@@ -3115,6 +3115,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         }
     }
 

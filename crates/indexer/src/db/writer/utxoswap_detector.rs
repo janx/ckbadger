@@ -41,7 +41,7 @@ impl ProtocolDetector for UtxoSwapDetector {
 
         let ckb_delta = accum.output_capacity - accum.input_capacity;
 
-        // --- Submitted: intent lock on outputs, only for owners with CKB flowing out ---
+        // --- Submitted: intent lock on outputs, only for the intent's owner ---
         if ckb_delta < 0 {
             for output in tx.outputs {
                 if !is_intent_lock(&output.lock_code_hash) {
@@ -51,6 +51,12 @@ impl ProtocolDetector for UtxoSwapDetector {
                     Some(p) => p,
                     None => continue,
                 };
+
+                // Only attribute to the actual intent owner, not co-signers or fee sponsors
+                if owner_lock_hash.len() < 20 || owner_lock_hash[..20] != parsed.owner_lock_hash[..]
+                {
+                    continue;
+                }
 
                 let action_name = format!("{}_submitted", parsed.intent_type.action_name());
 

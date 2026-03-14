@@ -961,13 +961,6 @@ impl Indexer {
             .writer
             .needs_startup_cleanup_with_force(actual_start, self.config.force_startup_cleanup)?;
 
-        if bulk_sync_mode && cleanup_needed {
-            bail!(
-                "bulk sync fail-fast: startup rollback cleanup required from block {}. \
-                 bulk sync does not auto-cleanup; delete RocksDB and restart from genesis",
-                actual_start + 1
-            );
-        }
         if cleanup_needed {
             self.startup_phase
                 .store(STARTUP_PHASE_ROLLBACK_CLEANUP, Ordering::SeqCst);

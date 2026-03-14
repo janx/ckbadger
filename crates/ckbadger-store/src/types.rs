@@ -30,6 +30,8 @@ pub struct LiveCellInfo {
     pub occupied_capacity: i64,
     #[serde(default)]
     pub udt_amount: Option<u128>,
+    #[serde(default)]
+    pub data_hash: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1247,6 +1249,7 @@ mod tests {
             data_size: 16,
             occupied_capacity: 6_100_000_000,
             udt_amount: Some(42),
+            data_hash: None,
         }
     }
 

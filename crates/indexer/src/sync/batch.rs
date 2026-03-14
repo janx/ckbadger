@@ -4926,6 +4926,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 1,
             udt_amount: None,
+            data_hash: None,
         }
     }
 
@@ -5342,6 +5343,7 @@ mod tests {
             data_size: 16,
             occupied_capacity: 0,
             udt_amount: Some(145_203),
+            data_hash: None,
         };
 
         let mut batch = StoreBatch::new(&store);

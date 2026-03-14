@@ -272,6 +272,7 @@ mod tests {
                 data_size: 0,
                 occupied_capacity: 61_00000000,
                 udt_amount: None,
+                data_hash: None,
             },
             10,
         );

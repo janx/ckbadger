@@ -166,6 +166,11 @@ fn delete_cell_index_entries(
             keys::encode_cell_index_key(type_code_hash, created_at_block, tx_hash, output_index);
         batch.delete_cf(store.cf_cell_by_type_code(), &idx_key);
     }
+    if let Some(ref data_hash) = cell.data_hash {
+        let idx_key =
+            keys::encode_cell_index_key(data_hash, created_at_block, tx_hash, output_index);
+        batch.delete_cf(store.cf_cell_by_data_hash(), &idx_key);
+    }
 }
 
 fn put_cell_index_entries(
@@ -199,6 +204,11 @@ fn put_cell_index_entries(
         let idx_key =
             keys::encode_cell_index_key(type_code_hash, created_at_block, tx_hash, output_index);
         batch.put_cf(store.cf_cell_by_type_code(), &idx_key, []);
+    }
+    if let Some(ref data_hash) = cell.data_hash {
+        let idx_key =
+            keys::encode_cell_index_key(data_hash, created_at_block, tx_hash, output_index);
+        batch.put_cf(store.cf_cell_by_data_hash(), &idx_key, []);
     }
 }
 
@@ -2994,6 +3004,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 500,
             udt_amount: None,
+            data_hash: None,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -3073,6 +3084,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 400,
             udt_amount: None,
+            data_hash: None,
         };
         let rollback_output_cell = LiveCellInfo {
             capacity: 200,
@@ -3087,6 +3099,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 200,
             udt_amount: None,
+            data_hash: None,
         };
 
         let tx_index = TxIndexEntry {
@@ -3205,6 +3218,7 @@ mod tests {
             data_size: 16,
             occupied_capacity: 100,
             udt_amount: Some(100),
+            data_hash: None,
         };
         let output_cell = LiveCellInfo {
             capacity: 100,
@@ -3219,6 +3233,7 @@ mod tests {
             data_size: 16,
             occupied_capacity: 100,
             udt_amount: Some(100),
+            data_hash: None,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -3371,6 +3386,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 400,
             udt_amount: None,
+            data_hash: None,
         };
         let rollback_output_cell_a = LiveCellInfo {
             capacity: 200,
@@ -3385,6 +3401,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 200,
             udt_amount: None,
+            data_hash: None,
         };
         let rollback_output_cell_b = LiveCellInfo {
             capacity: 180,
@@ -3399,6 +3416,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 180,
             udt_amount: None,
+            data_hash: None,
         };
 
         let tx_index = TxIndexEntry {
@@ -3671,6 +3689,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 100,
             udt_amount: None,
+            data_hash: None,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -3757,6 +3776,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 100,
             udt_amount: None,
+            data_hash: None,
         };
         let drop_live_cell = LiveCellInfo {
             capacity: 200,
@@ -3771,6 +3791,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 200,
             udt_amount: None,
+            data_hash: None,
         };
         let drop_consumed_cell = LiveCellInfo {
             capacity: 300,
@@ -3785,6 +3806,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 300,
             udt_amount: None,
+            data_hash: None,
         };
 
         let keep_tx = vec![0x10; 32];

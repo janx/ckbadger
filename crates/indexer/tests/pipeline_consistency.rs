@@ -72,6 +72,11 @@ fn precomputed_infos_for_insert(
                         data_size: cell.data_size,
                         occupied_capacity: occupied_capacity_from_cell(cell),
                         udt_amount: None,
+                        data_hash: if cell.data_hash.is_empty() {
+                            None
+                        } else {
+                            Some(cell.data_hash.clone())
+                        },
                     },
                     *created_at_block,
                 ),
@@ -247,6 +252,7 @@ fn test_full_cells_info_errors_on_zero_occupied_capacity_from_live_cell() {
         data_size: 100,
         occupied_capacity: 0,
         udt_amount: None,
+        data_hash: None,
     };
 
     let mut batch = StoreBatch::new(&store);
@@ -277,6 +283,7 @@ fn test_full_cells_info_errors_when_typed_cell_lacks_type_args_and_occupied_miss
         data_size: 100,
         occupied_capacity: 0,
         udt_amount: None,
+        data_hash: None,
     };
 
     let mut batch = StoreBatch::new(&store);

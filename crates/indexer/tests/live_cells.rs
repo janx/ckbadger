@@ -38,6 +38,7 @@ fn make_live_cell(
             data_size,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         },
         block,
     )

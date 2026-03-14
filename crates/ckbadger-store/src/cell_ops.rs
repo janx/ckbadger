@@ -666,6 +666,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: occupied,
             udt_amount: None,
+            data_hash: None,
         }
     }
 

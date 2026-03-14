@@ -686,6 +686,7 @@ mod tests {
             data_size: 16,
             occupied_capacity: 0,
             udt_amount: Some(1234),
+            data_hash: None,
         };
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&tx_hash, output_index, &cell, 1);
@@ -750,6 +751,7 @@ mod tests {
             data_size: 16,
             occupied_capacity: 0,
             udt_amount: Some(1234),
+            data_hash: None,
         };
         let mut batch = StoreBatch::new(&store);
         batch.put_consumed_cell(&tx_hash, output_index, &consumed_cell, 1, 2);
@@ -786,6 +788,7 @@ mod tests {
             data_size: 16,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         };
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&tx_hash, output_index, &cell, 1);
@@ -840,6 +843,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         };
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&tx_hash, output_index, &cell, 1);
@@ -891,6 +895,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         };
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&tx_hash, output_index, &cell, 1);

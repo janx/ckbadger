@@ -4,7 +4,7 @@
 use ckbadger_store::types::{AssetChange, LockCallEntry, ProtocolAction, TypeCallEntry};
 
 use crate::parser::stablepp::{
-    is_stablepp_intent_lock, is_stablepp_script, is_stablepp_vault_lock,
+    is_stablepp_asset, is_stablepp_intent_lock, is_stablepp_script, is_stablepp_vault_lock,
 };
 
 use super::activities::{OwnerAccum, ProtocolDetector, TxView};
@@ -19,9 +19,13 @@ impl StableppDetector {
         Self { is_mainnet }
     }
 
-    /// Check if any type_calls or lock_calls contain a Stable++ code_hash.
+    /// Check if any part of the transaction involves a Stable++ script.
+    /// Checks type_calls/lock_calls AND directly scans tx inputs/outputs,
+    /// because Stable++ Asset cells are classified as UDT upstream and
+    /// won't appear in type_calls.
     fn has_stablepp_scripts(
         &self,
+        tx: &TxView<'_>,
         type_calls: &[TypeCallEntry],
         lock_calls: &[LockCallEntry],
     ) -> bool {
@@ -31,6 +35,20 @@ impl StableppDetector {
             || lock_calls
                 .iter()
                 .any(|lc| is_stablepp_script(&lc.lock_code_hash))
+            || tx.inputs.iter().any(|input| {
+                is_stablepp_script(&input.lock_code_hash)
+                    || input
+                        .type_code_hash
+                        .as_ref()
+                        .is_some_and(|tc| is_stablepp_script(tc))
+            })
+            || tx.outputs.iter().any(|output| {
+                is_stablepp_script(&output.lock_code_hash)
+                    || output
+                        .type_code_hash
+                        .as_ref()
+                        .is_some_and(|tc| is_stablepp_script(tc))
+            })
     }
 
     /// Count vault lock cells in inputs and outputs.
@@ -56,12 +74,46 @@ impl StableppDetector {
             .any(|input| is_stablepp_intent_lock(&input.lock_code_hash))
     }
 
-    /// Sum all Token deltas from asset_changes as a heuristic for RUSD delta.
-    fn rusd_delta(&self, asset_changes: &[AssetChange]) -> i128 {
+    /// Collect type_script_hashes of Stable++ Asset cells from tx inputs/outputs.
+    fn stablepp_asset_type_script_hashes(&self, tx: &TxView<'_>) -> Vec<Vec<u8>> {
+        let mut hashes = Vec::new();
+        for input in &tx.inputs {
+            if let Some(ref tc) = input.type_code_hash {
+                if is_stablepp_asset(tc) {
+                    if let Some(ref tsh) = input.type_script_hash {
+                        hashes.push(tsh.clone());
+                    }
+                }
+            }
+        }
+        for output in tx.outputs {
+            if let Some(ref tc) = output.type_code_hash {
+                if is_stablepp_asset(tc) {
+                    if let Some(ref tsh) = output.type_script_hash {
+                        hashes.push(tsh.clone());
+                    }
+                }
+            }
+        }
+        hashes.sort();
+        hashes.dedup();
+        hashes
+    }
+
+    /// Sum Token deltas only for Stable++ Asset tokens (identified by type_script_hash).
+    fn stablepp_token_delta(
+        &self,
+        asset_changes: &[AssetChange],
+        stablepp_type_script_hashes: &[Vec<u8>],
+    ) -> i128 {
         asset_changes
             .iter()
             .filter_map(|ac| match ac {
-                AssetChange::Token { delta, .. } => Some(delta),
+                AssetChange::Token {
+                    type_script_hash,
+                    delta,
+                    ..
+                } if stablepp_type_script_hashes.contains(type_script_hash) => Some(delta),
                 _ => None,
             })
             .sum()
@@ -126,13 +178,14 @@ impl ProtocolDetector for StableppDetector {
         type_calls: &[TypeCallEntry],
         lock_calls: &[LockCallEntry],
     ) -> Vec<ProtocolAction> {
-        if !self.has_stablepp_scripts(type_calls, lock_calls) {
+        if !self.has_stablepp_scripts(tx, type_calls, lock_calls) {
             return vec![];
         }
 
         let (vault_in, vault_out) = self.count_vault_cells(tx);
         let has_intent = self.has_intent_in_inputs(tx);
-        let token_delta = self.rusd_delta(asset_changes);
+        let stablepp_hashes = self.stablepp_asset_type_script_hashes(tx);
+        let token_delta = self.stablepp_token_delta(asset_changes, &stablepp_hashes);
 
         let action = self.infer_action(vault_in, vault_out, token_delta);
 

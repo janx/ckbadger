@@ -1315,6 +1315,7 @@ mod tests {
             data_size: 100,
             occupied_capacity: 100_00000000,
             udt_amount: None,
+            data_hash: None,
         };
         let marker = ckbadger_store::types::encode_live_cell_marker(block_num);
         let payload = bincode::serialize(&cell_info).unwrap();

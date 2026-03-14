@@ -847,6 +847,7 @@ impl Indexer {
                                         data_size: cached.data_size,
                                         occupied_capacity: cached.occupied_capacity,
                                         udt_amount: cached.udt_amount,
+                                        data_hash: cached.data_hash.clone(),
                                     },
                                     cached.created_at_block,
                                 ),
@@ -1127,6 +1128,11 @@ impl Indexer {
                                     data_size: cell.data_size,
                                     occupied_capacity,
                                     udt_amount,
+                                    data_hash: if cell.data_hash.is_empty() {
+                                        None
+                                    } else {
+                                        Some(cell.data_hash.clone())
+                                    },
                                 },
                                 tx_data.block_number,
                             ),
@@ -1294,6 +1300,7 @@ impl Indexer {
                                 data_size: info.data_size,
                                 occupied_capacity: info.occupied_capacity,
                                 udt_amount: info.udt_amount,
+                                data_hash: info.data_hash.clone(),
                             },
                         );
                     }
@@ -3036,6 +3043,7 @@ mod tests {
                     data_size: 80,
                     occupied_capacity: 61_00000000,
                     udt_amount: None,
+                    data_hash: None,
                 },
                 14_000_000,
             ),
@@ -3180,6 +3188,7 @@ mod tests {
                 data_size: 0,
                 occupied_capacity: 61_00000000,
                 udt_amount: None,
+                data_hash: None,
             },
             14_000_000,
         )

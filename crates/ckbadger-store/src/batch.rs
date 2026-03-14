@@ -509,6 +509,17 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_cell_by_data_hash(), key, []);
     }
 
+    pub fn delete_cell_by_data_hash(
+        &mut self,
+        data_hash: &[u8],
+        block_num: i64,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) {
+        let key = keys::encode_cell_index_key(data_hash, block_num, tx_hash, output_index);
+        self.delete_cf(self.store.cf_cell_by_data_hash(), key);
+    }
+
     // ---- Cell index (raw pre-computed key) ----
 
     pub fn put_cell_by_lock_raw(&mut self, key: &[u8]) {
@@ -1179,6 +1190,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -1214,6 +1226,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -1550,6 +1563,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -1579,6 +1593,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -1671,6 +1686,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         };
 
         let mut first_batch = StoreBatch::new(&store);
@@ -1706,6 +1722,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         };
 
         let mut first_batch = StoreBatch::new(&store);
@@ -1771,6 +1788,7 @@ mod tests {
             data_size: 64,
             occupied_capacity: 10200000000,
             udt_amount: Some(999),
+            data_hash: None,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -1815,6 +1833,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         };
 
         // Write cell A via put_cell (original method)
@@ -1875,6 +1894,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         };
 
         // First, insert the cell as live
@@ -1940,6 +1960,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -2164,6 +2185,7 @@ mod tests {
             data_size: 0,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         };
 
         let mut batch = StoreBatch::new(&store);

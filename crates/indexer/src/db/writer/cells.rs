@@ -340,6 +340,14 @@ impl BatchWriter {
                     *output_index,
                 );
             }
+            if let Some(ref data_hash) = info.data_hash {
+                domain_batch.delete_cell_by_data_hash(
+                    data_hash,
+                    info.created_at_block,
+                    tx_hash,
+                    *output_index,
+                );
+            }
         }
 
         Ok(())
@@ -583,6 +591,14 @@ impl BatchWriter {
                         *output_index,
                     );
                 }
+                if let Some(ref data_hash) = info.data_hash {
+                    domain_batch.delete_cell_by_data_hash(
+                        data_hash,
+                        info.created_at_block,
+                        tx_hash,
+                        *output_index,
+                    );
+                }
             }
         }
 
@@ -646,6 +662,11 @@ mod tests {
                     data_size: cell.data_size,
                     occupied_capacity: occupied_capacity_from_parsed_cell(cell),
                     udt_amount,
+                    data_hash: if cell.data_hash.is_empty() {
+                        None
+                    } else {
+                        Some(cell.data_hash.clone())
+                    },
                 },
                 created_at_block,
             ),

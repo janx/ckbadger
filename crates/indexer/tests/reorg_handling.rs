@@ -68,6 +68,7 @@ fn make_cell(block_num: i64, lock_hash: &[u8]) -> PositionedCellInfo {
             data_size: 0,
             occupied_capacity: 0,
             udt_amount: None,
+            data_hash: None,
         },
         block_num,
     )
@@ -468,6 +469,7 @@ fn make_udt_cell(block_num: i64, lock_hash: &[u8]) -> PositionedCellInfo {
             data_size: 16,
             occupied_capacity: 14_200_000_000,
             udt_amount: Some(500_000_000),
+            data_hash: None,
         },
         block_num,
     )

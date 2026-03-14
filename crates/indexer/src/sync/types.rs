@@ -99,6 +99,7 @@ pub(crate) struct CachedCellInfo {
     pub(crate) data_size: i32,
     pub(crate) occupied_capacity: i64,
     pub(crate) udt_amount: Option<u128>,
+    pub(crate) data_hash: Option<Vec<u8>>,
 }
 
 #[derive(Clone)]

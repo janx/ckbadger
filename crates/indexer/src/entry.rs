@@ -1129,6 +1129,7 @@ mod tests {
             data_size: 16,
             occupied_capacity: 600,
             udt_amount: Some(1),
+            data_hash: None,
         };
         let consumed_cell = LiveCellInfo {
             capacity: 400,
@@ -1143,6 +1144,7 @@ mod tests {
             data_size: 16,
             occupied_capacity: 300,
             udt_amount: Some(1),
+            data_hash: None,
         };
 
         let mut batch = StoreBatch::new(&store);
