@@ -1825,4 +1825,275 @@ mod tests {
 
         assert!(alice_delta.lock_calls.is_none());
     }
+
+    // ---- RGB++ detector tests ----
+
+    use crate::db::writer::rgbpp_detector::RgbppDetector;
+    use crate::parser::rgbpp::RGBPP_LOCK_CODE_HASH_MAINNET;
+
+    /// Build rgbpp lock args from an out_index and btc_txid hex string.
+    fn make_rgbpp_lock_args(out_index: u32, btc_txid_hex: &str) -> Vec<u8> {
+        let mut args = Vec::with_capacity(36);
+        args.extend_from_slice(&out_index.to_le_bytes());
+        let mut txid_bytes = hex::decode(btc_txid_hex).expect("valid hex for btc txid");
+        txid_bytes.reverse(); // BTC txid is stored reversed
+        args.extend_from_slice(&txid_bytes);
+        args
+    }
+
+    fn make_input_with_lock(
+        lock_hash_byte: u8,
+        lock_code_hash: Vec<u8>,
+        lock_args: Vec<u8>,
+        capacity: i64,
+        type_code_hash: Option<Vec<u8>>,
+        type_args: Option<Vec<u8>>,
+    ) -> InputCellView {
+        InputCellView {
+            lock_script_hash: vec![lock_hash_byte; 32],
+            lock_code_hash,
+            lock_hash_type: 1,
+            lock_args,
+            capacity,
+            occupied_capacity: 61_00000000,
+            type_code_hash,
+            type_hash_type: Some(1),
+            type_script_hash: None,
+            type_args,
+            udt_amount: None,
+            data: vec![],
+            is_dao_withdraw_request: false,
+        }
+    }
+
+    fn make_output_with_lock(
+        lock_hash_byte: u8,
+        lock_code_hash: Vec<u8>,
+        lock_args: Vec<u8>,
+        capacity: i64,
+        type_code_hash: Option<Vec<u8>>,
+        type_args: Option<Vec<u8>>,
+    ) -> ParsedCell {
+        ParsedCell {
+            capacity,
+            lock_code_hash,
+            lock_hash_type: 1,
+            lock_args,
+            lock_script_hash: vec![lock_hash_byte; 32],
+            type_code_hash,
+            type_hash_type: Some(1),
+            type_args,
+            type_script_hash: None,
+            data_hash: vec![0; 32],
+            data_size: 0,
+            data: vec![],
+        }
+    }
+
+    #[test]
+    fn test_rgbpp_leap_to_ckb() {
+        // Input cell with rgbpp lock + xUDT type, output cell with standard lock + same type
+        let rgbpp_owner = 0xAA; // owner with rgbpp lock
+        let ckb_owner = 0xBB; // owner with standard CKB lock
+
+        let rgbpp_code_hash = crate::rpc::parse_hex_to_bytes(RGBPP_LOCK_CODE_HASH_MAINNET);
+        let standard_lock = vec![0x11; 32];
+        let xudt_code_hash = vec![0x77; 32]; // some type script
+        let type_args = vec![0x88; 32];
+
+        let rgbpp_args = make_rgbpp_lock_args(
+            0,
+            "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd",
+        );
+
+        let input = make_input_with_lock(
+            rgbpp_owner,
+            rgbpp_code_hash,
+            rgbpp_args,
+            200_00000000,
+            Some(xudt_code_hash.clone()),
+            Some(type_args.clone()),
+        );
+
+        let outputs = vec![make_output_with_lock(
+            ckb_owner,
+            standard_lock,
+            vec![0x22; 20],
+            200_00000000,
+            Some(xudt_code_hash),
+            Some(type_args),
+        )];
+
+        let tx = TxView {
+            tx_hash: &[0x40; 32],
+            block_hash: &[0xC0; 32],
+            tx_index: 1,
+            block_number: 5000,
+            timestamp: 1_700_200_000,
+            is_cellbase: false,
+            inputs: vec![input],
+            outputs: &outputs,
+            witnesses: &[],
+        };
+
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
+        let bundles =
+            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors);
+
+        assert_eq!(bundles.len(), 1);
+
+        // Check CKB owner (output side) gets leap_to_ckb action
+        let ckb_owner_delta = bundles[0]
+            .owners
+            .iter()
+            .find(|o| o.lock_hash == vec![ckb_owner; 32])
+            .expect("ckb owner should be present");
+        assert_eq!(ckb_owner_delta.protocol_actions.len(), 1);
+        assert_eq!(ckb_owner_delta.protocol_actions[0].protocol, "rgbpp");
+        assert_eq!(ckb_owner_delta.protocol_actions[0].action, "leap_to_ckb");
+
+        // Check rgbpp owner (input side) also gets leap_to_ckb action
+        let rgbpp_owner_delta = bundles[0]
+            .owners
+            .iter()
+            .find(|o| o.lock_hash == vec![rgbpp_owner; 32])
+            .expect("rgbpp owner should be present");
+        assert_eq!(rgbpp_owner_delta.protocol_actions.len(), 1);
+        assert_eq!(rgbpp_owner_delta.protocol_actions[0].protocol, "rgbpp");
+        assert_eq!(rgbpp_owner_delta.protocol_actions[0].action, "leap_to_ckb");
+    }
+
+    #[test]
+    fn test_rgbpp_transfer() {
+        // Input and output both have rgbpp lock + same type but different BTC UTXO args.
+        // Different lock_args means different lock_script_hash, so we use different owner bytes.
+        let input_owner = 0xAA;
+        let output_owner = 0xAB;
+
+        let rgbpp_code_hash = crate::rpc::parse_hex_to_bytes(RGBPP_LOCK_CODE_HASH_MAINNET);
+        let xudt_code_hash = vec![0x77; 32];
+        let type_args = vec![0x88; 32];
+
+        let input_args = make_rgbpp_lock_args(
+            0,
+            "1111111111111111111111111111111111111111111111111111111111111111",
+        );
+        let output_args = make_rgbpp_lock_args(
+            1,
+            "2222222222222222222222222222222222222222222222222222222222222222",
+        );
+
+        let input = make_input_with_lock(
+            input_owner,
+            rgbpp_code_hash.clone(),
+            input_args,
+            200_00000000,
+            Some(xudt_code_hash.clone()),
+            Some(type_args.clone()),
+        );
+
+        // Output with different rgbpp lock args (different BTC UTXO) = different lock_script_hash
+        let outputs = vec![make_output_with_lock(
+            output_owner,
+            rgbpp_code_hash,
+            output_args,
+            200_00000000,
+            Some(xudt_code_hash),
+            Some(type_args),
+        )];
+
+        let tx = TxView {
+            tx_hash: &[0x41; 32],
+            block_hash: &[0xC1; 32],
+            tx_index: 1,
+            block_number: 5001,
+            timestamp: 1_700_200_010,
+            is_cellbase: false,
+            inputs: vec![input],
+            outputs: &outputs,
+            witnesses: &[],
+        };
+
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
+        let bundles =
+            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors);
+
+        assert_eq!(bundles.len(), 1);
+
+        // Both owners should see the "transfer" action
+        let input_owner_delta = bundles[0]
+            .owners
+            .iter()
+            .find(|o| o.lock_hash == vec![input_owner; 32])
+            .expect("input owner should be present");
+        assert_eq!(input_owner_delta.protocol_actions.len(), 1);
+        assert_eq!(input_owner_delta.protocol_actions[0].protocol, "rgbpp");
+        assert_eq!(input_owner_delta.protocol_actions[0].action, "transfer");
+
+        let output_owner_delta = bundles[0]
+            .owners
+            .iter()
+            .find(|o| o.lock_hash == vec![output_owner; 32])
+            .expect("output owner should be present");
+        assert_eq!(output_owner_delta.protocol_actions.len(), 1);
+        assert_eq!(output_owner_delta.protocol_actions[0].protocol, "rgbpp");
+        assert_eq!(output_owner_delta.protocol_actions[0].action, "transfer");
+
+        // Verify metadata contains btcTxid from output
+        let metadata = &output_owner_delta.protocol_actions[0].metadata;
+        assert!(metadata.get("btcTxid").is_some());
+        assert!(metadata.get("outIndex").is_some());
+    }
+
+    #[test]
+    fn test_no_rgbpp_action_for_standard_locks() {
+        // No rgbpp locks in tx — expect no protocol actions
+        let alice = 0xAA;
+        let bob = 0xBB;
+        let standard_lock = vec![0x11; 32];
+        let xudt_code_hash = vec![0x77; 32];
+        let type_args = vec![0x88; 32];
+
+        let input = make_input_with_lock(
+            alice,
+            standard_lock.clone(),
+            vec![0x22; 20],
+            200_00000000,
+            Some(xudt_code_hash.clone()),
+            Some(type_args.clone()),
+        );
+
+        let outputs = vec![make_output_with_lock(
+            bob,
+            standard_lock,
+            vec![0x33; 20],
+            200_00000000,
+            Some(xudt_code_hash),
+            Some(type_args),
+        )];
+
+        let tx = TxView {
+            tx_hash: &[0x42; 32],
+            block_hash: &[0xC2; 32],
+            tx_index: 1,
+            block_number: 5002,
+            timestamp: 1_700_200_020,
+            is_cellbase: false,
+            inputs: vec![input],
+            outputs: &outputs,
+            witnesses: &[],
+        };
+
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
+        let bundles =
+            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors);
+
+        assert_eq!(bundles.len(), 1);
+        for owner in &bundles[0].owners {
+            assert!(
+                owner.protocol_actions.is_empty(),
+                "no rgbpp actions expected for standard-lock-only tx"
+            );
+        }
+    }
 }

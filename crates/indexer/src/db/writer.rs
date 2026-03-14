@@ -60,6 +60,7 @@ pub mod hodl_wave;
 mod mnft;
 pub(crate) mod nft_activity_acc;
 mod reorg;
+pub(crate) mod rgbpp_detector;
 mod spore;
 mod statistics;
 mod sync;
