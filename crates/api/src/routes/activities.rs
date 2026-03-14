@@ -496,9 +496,10 @@ fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
         if !matches!(
             value,
             "all" | "ckb" | "token" | "nft" | "dao" | "type_call" | "lock_call"
-        ) {
+        ) && !value.starts_with("protocol:")
+        {
             return Err(ApiError::bad_request(format!(
-                "invalid activity filter '{}'; expected one of: all, ckb, token, nft, dao, type_call, lock_call",
+                "invalid activity filter '{}'; expected one of: all, ckb, token, nft, dao, type_call, lock_call, protocol:<name>",
                 value
             )));
         }
@@ -731,6 +732,13 @@ mod tests {
         let err = validate_activity_filter(Some("tok")).unwrap_err();
         assert_eq!(err.0, axum::http::StatusCode::BAD_REQUEST);
         assert!(err.1 .0.message.contains("invalid activity filter"));
+    }
+
+    #[test]
+    fn test_validate_activity_filter_accepts_protocol_prefix() {
+        assert!(validate_activity_filter(Some("protocol:rgbpp")).is_ok());
+        assert!(validate_activity_filter(Some("protocol:fiber")).is_ok());
+        assert!(validate_activity_filter(Some("invalid")).is_err());
     }
 
     #[test]

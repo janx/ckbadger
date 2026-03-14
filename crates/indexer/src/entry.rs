@@ -25,6 +25,7 @@ pub struct IndexerServiceConfig {
     pub ckb_rpc_url: String,
     pub ckb_db_path: String,
     pub token_labels_path: String,
+    pub network: String,
     pub batch_size: usize,
     pub poll_interval_ms: u64,
     pub parallel_fetch_size: usize,
@@ -50,6 +51,7 @@ impl From<IndexerServiceConfig> for Config {
             fast_sync_mode: true,
             ckb_db_path: svc.ckb_db_path,
             token_labels_path: svc.token_labels_path,
+            network: svc.network,
             force_startup_cleanup: false,
             store_runtime_config: svc.store_runtime_config,
         }
@@ -1208,6 +1210,7 @@ mod tests {
             ckb_rpc_url: "http://localhost:8114".to_string(),
             ckb_db_path: "/ckb/data/db".to_string(),
             token_labels_path: "docs/labels".to_string(),
+            network: "mainnet".to_string(),
             batch_size: 5000,
             poll_interval_ms: 500,
             parallel_fetch_size: 32,
@@ -1227,6 +1230,7 @@ mod tests {
         assert_eq!(config.ckb_rpc_url, "http://localhost:8114");
         assert_eq!(config.ckb_db_path, "/ckb/data/db");
         assert_eq!(config.token_labels_path, "docs/labels");
+        assert_eq!(config.network, "mainnet");
         assert_eq!(config.batch_size, 5000);
         assert_eq!(config.poll_interval_ms, 500);
         assert_eq!(config.parallel_fetch_size, 32);

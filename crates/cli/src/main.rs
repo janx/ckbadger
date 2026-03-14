@@ -222,6 +222,7 @@ fn build_indexer_service_config(
         ckb_rpc_url: config.ckb.rpc_url.clone(),
         ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
         token_labels_path,
+        network: config.ckb.network.clone(),
         batch_size: config.indexer.batch_size,
         poll_interval_ms: config.indexer.poll_interval_ms,
         parallel_fetch_size: config.indexer.parallel_fetch_size,

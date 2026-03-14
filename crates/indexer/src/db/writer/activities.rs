@@ -175,8 +175,8 @@ pub struct TxView<'a> {
 }
 
 /// Detects protocol-level actions by analyzing cross-layer signals.
-pub(crate) trait ProtocolDetector {
-    #[allow(dead_code)] // Used by detector registration (Task 4+)
+pub(crate) trait ProtocolDetector: Send + Sync {
+    #[allow(dead_code)] // Part of trait interface; used by future detector management/logging
     fn protocol_name(&self) -> &str;
 
     fn detect(
@@ -194,7 +194,8 @@ pub(crate) trait ProtocolDetector {
 #[cfg(test)]
 pub type OwnerActivity = (Vec<u8>, Vec<Vec<u8>>, ActivityEntry);
 
-/// Build tx-scoped activity bundles for all transactions in a block.
+/// Build tx-scoped activity bundles for all transactions in a block (no protocol detectors).
+#[cfg(test)]
 pub fn build_activity_bundles_for_block(
     txs: &[TxView<'_>],
     token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,

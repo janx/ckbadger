@@ -1673,6 +1673,11 @@ impl Indexer {
             let writer = &self.writer;
             let dao_withdraw_outpoints = dao_withdraw_outpoints_from_map(&consumed_dao_map);
 
+            let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> =
+                vec![Box::new(
+                    crate::db::writer::rgbpp_detector::RgbppDetector::new(self.config.is_mainnet()),
+                )];
+
             let tt;
             (
                 batch_stats,
@@ -2861,9 +2866,10 @@ impl Indexer {
                                         .collect::<Result<Vec<_>>>()?;
 
                                 let bundles =
-                                    crate::db::writer::activities::build_activity_bundles_for_block(
+                                    crate::db::writer::activities::build_activity_bundles_for_block_with_detectors(
                                         &tx_views,
                                         token_info_cache,
+                                        &protocol_detectors,
                                     );
 
                                 for bundle in bundles {
@@ -4088,6 +4094,10 @@ impl Indexer {
             )?;
 
             // Activity writes (live sync)
+            let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> =
+                vec![Box::new(
+                    crate::db::writer::rgbpp_detector::RgbppDetector::new(self.config.is_mainnet()),
+                )];
             let mut activity_batch = StoreBatch::new(self.writer.store());
             {
                 let token_info_cache = load_activity_token_info_cache(
@@ -4126,9 +4136,10 @@ impl Indexer {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    let bundles = crate::db::writer::activities::build_activity_bundles_for_block(
+                    let bundles = crate::db::writer::activities::build_activity_bundles_for_block_with_detectors(
                         &tx_views,
                         &token_info_cache,
+                        &protocol_detectors,
                     );
 
                     for bundle in bundles {

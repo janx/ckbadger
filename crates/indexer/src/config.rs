@@ -37,6 +37,9 @@ pub struct Config {
     /// Path to token-labels repository for label import.
     #[serde(default = "default_token_labels_path")]
     pub token_labels_path: String,
+    /// CKB network identifier ("mainnet" or "testnet").
+    #[serde(default = "default_network")]
+    pub network: String,
     /// Force startup rollback cleanup before syncing.
     /// Used after unclean shutdowns to reconcile append-only aggregates.
     #[serde(default = "default_force_startup_cleanup")]
@@ -73,11 +76,20 @@ fn default_token_labels_path() -> String {
     "docs/token-labels".to_string()
 }
 
+fn default_network() -> String {
+    "mainnet".to_string()
+}
+
 fn default_force_startup_cleanup() -> bool {
     false
 }
 
 impl Config {
+    /// Whether this indexer is configured for CKB mainnet.
+    pub fn is_mainnet(&self) -> bool {
+        self.network == "mainnet"
+    }
+
     pub fn validate(&self) -> Result<()> {
         if self.build_version.trim().is_empty() {
             bail!("config: build_version must not be blank");
@@ -163,6 +175,7 @@ mod tests {
             fast_sync_mode: true,
             ckb_db_path: "/var/lib/ckb/data/db".to_string(),
             token_labels_path: "docs/token-labels".to_string(),
+            network: "mainnet".to_string(),
             force_startup_cleanup: false,
             store_runtime_config: StoreRuntimeConfig::default(),
         }

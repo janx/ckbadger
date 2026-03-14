@@ -6,10 +6,6 @@ use crate::parser::rgbpp::{RgbppLockType, RgbppParser};
 
 use super::activities::{OwnerAccum, ProtocolDetector, TxView};
 
-// The types below are only exercised via ProtocolDetector trait dispatch and tests;
-// the compiler cannot see non-test construction sites until Task 4 wires the detector
-// into the sync pipeline.
-#[allow(dead_code)]
 /// Which side of a transaction a cell appears on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CellSide {
@@ -17,7 +13,6 @@ enum CellSide {
     Output,
 }
 
-#[allow(dead_code)]
 /// Lock classification for a cell participating in an RGB++ type-group.
 #[derive(Debug, Clone)]
 struct TypeGroupCell {
@@ -27,12 +22,10 @@ struct TypeGroupCell {
     lock_args: Vec<u8>,
 }
 
-#[allow(dead_code)]
 pub(crate) struct RgbppDetector {
     is_mainnet: bool,
 }
 
-#[allow(dead_code)]
 impl RgbppDetector {
     pub fn new(is_mainnet: bool) -> Self {
         Self { is_mainnet }

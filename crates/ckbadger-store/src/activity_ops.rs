@@ -327,6 +327,13 @@ impl CkbadgerStore {
                 .lock_calls
                 .as_ref()
                 .is_some_and(|calls| !calls.is_empty()),
+            Some(f) if f.starts_with("protocol:") => {
+                let protocol_name = &f["protocol:".len()..];
+                entry
+                    .protocol_actions
+                    .iter()
+                    .any(|a| a.protocol == protocol_name)
+            }
             Some(_) => false,
         }
     }
@@ -524,5 +531,39 @@ mod tests {
         assert_eq!(latest.len(), 1);
         assert_eq!(latest[0].entry.block_number, 199);
         assert_eq!(latest[0].entry.tx_hash, non_cellbase.tx_hash);
+    }
+
+    #[test]
+    fn test_matches_activity_filter_protocol() {
+        let entry = ActivityEntry {
+            tx_hash: vec![1; 32],
+            block_hash: vec![2; 32],
+            block_number: 100,
+            tx_index: 0,
+            timestamp: 1_700_000_000,
+            ckb_delta: 0,
+            used_delta: 0,
+            is_cellbase: false,
+            has_type_script: false,
+            asset_changes: vec![],
+            type_calls: None,
+            lock_calls: None,
+            protocol_actions: vec![ProtocolAction {
+                protocol: "rgbpp".into(),
+                action: "leap_to_ckb".into(),
+                metadata: serde_json::json!({}),
+            }],
+            peers: vec![],
+        };
+
+        assert!(CkbadgerStore::matches_activity_filter(
+            &entry,
+            Some("protocol:rgbpp")
+        ));
+        assert!(!CkbadgerStore::matches_activity_filter(
+            &entry,
+            Some("protocol:fiber")
+        ));
+        assert!(CkbadgerStore::matches_activity_filter(&entry, None));
     }
 }
