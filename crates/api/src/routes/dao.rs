@@ -13,7 +13,7 @@ use std::time::Duration;
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
-use crate::utils::{script_to_address, shannon_to_ckb};
+use crate::utils::{script_to_address, shannon_to_ckb, shannon_to_ckb_signed};
 use crate::AppState;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
@@ -609,10 +609,10 @@ fn compute_dao_24h_deltas(state: &AppState) -> DaoDeltas {
         latest.unclaimed_compensation as i128 - prev.unclaimed_compensation as i128;
 
     DaoDeltas {
-        deposit_change: Some(shannon_to_ckb(&deposit_delta.to_string())),
+        deposit_change: Some(shannon_to_ckb_signed(deposit_delta)),
         depositors_change: Some(depositors_delta as i32),
-        claimed_compensation_change: Some(shannon_to_ckb(&claimed_delta.to_string())),
-        unclaimed_compensation_change: Some(shannon_to_ckb(&unclaimed_delta.to_string())),
+        claimed_compensation_change: Some(shannon_to_ckb_signed(claimed_delta)),
+        unclaimed_compensation_change: Some(shannon_to_ckb_signed(unclaimed_delta)),
     }
 }
 

@@ -668,12 +668,16 @@ async fn get_block_fee_stats(
     let mut non_cellbase_count: i32 = 0;
 
     for (_tx_idx, entry) in &txs {
+        if entry.is_cellbase {
+            continue;
+        }
+        non_cellbase_count += 1;
         total_size += entry.tx_size as i64;
         total_cycles += entry.cycles.unwrap_or(0);
 
-        if !entry.is_cellbase && entry.tx_size > 0 {
-            non_cellbase_count += 1;
-            let fee_rate = entry.fee as f64 / entry.tx_size as f64;
+        if entry.tx_size > 0 {
+            // Fee rate in shannons/KB, consistent with transaction detail endpoint
+            let fee_rate = (entry.fee as f64 * 1000.0) / entry.tx_size as f64;
             fee_rates.push(fee_rate);
         }
     }

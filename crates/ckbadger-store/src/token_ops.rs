@@ -105,7 +105,13 @@ impl CkbadgerStore {
             Some(value) if value.len() == 16 => {
                 Ok(Some(i128::from_le_bytes(value[..16].try_into().unwrap())))
             }
-            _ => Ok(None),
+            Some(value) => anyhow::bail!(
+                "token_holders: corrupt value length {} (expected 16) for type_hash=0x{}, lock_hash=0x{}",
+                value.len(),
+                bytes_to_hex(type_hash),
+                bytes_to_hex(lock_hash)
+            ),
+            None => Ok(None),
         }
     }
 
@@ -116,7 +122,12 @@ impl CkbadgerStore {
             Some(value) if value.len() == 8 => {
                 Ok(i64::from_le_bytes(value[..8].try_into().unwrap()))
             }
-            _ => Ok(0),
+            Some(value) => anyhow::bail!(
+                "stats_token: corrupt transfers_count value length {} (expected 8) for type_hash=0x{}",
+                value.len(),
+                bytes_to_hex(type_hash)
+            ),
+            None => Ok(0),
         }
     }
 

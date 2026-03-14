@@ -31,7 +31,7 @@ type TxIoBundle = (
     u128,
     u128,
     u128,
-    u128,
+    Option<u128>, // computed_fee: None when unavailable (e.g., DAO withdrawal)
     Vec<String>,
     bool,
 );
@@ -181,19 +181,18 @@ async fn list_transactions(
     let mem_cache = state.mem_cache.clone();
 
     if let Some(block_number) = params.block_number {
-        // List transactions for a specific block
+        // List transactions for a specific block (ascending order)
         let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
-        let (_cursor_block, cursor_index) = cursor.unwrap_or((i64::MAX, i32::MAX));
+        // Cursor is the tx_idx of the last item on the previous page.
+        // We want txs AFTER that index. Use -1 for first page (returns from idx 0).
+        let after_tx_idx = cursor.map(|(_, idx)| idx).unwrap_or(-1);
         let fetch_limit = (limit + 1) as usize;
 
         let store_c = store.clone();
         let ckb_store_c = ckb_store.clone();
         let mem_cache_c = mem_cache.clone();
         let (page_txs, block_tx_hashes) = tokio::task::spawn_blocking(move || {
-            // Use range-limited query: only fetch txs with tx_idx < cursor_index,
-            // limited to the page size we need. Avoids loading all block transactions.
-            let page_txs =
-                store_c.list_block_txs_before(block_number, cursor_index, fetch_limit)?;
+            let page_txs = store_c.list_block_txs_after(block_number, after_tx_idx, fetch_limit)?;
             let block_tx_hashes =
                 get_block_tx_hashes_cached(&mem_cache_c, &ckb_store_c, block_number);
             Ok::<_, anyhow::Error>((page_txs, block_tx_hashes))
@@ -553,6 +552,11 @@ fn is_dao_type_code_hash_hex(code_hash: &str) -> bool {
         .eq_ignore_ascii_case(DAO_TYPE_CODE_HASH_HEX)
 }
 
+/// Compute transaction fee from input/output capacities.
+///
+/// Returns `None` for DAO phase-2 withdrawals where outputs > inputs due to
+/// compensation (the compensation amount is not available here, so the fee
+/// cannot be computed from I/O alone).
 fn compute_tx_fee_from_io(
     inputs_capacity: u128,
     outputs_capacity: u128,
@@ -560,17 +564,19 @@ fn compute_tx_fee_from_io(
     has_dao_type_input: bool,
     block_number: i64,
     tx_hash: &[u8],
-) -> Result<u128, ApiRouteError> {
+) -> Result<Option<u128>, ApiRouteError> {
     if is_cellbase {
-        return Ok(0);
+        return Ok(Some(0));
     }
 
     if let Some(fee) = inputs_capacity.checked_sub(outputs_capacity) {
-        return Ok(fee);
+        return Ok(Some(fee));
     }
 
     if has_dao_type_input {
-        return Ok(0);
+        // DAO phase-2 withdrawal: outputs > inputs due to compensation.
+        // Cannot compute fee without the compensation amount.
+        return Ok(None);
     }
 
     Err(ApiError::internal(format!(
@@ -820,10 +826,9 @@ async fn get_transaction_detail(
     };
 
     // Use computed fee from inputs/outputs if available, otherwise use stored fee
-    let fee = if computed_fee > 0 {
-        computed_fee.to_string()
-    } else {
-        entry.fee.to_string()
+    let fee = match computed_fee {
+        Some(f) if f > 0 => f.to_string(),
+        _ => entry.fee.to_string(),
     };
 
     let fee_rate = final_tx_size.map(|size| {
@@ -864,7 +869,7 @@ async fn get_transaction_detail(
 }
 
 fn empty_inputs_outputs() -> TxIoBundle {
-    (vec![], vec![], 0, 0, 0, 0, 0, vec![], false)
+    (vec![], vec![], 0, 0, 0, 0, None, vec![], false)
 }
 
 fn build_inputs_outputs_from_rpc_pending(
@@ -1129,14 +1134,14 @@ fn build_inputs_outputs_from_rpc_pending(
     let computed_fee = if is_cellbase {
         Some(0)
     } else if inputs_complete {
-        Some(compute_tx_fee_from_io(
+        compute_tx_fee_from_io(
             inputs_capacity,
             outputs_capacity,
             false,
             has_dao_type_input,
             block_number,
             &tx_hash,
-        )?)
+        )?
     } else {
         None
     };
@@ -1404,7 +1409,7 @@ fn build_inputs_outputs_from_ckb(
             == "0x0000000000000000000000000000000000000000000000000000000000000000"
     });
 
-    // DAO phase-2 withdrawals may legitimately satisfy outputs > inputs due compensation.
+    // DAO phase-2 withdrawals may legitimately have outputs > inputs due to compensation.
     let computed_fee = compute_tx_fee_from_io(
         inputs_capacity,
         outputs_capacity,
@@ -2312,13 +2317,13 @@ mod tests {
     #[test]
     fn test_compute_tx_fee_from_io_for_regular_tx() {
         let fee = compute_tx_fee_from_io(1_000, 950, false, false, 10, &[0x11; 32]).unwrap();
-        assert_eq!(fee, 50);
+        assert_eq!(fee, Some(50));
     }
 
     #[test]
-    fn test_compute_tx_fee_from_io_allows_dao_compensation_case() {
+    fn test_compute_tx_fee_from_io_returns_none_for_dao_compensation() {
         let fee = compute_tx_fee_from_io(1_000, 1_100, false, true, 10, &[0x22; 32]).unwrap();
-        assert_eq!(fee, 0);
+        assert_eq!(fee, None);
     }
 
     #[test]

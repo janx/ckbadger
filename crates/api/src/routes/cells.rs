@@ -2007,13 +2007,20 @@ async fn list_cells_by_script(
             )
             .map_err(|e| ApiError::internal(e.to_string()))?,
         _ => {
-            // "both": merge results from lock and type indexes
+            // "both": merge results from lock and type indexes.
+            // Cursor pagination is not supported for "both" mode because the cursor
+            // from one CF is not valid in the other, causing missing items.
+            if after_key_ref.is_some() {
+                return Err(ApiError::bad_request(
+                    "Cursor pagination is not supported for script_kind=both. Use script_kind=lock or script_kind=type for paginated results.",
+                ));
+            }
             let mut merged = state
                 .store
                 .list_cells_by_lock_code_hash(
                     &resolved_code_hash,
                     fetch_limit,
-                    after_key_ref,
+                    None,
                     &state.append_only_store,
                 )
                 .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -2022,7 +2029,7 @@ async fn list_cells_by_script(
                 .list_cells_by_type_code_hash(
                     &resolved_code_hash,
                     fetch_limit,
-                    after_key_ref,
+                    None,
                     &state.append_only_store,
                 )
                 .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -2127,11 +2134,8 @@ async fn get_address(
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
-        // LiveCellInfo doesn't store hash_type directly; derive from code_hash via script_info
-        let hash_type_num = script_info
-            .as_ref()
-            .map(|si| si.hash_type as i16)
-            .unwrap_or(1); // Default to "type"
+        // Use the cell's own stored lock_hash_type (not script_info canonical default)
+        let hash_type_num = info.lock_hash_type;
 
         let hash_type_str = match hash_type_num {
             0 => "data",
@@ -2403,15 +2407,8 @@ async fn get_cell(
     };
 
     let type_script = if let Some(code_hash) = info.type_code_hash.as_ref() {
-        let store = state.store.clone();
-        let code_hash_c = code_hash.clone();
-        let type_hash_type_num: i16 =
-            tokio::task::spawn_blocking(move || store.get_script_info(&code_hash_c))
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .map(|si| si.hash_type as i16)
-                .unwrap_or(1);
+        // Use the cell's own stored type_hash_type (not script_info canonical default)
+        let type_hash_type_num: i16 = info.type_hash_type.unwrap_or(1);
         Some(ScriptResponse {
             code_hash: format!("0x{}", hex::encode(code_hash)),
             hash_type: hash_type_str(type_hash_type_num).to_string(),

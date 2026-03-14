@@ -223,7 +223,8 @@ pub struct SporeMediaProfileResponse {
 pub struct SporeResponse {
     pub spore_id: String,
     pub tx_hash: String,
-    pub output_index: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_index: Option<i32>,
     pub cluster_id: Option<String>,
     pub content_type: String,
     pub content_size: i32,
@@ -308,7 +309,7 @@ fn spore_to_response(
     SporeResponse {
         spore_id: format!("0x{}", hex::encode(spore_id)),
         tx_hash: format!("0x{}", hex::encode(&entry.created_at_tx)),
-        output_index: 0,
+        output_index: None, // ObjectEntry does not store output_index; needs schema addition
         cluster_id: entry
             .collection_id
             .as_ref()

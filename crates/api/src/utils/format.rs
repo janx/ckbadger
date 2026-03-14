@@ -5,6 +5,9 @@ use chrono::NaiveDate;
 const SHANNON_PER_CKB: u128 = 100_000_000;
 
 /// Converts shannon (smallest CKB unit, 1 CKB = 10^8 shannon) to CKB string.
+///
+/// For unsigned values only. For signed deltas (which may be negative),
+/// use [`shannon_to_ckb_signed`].
 pub fn shannon_to_ckb(shannon: &str) -> String {
     let num: u128 = match shannon.parse() {
         Ok(v) => v,
@@ -18,6 +21,18 @@ pub fn shannon_to_ckb(shannon: &str) -> String {
         }
     };
     shannon_to_ckb_u128(num)
+}
+
+/// Converts a signed shannon value (i128) to a CKB string, preserving the sign.
+///
+/// Used for delta/change values that may be negative (e.g., DAO 24h changes).
+pub fn shannon_to_ckb_signed(shannon: i128) -> String {
+    if shannon < 0 {
+        let abs = shannon.unsigned_abs();
+        format!("-{}", shannon_to_ckb_u128(abs))
+    } else {
+        shannon_to_ckb_u128(shannon as u128)
+    }
 }
 
 /// Converts shannon (u128) to CKB string with up to 8 decimal places.
@@ -157,6 +172,20 @@ mod tests {
     fn test_shannon_to_ckb_invalid_input() {
         assert_eq!(shannon_to_ckb("invalid"), "0");
         assert_eq!(shannon_to_ckb(""), "0");
+    }
+
+    #[test]
+    fn test_shannon_to_ckb_signed_positive() {
+        assert_eq!(shannon_to_ckb_signed(10000000000), "100");
+        assert_eq!(shannon_to_ckb_signed(150000000), "1.5");
+        assert_eq!(shannon_to_ckb_signed(0), "0");
+    }
+
+    #[test]
+    fn test_shannon_to_ckb_signed_negative() {
+        assert_eq!(shannon_to_ckb_signed(-10000000000), "-100");
+        assert_eq!(shannon_to_ckb_signed(-150000000), "-1.5");
+        assert_eq!(shannon_to_ckb_signed(-12345678901), "-123.45678901");
     }
 
     #[test]
