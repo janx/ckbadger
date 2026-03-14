@@ -64,6 +64,7 @@ pub(crate) mod nft_activity_acc;
 mod reorg;
 pub(crate) mod rgbpp_detector;
 mod spore;
+pub(crate) mod stablepp_detector;
 mod statistics;
 mod sync;
 mod udt;
