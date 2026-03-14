@@ -314,18 +314,34 @@ function formatProtocolAction(action: string): string {
   return action.replace(/_/g, ' ');
 }
 
+const FIBER_ACTION_LABELS: Record<string, string> = {
+  channel_open: 'Channel Open',
+  channel_close: 'Channel Close',
+  force_close: 'Force Close',
+  settlement: 'Settlement',
+};
+
+function getFiberActionLabel(action: string): string {
+  return FIBER_ACTION_LABELS[action] ?? formatProtocolAction(action);
+}
+
 function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {
-  const label = `${pa.protocol} \u00B7 ${formatProtocolAction(pa.action)}`;
+  const isFiber = pa.protocol === 'fiber';
+  const actionLabel = isFiber ? getFiberActionLabel(pa.action) : formatProtocolAction(pa.action);
+  const label = `${pa.protocol} \u00B7 ${actionLabel}`;
   const btcTxid = pa.metadata?.btcTxid as string | undefined;
+  const capacity = pa.metadata?.capacity as string | undefined;
 
   return {
     badge: (
-      <span className="text-orange font-mono text-xs">
-        {'\u2B21'} {label}
+      <span className={cn('font-mono text-xs', isFiber ? 'text-violet' : 'text-orange')}>
+        {isFiber ? '\u26A1' : '\u2B21'} {label}
       </span>
     ),
     value: btcTxid ? (
       <span className="text-text-dim font-mono text-xs">btc:{truncateHash(btcTxid, 8, 6)}</span>
+    ) : isFiber && capacity ? (
+      <span className="text-text-dim font-mono text-xs">{formatCkbAmount(capacity).full} CKB</span>
     ) : null,
   };
 }

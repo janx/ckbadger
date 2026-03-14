@@ -1320,6 +1320,50 @@ interface AssetEcosystemResponse {
   totalKnowledgeSizeCkb: string;
 }
 
+type FiberChannelState = 'open' | 'cooperativelyClosed' | 'forceClosed' | 'settled';
+
+interface FiberChannel {
+  channelId: string;
+  state: FiberChannelState;
+  capacity: string;
+  fundingTxHash: string;
+  fundingOutputIndex: number;
+  openBlock: number;
+  openTimestamp: string;
+  closeBlock: number | null;
+  closeTimestamp: string | null;
+  closeTxHash: string | null;
+  settlementBlock: number | null;
+  settlementTimestamp: string | null;
+  settlementTxHash: string | null;
+  participants: string[];
+}
+
+interface FiberTimelineEvent {
+  event: string;
+  blockNumber: number;
+  txHash: string;
+  timestamp: string;
+}
+
+interface FiberChannelDetail extends FiberChannel {
+  timeline: FiberTimelineEvent[];
+}
+
+interface FiberStats {
+  totalChannels: number;
+  openChannels: number;
+  closedChannels: number;
+  totalCapacity: string;
+  openCapacity: string;
+}
+
+interface FiberChannelQueryParams {
+  limit?: number;
+  cursor?: string;
+  state?: FiberChannelState;
+}
+
 export type {
   GraphNode,
   GraphLink,
@@ -1429,6 +1473,12 @@ export type {
   TopTokenEntry,
   CapacityCategory,
   AssetEcosystemResponse,
+  FiberChannel,
+  FiberChannelDetail,
+  FiberTimelineEvent,
+  FiberStats,
+  FiberChannelState,
+  FiberChannelQueryParams,
 };
 
 export const api = {
@@ -2261,6 +2311,34 @@ export const api = {
       title: 'Daily Active Addresses',
       yAxisLabel: 'Addresses',
     };
+  },
+
+  getFiberChannels: (
+    params: FiberChannelQueryParams = {}
+  ): Promise<CursorPaginatedResponse<FiberChannel>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.state) query.set('state', params.state);
+    return fetchApi(`/fiber/channels?${query}`);
+  },
+
+  getFiberChannel: (channelId: string): Promise<FiberChannelDetail> => {
+    return fetchApi(`/fiber/channels/${channelId}`);
+  },
+
+  getAddressFiberChannels: (
+    addr: string,
+    params: CursorQueryParams = {}
+  ): Promise<CursorPaginatedResponse<FiberChannel>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    return fetchApi(`/addresses/${addr}/fiber/channels?${query}`);
+  },
+
+  getFiberStats: (): Promise<FiberStats> => {
+    return fetchApi('/fiber/stats');
   },
 
   getCkbVolumeChart: async (): Promise<ChartResponse> => {

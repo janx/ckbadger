@@ -409,8 +409,17 @@ function StreamItemTypeCall({ classified }: { classified: ClassifiedActivity }) 
   );
 }
 
+const FIBER_ACTION_LABELS: Record<string, string> = {
+  channel_open: 'Channel Open',
+  channel_close: 'Channel Close',
+  force_close: 'Force Close',
+  settlement: 'Settlement',
+};
+
 function StreamItemProtocolAction({ classified }: { classified: ClassifiedActivity }) {
   const { activity, primaryProtocolAction, primaryLockCall, primaryAssetChange } = classified;
+
+  const isFiber = primaryProtocolAction?.protocol === 'fiber';
 
   // Layer 3: prefer ProtocolAction, fall back to legacy lock-call-only path
   const protocolName = primaryProtocolAction
@@ -419,7 +428,10 @@ function StreamItemProtocolAction({ classified }: { classified: ClassifiedActivi
       primaryLockCall?.scriptName?.trim() ||
       'Protocol';
   const action = primaryProtocolAction
-    ? primaryProtocolAction.action.replace(/_/g, ' ')
+    ? isFiber
+      ? (FIBER_ACTION_LABELS[primaryProtocolAction.action] ??
+        primaryProtocolAction.action.replace(/_/g, ' '))
+      : primaryProtocolAction.action.replace(/_/g, ' ')
     : (primaryLockCall?.decoded?.intentType as string) ||
       (primaryLockCall?.decoded?.action as string) ||
       '';
@@ -435,6 +447,13 @@ function StreamItemProtocolAction({ classified }: { classified: ClassifiedActivi
         {sign}
         {primaryAssetChange.delta}
         {symbol ? ` ${symbol}` : ''}
+      </span>
+    );
+  } else if (isFiber && primaryProtocolAction?.metadata?.capacity) {
+    const cap = primaryProtocolAction.metadata.capacity as string;
+    assetDetail = (
+      <span className="text-text-dim font-mono text-[10px] tabular-nums">
+        {formatCkbAmount(cap).full} CKB
       </span>
     );
   }

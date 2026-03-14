@@ -11,6 +11,7 @@ import { useHomeScrollStore } from '@/hooks/useHomeScrollStore';
 
 const navLinks = [
   { href: '/dao', label: 'DAO' },
+  { href: '/fiber/channels', label: 'Fiber' },
   { href: '/assets', label: 'Assets' },
   { href: '/scripts', label: 'Scripts' },
   { href: '/charts', label: 'Charts' },
