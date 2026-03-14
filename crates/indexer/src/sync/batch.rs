@@ -1673,10 +1673,14 @@ impl Indexer {
             let writer = &self.writer;
             let dao_withdraw_outpoints = dao_withdraw_outpoints_from_map(&consumed_dao_map);
 
-            let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> =
-                vec![Box::new(
-                    crate::db::writer::rgbpp_detector::RgbppDetector::new(self.config.is_mainnet()),
-                )];
+            let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> = vec![
+                Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new(
+                    self.config.is_mainnet(),
+                )),
+                Box::new(crate::db::writer::fiber_detector::FiberDetector::new(
+                    self.config.is_mainnet(),
+                )),
+            ];
 
             let tt;
             (
@@ -4094,10 +4098,14 @@ impl Indexer {
             )?;
 
             // Activity writes (live sync)
-            let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> =
-                vec![Box::new(
-                    crate::db::writer::rgbpp_detector::RgbppDetector::new(self.config.is_mainnet()),
-                )];
+            let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> = vec![
+                Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new(
+                    self.config.is_mainnet(),
+                )),
+                Box::new(crate::db::writer::fiber_detector::FiberDetector::new(
+                    self.config.is_mainnet(),
+                )),
+            ];
             let mut activity_batch = StoreBatch::new(self.writer.store());
             {
                 let token_info_cache = load_activity_token_info_cache(

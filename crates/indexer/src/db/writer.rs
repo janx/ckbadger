@@ -56,6 +56,7 @@ mod cells;
 mod chain;
 mod dao;
 pub(crate) mod dotbit;
+pub(crate) mod fiber_detector;
 pub mod hodl_wave;
 mod mnft;
 pub(crate) mod nft_activity_acc;
