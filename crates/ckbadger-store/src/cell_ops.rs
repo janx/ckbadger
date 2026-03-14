@@ -482,6 +482,55 @@ impl CkbadgerStore {
         )
     }
 
+    /// Find a cell (live or consumed) by data hash.
+    ///
+    /// Unlike `list_cells_by_data_hash` which only returns live cells, this method also
+    /// checks consumed cells as a fallback. Used for code cell resolution where the
+    /// deployment cell may have been consumed.
+    /// Prefers live cells over consumed cells.
+    pub fn find_any_cell_by_data_hash(
+        &self,
+        data_hash: &[u8],
+        cells_store: &CkbadgerStore,
+    ) -> anyhow::Result<Option<(Vec<u8>, i16, PositionedCellInfo)>> {
+        let iter = self.iterator_cf(
+            self.cf_cell_by_data_hash(),
+            rocksdb::IteratorMode::From(data_hash, rocksdb::Direction::Forward),
+        );
+
+        let mut consumed_fallback: Option<(Vec<u8>, i16, PositionedCellInfo)> = None;
+
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate cell index in find_any_cell_by_data_hash: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(data_hash) {
+                break;
+            }
+            // Key: hash(32) + block_num(8) + outpoint(34)
+            if key.len() >= 74 {
+                let (tx_hash, output_index) = keys::decode_outpoint(&key[40..74]);
+                // Prefer live cells
+                if let Some(cell) = self.get_cell(&tx_hash, output_index, cells_store)? {
+                    return Ok(Some((tx_hash, output_index, cell)));
+                }
+                // Fall back to consumed cell (take first one found)
+                if consumed_fallback.is_none() {
+                    if let Some(cell) =
+                        self.get_consumed_cell(&tx_hash, output_index, cells_store)?
+                    {
+                        consumed_fallback = Some((tx_hash, output_index, cell));
+                    }
+                }
+            }
+        }
+
+        Ok(consumed_fallback)
+    }
+
     /// List live cells by lock code hash (prefix scan on cell_by_lock_code).
     /// `after_key` is the full 74-byte cell index key of the last returned entry (for pagination).
     pub fn list_cells_by_lock_code_hash(

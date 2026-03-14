@@ -203,19 +203,21 @@ fn resolve_code_cell(
         }
     }
 
-    // Step 2: try data-hash lookup (CF_CELL_BY_DATA_HASH) — runs even if type-ref was attempted
+    // Step 2: try data-hash lookup (CF_CELL_BY_DATA_HASH) — runs even if type-ref was attempted.
+    // Uses find_any_cell_by_data_hash which checks both live and consumed cells,
+    // since code cells may have been consumed while the script is still in use.
     if let Some(data_hash) = data_ref.as_deref() {
-        let cells = store
-            .list_cells_by_data_hash(data_hash, 1, None, cells_store)
+        if let Some((tx_hash, idx, _)) = store
+            .find_any_cell_by_data_hash(data_hash, cells_store)
             .map_err(|e| {
                 ApiError::internal(format!(
                     "failed to resolve code cell by deployment data hash 0x{}: {}",
                     hex::encode(data_hash),
                     e
                 ))
-            })?;
-        if let Some((tx_hash, idx, _)) = cells.first() {
-            let output_index = i32::from(*idx);
+            })?
+        {
+            let output_index = i32::from(idx);
             return Ok((
                 Some(format!("0x{}", hex::encode(tx_hash))),
                 Some(output_index),
@@ -1345,6 +1347,68 @@ mod tests {
             resolved_tx.as_deref(),
             Some(format!("0x{}", hex::encode(&tx_hash)).as_str()),
             "should resolve code cell via data_hash fallback"
+        );
+        assert_eq!(resolved_idx, Some(0));
+    }
+
+    /// When the code cell has been consumed, resolve_code_cell must still find it
+    /// via the preserved CF_CELL_BY_DATA_HASH index entry + consumed cell lookup.
+    #[test]
+    fn resolve_code_cell_finds_consumed_code_cell_by_data_hash() {
+        use ckbadger_store::{CkbadgerStore, LiveCellInfo, StoreBatch};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+
+        let tx_hash = vec![0xCB; 32];
+        let output_index: i16 = 0;
+        let block_num: i64 = 5;
+        let data_hash = vec![0xEE; 32];
+
+        // Write cell payload (append-only — never deleted).
+        let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, output_index);
+        let cell_info = LiveCellInfo {
+            capacity: 200_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 100,
+            occupied_capacity: 100_00000000,
+            udt_amount: None,
+            data_hash: None,
+        };
+        let payload = bincode::serialize(&cell_info).unwrap();
+        store
+            .put_cf(store.cf_cells(), &outpoint_key, &payload)
+            .unwrap();
+
+        // Write consumed cell metadata (not live — no CF_LIVE_CELLS entry).
+        let mut batch = StoreBatch::new(&store);
+        batch.put_consumed_cell(&tx_hash, output_index, &cell_info, block_num, 10);
+        batch.commit().unwrap();
+
+        // Write CF_CELL_BY_DATA_HASH index entry (preserved on consumption).
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell_by_data_hash(&data_hash, block_num, &tx_hash, output_index);
+        batch.commit().unwrap();
+
+        let info = ScriptInfo {
+            code_hash: data_hash.clone(),
+            hash_type: 0, // data hash type
+            ..Default::default()
+        };
+
+        let (resolved_tx, resolved_idx) = resolve_code_cell(&info, &store, &store).unwrap();
+        assert_eq!(
+            resolved_tx.as_deref(),
+            Some(format!("0x{}", hex::encode(&tx_hash)).as_str()),
+            "should resolve consumed code cell via data_hash index"
         );
         assert_eq!(resolved_idx, Some(0));
     }

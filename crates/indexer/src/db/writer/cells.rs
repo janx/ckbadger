@@ -340,14 +340,10 @@ impl BatchWriter {
                     *output_index,
                 );
             }
-            if let Some(ref data_hash) = info.data_hash {
-                domain_batch.delete_cell_by_data_hash(
-                    data_hash,
-                    info.created_at_block,
-                    tx_hash,
-                    *output_index,
-                );
-            }
+            // NOTE: CF_CELL_BY_DATA_HASH entries are intentionally preserved on consumption.
+            // Code cell resolution (resolve_code_cell) needs to find deployment cells by
+            // data hash even after they've been consumed. The live-cell query methods
+            // (list_cells_by_hash_cf) already skip consumed cells via get_cell returning None.
         }
 
         Ok(())
@@ -591,14 +587,8 @@ impl BatchWriter {
                         *output_index,
                     );
                 }
-                if let Some(ref data_hash) = info.data_hash {
-                    domain_batch.delete_cell_by_data_hash(
-                        data_hash,
-                        info.created_at_block,
-                        tx_hash,
-                        *output_index,
-                    );
-                }
+                // NOTE: CF_CELL_BY_DATA_HASH entries are intentionally preserved on consumption.
+                // See comment in consume_cells() for rationale.
             }
         }
 
