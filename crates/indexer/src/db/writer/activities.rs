@@ -6,7 +6,8 @@ use std::sync::OnceLock;
 #[cfg(test)]
 use ckbadger_store::types::ActivityEntry;
 use ckbadger_store::types::{
-    AssetAction, AssetChange, LockCallEntry, OwnerActivityDelta, TxActivityBundle, TypeCallEntry,
+    AssetAction, AssetChange, LockCallEntry, OwnerActivityDelta, ProtocolAction, TxActivityBundle,
+    TypeCallEntry,
 };
 
 use crate::parser::cell::ParsedCell;
@@ -169,6 +170,24 @@ pub struct TxView<'a> {
     pub is_cellbase: bool,
     pub inputs: Vec<InputCellView>,
     pub outputs: &'a [ParsedCell],
+    #[allow(dead_code)] // Used by ProtocolDetector implementations (Task 3+)
+    pub witnesses: &'a [String],
+}
+
+/// Detects protocol-level actions by analyzing cross-layer signals.
+pub(crate) trait ProtocolDetector {
+    #[allow(dead_code)] // Used by detector registration (Task 4+)
+    fn protocol_name(&self) -> &str;
+
+    fn detect(
+        &self,
+        tx: &TxView<'_>,
+        owner_lock_hash: &[u8],
+        accum: &OwnerAccum,
+        asset_changes: &[AssetChange],
+        type_calls: &[TypeCallEntry],
+        lock_calls: &[LockCallEntry],
+    ) -> Vec<ProtocolAction>;
 }
 
 /// `(lock_hash, involved_script_code_hashes, ActivityEntry)` — one per owner per transaction.
@@ -180,9 +199,18 @@ pub fn build_activity_bundles_for_block(
     txs: &[TxView<'_>],
     token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
 ) -> Vec<TxActivityBundle> {
+    build_activity_bundles_for_block_with_detectors(txs, token_info_cache, &[])
+}
+
+/// Build tx-scoped activity bundles with protocol detectors.
+pub fn build_activity_bundles_for_block_with_detectors(
+    txs: &[TxView<'_>],
+    token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
+    detectors: &[Box<dyn ProtocolDetector>],
+) -> Vec<TxActivityBundle> {
     let hashes = code_hashes();
     txs.iter()
-        .map(|tx| build_tx_activity_bundle(tx, hashes, token_info_cache))
+        .map(|tx| build_tx_activity_bundle(tx, hashes, token_info_cache, detectors))
         .collect()
 }
 
@@ -202,46 +230,46 @@ pub fn build_activities_for_block(
 
 /// Accumulator for per-owner position within one transaction.
 #[derive(Default)]
-struct OwnerAccum {
-    lock_code_hash: Option<Vec<u8>>,
-    lock_hash_type: Option<i16>,
-    lock_args: Option<Vec<u8>>,
-    input_capacity: i128,
-    output_capacity: i128,
-    input_used: i64,
-    output_used: i64,
+pub(crate) struct OwnerAccum {
+    pub(crate) lock_code_hash: Option<Vec<u8>>,
+    pub(crate) lock_hash_type: Option<i16>,
+    pub(crate) lock_args: Option<Vec<u8>>,
+    pub(crate) input_capacity: i128,
+    pub(crate) output_capacity: i128,
+    pub(crate) input_used: i64,
+    pub(crate) output_used: i64,
     /// UDT: type_script_hash -> (input_amount, output_amount)
-    udt_deltas: HashMap<Vec<u8>, (i128, i128)>,
+    pub(crate) udt_deltas: HashMap<Vec<u8>, (i128, i128)>,
     /// DAO deposits (output cells with DAO type and data == 0x00..00)
-    dao_deposits: Vec<i64>,
+    pub(crate) dao_deposits: Vec<i64>,
     /// DAO withdraw requests (output cells with DAO type and non-zero deposit block)
-    dao_withdraw_requests: Vec<(i64, i64)>,
+    pub(crate) dao_withdraw_requests: Vec<(i64, i64)>,
     /// DAO withdraw completes (input cells with DAO withdraw request consumed without DAO output)
-    dao_withdraw_completes: Vec<i64>,
+    pub(crate) dao_withdraw_completes: Vec<i64>,
     /// Spore/DOB IDs seen as inputs
-    spore_inputs: Vec<Vec<u8>>,
+    pub(crate) spore_inputs: Vec<Vec<u8>>,
     /// Spore/DOB IDs seen as outputs
-    spore_outputs: Vec<Vec<u8>>,
+    pub(crate) spore_outputs: Vec<Vec<u8>>,
     /// mNFT IDs seen as inputs
-    nft_inputs: Vec<Vec<u8>>,
+    pub(crate) nft_inputs: Vec<Vec<u8>>,
     /// mNFT IDs seen as outputs
-    nft_outputs: Vec<Vec<u8>>,
+    pub(crate) nft_outputs: Vec<Vec<u8>>,
     /// DotBit IDs seen as inputs
-    dotbit_inputs: Vec<Vec<u8>>,
+    pub(crate) dotbit_inputs: Vec<Vec<u8>>,
     /// DotBit IDs seen as outputs
-    dotbit_outputs: Vec<Vec<u8>>,
+    pub(crate) dotbit_outputs: Vec<Vec<u8>>,
     /// did:ckb IDs seen as inputs
-    did_ckb_inputs: Vec<Vec<u8>>,
+    pub(crate) did_ckb_inputs: Vec<Vec<u8>>,
     /// did:ckb IDs seen as outputs
-    did_ckb_outputs: Vec<Vec<u8>>,
+    pub(crate) did_ckb_outputs: Vec<Vec<u8>>,
     /// Distinct script code_hashes involved (lock + type)
-    involved_scripts: BTreeSet<Vec<u8>>,
+    pub(crate) involved_scripts: BTreeSet<Vec<u8>>,
     /// Whether any cell for this owner has a type script
-    has_type_script: bool,
+    pub(crate) has_type_script: bool,
     /// Unrecognized type script instances keyed by (code_hash, hash_type, args)
-    unrecognized_type_calls: BTreeSet<(Vec<u8>, i16, Vec<u8>)>,
+    pub(crate) unrecognized_type_calls: BTreeSet<(Vec<u8>, i16, Vec<u8>)>,
     /// Non-standard lock scripts seen on output cells in this tx, keyed by (code_hash, hash_type, args)
-    unrecognized_lock_calls: BTreeSet<(Vec<u8>, i16, Vec<u8>)>,
+    pub(crate) unrecognized_lock_calls: BTreeSet<(Vec<u8>, i16, Vec<u8>)>,
 }
 
 const DOTBIT_TYPE_ARGS_LEN: usize = 20;
@@ -285,6 +313,7 @@ fn build_tx_activity_bundle(
     tx: &TxView<'_>,
     hashes: &CodeHashes,
     token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
+    detectors: &[Box<dyn ProtocolDetector>],
 ) -> TxActivityBundle {
     let mut owners: HashMap<Vec<u8>, OwnerAccum> = HashMap::new();
 
@@ -500,6 +529,23 @@ fn build_tx_activity_bundle(
                 .collect()
         });
 
+        let type_calls_ref: &[TypeCallEntry] = type_calls.as_deref().unwrap_or(&[]);
+        let lock_calls_ref: &[LockCallEntry] = lock_calls.as_deref().unwrap_or(&[]);
+
+        let protocol_actions: Vec<ProtocolAction> = detectors
+            .iter()
+            .flat_map(|d| {
+                d.detect(
+                    tx,
+                    lock_hash,
+                    accum,
+                    &asset_changes,
+                    type_calls_ref,
+                    lock_calls_ref,
+                )
+            })
+            .collect();
+
         bundle_owners.push(OwnerActivityDelta {
             lock_hash: lock_hash.clone(),
             lock_code_hash: accum
@@ -520,7 +566,7 @@ fn build_tx_activity_bundle(
             asset_changes,
             type_calls,
             lock_calls,
-            protocol_actions: vec![],
+            protocol_actions,
             peers,
         });
     }
@@ -870,6 +916,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(owner, 100_00000000, 61_00000000)],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new());
@@ -901,6 +948,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(bob, 200_00000000, 61_00000000)],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new());
@@ -933,6 +981,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -973,6 +1022,7 @@ mod tests {
             is_cellbase: true,
             inputs: vec![],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -1006,6 +1056,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 100_00000000, 61_00000000)],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -1038,6 +1089,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -1065,6 +1117,7 @@ mod tests {
             is_cellbase: true,
             inputs: vec![],
             outputs: &outputs1,
+            witnesses: &[],
         };
 
         let outputs2 = vec![make_output(bob, 200_00000000, None, None, None, vec![])];
@@ -1078,6 +1131,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 200_00000000, 61_00000000)],
             outputs: &outputs2,
+            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx1, tx2], &HashMap::new());
@@ -1130,6 +1184,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![alice_input],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let mut token_cache = HashMap::new();
@@ -1225,6 +1280,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![alice_input],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let mut token_cache = HashMap::new();
@@ -1284,6 +1340,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -1334,6 +1391,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -1379,6 +1437,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![dao_input],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -1410,6 +1469,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -1460,6 +1520,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![alice_input],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -1516,6 +1577,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -1567,6 +1629,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![udt_input],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -1659,6 +1722,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![alice_input],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -1706,6 +1770,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 100_00000000, 61_00000000)],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new());
@@ -1748,6 +1813,7 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 100_00000000, 61_00000000)],
             outputs: &outputs,
+            witnesses: &[],
         };
 
         let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new());
