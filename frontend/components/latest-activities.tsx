@@ -69,9 +69,9 @@ interface TypeBadgeInfo {
 }
 
 function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
-  const { type, primaryAssetChange } = classified;
+  const { displayType, primaryAssetChange } = classified;
 
-  switch (type) {
+  switch (displayType) {
     case 'daoDeposit':
       return { icon: '\u25C6', label: 'DAO Deposit', colorClass: 'text-gold' };
     case 'daoWithdrawRequest':
@@ -104,8 +104,11 @@ function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
       }
       return { icon: '\u2726', label: 'Identity', colorClass: 'text-aqua' };
     }
-    case 'protocolAction':
-      return { icon: '\u26A1', label: 'Protocol', colorClass: 'text-violet' };
+    case 'protocolAction': {
+      const pa = classified.primaryProtocolAction;
+      const label = pa ? pa.protocol.toUpperCase() : 'Protocol';
+      return { icon: '\u26A1', label, colorClass: 'text-violet' };
+    }
     case 'typeCall':
       return { icon: '\u2699', label: 'Type Call', colorClass: 'text-amber' };
     case 'ckbTransfer':
@@ -407,16 +410,34 @@ function StreamItemTypeCall({ classified }: { classified: ClassifiedActivity }) 
 }
 
 function StreamItemProtocolAction({ classified }: { classified: ClassifiedActivity }) {
-  const { activity, primaryLockCall } = classified;
+  const { activity, primaryProtocolAction, primaryLockCall, primaryAssetChange } = classified;
 
-  const protocolName =
-    (primaryLockCall?.decoded?.protocol as string) ||
-    primaryLockCall?.scriptName?.trim() ||
-    'Protocol';
-  const action =
-    (primaryLockCall?.decoded?.intentType as string) ||
-    (primaryLockCall?.decoded?.action as string) ||
-    '';
+  // Layer 3: prefer ProtocolAction, fall back to legacy lock-call-only path
+  const protocolName = primaryProtocolAction
+    ? primaryProtocolAction.protocol
+    : (primaryLockCall?.decoded?.protocol as string) ||
+      primaryLockCall?.scriptName?.trim() ||
+      'Protocol';
+  const action = primaryProtocolAction
+    ? primaryProtocolAction.action.replace(/_/g, ' ')
+    : (primaryLockCall?.decoded?.intentType as string) ||
+      (primaryLockCall?.decoded?.action as string) ||
+      '';
+
+  // Layer 2: carried asset summary (e.g., "+1,000 XUDT")
+  let assetDetail: React.ReactNode = null;
+  if (primaryAssetChange && primaryAssetChange.type === 'token') {
+    const delta = BigInt(primaryAssetChange.delta);
+    const sign = delta > BigInt(0) ? '+' : '';
+    const symbol = primaryAssetChange.symbol;
+    assetDetail = (
+      <span className="font-mono text-[10px] tabular-nums text-[#ff66aa]">
+        {sign}
+        {primaryAssetChange.delta}
+        {symbol ? ` ${symbol}` : ''}
+      </span>
+    );
+  }
 
   return (
     <>
@@ -443,12 +464,13 @@ function StreamItemProtocolAction({ classified }: { classified: ClassifiedActivi
         <AddressLink address={activity.address} />
         <CkbDelta delta={activity.ckbDelta} />
       </div>
+      {assetDetail && <div className="flex justify-end">{assetDetail}</div>}
     </>
   );
 }
 
 function StreamItem({ classified }: { classified: ClassifiedActivity }) {
-  switch (classified.type) {
+  switch (classified.displayType) {
     case 'ckbTransfer':
       return <StreamItemCkbTransfer classified={classified} />;
     case 'daoDeposit':

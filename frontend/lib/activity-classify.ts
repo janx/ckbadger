@@ -17,13 +17,33 @@ export type ActivityType =
   | 'typeCall'
   | 'ckbTransfer';
 
+/**
+ * Layered activity analysis.
+ *
+ * Three layers are composable, not mutually exclusive — a single activity
+ * may have signals at all three layers simultaneously:
+ *
+ *   Layer 3: Protocol Action   — WHY (cross-script pattern interpretation)
+ *   Layer 2: Asset Change      — WHAT (recognized asset mutations / script calls)
+ *   Layer 1: CKB Position      — HOW MUCH (ckbDelta, usedDelta — always present)
+ *
+ * `displayType` is a lossy projection of the layered analysis, used for
+ * badge/icon/color selection. It picks a headline; it does NOT mean the
+ * other layers are absent or unimportant.
+ */
 export interface ClassifiedActivity {
-  type: ActivityType;
+  /** Lossy projection for badge/icon/color — picks the highest non-empty layer. */
+  displayType: ActivityType;
   activity: GlobalActivity;
-  primaryAssetChange: ActivityAssetChange | null;
-  primaryTypeCall: ActivityTypeCall | null;
-  primaryLockCall: ActivityLockCall | null;
+  /** Layer 3: highest-level interpretation, if a ProtocolDetector matched. */
   primaryProtocolAction: ActivityProtocolAction | null;
+  /** Layer 2: primary recognized asset change, if present. */
+  primaryAssetChange: ActivityAssetChange | null;
+  /** Layer 2: primary unrecognized type script call, if present. */
+  primaryTypeCall: ActivityTypeCall | null;
+  /** Layer 2: primary non-standard lock script, if present. */
+  primaryLockCall: ActivityLockCall | null;
+  /* Layer 1: CKB position (ckbDelta, usedDelta) is always in activity — not repeated here. */
 }
 
 const ASSET_TYPE_PRIORITY: Array<{ assetType: string; activityType: ActivityType }> = [
@@ -38,10 +58,10 @@ const ASSET_TYPE_PRIORITY: Array<{ assetType: string; activityType: ActivityType
 export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
   const primaryLockCall = activity.lockCalls[0] ?? null;
 
-  // 0. Protocol actions — highest level interpretation
+  // Layer 3: Protocol actions — highest level interpretation
   if (activity.protocolActions.length > 0) {
     return {
-      type: 'protocolAction',
+      displayType: 'protocolAction',
       activity,
       primaryAssetChange: activity.assetChanges[0] ?? null,
       primaryTypeCall: activity.typeCalls[0] ?? null,
@@ -50,12 +70,12 @@ export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
     };
   }
 
-  // 1. Asset changes take priority
+  // Layer 2: Asset changes
   for (const { assetType, activityType } of ASSET_TYPE_PRIORITY) {
     const match = activity.assetChanges.find((c) => c.type === assetType);
     if (match) {
       return {
-        type: activityType,
+        displayType: activityType,
         activity,
         primaryAssetChange: match,
         primaryTypeCall: activity.typeCalls[0] ?? null,
@@ -65,11 +85,11 @@ export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
     }
   }
 
-  // 2. Protocol action lock calls
+  // Layer 2 (catch-all): Protocol action lock calls
   const protocolAction = activity.lockCalls.find((lc) => lc.role === 'protocol_action');
   if (protocolAction) {
     return {
-      type: 'protocolAction',
+      displayType: 'protocolAction',
       activity,
       primaryAssetChange: null,
       primaryTypeCall: activity.typeCalls[0] ?? null,
@@ -78,10 +98,10 @@ export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
     };
   }
 
-  // 3. Type calls
+  // Layer 2 (catch-all): Unrecognized type calls
   if (activity.typeCalls.length > 0) {
     return {
-      type: 'typeCall',
+      displayType: 'typeCall',
       activity,
       primaryAssetChange: null,
       primaryTypeCall: activity.typeCalls[0],
@@ -90,9 +110,9 @@ export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
     };
   }
 
-  // 4. CKB transfer (fallback)
+  // 4. CKB transfer — Layer 1 only (Layers 2 and 3 are empty)
   return {
-    type: 'ckbTransfer',
+    displayType: 'ckbTransfer',
     activity,
     primaryAssetChange: null,
     primaryTypeCall: null,

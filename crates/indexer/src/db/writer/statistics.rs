@@ -111,14 +111,21 @@ fn accumulate_activity_stats_inner(
         stats.script_call_count += 1;
     }
 
-    let matched = has_dao || has_token || has_object || has_identity || has_script_call;
-    if matched {
-        return;
-    }
-    if !has_type_script {
-        stats.transfer_count += 1;
-    } else {
-        stats.unknown_count += 1;
+    // transfer_count = Layer 1 only (CKB delta with no Layer 2 or Layer 3 signals).
+    // Any Layer 2 asset/script signal or Layer 3 protocol action excludes from transfer.
+    let has_protocol_action = !protocol_actions.is_empty();
+    let matched = has_dao
+        || has_token
+        || has_object
+        || has_identity
+        || has_script_call
+        || has_protocol_action;
+    if !matched {
+        if !has_type_script {
+            stats.transfer_count += 1;
+        } else {
+            stats.unknown_count += 1;
+        }
     }
 }
 

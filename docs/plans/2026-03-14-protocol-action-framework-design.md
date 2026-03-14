@@ -13,17 +13,22 @@ Missing is a **higher-level interpretation layer** that combines these signals t
 
 ### Layer Architecture
 
+See `docs/prompts/ACTIVITY_DESIGN.md` for the canonical three-layer model.
+
 ```
-Layer 3 (new):   ProtocolAction      "RGB++ leap to CKB carrying 1000 XUDT"
-                                     Composed from one or more Layer 2 signals
+Layer 3 (new):    ProtocolAction      "RGB++ leap to CKB carrying 1000 XUDT"
+                                      Composed from Layer 2 signals + Layer 0 raw data
 
-Layer 2 (exists): AssetChange        UDT delta, DAO deposit, Spore mint...
-                  TypeCallEntry      Unrecognized type script invocations
-                  LockCallEntry      Non-standard locks on outputs
+Layer 2 (exists): AssetChange         UDT delta, DAO deposit, Spore mint...
+                  TypeCallEntry       Unrecognized type script invocations
+                  LockCallEntry       Non-standard locks on outputs
 
-Layer 1 (exists): InputCellView      Raw input cell: lock, type, data, capacity
-                  ParsedCell         Raw output cell
-                  witnesses          Raw witness hex strings
+Layer 1 (exists): ckb_delta           Net CKB capacity change (always present)
+                  used_delta          Net occupied capacity change
+
+Layer 0 (raw):    InputCellView       Raw input cell: lock, type, data, capacity
+                  ParsedCell          Raw output cell
+                  witnesses           Raw witness hex strings
 ```
 
 ### Data Model

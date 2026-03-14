@@ -25,7 +25,7 @@ describe('classifyActivity', () => {
     const result = classifyActivity(
       makeActivity({ assetChanges: [{ type: 'daoDeposit', capacity: '10200000000' }] })
     );
-    expect(result.type).toBe('daoDeposit');
+    expect(result.displayType).toBe('daoDeposit');
   });
 
   it('classifies DAO withdraw request', () => {
@@ -34,7 +34,7 @@ describe('classifyActivity', () => {
         assetChanges: [{ type: 'daoWithdrawRequest', capacity: '10200000000', depositBlock: 100 }],
       })
     );
-    expect(result.type).toBe('daoWithdrawRequest');
+    expect(result.displayType).toBe('daoWithdrawRequest');
   });
 
   it('classifies DAO withdraw complete', () => {
@@ -45,7 +45,7 @@ describe('classifyActivity', () => {
         ],
       })
     );
-    expect(result.type).toBe('daoWithdrawComplete');
+    expect(result.displayType).toBe('daoWithdrawComplete');
   });
 
   it('classifies token transfer', () => {
@@ -56,7 +56,7 @@ describe('classifyActivity', () => {
         ],
       })
     );
-    expect(result.type).toBe('token');
+    expect(result.displayType).toBe('token');
   });
 
   it('classifies object action', () => {
@@ -65,7 +65,7 @@ describe('classifyActivity', () => {
         assetChanges: [{ type: 'object', objectId: '0xspore', standard: 'spore', action: 'mint' }],
       })
     );
-    expect(result.type).toBe('object');
+    expect(result.displayType).toBe('object');
   });
 
   it('classifies identity action', () => {
@@ -76,7 +76,7 @@ describe('classifyActivity', () => {
         ],
       })
     );
-    expect(result.type).toBe('identity');
+    expect(result.displayType).toBe('identity');
   });
 
   it('classifies script call', () => {
@@ -93,12 +93,12 @@ describe('classifyActivity', () => {
         ],
       })
     );
-    expect(result.type).toBe('typeCall');
+    expect(result.displayType).toBe('typeCall');
   });
 
   it('classifies CKB transfer as fallback', () => {
     const result = classifyActivity(makeActivity({ ckbDelta: '-50000000000' }));
-    expect(result.type).toBe('ckbTransfer');
+    expect(result.displayType).toBe('ckbTransfer');
   });
 
   it('DAO deposit takes priority over token in same activity', () => {
@@ -110,7 +110,7 @@ describe('classifyActivity', () => {
         ],
       })
     );
-    expect(result.type).toBe('daoDeposit');
+    expect(result.displayType).toBe('daoDeposit');
   });
 
   it('token takes priority over script call', () => {
@@ -130,7 +130,7 @@ describe('classifyActivity', () => {
         ],
       })
     );
-    expect(result.type).toBe('token');
+    expect(result.displayType).toBe('token');
   });
 
   it('returns the first matching asset change for the classified type', () => {
@@ -139,7 +139,7 @@ describe('classifyActivity', () => {
         assetChanges: [{ type: 'daoDeposit', capacity: '10200000000' }],
       })
     );
-    expect(result.type).toBe('daoDeposit');
+    expect(result.displayType).toBe('daoDeposit');
     expect(result.primaryAssetChange).toEqual({ type: 'daoDeposit', capacity: '10200000000' });
   });
 
@@ -158,7 +158,7 @@ describe('classifyActivity', () => {
         ],
       })
     );
-    expect(result.type).toBe('protocolAction');
+    expect(result.displayType).toBe('protocolAction');
     expect(result.primaryLockCall).toBeTruthy();
   });
 
@@ -179,7 +179,7 @@ describe('classifyActivity', () => {
         ],
       })
     );
-    expect(result.type).toBe('token');
+    expect(result.displayType).toBe('token');
     expect(result.primaryLockCall?.role).toBe('protocol_action');
   });
 
@@ -198,7 +198,7 @@ describe('classifyActivity', () => {
         ],
       })
     );
-    expect(result.type).toBe('ckbTransfer');
+    expect(result.displayType).toBe('ckbTransfer');
     expect(result.primaryLockCall?.role).toBe('access_control');
   });
 
@@ -210,7 +210,7 @@ describe('classifyActivity', () => {
         ],
       })
     );
-    expect(result.type).toBe('protocolAction');
+    expect(result.displayType).toBe('protocolAction');
     expect(result.primaryProtocolAction?.protocol).toBe('rgbpp');
     expect(result.primaryProtocolAction?.action).toBe('leap_to_ckb');
   });
@@ -224,7 +224,7 @@ describe('classifyActivity', () => {
         ],
       })
     );
-    expect(result.type).toBe('protocolAction');
+    expect(result.displayType).toBe('protocolAction');
     expect(result.primaryAssetChange?.type).toBe('token');
   });
 });
