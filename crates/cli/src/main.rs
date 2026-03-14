@@ -12,7 +12,8 @@ use tracing::info;
 
 use ckbadger_config::{
     default_config_toml, load_config, resolve_ckb_paths, resolve_share_dir, resolve_store_paths,
-    resolve_token_labels_path, CkbadgerConfig, ResolvedCkbPaths, StoreConfig, WorkDir,
+    resolve_token_labels_path, resolve_workdir_path, CkbadgerConfig, ResolvedCkbPaths, StoreConfig,
+    WorkDir,
 };
 
 use ckbadger_api::entry::{run_api, run_frontend_server, ApiServiceConfig, FrontendServiceConfig};
@@ -244,7 +245,7 @@ async fn cmd_run(workdir: &Path, args: &RunArgs) -> Result<()> {
         bail!("no services selected to run");
     }
 
-    info!("Starting services: {}", services.join(", "));
+    print_startup_info(workdir, &config, &work, &services);
 
     supervisor::run_supervisor(&work, &config, services).await
 }
@@ -623,6 +624,118 @@ fn print_banner() {
         println!("{BANNER}");
         println!("{BUILD_VERSION}");
     }
+}
+
+fn print_startup_info(
+    workdir: &Path,
+    config: &CkbadgerConfig,
+    work: &WorkDir,
+    services: &[String],
+) {
+    let use_color = std::io::stdout().is_terminal();
+    let dim = if use_color { "\x1b[90m" } else { "" };
+    let cyan = if use_color { "\x1b[36m" } else { "" };
+    let reset = if use_color { "\x1b[0m" } else { "" };
+    let bold = if use_color { "\x1b[1m" } else { "" };
+
+    println!();
+
+    // System environment
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get().to_string())
+        .unwrap_or_else(|_| "?".to_string());
+    let ram_info = get_total_ram_gb()
+        .map(|gb| format!(" · {gb} GB RAM"))
+        .unwrap_or_default();
+    println!(
+        "  {dim}System{reset}      {} {} · {cpus} cores{ram_info}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    println!(
+        "  {dim}Network{reset}     {bold}{}{reset}",
+        config.ckb.network
+    );
+    println!("  {dim}CKB RPC{reset}     {}", config.ckb.rpc_url);
+    if let Some(ref ckb_wd) = config.ckb.workdir {
+        if !ckb_wd.is_empty() {
+            let resolved = resolve_workdir_path(workdir, ckb_wd);
+            println!("  {dim}CKB node{reset}    {}", resolved.display());
+        }
+    }
+    println!("  {dim}Workdir{reset}     {}", work.root.display());
+    println!("  {dim}Log level{reset}   {}", config.log.level);
+
+    // Services
+    println!();
+    println!("  {dim}Services{reset}");
+    for svc in services {
+        match svc.as_str() {
+            "frontend-server" => {
+                println!(
+                    "    {dim}Frontend{reset}    {cyan}http://{}:{}{reset}",
+                    config.frontend.host, config.frontend.port
+                );
+            }
+            "api" => {
+                println!(
+                    "    {dim}API{reset}         {cyan}http://{}:{}{reset}",
+                    config.api.host, config.api.port
+                );
+            }
+            "indexer" => {
+                println!(
+                    "    {dim}Indexer{reset}     batch={} parallel={} buffer={}",
+                    config.indexer.batch_size,
+                    config.indexer.parallel_fetch_size,
+                    config.indexer.pipeline_buffer
+                );
+            }
+            other => {
+                println!("    {other}");
+            }
+        }
+    }
+
+    // Storage
+    let store_paths = resolve_store_paths(workdir, &config.store);
+    println!();
+    println!("  {dim}Storage{reset}");
+    println!(
+        "    {dim}Domain{reset}      {}",
+        store_paths.domain_data.display()
+    );
+    println!(
+        "    {dim}Append{reset}      {}",
+        store_paths.append_only_data.display()
+    );
+    if let Some(gb) = config.store.memory_budget_gb {
+        println!("    {dim}RocksDB{reset}     {gb} GB memory budget");
+    }
+    println!("    {dim}Logs{reset}        {}", work.log_dir.display());
+
+    // Tips
+    println!();
+    println!(
+        "  {dim}Tip: use {reset}{bold}ckbadger tui{reset}{dim} for live monitoring, \
+         {reset}{bold}ckbadger status{reset}{dim} for sync progress{reset}"
+    );
+    println!();
+}
+
+fn get_total_ram_gb() -> Option<u64> {
+    let content = std::fs::read_to_string("/proc/meminfo").ok()?;
+    parse_meminfo_total_gb(&content)
+}
+
+fn parse_meminfo_total_gb(content: &str) -> Option<u64> {
+    for line in content.lines() {
+        if let Some(rest) = line.strip_prefix("MemTotal:") {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb / 1_048_576);
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -1130,6 +1243,71 @@ mod tests {
     fn test_parse_only_flag_with_spaces() {
         let services = parse_only_flag(&Some(" indexer , api ".to_string()));
         assert_eq!(services, vec!["indexer".to_string(), "api".to_string()]);
+    }
+
+    // -- startup info --
+
+    #[test]
+    fn test_parse_meminfo_total_gb_valid() {
+        let content = "MemTotal:       65758916 kB\nMemFree:        12345678 kB\n";
+        // 65758916 / 1048576 = 62
+        assert_eq!(parse_meminfo_total_gb(content), Some(62));
+    }
+
+    #[test]
+    fn test_parse_meminfo_total_gb_missing_field() {
+        let content = "MemFree:        12345678 kB\nMemAvailable:   9876543 kB\n";
+        assert_eq!(parse_meminfo_total_gb(content), None);
+    }
+
+    #[test]
+    fn test_parse_meminfo_total_gb_empty() {
+        assert_eq!(parse_meminfo_total_gb(""), None);
+    }
+
+    #[test]
+    fn test_parse_meminfo_total_gb_small_value() {
+        // 8 GB = 8388608 kB
+        let content = "MemTotal:        8388608 kB\n";
+        assert_eq!(parse_meminfo_total_gb(content), Some(8));
+    }
+
+    #[test]
+    fn test_print_startup_info_does_not_panic() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let config = CkbadgerConfig::default();
+        let work = WorkDir::resolve(root);
+        let services = vec![
+            "indexer".to_string(),
+            "api".to_string(),
+            "frontend-server".to_string(),
+        ];
+        // Should not panic with any config
+        print_startup_info(root, &config, &work, &services);
+    }
+
+    #[test]
+    fn test_print_startup_info_partial_services() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let config = CkbadgerConfig::default();
+        let work = WorkDir::resolve(root);
+        let services = vec!["indexer".to_string()];
+        print_startup_info(root, &config, &work, &services);
+    }
+
+    #[test]
+    fn test_print_startup_info_custom_config() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let mut config = CkbadgerConfig::default();
+        config.ckb.network = "testnet".to_string();
+        config.ckb.workdir = Some("ckb-node".to_string());
+        config.store.memory_budget_gb = Some(48);
+        let work = WorkDir::resolve(root);
+        let services = vec!["api".to_string(), "frontend-server".to_string()];
+        print_startup_info(root, &config, &work, &services);
     }
 
     // -- resolve_frontend_dir --
