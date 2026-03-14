@@ -837,8 +837,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     <option value="object">Object</option>
                     <option value="identity">Identity</option>
                     <option value="dao">DAO</option>
-                    <option value="type_call">Type Call</option>
-                    <option value="lock_call">Lock Call</option>
+                    <option value="type_call">Script Call (type)</option>
+                    <option value="lock_call">Script Call (lock)</option>
                     <option value="protocol:rgbpp">RGB++</option>
                   </select>
                 </div>
@@ -880,7 +880,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   <div className="text-text-dim py-12 text-center">
                     {activityFilter === 'all'
                       ? 'No activities'
-                      : `No ${activityFilter === 'ckb' ? 'CKB' : activityFilter === 'type_call' ? 'Type Call' : activityFilter === 'lock_call' ? 'Lock Call' : activityFilter === 'protocol:rgbpp' ? 'RGB++' : activityFilter.charAt(0).toUpperCase() + activityFilter.slice(1)} activities on this page`}
+                      : `No ${activityFilter === 'ckb' ? 'CKB' : activityFilter === 'type_call' ? 'Script Call (type)' : activityFilter === 'lock_call' ? 'Script Call (lock)' : activityFilter === 'protocol:rgbpp' ? 'RGB++' : activityFilter.charAt(0).toUpperCase() + activityFilter.slice(1)} activities on this page`}
                   </div>
                 )}
               </>

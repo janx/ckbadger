@@ -89,7 +89,7 @@ describe('ActivityEventGroup', () => {
     expect(screen.getAllByText(/SEAL Transfer/).length).toBeGreaterThan(0);
   });
 
-  it('renders script call sub-row', () => {
+  it('renders generic type script call label', () => {
     render(
       <ActivityEventGroup
         activity={makeActivity({
@@ -106,12 +106,12 @@ describe('ActivityEventGroup', () => {
         formatTimeAgo={mockFormatTimeAgo}
       />
     );
+    expect(screen.getAllByText(/Script Call \(type\)/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Omnilock/).length).toBeGreaterThan(0);
-    // scriptName replaces "Type call" label
     expect(screen.queryByText(/Type call/)).not.toBeInTheDocument();
   });
 
-  it('renders script name instead of Type call when scriptName is set', () => {
+  it('keeps generic type script call label when scriptName is set', () => {
     render(
       <ActivityEventGroup
         activity={makeActivity({
@@ -128,8 +128,30 @@ describe('ActivityEventGroup', () => {
         formatTimeAgo={mockFormatTimeAgo}
       />
     );
+    expect(screen.getAllByText(/Script Call \(type\)/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Stable\+\+ Pool/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/Type call/)).not.toBeInTheDocument();
+  });
+
+  it('removes the hash-type prefix from type script refs', () => {
+    render(
+      <ActivityEventGroup
+        activity={makeActivity({
+          typeCalls: [
+            {
+              typeCodeHash: '0xcode',
+              typeHashType: 'data1',
+              typeArgs: '0x1234',
+              scriptHash: '0x1234567890abcdef',
+            },
+          ],
+        })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
+    );
+    expect(screen.getAllByText(/Script Call \(type\)/).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: '0x12345678' }).length).toBeGreaterThan(0);
+    expect(screen.queryByText('data1:0x12345678')).not.toBeInTheDocument();
   });
 
   it('renders multiple event types in one activity', () => {
@@ -195,7 +217,7 @@ describe('ActivityEventGroup', () => {
     expect(screen.getAllByText('5 mins ago').length).toBeGreaterThan(0);
   });
 
-  it('renders lock call sub-row with script name', () => {
+  it('renders generic lock script call label', () => {
     render(
       <ActivityEventGroup
         activity={makeActivity({
@@ -212,10 +234,11 @@ describe('ActivityEventGroup', () => {
         formatTimeAgo={mockFormatTimeAgo}
       />
     );
+    expect(screen.getAllByText(/Script Call \(lock\)/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/UTXOSwap Intent/).length).toBeGreaterThan(0);
   });
 
-  it('renders Lock call label when lock call has no script name or protocol', () => {
+  it('renders generic lock script call label when lock call has no script name or protocol', () => {
     render(
       <ActivityEventGroup
         activity={makeActivity({
@@ -231,6 +254,27 @@ describe('ActivityEventGroup', () => {
         formatTimeAgo={mockFormatTimeAgo}
       />
     );
-    expect(screen.getAllByText(/Lock call/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Script Call \(lock\)/).length).toBeGreaterThan(0);
+  });
+
+  it('removes the hash-type prefix from lock script refs', () => {
+    render(
+      <ActivityEventGroup
+        activity={makeActivity({
+          lockCalls: [
+            {
+              lockCodeHash: '0xunknown',
+              lockHashType: 'type',
+              lockArgs: '0xargs',
+              scriptHash: '0x8765432100abcdef',
+            },
+          ],
+        })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
+    );
+    expect(screen.getAllByText(/Script Call \(lock\)/).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: '0x87654321' }).length).toBeGreaterThan(0);
+    expect(screen.queryByText('type:0x87654321')).not.toBeInTheDocument();
   });
 });

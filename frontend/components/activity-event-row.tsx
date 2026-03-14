@@ -35,14 +35,12 @@ export function capitalizeAction(action: string): string {
   return action.charAt(0).toUpperCase() + action.slice(1);
 }
 
-export function formatScriptRef(sc: {
-  scriptHash: string;
-  typeHashType: string;
-  scriptName?: string;
-}): string {
+export const TYPE_SCRIPT_CALL_LABEL = 'Script Call (type)';
+export const LOCK_SCRIPT_CALL_LABEL = 'Script Call (lock)';
+
+export function formatScriptRef(sc: { scriptHash: string; scriptName?: string }): string {
   if (sc.scriptName?.trim()) return sc.scriptName!.trim();
-  const hashPrefix = sc.scriptHash.slice(0, 10);
-  return `${sc.typeHashType}:${hashPrefix}`;
+  return sc.scriptHash.slice(0, 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +102,7 @@ export function TypeCallExpr({ sc }: { sc: ActivityTypeCall }) {
 // ---------------------------------------------------------------------------
 
 export function LockCallExpr({ lc }: { lc: ActivityLockCall }) {
-  const fnName = lc.scriptName?.trim() || `${lc.lockHashType}:${lc.scriptHash.slice(0, 10)}`;
+  const fnName = formatScriptRef({ scriptHash: lc.scriptHash, scriptName: lc.scriptName });
   const args = truncateHash(lc.lockArgs, 6, 4);
 
   return (
@@ -263,11 +261,10 @@ function getAssetEventParts(change: ActivityAssetChange): EventParts {
 }
 
 function getTypeEventParts(sc: ActivityTypeCall): EventParts {
-  const label = sc.scriptName?.trim() || 'Type call';
   return {
     badge: (
       <span className="text-amber font-mono text-xs">
-        {'\u2699'} {label}
+        {'\u2699'} {TYPE_SCRIPT_CALL_LABEL}
       </span>
     ),
     value: (
@@ -279,20 +276,10 @@ function getTypeEventParts(sc: ActivityTypeCall): EventParts {
 }
 
 function getLockEventParts(lc: ActivityLockCall): EventParts {
-  const protocolName = (lc.decoded?.protocol as string) || lc.scriptName?.trim();
-
   return {
     badge: (
       <span className="text-violet font-mono text-xs">
-        {'\u26A1'}{' '}
-        {protocolName ? (
-          <>
-            {protocolName}
-            <span className="text-text-dim"> · </span>
-          </>
-        ) : (
-          'Lock call'
-        )}
+        {'\u26A1'} {LOCK_SCRIPT_CALL_LABEL}
       </span>
     ),
     value: (

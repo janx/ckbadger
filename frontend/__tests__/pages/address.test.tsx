@@ -212,6 +212,22 @@ describe('AddressDetailPage', () => {
     expect(screen.queryByText(/^Free:/)).not.toBeInTheDocument();
   });
 
+  it('uses script call labels in the activity filter and empty state', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
+
+    render(<AddressDetailPage />);
+
+    const filter = await screen.findByLabelText('Filter');
+    expect(screen.getByRole('option', { name: 'Script Call (type)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Script Call (lock)' })).toBeInTheDocument();
+
+    fireEvent.change(filter, { target: { value: 'type_call' } });
+    expect(screen.getByText('No Script Call (type) activities on this page')).toBeInTheDocument();
+
+    fireEvent.change(filter, { target: { value: 'lock_call' } });
+    expect(screen.getByText('No Script Call (lock) activities on this page')).toBeInTheDocument();
+  });
+
   it('displays Active badge', async () => {
     vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
 

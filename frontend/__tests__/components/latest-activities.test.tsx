@@ -95,7 +95,7 @@ describe('LatestActivities stream', () => {
     });
   });
 
-  it('renders a script call with the script name', async () => {
+  it('renders a generic type script call label with the script name', async () => {
     vi.mocked(api.getLatestActivities).mockResolvedValue([
       makeActivity({
         address: 'ckb1qscript1111111111111111111111111111111111111111111',
@@ -115,12 +115,13 @@ describe('LatestActivities stream', () => {
     render(<LatestActivities />);
 
     await waitFor(() => {
+      expect(screen.getByText(/Script Call \(type\)/)).toBeInTheDocument();
       expect(screen.getAllByText(/Omnilock/).length).toBeGreaterThan(0);
       expect(screen.queryByText(/Type call/)).not.toBeInTheDocument();
     });
   });
 
-  it('renders script name for script calls with scriptName', async () => {
+  it('keeps the generic type script call label when scriptName is set', async () => {
     vi.mocked(api.getLatestActivities).mockResolvedValue([
       makeActivity({
         address: 'ckb1qprotocol111111111111111111111111111111111111111',
@@ -140,8 +141,34 @@ describe('LatestActivities stream', () => {
     render(<LatestActivities />);
 
     await waitFor(() => {
+      expect(screen.getByText(/Script Call \(type\)/)).toBeInTheDocument();
       expect(screen.getAllByText(/Stable\+\+ Pool/).length).toBeGreaterThan(0);
       expect(screen.queryByText(/Type call/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('removes the hash-type prefix from type script refs in the stream', async () => {
+    vi.mocked(api.getLatestActivities).mockResolvedValue([
+      makeActivity({
+        address: 'ckb1qscriptref1111111111111111111111111111111111111111',
+        txHash: '0xtx-script-ref',
+        typeCalls: [
+          {
+            typeCodeHash: '0xcode',
+            typeHashType: 'data1',
+            typeArgs: '0x1234',
+            scriptHash: '0x1234567890abcdef',
+          },
+        ],
+      }),
+    ]);
+
+    render(<LatestActivities />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Script Call \(type\)/)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: '0x12345678' })).toBeInTheDocument();
+      expect(screen.queryByText('data1:0x12345678')).not.toBeInTheDocument();
     });
   });
 

@@ -23,6 +23,7 @@ import {
   TypeCallExpr,
   LockCallExpr,
   LockCallBadge,
+  TYPE_SCRIPT_CALL_LABEL,
 } from '@/components/activity-event-row';
 
 const MAX_STREAM_ITEMS = 20;
@@ -110,7 +111,7 @@ function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
       return { icon: '\u26A1', label, colorClass: 'text-violet' };
     }
     case 'typeCall':
-      return { icon: '\u2699', label: 'Type Call', colorClass: 'text-amber' };
+      return { icon: '\u2699', label: TYPE_SCRIPT_CALL_LABEL, colorClass: 'text-amber' };
     case 'ckbTransfer':
       return { icon: '\u2197', label: 'CKB Transfer', colorClass: 'text-jade' };
     default:
@@ -380,13 +381,13 @@ function StreamItemIdentity({ classified }: { classified: ClassifiedActivity }) 
 function StreamItemTypeCall({ classified }: { classified: ClassifiedActivity }) {
   const { activity, primaryTypeCall } = classified;
   const badge = getTypeBadge(classified);
-  const label = primaryTypeCall?.scriptName?.trim() || 'Type call';
 
   return (
     <>
       <div className="flex items-center justify-between gap-2">
         <span className={cn('min-w-0 truncate font-mono text-xs', badge.colorClass)}>
-          {badge.icon} {label} {primaryTypeCall ? <TypeCallExpr sc={primaryTypeCall} /> : null}
+          {badge.icon} {TYPE_SCRIPT_CALL_LABEL}{' '}
+          {primaryTypeCall ? <TypeCallExpr sc={primaryTypeCall} /> : null}
         </span>
         <span className="text-text-dim shrink-0 font-mono text-[10px]">
           {formatTimeAgo(activity.timestamp)}
