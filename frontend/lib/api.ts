@@ -1350,12 +1350,17 @@ interface FiberChannelDetail extends FiberChannel {
   timeline: FiberTimelineEvent[];
 }
 
+interface FiberStatsApiResponse {
+  totalChannels: number;
+  openChannels: number;
+  totalCapacityLocked: string;
+}
+
 interface FiberStats {
   totalChannels: number;
   openChannels: number;
   closedChannels: number;
-  totalCapacity: string;
-  openCapacity: string;
+  totalCapacityLocked: string;
 }
 
 interface FiberChannelQueryParams {
@@ -2338,7 +2343,20 @@ export const api = {
   },
 
   getFiberStats: (): Promise<FiberStats> => {
-    return fetchApi('/fiber/stats');
+    return fetchApi<FiberStatsApiResponse>('/fiber/stats').then((stats) => {
+      if (stats.openChannels > stats.totalChannels) {
+        throw new Error(
+          `invalid fiber stats: openChannels ${stats.openChannels} exceeds totalChannels ${stats.totalChannels}`
+        );
+      }
+
+      return {
+        totalChannels: stats.totalChannels,
+        openChannels: stats.openChannels,
+        closedChannels: stats.totalChannels - stats.openChannels,
+        totalCapacityLocked: stats.totalCapacityLocked,
+      };
+    });
   },
 
   getCkbVolumeChart: async (): Promise<ChartResponse> => {

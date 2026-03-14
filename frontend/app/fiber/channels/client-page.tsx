@@ -84,11 +84,11 @@ export default function FiberChannelsPage() {
                 <StatBlock label="Open Channels" value={stats.openChannels} color="jade" />
                 <StatBlock label="Closed Channels" value={stats.closedChannels} color="default" />
                 <StatBlock
-                  label="Total Capacity"
-                  value={formatCkbCompact(stats.totalCapacity).value}
+                  label="Locked Capacity"
+                  value={formatCkbCompact(stats.totalCapacityLocked).value}
                   suffix=" CKB"
                   color="gold"
-                  subtext={formatCkbAmount(stats.totalCapacity).full}
+                  subtext={formatCkbAmount(stats.totalCapacityLocked).full}
                 />
               </StatGrid>
             </TerminalPanelContent>

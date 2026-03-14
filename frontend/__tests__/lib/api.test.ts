@@ -251,6 +251,27 @@ describe('api', () => {
       expect(chart.title).toContain('Capacity History');
     });
 
+    it('normalizes fiber stats from the backend response shape', async () => {
+      server.use(
+        http.get('*/api/v1/fiber/stats', () => {
+          return HttpResponse.json({
+            totalChannels: 42,
+            openChannels: 10,
+            totalCapacityLocked: '500000000000',
+          });
+        })
+      );
+
+      const stats = await api.getFiberStats();
+
+      expect(stats).toEqual({
+        totalChannels: 42,
+        openChannels: 10,
+        closedChannels: 32,
+        totalCapacityLocked: '500000000000',
+      });
+    });
+
     it('builds date range query params for script capacity chart by name', async () => {
       server.use(
         http.get('*/api/v1/scripts/:name/charts/capacity-history', ({ request, params }) => {
