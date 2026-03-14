@@ -268,6 +268,11 @@ impl CellDistributionTracker {
         dist
     }
 
+    /// Return the number of block→date transitions recorded.
+    pub fn transition_count(&self) -> usize {
+        self.block_date_transitions.len()
+    }
+
     /// Look up the date for a given block number using binary search on transitions.
     pub fn block_number_to_date(&self, block_number: i64) -> Option<NaiveDate> {
         if self.block_date_transitions.is_empty() {

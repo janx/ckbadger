@@ -229,12 +229,20 @@ impl Indexer {
             if balance.balance <= 0 {
                 continue;
             }
-            if let Some(first_seen_date) = tracker.block_number_to_date(balance.first_seen_block) {
-                let cohort_month = first_seen_date.format("%Y-%m").to_string();
-                let entry = cohorts.entry(cohort_month).or_insert((0, 0));
-                entry.0 += balance.used_capacity;
-                entry.1 += balance.balance;
-            }
+            let first_seen_date = tracker
+                .block_number_to_date(balance.first_seen_block)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "missing block-date transition for address cohort snapshot: first_seen_block={}, date={}, transitions={}",
+                        balance.first_seen_block,
+                        date_str,
+                        tracker.transition_count()
+                    )
+                })?;
+            let cohort_month = first_seen_date.format("%Y-%m").to_string();
+            let entry = cohorts.entry(cohort_month).or_insert((0, 0));
+            entry.0 += balance.used_capacity;
+            entry.1 += balance.balance;
         }
 
         let entries: Vec<AddressCohortEntry> = cohorts

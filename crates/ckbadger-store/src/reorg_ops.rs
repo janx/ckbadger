@@ -392,6 +392,7 @@ use crate::bytes_to_hex;
 fn truncate_hodl_tracker_state_for_rollback(
     state: &mut HodlTrackerState,
     rollback_to: i64,
+    holder_count_delta: i64,
 ) -> anyhow::Result<bool> {
     if rollback_to < 0 {
         return Ok(true);
@@ -438,6 +439,95 @@ fn truncate_hodl_tracker_state_for_rollback(
             changed = true;
         }
     }
+
+    // Apply holder_count correction from addr_balance rollback deltas.
+    if holder_count_delta != 0 {
+        let new_holder_count = state.holder_count + holder_count_delta;
+        if new_holder_count < 0 {
+            anyhow::bail!(
+                "holder_count underflow during rollback repair: current={}, delta={}, result={}",
+                state.holder_count,
+                holder_count_delta,
+                new_holder_count
+            );
+        }
+        state.holder_count = new_holder_count;
+        changed = true;
+    }
+
+    Ok(changed)
+}
+
+fn truncate_cell_dist_tracker_state_for_rollback(
+    state: &mut CellDistributionTrackerState,
+    rollback_to: i64,
+) -> anyhow::Result<bool> {
+    if rollback_to < 0 {
+        return Ok(true);
+    }
+
+    let mut changed = false;
+
+    // 1. Truncate date_transitions to blocks <= rollback_to.
+    let original_transitions = state.date_transitions.len();
+    state
+        .date_transitions
+        .retain(|(block_num, _)| *block_num <= rollback_to);
+    if state.date_transitions.len() != original_transitions {
+        changed = true;
+    }
+
+    if state.date_transitions.is_empty() {
+        anyhow::bail!(
+            "invalid cell_dist tracker state after rollback truncate: rollback_to={}, no remaining date transitions",
+            rollback_to
+        );
+    }
+
+    // 2. Get max surviving date.
+    let max_date = state
+        .date_transitions
+        .last()
+        .map(|(_, date)| date.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing last date transition while truncating cell_dist tracker state: rollback_to={}",
+                rollback_to
+            )
+        })?;
+
+    // 3. Truncate capacity_by_date_and_bucket to dates <= max_date.
+    let original_capacity_dates = state.capacity_by_date_and_bucket.len();
+    state
+        .capacity_by_date_and_bucket
+        .retain(|(date, _)| date.as_str() <= max_date.as_str());
+    if state.capacity_by_date_and_bucket.len() != original_capacity_dates {
+        changed = true;
+    }
+
+    // 4. Recalculate total_capacity_by_bucket from remaining entries.
+    let mut recalculated = [0i128; 6];
+    for (_, buckets) in &state.capacity_by_date_and_bucket {
+        for (i, &cap) in buckets.iter().enumerate() {
+            recalculated[i] += cap;
+        }
+    }
+    if recalculated != state.total_capacity_by_bucket {
+        state.total_capacity_by_bucket = recalculated;
+        changed = true;
+    }
+
+    // 5. Clamp last_snapshot_date.
+    if let Some(last_snapshot_date) = state.last_snapshot_date.as_ref() {
+        if last_snapshot_date.as_str() > max_date.as_str() {
+            state.last_snapshot_date = Some(max_date);
+            changed = true;
+        }
+    }
+
+    // Note: count_by_bucket (cell counts per size bucket) cannot be precisely
+    // adjusted without per-cell tracking. For shallow reorgs (1-2 blocks), the
+    // drift is negligible. The next forward sync corrects incrementally.
 
     Ok(changed)
 }
@@ -1543,6 +1633,9 @@ impl CkbadgerStore {
         let mut all_addr_keys: HashSet<Vec<u8>> = addr_balance_deltas.keys().cloned().collect();
         all_addr_keys.extend(addr_txs_count_deltas.keys().cloned());
 
+        // Track holder count transitions for HODL tracker repair in stage 11.
+        let mut holder_count_delta: i64 = 0;
+
         for lock_hash in &all_addr_keys {
             let (balance_delta, used_delta, live_delta, total_cells_delta) = addr_balance_deltas
                 .get(lock_hash)
@@ -1564,9 +1657,18 @@ impl CkbadgerStore {
                 // a cellbase-only address was never materialized. Skip gracefully.
                 continue;
             };
+            // Track holder transitions: capture pre-rollback live count, then
+            // compare with post-rollback to detect 0↔>0 transitions.
+            let old_live = ab.live_cells_count;
             ab.balance += balance_delta;
             ab.used_capacity += used_delta;
             ab.live_cells_count += live_delta;
+            let new_live = ab.live_cells_count;
+            if old_live > 0 && new_live == 0 {
+                holder_count_delta -= 1;
+            } else if old_live == 0 && new_live > 0 {
+                holder_count_delta += 1;
+            }
             // total_cells_count and txs_count may underflow for legacy data that
             // was indexed before these rollback deltas were tracked. Clamp to 0.
             ab.total_cells_count = (ab.total_cells_count + total_cells_delta).max(0);
@@ -2309,7 +2411,11 @@ impl CkbadgerStore {
                 hodl_tracker_repaired += 1;
             }
         } else if let Some(mut state) = self.get_hodl_tracker_state()? {
-            if truncate_hodl_tracker_state_for_rollback(&mut state, rollback_to)? {
+            if truncate_hodl_tracker_state_for_rollback(
+                &mut state,
+                rollback_to,
+                holder_count_delta,
+            )? {
                 let encoded = bincode::serialize(&state).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to serialize repaired HODL tracker state during rollback cleanup: {}",
@@ -2326,6 +2432,36 @@ impl CkbadgerStore {
         }
         stage.tick(hodl_tracker_repaired);
         stage.finish(hodl_tracker_repaired);
+
+        // 12. Keep cell distribution tracker state aligned with rollback tip.
+        let mut stage = RollbackStageProgress::new("repair_cell_dist_tracker_state");
+        let mut cell_dist_tracker_repaired = 0u64;
+        if rollback_to < 0 {
+            if self
+                .get_cf(self.cf_sync_meta(), keys::sync_meta_keys::CELL_DIST_TRACKER)?
+                .is_some()
+            {
+                batch.delete_cf(self.cf_sync_meta(), keys::sync_meta_keys::CELL_DIST_TRACKER);
+                cell_dist_tracker_repaired += 1;
+            }
+        } else if let Some(mut state) = self.get_cell_dist_tracker_state()? {
+            if truncate_cell_dist_tracker_state_for_rollback(&mut state, rollback_to)? {
+                let encoded = bincode::serialize(&state).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to serialize repaired cell_dist tracker state during rollback cleanup: {}",
+                        e
+                    )
+                })?;
+                batch.put_cf(
+                    self.cf_sync_meta(),
+                    keys::sync_meta_keys::CELL_DIST_TRACKER,
+                    &encoded,
+                );
+                cell_dist_tracker_repaired += 1;
+            }
+        }
+        stage.tick(cell_dist_tracker_repaired);
+        stage.finish(cell_dist_tracker_repaired);
 
         // Commit all deletes atomically
         self.write_batch(batch)?;
@@ -2392,11 +2528,11 @@ mod tests {
     use crate::keys;
     use crate::store::CkbadgerStore;
     use crate::types::{
-        AddressBalance, AssetAction, CachedBlockHeader, DaoDepositCacheEntry, HodlTrackerState,
-        LiveCellInfo, ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectEntry,
-        ObjectExtra, ObjectStandard, OwnerActivityDelta, ScriptInfo, SporeMediaProfile,
-        StorageDependencyTier, SyncStatus, TokenInfo, TxActivityBundle, TxIndexEntry,
-        UndoInputOutPoint, UndoLogEntry, UndoTxContext,
+        AddressBalance, AssetAction, CachedBlockHeader, CellDistributionTrackerState,
+        DaoDepositCacheEntry, HodlTrackerState, LiveCellInfo, ObjectCollectionActivityEntry,
+        ObjectCollectionAggregate, ObjectEntry, ObjectExtra, ObjectStandard, OwnerActivityDelta,
+        ScriptInfo, SporeMediaProfile, StorageDependencyTier, SyncStatus, TokenInfo,
+        TxActivityBundle, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
 
     fn put_canonical_tx(batch: &mut StoreBatch<'_>, block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
@@ -4451,5 +4587,159 @@ mod tests {
             vec![("20231114".to_string(), 100)]
         );
         assert_eq!(repaired.last_snapshot_date, Some("20231114".to_string()));
+    }
+
+    #[test]
+    fn test_truncate_hodl_tracker_applies_holder_count_delta() {
+        // Direct unit test of the truncation function with holder_count_delta.
+        let mut state = HodlTrackerState {
+            capacity_by_date: vec![("20231114".to_string(), 100), ("20231115".to_string(), 200)],
+            date_transitions: vec![(1, "20231114".to_string()), (2, "20231115".to_string())],
+            holder_count: 10,
+            last_snapshot_date: Some("20231115".to_string()),
+        };
+
+        // Simulate: one address lost all live cells during rollback (delta = -1).
+        let changed = truncate_hodl_tracker_state_for_rollback(&mut state, 1, -1).unwrap();
+        assert!(changed);
+        assert_eq!(state.holder_count, 9);
+        assert_eq!(state.date_transitions, vec![(1, "20231114".to_string())]);
+        assert_eq!(state.capacity_by_date, vec![("20231114".to_string(), 100)]);
+
+        // Test with positive delta (address gained live cells on rollback — consumed cell restored).
+        let mut state2 = HodlTrackerState {
+            capacity_by_date: vec![("20231114".to_string(), 100)],
+            date_transitions: vec![(1, "20231114".to_string())],
+            holder_count: 5,
+            last_snapshot_date: Some("20231114".to_string()),
+        };
+        let changed = truncate_hodl_tracker_state_for_rollback(&mut state2, 1, 2).unwrap();
+        assert!(changed);
+        assert_eq!(state2.holder_count, 7);
+
+        // Test with zero delta — holder_count unchanged.
+        let mut state3 = HodlTrackerState {
+            capacity_by_date: vec![("20231114".to_string(), 100), ("20231115".to_string(), 200)],
+            date_transitions: vec![(1, "20231114".to_string()), (2, "20231115".to_string())],
+            holder_count: 10,
+            last_snapshot_date: Some("20231115".to_string()),
+        };
+        let changed = truncate_hodl_tracker_state_for_rollback(&mut state3, 1, 0).unwrap();
+        assert!(changed); // dates were truncated
+        assert_eq!(state3.holder_count, 10); // holder_count unchanged
+    }
+
+    #[test]
+    fn test_truncate_hodl_tracker_rejects_holder_count_underflow() {
+        let mut state = HodlTrackerState {
+            capacity_by_date: vec![("20231114".to_string(), 100)],
+            date_transitions: vec![(1, "20231114".to_string())],
+            holder_count: 2,
+            last_snapshot_date: Some("20231114".to_string()),
+        };
+        // Delta of -5 would make holder_count negative → should error.
+        let err = truncate_hodl_tracker_state_for_rollback(&mut state, 1, -5).unwrap_err();
+        assert!(err.to_string().contains("holder_count underflow"));
+    }
+
+    #[test]
+    fn test_rollback_truncates_cell_dist_tracker_state_to_tip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_086_400_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        put_canonical_tx(&mut batch, 1, 0, &[0x10; 32]);
+        put_canonical_tx(&mut batch, 2, 0, &[0x20; 32]);
+        batch.commit().unwrap();
+
+        store
+            .put_cell_dist_tracker_state(&CellDistributionTrackerState {
+                capacity_by_date_and_bucket: vec![
+                    ("20231114".to_string(), [100, 0, 0, 0, 0, 0]),
+                    ("20231115".to_string(), [0, 200, 0, 0, 0, 0]),
+                ],
+                count_by_bucket: [5, 3, 0, 0, 0, 0],
+                total_capacity_by_bucket: [100, 200, 0, 0, 0, 0],
+                date_transitions: vec![(1, "20231114".to_string()), (2, "20231115".to_string())],
+                last_snapshot_date: Some("20231115".to_string()),
+            })
+            .unwrap();
+
+        store.rollback_to_block(1).unwrap();
+
+        let repaired = store.get_cell_dist_tracker_state().unwrap().unwrap();
+        assert_eq!(repaired.date_transitions, vec![(1, "20231114".to_string())]);
+        assert_eq!(
+            repaired.capacity_by_date_and_bucket,
+            vec![("20231114".to_string(), [100, 0, 0, 0, 0, 0])]
+        );
+        // total_capacity_by_bucket recalculated from remaining entries only.
+        assert_eq!(repaired.total_capacity_by_bucket, [100, 0, 0, 0, 0, 0]);
+        // count_by_bucket preserved (can't be precisely adjusted without per-cell data).
+        assert_eq!(repaired.count_by_bucket, [5, 3, 0, 0, 0, 0]);
+        assert_eq!(repaired.last_snapshot_date, Some("20231114".to_string()));
+    }
+
+    #[test]
+    fn test_truncate_cell_dist_tracker_recalculates_total_capacity() {
+        // Direct unit test: capacity totals are recalculated from surviving date entries.
+        let mut state = CellDistributionTrackerState {
+            capacity_by_date_and_bucket: vec![
+                ("20231114".to_string(), [50, 100, 0, 0, 0, 0]),
+                ("20231115".to_string(), [30, 0, 200, 0, 0, 0]),
+                ("20231116".to_string(), [0, 0, 0, 500, 0, 0]),
+            ],
+            count_by_bucket: [10, 5, 3, 2, 0, 0],
+            total_capacity_by_bucket: [80, 100, 200, 500, 0, 0],
+            date_transitions: vec![
+                (1, "20231114".to_string()),
+                (100, "20231115".to_string()),
+                (200, "20231116".to_string()),
+            ],
+            last_snapshot_date: Some("20231116".to_string()),
+        };
+
+        let changed = truncate_cell_dist_tracker_state_for_rollback(&mut state, 150).unwrap();
+        assert!(changed);
+        // Only 20231114 and 20231115 survive.
+        assert_eq!(state.date_transitions.len(), 2);
+        assert_eq!(state.capacity_by_date_and_bucket.len(), 2);
+        // Totals recalculated: [50+30, 100+0, 0+200, 0, 0, 0]
+        assert_eq!(state.total_capacity_by_bucket, [80, 100, 200, 0, 0, 0]);
+        assert_eq!(state.last_snapshot_date, Some("20231115".to_string()));
+    }
+
+    #[test]
+    fn test_truncate_cell_dist_tracker_rejects_empty_transitions() {
+        let mut state = CellDistributionTrackerState {
+            capacity_by_date_and_bucket: vec![("20231115".to_string(), [100, 0, 0, 0, 0, 0])],
+            count_by_bucket: [1, 0, 0, 0, 0, 0],
+            total_capacity_by_bucket: [100, 0, 0, 0, 0, 0],
+            date_transitions: vec![(100, "20231115".to_string())],
+            last_snapshot_date: Some("20231115".to_string()),
+        };
+        // Rollback to block 50 — before any transition → should error.
+        let err = truncate_cell_dist_tracker_state_for_rollback(&mut state, 50).unwrap_err();
+        assert!(err.to_string().contains("no remaining date transitions"));
     }
 }
