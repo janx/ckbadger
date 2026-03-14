@@ -4,12 +4,14 @@ use axum::{
     Router,
 };
 use ckbadger_store::{
+    keys,
     types::{
-        ActivityEntry, AssetAction, AssetChange, LatestActivityItem, LockCallEntry, ScriptInfo,
-        TypeCallEntry,
+        ActivityEntry, AssetAction, AssetChange, LatestActivityItem, LockCallEntry,
+        OwnerActivityDelta, ScriptInfo, TxActivityBundle, TypeCallEntry,
     },
     CkbadgerStore,
 };
+use rocksdb::{Direction, IteratorMode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -24,6 +26,7 @@ use crate::AppState;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/addresses/{addr}/activities", get(get_address_activities))
+        .route("/activities", get(get_global_activities))
         .route("/activities/latest", get(get_latest_activities))
 }
 
@@ -588,6 +591,24 @@ fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
     Ok(())
 }
 
+fn validate_global_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
+    if let Some(value) = filter {
+        if value.is_empty() {
+            return Ok(());
+        }
+        if !matches!(
+            value,
+            "all" | "ckb" | "token" | "object" | "identity" | "dao" | "script" | "protocol"
+        ) {
+            return Err(ApiError::bad_request(format!(
+                "invalid global activity filter '{}'; expected one of: all, ckb, token, object, identity, dao, script, protocol",
+                value
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn parse_activity_cursor(value: &str) -> Option<(i64, i32)> {
     let parts: Vec<&str> = value.split(':').collect();
     match parts.as_slice() {
@@ -595,6 +616,36 @@ fn parse_activity_cursor(value: &str) -> Option<(i64, i32)> {
         [block_num, tx_idx] => Some((block_num.parse::<i64>().ok()?, tx_idx.parse::<i32>().ok()?)),
         _ => None,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GlobalActivityCursor {
+    block_num: i64,
+    tx_idx: i32,
+    owner_idx: usize,
+}
+
+fn parse_global_activity_cursor(value: &str) -> Option<GlobalActivityCursor> {
+    let parts: Vec<&str> = value.split(':').collect();
+    match parts.as_slice() {
+        [block_num, tx_idx, owner_idx] => Some(GlobalActivityCursor {
+            block_num: block_num.parse::<i64>().ok()?,
+            tx_idx: tx_idx.parse::<i32>().ok()?,
+            owner_idx: owner_idx.parse::<usize>().ok()?,
+        }),
+        _ => None,
+    }
+}
+
+fn encode_global_activity_cursor(cursor: GlobalActivityCursor) -> String {
+    format!(
+        "{}:{}:{}",
+        cursor.block_num, cursor.tx_idx, cursor.owner_idx
+    )
+}
+
+fn global_activity_seek_key(cursor: GlobalActivityCursor) -> Vec<u8> {
+    keys::encode_tx_activity_bundle_key(cursor.block_num, cursor.tx_idx, &[0; 32])
 }
 
 /// Check if an addr_tx entry is canonical using the same logic as
@@ -665,6 +716,220 @@ fn list_canonical_activities_page(
     Ok(out)
 }
 
+fn build_latest_activity_item(
+    bundle: &TxActivityBundle,
+    owner: &OwnerActivityDelta,
+) -> LatestActivityItem {
+    LatestActivityItem {
+        lock_hash: owner.lock_hash.clone(),
+        lock_code_hash: owner.lock_code_hash.clone(),
+        lock_hash_type: owner.lock_hash_type,
+        lock_args: owner.lock_args.clone(),
+        entry: ActivityEntry {
+            tx_hash: bundle.tx_hash.clone(),
+            block_hash: bundle.block_hash.clone(),
+            block_number: bundle.block_number,
+            tx_index: bundle.tx_index,
+            timestamp: bundle.timestamp,
+            ckb_delta: owner.ckb_delta,
+            used_delta: owner.used_delta,
+            is_cellbase: bundle.is_cellbase,
+            has_type_script: owner.has_type_script,
+            asset_changes: owner.asset_changes.clone(),
+            type_calls: owner.type_calls.clone(),
+            lock_calls: owner.lock_calls.clone(),
+            protocol_actions: owner.protocol_actions.clone(),
+            peers: owner.peers.clone(),
+        },
+    }
+}
+
+fn validate_tx_activity_bundle_identity(
+    bundle: &TxActivityBundle,
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash_from_key: &[u8],
+) -> anyhow::Result<()> {
+    if bundle.block_number != block_num || bundle.tx_index != tx_idx {
+        anyhow::bail!(
+            "tx activity bundle key/value location mismatch in global activities: key_block_num={}, value_block_num={}, key_tx_idx={}, value_tx_idx={}",
+            block_num,
+            bundle.block_number,
+            tx_idx,
+            bundle.tx_index
+        );
+    }
+    if bundle.tx_hash != tx_hash_from_key {
+        anyhow::bail!(
+            "tx activity bundle key/value tx_hash mismatch in global activities: block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
+            block_num,
+            tx_idx,
+            hex::encode(tx_hash_from_key),
+            hex::encode(&bundle.tx_hash)
+        );
+    }
+    Ok(())
+}
+
+fn matches_global_activity_filter(entry: &ActivityEntry, filter: Option<&str>) -> bool {
+    fn classify_global_activity_bucket(entry: &ActivityEntry) -> &'static str {
+        if !entry.protocol_actions.is_empty() {
+            return "protocol";
+        }
+        if entry
+            .asset_changes
+            .iter()
+            .any(|change| matches!(change, AssetChange::DaoDeposit { .. }))
+        {
+            return "dao";
+        }
+        if entry
+            .asset_changes
+            .iter()
+            .any(|change| matches!(change, AssetChange::DaoWithdrawRequest { .. }))
+        {
+            return "dao";
+        }
+        if entry
+            .asset_changes
+            .iter()
+            .any(|change| matches!(change, AssetChange::DaoWithdrawComplete { .. }))
+        {
+            return "dao";
+        }
+        if entry
+            .asset_changes
+            .iter()
+            .any(|change| matches!(change, AssetChange::Token { .. }))
+        {
+            return "token";
+        }
+        if entry
+            .asset_changes
+            .iter()
+            .any(|change| matches!(change, AssetChange::Object { .. }))
+        {
+            return "object";
+        }
+        if entry
+            .asset_changes
+            .iter()
+            .any(|change| matches!(change, AssetChange::Identity { .. }))
+        {
+            return "identity";
+        }
+        if entry.has_type_script
+            || entry
+                .type_calls
+                .as_ref()
+                .is_some_and(|calls| !calls.is_empty())
+            || entry
+                .lock_calls
+                .as_ref()
+                .is_some_and(|calls| !calls.is_empty())
+        {
+            return "script";
+        }
+        "ckb"
+    }
+
+    match filter {
+        None | Some("") | Some("all") => true,
+        Some(expected) => classify_global_activity_bucket(entry) == expected,
+    }
+}
+
+fn list_canonical_global_activities_page(
+    store: &CkbadgerStore,
+    limit: usize,
+    cursor: Option<GlobalActivityCursor>,
+    filter: Option<&str>,
+) -> anyhow::Result<Vec<(GlobalActivityCursor, LatestActivityItem)>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let iter = match cursor {
+        Some(cursor) => store.iterator_cf(
+            store.cf_activities(),
+            IteratorMode::From(&global_activity_seek_key(cursor), Direction::Forward),
+        ),
+        None => store.iterator_cf(store.cf_activities(), IteratorMode::Start),
+    };
+
+    let mut out = Vec::with_capacity(limit);
+    for item in iter {
+        let (key, value) = item.map_err(|e| {
+            anyhow::anyhow!(
+                "failed to iterate tx activity bundles in global activities: {}",
+                e
+            )
+        })?;
+        if key.len() != keys::TX_ACTIVITY_BUNDLE_KEY_SIZE {
+            continue;
+        }
+
+        let (block_num, tx_idx, tx_hash_from_key) = keys::decode_tx_activity_bundle_key(&key);
+        let bundle: TxActivityBundle = bincode::deserialize(&value).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to deserialize tx activity bundle in global activities: block_num={}, tx_idx={}, tx_hash=0x{}, error={}",
+                block_num,
+                tx_idx,
+                hex::encode(&tx_hash_from_key),
+                e
+            )
+        })?;
+        validate_tx_activity_bundle_identity(&bundle, block_num, tx_idx, &tx_hash_from_key)?;
+
+        if bundle.is_cellbase || !is_canonical_activity(store, block_num, tx_idx, &bundle.tx_hash)?
+        {
+            continue;
+        }
+
+        let owner_start_idx = match cursor {
+            Some(cursor) if cursor.block_num == block_num && cursor.tx_idx == tx_idx => {
+                if cursor.owner_idx >= bundle.owners.len() {
+                    anyhow::bail!(
+                        "global activities cursor owner_idx out of range: block_num={}, tx_idx={}, owner_idx={}, owner_count={}",
+                        block_num,
+                        tx_idx,
+                        cursor.owner_idx,
+                        bundle.owners.len()
+                    );
+                }
+                cursor.owner_idx.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "global activities cursor owner_idx overflow: block_num={}, tx_idx={}, owner_idx={}",
+                        block_num,
+                        tx_idx,
+                        cursor.owner_idx
+                    )
+                })?
+            }
+            _ => 0,
+        };
+
+        for (owner_idx, owner) in bundle.owners.iter().enumerate().skip(owner_start_idx) {
+            let row_cursor = GlobalActivityCursor {
+                block_num,
+                tx_idx,
+                owner_idx,
+            };
+            let item = build_latest_activity_item(&bundle, owner);
+            if !matches_global_activity_filter(&item.entry, filter) {
+                continue;
+            }
+
+            out.push((row_cursor, item));
+            if out.len() >= limit {
+                return Ok(out);
+            }
+        }
+    }
+
+    Ok(out)
+}
+
 async fn get_address_activities(
     State(state): State<Arc<AppState>>,
     Path(addr): Path<String>,
@@ -716,6 +981,67 @@ async fn get_address_activities(
             .into_iter()
             .map(|(_, _, entry)| {
                 build_activity_response(store.as_ref(), &entry, &mut script_info_cache)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        Ok((next_cursor, activities))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    ok(CursorPaginatedResponse::without_total(
+        activities,
+        limit as i64,
+        next_cursor,
+    ))
+}
+
+async fn get_global_activities(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ActivityParams>,
+) -> ApiResult<CursorPaginatedResponse<GlobalActivityResponse>> {
+    validate_global_activity_filter(params.filter.as_deref())?;
+
+    let limit = params.limit.clamp(1, 100) as usize;
+    let cursor = match params.cursor.as_deref() {
+        None | Some("") => None,
+        Some(value) => Some(
+            parse_global_activity_cursor(value)
+                .ok_or_else(|| ApiError::bad_request("invalid cursor format"))?,
+        ),
+    };
+
+    let store = state.store.clone();
+    let network = state.ckb_network.clone();
+    let filter = params.filter.clone();
+    let (next_cursor, activities) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let results = list_canonical_global_activities_page(
+            store.as_ref(),
+            limit + 1,
+            cursor,
+            filter.as_deref(),
+        )?;
+
+        let has_more = results.len() > limit;
+        let page: Vec<_> = results.into_iter().take(limit).collect();
+        let next_cursor = if has_more {
+            page.last()
+                .map(|(cursor, _)| encode_global_activity_cursor(*cursor))
+        } else {
+            None
+        };
+
+        let mut script_info_cache = HashMap::new();
+        let activities = page
+            .into_iter()
+            .map(|(_, item)| {
+                build_global_activity_response(
+                    store.as_ref(),
+                    &network,
+                    &item,
+                    &mut script_info_cache,
+                )
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
@@ -843,10 +1169,38 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_global_activity_filter_only_accepts_all() {
+        assert!(validate_global_activity_filter(None).is_ok());
+        assert!(validate_global_activity_filter(Some("")).is_ok());
+        assert!(validate_global_activity_filter(Some("all")).is_ok());
+        assert!(validate_global_activity_filter(Some("token")).is_ok());
+        assert!(validate_global_activity_filter(Some("object")).is_ok());
+        assert!(validate_global_activity_filter(Some("identity")).is_ok());
+        assert!(validate_global_activity_filter(Some("dao")).is_ok());
+        assert!(validate_global_activity_filter(Some("script")).is_ok());
+        assert!(validate_global_activity_filter(Some("protocol")).is_ok());
+        assert!(validate_global_activity_filter(Some("nft")).is_err());
+    }
+
+    #[test]
     fn test_parse_activity_cursor_rejects_non_current_format() {
         assert_eq!(parse_activity_cursor("100:2"), Some((100, 2)));
         assert_eq!(parse_activity_cursor("100:2:7"), None);
         assert_eq!(parse_activity_cursor("100"), None);
+    }
+
+    #[test]
+    fn test_parse_global_activity_cursor_requires_owner_index() {
+        assert_eq!(
+            parse_global_activity_cursor("100:2:7"),
+            Some(GlobalActivityCursor {
+                block_num: 100,
+                tx_idx: 2,
+                owner_idx: 7,
+            })
+        );
+        assert_eq!(parse_global_activity_cursor("100:2"), None);
+        assert_eq!(parse_global_activity_cursor("100"), None);
     }
 
     #[test]

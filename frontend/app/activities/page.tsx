@@ -1,7 +1,7 @@
 'use client';
 
+import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import { Header } from '@/components/layout/header';
-import { LatestActivities } from '@/components/latest-activities';
 import { PageHeader } from '@/components/ui/page-header';
 
 export default function ActivitiesPage() {
@@ -11,16 +11,10 @@ export default function ActivitiesPage() {
       <main className="container mx-auto px-4 py-8">
         <PageHeader
           title="Activities"
-          subtitle="Browse the latest canonical activity stream across the CKB network"
+          subtitle="Live canonical activity stream across CKB, with filters and infinite scroll"
         />
 
-        <LatestActivities
-          queryLimit={64}
-          maxItems={64}
-          showViewAllLink={false}
-          scrollable
-          panelClassName="h-auto min-h-[44rem]"
-        />
+        <ActivitiesStreamExplorer />
       </main>
     </div>
   );

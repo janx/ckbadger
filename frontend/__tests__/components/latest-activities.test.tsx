@@ -95,6 +95,50 @@ describe('LatestActivities stream', () => {
     });
   });
 
+  it('renders explicit tx and block links without nesting inner detail links', async () => {
+    vi.mocked(api.getLatestActivities).mockResolvedValue([
+      makeActivity({
+        address: 'ckb1qtoken1111111111111111111111111111111111111111111',
+        txHash: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+        blockNumber: 12_345,
+        assetChanges: [
+          { type: 'token', typeScriptHash: '0xtoken', delta: '1200', symbol: 'SEAL', decimals: 8 },
+        ],
+      }),
+    ]);
+
+    render(<LatestActivities />);
+
+    await waitFor(() => {
+      const txLink = screen
+        .getAllByRole('link')
+        .find(
+          (link) =>
+            link.getAttribute('href') ===
+            '/tx/0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+        );
+      const blockLink = screen
+        .getAllByRole('link')
+        .find((link) => link.getAttribute('href') === '/blocks/12345');
+      const addressLink = screen
+        .getAllByRole('link')
+        .find(
+          (link) =>
+            link.getAttribute('href') ===
+            '/address/ckb1qtoken1111111111111111111111111111111111111111111'
+        );
+      const tokenLink = screen
+        .getAllByRole('link')
+        .find((link) => link.getAttribute('href') === '/tokens/0xtoken');
+
+      expect(txLink).toBeTruthy();
+      expect(blockLink).toBeTruthy();
+      expect(addressLink).toBeTruthy();
+      expect(tokenLink).toBeTruthy();
+      expect(document.querySelector('a a')).toBeNull();
+    });
+  });
+
   it('renders a generic type script call label with the script name', async () => {
     vi.mocked(api.getLatestActivities).mockResolvedValue([
       makeActivity({
