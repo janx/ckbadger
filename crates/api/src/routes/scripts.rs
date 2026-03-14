@@ -37,6 +37,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/scripts", get(list_scripts))
         .route("/scripts/lookup", post(lookup_scripts))
         .route("/scripts/code-cell", get(get_code_cell))
+        .route("/scripts/code-cells", get(get_code_cells))
         .route(
             "/scripts/charts/capacity-history",
             get(get_script_capacity_history_chart_by_code_hash),
@@ -118,6 +119,8 @@ pub struct ScriptResponse {
     pub cells_count: i64,
     pub live_capacity_sum: String,
     pub live_used_capacity_sum: String,
+    pub code_cells_live_count: i64,
+    pub code_cells_total: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -170,6 +173,8 @@ pub struct ScriptLookupInfo {
     pub live_cells_count: i64,
     pub live_capacity_sum: String,
     pub live_used_capacity_sum: String,
+    pub code_cells_live_count: i64,
+    pub code_cells_total: i64,
 }
 
 /// Resolve the deployment code cell outpoint for a script.
@@ -266,6 +271,48 @@ fn resolve_deployed_at(
         .ok()
         .flatten()
         .map(|header| header.timestamp)
+}
+
+fn count_code_cells(
+    info: &ckbadger_store::ScriptInfo,
+    store: &ckbadger_store::CkbadgerStore,
+    cells_store: &ckbadger_store::CkbadgerStore,
+) -> Result<(i64, i64), ApiRouteError> {
+    let (type_ref, data_ref) = deployment_reference_hashes(info);
+
+    let mut seen = std::collections::HashSet::new();
+    let mut live_count: i64 = 0;
+    let mut total_count: i64 = 0;
+
+    if let Some(type_hash) = type_ref.as_deref() {
+        let cells = store
+            .list_all_cells_by_type(type_hash, cells_store)
+            .map_err(|e| ApiError::internal(format!("count_code_cells type failed: {}", e)))?;
+        for (tx_hash, idx, _, is_live) in cells {
+            if seen.insert((tx_hash, idx)) {
+                total_count += 1;
+                if is_live {
+                    live_count += 1;
+                }
+            }
+        }
+    }
+
+    if let Some(data_hash) = data_ref.as_deref() {
+        let cells = store
+            .list_all_cells_by_data_hash(data_hash, cells_store)
+            .map_err(|e| ApiError::internal(format!("count_code_cells data failed: {}", e)))?;
+        for (tx_hash, idx, _, is_live) in cells {
+            if seen.insert((tx_hash, idx)) {
+                total_count += 1;
+                if is_live {
+                    live_count += 1;
+                }
+            }
+        }
+    }
+
+    Ok((live_count, total_count))
 }
 
 fn script_display_name(info: &ckbadger_store::ScriptInfo) -> &str {
@@ -454,6 +501,8 @@ fn script_info_to_response(
     let live_used_capacity_sum = live_used.to_string();
     let live_capacity_sum = live_capacity.to_string();
     let (deployment_type_hash, deployment_data_hash) = deployment_reference_hashes(info);
+    let (code_cells_live_count, code_cells_total) =
+        count_code_cells(info, &state.store, &state.append_only_store)?;
 
     Ok(ScriptResponse {
         code_hash: format!("0x{}", hex::encode(&info.code_hash)),
@@ -482,6 +531,8 @@ fn script_info_to_response(
         cells_count: info.lock_cells_count + info.type_cells_count,
         live_capacity_sum,
         live_used_capacity_sum,
+        code_cells_live_count,
+        code_cells_total,
     })
 }
 
@@ -546,6 +597,8 @@ async fn lookup_scripts(
             let (code_cell_tx_hash, code_cell_output_index) =
                 resolve_code_cell(&info, &state.store, &state.append_only_store)?;
             let (deployment_type_hash, deployment_data_hash) = deployment_reference_hashes(&info);
+            let (code_cells_live_count, code_cells_total) =
+                count_code_cells(&info, &state.store, &state.append_only_store)?;
 
             result.insert(
                 code_hash_hex.clone(),
@@ -566,6 +619,8 @@ async fn lookup_scripts(
                     live_cells_count,
                     live_capacity_sum,
                     live_used_capacity_sum,
+                    code_cells_live_count,
+                    code_cells_total,
                 },
             );
         }
@@ -601,6 +656,24 @@ pub struct ScriptCapacityHistoryByCodeHashQuery {
 pub struct CodeCellResponse {
     pub tx_hash: Option<String>,
     pub output_index: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeCellEntry {
+    pub tx_hash: String,
+    pub output_index: i32,
+    pub status: &'static str,
+    pub created_at_block: i64,
+    pub capacity: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeCellsResponse {
+    pub code_cells: Vec<CodeCellEntry>,
+    pub live_count: i64,
+    pub total_count: i64,
 }
 
 async fn get_code_cell(
@@ -641,6 +714,121 @@ async fn get_code_cell(
     ok(CodeCellResponse {
         tx_hash,
         output_index,
+    })
+}
+
+async fn get_code_cells(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<CodeCellQuery>,
+) -> ApiResult<CodeCellsResponse> {
+    let code_hash_bytes = hex::decode(
+        params
+            .code_hash
+            .strip_prefix("0x")
+            .unwrap_or(&params.code_hash),
+    )
+    .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
+
+    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = load_script_infos_cached(&state)?
+        .into_iter()
+        .map(|(_, info)| info)
+        .collect();
+
+    let hash_type = match params.hash_type.as_str() {
+        "data" => 0,
+        "type" => 1,
+        "data1" => 2,
+        "data2" => 4,
+        _ => 0,
+    };
+    let script_info = merge_script_info_for_reference(&all_script_infos, &code_hash_bytes)
+        .unwrap_or_else(|| ckbadger_store::ScriptInfo {
+            code_hash: code_hash_bytes.clone(),
+            hash_type,
+            ..Default::default()
+        });
+
+    let (type_ref, data_ref) = deployment_reference_hashes(&script_info);
+
+    let mut all_cells: Vec<(Vec<u8>, i16, ckbadger_store::PositionedCellInfo, bool)> = Vec::new();
+
+    // Collect from type-ref index
+    if let Some(type_hash) = type_ref.as_deref() {
+        let cells = state
+            .store
+            .list_all_cells_by_type(type_hash, &state.append_only_store)
+            .map_err(|e| ApiError::internal(format!("code cells type lookup failed: {}", e)))?;
+        all_cells.extend(cells);
+    }
+
+    // Collect from data-ref index (deduplicate against type-ref results)
+    if let Some(data_hash) = data_ref.as_deref() {
+        let cells = state
+            .store
+            .list_all_cells_by_data_hash(data_hash, &state.append_only_store)
+            .map_err(|e| ApiError::internal(format!("code cells data lookup failed: {}", e)))?;
+        for cell in cells {
+            if !all_cells
+                .iter()
+                .any(|(h, i, _, _)| h == &cell.0 && *i == cell.1)
+            {
+                all_cells.push(cell);
+            }
+        }
+    }
+
+    // Also include the imported outpoint fallback if not already present
+    if let (Some(tx_hash), Some(idx)) = (
+        &script_info.code_cell_tx_hash,
+        script_info.code_cell_output_index,
+    ) {
+        if !tx_hash.is_empty() {
+            let idx_i16 = idx as i16;
+            if !all_cells
+                .iter()
+                .any(|(h, i, _, _)| h == tx_hash && *i == idx_i16)
+            {
+                if let Some(cell) = state
+                    .store
+                    .get_cell(tx_hash, idx_i16, &state.append_only_store)
+                    .unwrap_or(None)
+                {
+                    all_cells.push((tx_hash.clone(), idx_i16, cell, true));
+                } else if let Some(cell) = state
+                    .store
+                    .get_consumed_cell(tx_hash, idx_i16, &state.append_only_store)
+                    .unwrap_or(None)
+                {
+                    all_cells.push((tx_hash.clone(), idx_i16, cell, false));
+                }
+            }
+        }
+    }
+
+    // Sort: live first, then by created_at_block ascending
+    all_cells.sort_by(|a, b| {
+        b.3.cmp(&a.3)
+            .then_with(|| a.2.created_at_block.cmp(&b.2.created_at_block))
+    });
+
+    let live_count = all_cells.iter().filter(|(_, _, _, live)| *live).count() as i64;
+    let total_count = all_cells.len() as i64;
+
+    let code_cells = all_cells
+        .into_iter()
+        .map(|(tx_hash, output_index, cell, is_live)| CodeCellEntry {
+            tx_hash: format!("0x{}", hex::encode(&tx_hash)),
+            output_index: i32::from(output_index),
+            status: if is_live { "live" } else { "consumed" },
+            created_at_block: cell.created_at_block,
+            capacity: cell.cell.capacity.to_string(),
+        })
+        .collect();
+
+    ok(CodeCellsResponse {
+        code_cells,
+        live_count,
+        total_count,
     })
 }
 

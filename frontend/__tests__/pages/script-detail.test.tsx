@@ -152,6 +152,8 @@ describe('ScriptDetailPage', () => {
         liveCellsCount: 1,
         liveCapacitySum: '1000000000',
         liveUsedCapacitySum: '610000000',
+        codeCellsLiveCount: 1,
+        codeCellsTotal: 1,
       },
       [newerCodeHash]: {
         codeHash: newerCodeHash,
@@ -166,6 +168,8 @@ describe('ScriptDetailPage', () => {
         liveCellsCount: 7,
         liveCapacitySum: '9000000000',
         liveUsedCapacitySum: '5490000000',
+        codeCellsLiveCount: 1,
+        codeCellsTotal: 1,
       },
     });
   });
@@ -201,11 +205,8 @@ describe('ScriptDetailPage', () => {
     expect(within(cellsRefs).getByText('type')).toBeInTheDocument();
     expect(within(cellsRefs).getByText('bytecode(data)')).toBeInTheDocument();
 
-    const codeCellLinks = screen
-      .getAllByRole('link')
-      .map((link) => link.getAttribute('href'))
-      .filter((href): href is string => href?.startsWith('/cell/') ?? false);
-    expect(codeCellLinks).toContain(`/cell/${newerCodeCellTxHash}-1`);
-    expect(codeCellLinks).toContain(`/cell/${olderCodeCellTxHash}-0`);
+    // Code cell summaries show "X live" instead of direct links (expanded via CodeCellsList)
+    const liveBadges = screen.getAllByText('1 live');
+    expect(liveBadges.length).toBeGreaterThanOrEqual(2);
   });
 });

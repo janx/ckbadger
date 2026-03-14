@@ -54,6 +54,8 @@ describe('ScriptByCodeHashPage', () => {
         liveCellsCount: 15,
         liveCapacitySum: '25000000000',
         liveUsedCapacitySum: '14000000000',
+        codeCellsLiveCount: 0,
+        codeCellsTotal: 0,
       },
     });
     vi.mocked(api.getCodeCell).mockResolvedValue({ txHash: null, outputIndex: null });
@@ -129,6 +131,8 @@ describe('ScriptByCodeHashPage', () => {
         liveCellsCount: 15,
         liveCapacitySum: '25000000000',
         liveUsedCapacitySum: '14000000000',
+        codeCellsLiveCount: 0,
+        codeCellsTotal: 0,
       },
     });
 

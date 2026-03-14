@@ -147,6 +147,8 @@ describe('TransactionDetailPage', () => {
         liveCellsCount: 10,
         liveCapacitySum: '100000000000',
         liveUsedCapacitySum: '60000000000',
+        codeCellsLiveCount: 0,
+        codeCellsTotal: 0,
       },
       [TYPE_CODE_HASH]: {
         codeHash: TYPE_CODE_HASH,
@@ -159,6 +161,8 @@ describe('TransactionDetailPage', () => {
         liveCellsCount: 1,
         liveCapacitySum: '10000000000',
         liveUsedCapacitySum: '6000000000',
+        codeCellsLiveCount: 0,
+        codeCellsTotal: 0,
       },
     });
 

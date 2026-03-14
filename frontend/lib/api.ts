@@ -269,6 +269,20 @@ interface CodeCellScript {
   deploymentDataHash?: string | null;
 }
 
+interface CodeCellEntry {
+  txHash: string;
+  outputIndex: number;
+  status: 'live' | 'consumed';
+  createdAtBlock: number;
+  capacity: string;
+}
+
+interface CodeCellsResponse {
+  codeCells: CodeCellEntry[];
+  liveCount: number;
+  totalCount: number;
+}
+
 interface CellDaoInfo {
   isDaoCell: boolean;
   daoStatus: string;
@@ -1119,6 +1133,8 @@ interface KnownScript {
   liveUsedCapacitySum?: string;
   liveCellsCount?: number;
   cellsCount?: number;
+  codeCellsLiveCount?: number;
+  codeCellsTotal?: number;
 }
 
 interface DeploymentUsage {
@@ -1179,6 +1195,8 @@ interface ScriptLookupInfo {
   liveCellsCount: number;
   liveCapacitySum: string;
   liveUsedCapacitySum: string;
+  codeCellsLiveCount: number;
+  codeCellsTotal: number;
 }
 
 type ScriptLookupResponse = Record<string, ScriptLookupInfo>;
@@ -1382,6 +1400,8 @@ export type {
   CellDaoInfo,
   CellDep,
   CodeCellScript,
+  CodeCellEntry,
+  CodeCellsResponse,
   Transaction,
   TransactionStatus,
   TransactionDetail,
@@ -2243,6 +2263,13 @@ export const api = {
     query.set('code_hash', codeHash);
     query.set('hash_type', hashType);
     return fetchApi(`/scripts/code-cell?${query}`);
+  },
+
+  getCodeCells: (codeHash: string, hashType: ScriptRefHashType): Promise<CodeCellsResponse> => {
+    const query = new URLSearchParams();
+    query.set('code_hash', codeHash);
+    query.set('hash_type', hashType);
+    return fetchApi(`/scripts/code-cells?${query}`);
   },
 
   getCyclesStatus: (hash: string): Promise<CyclesStatusResponse> => {
