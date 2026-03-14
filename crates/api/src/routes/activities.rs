@@ -5,8 +5,8 @@ use axum::{
 };
 use ckbadger_store::{
     types::{
-        ActivityEntry, AssetAction, AssetChange, LatestActivityItem, LockCallEntry, ScriptInfo,
-        TypeCallEntry,
+        ActivityEntry, AssetAction, AssetChange, LatestActivityItem, LockCallEntry,
+        OwnerActivityDelta, ScriptInfo, TxActivityBundle, TypeCallEntry,
     },
     CkbadgerStore,
 };
@@ -24,6 +24,7 @@ use crate::AppState;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/addresses/{addr}/activities", get(get_address_activities))
+        .route("/activities", get(get_global_activities))
         .route("/activities/latest", get(get_latest_activities))
 }
 
@@ -588,6 +589,16 @@ fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
     Ok(())
 }
 
+fn validate_global_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
+    match filter {
+        None | Some("") | Some("all") => Ok(()),
+        Some(value) => Err(ApiError::bad_request(format!(
+            "invalid global activity filter '{}'; expected one of: all",
+            value
+        ))),
+    }
+}
+
 fn parse_activity_cursor(value: &str) -> Option<(i64, i32)> {
     let parts: Vec<&str> = value.split(':').collect();
     match parts.as_slice() {
@@ -595,6 +606,32 @@ fn parse_activity_cursor(value: &str) -> Option<(i64, i32)> {
         [block_num, tx_idx] => Some((block_num.parse::<i64>().ok()?, tx_idx.parse::<i32>().ok()?)),
         _ => None,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GlobalActivityCursor {
+    block_num: i64,
+    tx_idx: i32,
+    owner_idx: usize,
+}
+
+fn parse_global_activity_cursor(value: &str) -> Option<GlobalActivityCursor> {
+    let parts: Vec<&str> = value.split(':').collect();
+    match parts.as_slice() {
+        [block_num, tx_idx, owner_idx] => Some(GlobalActivityCursor {
+            block_num: block_num.parse::<i64>().ok()?,
+            tx_idx: tx_idx.parse::<i32>().ok()?,
+            owner_idx: owner_idx.parse::<usize>().ok()?,
+        }),
+        _ => None,
+    }
+}
+
+fn encode_global_activity_cursor(cursor: GlobalActivityCursor) -> String {
+    format!(
+        "{}:{}:{}",
+        cursor.block_num, cursor.tx_idx, cursor.owner_idx
+    )
 }
 
 /// Check if an addr_tx entry is canonical using the same logic as
@@ -665,6 +702,112 @@ fn list_canonical_activities_page(
     Ok(out)
 }
 
+fn build_latest_activity_item(
+    bundle: &TxActivityBundle,
+    owner: &OwnerActivityDelta,
+) -> LatestActivityItem {
+    LatestActivityItem {
+        lock_hash: owner.lock_hash.clone(),
+        lock_code_hash: owner.lock_code_hash.clone(),
+        lock_hash_type: owner.lock_hash_type,
+        lock_args: owner.lock_args.clone(),
+        entry: ActivityEntry {
+            tx_hash: bundle.tx_hash.clone(),
+            block_hash: bundle.block_hash.clone(),
+            block_number: bundle.block_number,
+            tx_index: bundle.tx_index,
+            timestamp: bundle.timestamp,
+            ckb_delta: owner.ckb_delta,
+            used_delta: owner.used_delta,
+            is_cellbase: bundle.is_cellbase,
+            has_type_script: owner.has_type_script,
+            asset_changes: owner.asset_changes.clone(),
+            type_calls: owner.type_calls.clone(),
+            lock_calls: owner.lock_calls.clone(),
+            protocol_actions: owner.protocol_actions.clone(),
+            peers: owner.peers.clone(),
+        },
+    }
+}
+
+fn list_canonical_global_activities_page(
+    store: &CkbadgerStore,
+    limit: usize,
+    cursor: Option<GlobalActivityCursor>,
+    filter: Option<&str>,
+) -> anyhow::Result<Vec<(GlobalActivityCursor, LatestActivityItem)>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let scan_limit = ACTIVITY_SCAN_CHUNK_SIZE.max(limit);
+    let mut out = Vec::with_capacity(limit);
+    let mut scan_cursor = None;
+    let mut cursor_consumed = cursor.is_none();
+
+    loop {
+        let bundles = store.list_tx_activity_bundles_recent(scan_limit, scan_cursor)?;
+        if bundles.is_empty() {
+            break;
+        }
+
+        let bundles_len = bundles.len();
+        let mut last_seen = None;
+        for bundle in bundles {
+            last_seen = Some((bundle.block_number, bundle.tx_index));
+            if bundle.is_cellbase {
+                continue;
+            }
+            if !is_canonical_activity(store, bundle.block_number, bundle.tx_index, &bundle.tx_hash)?
+            {
+                continue;
+            }
+
+            for (owner_idx, owner) in bundle.owners.iter().enumerate() {
+                let row_cursor = GlobalActivityCursor {
+                    block_num: bundle.block_number,
+                    tx_idx: bundle.tx_index,
+                    owner_idx,
+                };
+
+                if let Some(expected_cursor) = cursor {
+                    if !cursor_consumed {
+                        if row_cursor == expected_cursor {
+                            cursor_consumed = true;
+                        }
+                        continue;
+                    }
+                }
+
+                let item = build_latest_activity_item(&bundle, owner);
+                match filter {
+                    None | Some("") | Some("all") => {}
+                    Some(value) => {
+                        anyhow::bail!(
+                            "unsupported global activity filter after validation: {}",
+                            value
+                        )
+                    }
+                }
+                out.push((row_cursor, item));
+                if out.len() >= limit {
+                    return Ok(out);
+                }
+            }
+        }
+
+        if bundles_len < scan_limit {
+            break;
+        }
+        let Some(last_seen_cursor) = last_seen else {
+            break;
+        };
+        scan_cursor = Some(last_seen_cursor);
+    }
+
+    Ok(out)
+}
+
 async fn get_address_activities(
     State(state): State<Arc<AppState>>,
     Path(addr): Path<String>,
@@ -716,6 +859,67 @@ async fn get_address_activities(
             .into_iter()
             .map(|(_, _, entry)| {
                 build_activity_response(store.as_ref(), &entry, &mut script_info_cache)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        Ok((next_cursor, activities))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    ok(CursorPaginatedResponse::without_total(
+        activities,
+        limit as i64,
+        next_cursor,
+    ))
+}
+
+async fn get_global_activities(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ActivityParams>,
+) -> ApiResult<CursorPaginatedResponse<GlobalActivityResponse>> {
+    validate_global_activity_filter(params.filter.as_deref())?;
+
+    let limit = params.limit.clamp(1, 100) as usize;
+    let cursor = match params.cursor.as_deref() {
+        None | Some("") => None,
+        Some(value) => Some(
+            parse_global_activity_cursor(value)
+                .ok_or_else(|| ApiError::bad_request("invalid cursor format"))?,
+        ),
+    };
+
+    let store = state.store.clone();
+    let network = state.ckb_network.clone();
+    let filter = params.filter.clone();
+    let (next_cursor, activities) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let results = list_canonical_global_activities_page(
+            store.as_ref(),
+            limit + 1,
+            cursor,
+            filter.as_deref(),
+        )?;
+
+        let has_more = results.len() > limit;
+        let page: Vec<_> = results.into_iter().take(limit).collect();
+        let next_cursor = if has_more {
+            page.last()
+                .map(|(cursor, _)| encode_global_activity_cursor(*cursor))
+        } else {
+            None
+        };
+
+        let mut script_info_cache = HashMap::new();
+        let activities = page
+            .into_iter()
+            .map(|(_, item)| {
+                build_global_activity_response(
+                    store.as_ref(),
+                    &network,
+                    &item,
+                    &mut script_info_cache,
+                )
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
@@ -843,10 +1047,32 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_global_activity_filter_only_accepts_all() {
+        assert!(validate_global_activity_filter(None).is_ok());
+        assert!(validate_global_activity_filter(Some("")).is_ok());
+        assert!(validate_global_activity_filter(Some("all")).is_ok());
+        assert!(validate_global_activity_filter(Some("token")).is_err());
+    }
+
+    #[test]
     fn test_parse_activity_cursor_rejects_non_current_format() {
         assert_eq!(parse_activity_cursor("100:2"), Some((100, 2)));
         assert_eq!(parse_activity_cursor("100:2:7"), None);
         assert_eq!(parse_activity_cursor("100"), None);
+    }
+
+    #[test]
+    fn test_parse_global_activity_cursor_requires_owner_index() {
+        assert_eq!(
+            parse_global_activity_cursor("100:2:7"),
+            Some(GlobalActivityCursor {
+                block_num: 100,
+                tx_idx: 2,
+                owner_idx: 7,
+            })
+        );
+        assert_eq!(parse_global_activity_cursor("100:2"), None);
+        assert_eq!(parse_global_activity_cursor("100"), None);
     }
 
     #[test]

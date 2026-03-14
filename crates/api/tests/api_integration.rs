@@ -235,6 +235,24 @@ fn make_single_owner_bundle(lock_hash: &[u8], activity: &ActivityEntry) -> TxAct
     }
 }
 
+fn make_owner_delta(lock_hash_byte: u8, ckb_delta: i128) -> OwnerActivityDelta {
+    OwnerActivityDelta {
+        lock_hash: vec![lock_hash_byte; 32],
+        lock_code_hash: vec![0x11; 32],
+        lock_hash_type: 1,
+        lock_args: vec![lock_hash_byte; 20],
+        ckb_delta,
+        used_delta: 0,
+        has_type_script: false,
+        involved_script_code_hashes: vec![vec![0x11; 32]],
+        asset_changes: vec![],
+        type_calls: None,
+        lock_calls: None,
+        protocol_actions: vec![],
+        peers: vec![],
+    }
+}
+
 #[tokio::test]
 async fn test_network_stats_returns_ok() {
     let store = test_store();
@@ -7557,6 +7575,146 @@ async fn test_latest_activities_return_asset_changes_and_type_calls_as_separate_
     assert_eq!(type_calls[0]["scriptName"], "RGB++ Lock");
     let lock_calls = items[0]["lockCalls"].as_array().unwrap();
     assert_eq!(lock_calls.len(), 0);
+}
+
+#[tokio::test]
+async fn test_global_activities_support_owner_level_cursor_pagination() {
+    let store = test_store();
+
+    let newer_tx_hash = vec![0x91; 32];
+    let older_tx_hash = vec![0x92; 32];
+    let newer_block_hash = vec![0xA1; 32];
+    let older_block_hash = vec![0xA2; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        200,
+        &CachedBlockHeader {
+            hash: newer_block_hash.clone(),
+            timestamp: 1_700_000_200,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    batch.put_block_header(
+        199,
+        &CachedBlockHeader {
+            hash: older_block_hash.clone(),
+            timestamp: 1_700_000_199,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    batch.put_tx_hash_map(&newer_tx_hash, 200, 0);
+    batch.put_tx_hash_map(&older_tx_hash, 199, 0);
+    batch.put_tx_index(
+        200,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_200,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+        },
+    );
+    batch.put_tx_index(
+        199,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_199,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+        },
+    );
+    batch.put_tx_activity_bundle(&TxActivityBundle {
+        tx_hash: newer_tx_hash.clone(),
+        block_hash: newer_block_hash,
+        block_number: 200,
+        tx_index: 0,
+        timestamp: 1_700_000_200,
+        is_cellbase: false,
+        owners: vec![
+            make_owner_delta(0x11, 111),
+            make_owner_delta(0x12, 222),
+            make_owner_delta(0x13, 333),
+        ],
+    });
+    batch.put_tx_activity_bundle(&TxActivityBundle {
+        tx_hash: older_tx_hash.clone(),
+        block_hash: older_block_hash,
+        block_number: 199,
+        tx_index: 0,
+        timestamp: 1_700_000_199,
+        is_cellbase: false,
+        owners: vec![make_owner_delta(0x21, 444)],
+    });
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/activities?limit=2")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().expect("data array");
+    assert_eq!(json["limit"], 2);
+    assert_eq!(data.len(), 2);
+    assert_eq!(
+        data[0]["txHash"],
+        format!("0x{}", hex::encode(&newer_tx_hash))
+    );
+    assert_eq!(
+        data[1]["txHash"],
+        format!("0x{}", hex::encode(&newer_tx_hash))
+    );
+    assert_eq!(data[0]["ckbDelta"], "111");
+    assert_eq!(data[1]["ckbDelta"], "222");
+    assert_eq!(json["hasMore"], true);
+    let next_cursor = json["nextCursor"].as_str().expect("next cursor");
+    let cursor_parts: Vec<_> = next_cursor.split(':').collect();
+    assert_eq!(cursor_parts, vec!["200", "0", "1"]);
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/activities?limit=2&cursor={}", next_cursor))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().expect("data array");
+    assert_eq!(data.len(), 2);
+    assert_eq!(
+        data[0]["txHash"],
+        format!("0x{}", hex::encode(&newer_tx_hash))
+    );
+    assert_eq!(
+        data[1]["txHash"],
+        format!("0x{}", hex::encode(&older_tx_hash))
+    );
+    assert_eq!(data[0]["ckbDelta"], "333");
+    assert_eq!(data[1]["ckbDelta"], "444");
+    assert_eq!(json["hasMore"], false);
+    assert!(json["nextCursor"].is_null());
 }
 
 #[tokio::test]
