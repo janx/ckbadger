@@ -531,6 +531,91 @@ impl CkbadgerStore {
         Ok(consumed_fallback)
     }
 
+    /// List all cells (live and consumed) matching a data hash.
+    ///
+    /// Returns cells sorted by creation block (ascending, matching index key order).
+    /// Each result includes a `bool` indicating whether the cell is live (`true`) or consumed (`false`).
+    /// Used by the code-cells endpoint to show all deployment cells for a script.
+    #[allow(clippy::type_complexity)]
+    pub fn list_all_cells_by_data_hash(
+        &self,
+        data_hash: &[u8],
+        cells_store: &CkbadgerStore,
+    ) -> anyhow::Result<Vec<(Vec<u8>, i16, PositionedCellInfo, bool)>> {
+        let mut results = Vec::new();
+
+        let iter = self.iterator_cf(
+            self.cf_cell_by_data_hash(),
+            rocksdb::IteratorMode::From(data_hash, rocksdb::Direction::Forward),
+        );
+
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate cell index in list_all_cells_by_data_hash: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(data_hash) {
+                break;
+            }
+            if key.len() >= 74 {
+                let (tx_hash, output_index) = keys::decode_outpoint(&key[40..74]);
+                if let Some(cell) = self.get_cell(&tx_hash, output_index, cells_store)? {
+                    results.push((tx_hash, output_index, cell, true));
+                } else if let Some(cell) =
+                    self.get_consumed_cell(&tx_hash, output_index, cells_store)?
+                {
+                    results.push((tx_hash, output_index, cell, false));
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// List all cells (live and consumed) matching a type script hash.
+    ///
+    /// For type_id scripts this typically returns 0-1 results.
+    /// Each result includes a `bool` indicating whether the cell is live (`true`) or consumed (`false`).
+    #[allow(clippy::type_complexity)]
+    pub fn list_all_cells_by_type(
+        &self,
+        type_hash: &[u8],
+        cells_store: &CkbadgerStore,
+    ) -> anyhow::Result<Vec<(Vec<u8>, i16, PositionedCellInfo, bool)>> {
+        let mut results = Vec::new();
+
+        let iter = self.iterator_cf(
+            self.cf_cell_by_type(),
+            rocksdb::IteratorMode::From(type_hash, rocksdb::Direction::Forward),
+        );
+
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate cell index in list_all_cells_by_type: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(type_hash) {
+                break;
+            }
+            if key.len() >= 74 {
+                let (tx_hash, output_index) = keys::decode_outpoint(&key[40..74]);
+                if let Some(cell) = self.get_cell(&tx_hash, output_index, cells_store)? {
+                    results.push((tx_hash, output_index, cell, true));
+                } else if let Some(cell) =
+                    self.get_consumed_cell(&tx_hash, output_index, cells_store)?
+                {
+                    results.push((tx_hash, output_index, cell, false));
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
     /// List live cells by lock code hash (prefix scan on cell_by_lock_code).
     /// `after_key` is the full 74-byte cell index key of the last returned entry (for pagination).
     pub fn list_cells_by_lock_code_hash(
@@ -991,5 +1076,54 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to decode consumed cell meta"));
+    }
+
+    #[test]
+    fn test_list_all_cells_by_data_hash_returns_live_and_consumed() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let data_hash = vec![0xAA; 32];
+        let tx1 = vec![0x01; 32];
+        let tx2 = vec![0x02; 32];
+        let cell = LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 50,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        };
+
+        // Cell 1: live at block 5
+        let mut batch = StoreBatch::new(&store);
+        batch.put_live_cell_marker_by_outpoint(&tx1, 0, 5);
+        batch.put_cell_payload_by_outpoint(&tx1, 0, &cell);
+        batch.put_cell_by_data_hash(&data_hash, 5, &tx1, 0);
+        batch.commit().unwrap();
+
+        // Cell 2: consumed (created block 10, consumed block 20)
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell_payload_by_outpoint(&tx2, 0, &cell);
+        batch.put_consumed_cell(&tx2, 0, &cell, 10, 20);
+        batch.put_cell_by_data_hash(&data_hash, 10, &tx2, 0);
+        batch.commit().unwrap();
+
+        let results = store
+            .list_all_cells_by_data_hash(&data_hash, &store)
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        // Sorted by block: block 5 first, block 10 second
+        assert_eq!(results[0].0, tx1);
+        assert!(results[0].3, "first cell should be live");
+        assert_eq!(results[1].0, tx2);
+        assert!(!results[1].3, "second cell should be consumed");
     }
 }
