@@ -45,6 +45,7 @@ pub struct ActivityResponse {
     pub ckb_delta: String,
     pub used_delta: String,
     pub is_cellbase: bool,
+    pub has_type_script: bool,
     pub asset_changes: Vec<AssetChangeResponse>,
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
@@ -128,6 +129,7 @@ pub struct GlobalActivityResponse {
     pub ckb_delta: String,
     pub used_delta: String,
     pub is_cellbase: bool,
+    pub has_type_script: bool,
     pub asset_changes: Vec<AssetChangeResponse>,
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
@@ -477,6 +479,7 @@ pub(crate) fn build_activity_response(
         ckb_delta: entry.ckb_delta.to_string(),
         used_delta: entry.used_delta.to_string(),
         is_cellbase: entry.is_cellbase,
+        has_type_script: entry.has_type_script,
         asset_changes: entry
             .asset_changes
             .iter()
@@ -528,6 +531,7 @@ pub(crate) fn build_global_activity_response(
         ckb_delta: item.entry.ckb_delta.to_string(),
         used_delta: item.entry.used_delta.to_string(),
         is_cellbase: item.entry.is_cellbase,
+        has_type_script: item.entry.has_type_script,
         asset_changes: item
             .entry
             .asset_changes
@@ -563,7 +567,7 @@ fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
     if let Some(value) = filter {
         if !matches!(
             value,
-            "all" | "ckb" | "token" | "nft" | "dao" | "type_call" | "lock_call"
+            "all" | "ckb" | "token" | "nft" | "object" | "dao" | "type_call" | "lock_call"
         ) && !value.starts_with("protocol:")
         {
             return Err(ApiError::bad_request(format!(
@@ -731,9 +735,25 @@ async fn get_latest_activities(
     let activities = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let items = store.get_latest_activities()?;
 
+        // Filter to canonical entries only (same logic as address activities)
+        let tx_hashes: Vec<Vec<u8>> = items.iter().map(|i| i.entry.tx_hash.clone()).collect();
+        let canonical_batch = store.get_canonical_tx_identities_by_hash_batch(&tx_hashes)?;
+        let canonical_map: CanonicalActivityLocationMap = canonical_batch
+            .into_iter()
+            .filter_map(|(tx_hash, loc)| loc.map(|l| (tx_hash, l)))
+            .collect();
+
         let mut script_info_cache = HashMap::new();
         let activities: Vec<GlobalActivityResponse> = items
             .into_iter()
+            .filter(|item| {
+                canonical_map.get(&item.entry.tx_hash)
+                    == Some(&(
+                        item.entry.block_number,
+                        item.entry.tx_index,
+                        item.entry.block_hash.clone(),
+                    ))
+            })
             .take(limit)
             .map(|item| {
                 build_global_activity_response(

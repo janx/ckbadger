@@ -473,6 +473,7 @@ interface Activity {
   ckbDelta: string;
   usedDelta: string;
   isCellbase: boolean;
+  hasTypeScript: boolean;
   assetChanges: ActivityAssetChange[];
   typeCalls: ActivityTypeCall[];
   lockCalls: ActivityLockCall[];
@@ -489,6 +490,7 @@ interface GlobalActivity {
   ckbDelta: string;
   usedDelta: string;
   isCellbase: boolean;
+  hasTypeScript: boolean;
   assetChanges: ActivityAssetChange[];
   typeCalls: ActivityTypeCall[];
   lockCalls: ActivityLockCall[];

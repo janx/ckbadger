@@ -97,7 +97,21 @@ export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
     };
   }
 
-  // 4. CKB transfer — Layer 1 only (Layers 2 and 3 are empty)
+  // Layer 2 (catch-all): hasTypeScript but no recognized changes or type calls.
+  // A type script was involved (e.g. zero-delta UDT) but produced no visible signals.
+  // Matches backend daily stats classification (unknown_count).
+  if (activity.hasTypeScript) {
+    return {
+      displayType: 'typeCall',
+      activity,
+      primaryAssetChange: null,
+      primaryTypeCall: null,
+      primaryLockCall,
+      primaryProtocolAction: null,
+    };
+  }
+
+  // 4. CKB transfer — Layer 1 only (Layers 2 and 3 are empty, no type scripts)
   return {
     displayType: 'ckbTransfer',
     activity,

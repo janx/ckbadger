@@ -7384,6 +7384,33 @@ async fn test_latest_activities_return_asset_changes_and_type_calls_as_separate_
             ..Default::default()
         },
     );
+    // Canonical chain data required for canonical filtering in /activities/latest
+    core_batch.put_block_header(
+        entry.block_number,
+        &CachedBlockHeader {
+            hash: entry.block_hash.clone(),
+            timestamp: entry.timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 2,
+        },
+    );
+    core_batch.put_tx_hash_map(&entry.tx_hash, entry.block_number, entry.tx_index);
+    core_batch.put_tx_index(
+        entry.block_number,
+        entry.tx_index,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: entry.timestamp,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+        },
+    );
     core_batch.put_tx_activity_bundle(&TxActivityBundle {
         tx_hash: entry.tx_hash.clone(),
         block_hash: entry.block_hash.clone(),

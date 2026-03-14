@@ -302,7 +302,15 @@ impl CkbadgerStore {
     fn matches_activity_filter(entry: &ActivityEntry, filter: Option<&str>) -> bool {
         match filter {
             None | Some("all") => true,
-            Some("ckb") => entry.asset_changes.is_empty() && !entry.has_type_script,
+            Some("ckb") => {
+                entry.asset_changes.is_empty()
+                    && !entry.has_type_script
+                    && entry.protocol_actions.is_empty()
+                    && entry
+                        .lock_calls
+                        .as_ref()
+                        .is_none_or(|calls| calls.is_empty())
+            }
             Some("token") => entry
                 .asset_changes
                 .iter()
@@ -565,5 +573,82 @@ mod tests {
             Some("protocol:fiber")
         ));
         assert!(CkbadgerStore::matches_activity_filter(&entry, None));
+    }
+
+    #[test]
+    fn test_matches_activity_filter_ckb_excludes_protocol_actions() {
+        let entry = ActivityEntry {
+            tx_hash: vec![1; 32],
+            block_hash: vec![2; 32],
+            block_number: 100,
+            tx_index: 0,
+            timestamp: 1_700_000_000,
+            ckb_delta: -100,
+            used_delta: 0,
+            is_cellbase: false,
+            has_type_script: false,
+            asset_changes: vec![],
+            type_calls: None,
+            lock_calls: None,
+            protocol_actions: vec![ProtocolAction {
+                protocol: "rgbpp".into(),
+                action: "leap_to_ckb".into(),
+                metadata: serde_json::json!({}),
+            }],
+            peers: vec![],
+        };
+
+        // Has protocol actions -> should NOT match "ckb" filter
+        assert!(!CkbadgerStore::matches_activity_filter(&entry, Some("ckb")));
+    }
+
+    #[test]
+    fn test_matches_activity_filter_ckb_excludes_lock_calls() {
+        let entry = ActivityEntry {
+            tx_hash: vec![1; 32],
+            block_hash: vec![2; 32],
+            block_number: 100,
+            tx_index: 0,
+            timestamp: 1_700_000_000,
+            ckb_delta: -100,
+            used_delta: 0,
+            is_cellbase: false,
+            has_type_script: false,
+            asset_changes: vec![],
+            type_calls: None,
+            lock_calls: Some(vec![LockCallEntry {
+                lock_code_hash: vec![0xDD; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0xEE; 20],
+            }]),
+            protocol_actions: vec![],
+            peers: vec![],
+        };
+
+        // Has lock calls -> should NOT match "ckb" filter
+        assert!(!CkbadgerStore::matches_activity_filter(&entry, Some("ckb")));
+    }
+
+    #[test]
+    fn test_matches_activity_filter_ckb_matches_pure_transfer() {
+        let entry = ActivityEntry {
+            tx_hash: vec![1; 32],
+            block_hash: vec![2; 32],
+            block_number: 100,
+            tx_index: 0,
+            timestamp: 1_700_000_000,
+            ckb_delta: -100,
+            used_delta: 0,
+            is_cellbase: false,
+            has_type_script: false,
+            asset_changes: vec![],
+            type_calls: None,
+            lock_calls: None,
+            protocol_actions: vec![],
+            peers: vec![],
+        };
+
+        // Pure CKB transfer -> should match "ckb" filter
+        assert!(CkbadgerStore::matches_activity_filter(&entry, Some("ckb")));
     }
 }

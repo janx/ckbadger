@@ -298,6 +298,7 @@ describe('AddressDetailPage', () => {
           ckbDelta: '0',
           usedDelta: '0',
           isCellbase: false,
+          hasTypeScript: false,
           peers: [],
           typeCalls: [],
           lockCalls: [],
@@ -513,6 +514,7 @@ describe('AddressDetailPage', () => {
           ckbDelta: '0',
           usedDelta: '0',
           isCellbase: false,
+          hasTypeScript: false,
           peers: [],
           typeCalls: [],
           lockCalls: [],
@@ -553,6 +555,7 @@ describe('AddressDetailPage', () => {
           ckbDelta: '0',
           usedDelta: '0',
           isCellbase: false,
+          hasTypeScript: false,
           peers: [],
           typeCalls: [],
           lockCalls: [],
@@ -593,6 +596,7 @@ describe('AddressDetailPage', () => {
           ckbDelta: '0',
           usedDelta: '0',
           isCellbase: false,
+          hasTypeScript: false,
           peers: [],
           assetChanges: [
             {

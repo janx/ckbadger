@@ -365,11 +365,11 @@ fn build_tx_activity_bundle(
 
         // Compute occupied for output
         let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
-        let type_script_size = cell
-            .type_args
-            .as_ref()
-            .map(|args| 32 + 1 + args.len() as i64)
-            .unwrap_or(0);
+        let type_script_size = if cell.type_code_hash.is_some() {
+            32 + 1 + cell.type_args.as_ref().map(|a| a.len() as i64).unwrap_or(0)
+        } else {
+            0
+        };
         let occupied =
             (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
         accum.output_used += occupied;

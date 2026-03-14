@@ -12,6 +12,7 @@ function makeActivity(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
     ckbDelta: overrides.ckbDelta ?? '0',
     usedDelta: overrides.usedDelta ?? '0',
     isCellbase: overrides.isCellbase ?? false,
+    hasTypeScript: overrides.hasTypeScript ?? false,
     assetChanges: overrides.assetChanges ?? [],
     typeCalls: overrides.typeCalls ?? [],
     lockCalls: overrides.lockCalls ?? [],
@@ -203,5 +204,30 @@ describe('classifyActivity', () => {
     );
     expect(result.displayType).toBe('protocolAction');
     expect(result.primaryAssetChange?.type).toBe('token');
+  });
+
+  it('classifies hasTypeScript without changes as typeCall', () => {
+    // Zero-delta UDT: type script is present but no asset changes emitted
+    const result = classifyActivity(makeActivity({ hasTypeScript: true }));
+    expect(result.displayType).toBe('typeCall');
+  });
+
+  it('hasTypeScript does not override recognized asset changes', () => {
+    const result = classifyActivity(
+      makeActivity({
+        hasTypeScript: true,
+        assetChanges: [
+          { type: 'token', typeScriptHash: '0xt', delta: '100', symbol: 'X', decimals: 8 },
+        ],
+      })
+    );
+    expect(result.displayType).toBe('token');
+  });
+
+  it('ckbTransfer only when no type script involved', () => {
+    const result = classifyActivity(
+      makeActivity({ hasTypeScript: false, ckbDelta: '-50000000000' })
+    );
+    expect(result.displayType).toBe('ckbTransfer');
   });
 });

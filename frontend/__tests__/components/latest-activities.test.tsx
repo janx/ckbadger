@@ -22,6 +22,7 @@ function makeActivity(
     ckbDelta: overrides.ckbDelta ?? '0',
     usedDelta: overrides.usedDelta ?? '0',
     isCellbase: overrides.isCellbase ?? false,
+    hasTypeScript: overrides.hasTypeScript ?? false,
     assetChanges: overrides.assetChanges ?? [],
     typeCalls: overrides.typeCalls ?? [],
     lockCalls: overrides.lockCalls ?? [],
