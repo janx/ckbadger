@@ -7718,6 +7718,190 @@ async fn test_global_activities_support_owner_level_cursor_pagination() {
 }
 
 #[tokio::test]
+async fn test_global_activities_apply_stream_filters() {
+    let store = test_store();
+
+    let tx_hash = vec![0x93; 32];
+    let block_hash = vec![0xA3; 32];
+
+    let ckb_owner = make_owner_delta(0x31, 101);
+
+    let mut token_owner = make_owner_delta(0x32, 202);
+    token_owner.asset_changes = vec![AssetChange::Token {
+        type_script_hash: vec![0x44; 32],
+        delta: 42,
+        symbol: Some("TKN".to_string()),
+        decimals: Some(8),
+    }];
+
+    let mut object_owner = make_owner_delta(0x33, 303);
+    object_owner.asset_changes = vec![AssetChange::Object {
+        object_id: vec![0x55; 32],
+        standard: "spore".to_string(),
+        action: AssetAction::Transfer,
+    }];
+
+    let mut identity_owner = make_owner_delta(0x34, 404);
+    identity_owner.asset_changes = vec![AssetChange::Identity {
+        identity_id: vec![0x66; 32],
+        standard: "dotbit".to_string(),
+        action: AssetAction::Update,
+    }];
+
+    let mut dao_owner = make_owner_delta(0x35, 505);
+    dao_owner.asset_changes = vec![AssetChange::DaoDeposit {
+        capacity: 102_00000000,
+    }];
+
+    let mut script_owner = make_owner_delta(0x36, 606);
+    script_owner.has_type_script = true;
+    script_owner.type_calls = Some(vec![TypeCallEntry {
+        type_code_hash: vec![0x77; 32],
+        type_hash_type: 1,
+        type_args: vec![0x88; 20],
+    }]);
+
+    let mut implicit_script_owner = make_owner_delta(0x38, 808);
+    implicit_script_owner.has_type_script = true;
+
+    let mut protocol_owner = make_owner_delta(0x37, 707);
+    protocol_owner.protocol_actions = vec![ProtocolAction::new(
+        "rgbpp",
+        "leap_to_ckb",
+        serde_json::json!({
+            "btcTxid": "11".repeat(32),
+        }),
+    )];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        210,
+        &CachedBlockHeader {
+            hash: block_hash.clone(),
+            timestamp: 1_700_000_210,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    batch.put_tx_hash_map(&tx_hash, 210, 0);
+    batch.put_tx_index(
+        210,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_210,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+        },
+    );
+    batch.put_tx_activity_bundle(&TxActivityBundle {
+        tx_hash: tx_hash.clone(),
+        block_hash,
+        block_number: 210,
+        tx_index: 0,
+        timestamp: 1_700_000_210,
+        is_cellbase: false,
+        owners: vec![
+            ckb_owner,
+            token_owner,
+            object_owner,
+            identity_owner,
+            dao_owner,
+            script_owner,
+            implicit_script_owner,
+            protocol_owner,
+        ],
+    });
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/activities?filter=ckb")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["ckbDelta"], "101");
+
+    let request = Request::builder()
+        .uri("/api/v1/activities?filter=token")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["assetChanges"][0]["type"], "token");
+
+    let request = Request::builder()
+        .uri("/api/v1/activities?filter=object")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["assetChanges"][0]["type"], "object");
+
+    let request = Request::builder()
+        .uri("/api/v1/activities?filter=identity")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["assetChanges"][0]["type"], "identity");
+
+    let request = Request::builder()
+        .uri("/api/v1/activities?filter=dao")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["assetChanges"][0]["type"], "daoDeposit");
+
+    let request = Request::builder()
+        .uri("/api/v1/activities?filter=script")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 2);
+    assert_eq!(json["data"][0]["typeCalls"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][1]["hasTypeScript"], true);
+
+    let request = Request::builder()
+        .uri("/api/v1/activities?filter=protocol")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["protocolActions"][0]["protocol"], "rgbpp");
+}
+
+#[tokio::test]
 async fn test_dao_deposits_cursor_pagination_descending() {
     let store = test_store();
     let mut batch = StoreBatch::new(store.as_ref());

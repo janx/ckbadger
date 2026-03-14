@@ -624,13 +624,14 @@ export function LatestActivities({
             : classifiedItems.map((classified) => {
                 const key = itemKey(classified.activity);
                 const isNew = newItemKeys.has(key);
+                const txHref = `/tx/${classified.activity.txHash}`;
+                const blockHref = `/blocks/${classified.activity.blockNumber}`;
 
                 return (
-                  <Link
+                  <div
                     key={key}
-                    href={`/tx/${classified.activity.txHash}`}
                     className={cn(
-                      'border-base-border/50 block border-b px-3 py-2 no-underline last:border-b-0',
+                      'border-base-border/50 border-b px-3 py-2 last:border-b-0',
                       'hover:bg-base-elevated/50 transition-all duration-300'
                     )}
                     style={
@@ -642,10 +643,24 @@ export function LatestActivities({
                         : undefined
                     }
                   >
-                    <div className="space-y-1">
+                    <div className="space-y-2">
                       <StreamItem classified={classified} />
+                      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 font-mono text-[10px]">
+                        <Link
+                          href={txHref}
+                          className="text-text-dim hover:text-aqua transition-colors"
+                        >
+                          tx {truncateHash(classified.activity.txHash, 8, 6)}
+                        </Link>
+                        <Link
+                          href={blockHref}
+                          className="text-text-dim hover:text-text transition-colors"
+                        >
+                          #{classified.activity.blockNumber.toLocaleString()}
+                        </Link>
+                      </div>
                     </div>
-                  </Link>
+                  </div>
                 );
               })}
         </div>

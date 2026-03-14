@@ -512,6 +512,16 @@ interface GlobalActivity {
   peers: string[];
 }
 
+type GlobalActivityFilter =
+  | 'all'
+  | 'ckb'
+  | 'token'
+  | 'object'
+  | 'identity'
+  | 'dao'
+  | 'script'
+  | 'protocol';
+
 interface ScriptCountEntry {
   codeHash: string;
   name: string | null;
@@ -1492,6 +1502,7 @@ export type {
   ActivityLockCall,
   ActivityProtocolAction,
   GlobalActivity,
+  GlobalActivityFilter,
   ScriptCountEntry,
   DailyActivityStats,
   ActivitySummary24h,
@@ -1622,6 +1633,16 @@ export const api = {
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.filter && params.filter !== 'all') query.set('filter', params.filter);
     return fetchApi(`/addresses/${addr}/activities?${query}`);
+  },
+
+  getGlobalActivities: (
+    params: CursorQueryParams & { filter?: GlobalActivityFilter } = {}
+  ): Promise<CursorPaginatedResponse<GlobalActivity>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.filter && params.filter !== 'all') query.set('filter', params.filter);
+    return fetchApi(`/activities?${query}`);
   },
 
   getLatestActivities: (limit: number = 8): Promise<GlobalActivity[]> => {

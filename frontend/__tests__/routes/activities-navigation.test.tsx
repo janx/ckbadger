@@ -6,7 +6,7 @@ import { createAppRouter } from '@/src/routes/router';
 
 vi.mock('@/lib/api', () => ({
   api: {
-    getLatestActivities: vi.fn(),
+    getGlobalActivities: vi.fn(),
   },
 }));
 
@@ -37,7 +37,13 @@ function AppHarness() {
 describe('activities navigation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(api.getLatestActivities).mockResolvedValue([]);
+    window.scrollTo = vi.fn();
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
   });
 
   it('renders the activities route instead of the 404 page', async () => {
@@ -49,7 +55,9 @@ describe('activities navigation', () => {
 
     expect(await screen.findByText('Activities')).toBeInTheDocument();
     await waitFor(() => {
-      expect(api.getLatestActivities).toHaveBeenCalledWith(64);
+      expect(api.getGlobalActivities).toHaveBeenCalledWith(
+        expect.objectContaining({ filter: 'all', limit: 20 })
+      );
     });
     expect(screen.getByTestId('pathname')).toHaveTextContent('/activities');
     expect(screen.queryByText('not found page')).not.toBeInTheDocument();
