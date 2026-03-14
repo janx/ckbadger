@@ -32,7 +32,15 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const [selectedDao, setSelectedDao] = useState(false);
   const [activeTab, setActiveTab] = useState<'activities' | 'cells' | 'transactions'>('activities');
   const [activityFilter, setActivityFilter] = useState<
-    'all' | 'ckb' | 'token' | 'object' | 'identity' | 'dao' | 'type_call' | 'lock_call'
+    | 'all'
+    | 'ckb'
+    | 'token'
+    | 'object'
+    | 'identity'
+    | 'dao'
+    | 'type_call'
+    | 'lock_call'
+    | 'protocol:rgbpp'
   >('all');
   const [cellFilter, setCellFilter] = useState<'all' | 'ckb' | 'token' | 'dao'>('all');
   const DAO_CODE_HASH = '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e';
@@ -698,6 +706,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     <option value="dao">DAO</option>
                     <option value="type_call">Type Call</option>
                     <option value="lock_call">Lock Call</option>
+                    <option value="protocol:rgbpp">RGB++</option>
                   </select>
                 </div>
                 {activitiesLoading ? (
@@ -736,7 +745,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   <div className="text-text-dim py-12 text-center">
                     {activityFilter === 'all'
                       ? 'No activities'
-                      : `No ${activityFilter === 'ckb' ? 'CKB' : activityFilter === 'type_call' ? 'Type Call' : activityFilter === 'lock_call' ? 'Lock Call' : activityFilter.charAt(0).toUpperCase() + activityFilter.slice(1)} activities on this page`}
+                      : `No ${activityFilter === 'ckb' ? 'CKB' : activityFilter === 'type_call' ? 'Type Call' : activityFilter === 'lock_call' ? 'Lock Call' : activityFilter === 'protocol:rgbpp' ? 'RGB++' : activityFilter.charAt(0).toUpperCase() + activityFilter.slice(1)} activities on this page`}
                   </div>
                 )}
               </>

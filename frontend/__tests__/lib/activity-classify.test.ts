@@ -15,6 +15,7 @@ function makeActivity(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
     assetChanges: overrides.assetChanges ?? [],
     typeCalls: overrides.typeCalls ?? [],
     lockCalls: overrides.lockCalls ?? [],
+    protocolActions: overrides.protocolActions ?? [],
     peers: overrides.peers ?? [],
   };
 }
@@ -199,5 +200,31 @@ describe('classifyActivity', () => {
     );
     expect(result.type).toBe('ckbTransfer');
     expect(result.primaryLockCall?.role).toBe('access_control');
+  });
+
+  it('classifies protocol action as protocolAction', () => {
+    const result = classifyActivity(
+      makeActivity({
+        protocolActions: [
+          { protocol: 'rgbpp', action: 'leap_to_ckb', metadata: { btcTxid: 'abc123' } },
+        ],
+      })
+    );
+    expect(result.type).toBe('protocolAction');
+    expect(result.primaryProtocolAction?.protocol).toBe('rgbpp');
+    expect(result.primaryProtocolAction?.action).toBe('leap_to_ckb');
+  });
+
+  it('protocol action takes priority over asset changes', () => {
+    const result = classifyActivity(
+      makeActivity({
+        protocolActions: [{ protocol: 'rgbpp', action: 'transfer', metadata: {} }],
+        assetChanges: [
+          { type: 'token', typeScriptHash: '0xt', delta: '100', symbol: 'X', decimals: 8 },
+        ],
+      })
+    );
+    expect(result.type).toBe('protocolAction');
+    expect(result.primaryAssetChange?.type).toBe('token');
   });
 });

@@ -16,6 +16,7 @@ function makeActivity(overrides: Partial<Activity> = {}): Activity {
     assetChanges: overrides.assetChanges ?? [],
     typeCalls: overrides.typeCalls ?? [],
     lockCalls: overrides.lockCalls ?? [],
+    protocolActions: overrides.protocolActions ?? [],
     peers: overrides.peers ?? [],
   };
 }

@@ -1,6 +1,7 @@
 import type {
   ActivityAssetChange,
   ActivityLockCall,
+  ActivityProtocolAction,
   ActivityTypeCall,
   GlobalActivity,
 } from '@/lib/api';
@@ -22,6 +23,7 @@ export interface ClassifiedActivity {
   primaryAssetChange: ActivityAssetChange | null;
   primaryTypeCall: ActivityTypeCall | null;
   primaryLockCall: ActivityLockCall | null;
+  primaryProtocolAction: ActivityProtocolAction | null;
 }
 
 const ASSET_TYPE_PRIORITY: Array<{ assetType: string; activityType: ActivityType }> = [
@@ -36,6 +38,18 @@ const ASSET_TYPE_PRIORITY: Array<{ assetType: string; activityType: ActivityType
 export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
   const primaryLockCall = activity.lockCalls[0] ?? null;
 
+  // 0. Protocol actions — highest level interpretation
+  if (activity.protocolActions.length > 0) {
+    return {
+      type: 'protocolAction',
+      activity,
+      primaryAssetChange: activity.assetChanges[0] ?? null,
+      primaryTypeCall: activity.typeCalls[0] ?? null,
+      primaryLockCall,
+      primaryProtocolAction: activity.protocolActions[0],
+    };
+  }
+
   // 1. Asset changes take priority
   for (const { assetType, activityType } of ASSET_TYPE_PRIORITY) {
     const match = activity.assetChanges.find((c) => c.type === assetType);
@@ -46,6 +60,7 @@ export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
         primaryAssetChange: match,
         primaryTypeCall: activity.typeCalls[0] ?? null,
         primaryLockCall,
+        primaryProtocolAction: null,
       };
     }
   }
@@ -59,6 +74,7 @@ export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
       primaryAssetChange: null,
       primaryTypeCall: activity.typeCalls[0] ?? null,
       primaryLockCall: protocolAction,
+      primaryProtocolAction: null,
     };
   }
 
@@ -70,6 +86,7 @@ export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
       primaryAssetChange: null,
       primaryTypeCall: activity.typeCalls[0],
       primaryLockCall,
+      primaryProtocolAction: null,
     };
   }
 
@@ -80,5 +97,6 @@ export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
     primaryAssetChange: null,
     primaryTypeCall: null,
     primaryLockCall,
+    primaryProtocolAction: null,
   };
 }

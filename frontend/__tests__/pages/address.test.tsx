@@ -301,6 +301,7 @@ describe('AddressDetailPage', () => {
           peers: [],
           typeCalls: [],
           lockCalls: [],
+          protocolActions: [],
           assetChanges: [
             {
               type: 'token',
@@ -515,6 +516,7 @@ describe('AddressDetailPage', () => {
           peers: [],
           typeCalls: [],
           lockCalls: [],
+          protocolActions: [],
           assetChanges: [
             {
               type: 'identity',
@@ -554,6 +556,7 @@ describe('AddressDetailPage', () => {
           peers: [],
           typeCalls: [],
           lockCalls: [],
+          protocolActions: [],
           assetChanges: [
             {
               type: 'identity',
@@ -610,6 +613,7 @@ describe('AddressDetailPage', () => {
             },
           ],
           lockCalls: [],
+          protocolActions: [],
         },
       ],
       total: 1,

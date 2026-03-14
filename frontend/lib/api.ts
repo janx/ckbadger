@@ -461,6 +461,12 @@ interface ActivityLockCall {
   decoded?: Record<string, unknown>;
 }
 
+interface ActivityProtocolAction {
+  protocol: string;
+  action: string;
+  metadata: Record<string, unknown>;
+}
+
 interface Activity {
   txHash: string;
   blockNumber: number;
@@ -472,6 +478,7 @@ interface Activity {
   assetChanges: ActivityAssetChange[];
   typeCalls: ActivityTypeCall[];
   lockCalls: ActivityLockCall[];
+  protocolActions: ActivityProtocolAction[];
   peers: string[];
 }
 
@@ -487,6 +494,7 @@ interface GlobalActivity {
   assetChanges: ActivityAssetChange[];
   typeCalls: ActivityTypeCall[];
   lockCalls: ActivityLockCall[];
+  protocolActions: ActivityProtocolAction[];
   peers: string[];
 }
 
@@ -1413,6 +1421,7 @@ export type {
   ActivityAssetChange,
   ActivityTypeCall,
   ActivityLockCall,
+  ActivityProtocolAction,
   GlobalActivity,
   ScriptCountEntry,
   DailyActivityStats,

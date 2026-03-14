@@ -10,7 +10,13 @@ import {
 } from '@/lib/detail-routes';
 import { formatCkbAmount, truncateHash, cn } from '@/lib/utils';
 import { formatTokenBalance } from '@/lib/format-asset';
-import type { Activity, ActivityAssetChange, ActivityTypeCall, ActivityLockCall } from '@/lib/api';
+import type {
+  Activity,
+  ActivityAssetChange,
+  ActivityTypeCall,
+  ActivityLockCall,
+  ActivityProtocolAction,
+} from '@/lib/api';
 
 // ---------------------------------------------------------------------------
 // Shared helpers (extracted from latest-activities.tsx)
@@ -304,6 +310,26 @@ function getLockEventParts(lc: ActivityLockCall): EventParts {
   };
 }
 
+function formatProtocolAction(action: string): string {
+  return action.replace(/_/g, ' ');
+}
+
+function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {
+  const label = `${pa.protocol} \u00B7 ${formatProtocolAction(pa.action)}`;
+  const btcTxid = pa.metadata?.btcTxid as string | undefined;
+
+  return {
+    badge: (
+      <span className="text-orange font-mono text-xs">
+        {'\u2B21'} {label}
+      </span>
+    ),
+    value: btcTxid ? (
+      <span className="text-text-dim font-mono text-xs">btc:{truncateHash(btcTxid, 8, 6)}</span>
+    ) : null,
+  };
+}
+
 function getCkbEventParts(delta: string, isCellbase: boolean): EventParts {
   const icon = isCellbase ? '\u2605' : '\u2197';
   const label = isCellbase ? 'Coinbase' : 'CKB Transfer';
@@ -343,13 +369,21 @@ export function ActivityEventGroup({
 }: ActivityEventGroupProps) {
   const events: EventParts[] = [];
 
+  activity.protocolActions.forEach((pa) => {
+    events.push(getProtocolActionEventParts(pa));
+  });
   activity.assetChanges.forEach((change) => {
     events.push(getAssetEventParts(change));
   });
   activity.typeCalls.forEach((sc) => {
     events.push(getTypeEventParts(sc));
   });
+  const protocolNames = new Set(
+    activity.protocolActions.map((pa: ActivityProtocolAction) => pa.protocol)
+  );
   activity.lockCalls.forEach((lc) => {
+    const decodedProtocol = lc.decoded?.protocol as string | undefined;
+    if (decodedProtocol && protocolNames.has(decodedProtocol)) return;
     events.push(getLockEventParts(lc));
   });
   events.push(getCkbEventParts(activity.ckbDelta, activity.isCellbase));
