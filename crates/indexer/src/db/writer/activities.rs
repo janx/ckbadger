@@ -520,6 +520,7 @@ fn build_tx_activity_bundle(
             asset_changes,
             type_calls,
             lock_calls,
+            protocol_actions: vec![],
             peers,
         });
     }
@@ -554,6 +555,7 @@ fn flatten_tx_activity_bundle(bundle: TxActivityBundle) -> Vec<OwnerActivity> {
                 asset_changes: owner.asset_changes,
                 type_calls: owner.type_calls,
                 lock_calls: owner.lock_calls,
+                protocol_actions: owner.protocol_actions,
                 peers: owner.peers,
             };
             (owner.lock_hash, owner.involved_script_code_hashes, entry)

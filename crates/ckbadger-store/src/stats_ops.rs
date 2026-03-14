@@ -1380,6 +1380,7 @@ mod daily_activity_stats_tests {
             unique_address_count: 500,
             total_ckb_moved: 100_000_000_000_000,
             script_counts: std::collections::HashMap::new(),
+            protocol_action_counts: std::collections::HashMap::new(),
         };
         store.put_daily_activity_stats("20260309", &stats).unwrap();
         let loaded = store.get_daily_activity_stats("20260309").unwrap().unwrap();

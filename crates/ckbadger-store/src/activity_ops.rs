@@ -50,6 +50,7 @@ fn bundle_owner_to_activity_entry(
         asset_changes: owner.asset_changes.clone(),
         type_calls: owner.type_calls.clone(),
         lock_calls: owner.lock_calls.clone(),
+        protocol_actions: owner.protocol_actions.clone(),
         peers: owner.peers.clone(),
     }
 }
@@ -358,6 +359,7 @@ mod tests {
                     asset_changes: vec![],
                     type_calls: None,
                     lock_calls: None,
+                    protocol_actions: vec![],
                     peers: vec![],
                 })
                 .collect(),
@@ -389,6 +391,7 @@ mod tests {
                 asset_changes: vec![],
                 type_calls: None,
                 lock_calls: None,
+                protocol_actions: vec![],
                 peers: vec![],
             }],
         }

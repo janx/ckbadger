@@ -675,6 +675,10 @@ impl BatchWriter {
                 for (code_hash, count) in &accumulated.script_counts {
                     *e.script_counts.entry(code_hash.clone()).or_insert(0) += count;
                 }
+                // Merge protocol action counts
+                for (key, count) in &accumulated.protocol_action_counts {
+                    *e.protocol_action_counts.entry(key.clone()).or_insert(0) += count;
+                }
                 e
             }
             None => {
@@ -724,6 +728,10 @@ impl BatchWriter {
                 // Merge script counts
                 for (code_hash, count) in &accumulated.script_counts {
                     *e.script_counts.entry(code_hash.clone()).or_insert(0) += count;
+                }
+                // Merge protocol action counts
+                for (key, count) in &accumulated.protocol_action_counts {
+                    *e.protocol_action_counts.entry(key.clone()).or_insert(0) += count;
                 }
                 e
             }
@@ -1663,6 +1671,7 @@ mod activity_stats_tests {
             asset_changes: changes,
             type_calls: None,
             lock_calls: None,
+            protocol_actions: vec![],
             peers: vec![],
         }
     }
@@ -1684,6 +1693,7 @@ mod activity_stats_tests {
             asset_changes: changes,
             type_calls: None,
             lock_calls: None,
+            protocol_actions: vec![],
             peers: vec![],
         }
     }
@@ -2011,6 +2021,7 @@ mod activity_stats_tests {
                 type_args: vec![0xEE; 20],
             }]),
             lock_calls: None,
+            protocol_actions: vec![],
             peers: vec![],
         };
         BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);

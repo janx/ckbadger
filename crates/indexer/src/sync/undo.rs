@@ -317,6 +317,7 @@ mod tests {
                 asset_changes: vec![],
                 type_calls: None,
                 lock_calls: None,
+                protocol_actions: vec![],
                 peers: vec![],
             }],
         };

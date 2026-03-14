@@ -417,6 +417,7 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
                 asset_changes: vec![],
                 type_calls: None,
                 lock_calls: None,
+                protocol_actions: vec![],
                 peers: vec![],
             }],
         };

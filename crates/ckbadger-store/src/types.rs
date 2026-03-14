@@ -1001,6 +1001,8 @@ pub struct ActivityEntry {
     pub type_calls: Option<Vec<TypeCallEntry>>,
     #[serde(default)]
     pub lock_calls: Option<Vec<LockCallEntry>>,
+    #[serde(default)]
+    pub protocol_actions: Vec<ProtocolAction>,
     /// Lock hashes of other parties in this transaction.
     pub peers: Vec<Vec<u8>>,
 }
@@ -1020,6 +1022,16 @@ pub struct LockCallEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtocolAction {
+    /// Protocol identifier: "rgbpp", "utxoswap", "fiber", etc.
+    pub protocol: String,
+    /// Action name: "leap_to_ckb", "leap_to_btc", "transfer", etc.
+    pub action: String,
+    /// Protocol-specific decoded metadata.
+    pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OwnerActivityDelta {
     pub lock_hash: Vec<u8>,
     pub lock_code_hash: Vec<u8>,
@@ -1033,6 +1045,8 @@ pub struct OwnerActivityDelta {
     pub type_calls: Option<Vec<TypeCallEntry>>,
     #[serde(default)]
     pub lock_calls: Option<Vec<LockCallEntry>>,
+    #[serde(default)]
+    pub protocol_actions: Vec<ProtocolAction>,
     pub peers: Vec<Vec<u8>>,
 }
 
@@ -1138,6 +1152,9 @@ pub struct DailyActivityStats {
     /// Per-script activity counts: hex code_hash -> count
     #[serde(default)]
     pub script_counts: HashMap<String, u32>,
+    /// Per-protocol action counts: "rgbpp:leap_to_ckb" -> count
+    #[serde(default)]
+    pub protocol_action_counts: HashMap<String, u32>,
 }
 
 // ============================================
@@ -1455,6 +1472,7 @@ mod tests {
             ],
             type_calls: None,
             lock_calls: None,
+            protocol_actions: vec![],
             peers: vec![vec![0xBB; 32], vec![0xCC; 32]],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1514,6 +1532,7 @@ mod tests {
                 type_args: vec![0xEE; 20],
             }]),
             lock_calls: None,
+            protocol_actions: vec![],
             peers: vec![],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1564,6 +1583,7 @@ mod tests {
             asset_changes: vec![],
             type_calls: None,
             lock_calls: None,
+            protocol_actions: vec![],
             peers: vec![],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1593,6 +1613,7 @@ mod tests {
                 type_args: vec![0xEE; 20],
             }]),
             lock_calls: None,
+            protocol_actions: vec![],
             peers: vec![vec![0xEE; 32]],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1621,6 +1642,7 @@ mod tests {
             asset_changes: vec![],
             type_calls: None,
             lock_calls: None,
+            protocol_actions: vec![],
             peers: vec![],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1653,6 +1675,7 @@ mod tests {
                 type_args: vec![0xEE; 20],
             }]),
             lock_calls: None,
+            protocol_actions: vec![],
             peers: vec![vec![0xFF; 32]],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1686,6 +1709,7 @@ mod tests {
                 asset_changes: vec![],
                 type_calls: None,
                 lock_calls: None,
+                protocol_actions: vec![],
                 peers: vec![],
             }],
         };

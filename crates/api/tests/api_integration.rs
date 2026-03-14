@@ -229,6 +229,7 @@ fn make_single_owner_bundle(lock_hash: &[u8], activity: &ActivityEntry) -> TxAct
             asset_changes: activity.asset_changes.clone(),
             type_calls: activity.type_calls.clone(),
             lock_calls: activity.lock_calls.clone(),
+            protocol_actions: activity.protocol_actions.clone(),
             peers: activity.peers.clone(),
         }],
     }
@@ -7103,6 +7104,7 @@ async fn test_address_activities_reads_from_derived_store() {
         asset_changes: vec![],
         type_calls: None,
         lock_calls: None,
+        protocol_actions: vec![],
         peers: vec![],
     };
 
@@ -7236,6 +7238,7 @@ async fn test_address_activities_return_type_calls_separately_and_support_type_c
             type_args: type_args.clone(),
         }]),
         lock_calls: None,
+        protocol_actions: vec![],
         peers: vec![],
     };
 
@@ -7347,6 +7350,7 @@ async fn test_latest_activities_return_asset_changes_and_type_calls_as_separate_
             type_args: type_args.clone(),
         }]),
         lock_calls: None,
+        protocol_actions: vec![],
         peers: vec![],
     };
 
@@ -7379,6 +7383,7 @@ async fn test_latest_activities_return_asset_changes_and_type_calls_as_separate_
             asset_changes: entry.asset_changes.clone(),
             type_calls: entry.type_calls.clone(),
             lock_calls: entry.lock_calls.clone(),
+            protocol_actions: entry.protocol_actions.clone(),
             peers: entry.peers.clone(),
         }],
     });
