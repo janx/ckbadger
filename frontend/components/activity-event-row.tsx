@@ -263,18 +263,11 @@ function getAssetEventParts(change: ActivityAssetChange): EventParts {
 }
 
 function getTypeEventParts(sc: ActivityTypeCall): EventParts {
+  const label = sc.scriptName?.trim() || 'Type call';
   return {
     badge: (
       <span className="text-amber font-mono text-xs">
-        {'\u2699'}{' '}
-        {sc.protocolName ? (
-          <>
-            {sc.protocolName}
-            <span className="text-text-dim"> · </span>
-          </>
-        ) : (
-          'Type call'
-        )}
+        {'\u2699'} {label}
       </span>
     ),
     value: (

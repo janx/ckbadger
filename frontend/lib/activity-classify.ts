@@ -85,19 +85,6 @@ export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
     }
   }
 
-  // Layer 2 (catch-all): Protocol action lock calls
-  const protocolAction = activity.lockCalls.find((lc) => lc.role === 'protocol_action');
-  if (protocolAction) {
-    return {
-      displayType: 'protocolAction',
-      activity,
-      primaryAssetChange: null,
-      primaryTypeCall: activity.typeCalls[0] ?? null,
-      primaryLockCall: protocolAction,
-      primaryProtocolAction: null,
-    };
-  }
-
   // Layer 2 (catch-all): Unrecognized type calls
   if (activity.typeCalls.length > 0) {
     return {

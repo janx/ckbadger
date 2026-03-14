@@ -448,7 +448,6 @@ interface ActivityTypeCall {
   typeArgs: string;
   scriptHash: string;
   scriptName?: string;
-  protocolName?: string;
 }
 
 interface ActivityLockCall {
@@ -457,7 +456,6 @@ interface ActivityLockCall {
   lockArgs: string;
   scriptHash: string;
   scriptName?: string;
-  role: 'protocol_action' | 'access_control';
   decoded?: Record<string, unknown>;
 }
 

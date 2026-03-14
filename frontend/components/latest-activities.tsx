@@ -380,22 +380,13 @@ function StreamItemIdentity({ classified }: { classified: ClassifiedActivity }) 
 function StreamItemTypeCall({ classified }: { classified: ClassifiedActivity }) {
   const { activity, primaryTypeCall } = classified;
   const badge = getTypeBadge(classified);
-  const protocolName = primaryTypeCall?.protocolName;
+  const label = primaryTypeCall?.scriptName?.trim() || 'Type call';
 
   return (
     <>
       <div className="flex items-center justify-between gap-2">
         <span className={cn('min-w-0 truncate font-mono text-xs', badge.colorClass)}>
-          {badge.icon}{' '}
-          {protocolName ? (
-            <>
-              <span className="text-amber">{protocolName}</span>
-              <span className="text-text-dim"> · </span>
-            </>
-          ) : (
-            'Type call '
-          )}
-          {primaryTypeCall ? <TypeCallExpr sc={primaryTypeCall} /> : null}
+          {badge.icon} {label} {primaryTypeCall ? <TypeCallExpr sc={primaryTypeCall} /> : null}
         </span>
         <span className="text-text-dim shrink-0 font-mono text-[10px]">
           {formatTimeAgo(activity.timestamp)}
@@ -416,10 +407,25 @@ const FIBER_ACTION_LABELS: Record<string, string> = {
   settlement: 'Settlement',
 };
 
+const STABLEPP_ACTION_LABELS: Record<string, string> = {
+  open_vault: 'Open Vault',
+  borrow: 'Borrow',
+  repay: 'Repay',
+  close_vault: 'Close Vault',
+  deposit: 'Deposit',
+  adjust: 'Adjust Vault',
+  liquidation: 'Liquidation',
+  redemption: 'Redemption',
+  interaction: 'Interaction',
+};
+
+const PROTOCOL_ACTION_LABELS: Record<string, Record<string, string>> = {
+  fiber: FIBER_ACTION_LABELS,
+  stablepp: STABLEPP_ACTION_LABELS,
+};
+
 function StreamItemProtocolAction({ classified }: { classified: ClassifiedActivity }) {
   const { activity, primaryProtocolAction, primaryLockCall, primaryAssetChange } = classified;
-
-  const isFiber = primaryProtocolAction?.protocol === 'fiber';
 
   // Layer 3: prefer ProtocolAction, fall back to legacy lock-call-only path
   const protocolName = primaryProtocolAction
@@ -428,10 +434,8 @@ function StreamItemProtocolAction({ classified }: { classified: ClassifiedActivi
       primaryLockCall?.scriptName?.trim() ||
       'Protocol';
   const action = primaryProtocolAction
-    ? isFiber
-      ? (FIBER_ACTION_LABELS[primaryProtocolAction.action] ??
-        primaryProtocolAction.action.replace(/_/g, ' '))
-      : primaryProtocolAction.action.replace(/_/g, ' ')
+    ? (PROTOCOL_ACTION_LABELS[primaryProtocolAction.protocol]?.[primaryProtocolAction.action] ??
+      primaryProtocolAction.action.replace(/_/g, ' '))
     : (primaryLockCall?.decoded?.intentType as string) ||
       (primaryLockCall?.decoded?.action as string) ||
       '';
@@ -449,7 +453,10 @@ function StreamItemProtocolAction({ classified }: { classified: ClassifiedActivi
         {symbol ? ` ${symbol}` : ''}
       </span>
     );
-  } else if (isFiber && primaryProtocolAction?.metadata?.capacity) {
+  } else if (
+    primaryProtocolAction?.protocol === 'fiber' &&
+    primaryProtocolAction?.metadata?.capacity
+  ) {
     const cap = primaryProtocolAction.metadata.capacity as string;
     assetDetail = (
       <span className="text-text-dim font-mono text-[10px] tabular-nums">
