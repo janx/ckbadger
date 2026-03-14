@@ -302,10 +302,16 @@ fn convert_type_calls(
 }
 
 /// Protocol action lock code_hashes — locks where creating a cell IS the protocol action.
-/// Initially empty; populated when UTXOSwap/Fiber code_hashes become available.
 static PROTOCOL_ACTION_LOCKS: LazyLock<HashSet<Vec<u8>>> = LazyLock::new(|| {
-    HashSet::new()
-    // Future: add UTXOSwap intentLock, Fiber funding_lock, etc.
+    let hashes: &[&str] = &[
+        // Fiber funding lock (mainnet, testnet)
+        "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1",
+        "0x6c67887fe201ee0c7853f1682c0b77c0e6214044c156c7558269390a8afa6d7c",
+        // Fiber commitment lock (mainnet, testnet)
+        "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c",
+        "0x740dee83f87c6f309824d8fd3fbdd3c8380ee6fc9acc90b1a748438afcdf81d8",
+    ];
+    hashes.iter().map(|h| parse_hex_code_hash(h)).collect()
 });
 
 type ArgsDecoder = fn(&[u8]) -> Option<serde_json::Value>;
@@ -340,6 +346,26 @@ static LOCK_ARGS_DECODERS: LazyLock<HashMap<Vec<u8>, ArgsDecoder>> = LazyLock::n
             decode_btc_time_lock_args as ArgsDecoder,
         );
     }
+    // Fiber funding lock
+    for hex in [
+        "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1", // mainnet
+        "0x6c67887fe201ee0c7853f1682c0b77c0e6214044c156c7558269390a8afa6d7c", // testnet
+    ] {
+        m.insert(
+            parse_hex_code_hash(hex),
+            decode_fiber_funding_lock_args as ArgsDecoder,
+        );
+    }
+    // Fiber commitment lock
+    for hex in [
+        "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c", // mainnet
+        "0x740dee83f87c6f309824d8fd3fbdd3c8380ee6fc9acc90b1a748438afcdf81d8", // testnet
+    ] {
+        m.insert(
+            parse_hex_code_hash(hex),
+            decode_fiber_commitment_lock_args as ArgsDecoder,
+        );
+    }
     m
 });
 
@@ -369,6 +395,44 @@ fn decode_btc_time_lock_args(args: &[u8]) -> Option<serde_json::Value> {
         "protocol": "rgbpp",
         "action": "btcTimeLock",
         "btcTxid": hex::encode(&btc_txid),
+    }))
+}
+
+fn decode_fiber_funding_lock_args(args: &[u8]) -> Option<serde_json::Value> {
+    // Funding lock args: pubkey_hash (20 bytes minimum)
+    if args.len() < 20 {
+        return None;
+    }
+    Some(serde_json::json!({
+        "protocol": "fiber",
+        "action": "funding",
+        "pubkeyHash": format!("0x{}", hex::encode(&args[0..20])),
+    }))
+}
+
+fn decode_fiber_commitment_lock_args(args: &[u8]) -> Option<serde_json::Value> {
+    // Commitment lock args layout (minimum 57 bytes):
+    //   [0..20]   pubkey_hash (20 bytes)
+    //   [20..28]  delay_epoch (8 bytes LE)
+    //   [28..36]  version (8 bytes BE)
+    //   [36..56]  settlement_hash (20 bytes)
+    //   [56]      settlement_flag (1 byte)
+    if args.len() < 57 {
+        return None;
+    }
+    let pubkey_hash = &args[0..20];
+    let delay_epoch = u64::from_le_bytes(args[20..28].try_into().ok()?);
+    let version = u64::from_be_bytes(args[28..36].try_into().ok()?);
+    let settlement_hash = &args[36..56];
+    let settlement_flag = args[56];
+    Some(serde_json::json!({
+        "protocol": "fiber",
+        "action": "commitment",
+        "pubkeyHash": format!("0x{}", hex::encode(pubkey_hash)),
+        "delayEpoch": delay_epoch,
+        "version": version,
+        "settlementHash": format!("0x{}", hex::encode(settlement_hash)),
+        "settlementFlag": settlement_flag,
     }))
 }
 
@@ -921,5 +985,104 @@ mod tests {
     fn test_decode_btc_time_lock_args_too_short() {
         let args = vec![0; 35]; // 1 byte short of minimum 36
         assert!(decode_btc_time_lock_args(&args).is_none());
+    }
+
+    #[test]
+    fn test_decode_fiber_funding_lock_args_valid() {
+        let mut args = vec![0u8; 20];
+        for (i, byte) in args.iter_mut().enumerate() {
+            *byte = (i + 1) as u8;
+        }
+        let result = decode_fiber_funding_lock_args(&args).unwrap();
+        assert_eq!(result["protocol"], "fiber");
+        assert_eq!(result["action"], "funding");
+        let pubkey_hash = result["pubkeyHash"].as_str().unwrap();
+        assert_eq!(pubkey_hash, "0x0102030405060708090a0b0c0d0e0f1011121314");
+    }
+
+    #[test]
+    fn test_decode_fiber_funding_lock_args_longer_than_minimum() {
+        // Funding lock args may be longer than 20 bytes; decoder uses first 20
+        let mut args = vec![0xFFu8; 40];
+        for (i, byte) in args[..20].iter_mut().enumerate() {
+            *byte = (i + 1) as u8;
+        }
+        let result = decode_fiber_funding_lock_args(&args).unwrap();
+        assert_eq!(result["protocol"], "fiber");
+        let pubkey_hash = result["pubkeyHash"].as_str().unwrap();
+        assert_eq!(pubkey_hash, "0x0102030405060708090a0b0c0d0e0f1011121314");
+    }
+
+    #[test]
+    fn test_decode_fiber_funding_lock_args_too_short() {
+        let args = vec![0; 19]; // 1 byte short of minimum 20
+        assert!(decode_fiber_funding_lock_args(&args).is_none());
+    }
+
+    #[test]
+    fn test_decode_fiber_commitment_lock_args_valid() {
+        let mut args = vec![0u8; 57];
+        // pubkey_hash [0..20]
+        for (i, byte) in args[..20].iter_mut().enumerate() {
+            *byte = (i + 1) as u8;
+        }
+        // delay_epoch [20..28] LE = 1000
+        args[20..28].copy_from_slice(&1000u64.to_le_bytes());
+        // version [28..36] BE = 1
+        args[28..36].copy_from_slice(&1u64.to_be_bytes());
+        // settlement_hash [36..56]
+        for (i, byte) in args[36..56].iter_mut().enumerate() {
+            *byte = (0xA0 + i) as u8;
+        }
+        // settlement_flag [56] = 1
+        args[56] = 1;
+
+        let result = decode_fiber_commitment_lock_args(&args).unwrap();
+        assert_eq!(result["protocol"], "fiber");
+        assert_eq!(result["action"], "commitment");
+        assert_eq!(
+            result["pubkeyHash"].as_str().unwrap(),
+            "0x0102030405060708090a0b0c0d0e0f1011121314"
+        );
+        assert_eq!(result["delayEpoch"], 1000);
+        assert_eq!(result["version"], 1);
+        assert_eq!(
+            result["settlementHash"].as_str().unwrap(),
+            "0xa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3"
+        );
+        assert_eq!(result["settlementFlag"], 1);
+    }
+
+    #[test]
+    fn test_decode_fiber_commitment_lock_args_too_short() {
+        let args = vec![0; 56]; // 1 byte short of minimum 57
+        assert!(decode_fiber_commitment_lock_args(&args).is_none());
+    }
+
+    #[test]
+    fn test_fiber_locks_in_protocol_action_locks() {
+        // Verify Fiber code hashes are recognized as protocol_action locks
+        let funding_mainnet = parse_hex_code_hash(
+            "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1",
+        );
+        let commitment_testnet = parse_hex_code_hash(
+            "0x740dee83f87c6f309824d8fd3fbdd3c8380ee6fc9acc90b1a748438afcdf81d8",
+        );
+        assert!(PROTOCOL_ACTION_LOCKS.contains(&funding_mainnet));
+        assert!(PROTOCOL_ACTION_LOCKS.contains(&commitment_testnet));
+        assert_eq!(PROTOCOL_ACTION_LOCKS.len(), 4);
+    }
+
+    #[test]
+    fn test_fiber_locks_have_decoders() {
+        // Verify Fiber code hashes are registered in LOCK_ARGS_DECODERS
+        let funding_mainnet = parse_hex_code_hash(
+            "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1",
+        );
+        let commitment_mainnet = parse_hex_code_hash(
+            "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c",
+        );
+        assert!(LOCK_ARGS_DECODERS.contains_key(&funding_mainnet));
+        assert!(LOCK_ARGS_DECODERS.contains_key(&commitment_mainnet));
     }
 }
