@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams } from '@/src/navigation';
 import Link from '@/components/ui/link';
@@ -14,6 +14,7 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Capacity } from '@/components/ui/capacity';
+import { CodeCellsList, CodeCellsSummary } from '@/components/ui/code-cells-list';
 import { HMultiplier } from '@/components/ui/h-multiplier';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
@@ -92,6 +93,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
   const selectedRefHashType = normalizeScriptRefHashType(searchParams.get('hashType'));
   const [capacityRange, setCapacityRange] = useState<CapacityRangeKey>('all');
   const [selectedDeployment, setSelectedDeployment] = useState<SelectedDeployment | null>(null);
+  const [expandedCodeCells, setExpandedCodeCells] = useState<string | null>(null);
   const cellsPagination = useCursorPagination();
   const capacityRangeParams = getCapacityRangeParams(capacityRange);
   const {
@@ -393,7 +395,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
             </div>
             <div className="overflow-x-auto">
               <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                <div className="flex-1">Deployment</div>
+                <div className="flex-1">Code Cells</div>
                 <div className="w-56">Deployed At</div>
                 <div className="w-24">Kind</div>
                 <div className="w-24 text-right">Cells</div>
@@ -407,106 +409,136 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                   deploymentLookup?.[deployment.codeHash]
                 );
                 return (
-                  <TerminalRow
-                    key={idx}
-                    className={`cursor-pointer ${selected ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}`}
-                  >
-                    <div
-                      className="flex w-full items-center gap-3"
-                      onClick={() => handleDeploymentClick(deployment)}
+                  <React.Fragment key={idx}>
+                    <TerminalRow
+                      className={`cursor-pointer ${selected ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}`}
                     >
-                      <div className="min-w-0 flex-1 py-0.5">
-                        <div className="mb-2">
-                          {deployment.codeCellTxHash && deployment.codeCellOutputIndex !== null ? (
-                            <Link
-                              href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
-                              onClick={(e) => e.stopPropagation()}
-                              className="text-emphasis text-xs hover:underline"
-                            >
-                              <HexDisplay
-                                value={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
-                                startChars={8}
-                                endChars={8}
-                              />
-                            </Link>
+                      <div
+                        className="flex w-full items-center gap-3"
+                        onClick={() => handleDeploymentClick(deployment)}
+                      >
+                        <div className="min-w-0 flex-1 py-0.5">
+                          <div className="mb-2">
+                            {(() => {
+                              const lookupInfo = deploymentLookup?.[deployment.codeHash];
+                              return lookupInfo ? (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setExpandedCodeCells(
+                                      expandedCodeCells === deployment.codeHash
+                                        ? null
+                                        : deployment.codeHash
+                                    );
+                                  }}
+                                  className="text-left hover:underline"
+                                >
+                                  <CodeCellsSummary
+                                    liveCount={lookupInfo.codeCellsLiveCount}
+                                    totalCount={lookupInfo.codeCellsTotal}
+                                  />
+                                </button>
+                              ) : deployment.codeCellTxHash &&
+                                deployment.codeCellOutputIndex !== null ? (
+                                <Link
+                                  href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="text-emphasis text-xs hover:underline"
+                                >
+                                  <HexDisplay
+                                    value={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
+                                    startChars={8}
+                                    endChars={8}
+                                  />
+                                </Link>
+                              ) : (
+                                <span className="text-text-dim">-</span>
+                              );
+                            })()}
+                          </div>
+                          <div className="space-y-1 text-xs">
+                            <div className="flex items-center gap-2">
+                              <span className="border-base-border/80 bg-base-elevated/70 text-text-dim inline-flex rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide">
+                                type
+                              </span>
+                              {refs.typeRef ? (
+                                <HexDisplay
+                                  value={refs.typeRef}
+                                  size="sm"
+                                  startChars={10}
+                                  endChars={8}
+                                />
+                              ) : (
+                                <span className="text-text-dim font-mono">Unavailable</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="border-base-border/80 bg-base-elevated/70 text-text-dim inline-flex rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide">
+                                {getScriptRefBadgeLabel(refs.dataRefType)}
+                              </span>
+                              {refs.dataRef ? (
+                                <HexDisplay
+                                  value={refs.dataRef}
+                                  size="sm"
+                                  startChars={10}
+                                  endChars={8}
+                                />
+                              ) : (
+                                <span className="text-text-dim font-mono">Unavailable</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <div
+                          className="text-text-dim w-56 font-mono text-xs"
+                          title={
+                            deployment.deployedAt
+                              ? new Date(deployment.deployedAt).toISOString()
+                              : undefined
+                          }
+                        >
+                          {deployment.deployedAt
+                            ? new Date(deployment.deployedAt).toLocaleString()
+                            : '-'}
+                        </div>
+                        <div className="text-text-dim w-24">
+                          {stats?.scriptKind ? (
+                            <Badge variant="neutral" className="px-1.5 py-0.5 text-[10px]">
+                              {stats.scriptKind}
+                            </Badge>
                           ) : (
                             <span className="text-text-dim">-</span>
                           )}
                         </div>
-                        <div className="space-y-1 text-xs">
-                          <div className="flex items-center gap-2">
-                            <span className="border-base-border/80 bg-base-elevated/70 text-text-dim inline-flex rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide">
-                              type
+                        <div className="text-text w-24 text-right font-mono tabular-nums">
+                          {stats ? (
+                            <span title={`Total: ${formatNumber(stats.cellsCount)}`}>
+                              {formatNumber(stats.liveCellsCount)}
                             </span>
-                            {refs.typeRef ? (
-                              <HexDisplay
-                                value={refs.typeRef}
-                                size="sm"
-                                startChars={10}
-                                endChars={8}
-                              />
-                            ) : (
-                              <span className="text-text-dim font-mono">Unavailable</span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="border-base-border/80 bg-base-elevated/70 text-text-dim inline-flex rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide">
-                              {getScriptRefBadgeLabel(refs.dataRefType)}
+                          ) : (
+                            '-'
+                          )}
+                        </div>
+                        <div className="text-text w-32 text-right font-mono tabular-nums">
+                          {stats ? (
+                            <span title={`${formatCkbCompact(stats.liveCapacitySum).full} CKB`}>
+                              {formatCkbCompact(stats.liveCapacitySum).value} CKB
                             </span>
-                            {refs.dataRef ? (
-                              <HexDisplay
-                                value={refs.dataRef}
-                                size="sm"
-                                startChars={10}
-                                endChars={8}
-                              />
-                            ) : (
-                              <span className="text-text-dim font-mono">Unavailable</span>
-                            )}
-                          </div>
+                          ) : (
+                            '-'
+                          )}
                         </div>
                       </div>
-                      <div
-                        className="text-text-dim w-56 font-mono text-xs"
-                        title={
-                          deployment.deployedAt
-                            ? new Date(deployment.deployedAt).toISOString()
-                            : undefined
-                        }
-                      >
-                        {deployment.deployedAt
-                          ? new Date(deployment.deployedAt).toLocaleString()
-                          : '-'}
+                    </TerminalRow>
+                    {expandedCodeCells === deployment.codeHash && (
+                      <div className="border-base-border bg-base-bg/50 border-b">
+                        <CodeCellsList
+                          codeHash={deployment.codeHash}
+                          hashType={(deployment.hashType as ScriptRefHashType) ?? 'data'}
+                        />
                       </div>
-                      <div className="text-text-dim w-24">
-                        {stats?.scriptKind ? (
-                          <Badge variant="neutral" className="px-1.5 py-0.5 text-[10px]">
-                            {stats.scriptKind}
-                          </Badge>
-                        ) : (
-                          <span className="text-text-dim">-</span>
-                        )}
-                      </div>
-                      <div className="text-text w-24 text-right font-mono tabular-nums">
-                        {stats ? (
-                          <span title={`Total: ${formatNumber(stats.cellsCount)}`}>
-                            {formatNumber(stats.liveCellsCount)}
-                          </span>
-                        ) : (
-                          '-'
-                        )}
-                      </div>
-                      <div className="text-text w-32 text-right font-mono tabular-nums">
-                        {stats ? (
-                          <span title={`${formatCkbCompact(stats.liveCapacitySum).full} CKB`}>
-                            {formatCkbCompact(stats.liveCapacitySum).value} CKB
-                          </span>
-                        ) : (
-                          '-'
-                        )}
-                      </div>
-                    </div>
-                  </TerminalRow>
+                    )}
+                  </React.Fragment>
                 );
               })}
               {usage && (

@@ -16,6 +16,7 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Capacity } from '@/components/ui/capacity';
+import { CodeCellsList, CodeCellsSummary } from '@/components/ui/code-cells-list';
 import { HMultiplier } from '@/components/ui/h-multiplier';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
@@ -187,7 +188,7 @@ export default function ScriptByCodeHashPage({
           <TerminalPanelContent padding="none">
             <div className="overflow-x-auto">
               <div className="border-base-border bg-base-surface/50 text-text-dim flex min-w-[760px] border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                <div className="w-40 shrink-0">Code Cell</div>
+                <div className="w-40 shrink-0">Code Cells</div>
                 <div className="min-w-0 flex-1">Code Hash</div>
                 <div className="w-28 shrink-0 text-center">Hash Type</div>
                 <div className="w-20 shrink-0 text-center">Kind</div>
@@ -197,7 +198,12 @@ export default function ScriptByCodeHashPage({
               <TerminalRow hoverable={false}>
                 <div className="flex min-w-[760px] items-center">
                   <div className="w-40 shrink-0">
-                    {codeCellTxHash && codeCellOutputIndex !== null ? (
+                    {knownScript ? (
+                      <CodeCellsSummary
+                        liveCount={knownScript.codeCellsLiveCount ?? 0}
+                        totalCount={knownScript.codeCellsTotal ?? 0}
+                      />
+                    ) : codeCellTxHash ? (
                       <Link
                         href={`/cell/${codeCellTxHash}-${codeCellOutputIndex}`}
                         className="hover:underline"
@@ -236,6 +242,12 @@ export default function ScriptByCodeHashPage({
                   </div>
                 </div>
               </TerminalRow>
+            </div>
+            <div className="border-base-border border-t">
+              <div className="text-text-dim px-4 py-2 text-[11px] uppercase tracking-wider">
+                Code Cells
+              </div>
+              <CodeCellsList codeHash={codeHash} hashType={hashType} />
             </div>
             <div className="border-base-border border-t px-4 py-3">
               <div className="text-text-dim mb-2 text-[11px] uppercase tracking-wider">
