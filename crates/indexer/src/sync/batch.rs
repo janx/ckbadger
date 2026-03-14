@@ -2917,6 +2917,13 @@ impl Indexer {
                                         }
                                     }
                                     activity_batch.put_tx_activity_bundle(&bundle);
+
+                                    // Process Fiber channel lifecycle events
+                                    crate::db::writer::fiber::process_fiber_channel_events(
+                                        &mut activity_batch,
+                                        store,
+                                        &bundle,
+                                    )?;
                                 }
                             }
                             let mut commit_ms = 0.0;
@@ -4191,6 +4198,13 @@ impl Indexer {
                             bundle.block_number,
                             &bundle,
                         );
+
+                        // Process Fiber channel lifecycle events
+                        crate::db::writer::fiber::process_fiber_channel_events(
+                            &mut activity_batch,
+                            self.writer.store(),
+                            &bundle,
+                        )?;
                     }
                 }
             }

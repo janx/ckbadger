@@ -1074,8 +1074,27 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_fiber_channels(), channel_id);
     }
 
+    pub fn put_fiber_channel_by_funding_args(
+        &mut self,
+        funding_lock_args: &[u8],
+        channel_id: &[u8],
+    ) {
+        self.put_cf(
+            self.store.cf_fiber_channel_by_funding_args(),
+            funding_lock_args,
+            channel_id,
+        );
+    }
+
     pub fn delete_fiber_channel_by_commitment(&mut self, commitment_hash: &[u8]) {
         self.delete_cf(self.store.cf_fiber_channel_by_commitment(), commitment_hash);
+    }
+
+    pub fn delete_fiber_channel_by_funding_args(&mut self, funding_lock_args: &[u8]) {
+        self.delete_cf(
+            self.store.cf_fiber_channel_by_funding_args(),
+            funding_lock_args,
+        );
     }
 
     pub fn delete_addr_fiber_channel(&mut self, lock_hash: &[u8], channel_id: &[u8]) {

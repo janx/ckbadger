@@ -315,6 +315,7 @@ pub const CF_IDENTITY_COLLECTION_ACTIVITIES: &str = "identity_collection_activit
 pub const CF_PENDING_PROPOSALS: &str = "pending_proposals";
 pub const CF_FIBER_CHANNELS: &str = "fiber_channels";
 pub const CF_FIBER_CHANNEL_BY_COMMITMENT: &str = "fiber_channel_by_commitment";
+pub const CF_FIBER_CHANNEL_BY_FUNDING_ARGS: &str = "fiber_channel_by_funding_args";
 pub const CF_ADDR_FIBER_CHANNELS: &str = "addr_fiber_channels";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -386,6 +387,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_PENDING_PROPOSALS,
     CF_FIBER_CHANNELS,
     CF_FIBER_CHANNEL_BY_COMMITMENT,
+    CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
     CF_ADDR_FIBER_CHANNELS,
 ];
 
@@ -441,6 +443,7 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_PENDING_PROPOSALS,
     CF_FIBER_CHANNELS,
     CF_FIBER_CHANNEL_BY_COMMITMENT,
+    CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
     CF_ADDR_FIBER_CHANNELS,
 ];
 
@@ -1224,6 +1227,9 @@ impl CkbadgerStore {
     }
     pub fn cf_fiber_channel_by_commitment(&self) -> &ColumnFamily {
         self.cf(CF_FIBER_CHANNEL_BY_COMMITMENT)
+    }
+    pub fn cf_fiber_channel_by_funding_args(&self) -> &ColumnFamily {
+        self.cf(CF_FIBER_CHANNEL_BY_FUNDING_ARGS)
     }
     pub fn cf_addr_fiber_channels(&self) -> &ColumnFamily {
         self.cf(CF_ADDR_FIBER_CHANNELS)

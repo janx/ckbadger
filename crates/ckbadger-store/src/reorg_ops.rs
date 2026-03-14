@@ -1390,6 +1390,116 @@ impl CkbadgerStore {
             }
         }
 
+        // 8f. Delete Fiber channel data for rolled-back blocks.
+        // Simplest approach for dev: wipe all Fiber CFs and let resync rebuild.
+        {
+            let mut fiber_removed = 0u64;
+            let mut stage = RollbackStageProgress::new("delete_fiber_channels");
+
+            // Delete all entries in CF_FIBER_CHANNELS where open_block > rollback_to.
+            // Also collect channel_ids and participant info for secondary index cleanup.
+            let iter = self.iterator_cf(self.cf_fiber_channels(), IteratorMode::Start);
+            for item in iter {
+                let (key, value) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate fiber_channels in rollback_to_block cleanup: {}",
+                        e
+                    )
+                })?;
+                if key.len() != keys::FIBER_CHANNEL_KEY_SIZE {
+                    continue;
+                }
+                let channel: FiberChannel = match bincode::deserialize(&value) {
+                    Ok(ch) => ch,
+                    Err(e) => {
+                        info!(
+                            error = %e,
+                            key_hex = %crate::bytes_to_hex(&key),
+                            "rollback: failed to deserialize fiber channel, deleting"
+                        );
+                        batch.delete_cf(self.cf_fiber_channels(), &key);
+                        fiber_removed += 1;
+                        continue;
+                    }
+                };
+
+                if channel.open_block > rollback_to {
+                    // Channel was opened in a rolled-back block — delete it and all indexes
+                    batch.delete_cf(self.cf_fiber_channels(), &key);
+
+                    // Delete addr_fiber_channel entries for each participant
+                    for participant in &channel.participants {
+                        let addr_key = keys::encode_addr_fiber_channel_key(participant, &key);
+                        batch.delete_cf(self.cf_addr_fiber_channels(), &addr_key);
+                    }
+
+                    // Delete funding_args index
+                    if !channel.funding_lock_args.is_empty() {
+                        batch.delete_cf(
+                            self.cf_fiber_channel_by_funding_args(),
+                            &channel.funding_lock_args,
+                        );
+                    }
+
+                    // Delete commitment index if present
+                    // We don't have easy access to the commitment hash used as key,
+                    // so we handle this in the full CF sweep below.
+
+                    fiber_removed += 1;
+                } else if channel.close_block.is_some_and(|b| b > rollback_to)
+                    || channel.settlement_block.is_some_and(|b| b > rollback_to)
+                {
+                    // Channel was opened before rollback but modified after —
+                    // reset to Open state.
+                    let mut reset_channel = channel.clone();
+                    reset_channel.state = FiberChannelState::Open;
+                    reset_channel.close_tx_hash = None;
+                    reset_channel.close_block = None;
+                    reset_channel.close_timestamp = None;
+                    reset_channel.commitment_tx_hash = None;
+                    reset_channel.commitment_output_index = None;
+                    reset_channel.delay_epoch = None;
+                    reset_channel.settlement_tx_hash = None;
+                    reset_channel.settlement_block = None;
+                    reset_channel.settlement_timestamp = None;
+
+                    let value = bincode::serialize(&reset_channel).expect("serialize FiberChannel");
+                    batch.put_cf(self.cf_fiber_channels(), &key, &value);
+                    fiber_removed += 1; // count as modified
+                }
+
+                stage.tick(fiber_removed);
+            }
+
+            // Sweep CF_FIBER_CHANNEL_BY_COMMITMENT: delete all entries whose channel_id
+            // no longer exists or was reset. Simpler than tracking exact keys.
+            let iter = self.iterator_cf(self.cf_fiber_channel_by_commitment(), IteratorMode::Start);
+            for item in iter {
+                let (key, value) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate fiber_channel_by_commitment in rollback cleanup: {}",
+                        e
+                    )
+                })?;
+                // value is the channel_id; check if that channel is still in a
+                // force-closed/settled state
+                if let Ok(Some(ch)) = self.get_fiber_channel(&value) {
+                    if ch.open_block > rollback_to
+                        || ch.close_block.is_some_and(|b| b > rollback_to)
+                    {
+                        batch.delete_cf(self.cf_fiber_channel_by_commitment(), &key);
+                    }
+                } else {
+                    batch.delete_cf(self.cf_fiber_channel_by_commitment(), &key);
+                }
+            }
+
+            stage.finish(fiber_removed);
+            if fiber_removed > 0 {
+                info!(fiber_removed, "rollback: cleaned up Fiber channel data");
+            }
+        }
+
         // 9. Apply derived-CF deltas (addr_balance, script_info, token_holders, token_info).
         let stage = RollbackStageProgress::new("apply_derived_cf_deltas");
         let mut addr_balances_updated = 0u64;

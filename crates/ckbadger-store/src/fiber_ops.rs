@@ -22,6 +22,14 @@ impl CkbadgerStore {
         }
     }
 
+    /// Look up a channel_id by funding lock args (pubkey_hash).
+    pub fn get_fiber_channel_id_by_funding_args(
+        &self,
+        funding_lock_args: &[u8],
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        self.get_cf(self.cf_fiber_channel_by_funding_args(), funding_lock_args)
+    }
+
     /// Look up a channel_id by commitment lock outpoint hash.
     pub fn get_fiber_channel_id_by_commitment(
         &self,
