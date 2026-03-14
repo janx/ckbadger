@@ -20,7 +20,9 @@ import {
   CkbDelta,
   formatStandard,
   capitalizeAction,
-  ScriptCallExpr,
+  TypeCallExpr,
+  LockCallExpr,
+  LockCallBadge,
 } from '@/components/activity-event-row';
 
 const MAX_STREAM_ITEMS = 20;
@@ -102,8 +104,10 @@ function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
       }
       return { icon: '\u2726', label: 'Identity', colorClass: 'text-aqua' };
     }
-    case 'scriptCall':
-      return { icon: '\u2699', label: 'Script Call', colorClass: 'text-amber' };
+    case 'protocolAction':
+      return { icon: '\u26A1', label: 'Protocol', colorClass: 'text-violet' };
+    case 'typeCall':
+      return { icon: '\u2699', label: 'Type Call', colorClass: 'text-amber' };
     case 'ckbTransfer':
       return { icon: '\u2197', label: 'CKB Transfer', colorClass: 'text-jade' };
     default:
@@ -130,9 +134,12 @@ function StreamItemCkbTransfer({ classified }: { classified: ClassifiedActivity 
   return (
     <>
       <div className="flex items-center justify-between gap-2">
-        <span className={cn('font-mono text-xs', badge.colorClass)}>
-          {badge.icon} {badge.label}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className={cn('font-mono text-xs', badge.colorClass)}>
+            {badge.icon} {badge.label}
+          </span>
+          {classified.primaryLockCall && <LockCallBadge lc={classified.primaryLockCall} />}
+        </div>
         <span className="text-text-dim font-mono text-[10px]">
           {formatTimeAgo(activity.timestamp)}
         </span>
@@ -258,9 +265,12 @@ function StreamItemToken({ classified }: { classified: ClassifiedActivity }) {
   return (
     <>
       <div className="flex items-center justify-between gap-2">
-        <span className={cn('font-mono text-xs', badge.colorClass)}>
-          {badge.icon} {badge.label}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className={cn('font-mono text-xs', badge.colorClass)}>
+            {badge.icon} {badge.label}
+          </span>
+          {classified.primaryLockCall && <LockCallBadge lc={classified.primaryLockCall} />}
+        </div>
         <span className="text-text-dim font-mono text-[10px]">
           {formatTimeAgo(activity.timestamp)}
         </span>
@@ -364,10 +374,10 @@ function StreamItemIdentity({ classified }: { classified: ClassifiedActivity }) 
   );
 }
 
-function StreamItemScriptCall({ classified }: { classified: ClassifiedActivity }) {
-  const { activity, primaryScriptCall } = classified;
+function StreamItemTypeCall({ classified }: { classified: ClassifiedActivity }) {
+  const { activity, primaryTypeCall } = classified;
   const badge = getTypeBadge(classified);
-  const protocolName = primaryScriptCall?.protocolName;
+  const protocolName = primaryTypeCall?.protocolName;
 
   return (
     <>
@@ -380,9 +390,50 @@ function StreamItemScriptCall({ classified }: { classified: ClassifiedActivity }
               <span className="text-text-dim"> · </span>
             </>
           ) : (
-            'Script call '
+            'Type call '
           )}
-          {primaryScriptCall ? <ScriptCallExpr sc={primaryScriptCall} /> : null}
+          {primaryTypeCall ? <TypeCallExpr sc={primaryTypeCall} /> : null}
+        </span>
+        <span className="text-text-dim shrink-0 font-mono text-[10px]">
+          {formatTimeAgo(activity.timestamp)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <AddressLink address={activity.address} />
+        <CkbDelta delta={activity.ckbDelta} />
+      </div>
+    </>
+  );
+}
+
+function StreamItemProtocolAction({ classified }: { classified: ClassifiedActivity }) {
+  const { activity, primaryLockCall } = classified;
+
+  const protocolName =
+    (primaryLockCall?.decoded?.protocol as string) ||
+    primaryLockCall?.scriptName?.trim() ||
+    'Protocol';
+  const action =
+    (primaryLockCall?.decoded?.intentType as string) ||
+    (primaryLockCall?.decoded?.action as string) ||
+    '';
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-violet min-w-0 truncate font-mono text-xs">
+          {'\u26A1'} <span className="text-violet">{protocolName}</span>
+          {action ? (
+            <>
+              <span className="text-text-dim"> · </span>
+              <span className="text-violet/70">{action}</span>
+            </>
+          ) : primaryLockCall ? (
+            <>
+              <span className="text-text-dim"> · </span>
+              <LockCallExpr lc={primaryLockCall} />
+            </>
+          ) : null}
         </span>
         <span className="text-text-dim shrink-0 font-mono text-[10px]">
           {formatTimeAgo(activity.timestamp)}
@@ -412,8 +463,10 @@ function StreamItem({ classified }: { classified: ClassifiedActivity }) {
       return <StreamItemObject classified={classified} />;
     case 'identity':
       return <StreamItemIdentity classified={classified} />;
-    case 'scriptCall':
-      return <StreamItemScriptCall classified={classified} />;
+    case 'protocolAction':
+      return <StreamItemProtocolAction classified={classified} />;
+    case 'typeCall':
+      return <StreamItemTypeCall classified={classified} />;
     default:
       return <StreamItemCkbTransfer classified={classified} />;
   }

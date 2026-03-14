@@ -13,7 +13,8 @@ function makeActivity(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
     usedDelta: overrides.usedDelta ?? '0',
     isCellbase: overrides.isCellbase ?? false,
     assetChanges: overrides.assetChanges ?? [],
-    scriptCalls: overrides.scriptCalls ?? [],
+    typeCalls: overrides.typeCalls ?? [],
+    lockCalls: overrides.lockCalls ?? [],
     peers: overrides.peers ?? [],
   };
 }
@@ -80,7 +81,7 @@ describe('classifyActivity', () => {
   it('classifies script call', () => {
     const result = classifyActivity(
       makeActivity({
-        scriptCalls: [
+        typeCalls: [
           {
             typeCodeHash: '0xcode',
             typeHashType: 'type',
@@ -91,7 +92,7 @@ describe('classifyActivity', () => {
         ],
       })
     );
-    expect(result.type).toBe('scriptCall');
+    expect(result.type).toBe('typeCall');
   });
 
   it('classifies CKB transfer as fallback', () => {
@@ -117,7 +118,7 @@ describe('classifyActivity', () => {
         assetChanges: [
           { type: 'token', typeScriptHash: '0xt', delta: '100', symbol: 'X', decimals: 8 },
         ],
-        scriptCalls: [
+        typeCalls: [
           {
             typeCodeHash: '0xcode',
             typeHashType: 'type',
@@ -139,5 +140,64 @@ describe('classifyActivity', () => {
     );
     expect(result.type).toBe('daoDeposit');
     expect(result.primaryAssetChange).toEqual({ type: 'daoDeposit', capacity: '10200000000' });
+  });
+
+  it('classifies protocol action lock call as protocolAction', () => {
+    const result = classifyActivity(
+      makeActivity({
+        lockCalls: [
+          {
+            lockCodeHash: '0xintent',
+            lockHashType: 'type',
+            lockArgs: '0xargs',
+            scriptHash: '0xhash',
+            scriptName: 'UTXOSwap Intent',
+            role: 'protocol_action',
+          },
+        ],
+      })
+    );
+    expect(result.type).toBe('protocolAction');
+    expect(result.primaryLockCall).toBeTruthy();
+  });
+
+  it('asset change takes priority over protocol action lock call', () => {
+    const result = classifyActivity(
+      makeActivity({
+        assetChanges: [
+          { type: 'token', typeScriptHash: '0xt', delta: '100', symbol: 'X', decimals: 8 },
+        ],
+        lockCalls: [
+          {
+            lockCodeHash: '0xintent',
+            lockHashType: 'type',
+            lockArgs: '0xargs',
+            scriptHash: '0xhash',
+            role: 'protocol_action',
+          },
+        ],
+      })
+    );
+    expect(result.type).toBe('token');
+    expect(result.primaryLockCall?.role).toBe('protocol_action');
+  });
+
+  it('access control lock call does not create protocolAction type', () => {
+    const result = classifyActivity(
+      makeActivity({
+        lockCalls: [
+          {
+            lockCodeHash: '0xrgbpp',
+            lockHashType: 'type',
+            lockArgs: '0xargs',
+            scriptHash: '0xhash',
+            scriptName: 'RGB++',
+            role: 'access_control',
+          },
+        ],
+      })
+    );
+    expect(result.type).toBe('ckbTransfer');
+    expect(result.primaryLockCall?.role).toBe('access_control');
   });
 });

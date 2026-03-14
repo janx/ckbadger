@@ -37,7 +37,7 @@ fn accumulate_activity_stats_inner(
     ckb_delta: i128,
     has_type_script: bool,
     asset_changes: &[AssetChange],
-    script_calls: Option<&[ScriptCallEntry]>,
+    type_calls: Option<&[TypeCallEntry]>,
     scripts: &[Vec<u8>],
     stats: &mut DailyActivityStats,
 ) {
@@ -63,7 +63,7 @@ fn accumulate_activity_stats_inner(
     let mut has_token = false;
     let mut has_object = false;
     let mut has_identity = false;
-    let has_script_call = script_calls.is_some_and(|calls| !calls.is_empty());
+    let has_script_call = type_calls.is_some_and(|calls| !calls.is_empty());
 
     for change in asset_changes {
         match change {
@@ -616,7 +616,7 @@ impl BatchWriter {
             entry.ckb_delta,
             entry.has_type_script,
             &entry.asset_changes,
-            entry.script_calls.as_deref(),
+            entry.type_calls.as_deref(),
             scripts,
             stats,
         );
@@ -633,7 +633,7 @@ impl BatchWriter {
             owner.ckb_delta,
             owner.has_type_script,
             &owner.asset_changes,
-            owner.script_calls.as_deref(),
+            owner.type_calls.as_deref(),
             &owner.involved_script_code_hashes,
             stats,
         );
@@ -1640,7 +1640,7 @@ mod activity_stats_tests {
 
     use ckbadger_store::types::{
         ActivityEntry, AssetAction, AssetChange, DailyActivityStats, OwnerActivityDelta,
-        ScriptCallEntry,
+        TypeCallEntry,
     };
     use ckbadger_store::CkbadgerStore;
 
@@ -1661,7 +1661,8 @@ mod activity_stats_tests {
             is_cellbase,
             has_type_script,
             asset_changes: changes,
-            script_calls: None,
+            type_calls: None,
+            lock_calls: None,
             peers: vec![],
         }
     }
@@ -1681,7 +1682,8 @@ mod activity_stats_tests {
             has_type_script,
             involved_script_code_hashes: vec![vec![0x11; 32]],
             asset_changes: changes,
-            script_calls: None,
+            type_calls: None,
+            lock_calls: None,
             peers: vec![],
         }
     }
@@ -2003,11 +2005,12 @@ mod activity_stats_tests {
             is_cellbase: false,
             has_type_script: true,
             asset_changes: vec![],
-            script_calls: Some(vec![ScriptCallEntry {
+            type_calls: Some(vec![TypeCallEntry {
                 type_code_hash: vec![0xFF; 32],
                 type_hash_type: 1,
                 type_args: vec![0xEE; 20],
             }]),
+            lock_calls: None,
             peers: vec![],
         };
         BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);

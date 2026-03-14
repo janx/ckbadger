@@ -2264,7 +2264,8 @@ mod tests {
                 has_type_script: false,
                 involved_script_code_hashes: vec![vec![0x11; 32]],
                 asset_changes: vec![],
-                script_calls: None,
+                type_calls: None,
+                lock_calls: None,
                 peers: vec![],
             }],
         }

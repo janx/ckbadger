@@ -442,13 +442,23 @@ type ActivityAssetChange =
   | { type: 'daoWithdrawRequest'; capacity: string; depositBlock: number }
   | { type: 'daoWithdrawComplete'; capacity: string; compensation: string };
 
-interface ActivityScriptCall {
+interface ActivityTypeCall {
   typeCodeHash: string;
   typeHashType: string;
   typeArgs: string;
   scriptHash: string;
   scriptName?: string;
   protocolName?: string;
+}
+
+interface ActivityLockCall {
+  lockCodeHash: string;
+  lockHashType: string;
+  lockArgs: string;
+  scriptHash: string;
+  scriptName?: string;
+  role: 'protocol_action' | 'access_control';
+  decoded?: Record<string, unknown>;
 }
 
 interface Activity {
@@ -460,7 +470,8 @@ interface Activity {
   usedDelta: string;
   isCellbase: boolean;
   assetChanges: ActivityAssetChange[];
-  scriptCalls: ActivityScriptCall[];
+  typeCalls: ActivityTypeCall[];
+  lockCalls: ActivityLockCall[];
   peers: string[];
 }
 
@@ -474,7 +485,8 @@ interface GlobalActivity {
   usedDelta: string;
   isCellbase: boolean;
   assetChanges: ActivityAssetChange[];
-  scriptCalls: ActivityScriptCall[];
+  typeCalls: ActivityTypeCall[];
+  lockCalls: ActivityLockCall[];
   peers: string[];
 }
 
@@ -1399,7 +1411,8 @@ export type {
   HardforkActivation,
   Activity,
   ActivityAssetChange,
-  ActivityScriptCall,
+  ActivityTypeCall,
+  ActivityLockCall,
   GlobalActivity,
   ScriptCountEntry,
   DailyActivityStats,

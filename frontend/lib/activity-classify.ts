@@ -1,4 +1,9 @@
-import type { ActivityAssetChange, ActivityScriptCall, GlobalActivity } from '@/lib/api';
+import type {
+  ActivityAssetChange,
+  ActivityLockCall,
+  ActivityTypeCall,
+  GlobalActivity,
+} from '@/lib/api';
 
 export type ActivityType =
   | 'daoDeposit'
@@ -7,14 +12,16 @@ export type ActivityType =
   | 'token'
   | 'object'
   | 'identity'
-  | 'scriptCall'
+  | 'protocolAction'
+  | 'typeCall'
   | 'ckbTransfer';
 
 export interface ClassifiedActivity {
   type: ActivityType;
   activity: GlobalActivity;
   primaryAssetChange: ActivityAssetChange | null;
-  primaryScriptCall: ActivityScriptCall | null;
+  primaryTypeCall: ActivityTypeCall | null;
+  primaryLockCall: ActivityLockCall | null;
 }
 
 const ASSET_TYPE_PRIORITY: Array<{ assetType: string; activityType: ActivityType }> = [
@@ -27,6 +34,9 @@ const ASSET_TYPE_PRIORITY: Array<{ assetType: string; activityType: ActivityType
 ];
 
 export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
+  const primaryLockCall = activity.lockCalls[0] ?? null;
+
+  // 1. Asset changes take priority
   for (const { assetType, activityType } of ASSET_TYPE_PRIORITY) {
     const match = activity.assetChanges.find((c) => c.type === assetType);
     if (match) {
@@ -34,24 +44,41 @@ export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
         type: activityType,
         activity,
         primaryAssetChange: match,
-        primaryScriptCall: activity.scriptCalls[0] ?? null,
+        primaryTypeCall: activity.typeCalls[0] ?? null,
+        primaryLockCall,
       };
     }
   }
 
-  if (activity.scriptCalls.length > 0) {
+  // 2. Protocol action lock calls
+  const protocolAction = activity.lockCalls.find((lc) => lc.role === 'protocol_action');
+  if (protocolAction) {
     return {
-      type: 'scriptCall',
+      type: 'protocolAction',
       activity,
       primaryAssetChange: null,
-      primaryScriptCall: activity.scriptCalls[0],
+      primaryTypeCall: activity.typeCalls[0] ?? null,
+      primaryLockCall: protocolAction,
     };
   }
 
+  // 3. Type calls
+  if (activity.typeCalls.length > 0) {
+    return {
+      type: 'typeCall',
+      activity,
+      primaryAssetChange: null,
+      primaryTypeCall: activity.typeCalls[0],
+      primaryLockCall,
+    };
+  }
+
+  // 4. CKB transfer (fallback)
   return {
     type: 'ckbTransfer',
     activity,
     primaryAssetChange: null,
-    primaryScriptCall: null,
+    primaryTypeCall: null,
+    primaryLockCall,
   };
 }

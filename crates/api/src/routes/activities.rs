@@ -5,12 +5,13 @@ use axum::{
 };
 use ckbadger_store::{
     types::{
-        ActivityEntry, AssetAction, AssetChange, LatestActivityItem, ScriptCallEntry, ScriptInfo,
+        ActivityEntry, AssetAction, AssetChange, LatestActivityItem, LockCallEntry, ScriptInfo,
+        TypeCallEntry,
     },
     CkbadgerStore,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
 use crate::response::{
@@ -45,7 +46,8 @@ pub struct ActivityResponse {
     pub used_delta: String,
     pub is_cellbase: bool,
     pub asset_changes: Vec<AssetChangeResponse>,
-    pub script_calls: Vec<ScriptCallResponse>,
+    pub type_calls: Vec<TypeCallResponse>,
+    pub lock_calls: Vec<LockCallResponse>,
     pub peers: Vec<String>,
 }
 
@@ -87,13 +89,25 @@ pub enum AssetChangeResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ScriptCallResponse {
+pub struct TypeCallResponse {
     pub type_code_hash: String,
     pub type_hash_type: String,
     pub type_args: String,
     pub script_hash: String,
     pub script_name: Option<String>,
     pub protocol_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LockCallResponse {
+    pub lock_code_hash: String,
+    pub lock_hash_type: String,
+    pub lock_args: String,
+    pub script_hash: String,
+    pub script_name: Option<String>,
+    pub role: String,
+    pub decoded: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -108,7 +122,8 @@ pub struct GlobalActivityResponse {
     pub used_delta: String,
     pub is_cellbase: bool,
     pub asset_changes: Vec<AssetChangeResponse>,
-    pub script_calls: Vec<ScriptCallResponse>,
+    pub type_calls: Vec<TypeCallResponse>,
+    pub lock_calls: Vec<LockCallResponse>,
     pub peers: Vec<String>,
 }
 
@@ -226,27 +241,24 @@ fn normalized_script_name(info: Option<&ScriptInfo>) -> Option<String> {
 fn resolve_script_info_cached<'a>(
     store: &CkbadgerStore,
     cache: &'a mut HashMap<Vec<u8>, Option<ScriptInfo>>,
-    type_code_hash: &[u8],
+    code_hash: &[u8],
 ) -> anyhow::Result<Option<&'a ScriptInfo>> {
-    if !cache.contains_key(type_code_hash) {
-        cache.insert(
-            type_code_hash.to_vec(),
-            store.get_script_info(type_code_hash)?,
-        );
+    if !cache.contains_key(code_hash) {
+        cache.insert(code_hash.to_vec(), store.get_script_info(code_hash)?);
     }
 
-    Ok(cache.get(type_code_hash).and_then(Option::as_ref))
+    Ok(cache.get(code_hash).and_then(Option::as_ref))
 }
 
-fn convert_script_call(
+fn convert_type_call(
     store: &CkbadgerStore,
     cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
-    call: &ScriptCallEntry,
-) -> anyhow::Result<ScriptCallResponse> {
+    call: &TypeCallEntry,
+) -> anyhow::Result<TypeCallResponse> {
     let hash_type = hash_type_to_str(call.type_hash_type);
     if hash_type == "unknown" {
         return Err(anyhow::anyhow!(
-            "unsupported script hash_type {} in activity script_call",
+            "unsupported script hash_type {} in activity type_call",
             call.type_hash_type
         ));
     }
@@ -257,7 +269,7 @@ fn convert_script_call(
     );
     let script_info = resolve_script_info_cached(store, cache, &call.type_code_hash)?;
 
-    Ok(ScriptCallResponse {
+    Ok(TypeCallResponse {
         type_code_hash: format!("0x{}", hex::encode(&call.type_code_hash)),
         type_hash_type: hash_type.to_string(),
         type_args: format!("0x{}", hex::encode(&call.type_args)),
@@ -267,15 +279,139 @@ fn convert_script_call(
     })
 }
 
-fn convert_script_calls(
+fn convert_type_calls(
     store: &CkbadgerStore,
     cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
-    calls: Option<&Vec<ScriptCallEntry>>,
-) -> anyhow::Result<Vec<ScriptCallResponse>> {
+    calls: Option<&Vec<TypeCallEntry>>,
+) -> anyhow::Result<Vec<TypeCallResponse>> {
     calls
         .into_iter()
         .flatten()
-        .map(|call| convert_script_call(store, cache, call))
+        .map(|call| convert_type_call(store, cache, call))
+        .collect()
+}
+
+/// Protocol action lock code_hashes — locks where creating a cell IS the protocol action.
+/// Initially empty; populated when UTXOSwap/Fiber code_hashes become available.
+static PROTOCOL_ACTION_LOCKS: LazyLock<HashSet<Vec<u8>>> = LazyLock::new(|| {
+    HashSet::new()
+    // Future: add UTXOSwap intentLock, Fiber funding_lock, etc.
+});
+
+type ArgsDecoder = fn(&[u8]) -> Option<serde_json::Value>;
+
+/// Parse a 0x-prefixed hex string into bytes. Panics on invalid hex (compile-time constants only).
+fn parse_hex_code_hash(hex_str: &str) -> Vec<u8> {
+    let hex = hex_str.strip_prefix("0x").unwrap_or(hex_str);
+    hex::decode(hex).expect("invalid hex in lock args decoder constant")
+}
+
+static LOCK_ARGS_DECODERS: LazyLock<HashMap<Vec<u8>, ArgsDecoder>> = LazyLock::new(|| {
+    let mut m: HashMap<Vec<u8>, ArgsDecoder> = HashMap::new();
+    // RGB++ lock
+    for hex in [
+        "0xbc6c568a1a0d0a09f6844dc9d74ddb4343c32143ff25f727c59edf4fb72d6936", // mainnet
+        "0x61ca7a4796a4eb19ca4f0d065cb9b10ddcf002f10f7cbb810c706cb6bb5c3248", // testnet
+        "0xd07598deec7ce7b5665310386b4abd06a6d48843e953c5cc2112ad0d5a220364", // signet
+    ] {
+        m.insert(
+            parse_hex_code_hash(hex),
+            decode_rgbpp_lock_args as ArgsDecoder,
+        );
+    }
+    // BTC time lock
+    for hex in [
+        "0x70d64497a075bd651e98ac030455ea200637ee325a12ad08aff03f1a117e5a62", // mainnet
+        "0x00cdf8fab0f8ac638758ebf5ea5e4052b1d71e8a77b9f43139718621f6849326", // testnet
+        "0x80a09eca26d77cea1f5a69471c59481be7404febf40ee90f886c36a948385b55", // signet
+    ] {
+        m.insert(
+            parse_hex_code_hash(hex),
+            decode_btc_time_lock_args as ArgsDecoder,
+        );
+    }
+    m
+});
+
+fn decode_rgbpp_lock_args(args: &[u8]) -> Option<serde_json::Value> {
+    if args.len() < 36 {
+        return None;
+    }
+    let out_index = u32::from_le_bytes(args[0..4].try_into().ok()?);
+    let mut btc_txid = args[4..36].to_vec();
+    btc_txid.reverse(); // little-endian to big-endian for display
+    Some(serde_json::json!({
+        "protocol": "rgbpp",
+        "btcTxid": hex::encode(&btc_txid),
+        "outIndex": out_index,
+    }))
+}
+
+fn decode_btc_time_lock_args(args: &[u8]) -> Option<serde_json::Value> {
+    // BTC time lock args: btc_txid is always the last 32 bytes (LE).
+    // Minimum 36 bytes (matching indexer parser).
+    if args.len() < 36 {
+        return None;
+    }
+    let mut btc_txid = args[args.len() - 32..].to_vec();
+    btc_txid.reverse();
+    Some(serde_json::json!({
+        "protocol": "rgbpp",
+        "action": "btcTimeLock",
+        "btcTxid": hex::encode(&btc_txid),
+    }))
+}
+
+fn lock_call_role(code_hash: &[u8]) -> &'static str {
+    if PROTOCOL_ACTION_LOCKS.contains(code_hash) {
+        "protocol_action"
+    } else {
+        "access_control"
+    }
+}
+
+fn convert_lock_call(
+    store: &CkbadgerStore,
+    cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    call: &LockCallEntry,
+) -> anyhow::Result<LockCallResponse> {
+    let hash_type = hash_type_to_str(call.lock_hash_type);
+    if hash_type == "unknown" {
+        return Err(anyhow::anyhow!(
+            "unsupported lock hash_type {} in activity lock_call",
+            call.lock_hash_type
+        ));
+    }
+    let script_hash = compute_script_hash(
+        &call.lock_code_hash,
+        call.lock_hash_type as u8,
+        &call.lock_args,
+    );
+    let script_info = resolve_script_info_cached(store, cache, &call.lock_code_hash)?;
+    let role = lock_call_role(&call.lock_code_hash);
+
+    Ok(LockCallResponse {
+        lock_code_hash: format!("0x{}", hex::encode(&call.lock_code_hash)),
+        lock_hash_type: hash_type.to_string(),
+        lock_args: format!("0x{}", hex::encode(&call.lock_args)),
+        script_hash: format!("0x{}", hex::encode(script_hash)),
+        script_name: normalized_script_name(script_info),
+        role: role.to_string(),
+        decoded: LOCK_ARGS_DECODERS
+            .get(call.lock_code_hash.as_slice())
+            .and_then(|decoder| decoder(&call.lock_args)),
+    })
+}
+
+fn convert_lock_calls(
+    store: &CkbadgerStore,
+    cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    calls: Option<&Vec<LockCallEntry>>,
+) -> anyhow::Result<Vec<LockCallResponse>> {
+    calls
+        .into_iter()
+        .flatten()
+        .map(|call| convert_lock_call(store, cache, call))
         .collect()
 }
 
@@ -297,7 +433,8 @@ pub(crate) fn build_activity_response(
             .iter()
             .map(convert_asset_change)
             .collect(),
-        script_calls: convert_script_calls(store, script_info_cache, entry.script_calls.as_ref())?,
+        type_calls: convert_type_calls(store, script_info_cache, entry.type_calls.as_ref())?,
+        lock_calls: convert_lock_calls(store, script_info_cache, entry.lock_calls.as_ref())?,
         peers: entry
             .peers
             .iter()
@@ -339,11 +476,8 @@ pub(crate) fn build_global_activity_response(
             .iter()
             .map(convert_asset_change)
             .collect(),
-        script_calls: convert_script_calls(
-            store,
-            script_info_cache,
-            item.entry.script_calls.as_ref(),
-        )?,
+        type_calls: convert_type_calls(store, script_info_cache, item.entry.type_calls.as_ref())?,
+        lock_calls: convert_lock_calls(store, script_info_cache, item.entry.lock_calls.as_ref())?,
         peers: item
             .entry
             .peers
@@ -361,10 +495,10 @@ fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
     if let Some(value) = filter {
         if !matches!(
             value,
-            "all" | "ckb" | "token" | "nft" | "dao" | "script_call"
+            "all" | "ckb" | "token" | "nft" | "dao" | "type_call" | "lock_call"
         ) {
             return Err(ApiError::bad_request(format!(
-                "invalid activity filter '{}'; expected one of: all, ckb, token, nft, dao, script_call",
+                "invalid activity filter '{}'; expected one of: all, ckb, token, nft, dao, type_call, lock_call",
                 value
             )));
         }
@@ -584,7 +718,8 @@ mod tests {
                 has_type_script: false,
                 involved_script_code_hashes: vec![vec![0x33; 32]],
                 asset_changes: vec![],
-                script_calls: None,
+                type_calls: None,
+                lock_calls: None,
                 peers: vec![],
             }],
         }
@@ -691,5 +826,62 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].2.tx_hash, tx_hash);
         assert_eq!(rows[0].2.block_hash, vec![0xBB; 32]);
+    }
+
+    #[test]
+    fn test_decode_rgbpp_lock_args_valid() {
+        // out_index=2 (LE), btc_txid=32 bytes
+        let mut args = vec![0; 36];
+        args[0..4].copy_from_slice(&2u32.to_le_bytes());
+        // btc_txid: stored little-endian, reversed for display
+        for i in 0..32 {
+            args[4 + i] = (32 - i) as u8;
+        }
+        let result = decode_rgbpp_lock_args(&args).unwrap();
+        assert_eq!(result["protocol"], "rgbpp");
+        assert_eq!(result["outIndex"], 2);
+        // After reverse, should be 01020304...
+        let txid = result["btcTxid"].as_str().unwrap();
+        assert!(txid.starts_with("0102"));
+    }
+
+    #[test]
+    fn test_decode_rgbpp_lock_args_too_short() {
+        let args = vec![0; 35]; // 1 byte short
+        assert!(decode_rgbpp_lock_args(&args).is_none());
+    }
+
+    #[test]
+    fn test_decode_btc_time_lock_args_valid() {
+        // btc_txid is the last 32 bytes (LE, reversed for display)
+        let mut args = vec![0; 68];
+        for i in 0..32 {
+            args[36 + i] = (32 - i) as u8;
+        }
+        let result = decode_btc_time_lock_args(&args).unwrap();
+        assert_eq!(result["protocol"], "rgbpp");
+        assert_eq!(result["action"], "btcTimeLock");
+        assert!(result.get("after").is_none());
+        let txid = result["btcTxid"].as_str().unwrap();
+        assert!(txid.starts_with("0102"));
+    }
+
+    #[test]
+    fn test_decode_btc_time_lock_args_extracts_last_32_bytes() {
+        // Verify "last 32 bytes" semantics with variable-length args
+        let mut args = vec![0; 100];
+        // Put txid in last 32 bytes (not at fixed offset 36..68)
+        for i in 0..32 {
+            args[68 + i] = (32 - i) as u8;
+        }
+        let result = decode_btc_time_lock_args(&args).unwrap();
+        let txid = result["btcTxid"].as_str().unwrap();
+        assert!(txid.starts_with("0102"));
+    }
+
+    #[test]
+    fn test_decode_btc_time_lock_args_too_short() {
+        let args = vec![0; 35]; // 1 byte short of minimum 36
+        assert!(decode_btc_time_lock_args(&args).is_none());
     }
 }

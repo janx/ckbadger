@@ -299,7 +299,8 @@ describe('AddressDetailPage', () => {
           usedDelta: '0',
           isCellbase: false,
           peers: [],
-          scriptCalls: [],
+          typeCalls: [],
+          lockCalls: [],
           assetChanges: [
             {
               type: 'token',
@@ -512,7 +513,8 @@ describe('AddressDetailPage', () => {
           usedDelta: '0',
           isCellbase: false,
           peers: [],
-          scriptCalls: [],
+          typeCalls: [],
+          lockCalls: [],
           assetChanges: [
             {
               type: 'identity',
@@ -550,7 +552,8 @@ describe('AddressDetailPage', () => {
           usedDelta: '0',
           isCellbase: false,
           peers: [],
-          scriptCalls: [],
+          typeCalls: [],
+          lockCalls: [],
           assetChanges: [
             {
               type: 'identity',
@@ -597,7 +600,7 @@ describe('AddressDetailPage', () => {
               decimals: 8,
             },
           ],
-          scriptCalls: [
+          typeCalls: [
             {
               typeCodeHash: '0xcodehash',
               typeHashType: 'type',
@@ -606,6 +609,7 @@ describe('AddressDetailPage', () => {
               scriptName: 'RGB++ Lock',
             },
           ],
+          lockCalls: [],
         },
       ],
       total: 1,
@@ -616,7 +620,7 @@ describe('AddressDetailPage', () => {
 
     render(<AddressDetailPage />);
 
-    // ActivityEventGroup renders script calls inline with ScriptCallExpr link (mobile + desktop)
+    // ActivityEventGroup renders type calls inline with TypeCallExpr link (mobile + desktop)
     await waitFor(() => {
       expect(screen.getAllByText('RGB++ Lock')[0]).toBeInTheDocument();
     });

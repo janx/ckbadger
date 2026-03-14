@@ -998,16 +998,25 @@ pub struct ActivityEntry {
     #[serde(default)]
     pub has_type_script: bool,
     pub asset_changes: Vec<AssetChange>,
-    pub script_calls: Option<Vec<ScriptCallEntry>>,
+    pub type_calls: Option<Vec<TypeCallEntry>>,
+    #[serde(default)]
+    pub lock_calls: Option<Vec<LockCallEntry>>,
     /// Lock hashes of other parties in this transaction.
     pub peers: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScriptCallEntry {
+pub struct TypeCallEntry {
     pub type_code_hash: Vec<u8>,
     pub type_hash_type: i16,
     pub type_args: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockCallEntry {
+    pub lock_code_hash: Vec<u8>,
+    pub lock_hash_type: i16,
+    pub lock_args: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1021,7 +1030,9 @@ pub struct OwnerActivityDelta {
     pub has_type_script: bool,
     pub involved_script_code_hashes: Vec<Vec<u8>>,
     pub asset_changes: Vec<AssetChange>,
-    pub script_calls: Option<Vec<ScriptCallEntry>>,
+    pub type_calls: Option<Vec<TypeCallEntry>>,
+    #[serde(default)]
+    pub lock_calls: Option<Vec<LockCallEntry>>,
     pub peers: Vec<Vec<u8>>,
 }
 
@@ -1442,7 +1453,8 @@ mod tests {
                     capacity: 1_000_000_000_000,
                 },
             ],
-            script_calls: None,
+            type_calls: None,
+            lock_calls: None,
             peers: vec![vec![0xBB; 32], vec![0xCC; 32]],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1496,11 +1508,12 @@ mod tests {
                     compensation: 42,
                 },
             ],
-            script_calls: Some(vec![ScriptCallEntry {
+            type_calls: Some(vec![TypeCallEntry {
                 type_code_hash: vec![0xDD; 32],
                 type_hash_type: 1,
                 type_args: vec![0xEE; 20],
             }]),
+            lock_calls: None,
             peers: vec![],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1508,11 +1521,11 @@ mod tests {
         assert_eq!(decoded.asset_changes.len(), 6);
         assert!(decoded.is_cellbase);
         assert!(decoded.peers.is_empty());
-        let script_calls = decoded.script_calls.expect("script calls should exist");
-        assert_eq!(script_calls.len(), 1);
-        assert_eq!(script_calls[0].type_code_hash, vec![0xDD; 32]);
-        assert_eq!(script_calls[0].type_hash_type, 1);
-        assert_eq!(script_calls[0].type_args, vec![0xEE; 20]);
+        let type_calls = decoded.type_calls.expect("script calls should exist");
+        assert_eq!(type_calls.len(), 1);
+        assert_eq!(type_calls[0].type_code_hash, vec![0xDD; 32]);
+        assert_eq!(type_calls[0].type_hash_type, 1);
+        assert_eq!(type_calls[0].type_args, vec![0xEE; 20]);
 
         // Verify each variant survived roundtrip
         match &decoded.asset_changes[1] {
@@ -1549,14 +1562,15 @@ mod tests {
             is_cellbase: false,
             has_type_script: false,
             asset_changes: vec![],
-            script_calls: None,
+            type_calls: None,
+            lock_calls: None,
             peers: vec![],
         };
         let bytes = bincode::serialize(&entry).unwrap();
         let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.ckb_delta, 0);
         assert!(decoded.asset_changes.is_empty());
-        assert!(decoded.script_calls.is_none());
+        assert!(decoded.type_calls.is_none());
         assert!(decoded.peers.is_empty());
     }
 
@@ -1573,26 +1587,27 @@ mod tests {
             is_cellbase: false,
             has_type_script: true,
             asset_changes: vec![],
-            script_calls: Some(vec![ScriptCallEntry {
+            type_calls: Some(vec![TypeCallEntry {
                 type_code_hash: vec![0xDD; 32],
                 type_hash_type: 1,
                 type_args: vec![0xEE; 20],
             }]),
+            lock_calls: None,
             peers: vec![vec![0xEE; 32]],
         };
         let bytes = bincode::serialize(&entry).unwrap();
         let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
         assert!(decoded.has_type_script);
-        let script_calls = decoded.script_calls.expect("script calls should exist");
-        assert_eq!(script_calls.len(), 1);
-        assert_eq!(script_calls[0].type_code_hash, vec![0xDD; 32]);
-        assert_eq!(script_calls[0].type_hash_type, 1);
-        assert_eq!(script_calls[0].type_args, vec![0xEE; 20]);
+        let type_calls = decoded.type_calls.expect("script calls should exist");
+        assert_eq!(type_calls.len(), 1);
+        assert_eq!(type_calls[0].type_code_hash, vec![0xDD; 32]);
+        assert_eq!(type_calls[0].type_hash_type, 1);
+        assert_eq!(type_calls[0].type_args, vec![0xEE; 20]);
         assert!(decoded.asset_changes.is_empty());
     }
 
     #[test]
-    fn test_activity_entry_script_calls_none_roundtrip() {
+    fn test_activity_entry_type_calls_none_roundtrip() {
         let entry = ActivityEntry {
             tx_hash: vec![0x11; 32],
             block_hash: vec![0xF1; 32],
@@ -1604,17 +1619,18 @@ mod tests {
             is_cellbase: false,
             has_type_script: false,
             asset_changes: vec![],
-            script_calls: None,
+            type_calls: None,
+            lock_calls: None,
             peers: vec![],
         };
         let bytes = bincode::serialize(&entry).unwrap();
         let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
-        assert!(decoded.script_calls.is_none());
+        assert!(decoded.type_calls.is_none());
         assert!(decoded.asset_changes.is_empty());
     }
 
     #[test]
-    fn test_activity_entry_script_calls_some_roundtrip() {
+    fn test_activity_entry_type_calls_some_roundtrip() {
         let entry = ActivityEntry {
             tx_hash: vec![0x12; 32],
             block_hash: vec![0xF2; 32],
@@ -1631,20 +1647,21 @@ mod tests {
                 symbol: Some("SEAL".to_string()),
                 decimals: Some(8),
             }],
-            script_calls: Some(vec![ScriptCallEntry {
+            type_calls: Some(vec![TypeCallEntry {
                 type_code_hash: vec![0xDD; 32],
                 type_hash_type: 1,
                 type_args: vec![0xEE; 20],
             }]),
+            lock_calls: None,
             peers: vec![vec![0xFF; 32]],
         };
         let bytes = bincode::serialize(&entry).unwrap();
         let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
-        let script_calls = decoded.script_calls.expect("script calls should exist");
-        assert_eq!(script_calls.len(), 1);
-        assert_eq!(script_calls[0].type_code_hash, vec![0xDD; 32]);
-        assert_eq!(script_calls[0].type_hash_type, 1);
-        assert_eq!(script_calls[0].type_args, vec![0xEE; 20]);
+        let type_calls = decoded.type_calls.expect("script calls should exist");
+        assert_eq!(type_calls.len(), 1);
+        assert_eq!(type_calls[0].type_code_hash, vec![0xDD; 32]);
+        assert_eq!(type_calls[0].type_hash_type, 1);
+        assert_eq!(type_calls[0].type_args, vec![0xEE; 20]);
         assert_eq!(decoded.asset_changes.len(), 1);
     }
 
@@ -1667,7 +1684,8 @@ mod tests {
                 has_type_script: false,
                 involved_script_code_hashes: vec![vec![0xDD; 32]],
                 asset_changes: vec![],
-                script_calls: None,
+                type_calls: None,
+                lock_calls: None,
                 peers: vec![],
             }],
         };

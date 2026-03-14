@@ -23,7 +23,8 @@ function makeActivity(
     usedDelta: overrides.usedDelta ?? '0',
     isCellbase: overrides.isCellbase ?? false,
     assetChanges: overrides.assetChanges ?? [],
-    scriptCalls: overrides.scriptCalls ?? [],
+    typeCalls: overrides.typeCalls ?? [],
+    lockCalls: overrides.lockCalls ?? [],
     peers: overrides.peers ?? [],
   };
 }
@@ -97,7 +98,7 @@ describe('LatestActivities stream', () => {
       makeActivity({
         address: 'ckb1qscript1111111111111111111111111111111111111111111',
         txHash: '0xtx-script',
-        scriptCalls: [
+        typeCalls: [
           {
             typeCodeHash: '0xcode',
             typeHashType: 'type',
@@ -113,7 +114,7 @@ describe('LatestActivities stream', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Omnilock/)).toBeInTheDocument();
-      expect(screen.getByText(/Script call/)).toBeInTheDocument();
+      expect(screen.getByText(/Type call/)).toBeInTheDocument();
     });
   });
 
@@ -122,7 +123,7 @@ describe('LatestActivities stream', () => {
       makeActivity({
         address: 'ckb1qprotocol111111111111111111111111111111111111111',
         txHash: '0xtx-protocol',
-        scriptCalls: [
+        typeCalls: [
           {
             typeCodeHash: '0xcode',
             typeHashType: 'type',
@@ -140,8 +141,8 @@ describe('LatestActivities stream', () => {
     await waitFor(() => {
       expect(screen.getByText('Stable++')).toBeInTheDocument();
       expect(screen.getByText(/Pool/)).toBeInTheDocument();
-      // Should NOT show "Script call" text when protocol name is present
-      expect(screen.queryByText(/Script call/)).not.toBeInTheDocument();
+      // Should NOT show "Type call" text when protocol name is present
+      expect(screen.queryByText(/Type call/)).not.toBeInTheDocument();
     });
   });
 
@@ -158,6 +159,32 @@ describe('LatestActivities stream', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/CKB Transfer/)).toBeInTheDocument();
+    });
+  });
+
+  it('renders a protocol action lock call with script name', async () => {
+    vi.mocked(api.getLatestActivities).mockResolvedValue([
+      makeActivity({
+        address: 'ckb1qlockaction111111111111111111111111111111111111',
+        txHash: '0xtx-lock',
+        lockCalls: [
+          {
+            lockCodeHash: '0xintent',
+            lockHashType: 'type',
+            lockArgs: '0xargs',
+            scriptHash: '0xhash',
+            scriptName: 'UTXOSwap Intent',
+            role: 'protocol_action',
+          },
+        ],
+      }),
+    ]);
+
+    render(<LatestActivities />);
+
+    await waitFor(() => {
+      // Script name appears twice: once as protocol label, once as link text in LockCallExpr
+      expect(screen.getAllByText(/UTXOSwap Intent/).length).toBeGreaterThanOrEqual(1);
     });
   });
 
