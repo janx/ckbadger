@@ -152,14 +152,15 @@ fn default_latest_limit() -> usize {
 static PROTOCOL_INDEX: LazyLock<HashMap<Vec<u8>, String>> = LazyLock::new(|| {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../docs/script-name-overrides.json");
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(_) => return HashMap::new(),
-    };
-    let doc: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(_) => return HashMap::new(),
-    };
+    let content = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read protocol index at {}: {}", path.display(), e));
+    let doc: serde_json::Value = serde_json::from_str(&content).unwrap_or_else(|e| {
+        panic!(
+            "failed to parse protocol index JSON at {}: {}",
+            path.display(),
+            e
+        )
+    });
 
     let mut index = HashMap::new();
     if let Some(protocols) = doc.get("protocols").and_then(|v| v.as_object()) {
@@ -265,13 +266,12 @@ fn convert_type_call(
     cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
     call: &TypeCallEntry,
 ) -> anyhow::Result<TypeCallResponse> {
-    let hash_type = hash_type_to_str(call.type_hash_type);
-    if hash_type == "unknown" {
-        return Err(anyhow::anyhow!(
+    let hash_type = hash_type_to_str(call.type_hash_type).ok_or_else(|| {
+        anyhow::anyhow!(
             "unsupported script hash_type {} in activity type_call",
             call.type_hash_type
-        ));
-    }
+        )
+    })?;
     let script_hash = compute_script_hash(
         &call.type_code_hash,
         call.type_hash_type as u8,
@@ -449,13 +449,12 @@ fn convert_lock_call(
     cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
     call: &LockCallEntry,
 ) -> anyhow::Result<LockCallResponse> {
-    let hash_type = hash_type_to_str(call.lock_hash_type);
-    if hash_type == "unknown" {
-        return Err(anyhow::anyhow!(
+    let hash_type = hash_type_to_str(call.lock_hash_type).ok_or_else(|| {
+        anyhow::anyhow!(
             "unsupported lock hash_type {} in activity lock_call",
             call.lock_hash_type
-        ));
-    }
+        )
+    })?;
     let script_hash = compute_script_hash(
         &call.lock_code_hash,
         call.lock_hash_type as u8,
@@ -703,34 +702,41 @@ async fn get_address_activities(
         ),
     };
 
-    let results = list_canonical_activities_page(
-        state.store.as_ref(),
-        state.store.as_ref(),
-        &lock_hash,
-        limit + 1,
-        cursor,
-        params.filter.as_deref(),
-    )
+    let filter = params.filter.clone();
+    let store = state.store.clone();
+    let (next_cursor, activities) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let results = list_canonical_activities_page(
+            store.as_ref(),
+            store.as_ref(),
+            &lock_hash,
+            limit + 1,
+            cursor,
+            filter.as_deref(),
+        )?;
+
+        let has_more = results.len() > limit;
+        let page: Vec<_> = results.into_iter().take(limit).collect();
+
+        let next_cursor = if has_more {
+            page.last()
+                .map(|(block_num, tx_idx, _)| format!("{}:{}", block_num, tx_idx))
+        } else {
+            None
+        };
+
+        let mut script_info_cache = HashMap::new();
+        let activities: Vec<ActivityResponse> = page
+            .into_iter()
+            .map(|(_, _, entry)| {
+                build_activity_response(store.as_ref(), &entry, &mut script_info_cache)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        Ok((next_cursor, activities))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
     .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let has_more = results.len() > limit;
-    let page: Vec<_> = results.into_iter().take(limit).collect();
-
-    let next_cursor = if has_more {
-        page.last()
-            .map(|(block_num, tx_idx, _)| format!("{}:{}", block_num, tx_idx))
-    } else {
-        None
-    };
-
-    let mut script_info_cache = HashMap::new();
-    let activities: Vec<ActivityResponse> = page
-        .into_iter()
-        .map(|(_, _, entry)| {
-            build_activity_response(state.store.as_ref(), &entry, &mut script_info_cache)
-        })
-        .collect::<anyhow::Result<Vec<_>>>()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     ok(CursorPaginatedResponse::without_total(
         activities,
@@ -744,26 +750,30 @@ async fn get_latest_activities(
     Query(params): Query<LatestActivityParams>,
 ) -> ApiResult<Vec<GlobalActivityResponse>> {
     let limit = params.limit.clamp(1, 64);
-    let items = state
-        .store
-        .get_latest_activities()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let network = state.ckb_network.clone();
+    let activities = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let items = store.get_latest_activities()?;
 
-    let network = &state.ckb_network;
-    let mut script_info_cache = HashMap::new();
-    let activities: Vec<GlobalActivityResponse> = items
-        .into_iter()
-        .take(limit)
-        .map(|item| {
-            build_global_activity_response(
-                state.store.as_ref(),
-                network,
-                &item,
-                &mut script_info_cache,
-            )
-        })
-        .collect::<anyhow::Result<Vec<_>>>()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        let mut script_info_cache = HashMap::new();
+        let activities: Vec<GlobalActivityResponse> = items
+            .into_iter()
+            .take(limit)
+            .map(|item| {
+                build_global_activity_response(
+                    store.as_ref(),
+                    &network,
+                    &item,
+                    &mut script_info_cache,
+                )
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        Ok(activities)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     ok(activities)
 }

@@ -6,7 +6,17 @@ const SHANNON_PER_CKB: u128 = 100_000_000;
 
 /// Converts shannon (smallest CKB unit, 1 CKB = 10^8 shannon) to CKB string.
 pub fn shannon_to_ckb(shannon: &str) -> String {
-    let num: u128 = shannon.parse().unwrap_or(0);
+    let num: u128 = match shannon.parse() {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                "shannon_to_ckb: failed to parse input {:?} as u128: {}",
+                shannon,
+                e
+            );
+            0
+        }
+    };
     shannon_to_ckb_u128(num)
 }
 

@@ -144,13 +144,14 @@ pub fn default_limit() -> i64 {
 }
 
 /// Map CKB script hash_type integer to its string representation.
-pub fn hash_type_to_str(hash_type: i16) -> &'static str {
+/// Returns `None` for unknown hash_type values so callers must handle them explicitly.
+pub fn hash_type_to_str(hash_type: i16) -> Option<&'static str> {
     match hash_type {
-        0 => "data",
-        1 => "type",
-        2 => "data1",
-        4 => "data2",
-        _ => "unknown",
+        0 => Some("data"),
+        1 => Some("type"),
+        2 => Some("data1"),
+        4 => Some("data2"),
+        _ => None,
     }
 }
 
@@ -255,11 +256,11 @@ mod tests {
 
     #[test]
     fn test_hash_type_to_str() {
-        assert_eq!(hash_type_to_str(0), "data");
-        assert_eq!(hash_type_to_str(1), "type");
-        assert_eq!(hash_type_to_str(2), "data1");
-        assert_eq!(hash_type_to_str(4), "data2");
-        assert_eq!(hash_type_to_str(99), "unknown");
+        assert_eq!(hash_type_to_str(0), Some("data"));
+        assert_eq!(hash_type_to_str(1), Some("type"));
+        assert_eq!(hash_type_to_str(2), Some("data1"));
+        assert_eq!(hash_type_to_str(4), Some("data2"));
+        assert_eq!(hash_type_to_str(99), None);
     }
 
     #[test]

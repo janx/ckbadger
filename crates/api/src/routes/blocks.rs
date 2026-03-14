@@ -450,12 +450,19 @@ fn get_miner_address_from_store(
 
     let code_hash: Vec<u8> = lock.code_hash().raw_data().to_vec();
     let hash_type_byte = lock.hash_type().as_bytes()[0];
-    let hash_type = match hash_type_byte {
-        0 => 0i16,
-        1 => 1i16,
-        2 => 2i16,
-        4 => 4i16,
-        _ => 0i16,
+    let hash_type: i16 = match hash_type_byte {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        4 => 4,
+        _ => {
+            tracing::error!(
+                "unknown hash_type byte {} in miner lock script for block 0x{}",
+                hash_type_byte,
+                hex::encode(block_hash)
+            );
+            return None;
+        }
     };
     let args: Vec<u8> = lock.args().raw_data().to_vec();
 

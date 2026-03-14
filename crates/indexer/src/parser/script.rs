@@ -40,7 +40,9 @@ impl ScriptParser {
         const CODE_HASH_SIZE: u32 = 32;
         const HASH_TYPE_SIZE: u32 = 1;
 
-        let args_size = 4 + args.len() as u32; // Bytes = length prefix (4) + data
+        let args_len_u32 = u32::try_from(args.len())
+            .unwrap_or_else(|_| panic!("script args length exceeds u32 range: {}", args.len()));
+        let args_size = 4 + args_len_u32; // Bytes = length prefix (4) + data
         let total_size = HEADER_SIZE + CODE_HASH_SIZE + HASH_TYPE_SIZE + args_size;
 
         let offset_code_hash = HEADER_SIZE;
@@ -58,7 +60,7 @@ impl ScriptParser {
         // Body
         buf.extend_from_slice(code_hash); // Byte32
         buf.push(hash_type); // byte
-        buf.extend_from_slice(&(args.len() as u32).to_le_bytes()); // Bytes length prefix
+        buf.extend_from_slice(&args_len_u32.to_le_bytes()); // Bytes length prefix
         buf.extend_from_slice(args); // Bytes data
 
         buf

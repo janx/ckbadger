@@ -451,16 +451,18 @@ async fn get_pending_proposals(
 ) -> ApiResult<ckbadger_common::PendingProposalsResponse> {
     use ckbadger_common::{PendingProposal, PendingProposalsResponse};
 
-    let tip = state
-        .store
-        .get_sync_status()
-        .map(|s| s.tip_block_number)
-        .unwrap_or(0);
-
-    let cached_proposals = state
-        .store
-        .get_all_pending_proposals()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let (tip, cached_proposals) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let tip = store
+            .get_sync_status()
+            .map(|s| s.tip_block_number)
+            .unwrap_or(0);
+        let cached_proposals = store.get_all_pending_proposals()?;
+        Ok((tip, cached_proposals))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut proposals: Vec<PendingProposal> = cached_proposals
         .iter()

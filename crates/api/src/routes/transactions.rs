@@ -599,7 +599,17 @@ fn resolve_stored_input_type_hash_type(
 ) -> Result<String, ApiRouteError> {
     if let Some(type_hash) = type_script_hash {
         match core_store.get_token(type_hash) {
-            Ok(Some(token)) => return Ok(hash_type_to_str(token.hash_type as i16).to_string()),
+            Ok(Some(token)) => {
+                return hash_type_to_str(token.hash_type as i16)
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "unknown hash_type {} for token type_script_hash=0x{}",
+                            token.hash_type,
+                            hex::encode(type_hash)
+                        ))
+                    })
+            }
             Ok(None) => {}
             Err(e) => {
                 return Err(ApiError::internal(format!(
@@ -612,7 +622,15 @@ fn resolve_stored_input_type_hash_type(
     }
 
     match store.get_script_info(type_code_hash) {
-        Ok(Some(script)) => Ok(hash_type_to_str(script.hash_type as i16).to_string()),
+        Ok(Some(script)) => hash_type_to_str(script.hash_type as i16)
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "unknown hash_type {} for script code_hash=0x{}",
+                    script.hash_type,
+                    hex::encode(type_code_hash)
+                ))
+            }),
         Ok(None) => Ok("unknown".to_string()),
         Err(e) => Err(ApiError::internal(format!(
             "failed to resolve script hash_type for type_code_hash=0x{}: {}",
@@ -932,9 +950,16 @@ fn build_inputs_outputs_from_rpc_pending(
                     );
                     inputs_occupied_capacity += occ as u128;
 
+                    let lock_hash_type_str =
+                        hash_type_to_str(info.lock_hash_type).ok_or_else(|| {
+                            ApiError::internal(format!(
+                                "unknown lock hash_type {} for input cell",
+                                info.lock_hash_type
+                            ))
+                        })?;
                     let lock_resp = ScriptResponse {
                         code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
-                        hash_type: hash_type_to_str(info.lock_hash_type).to_string(),
+                        hash_type: lock_hash_type_str.to_string(),
                         args: format!("0x{}", hex::encode(&info.lock_args)),
                     };
                     let type_resp = info
@@ -1206,9 +1231,16 @@ fn build_inputs_outputs_from_ckb(
                         );
                         inputs_occupied_capacity += occ as u128;
 
+                        let lock_hash_type_str =
+                            hash_type_to_str(info.lock_hash_type).ok_or_else(|| {
+                                ApiError::internal(format!(
+                                    "unknown lock hash_type {} for input cell",
+                                    info.lock_hash_type
+                                ))
+                            })?;
                         let lock_resp = ScriptResponse {
                             code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
-                            hash_type: hash_type_to_str(info.lock_hash_type).to_string(),
+                            hash_type: lock_hash_type_str.to_string(),
                             args: format!("0x{}", hex::encode(&info.lock_args)),
                         };
                         let type_resp = info
@@ -2031,11 +2063,11 @@ mod tests {
 
     #[test]
     fn test_hash_type_to_str() {
-        assert_eq!(hash_type_to_str(0), "data");
-        assert_eq!(hash_type_to_str(1), "type");
-        assert_eq!(hash_type_to_str(2), "data1");
-        assert_eq!(hash_type_to_str(4), "data2");
-        assert_eq!(hash_type_to_str(99), "unknown");
+        assert_eq!(hash_type_to_str(0), Some("data"));
+        assert_eq!(hash_type_to_str(1), Some("type"));
+        assert_eq!(hash_type_to_str(2), Some("data1"));
+        assert_eq!(hash_type_to_str(4), Some("data2"));
+        assert_eq!(hash_type_to_str(99), None);
     }
 
     #[test]

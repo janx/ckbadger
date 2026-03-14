@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{
-    default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
+    default_limit, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
+    CursorPaginatedResponse,
 };
 use crate::utils::{
     accumulate_live_capacity, apply_live_capacity_delta, date_keys_inclusive,
@@ -51,7 +52,6 @@ pub struct HolderParams {
 pub struct TransferParams {
     #[serde(default = "default_limit")]
     limit: i64,
-    #[allow(dead_code)]
     cursor: Option<String>,
 }
 
@@ -123,12 +123,21 @@ fn token_info_to_response(
     transfers_24h: i64,
     live_capacity: Option<i128>,
     live_used_capacity: Option<i128>,
-) -> TokenResponse {
+) -> Result<TokenResponse, ApiRouteError> {
+    let type_hash_type = hash_type_to_str(info.hash_type as i16)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "unknown hash_type {} for token type_hash=0x{}",
+                info.hash_type,
+                hex::encode(type_hash)
+            ))
+        })?
+        .to_string();
     let maximum_supply = info.max_supply.map(|s| s.to_string());
-    TokenResponse {
+    Ok(TokenResponse {
         type_script_hash: format!("0x{}", hex::encode(type_hash)),
         type_code_hash: format!("0x{}", hex::encode(&info.type_code_hash)),
-        type_hash_type: hash_type_to_string(info.hash_type as i16),
+        type_hash_type,
         type_args: format!("0x{}", hex::encode(&info.type_args)),
         standard: info.standard.clone(),
         name: info.name.clone(),
@@ -160,7 +169,7 @@ fn token_info_to_response(
         cells_count: None,
         total_capacity: live_capacity.map(|c| c.to_string()),
         total_used_capacity: live_used_capacity.map(|c| c.to_string()),
-    }
+    })
 }
 
 const XUDT_EXTENSION_FLAGS_MASK: u32 = 0x1FFF_FFFF;
@@ -240,34 +249,6 @@ fn parse_token_holder_cursor(cursor: &str) -> Result<(i128, Vec<u8>), ApiRouteEr
         return Err(ApiError::bad_request("Invalid token holders cursor"));
     }
     Ok((balance, lock_hash))
-}
-
-fn load_token_live_capacity(
-    state: &AppState,
-    type_hash: &[u8],
-) -> Result<(Option<i128>, Option<i128>), ApiRouteError> {
-    let deltas = state
-        .store
-        .list_token_daily_deltas(type_hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    if deltas.is_empty() {
-        return Ok((None, None));
-    }
-
-    let (live_capacity, live_used_capacity) = accumulate_live_capacity(
-        deltas
-            .into_iter()
-            .map(|(_, delta)| (delta.live_capacity_delta, delta.live_used_capacity_delta)),
-    )
-    .map_err(|e| {
-        ApiError::internal(format!(
-            "invalid token daily deltas for type_hash=0x{}: {}",
-            hex::encode(type_hash),
-            e
-        ))
-    })?;
-
-    Ok((Some(live_capacity), Some(live_used_capacity)))
 }
 
 async fn list_tokens(
@@ -413,19 +394,43 @@ async fn get_token(
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
 
-    let info = state
-        .store
-        .get_token(&hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let hash_c = hash.clone();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let info = store.get_token(&hash_c)?;
+        match info {
+            Some(info) => {
+                let transfers_count = info.transfers_count;
+                let transfers_24h = store
+                    .get_token_24h_transfers(&hash_c, chrono::Utc::now().timestamp_millis())?;
+                let deltas = store.list_token_daily_deltas(&hash_c)?;
+                Ok(Some((info, transfers_count, transfers_24h, deltas)))
+            }
+            None => Ok(None),
+        }
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    match info {
-        Some(info) => {
-            let transfers_count = info.transfers_count;
-            let transfers_24h = state
-                .store
-                .get_token_24h_transfers(&hash, chrono::Utc::now().timestamp_millis())
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-            let (live_capacity, live_used_capacity) = load_token_live_capacity(&state, &hash)?;
+    match result {
+        Some((info, transfers_count, transfers_24h, deltas)) => {
+            let (live_capacity, live_used_capacity) = if deltas.is_empty() {
+                (None, None)
+            } else {
+                let (lc, luc) =
+                    accumulate_live_capacity(deltas.into_iter().map(|(_, delta)| {
+                        (delta.live_capacity_delta, delta.live_used_capacity_delta)
+                    }))
+                    .map_err(|e| {
+                        ApiError::internal(format!(
+                            "invalid token daily deltas for type_hash=0x{}: {}",
+                            hex::encode(&hash),
+                            e
+                        ))
+                    })?;
+                (Some(lc), Some(luc))
+            };
 
             ok(token_info_to_response(
                 &hash,
@@ -434,7 +439,7 @@ async fn get_token(
                 transfers_24h,
                 live_capacity,
                 live_used_capacity,
-            ))
+            )?)
         }
         None => Err(ApiError::not_found("Token not found")),
     }
@@ -448,11 +453,32 @@ async fn get_token_holders(
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
 
-    let token = state
-        .store
-        .get_token(&hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found("Token not found"))?;
+    let limit = params.limit.clamp(1, 100) as usize;
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(parse_token_holder_cursor)
+        .transpose()?;
+    let has_cursor = params.cursor.is_some();
+
+    let store = state.store.clone();
+    let hash_c = hash.clone();
+    let (token, mut page) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let token = store
+            .get_token(&hash_c)?
+            .ok_or_else(|| anyhow::anyhow!("not_found"))?;
+        let page = store.list_token_holders_by_balance(&hash_c, limit + 1, cursor)?;
+        Ok((token, page))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e: anyhow::Error| {
+        if e.to_string() == "not_found" {
+            ApiError::not_found("Token not found")
+        } else {
+            ApiError::internal(e.to_string())
+        }
+    })?;
     if token.holders_count < 0 {
         return Err(ApiError::internal(format!(
             "invalid token holders_count: type_hash=0x{}, holders_count={}",
@@ -460,19 +486,7 @@ async fn get_token_holders(
             token.holders_count
         )));
     }
-
-    let limit = params.limit.clamp(1, 100) as usize;
-    let cursor = params
-        .cursor
-        .as_deref()
-        .map(parse_token_holder_cursor)
-        .transpose()?;
-
-    let mut page = state
-        .store
-        .list_token_holders_by_balance(&hash, limit + 1, cursor)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    if params.cursor.is_none() && token.holders_count > 0 && page.is_empty() {
+    if !has_cursor && token.holders_count > 0 && page.is_empty() {
         return Err(ApiError::internal(format!(
             "missing ranked token holder index entries: type_hash=0x{}, holders_count={}",
             hex::encode(&hash),
@@ -546,15 +560,6 @@ async fn get_token_activities(
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
 
-    let token_exists = state
-        .store
-        .get_token(&hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .is_some();
-    if !token_exists {
-        return Err(ApiError::not_found("Token not found"));
-    }
-
     let limit = params.limit.clamp(1, 100) as usize;
 
     let cursor = match params.cursor.as_deref() {
@@ -562,10 +567,24 @@ async fn get_token_activities(
         Some(c) => Some(parse_block_tx_cursor(c)?),
     };
 
-    let results = state
-        .store
-        .list_token_activities(&hash, limit + 1, cursor)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let hash_c = hash.clone();
+    let results = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let token_exists = store.get_token(&hash_c)?.is_some();
+        if !token_exists {
+            return Err(anyhow::anyhow!("not_found"));
+        }
+        store.list_token_activities(&hash_c, limit + 1, cursor)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e: anyhow::Error| {
+        if e.to_string() == "not_found" {
+            ApiError::not_found("Token not found")
+        } else {
+            ApiError::internal(e.to_string())
+        }
+    })?;
 
     let has_more = results.len() > limit;
     let page: Vec<_> = results.into_iter().take(limit).collect();
@@ -636,16 +655,6 @@ async fn get_token_transfers(
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
 
-    let token_info = state
-        .store
-        .get_token(&hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let info = match token_info {
-        Some(info) => info,
-        None => return Err(ApiError::not_found("Token not found")),
-    };
-
     let limit = params.limit.clamp(1, 100) as usize;
 
     // Parse cursor: "block_num:tx_idx"
@@ -654,10 +663,24 @@ async fn get_token_transfers(
         Some(c) => Some(parse_block_tx_cursor(c)?),
     };
 
-    let results = state
-        .store
-        .list_token_transfers(&hash, limit + 1, cursor)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let hash_c = hash.clone();
+    let (info, results) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let info = store
+            .get_token(&hash_c)?
+            .ok_or_else(|| anyhow::anyhow!("not_found"))?;
+        let results = store.list_token_transfers(&hash_c, limit + 1, cursor)?;
+        Ok((info, results))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e: anyhow::Error| {
+        if e.to_string() == "not_found" {
+            ApiError::not_found("Token not found")
+        } else {
+            ApiError::internal(e.to_string())
+        }
+    })?;
 
     let has_more = results.len() > limit;
     let page: Vec<_> = results.into_iter().take(limit).collect();
@@ -709,41 +732,50 @@ async fn get_token_capacity_chart(
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
 
-    let token = state
-        .store
-        .get_token(&hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let token = match token {
-        Some(info) => info,
-        None => return Err(ApiError::not_found("Token not found")),
-    };
-
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
+    let store = state.store.clone();
+    let hash_c = hash.clone();
+    let (token, baseline_deltas, deltas) =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let token = store
+                .get_token(&hash_c)?
+                .ok_or_else(|| anyhow::anyhow!("not_found"))?;
+            let baseline_deltas = if let Some(from) = from_date {
+                store.list_token_daily_deltas_in_range(
+                    &hash_c,
+                    None,
+                    Some(from.saturating_sub(1)),
+                )?
+            } else {
+                Vec::new()
+            };
+            let deltas = store.list_token_daily_deltas_in_range(&hash_c, from_date, to_date)?;
+            Ok((token, baseline_deltas, deltas))
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e: anyhow::Error| {
+            if e.to_string() == "not_found" {
+                ApiError::not_found("Token not found")
+            } else {
+                ApiError::internal(e.to_string())
+            }
+        })?;
+
     let mut cumulative_capacity: i128 = 0;
     let mut cumulative_used: i128 = 0;
-    if let Some(from) = from_date {
-        let baseline = state
-            .store
-            .list_token_daily_deltas_in_range(&hash, None, Some(from.saturating_sub(1)))
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        for (_, delta) in baseline {
-            (cumulative_capacity, cumulative_used) = apply_live_capacity_delta(
-                cumulative_capacity,
-                cumulative_used,
-                delta.live_capacity_delta,
-                delta.live_used_capacity_delta,
-                "building token baseline capacity history chart",
-            )
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        }
-    }
-
-    let deltas = state
-        .store
-        .list_token_daily_deltas_in_range(&hash, from_date, to_date)
+    for (_, delta) in baseline_deltas {
+        (cumulative_capacity, cumulative_used) = apply_live_capacity_delta(
+            cumulative_capacity,
+            cumulative_used,
+            delta.live_capacity_delta,
+            delta.live_used_capacity_delta,
+            "building token baseline capacity history chart",
+        )
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    }
     let mut daily_deltas: std::collections::BTreeMap<u32, (i128, i128)> =
         std::collections::BTreeMap::new();
     for (date, delta) in deltas {
@@ -832,16 +864,6 @@ async fn get_token_capacity_chart(
         ],
         title: format!("{title} Capacity History"),
     })
-}
-
-fn hash_type_to_string(hash_type: i16) -> String {
-    match hash_type {
-        0 => "data".to_string(),
-        1 => "type".to_string(),
-        2 => "data1".to_string(),
-        4 => "data2".to_string(),
-        _ => format!("unknown({})", hash_type),
-    }
 }
 
 #[cfg(test)]

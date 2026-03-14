@@ -67,11 +67,15 @@ async fn get_identity_collection(
 ) -> ApiResult<IdentityCollectionDetailResponse> {
     let collection_id_bytes = decode_identity_collection_id(&collection_id)?;
 
-    let agg = state
-        .store
-        .get_identity_collection_aggregate(&collection_id_bytes)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found("Identity collection not found"))?;
+    let store = state.store.clone();
+    let collection_id_bytes_c = collection_id_bytes.clone();
+    let agg = tokio::task::spawn_blocking(move || {
+        store.get_identity_collection_aggregate(&collection_id_bytes_c)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("Identity collection not found"))?;
 
     if agg.holders_count < 0 {
         return Err(ApiError::internal(format!(
@@ -181,11 +185,15 @@ async fn list_identity_collection_holders(
         .map(decode_identity_holders_cursor)
         .transpose()?;
 
-    let agg = state
-        .store
-        .get_identity_collection_aggregate(&collection_id_bytes)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found("Identity collection not found"))?;
+    let store = state.store.clone();
+    let collection_id_bytes_c = collection_id_bytes.clone();
+    let agg = tokio::task::spawn_blocking(move || {
+        store.get_identity_collection_aggregate(&collection_id_bytes_c)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("Identity collection not found"))?;
     if agg.holders_count < 0 {
         return Err(ApiError::internal(format!(
             "invalid identity collection aggregate holders_count: collection_id=0x{}, holders_count={}",
@@ -256,11 +264,15 @@ async fn list_identity_collection_activities(
     let action_filter = normalize_identity_activity_action_filter(params.action.as_deref())?;
 
     // Validate collection exists
-    let _agg = state
-        .store
-        .get_identity_collection_aggregate(&collection_id_bytes)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found("Identity collection not found"))?;
+    let store = state.store.clone();
+    let collection_id_bytes_c = collection_id_bytes.clone();
+    let _agg = tokio::task::spawn_blocking(move || {
+        store.get_identity_collection_aggregate(&collection_id_bytes_c)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("Identity collection not found"))?;
 
     // Fetch canonical rows only; skip orphaned history entries.
     let results = list_canonical_nft_collection_activities_page(
@@ -331,11 +343,15 @@ async fn list_identity_collection_items(
         .map(decode_nft_item_cursor)
         .transpose()?;
 
-    let agg = state
-        .store
-        .get_identity_collection_aggregate(&collection_id_bytes)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found("Identity collection not found"))?;
+    let store = state.store.clone();
+    let collection_id_bytes_c = collection_id_bytes.clone();
+    let agg = tokio::task::spawn_blocking(move || {
+        store.get_identity_collection_aggregate(&collection_id_bytes_c)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .ok_or_else(|| ApiError::not_found("Identity collection not found"))?;
 
     // Convert to ObjectCollectionAggregate for the shared inner function
     let obj_agg = ckbadger_store::types::ObjectCollectionAggregate {
@@ -373,9 +389,11 @@ async fn get_dotbit_item_detail(
     Path(identity_id): Path<String>,
 ) -> ApiResult<CollectionItemResponse> {
     let identity_id_bytes = decode_item_id(&identity_id)?;
-    let entry = state
-        .store
-        .get_identity(&identity_id_bytes)
+    let store = state.store.clone();
+    let identity_id_bytes_c = identity_id_bytes.clone();
+    let entry = tokio::task::spawn_blocking(move || store.get_identity(&identity_id_bytes_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found(".bit item not found"))?;
 
@@ -445,9 +463,11 @@ async fn get_did_ckb_item_detail(
     Path(identity_id): Path<String>,
 ) -> ApiResult<CollectionItemResponse> {
     let identity_id_bytes = decode_item_id(&identity_id)?;
-    let entry = state
-        .store
-        .get_identity(&identity_id_bytes)
+    let store = state.store.clone();
+    let identity_id_bytes_c = identity_id_bytes.clone();
+    let entry = tokio::task::spawn_blocking(move || store.get_identity(&identity_id_bytes_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("did:ckb item not found"))?;
 
@@ -481,9 +501,11 @@ async fn list_dotbit_item_activities(
     let limit = params.limit.clamp(1, 100);
     let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
     let identity_id_bytes = decode_item_id(&identity_id)?;
-    let entry = state
-        .store
-        .get_identity(&identity_id_bytes)
+    let store = state.store.clone();
+    let identity_id_bytes_c = identity_id_bytes.clone();
+    let entry = tokio::task::spawn_blocking(move || store.get_identity(&identity_id_bytes_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found(".bit item not found"))?;
     if !matches!(
@@ -517,9 +539,11 @@ async fn list_did_ckb_item_activities(
     let limit = params.limit.clamp(1, 100);
     let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
     let identity_id_bytes = decode_item_id(&identity_id)?;
-    let entry = state
-        .store
-        .get_identity(&identity_id_bytes)
+    let store = state.store.clone();
+    let identity_id_bytes_c = identity_id_bytes.clone();
+    let entry = tokio::task::spawn_blocking(move || store.get_identity(&identity_id_bytes_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("did:ckb item not found"))?;
     if entry.standard != ckbadger_store::types::IdentityStandard::DidCkb {

@@ -248,11 +248,15 @@ async fn search(
         });
     }
 
+    // Batch all blocking store reads into spawn_blocking calls
+
+    // 1) Block number lookup
     if scope_allows(scope, &[SearchScope::Block]) {
         if let Ok(block_num) = scoped_query.parse::<i64>() {
-            let block = state
-                .store
-                .get_block_header(block_num)
+            let store = state.store.clone();
+            let block = tokio::task::spawn_blocking(move || store.get_block_header(block_num))
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?
                 .map_err(|e| ApiError::internal(e.to_string()))?;
 
             if block.is_some() {
@@ -267,6 +271,7 @@ async fn search(
         }
     }
 
+    // 2) Hash-based lookups (batch all store reads for a 32-byte hash)
     if scope_allows(
         scope,
         &[
@@ -284,12 +289,75 @@ async fn search(
             let hash_bytes =
                 hex::decode(&hash_query[2..]).map_err(|e| ApiError::bad_request(e.to_string()))?;
 
+            // Batch all hash-based store reads in one spawn_blocking
+            let store = state.store.clone();
+            let hash_c = hash_bytes.clone();
+            let check_tx = scope_allows(scope, &[SearchScope::Transaction]);
+            let check_block = scope_allows(scope, &[SearchScope::Block]);
+            let check_addr = scope_allows(scope, &[SearchScope::Address]);
+            let check_script = scope_allows(scope, &[SearchScope::Script]);
+            let check_token = scope_allows(scope, &[SearchScope::Token, SearchScope::Asset]);
+            let check_spore = scope_allows(
+                scope,
+                &[SearchScope::Spore, SearchScope::Cluster, SearchScope::Asset],
+            );
+            #[allow(clippy::type_complexity)]
+            let hash_results: (
+                Option<(i64, i32)>,
+                Option<i64>,
+                Option<ckbadger_store::AddressBalance>,
+                Option<ckbadger_store::ScriptInfo>,
+                Option<ckbadger_store::TokenInfo>,
+                Option<ckbadger_store::ObjectEntry>,
+            ) = tokio::task::spawn_blocking(move || -> anyhow::Result<(
+                Option<(i64, i32)>,
+                Option<i64>,
+                Option<ckbadger_store::AddressBalance>,
+                Option<ckbadger_store::ScriptInfo>,
+                Option<ckbadger_store::TokenInfo>,
+                Option<ckbadger_store::ObjectEntry>,
+            )> {
+                let tx_loc = if check_tx {
+                    store.get_tx_location(&hash_c)?
+                } else {
+                    None
+                };
+                let block_num = if check_block {
+                    store.get_block_number_by_hash(&hash_c)?
+                } else {
+                    None
+                };
+                let addr_bal = if check_addr {
+                    store.get_addr_balance(&hash_c)?
+                } else {
+                    None
+                };
+                let script = if check_script {
+                    store.get_script_info(&hash_c)?
+                } else {
+                    None
+                };
+                let token = if check_token {
+                    store.get_token(&hash_c)?
+                } else {
+                    None
+                };
+                let spore = if check_spore {
+                    store.get_spore(&hash_c)?
+                } else {
+                    None
+                };
+                Ok((tx_loc, block_num, addr_bal, script, token, spore))
+            })
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+
+            let (tx_loc, block_num_result, addr_bal, script_info, token_info, spore_entry) =
+                hash_results;
+
             if scope_allows(scope, &[SearchScope::Transaction]) {
-                let tx_result = state
-                    .store
-                    .get_tx_location(&hash_bytes)
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-                if let Some((block_num, _)) = tx_result {
+                if let Some((block_num, _)) = tx_loc {
                     results.push(SearchResult {
                         result_type: "transaction".to_string(),
                         id: hash_query.clone(),
@@ -315,11 +383,7 @@ async fn search(
             }
 
             if scope_allows(scope, &[SearchScope::Block]) {
-                let block_result = state
-                    .store
-                    .get_block_number_by_hash(&hash_bytes)
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-                if let Some(block_num) = block_result {
+                if let Some(block_num) = block_num_result {
                     results.push(SearchResult {
                         result_type: "block".to_string(),
                         id: block_num.to_string(),
@@ -331,11 +395,7 @@ async fn search(
             }
 
             if scope_allows(scope, &[SearchScope::Address]) {
-                let addr_balance = state
-                    .store
-                    .get_addr_balance(&hash_bytes)
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-                if let Some(ab) = addr_balance {
+                if let Some(ab) = addr_bal {
                     if ab.total_cells_count > 0 || ab.txs_count > 0 || ab.balance > 0 {
                         results.push(SearchResult {
                             result_type: "address".to_string(),
@@ -349,12 +409,8 @@ async fn search(
             }
 
             if scope_allows(scope, &[SearchScope::Script]) {
-                let script = state
-                    .store
-                    .get_script_info(&hash_bytes)
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-                if let Some(script_info) = script {
-                    let label = script_info
+                if let Some(si) = script_info {
+                    let label = si
                         .name
                         .as_deref()
                         .filter(|name| is_known_script_name(Some(name)))
@@ -371,15 +427,11 @@ async fn search(
             }
 
             if scope_allows(scope, &[SearchScope::Token, SearchScope::Asset]) {
-                let token = state
-                    .store
-                    .get_token(&hash_bytes)
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-                if let Some(token_info) = token {
-                    let label_name = token_info
+                if let Some(ti) = token_info {
+                    let label_name = ti
                         .symbol
                         .as_deref()
-                        .or(token_info.name.as_deref())
+                        .or(ti.name.as_deref())
                         .unwrap_or("Unknown token");
                     results.push(SearchResult {
                         result_type: "token".to_string(),
@@ -395,12 +447,7 @@ async fn search(
                 scope,
                 &[SearchScope::Spore, SearchScope::Cluster, SearchScope::Asset],
             ) {
-                let spore_or_cluster = state
-                    .store
-                    .get_spore(&hash_bytes)
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-                if let Some(entry) = spore_or_cluster {
+                if let Some(entry) = spore_entry {
                     if entry.standard.is_cluster() {
                         results.push(SearchResult {
                             result_type: "cluster".to_string(),
@@ -429,12 +476,14 @@ async fn search(
         }
     }
 
+    // 3) CKB address lookup
     if scope_allows(scope, &[SearchScope::Address]) && is_ckb_address(scoped_query) {
         let lock_hash = address_to_lock_script_hash(scoped_query)
             .map_err(|e| ApiError::bad_request(format!("invalid CKB address: {}", e)))?;
-        let addr_balance = state
-            .store
-            .get_addr_balance(&lock_hash)
+        let store = state.store.clone();
+        let addr_balance = tokio::task::spawn_blocking(move || store.get_addr_balance(&lock_hash))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
         if let Some(ab) = addr_balance {
             if ab.total_cells_count > 0 || ab.txs_count > 0 || ab.balance > 0 {
@@ -449,29 +498,25 @@ async fn search(
         }
     }
 
+    // 4) Cell outpoint lookup
     if scope_allows(scope, &[SearchScope::Cell]) {
         if let Some(outpoint) = parse_outpoint(scoped_query) {
-            let live = state
-                .store
-                .get_cell(
-                    &outpoint.tx_hash_bytes,
-                    outpoint.output_index,
-                    &state.append_only_store,
-                )
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            let consumed = if live.is_none() {
-                state
-                    .store
-                    .get_consumed_cell(
-                        &outpoint.tx_hash_bytes,
-                        outpoint.output_index,
-                        &state.append_only_store,
-                    )
-                    .map_err(|e| ApiError::internal(e.to_string()))?
-            } else {
-                None
-            };
+            let store = state.store.clone();
+            let ao_store = state.append_only_store.clone();
+            let tx_hash = outpoint.tx_hash_bytes.clone();
+            let out_idx = outpoint.output_index;
+            let (live, consumed) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                let live = store.get_cell(&tx_hash, out_idx, &ao_store)?;
+                let consumed = if live.is_none() {
+                    store.get_consumed_cell(&tx_hash, out_idx, &ao_store)?
+                } else {
+                    None
+                };
+                Ok((live, consumed))
+            })
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
             match (live, consumed) {
                 (Some(cell), _) => {

@@ -747,10 +747,12 @@ async fn get_address_dao_summary(
             estimated_apc: "".to_string(),
         }
     } else {
-        let latest_snapshot = state
-            .store
-            .get_latest_dao_daily_snapshot()
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let store = state.store.clone();
+        let latest_snapshot =
+            tokio::task::spawn_blocking(move || store.get_latest_dao_daily_snapshot())
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map_err(|e| ApiError::internal(e.to_string()))?;
         let estimated_apc = latest_snapshot
             .as_ref()
             .map(snapshot_estimated_apc)
@@ -816,10 +818,12 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         0.0
     };
 
-    let latest_snapshot = state
-        .store
-        .get_latest_dao_daily_snapshot()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let latest_snapshot =
+        tokio::task::spawn_blocking(move || store.get_latest_dao_daily_snapshot())
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
     let estimated_apc = match latest_snapshot.as_ref() {
         Some(snapshot) => snapshot_estimated_apc(snapshot)?.unwrap_or_default(),
         None => String::new(),
@@ -907,9 +911,10 @@ async fn get_top_depositors(
         return ok(cached);
     }
 
-    let top = state
-        .store
-        .get_dao_top_depositors()
+    let store = state.store.clone();
+    let top = tokio::task::spawn_blocking(move || store.get_dao_top_depositors())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?
         .unwrap_or_else(|| ckbadger_store::DaoTopDepositors {
             tip_block_number: 0,
@@ -1115,9 +1120,10 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         return ok(cached);
     }
 
-    let snapshots = state
-        .store
-        .list_dao_daily_snapshots()
+    let store = state.store.clone();
+    let snapshots = tokio::task::spawn_blocking(move || store.list_dao_daily_snapshots())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let depositors_series = build_total_depositors_series(&snapshots)?;
 
@@ -1154,9 +1160,10 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         return ok(cached);
     }
 
-    let snapshots = state
-        .store
-        .list_dao_daily_snapshots()
+    let store = state.store.clone();
+    let snapshots = tokio::task::spawn_blocking(move || store.list_dao_daily_snapshots())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Compute daily gross deposits from cumulative deposit amounts.
@@ -1215,9 +1222,10 @@ async fn get_circulation_ratio_chart(
         return ok(cached);
     }
 
-    let snapshots = state
-        .store
-        .list_dao_daily_snapshots()
+    let store = state.store.clone();
+    let snapshots = tokio::task::spawn_blocking(move || store.list_dao_daily_snapshots())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut data = Vec::with_capacity(snapshots.len());

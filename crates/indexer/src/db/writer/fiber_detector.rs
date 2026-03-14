@@ -157,7 +157,7 @@ impl FiberDetector {
         event: FiberEvent,
         summary: &FiberCellSummary,
         tx_hash: &[u8],
-    ) -> serde_json::Value {
+    ) -> anyhow::Result<serde_json::Value> {
         match event {
             FiberEvent::ChannelOpen => {
                 let mut meta = serde_json::Map::new();
@@ -168,10 +168,16 @@ impl FiberDetector {
                     summary.funding_output_capacity,
                     summary.funding_output_index,
                 ) {
+                    let output_index_u32 = u32::try_from(output_index).map_err(|_| {
+                        anyhow::anyhow!(
+                            "Fiber funding output_index exceeds u32 range: {}",
+                            output_index
+                        )
+                    })?;
                     // Encode outpoint as hex: tx_hash(32B) + output_index as LE u32(4B)
                     let mut outpoint_bytes = Vec::with_capacity(36);
                     outpoint_bytes.extend_from_slice(tx_hash);
-                    outpoint_bytes.extend_from_slice(&(output_index as u32).to_le_bytes());
+                    outpoint_bytes.extend_from_slice(&output_index_u32.to_le_bytes());
                     meta.insert(
                         "channelOutpoint".to_string(),
                         serde_json::json!(format!("0x{}", hex::encode(&outpoint_bytes))),
@@ -188,7 +194,7 @@ impl FiberDetector {
                     }
                 }
 
-                serde_json::Value::Object(meta)
+                Ok(serde_json::Value::Object(meta))
             }
             FiberEvent::ChannelClose => {
                 let mut meta = serde_json::Map::new();
@@ -209,7 +215,7 @@ impl FiberDetector {
                     }
                 }
 
-                serde_json::Value::Object(meta)
+                Ok(serde_json::Value::Object(meta))
             }
             FiberEvent::ForceClose => {
                 let mut meta = serde_json::Map::new();
@@ -237,7 +243,7 @@ impl FiberDetector {
                     );
                 }
 
-                serde_json::Value::Object(meta)
+                Ok(serde_json::Value::Object(meta))
             }
             FiberEvent::Settlement => {
                 let mut meta = serde_json::Map::new();
@@ -257,7 +263,7 @@ impl FiberDetector {
                     );
                 }
 
-                serde_json::Value::Object(meta)
+                Ok(serde_json::Value::Object(meta))
             }
         }
     }
@@ -301,7 +307,17 @@ impl ProtocolDetector for FiberDetector {
             None => return vec![],
         };
 
-        let metadata = self.build_metadata(event, &summary, tx.tx_hash);
+        let metadata = match self.build_metadata(event, &summary, tx.tx_hash) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::error!(
+                    "Fiber metadata build failed for tx 0x{}: {}",
+                    hex::encode(tx.tx_hash),
+                    e,
+                );
+                return vec![];
+            }
+        };
 
         let action = match event {
             FiberEvent::ChannelOpen => "channel_open",

@@ -69,51 +69,57 @@ async fn list_hardforks(
         ))
     })?;
 
-    let (tip_block, tip_epoch) = state
-        .store
-        .get_sync_tip_block()
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_or((0i64, 0i64), |(num, header)| (num, header.epoch_number));
+    let store = state.store.clone();
+    let network_owned = network.to_string();
+    let hardforks_owned: Vec<_> = hardforks.to_vec();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let (tip_block, tip_epoch) = store
+            .get_sync_tip_block()?
+            .map_or((0i64, 0i64), |(num, header)| (num, header.epoch_number));
 
-    let mut events = Vec::with_capacity(hardforks.len());
-    for spec in hardforks {
-        let activation_block = state
-            .store
-            .get_epoch_stats(spec.activation_epoch)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map(|stats| stats.start_block);
+        let mut events = Vec::with_capacity(hardforks_owned.len());
+        for spec in &hardforks_owned {
+            let activation_block = store
+                .get_epoch_stats(spec.activation_epoch)?
+                .map(|stats| stats.start_block);
 
-        let status = if tip_epoch >= spec.activation_epoch {
-            "activated"
-        } else {
-            "upcoming"
-        };
+            let status = if tip_epoch >= spec.activation_epoch {
+                "activated"
+            } else {
+                "upcoming"
+            };
 
-        events.push(HardforkEventResponse {
-            id: spec.id.to_string(),
-            name: spec.name.to_string(),
-            short_name: spec.short_name.to_string(),
-            edition_year: spec.edition_year,
-            activation_epoch: spec.activation_epoch,
-            activation_date: spec.activation_date.to_string(),
-            activation_block,
-            status: status.to_string(),
-            summary: spec.summary.to_string(),
-            resources: spec
-                .resources
-                .iter()
-                .map(|resource| HardforkResourceResponse {
-                    label: resource.label.to_string(),
-                    url: resource.url.to_string(),
-                })
-                .collect(),
-        });
-    }
+            events.push(HardforkEventResponse {
+                id: spec.id.to_string(),
+                name: spec.name.to_string(),
+                short_name: spec.short_name.to_string(),
+                edition_year: spec.edition_year,
+                activation_epoch: spec.activation_epoch,
+                activation_date: spec.activation_date.to_string(),
+                activation_block,
+                status: status.to_string(),
+                summary: spec.summary.to_string(),
+                resources: spec
+                    .resources
+                    .iter()
+                    .map(|resource| HardforkResourceResponse {
+                        label: resource.label.to_string(),
+                        url: resource.url.to_string(),
+                    })
+                    .collect(),
+            });
+        }
 
-    ok(HardforkTimelineResponse {
-        network: network.to_string(),
-        tip_epoch,
-        tip_block,
-        events,
+        Ok(HardforkTimelineResponse {
+            network: network_owned,
+            tip_epoch,
+            tip_block,
+            events,
+        })
     })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    ok(result)
 }

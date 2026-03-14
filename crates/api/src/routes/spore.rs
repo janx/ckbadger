@@ -1269,14 +1269,18 @@ async fn get_cluster_holders(
         .map(decode_cluster_holders_cursor)
         .transpose()?;
 
-    let owners = state
-        .store
-        .list_cluster_owner_counts(&id)
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let owners = tokio::task::spawn_blocking(move || store.list_cluster_owner_counts(&id_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
     if owners.is_empty() && !is_sole_spores_sentinel(&id) {
-        let cluster_exists = state
-            .store
-            .get_spore(&id)
+        let store = state.store.clone();
+        let id_c = id.clone();
+        let cluster_exists = tokio::task::spawn_blocking(move || store.get_spore(&id_c))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?
             .is_some();
         if !cluster_exists {
@@ -1339,9 +1343,11 @@ async fn get_cluster_activities(
 
     // Validate cluster exists (sentinel always passes)
     if !is_sole_spores_sentinel(&id) {
-        let cluster_exists = state
-            .store
-            .get_spore(&id)
+        let store = state.store.clone();
+        let id_c = id.clone();
+        let cluster_exists = tokio::task::spawn_blocking(move || store.get_spore(&id_c))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?
             .is_some();
         if !cluster_exists {
@@ -1413,10 +1419,13 @@ async fn get_spores_by_cluster(
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
     // Use secondary index for efficient lookup
-    let cluster_spores = state
-        .store
-        .list_spores_by_cluster(&id, 10_000)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let cluster_spores =
+        tokio::task::spawn_blocking(move || store.list_spores_by_cluster(&id_c, 10_000))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut filtered: Vec<_> = cluster_spores
         .into_iter()
@@ -1456,19 +1465,25 @@ async fn get_cluster(
     let id = parse_cluster_id_param(&cluster_id)?;
 
     // Look up the cluster entry directly
-    let cluster_entry = state
-        .store
-        .get_spore(&id)
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let cluster_entry = tokio::task::spawn_blocking(move || store.get_spore(&id_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let cluster_aggregate = state
-        .store
-        .get_cluster_aggregate(&id)
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let cluster_aggregate = tokio::task::spawn_blocking(move || store.get_cluster_aggregate(&id_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Count spores in cluster using secondary index
-    let spores_count = state
-        .store
-        .count_spores_in_cluster(&id)
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let spores_count = tokio::task::spawn_blocking(move || store.count_spores_in_cluster(&id_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     if spores_count == 0 && cluster_entry.is_none() && !is_sole_spores_sentinel(&id) {
@@ -1506,9 +1521,11 @@ async fn get_cluster(
             .unwrap_or(0);
         (name, description, owner_lock_hash, created_at_block)
     };
-    let daily = state
-        .store
-        .list_cluster_daily_deltas(&id)
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let daily = tokio::task::spawn_blocking(move || store.list_cluster_daily_deltas(&id_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let chart = build_capacity_history_chart(
         daily
@@ -1591,9 +1608,11 @@ async fn get_spore(
     let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
         .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
 
-    let entry = state
-        .store
-        .get_spore(&id)
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let entry = tokio::task::spawn_blocking(move || store.get_spore(&id_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     match entry {
@@ -1632,9 +1651,11 @@ async fn decode_spore(
     let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
         .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
 
-    let entry = state
-        .store
-        .get_spore(&id)
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let entry = tokio::task::spawn_blocking(move || store.get_spore(&id_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Spore not found"))?;
 
@@ -1701,13 +1722,17 @@ async fn get_cluster_capacity_chart(
 
     let id = parse_cluster_id_param(&cluster_id)?;
 
-    let cluster_entry = state
-        .store
-        .get_spore(&id)
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let cluster_entry = tokio::task::spawn_blocking(move || store.get_spore(&id_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let spores_count = state
-        .store
-        .count_spores_in_cluster(&id)
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let spores_count = tokio::task::spawn_blocking(move || store.count_spores_in_cluster(&id_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
     if spores_count == 0 && cluster_entry.is_none() && !is_sole_spores_sentinel(&id) {
         return Err(ApiError::not_found("Cluster not found"));
@@ -1721,10 +1746,14 @@ async fn get_cluster_capacity_chart(
             .and_then(|e| e.name.clone())
             .unwrap_or_else(|| "Spore Cluster".to_string())
     };
-    let daily = state
-        .store
-        .list_cluster_daily_deltas_in_range(&id, from_date, to_date)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let daily = tokio::task::spawn_blocking(move || {
+        store.list_cluster_daily_deltas_in_range(&id_c, from_date, to_date)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
     let (initial_capacity, initial_used) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
         let mut base_used: i128 = 0;
@@ -1778,18 +1807,24 @@ async fn get_spore_capacity_chart(
     let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
         .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
 
-    let entry = state
-        .store
-        .get_spore(&id)
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let entry = tokio::task::spawn_blocking(move || store.get_spore(&id_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
     if entry.is_none() {
         return Err(ApiError::not_found("Spore not found"));
     }
 
-    let daily = state
-        .store
-        .list_spore_daily_deltas_in_range(&id, from_date, to_date)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let daily = tokio::task::spawn_blocking(move || {
+        store.list_spore_daily_deltas_in_range(&id_c, from_date, to_date)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
     let (initial_capacity, initial_used) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
         let mut base_used: i128 = 0;

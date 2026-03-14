@@ -192,9 +192,10 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
     }
 
     // Get the latest block header to determine reference time
-    let latest_header = state
-        .store
-        .get_sync_tip_block()
+    let store = state.store.clone();
+    let latest_header = tokio::task::spawn_blocking(move || store.get_sync_tip_block())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let reference_time = latest_header
@@ -204,9 +205,10 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
     let reference_ts = reference_time.timestamp() * 1000; // ms
 
     // Get hourly stats (last 24 hours)
-    let hourly_stats = state
-        .store
-        .list_hourly_stats_with_keys()
+    let store = state.store.clone();
+    let hourly_stats = tokio::task::spawn_blocking(move || store.list_hourly_stats_with_keys())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let cutoff_24h = reference_ts - 24 * 3600 * 1000;
@@ -220,9 +222,10 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
     recent_hourly.truncate(24);
 
     // Get daily stats (last 14 days)
-    let daily_stats = state
-        .store
-        .list_daily_stats_with_dates()
+    let store = state.store.clone();
+    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let reference_date = ckbadger_common::block_date(reference_time);
@@ -901,10 +904,13 @@ async fn get_most_utilized_assets_chart(
                     token.id
                 ))
             })?;
-        let deltas = state
-            .store
-            .list_token_daily_deltas(&type_hash)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let store = state.store.clone();
+        let type_hash_c = type_hash.clone();
+        let deltas =
+            tokio::task::spawn_blocking(move || store.list_token_daily_deltas(&type_hash_c))
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map_err(|e| ApiError::internal(e.to_string()))?;
         let (total_cells_capacity, used_cap) = accumulate_capacity_deltas(
             deltas
                 .iter()
@@ -1000,10 +1006,14 @@ async fn get_most_utilized_assets_chart(
                 collection_id
             ))
         })?;
-        let deltas = state
-            .store
-            .list_object_daily_deltas(&collection_bytes)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let store = state.store.clone();
+        let collection_bytes_c = collection_bytes.clone();
+        let deltas = tokio::task::spawn_blocking(move || {
+            store.list_object_daily_deltas(&collection_bytes_c)
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
         let (total_cells_capacity, used_cap) = accumulate_capacity_deltas(
             deltas
                 .iter()
@@ -1081,9 +1091,10 @@ async fn get_most_utilized_assets_chart(
 async fn get_transaction_count_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
-    let daily_stats = state
-        .store
-        .list_daily_stats_with_dates()
+    let store = state.store.clone();
+    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<ChartDataPoint> = daily_stats
@@ -1109,9 +1120,10 @@ async fn get_transaction_count_chart(
 async fn get_cell_count_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
-    let daily_stats = state
-        .store
-        .list_daily_stats_with_dates()
+    let store = state.store.clone();
+    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // The stored values are per-day deltas (cells created/consumed that day).
@@ -1173,14 +1185,16 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
         return ok(cached);
     }
 
-    let daily_stats = state
-        .store
-        .list_daily_stats_with_dates()
+    let store = state.store.clone();
+    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let snapshots = state
-        .store
-        .list_dao_daily_snapshots()
+    let store = state.store.clone();
+    let snapshots = tokio::task::spawn_blocking(move || store.list_dao_daily_snapshots())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let circulating_by_date = build_circulating_supply_by_date_map(&snapshots)?;
 
@@ -1315,9 +1329,10 @@ async fn get_common_knowledge_composition_chart(
         return ok(cached);
     }
 
-    let daily_stats = state
-        .store
-        .list_daily_stats_with_dates()
+    let store = state.store.clone();
+    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let mut knowledge_by_date: BTreeMap<u32, i128> = BTreeMap::new();
     for (date_key, stats) in daily_stats {
@@ -1360,10 +1375,14 @@ async fn get_common_knowledge_composition_chart(
     let mut nft_spore_daily_delta: HashMap<u32, i128> = HashMap::new();
 
     for code_hash in type_code_hashes {
-        let deltas = state
-            .store
-            .list_script_daily_deltas_in_range(&code_hash, true, None, None)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let store = state.store.clone();
+        let code_hash_c = code_hash.clone();
+        let deltas = tokio::task::spawn_blocking(move || {
+            store.list_script_daily_deltas_in_range(&code_hash_c, true, None, None)
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
         for (date, delta) in deltas {
             let used_delta = delta.live_used_capacity_delta;
             *type_daily_delta.entry(date).or_insert(0) += used_delta;
@@ -1851,9 +1870,10 @@ async fn get_epoch_time_distribution_chart(
         return ok(cached);
     }
 
-    let dist = state
-        .store
-        .list_epoch_time_dist()
+    let store = state.store.clone();
+    let dist = tokio::task::spawn_blocking(move || store.list_epoch_time_dist())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<ChartDataPoint> = dist
@@ -1888,9 +1908,10 @@ async fn get_epoch_time_length_chart(
         return ok(cached);
     }
 
-    let epochs = state
-        .store
-        .list_epoch_stats()
+    let store = state.store.clone();
+    let epochs = tokio::task::spawn_blocking(move || store.list_epoch_stats())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<ChartDataPoint> = epochs
@@ -1927,9 +1948,10 @@ async fn get_average_block_time_chart(
         return ok(cached);
     }
 
-    let daily_stats = state
-        .store
-        .list_daily_stats_with_dates()
+    let store = state.store.clone();
+    let daily_stats = tokio::task::spawn_blocking(move || store.list_daily_stats_with_dates())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<ChartDataPoint> = daily_stats
@@ -2340,9 +2362,10 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
         return ok(cached);
     }
 
-    let daily_block_stats = state
-        .store
-        .list_daily_block_stats()
+    let store = state.store.clone();
+    let daily_block_stats = tokio::task::spawn_blocking(move || store.list_daily_block_stats())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Exclude the last day (incomplete) like the SQL version did
@@ -2387,9 +2410,10 @@ async fn get_difficulty_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
         return ok(cached);
     }
 
-    let daily_block_stats = state
-        .store
-        .list_daily_block_stats()
+    let store = state.store.clone();
+    let daily_block_stats = tokio::task::spawn_blocking(move || store.list_daily_block_stats())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let max_date = daily_block_stats
@@ -2432,9 +2456,10 @@ async fn get_uncle_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
         return ok(cached);
     }
 
-    let daily_block_stats = state
-        .store
-        .list_daily_block_stats()
+    let store = state.store.clone();
+    let daily_block_stats = tokio::task::spawn_blocking(move || store.list_daily_block_stats())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let max_date = daily_block_stats
@@ -2501,9 +2526,10 @@ async fn get_miner_address_distribution_chart(
         return ok(cached);
     }
 
-    let miner_stats = state
-        .store
-        .list_miner_stats()
+    let store = state.store.clone();
+    let miner_stats = tokio::task::spawn_blocking(move || store.list_miner_stats())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Aggregate by miner_lock_hash across all dates
@@ -2603,9 +2629,10 @@ async fn get_total_supply_chart(
         return ok(cached);
     }
 
-    let snapshots = state
-        .store
-        .list_dao_daily_snapshots()
+    let store = state.store.clone();
+    let snapshots = tokio::task::spawn_blocking(move || store.list_dao_daily_snapshots())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     const SHANNON: f64 = 100_000_000.0;
@@ -2735,9 +2762,10 @@ async fn get_secondary_issuance_chart(
         return ok(cached);
     }
 
-    let snapshots = state
-        .store
-        .list_dao_daily_snapshots()
+    let store = state.store.clone();
+    let snapshots = tokio::task::spawn_blocking(move || store.list_dao_daily_snapshots())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     const SHANNON: f64 = 100_000_000.0;
@@ -2873,9 +2901,10 @@ async fn get_hodl_wave_chart(
         state.cache.delete(cache_key).await;
     }
 
-    let waves = state
-        .store
-        .list_hodl_waves()
+    let store = state.store.clone();
+    let waves = tokio::task::spawn_blocking(move || store.list_hodl_waves())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<StackedAreaDataPoint> = waves
@@ -3047,9 +3076,10 @@ async fn get_daily_activity_stats(
         return ok(cached);
     }
 
-    let all_stats = state
-        .store
-        .list_daily_activity_stats()
+    let store = state.store.clone();
+    let all_stats = tokio::task::spawn_blocking(move || store.list_daily_activity_stats())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // days=0 returns all data; otherwise take the last N days
@@ -3156,10 +3186,13 @@ async fn get_activity_summary_24h(
     let cutoff = now - chrono::Duration::hours(24);
     let since_hour = cutoff.format("%Y%m%d%H").to_string();
 
-    let hourly_stats = state
-        .store
-        .list_hourly_activity_stats_since(&since_hour)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let since_hour_c = since_hour.clone();
+    let hourly_stats =
+        tokio::task::spawn_blocking(move || store.list_hourly_activity_stats_since(&since_hour_c))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Aggregate all hourly buckets
     let mut agg = ckbadger_store::DailyActivityStats::default();
@@ -3298,9 +3331,10 @@ async fn get_asset_ecosystem(
         .sum();
 
     // Get DAO locked and knowledge size from latest snapshot
-    let dao_snapshot = state
-        .store
-        .get_latest_dao_daily_snapshot()
+    let store = state.store.clone();
+    let dao_snapshot = tokio::task::spawn_blocking(move || store.get_latest_dao_daily_snapshot())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (dao_locked, knowledge_size) = match dao_snapshot.as_ref() {

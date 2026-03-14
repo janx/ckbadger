@@ -174,30 +174,28 @@ async fn get_cell_graph(
     let cell_id = format!("cell-{}-{}", tx_hash, output_index);
 
     // Look up the transaction to verify it exists
-    let tx_info = state
-        .store
-        .get_tx_location(&hash_bytes)
+    let output_idx = output_index as i16;
+    let store = state.store.clone();
+    let ao_store = state.append_only_store.clone();
+    let hash_c = hash_bytes.clone();
+    let (tx_info, live_cell, consumed_cell) =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let tx_info = store.get_tx_location(&hash_c)?;
+            let live_cell = store.get_cell(&hash_c, output_idx, &ao_store)?;
+            let consumed_cell = if live_cell.is_none() {
+                store.get_consumed_cell_info(&hash_c, output_idx, &ao_store)?
+            } else {
+                None
+            };
+            Ok((tx_info, live_cell, consumed_cell))
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let block_number = match tx_info {
         Some((bn, _)) => bn,
         None => return Err(ApiError::not_found("Transaction not found")),
-    };
-
-    // Get the cell info (live or consumed)
-    let output_idx = output_index as i16;
-    let live_cell = state
-        .store
-        .get_cell(&hash_bytes, output_idx, &state.append_only_store)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let consumed_cell = if live_cell.is_none() {
-        state
-            .store
-            .get_consumed_cell_info(&hash_bytes, output_idx, &state.append_only_store)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        None
     };
 
     let (cell_info, status_str, consumed_by_tx, consumed_at_block): (
@@ -255,11 +253,19 @@ async fn get_cell_graph(
             let inputs = get_tx_inputs_from_ckb_store(ckb_store, &hash_bytes);
 
             if !inputs.is_empty() {
-                let outpoints: Vec<(&[u8], i16)> =
-                    inputs.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
-                let cell_map = state
-                    .store
-                    .get_cells_batch(&outpoints, &state.append_only_store)
+                let store = state.store.clone();
+                let ao_store = state.append_only_store.clone();
+                let inputs_c = inputs.clone();
+                let (cell_map, consumed_map) =
+                    tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                        let outpoints: Vec<(&[u8], i16)> =
+                            inputs_c.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
+                        let cell_map = store.get_cells_batch(&outpoints, &ao_store)?;
+                        let consumed_map = store.get_consumed_cells_batch(&outpoints, &ao_store)?;
+                        Ok((cell_map, consumed_map))
+                    })
+                    .await
+                    .map_err(|e| ApiError::internal(e.to_string()))?
                     .map_err(|e| ApiError::internal(e.to_string()))?;
 
                 for (prev_tx_hash, prev_idx) in &inputs {
@@ -267,21 +273,9 @@ async fn get_cell_graph(
 
                     let label = cell_map
                         .get(&(prev_tx_hash.clone(), *prev_idx))
+                        .or_else(|| consumed_map.get(&(prev_tx_hash.clone(), *prev_idx)))
                         .map(|c| format!("{} CKB", parse_capacity(&c.capacity.to_string())))
-                        .unwrap_or_else(|| {
-                            // Try consumed cells
-                            state
-                                .store
-                                .get_consumed_cell(
-                                    prev_tx_hash,
-                                    *prev_idx,
-                                    &state.append_only_store,
-                                )
-                                .ok()
-                                .flatten()
-                                .map(|c| format!("{} CKB", parse_capacity(&c.capacity.to_string())))
-                                .unwrap_or_else(|| "?".to_string())
-                        });
+                        .unwrap_or_else(|| "?".to_string());
 
                     nodes.push(GraphNode {
                         id: prev_cell_id.clone(),
@@ -329,9 +323,11 @@ async fn get_tx_graph(
     let mut links = Vec::new();
 
     // Look up transaction
-    let tx_result = state
-        .store
-        .get_tx_by_hash(&hash_bytes)
+    let store = state.store.clone();
+    let hash_c = hash_bytes.clone();
+    let tx_result = tokio::task::spawn_blocking(move || store.get_tx_by_hash(&hash_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (block_number, _tx_idx, tx_entry) = match tx_result {
@@ -374,16 +370,19 @@ async fn get_tx_graph(
 
             if !inputs.is_empty() {
                 // Batch lookup cells
-                let outpoints: Vec<(&[u8], i16)> =
-                    inputs.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
-
-                let live_map = state
-                    .store
-                    .get_cells_batch(&outpoints, &state.append_only_store)
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-                let consumed_map = state
-                    .store
-                    .get_consumed_cells_batch(&outpoints, &state.append_only_store)
+                let store = state.store.clone();
+                let ao_store = state.append_only_store.clone();
+                let inputs_c = inputs.clone();
+                let (live_map, consumed_map) =
+                    tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                        let outpoints: Vec<(&[u8], i16)> =
+                            inputs_c.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
+                        let live_map = store.get_cells_batch(&outpoints, &ao_store)?;
+                        let consumed_map = store.get_consumed_cells_batch(&outpoints, &ao_store)?;
+                        Ok((live_map, consumed_map))
+                    })
+                    .await
+                    .map_err(|e| ApiError::internal(e.to_string()))?
                     .map_err(|e| ApiError::internal(e.to_string()))?;
 
                 for (prev_tx_hash, prev_idx) in inputs {
@@ -421,58 +420,78 @@ async fn get_tx_graph(
     if let Some(ref ckb_store) = state.ckb_store {
         let outputs = get_tx_outputs_from_ckb_store(ckb_store, &hash_bytes);
 
-        for (output_index, capacity) in outputs {
-            let output_cell_id = format!("cell-{}-{}", hash, output_index);
-            let capacity_str = capacity.to_string();
+        if !outputs.is_empty() {
+            // Batch check which outputs are live
+            let store = state.store.clone();
+            let ao_store = state.append_only_store.clone();
+            let hash_c = hash_bytes.clone();
+            let output_indices: Vec<i16> = outputs.iter().map(|(idx, _)| *idx).collect();
+            let live_set = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                let mut live = std::collections::HashSet::new();
+                for idx in &output_indices {
+                    if store.get_cell(&hash_c, *idx, &ao_store)?.is_some() {
+                        live.insert(*idx);
+                    }
+                }
+                Ok(live)
+            })
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            // Check if cell is live or dead
-            let is_live = state
-                .store
-                .get_cell(&hash_bytes, output_index, &state.append_only_store)
-                .ok()
-                .flatten()
-                .is_some();
+            for (output_index, capacity) in outputs {
+                let output_cell_id = format!("cell-{}-{}", hash, output_index);
+                let capacity_str = capacity.to_string();
+                let is_live = live_set.contains(&output_index);
 
-            nodes.push(GraphNode {
-                id: output_cell_id.clone(),
-                node_type: "cell".to_string(),
-                label: format!("{} CKB", parse_capacity(&capacity_str)),
-                data: serde_json::json!({
-                    "txHash": hash,
-                    "outputIndex": output_index,
-                    "capacity": capacity_str,
-                    "status": if is_live { "live" } else { "dead" },
-                }),
-            });
+                nodes.push(GraphNode {
+                    id: output_cell_id.clone(),
+                    node_type: "cell".to_string(),
+                    label: format!("{} CKB", parse_capacity(&capacity_str)),
+                    data: serde_json::json!({
+                        "txHash": hash,
+                        "outputIndex": output_index,
+                        "capacity": capacity_str,
+                        "status": if is_live { "live" } else { "dead" },
+                    }),
+                });
 
-            links.push(GraphLink {
-                source: tx_id.clone(),
-                target: output_cell_id,
-                link_type: "output".to_string(),
-            });
+                links.push(GraphLink {
+                    source: tx_id.clone(),
+                    target: output_cell_id,
+                    link_type: "output".to_string(),
+                });
+            }
         }
     } else {
         // Fallback: look up live cells created by this tx from the store.
         // This won't show consumed outputs.
-        let iter = state.store.iterator_cf(
-            state.store.cf_live_cells(),
-            rocksdb::IteratorMode::From(&hash_bytes, rocksdb::Direction::Forward),
-        );
-
-        for item in iter.flatten() {
-            let (key, _) = item;
-            // cf_live_cells key layout is tx_hash(32) + output_index(2).
-            if !live_cell_key_matches_tx_hash(&key, &hash_bytes) {
-                break;
+        let store = state.store.clone();
+        let ao_store = state.append_only_store.clone();
+        let hash_c = hash_bytes.clone();
+        let live_cells = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let iter = store.iterator_cf(
+                store.cf_live_cells(),
+                rocksdb::IteratorMode::From(&hash_c, rocksdb::Direction::Forward),
+            );
+            let mut results = Vec::new();
+            for item in iter.flatten() {
+                let (key, _) = item;
+                if !live_cell_key_matches_tx_hash(&key, &hash_c) {
+                    break;
+                }
+                let output_index = i16::from_be_bytes([key[32], key[33]]);
+                if let Some(info) = store.get_live_cell_by_outpoint_key(&key, &ao_store)? {
+                    results.push((output_index, info));
+                }
             }
-            let output_index = i16::from_be_bytes([key[32], key[33]]);
-            let Some(info) = state
-                .store
-                .get_live_cell_by_outpoint_key(&key, &state.append_only_store)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-            else {
-                continue;
-            };
+            Ok(results)
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        for (output_index, info) in live_cells {
             let output_cell_id = format!("cell-{}-{}", hash, output_index);
             let capacity_str = info.capacity.to_string();
 
@@ -544,9 +563,10 @@ async fn get_proposal_graph(
     State(state): State<Arc<AppState>>,
     Path(block_number): Path<i64>,
 ) -> ApiResult<ProposalGraphResponse> {
-    let block_header = state
-        .store
-        .get_block_header(block_number)
+    let store = state.store.clone();
+    let block_header = tokio::task::spawn_blocking(move || store.get_block_header(block_number))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Block not found"))?;
 

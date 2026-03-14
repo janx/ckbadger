@@ -186,7 +186,21 @@ pub(crate) fn short_tx_hash(tx_hash: &[u8]) -> String {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn duration_from_millis(ms: f64) -> Duration {
-    let micros = (ms.max(0.0) * 1000.0).round();
+    debug_assert!(
+        ms >= 0.0,
+        "duration_from_millis called with negative ms: {}",
+        ms
+    );
+    let ms = if ms < 0.0 {
+        tracing::warn!(
+            "duration_from_millis: negative ms value {}, clamping to 0",
+            ms
+        );
+        0.0
+    } else {
+        ms
+    };
+    let micros = (ms * 1000.0).round();
     Duration::from_micros(micros as u64)
 }
 
@@ -225,13 +239,23 @@ pub(crate) fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> S
 // Atomics
 // ---------------------------------------------------------------------------
 
-pub(crate) fn atomic_saturating_sub_u64(counter: &AtomicU64, value: u64) {
+pub(crate) fn atomic_checked_sub_u64(counter: &AtomicU64, value: u64) {
     if value == 0 {
         return;
     }
     loop {
         let current = counter.load(Ordering::Relaxed);
-        let next = current.saturating_sub(value);
+        let next = match current.checked_sub(value) {
+            Some(n) => n,
+            None => {
+                tracing::error!(
+                    "pipeline counter underflow: current={}, sub_value={}, clamping to 0",
+                    current,
+                    value,
+                );
+                0
+            }
+        };
         if counter
             .compare_exchange(current, next, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()

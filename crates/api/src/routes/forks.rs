@@ -88,8 +88,6 @@ pub struct RecentReorgResponse {
 #[derive(Debug, Deserialize)]
 pub struct ListForksParams {
     pub limit: Option<i64>,
-    #[allow(dead_code)]
-    pub offset: Option<i64>,
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -114,27 +112,6 @@ fn deep_fork_info_if_consistent(
             status.tip_block_number
         ))),
     }
-}
-
-fn latest_reorg_detected_at(state: &AppState) -> Result<String, ApiRouteError> {
-    let latest = state
-        .store
-        .get_latest_reorg_event()
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ApiError::internal(
-                "missing persisted reorg event while deep fork is active; check sync_meta reorg records",
-            )
-        })?;
-    let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(latest.detected_at, 0).ok_or_else(
-        || {
-            ApiError::internal(format!(
-                "invalid reorg detected_at timestamp in sync_meta: {}",
-                latest.detected_at
-            ))
-        },
-    )?;
-    Ok(dt.to_rfc3339())
 }
 
 fn build_deep_fork_event(info: &DeepForkInfo, detected_at: String) -> ReorgEventResponse {
@@ -167,16 +144,37 @@ async fn list_forks(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListForksParams>,
 ) -> ApiResult<CursorPaginatedResponse<ReorgEventResponse>> {
-    let limit = params.limit.unwrap_or(20).min(100);
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
 
-    let sync_status = state
-        .store
-        .get_sync_status()
+    let store = state.store.clone();
+    let sync_status = tokio::task::spawn_blocking(move || store.get_sync_status())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut events = Vec::new();
     if let Some(info) = deep_fork_info_if_consistent(&sync_status)? {
-        let detected_at = latest_reorg_detected_at(state.as_ref())?;
+        let store = state.store.clone();
+        let detected_at = tokio::task::spawn_blocking(move || {
+            let latest = store
+                .get_latest_reorg_event()?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing persisted reorg event while deep fork is active; check sync_meta reorg records"
+                    )
+                })?;
+            let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(latest.detected_at, 0)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "invalid reorg detected_at timestamp in sync_meta: {}",
+                        latest.detected_at
+                    )
+                })?;
+            Ok::<_, anyhow::Error>(dt.to_rfc3339())
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
         events.push(build_deep_fork_event(info, detected_at));
     }
 
@@ -193,9 +191,10 @@ async fn get_fork_detail(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> ApiResult<ReorgDetailResponse> {
-    let sync_status = state
-        .store
-        .get_sync_status()
+    let store = state.store.clone();
+    let sync_status = tokio::task::spawn_blocking(move || store.get_sync_status())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     if id != 1 {
@@ -205,7 +204,23 @@ async fn get_fork_detail(
     let Some(info) = deep_fork_info_if_consistent(&sync_status)? else {
         return Err(ApiError::not_found("Reorg event not found"));
     };
-    let detected_at = latest_reorg_detected_at(state.as_ref())?;
+    let store = state.store.clone();
+    let detected_at = tokio::task::spawn_blocking(move || {
+        let latest = store.get_latest_reorg_event()?.ok_or_else(|| {
+            anyhow::anyhow!("missing persisted reorg event while deep fork is active")
+        })?;
+        let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(latest.detected_at, 0)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "invalid reorg detected_at timestamp: {}",
+                    latest.detected_at
+                )
+            })?;
+        Ok::<_, anyhow::Error>(dt.to_rfc3339())
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
     let event = build_deep_fork_event(info, detected_at);
 
     ok(ReorgDetailResponse {
@@ -216,9 +231,10 @@ async fn get_fork_detail(
 }
 
 async fn get_recent_reorg(State(state): State<Arc<AppState>>) -> ApiResult<RecentReorgResponse> {
-    let sync_status = state
-        .store
-        .get_sync_status()
+    let store = state.store.clone();
+    let sync_status = tokio::task::spawn_blocking(move || store.get_sync_status())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let deep_fork_info = deep_fork_info_if_consistent(&sync_status)?;
@@ -249,7 +265,23 @@ async fn get_recent_reorg(State(state): State<Arc<AppState>>) -> ApiResult<Recen
     // With RocksDB we don't have a reorg_events table with timestamps, so we
     // only surface the deep fork if one is currently detected.
     let reorg = if let Some(info) = deep_fork_info {
-        let detected_at = latest_reorg_detected_at(state.as_ref())?;
+        let store = state.store.clone();
+        let detected_at = tokio::task::spawn_blocking(move || {
+            let latest = store.get_latest_reorg_event()?.ok_or_else(|| {
+                anyhow::anyhow!("missing persisted reorg event while deep fork is active")
+            })?;
+            let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(latest.detected_at, 0)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "invalid reorg detected_at timestamp: {}",
+                        latest.detected_at
+                    )
+                })?;
+            Ok::<_, anyhow::Error>(dt.to_rfc3339())
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
         Some(build_deep_fork_event(info, detected_at))
     } else {
         None

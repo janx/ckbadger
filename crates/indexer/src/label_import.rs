@@ -6,6 +6,8 @@ use serde::Deserialize;
 use std::path::Path;
 use tracing::{debug, info};
 
+use crate::parser::script::ScriptParser;
+
 mod bundled {
     use super::*;
 
@@ -321,16 +323,6 @@ fn load_token_labels(base_path: &str) -> Result<Vec<UdtLabelInfo>> {
     Ok(labels)
 }
 
-fn parse_hash_type(hash_type: &str) -> Result<u8> {
-    match hash_type {
-        "data" => Ok(0),
-        "type" => Ok(1),
-        "data1" => Ok(2),
-        "data2" => Ok(4),
-        _ => Err(anyhow::anyhow!("unknown hash_type: '{}'", hash_type)),
-    }
-}
-
 fn decode_hex(s: &str) -> Result<Vec<u8>> {
     let s = s.strip_prefix("0x").unwrap_or(s);
     hex::decode(s).map_err(|e| anyhow::anyhow!("invalid hex: {}", e))
@@ -338,7 +330,7 @@ fn decode_hex(s: &str) -> Result<Vec<u8>> {
 
 fn upsert_token_label(store: &CkbadgerStore, label: &UdtLabelInfo) -> Result<bool> {
     let type_hash = decode_hex(&label.type_hash)?;
-    let label_hash_type = parse_hash_type(&label.type_script.hash_type)?;
+    let label_hash_type = ScriptParser::parse_hash_type(&label.type_script.hash_type)?;
     let label_type_code_hash = decode_hex(&label.type_script.code_hash).map_err(|e| {
         anyhow::anyhow!(
             "invalid type script code_hash for token label type_hash={}: {}",
@@ -534,7 +526,7 @@ fn import_single_deployment(
     deployment: &ScriptDeployment,
 ) -> Result<()> {
     let code_hash = decode_hex(&deployment.code_hash)?;
-    let deployment_hash_type = parse_hash_type(&deployment.hash_type)?;
+    let deployment_hash_type = ScriptParser::parse_hash_type(&deployment.hash_type)?;
 
     let mut info =
         store
@@ -602,11 +594,11 @@ mod tests {
 
     #[test]
     fn test_parse_hash_type() {
-        assert_eq!(parse_hash_type("data").unwrap(), 0);
-        assert_eq!(parse_hash_type("type").unwrap(), 1);
-        assert_eq!(parse_hash_type("data1").unwrap(), 2);
-        assert_eq!(parse_hash_type("data2").unwrap(), 4);
-        assert!(parse_hash_type("unknown").is_err());
+        assert_eq!(ScriptParser::parse_hash_type("data").unwrap(), 0);
+        assert_eq!(ScriptParser::parse_hash_type("type").unwrap(), 1);
+        assert_eq!(ScriptParser::parse_hash_type("data1").unwrap(), 2);
+        assert_eq!(ScriptParser::parse_hash_type("data2").unwrap(), 4);
+        assert!(ScriptParser::parse_hash_type("unknown").is_err());
     }
 
     #[test]

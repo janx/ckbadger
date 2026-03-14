@@ -199,8 +199,10 @@ impl DaoParser {
         ar_deposit: u64,
         ar_withdraw_request: u64,
     ) -> Option<u128> {
+        // AR starts at 10^16 at genesis and only increases; ar_deposit == 0 means
+        // invalid/corrupt chain data, so return None rather than a misleading zero.
         if ar_deposit == 0 {
-            return Some(0);
+            return None;
         }
 
         if capacity < occupied_capacity {
@@ -340,8 +342,9 @@ mod tests {
 
     #[test]
     fn test_calculate_compensation_zero_ar_deposit() {
-        let compensation = DaoParser::calculate_compensation(100, 50, 0, 100).unwrap();
-        assert_eq!(compensation, 0);
+        // ar_deposit == 0 is invalid chain data (AR starts at 10^16), returns None
+        let compensation = DaoParser::calculate_compensation(100, 50, 0, 100);
+        assert_eq!(compensation, None);
     }
 
     #[test]

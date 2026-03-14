@@ -2033,7 +2033,7 @@ impl Indexer {
                     parser_perf_sample,
                 ))) => {
                     consecutive_idle_timeouts = 0;
-                    atomic_saturating_sub_u64(
+                    atomic_checked_sub_u64(
                         &parse_tx_pending_txs_for_writer,
                         parsed_batch_tx_count_u64,
                     );

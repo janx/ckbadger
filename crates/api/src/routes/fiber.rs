@@ -249,10 +249,13 @@ async fn list_channels(
     };
 
     // Fetch limit+1 to determine has_more.
-    let rows = state
-        .store
-        .list_fiber_channels(limit + 1, cursor_bytes.as_deref(), state_filter)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let rows = tokio::task::spawn_blocking(move || {
+        store.list_fiber_channels(limit + 1, cursor_bytes.as_deref(), state_filter)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = rows.len() > limit;
     let page: Vec<_> = rows.into_iter().take(limit).collect();
@@ -284,9 +287,11 @@ async fn get_channel(
     let id_bytes = hex::decode(stripped)
         .map_err(|_| ApiError::bad_request("invalid channel_id: expected hex string"))?;
 
-    let channel = state
-        .store
-        .get_fiber_channel(&id_bytes)
+    let store = state.store.clone();
+    let id_bytes_c = id_bytes.clone();
+    let channel = tokio::task::spawn_blocking(move || store.get_fiber_channel(&id_bytes_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Fiber channel not found"))?;
 
@@ -315,10 +320,12 @@ async fn get_address_channels(
             .map_err(|_| ApiError::bad_request("Invalid address/lock script hash"))?
     };
 
-    let rows = state
-        .store
-        .list_addr_fiber_channels(&lock_hash, limit)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let rows =
+        tokio::task::spawn_blocking(move || store.list_addr_fiber_channels(&lock_hash, limit))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data: Vec<FiberChannelResponse> = rows
         .iter()
@@ -333,42 +340,47 @@ async fn get_stats(State(state): State<Arc<AppState>>) -> ApiResult<FiberStatsRe
     // Iterate all channels to compute stats. For a small-to-moderate number of
     // Fiber channels this is fine. If the number grows significantly, a
     // pre-aggregated counter should be added to the store.
-    let mut total_channels: u64 = 0;
-    let mut open_channels: u64 = 0;
-    let mut total_capacity_locked: u128 = 0;
+    let store = state.store.clone();
+    let stats = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let mut total_channels: u64 = 0;
+        let mut open_channels: u64 = 0;
+        let mut total_capacity_locked: u128 = 0;
 
-    let batch_size = 500;
-    let mut cursor: Option<Vec<u8>> = None;
+        let batch_size = 500;
+        let mut cursor: Option<Vec<u8>> = None;
 
-    loop {
-        let rows = state
-            .store
-            .list_fiber_channels(batch_size, cursor.as_deref(), None)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        loop {
+            let rows = store.list_fiber_channels(batch_size, cursor.as_deref(), None)?;
 
-        if rows.is_empty() {
-            break;
-        }
-
-        for (id, ch) in &rows {
-            total_channels += 1;
-            if ch.state == FiberChannelState::Open {
-                open_channels += 1;
-                total_capacity_locked += ch.capacity as u128;
+            if rows.is_empty() {
+                break;
             }
-            cursor = Some(id.clone());
+
+            for (id, ch) in &rows {
+                total_channels += 1;
+                if ch.state == FiberChannelState::Open {
+                    open_channels += 1;
+                    total_capacity_locked += ch.capacity as u128;
+                }
+                cursor = Some(id.clone());
+            }
+
+            if rows.len() < batch_size {
+                break;
+            }
         }
 
-        if rows.len() < batch_size {
-            break;
-        }
-    }
-
-    ok(FiberStatsResponse {
-        total_channels,
-        open_channels,
-        total_capacity_locked: total_capacity_locked.to_string(),
+        Ok(FiberStatsResponse {
+            total_channels,
+            open_channels,
+            total_capacity_locked: total_capacity_locked.to_string(),
+        })
     })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    ok(stats)
 }
 
 #[cfg(test)]

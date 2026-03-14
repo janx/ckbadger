@@ -2089,9 +2089,11 @@ async fn get_address(
     };
 
     // Get balance from the store
-    let addr_balance = state
-        .store
-        .get_addr_balance(&lock_hash)
+    let store = state.store.clone();
+    let lock_hash_c = lock_hash.clone();
+    let addr_balance = tokio::task::spawn_blocking(move || store.get_addr_balance(&lock_hash_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (balance, used_capacity, live_cells_count, transactions_count) = match &addr_balance {
@@ -2105,61 +2107,69 @@ async fn get_address(
     };
 
     // Try to find a cell for this lock hash to get the lock script details
-    let cells_for_script = state
-        .store
-        .list_cells_by_lock(&lock_hash, 1, None, &state.append_only_store)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let ao_store = state.append_only_store.clone();
+    let lock_hash_c = lock_hash.clone();
+    let cells_for_script = tokio::task::spawn_blocking(move || {
+        store.list_cells_by_lock(&lock_hash_c, 1, None, &ao_store)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (lock_script, lock_script_info, address) =
-        if let Some((_, _, info)) = cells_for_script.first() {
-            let script_info = state
-                .store
-                .get_script_info(&info.lock_code_hash)
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (lock_script, lock_script_info, address) = if let Some((_, _, info)) =
+        cells_for_script.first()
+    {
+        let store = state.store.clone();
+        let code_hash_c = info.lock_code_hash.clone();
+        let script_info = tokio::task::spawn_blocking(move || store.get_script_info(&code_hash_c))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            // LiveCellInfo doesn't store hash_type directly; derive from code_hash via script_info
-            let hash_type_num = script_info
-                .as_ref()
-                .map(|si| si.hash_type as i16)
-                .unwrap_or(1); // Default to "type"
+        // LiveCellInfo doesn't store hash_type directly; derive from code_hash via script_info
+        let hash_type_num = script_info
+            .as_ref()
+            .map(|si| si.hash_type as i16)
+            .unwrap_or(1); // Default to "type"
 
-            let hash_type_str = match hash_type_num {
-                0 => "data",
-                1 => "type",
-                2 => "data1",
-                4 => "data2",
-                _ => "data",
-            };
-
-            let script = ScriptResponse {
-                code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
-                hash_type: hash_type_str.to_string(),
-                args: format!("0x{}", hex::encode(&info.lock_args)),
-            };
-
-            let addr = input_address.or_else(|| {
-                script_to_address(
-                    &info.lock_code_hash,
-                    hash_type_num,
-                    &info.lock_args,
-                    &state.ckb_network,
-                )
-                .ok()
-            });
-
-            let script_info_response = script_info.map(|si| LockScriptInfo {
-                code_hash: format!("0x{}", hex::encode(&si.code_hash)),
-                name: si.name.unwrap_or_else(|| "Unknown".to_string()),
-                script_kind: Some("lock".to_string()),
-                deprecated: false,
-            });
-
-            (Some(script), script_info_response, addr)
-        } else {
-            // No live cells found, also check consumed cells for script info.
-            // For now, just return what we have.
-            (None, None, input_address)
+        let hash_type_str = match hash_type_num {
+            0 => "data",
+            1 => "type",
+            2 => "data1",
+            4 => "data2",
+            _ => "data",
         };
+
+        let script = ScriptResponse {
+            code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
+            hash_type: hash_type_str.to_string(),
+            args: format!("0x{}", hex::encode(&info.lock_args)),
+        };
+
+        let addr = input_address.or_else(|| {
+            script_to_address(
+                &info.lock_code_hash,
+                hash_type_num,
+                &info.lock_args,
+                &state.ckb_network,
+            )
+            .ok()
+        });
+
+        let script_info_response = script_info.map(|si| LockScriptInfo {
+            code_hash: format!("0x{}", hex::encode(&si.code_hash)),
+            name: si.name.unwrap_or_else(|| "Unknown".to_string()),
+            script_kind: Some("lock".to_string()),
+            deprecated: false,
+        });
+
+        (Some(script), script_info_response, addr)
+    } else {
+        // No live cells found, also check consumed cells for script info.
+        // For now, just return what we have.
+        (None, None, input_address)
+    };
 
     let recent_activities_count = transactions_count;
 
@@ -2349,21 +2359,22 @@ async fn get_cell(
 
     let output_idx = output_index as i16;
 
-    // Try live cells first
-    let live_cell = state
-        .store
-        .get_cell(&hash_bytes, output_idx, &state.append_only_store)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    // Try consumed cells if not found in live
-    let consumed_cell = if live_cell.is_none() {
-        state
-            .store
-            .get_consumed_cell_info(&hash_bytes, output_idx, &state.append_only_store)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-    } else {
-        None
-    };
+    // Try live cells first, then consumed
+    let store = state.store.clone();
+    let ao_store = state.append_only_store.clone();
+    let hash_c = hash_bytes.clone();
+    let (live_cell, consumed_cell) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let live_cell = store.get_cell(&hash_c, output_idx, &ao_store)?;
+        let consumed_cell = if live_cell.is_none() {
+            store.get_consumed_cell_info(&hash_c, output_idx, &ao_store)?
+        } else {
+            None
+        };
+        Ok((live_cell, consumed_cell))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (info, status_str, consumed_meta): (
         ckbadger_store::PositionedCellInfo,
@@ -2392,12 +2403,15 @@ async fn get_cell(
     };
 
     let type_script = if let Some(code_hash) = info.type_code_hash.as_ref() {
-        let type_hash_type_num: i16 = state
-            .store
-            .get_script_info(code_hash)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map(|si| si.hash_type as i16)
-            .unwrap_or(1);
+        let store = state.store.clone();
+        let code_hash_c = code_hash.clone();
+        let type_hash_type_num: i16 =
+            tokio::task::spawn_blocking(move || store.get_script_info(&code_hash_c))
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map(|si| si.hash_type as i16)
+                .unwrap_or(1);
         Some(ScriptResponse {
             code_hash: format!("0x{}", hex::encode(code_hash)),
             hash_type: hash_type_str(type_hash_type_num).to_string(),
@@ -2542,9 +2556,10 @@ async fn get_active_addresses(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ActiveAddressesParams>,
 ) -> ApiResult<Vec<ActiveAddressResponse>> {
-    let sync_status = state
-        .store
-        .get_sync_status()
+    let store = state.store.clone();
+    let sync_status = tokio::task::spawn_blocking(move || store.get_sync_status())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let limit = params.limit.clamp(1, 500) as usize;
@@ -2702,13 +2717,19 @@ async fn get_address_transactions(
     let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
 
     // Fetch canonical recent transactions for this address (newest first).
-    let addr_txs = list_canonical_addr_txs_page(
-        state.store.as_ref(),
-        state.store.as_ref(),
-        &lock_hash,
-        limit + 1,
-        cursor,
-    )
+    let store = state.store.clone();
+    let lock_hash_c = lock_hash.clone();
+    let addr_txs = tokio::task::spawn_blocking(move || {
+        list_canonical_addr_txs_page(
+            store.as_ref(),
+            store.as_ref(),
+            &lock_hash_c,
+            limit + 1,
+            cursor,
+        )
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = addr_txs.len() > limit;
@@ -2963,10 +2984,12 @@ async fn get_address_tokens(
         .iter()
         .map(|(type_hash, _)| type_hash.clone())
         .collect();
-    let token_infos = state
-        .store
-        .get_tokens_batch(&token_type_hashes)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let store = state.store.clone();
+    let token_infos =
+        tokio::task::spawn_blocking(move || store.get_tokens_batch(&token_type_hashes))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
     let token_info_by_hash: HashMap<Vec<u8>, ckbadger_store::TokenInfo> = token_infos
         .into_iter()
         .map(|(type_hash, info)| match info {
