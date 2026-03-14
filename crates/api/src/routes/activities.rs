@@ -48,6 +48,7 @@ pub struct ActivityResponse {
     pub asset_changes: Vec<AssetChangeResponse>,
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
+    pub protocol_actions: Vec<ProtocolActionResponse>,
     pub peers: Vec<String>,
 }
 
@@ -112,6 +113,14 @@ pub struct LockCallResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProtocolActionResponse {
+    pub protocol: String,
+    pub action: String,
+    pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GlobalActivityResponse {
     pub address: String,
     pub tx_hash: String,
@@ -124,6 +133,7 @@ pub struct GlobalActivityResponse {
     pub asset_changes: Vec<AssetChangeResponse>,
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
+    pub protocol_actions: Vec<ProtocolActionResponse>,
     pub peers: Vec<String>,
 }
 
@@ -435,6 +445,15 @@ pub(crate) fn build_activity_response(
             .collect(),
         type_calls: convert_type_calls(store, script_info_cache, entry.type_calls.as_ref())?,
         lock_calls: convert_lock_calls(store, script_info_cache, entry.lock_calls.as_ref())?,
+        protocol_actions: entry
+            .protocol_actions
+            .iter()
+            .map(|a| ProtocolActionResponse {
+                protocol: a.protocol.clone(),
+                action: a.action.clone(),
+                metadata: a.metadata.clone(),
+            })
+            .collect(),
         peers: entry
             .peers
             .iter()
@@ -478,6 +497,16 @@ pub(crate) fn build_global_activity_response(
             .collect(),
         type_calls: convert_type_calls(store, script_info_cache, item.entry.type_calls.as_ref())?,
         lock_calls: convert_lock_calls(store, script_info_cache, item.entry.lock_calls.as_ref())?,
+        protocol_actions: item
+            .entry
+            .protocol_actions
+            .iter()
+            .map(|a| ProtocolActionResponse {
+                protocol: a.protocol.clone(),
+                action: a.action.clone(),
+                metadata: a.metadata.clone(),
+            })
+            .collect(),
         peers: item
             .entry
             .peers

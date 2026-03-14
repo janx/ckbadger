@@ -39,6 +39,7 @@ fn accumulate_activity_stats_inner(
     asset_changes: &[AssetChange],
     type_calls: Option<&[TypeCallEntry]>,
     scripts: &[Vec<u8>],
+    protocol_actions: &[ProtocolAction],
     stats: &mut DailyActivityStats,
 ) {
     // Coinbase transactions are counted but excluded from all other metrics
@@ -57,6 +58,12 @@ fn accumulate_activity_stats_inner(
     for code_hash in scripts {
         let hex = hex::encode(code_hash);
         *stats.script_counts.entry(hex).or_insert(0) += 1;
+    }
+
+    // Count each protocol action — excludes coinbase
+    for pa in protocol_actions {
+        let key = format!("{}:{}", pa.protocol, pa.action);
+        *stats.protocol_action_counts.entry(key).or_insert(0) += 1;
     }
 
     let mut has_dao = false;
@@ -618,6 +625,7 @@ impl BatchWriter {
             &entry.asset_changes,
             entry.type_calls.as_deref(),
             scripts,
+            &entry.protocol_actions,
             stats,
         );
     }
@@ -635,6 +643,7 @@ impl BatchWriter {
             &owner.asset_changes,
             owner.type_calls.as_deref(),
             &owner.involved_script_code_hashes,
+            &owner.protocol_actions,
             stats,
         );
     }
@@ -1648,7 +1657,7 @@ mod activity_stats_tests {
 
     use ckbadger_store::types::{
         ActivityEntry, AssetAction, AssetChange, DailyActivityStats, OwnerActivityDelta,
-        TypeCallEntry,
+        ProtocolAction, TypeCallEntry,
     };
     use ckbadger_store::CkbadgerStore;
 
@@ -2052,6 +2061,39 @@ mod activity_stats_tests {
         assert_eq!(stats.transfer_count, 1);
         assert_eq!(stats.unknown_count, 0);
         assert_eq!(stats.script_call_count, 0);
+    }
+
+    #[test]
+    fn test_accumulate_protocol_action_counts() {
+        let mut stats = DailyActivityStats::default();
+        let entry = ActivityEntry {
+            tx_hash: vec![1; 32],
+            block_hash: vec![2; 32],
+            block_number: 100,
+            tx_index: 0,
+            timestamp: 1_700_000_000,
+            ckb_delta: 100,
+            used_delta: 0,
+            is_cellbase: false,
+            has_type_script: true,
+            asset_changes: vec![],
+            type_calls: None,
+            lock_calls: None,
+            protocol_actions: vec![ProtocolAction {
+                protocol: "rgbpp".into(),
+                action: "leap_to_ckb".into(),
+                metadata: serde_json::json!({}),
+            }],
+            peers: vec![],
+        };
+        BatchWriter::accumulate_activity_stats(&entry, &[], &mut stats);
+        assert_eq!(
+            *stats
+                .protocol_action_counts
+                .get("rgbpp:leap_to_ckb")
+                .unwrap(),
+            1
+        );
     }
 
     #[test]
