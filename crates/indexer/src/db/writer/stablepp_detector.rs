@@ -195,11 +195,7 @@ impl ProtocolDetector for StableppDetector {
             "vaultCount": vault_count,
         });
 
-        vec![ProtocolAction {
-            protocol: "stablepp".to_string(),
-            action: action.to_string(),
-            metadata,
-        }]
+        vec![ProtocolAction::new("stablepp", action, metadata)]
     }
 }
 
@@ -390,7 +386,9 @@ mod tests {
         assert_eq!(participant_delta.protocol_actions[0].protocol, "stablepp");
         assert_eq!(participant_delta.protocol_actions[0].action, "deposit");
 
-        let meta = &participant_delta.protocol_actions[0].metadata;
+        let meta = participant_delta.protocol_actions[0]
+            .metadata_value()
+            .unwrap();
         assert_eq!(meta["vaultCount"], 1);
     }
 
@@ -539,7 +537,9 @@ mod tests {
         assert_eq!(participant_delta.protocol_actions[0].protocol, "stablepp");
         assert_eq!(participant_delta.protocol_actions[0].action, "adjust");
 
-        let meta = &participant_delta.protocol_actions[0].metadata;
+        let meta = participant_delta.protocol_actions[0]
+            .metadata_value()
+            .unwrap();
         assert_eq!(meta["vaultCount"], 1);
         assert_eq!(meta["hasIntent"], false);
     }
@@ -621,7 +621,9 @@ mod tests {
         assert_eq!(participant_delta.protocol_actions.len(), 1);
         assert_eq!(participant_delta.protocol_actions[0].protocol, "stablepp");
 
-        let meta = &participant_delta.protocol_actions[0].metadata;
+        let meta = participant_delta.protocol_actions[0]
+            .metadata_value()
+            .unwrap();
         assert_eq!(meta["hasIntent"], true);
     }
 

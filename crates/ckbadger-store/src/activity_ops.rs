@@ -556,11 +556,11 @@ mod tests {
             asset_changes: vec![],
             type_calls: None,
             lock_calls: None,
-            protocol_actions: vec![ProtocolAction {
-                protocol: "rgbpp".into(),
-                action: "leap_to_ckb".into(),
-                metadata: serde_json::json!({}),
-            }],
+            protocol_actions: vec![ProtocolAction::new(
+                "rgbpp",
+                "leap_to_ckb",
+                serde_json::json!({}),
+            )],
             peers: vec![],
         };
 
@@ -590,11 +590,11 @@ mod tests {
             asset_changes: vec![],
             type_calls: None,
             lock_calls: None,
-            protocol_actions: vec![ProtocolAction {
-                protocol: "rgbpp".into(),
-                action: "leap_to_ckb".into(),
-                metadata: serde_json::json!({}),
-            }],
+            protocol_actions: vec![ProtocolAction::new(
+                "rgbpp",
+                "leap_to_ckb",
+                serde_json::json!({}),
+            )],
             peers: vec![],
         };
 

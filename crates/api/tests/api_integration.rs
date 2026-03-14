@@ -17,7 +17,7 @@ use ckbadger_store::types::{
     DeepForkInfo, EpochStats, HourlyStats, IdentityCollectionAggregate, IdentityEntry,
     IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats, ObjectCollectionActivityEntry,
     ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry, ObjectExtra, ObjectStandard,
-    OwnerActivityDelta, ReorgEvent, ScriptDailyDelta, ScriptInfo, SporeDailyDelta,
+    OwnerActivityDelta, ProtocolAction, ReorgEvent, ScriptDailyDelta, ScriptInfo, SporeDailyDelta,
     SporeMediaProfile, TokenDailyDelta, TokenInfo, TxActivityBundle, TxIndexEntry, TypeCallEntry,
 };
 use ckbadger_store::CkbadgerStore;
@@ -7195,6 +7195,106 @@ async fn test_address_activities_reads_from_derived_store() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn test_address_activities_returns_protocol_metadata() {
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+    let lock_hash = vec![0x24; 32];
+
+    let activity = ActivityEntry {
+        tx_hash: vec![0xaa; 32],
+        block_hash: vec![0xbb; 32],
+        block_number: 88,
+        tx_index: 1,
+        timestamp: 1_700_000_123,
+        ckb_delta: 100,
+        used_delta: 50,
+        is_cellbase: false,
+        has_type_script: false,
+        asset_changes: vec![],
+        type_calls: None,
+        lock_calls: None,
+        protocol_actions: vec![ProtocolAction::new(
+            "stablepp",
+            "deposit",
+            serde_json::json!({
+                "hasIntent": true,
+                "vaultCount": 2,
+            }),
+        )],
+        peers: vec![],
+    };
+
+    let mut batch = StoreBatch::new(core_store.as_ref());
+    batch.put_tx_hash_map(&activity.tx_hash, activity.block_number, activity.tx_index);
+    batch.put_tx_index(
+        activity.block_number,
+        activity.tx_index,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: activity.timestamp,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+        },
+    );
+    batch.put_block_header(
+        activity.block_number,
+        &CachedBlockHeader {
+            hash: activity.block_hash.clone(),
+            timestamp: activity.timestamp,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    batch.put_tx_activity_bundle(&make_single_owner_bundle(&lock_hash, &activity));
+    batch.put_addr_tx(
+        &lock_hash,
+        activity.block_number,
+        activity.tx_index,
+        &activity.tx_hash,
+    );
+    batch.commit().unwrap();
+    core_store
+        .update_sync_status(|s| {
+            s.tip_block_number = activity.block_number;
+        })
+        .unwrap();
+
+    let config = test_config_with_append_only(core_store, append_only_store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/addresses/0x{}/activities",
+            hex::encode(&lock_hash)
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json["data"][0]["protocolActions"][0]["protocol"],
+        "stablepp"
+    );
+    assert_eq!(
+        json["data"][0]["protocolActions"][0]["metadata"]["hasIntent"],
+        true
+    );
+    assert_eq!(
+        json["data"][0]["protocolActions"][0]["metadata"]["vaultCount"],
+        2
+    );
 }
 
 #[tokio::test]

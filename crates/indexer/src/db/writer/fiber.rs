@@ -28,18 +28,27 @@ pub fn process_fiber_channel_events(
                 continue;
             }
 
+            let metadata = action.metadata_value().map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to decode fiber metadata for tx 0x{} action={}: {}",
+                    hex::encode(&bundle.tx_hash),
+                    action.action,
+                    e
+                )
+            })?;
+
             match action.action.as_str() {
                 "channel_open" => {
-                    handle_channel_open(batch, bundle, &owner.lock_hash, &action.metadata)?;
+                    handle_channel_open(batch, bundle, &owner.lock_hash, &metadata)?;
                 }
                 "channel_close" => {
-                    handle_channel_close(batch, store, bundle, &action.metadata)?;
+                    handle_channel_close(batch, store, bundle, &metadata)?;
                 }
                 "force_close" => {
-                    handle_force_close(batch, store, bundle, &action.metadata)?;
+                    handle_force_close(batch, store, bundle, &metadata)?;
                 }
                 "settlement" => {
-                    handle_settlement(batch, store, bundle, &action.metadata)?;
+                    handle_settlement(batch, store, bundle, &metadata)?;
                 }
                 other => {
                     warn!(
@@ -407,11 +416,7 @@ mod tests {
             asset_changes: vec![],
             type_calls: None,
             lock_calls: None,
-            protocol_actions: vec![ProtocolAction {
-                protocol: "fiber".to_string(),
-                action: action.to_string(),
-                metadata,
-            }],
+            protocol_actions: vec![ProtocolAction::new("fiber", action, metadata)],
             peers: vec![],
         }
     }

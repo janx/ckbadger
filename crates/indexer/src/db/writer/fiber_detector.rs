@@ -326,11 +326,7 @@ impl ProtocolDetector for FiberDetector {
             FiberEvent::Settlement => "settlement",
         };
 
-        vec![ProtocolAction {
-            protocol: "fiber".to_string(),
-            action: action.to_string(),
-            metadata,
-        }]
+        vec![ProtocolAction::new("fiber", action, metadata)]
     }
 }
 
@@ -471,7 +467,9 @@ mod tests {
         assert_eq!(participant_delta.protocol_actions[0].action, "channel_open");
 
         // Verify metadata
-        let meta = &participant_delta.protocol_actions[0].metadata;
+        let meta = participant_delta.protocol_actions[0]
+            .metadata_value()
+            .unwrap();
         assert_eq!(meta["event"], "channel_open");
         assert!(meta["channelOutpoint"].as_str().unwrap().starts_with("0x"));
         assert_eq!(meta["capacity"], "14500000000");
@@ -562,7 +560,9 @@ mod tests {
             "channel_close"
         );
 
-        let meta = &participant_delta.protocol_actions[0].metadata;
+        let meta = participant_delta.protocol_actions[0]
+            .metadata_value()
+            .unwrap();
         assert_eq!(meta["event"], "channel_close");
         assert_eq!(meta["capacity"], "14500000000");
         assert_eq!(
@@ -655,7 +655,9 @@ mod tests {
         assert_eq!(participant_delta.protocol_actions[0].protocol, "fiber");
         assert_eq!(participant_delta.protocol_actions[0].action, "force_close");
 
-        let meta = &participant_delta.protocol_actions[0].metadata;
+        let meta = participant_delta.protocol_actions[0]
+            .metadata_value()
+            .unwrap();
         assert_eq!(meta["event"], "force_close");
         assert_eq!(meta["capacity"], "14500000000");
         assert_eq!(
@@ -746,7 +748,9 @@ mod tests {
         assert_eq!(participant_delta.protocol_actions[0].protocol, "fiber");
         assert_eq!(participant_delta.protocol_actions[0].action, "settlement");
 
-        let meta = &participant_delta.protocol_actions[0].metadata;
+        let meta = participant_delta.protocol_actions[0]
+            .metadata_value()
+            .unwrap();
         assert_eq!(meta["event"], "settlement");
         assert_eq!(meta["capacity"], "10000000000");
         assert_eq!(
@@ -876,7 +880,9 @@ mod tests {
             .expect("participant should be present");
         assert_eq!(participant_delta.protocol_actions.len(), 1);
 
-        let meta = &participant_delta.protocol_actions[0].metadata;
+        let meta = participant_delta.protocol_actions[0]
+            .metadata_value()
+            .unwrap();
         // output_index = 1 as LE u32 -> [0x01, 0x00, 0x00, 0x00]
         let expected_outpoint = {
             let mut buf = Vec::with_capacity(36);

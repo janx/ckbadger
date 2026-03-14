@@ -2041,7 +2041,9 @@ mod tests {
         assert_eq!(output_owner_delta.protocol_actions[0].action, "transfer");
 
         // Verify metadata contains btcTxid from output
-        let metadata = &output_owner_delta.protocol_actions[0].metadata;
+        let metadata = output_owner_delta.protocol_actions[0]
+            .metadata_value()
+            .unwrap();
         assert!(metadata.get("btcTxid").is_some());
         assert!(metadata.get("outIndex").is_some());
     }

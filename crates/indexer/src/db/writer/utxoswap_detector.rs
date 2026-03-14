@@ -76,11 +76,7 @@ impl ProtocolDetector for UtxoSwapDetector {
                     metadata["totalFeeRate"] = serde_json::json!(extra.total_fee_rate);
                 }
 
-                actions.push(ProtocolAction {
-                    protocol: "utxoswap".to_string(),
-                    action: action_name,
-                    metadata,
-                });
+                actions.push(ProtocolAction::new("utxoswap", action_name, metadata));
             }
         }
 
@@ -115,11 +111,7 @@ impl ProtocolDetector for UtxoSwapDetector {
                     metadata["totalFeeRate"] = serde_json::json!(extra.total_fee_rate);
                 }
 
-                actions.push(ProtocolAction {
-                    protocol: "utxoswap".to_string(),
-                    action: action_name,
-                    metadata,
-                });
+                actions.push(ProtocolAction::new("utxoswap", action_name, metadata));
             }
         }
 
@@ -307,7 +299,7 @@ mod tests {
             "swap_exact_input_submitted"
         );
 
-        let meta = &alice_owner.protocol_actions[0].metadata;
+        let meta = alice_owner.protocol_actions[0].metadata_value().unwrap();
         assert_eq!(meta["intentType"], "SwapExactInputForOutput");
         assert_eq!(meta["amountIn"], "1000");
         assert_eq!(meta["amountOutMin"], "500");
@@ -376,7 +368,7 @@ mod tests {
             "swap_exact_input_settled"
         );
 
-        let meta = &alice_owner.protocol_actions[0].metadata;
+        let meta = alice_owner.protocol_actions[0].metadata_value().unwrap();
         assert_eq!(meta["intentType"], "SwapExactInputForOutput");
         assert_eq!(meta["amountIn"], "2000");
         assert_eq!(meta["amountOutMin"], "1500");
@@ -434,7 +426,7 @@ mod tests {
             "add_liquidity_submitted"
         );
 
-        let meta = &alice_owner.protocol_actions[0].metadata;
+        let meta = alice_owner.protocol_actions[0].metadata_value().unwrap();
         assert_eq!(meta["intentType"], "AddLiquidity");
     }
 

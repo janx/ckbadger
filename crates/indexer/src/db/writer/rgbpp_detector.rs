@@ -100,11 +100,7 @@ impl RgbppDetector {
         // Extract metadata from the first rgbpp-family output (preferred) or input
         let metadata = self.extract_metadata(&inputs, &outputs);
 
-        vec![ProtocolAction {
-            protocol: "rgbpp".to_string(),
-            action: action.to_string(),
-            metadata,
-        }]
+        vec![ProtocolAction::new("rgbpp", action, metadata)]
     }
 
     /// Extract BTC txid and output index from rgbpp lock args.

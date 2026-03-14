@@ -466,6 +466,25 @@ fn convert_lock_calls(
         .collect()
 }
 
+fn convert_protocol_action(
+    action: &ckbadger_store::types::ProtocolAction,
+) -> anyhow::Result<ProtocolActionResponse> {
+    let metadata = action.metadata_value().map_err(|e| {
+        anyhow::anyhow!(
+            "failed to decode protocol metadata for protocol={} action={}: {}",
+            action.protocol,
+            action.action,
+            e
+        )
+    })?;
+
+    Ok(ProtocolActionResponse {
+        protocol: action.protocol.clone(),
+        action: action.action.clone(),
+        metadata,
+    })
+}
+
 pub(crate) fn build_activity_response(
     store: &CkbadgerStore,
     entry: &ActivityEntry,
@@ -490,12 +509,8 @@ pub(crate) fn build_activity_response(
         protocol_actions: entry
             .protocol_actions
             .iter()
-            .map(|a| ProtocolActionResponse {
-                protocol: a.protocol.clone(),
-                action: a.action.clone(),
-                metadata: a.metadata.clone(),
-            })
-            .collect(),
+            .map(convert_protocol_action)
+            .collect::<anyhow::Result<Vec<_>>>()?,
         peers: entry
             .peers
             .iter()
@@ -544,12 +559,8 @@ pub(crate) fn build_global_activity_response(
             .entry
             .protocol_actions
             .iter()
-            .map(|a| ProtocolActionResponse {
-                protocol: a.protocol.clone(),
-                action: a.action.clone(),
-                metadata: a.metadata.clone(),
-            })
-            .collect(),
+            .map(convert_protocol_action)
+            .collect::<anyhow::Result<Vec<_>>>()?,
         peers: item
             .entry
             .peers

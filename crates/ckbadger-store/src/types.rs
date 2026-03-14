@@ -1023,6 +1023,39 @@ pub struct LockCallEntry {
     pub lock_args: Vec<u8>,
 }
 
+/// Stable storage form for protocol metadata.
+///
+/// `serde_json::Value` can be serialized by bincode but cannot be
+/// deserialized back because its `Deserialize` impl requires
+/// `deserialize_any`, which bincode does not support. Store canonical JSON
+/// text instead, then parse it at the API/indexer boundary when needed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct ProtocolMetadata(String);
+
+impl ProtocolMetadata {
+    pub fn from_value(value: serde_json::Value) -> Self {
+        Self(
+            serde_json::to_string(&value)
+                .expect("protocol metadata JSON serialization should never fail"),
+        )
+    }
+
+    pub fn to_value(&self) -> serde_json::Result<serde_json::Value> {
+        serde_json::from_str(&self.0)
+    }
+
+    pub fn raw(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<serde_json::Value> for ProtocolMetadata {
+    fn from(value: serde_json::Value) -> Self {
+        Self::from_value(value)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProtocolAction {
     /// Protocol identifier: "rgbpp", "utxoswap", "fiber", etc.
@@ -1030,7 +1063,25 @@ pub struct ProtocolAction {
     /// Action name: "leap_to_ckb", "leap_to_btc", "transfer", etc.
     pub action: String,
     /// Protocol-specific decoded metadata.
-    pub metadata: serde_json::Value,
+    pub metadata: ProtocolMetadata,
+}
+
+impl ProtocolAction {
+    pub fn new(
+        protocol: impl Into<String>,
+        action: impl Into<String>,
+        metadata: serde_json::Value,
+    ) -> Self {
+        Self {
+            protocol: protocol.into(),
+            action: action.into(),
+            metadata: ProtocolMetadata::from_value(metadata),
+        }
+    }
+
+    pub fn metadata_value(&self) -> serde_json::Result<serde_json::Value> {
+        self.metadata.to_value()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1759,6 +1810,48 @@ mod tests {
         assert_eq!(decoded.owners.len(), 1);
         assert_eq!(decoded.owners[0].lock_hash_type, 1);
         assert_eq!(decoded.owners[0].lock_args, vec![0xCC; 20]);
+    }
+
+    #[test]
+    fn test_tx_activity_bundle_roundtrip_with_protocol_metadata() {
+        let bundle = TxActivityBundle {
+            tx_hash: vec![0x21; 32],
+            block_hash: vec![0x31; 32],
+            block_number: 101,
+            tx_index: 4,
+            timestamp: 1_700_000_001_000,
+            is_cellbase: false,
+            owners: vec![OwnerActivityDelta {
+                lock_hash: vec![0xAB; 32],
+                lock_code_hash: vec![0xBC; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0xCD; 20],
+                ckb_delta: 7,
+                used_delta: 0,
+                has_type_script: false,
+                involved_script_code_hashes: vec![vec![0xDE; 32]],
+                asset_changes: vec![],
+                type_calls: None,
+                lock_calls: None,
+                protocol_actions: vec![ProtocolAction::new(
+                    "stablepp",
+                    "deposit",
+                    serde_json::json!({
+                        "hasIntent": true,
+                        "vaultCount": 2,
+                    }),
+                )],
+                peers: vec![],
+            }],
+        };
+
+        let bytes = bincode::serialize(&bundle).unwrap();
+        let decoded: TxActivityBundle = bincode::deserialize(&bytes).unwrap();
+        let metadata = decoded.owners[0].protocol_actions[0]
+            .metadata_value()
+            .unwrap();
+        assert_eq!(metadata["hasIntent"], true);
+        assert_eq!(metadata["vaultCount"], 2);
     }
 
     // ---- ObjectStandard ----
