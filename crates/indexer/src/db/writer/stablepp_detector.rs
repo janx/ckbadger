@@ -9,13 +9,11 @@ use crate::parser::stablepp::{
 
 use super::activities::{OwnerAccum, ProtocolDetector, TxView};
 
-#[allow(dead_code)] // Will be registered in sync pipeline (Task 4)
 pub(crate) struct StableppDetector {
     #[allow(dead_code)]
     is_mainnet: bool,
 }
 
-#[allow(dead_code)] // Will be registered in sync pipeline (Task 4)
 impl StableppDetector {
     pub fn new(is_mainnet: bool) -> Self {
         Self { is_mainnet }
