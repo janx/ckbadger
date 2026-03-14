@@ -1,5 +1,5 @@
 {
-  "_comment": "Override script names (by name), mark deprecated scripts (by code_hash), define NFT storage-tier overrides by standard, and group scripts by protocol. Applied during label import and API asset rendering.",
+  "_comment": "Override script names (by name), define extra known scripts when token-labels cannot be updated, mark deprecated scripts (by code_hash), define NFT storage-tier overrides by standard, and group scripts by protocol. Applied during label import and API asset rendering.",
   "overrides": {
     "DAS Lock": ".bit Lock",
     "DID Account": ".bit Account",
@@ -8,6 +8,92 @@
     "SECP256K1/blake160": "Default Lock",
     "SECP256k1/Multisig": "Default Multisig"
   },
+  "known_scripts": [
+    {
+      "name": ".bit Time Index State",
+      "description": ".bit time oracle index-state type script.",
+      "rfc": "",
+      "website": "https://github.com/dotbitHQ/ckb-time-script",
+      "sourceUrl": "https://github.com/dotbitHQ/ckb-time-script",
+      "decoderType": "",
+      "deployments": {
+        "mainnet": [
+          {
+            "tag": "",
+            "deprecated": false,
+            "hashType": "type",
+            "dataHash": "0xb575f6dd6417d4f7c52fd9e3a96824130302751c78ac10d1d0d35cd4b507bbae",
+            "typeHash": "0x3a468d53352eb855521dabed0dc7036929bfe72766ad58f801edfbae564f7b43",
+            "codeHash": "0x3a468d53352eb855521dabed0dc7036929bfe72766ad58f801edfbae564f7b43"
+          }
+        ],
+        "testnet": []
+      }
+    },
+    {
+      "name": ".bit Time Info",
+      "description": ".bit time oracle info type script.",
+      "rfc": "",
+      "website": "https://github.com/dotbitHQ/ckb-time-script",
+      "sourceUrl": "https://github.com/dotbitHQ/ckb-time-script",
+      "decoderType": "",
+      "deployments": {
+        "mainnet": [
+          {
+            "tag": "",
+            "deprecated": false,
+            "hashType": "type",
+            "dataHash": "0x1871b6ecbe086e0c0a5298b653de8bd7efb223c1f7927f41ad8b13de848b7209",
+            "typeHash": "0x9e537bf5b8ec044ca3f53355e879f3fd8832217e4a9b41d9994cf0c547241a79",
+            "codeHash": "0x9e537bf5b8ec044ca3f53355e879f3fd8832217e4a9b41d9994cf0c547241a79"
+          }
+        ],
+        "testnet": []
+      }
+    },
+    {
+      "name": "ccBTC Oracle Cell",
+      "description": "Oracle price cell type script carrying ccBTC and CKB feeds.",
+      "rfc": "",
+      "website": "",
+      "sourceUrl": "",
+      "decoderType": "",
+      "deployments": {
+        "mainnet": [
+          {
+            "tag": "",
+            "deprecated": false,
+            "hashType": "type",
+            "dataHash": "0x0b4a6b4bc17e0ed1e3537770eed2cabdd8dd476493251b0d0fbe27b8e5b5c9b8",
+            "typeHash": "0x363e0a26a3730e54cce57b1ee529f848e15a274788597eaf43578a001e9a1373",
+            "codeHash": "0x92156e93acbad7b1ac26c6364efed9bdd5a4f866cecfdf6217e2ea4374f325f0"
+          }
+        ],
+        "testnet": []
+      }
+    },
+    {
+      "name": "Bitcoin SPV Type Lock",
+      "description": "Bitcoin SPV light-client type script used by RGB++ flows.",
+      "rfc": "",
+      "website": "",
+      "sourceUrl": "",
+      "decoderType": "",
+      "deployments": {
+        "mainnet": [
+          {
+            "tag": "",
+            "deprecated": false,
+            "hashType": "type",
+            "dataHash": "0x0a1d2402d7ccd9fe9b6e86eda78c6bd89cd3e00d84521bd5271c62846da7dbbf",
+            "typeHash": "0xe58e5edfb4b7320cf822be815b025d6b8c0d5767b44c5eb1209e3edc52c97eb7",
+            "codeHash": "0xa76e227da81b97d23deabf0d8964aa41c042f4bcf2db2b8bd873fe8521de741d"
+          }
+        ],
+        "testnet": []
+      }
+    }
+  ],
   "nft_storage_tier_overrides": {
     ".bit": "fully_onchain",
     "dotbit": "fully_onchain",

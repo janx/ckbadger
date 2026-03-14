@@ -99,6 +99,8 @@ struct ScriptDeployment {
 struct ScriptNameOverrides {
     #[serde(default)]
     pub overrides: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub known_scripts: Vec<ScriptLabelInfo>,
     // Parsed for shared docs compatibility; currently consumed by API-side NFT metadata logic.
     #[allow(dead_code)]
     #[serde(default)]
@@ -247,13 +249,7 @@ pub fn run_label_import_bundled(
         .map(|d| d.to_lowercase())
         .collect();
     let mut scripts = bundled::script_labels();
-    for script in &mut scripts {
-        if let Some(new_name) = overrides.overrides.get(&script.name) {
-            script.name = new_name.clone();
-        }
-        apply_deprecated_flags(&mut script.deployments.mainnet, &deprecated_set);
-        apply_deprecated_flags(&mut script.deployments.testnet, &deprecated_set);
-    }
+    apply_script_overrides(&mut scripts, &overrides, &deprecated_set);
     info!("Bundled script labels: {}", scripts.len());
     for script in &scripts {
         match upsert_script_label(store, ckb_store, script, network) {
@@ -419,12 +415,7 @@ fn load_script_labels(base_path: &str) -> Result<Vec<ScriptLabelInfo>> {
 
         match std::fs::read_to_string(&index_path) {
             Ok(content) => match serde_json::from_str::<ScriptLabelInfo>(&content) {
-                Ok(mut script) => {
-                    if let Some(new_name) = overrides.overrides.get(&script.name) {
-                        script.name = new_name.clone();
-                    }
-                    apply_deprecated_flags(&mut script.deployments.mainnet, &deprecated_set);
-                    apply_deprecated_flags(&mut script.deployments.testnet, &deprecated_set);
+                Ok(script) => {
                     scripts.push(script);
                 }
                 Err(e) => {
@@ -437,7 +428,54 @@ fn load_script_labels(base_path: &str) -> Result<Vec<ScriptLabelInfo>> {
         }
     }
 
+    apply_script_overrides(&mut scripts, &overrides, &deprecated_set);
+
     Ok(scripts)
+}
+
+fn apply_script_overrides(
+    scripts: &mut Vec<ScriptLabelInfo>,
+    overrides: &ScriptNameOverrides,
+    deprecated_set: &std::collections::HashSet<String>,
+) {
+    for script in &mut *scripts {
+        if let Some(new_name) = overrides.overrides.get(&script.name) {
+            script.name = new_name.clone();
+        }
+        apply_deprecated_flags(&mut script.deployments.mainnet, deprecated_set);
+        apply_deprecated_flags(&mut script.deployments.testnet, deprecated_set);
+    }
+
+    for mut script in overrides.known_scripts.clone() {
+        if let Some(new_name) = overrides.overrides.get(&script.name) {
+            script.name = new_name.clone();
+        }
+        apply_deprecated_flags(&mut script.deployments.mainnet, deprecated_set);
+        apply_deprecated_flags(&mut script.deployments.testnet, deprecated_set);
+
+        if !scripts_overlap(scripts, &script) {
+            scripts.push(script);
+        }
+    }
+}
+
+fn scripts_overlap(existing: &[ScriptLabelInfo], candidate: &ScriptLabelInfo) -> bool {
+    let candidate_hashes: std::collections::HashSet<&str> = candidate
+        .deployments
+        .mainnet
+        .iter()
+        .chain(candidate.deployments.testnet.iter())
+        .map(|deployment| deployment.code_hash.as_str())
+        .collect();
+
+    existing.iter().any(|script| {
+        script
+            .deployments
+            .mainnet
+            .iter()
+            .chain(script.deployments.testnet.iter())
+            .any(|deployment| candidate_hashes.contains(deployment.code_hash.as_str()))
+    })
 }
 
 fn load_script_overrides(base_path: &str) -> Result<ScriptNameOverrides> {
@@ -829,6 +867,74 @@ mod tests {
         assert!(
             result.script_labels_imported > 0,
             "expected script labels imported, got 0"
+        );
+    }
+
+    #[test]
+    fn test_run_label_import_bundled_imports_ckb_time_scripts() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        super::run_label_import_bundled(&store, None, "mainnet").unwrap();
+
+        let index_state_code_hash =
+            hex::decode("3a468d53352eb855521dabed0dc7036929bfe72766ad58f801edfbae564f7b43")
+                .unwrap();
+        let index_state = store
+            .get_script_info(&index_state_code_hash)
+            .unwrap()
+            .expect("ckb time index-state script should be imported");
+        assert_eq!(index_state.name.as_deref(), Some(".bit Time Index State"));
+        assert_eq!(
+            index_state.description.as_deref(),
+            Some(".bit time oracle index-state type script.")
+        );
+
+        let info_code_hash =
+            hex::decode("9e537bf5b8ec044ca3f53355e879f3fd8832217e4a9b41d9994cf0c547241a79")
+                .unwrap();
+        let info = store
+            .get_script_info(&info_code_hash)
+            .unwrap()
+            .expect("ckb time info script should be imported");
+        assert_eq!(info.name.as_deref(), Some(".bit Time Info"));
+        assert_eq!(
+            info.description.as_deref(),
+            Some(".bit time oracle info type script.")
+        );
+    }
+
+    #[test]
+    fn test_run_label_import_bundled_imports_additional_known_scripts() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        super::run_label_import_bundled(&store, None, "mainnet").unwrap();
+
+        let oracle_code_hash =
+            hex::decode("92156e93acbad7b1ac26c6364efed9bdd5a4f866cecfdf6217e2ea4374f325f0")
+                .unwrap();
+        let oracle = store
+            .get_script_info(&oracle_code_hash)
+            .unwrap()
+            .expect("oracle script should be imported");
+        assert_eq!(oracle.name.as_deref(), Some("ccBTC Oracle Cell"));
+        assert_eq!(
+            oracle.description.as_deref(),
+            Some("Oracle price cell type script carrying ccBTC and CKB feeds.")
+        );
+
+        let spv_code_hash =
+            hex::decode("a76e227da81b97d23deabf0d8964aa41c042f4bcf2db2b8bd873fe8521de741d")
+                .unwrap();
+        let spv = store
+            .get_script_info(&spv_code_hash)
+            .unwrap()
+            .expect("bitcoin spv script should be imported");
+        assert_eq!(spv.name.as_deref(), Some("Bitcoin SPV Type Lock"));
+        assert_eq!(
+            spv.description.as_deref(),
+            Some("Bitcoin SPV light-client type script used by RGB++ flows.")
         );
     }
 }
