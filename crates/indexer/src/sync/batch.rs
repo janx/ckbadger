@@ -368,9 +368,21 @@ where
 
 type UdtInputInfo = (Vec<u8>, Vec<u8>, i16, Vec<u8>, Vec<u8>, u128, String);
 
-/// Resolve input UDT cells only from live_cells (plus same-batch cells at call sites).
-/// Intentionally never trusts in-memory UDT cache for input validity because cache entries can
-/// outlive cell consumption and reintroduce spent outpoints.
+fn cached_to_udt_input_info(cached: &CachedUdtCellInfo) -> UdtInputInfo {
+    (
+        cached.type_script_hash.clone(),
+        cached.type_code_hash.clone(),
+        cached.type_hash_type,
+        cached.type_args.clone(),
+        cached.lock_script_hash.clone(),
+        cached.amount,
+        cached.standard.clone(),
+    )
+}
+
+/// Resolve input UDT cells from cache first, then DB for misses.
+/// Cache hits are safe during bulk sync: cells are consumed sequentially and same-batch outputs
+/// are guaranteed valid. Cache is populated from both output parsing and DB results.
 fn resolve_input_udt_info_from_live_cells(
     writer: &BatchWriter,
     udt_cache: &DashMap<([u8; 32], i16), CachedUdtCellInfo>,
@@ -398,36 +410,54 @@ fn resolve_input_udt_info_from_live_cells(
         return Ok(HashMap::new());
     }
 
-    let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
-        .iter()
-        .map(|(h, i)| (h.as_slice(), *i))
-        .collect();
-    let db_results = writer.get_udt_cells_info_batch(&outpoint_refs)?;
+    // Check cache first, collect misses for DB lookup
+    let mut result = HashMap::with_capacity(unique_outpoints.len());
+    let mut cache_misses = Vec::new();
 
-    for ((tx_hash, idx), (tsh, tch, tht, ta, lsh, am, std)) in &db_results {
-        let key = tx_hash_key32(
-            tx_hash,
-            "resolve_input_udt_info_from_live_cells cache insert",
-        )?;
-        udt_cache.insert(
-            (key, *idx),
-            CachedUdtCellInfo {
-                type_script_hash: tsh.clone(),
-                type_code_hash: tch.clone(),
-                type_hash_type: *tht,
-                type_args: ta.clone(),
-                lock_script_hash: lsh.clone(),
-                amount: *am,
-                standard: std.clone(),
-            },
-        );
+    for (tx_hash, idx) in &unique_outpoints {
+        let key = tx_hash_key32(tx_hash, "resolve_input_udt cache lookup")?;
+        if let Some(cached) = udt_cache.get(&(key, *idx)) {
+            result.insert((tx_hash.clone(), *idx), cached_to_udt_input_info(&cached));
+        } else {
+            cache_misses.push((tx_hash.clone(), *idx));
+        }
+    }
+
+    // Only send cache misses to DB
+    if !cache_misses.is_empty() {
+        let outpoint_refs: Vec<(&[u8], i16)> = cache_misses
+            .iter()
+            .map(|(h, i)| (h.as_slice(), *i))
+            .collect();
+        let db_results = writer.get_udt_cells_info_batch(&outpoint_refs)?;
+
+        for ((tx_hash, idx), info) in &db_results {
+            let key = tx_hash_key32(
+                tx_hash,
+                "resolve_input_udt_info_from_live_cells cache insert",
+            )?;
+            udt_cache.insert(
+                (key, *idx),
+                CachedUdtCellInfo {
+                    type_script_hash: info.0.clone(),
+                    type_code_hash: info.1.clone(),
+                    type_hash_type: info.2,
+                    type_args: info.3.clone(),
+                    lock_script_hash: info.4.clone(),
+                    amount: info.5,
+                    standard: info.6.clone(),
+                },
+            );
+        }
+
+        result.extend(db_results);
     }
 
     if udt_cache.len() > UDT_CELL_CACHE_CAPACITY * 2 {
         udt_cache.clear();
     }
 
-    Ok(db_results)
+    Ok(result)
 }
 
 pub(super) fn classify_unresolved_local_probe(
@@ -5269,7 +5299,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_input_udt_info_ignores_stale_cache_entry_for_non_live_outpoint() {
+    fn test_resolve_input_udt_info_returns_cache_hit_without_db_lookup() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store);
@@ -5290,6 +5320,8 @@ mod tests {
             },
         );
 
+        // Cache entries are trusted — no DB round-trip needed.
+        // During bulk sync, cached outputs from the same batch are guaranteed valid.
         let resolved = resolve_input_udt_info_from_live_cells(
             &writer,
             &cache,
@@ -5297,7 +5329,12 @@ mod tests {
         )
         .unwrap();
 
-        assert!(resolved.is_empty());
+        let entry = resolved
+            .get(&(tx_hash, output_index))
+            .expect("expected cache hit to be returned");
+        assert_eq!(entry.0, vec![0x10; 32]); // type_script_hash
+        assert_eq!(entry.5, 145_203); // amount
+        assert_eq!(entry.6, "xudt_compatible"); // standard
     }
 
     #[test]

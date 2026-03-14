@@ -286,6 +286,16 @@ impl ProtocolDetector for FiberDetector {
         "fiber"
     }
 
+    fn might_apply(&self, tx: &TxView<'_>) -> bool {
+        tx.inputs
+            .iter()
+            .any(|input| classify_lock(&input.lock_code_hash) != FiberLockType::Other)
+            || tx
+                .outputs
+                .iter()
+                .any(|output| classify_lock(&output.lock_code_hash) != FiberLockType::Other)
+    }
+
     fn detect(
         &self,
         tx: &TxView<'_>,

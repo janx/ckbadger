@@ -179,6 +179,11 @@ pub(crate) trait ProtocolDetector: Send + Sync {
     #[allow(dead_code)] // Part of trait interface; used by future detector management/logging
     fn protocol_name(&self) -> &str;
 
+    /// Fast pre-filter: returns false if this detector definitely has no match for the tx.
+    /// Called once per tx (not per owner). Implementations should check lock/type code_hashes
+    /// without allocating or building data structures.
+    fn might_apply(&self, tx: &TxView<'_>) -> bool;
+
     fn detect(
         &self,
         tx: &TxView<'_>,
@@ -411,6 +416,13 @@ fn build_tx_activity_bundle(
     let mut owner_hashes: Vec<Vec<u8>> = owners.keys().cloned().collect();
     owner_hashes.sort();
 
+    // Pre-filter detectors once per tx (not per owner)
+    let applicable_detectors: Vec<&dyn ProtocolDetector> = detectors
+        .iter()
+        .filter(|d| d.might_apply(tx))
+        .map(|d| d.as_ref())
+        .collect();
+
     let mut bundle_owners = Vec::with_capacity(owner_hashes.len());
 
     for lock_hash in &owner_hashes {
@@ -533,7 +545,7 @@ fn build_tx_activity_bundle(
         let type_calls_ref: &[TypeCallEntry] = type_calls.as_deref().unwrap_or(&[]);
         let lock_calls_ref: &[LockCallEntry] = lock_calls.as_deref().unwrap_or(&[]);
 
-        let protocol_actions: Vec<ProtocolAction> = detectors
+        let protocol_actions: Vec<ProtocolAction> = applicable_detectors
             .iter()
             .flat_map(|d| {
                 d.detect(
@@ -2098,5 +2110,82 @@ mod tests {
                 "no rgbpp actions expected for standard-lock-only tx"
             );
         }
+    }
+
+    #[test]
+    fn test_protocol_detector_might_apply_filters_irrelevant_tx() {
+        use super::super::fiber_detector::FiberDetector;
+        use super::super::rgbpp_detector::RgbppDetector;
+        use super::super::stablepp_detector::StableppDetector;
+        use super::super::utxoswap_detector::UtxoSwapDetector;
+
+        let plain_lock = vec![0u8; 32];
+
+        // Build a TxView with plain lock code_hash on input and output (no protocol scripts)
+        let input = InputCellView {
+            lock_script_hash: vec![0xAA; 32],
+            lock_code_hash: plain_lock.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![0x22; 20],
+            capacity: 200_00000000,
+            occupied_capacity: 61_00000000,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_script_hash: None,
+            type_args: None,
+            udt_amount: None,
+            data: vec![],
+            is_dao_withdraw_request: false,
+        };
+
+        let output = ParsedCell {
+            capacity: 200_00000000,
+            lock_code_hash: plain_lock,
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            lock_script_hash: vec![0xBB; 32],
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            type_script_hash: None,
+            data_hash: vec![0; 32],
+            data_size: 0,
+            data: vec![],
+        };
+
+        let outputs = vec![output];
+        let tx = TxView {
+            tx_hash: &[0x99; 32],
+            block_hash: &[0xCC; 32],
+            tx_index: 1,
+            block_number: 1000,
+            timestamp: 1_700_100_000,
+            is_cellbase: false,
+            inputs: vec![input],
+            outputs: &outputs,
+            witnesses: &[],
+        };
+
+        let rgbpp = RgbppDetector::new(true);
+        let fiber = FiberDetector::new(true);
+        let stablepp = StableppDetector::new(true);
+        let utxoswap = UtxoSwapDetector::new(true);
+
+        assert!(
+            !rgbpp.might_apply(&tx),
+            "rgbpp should not apply to plain tx"
+        );
+        assert!(
+            !fiber.might_apply(&tx),
+            "fiber should not apply to plain tx"
+        );
+        assert!(
+            !stablepp.might_apply(&tx),
+            "stablepp should not apply to plain tx"
+        );
+        assert!(
+            !utxoswap.might_apply(&tx),
+            "utxoswap should not apply to plain tx"
+        );
     }
 }

@@ -141,6 +141,16 @@ impl ProtocolDetector for RgbppDetector {
         "rgbpp"
     }
 
+    fn might_apply(&self, tx: &TxView<'_>) -> bool {
+        tx.inputs.iter().any(|input| {
+            RgbppParser::detect_lock_type(&input.lock_code_hash, self.is_mainnet)
+                != RgbppLockType::Other
+        }) || tx.outputs.iter().any(|output| {
+            RgbppParser::detect_lock_type(&output.lock_code_hash, self.is_mainnet)
+                != RgbppLockType::Other
+        })
+    }
+
     fn detect(
         &self,
         tx: &TxView<'_>,

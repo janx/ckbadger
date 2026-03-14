@@ -169,6 +169,22 @@ impl ProtocolDetector for StableppDetector {
         "stablepp"
     }
 
+    fn might_apply(&self, tx: &TxView<'_>) -> bool {
+        tx.inputs.iter().any(|input| {
+            is_stablepp_script(&input.lock_code_hash)
+                || input
+                    .type_code_hash
+                    .as_ref()
+                    .is_some_and(|tc| is_stablepp_script(tc))
+        }) || tx.outputs.iter().any(|output| {
+            is_stablepp_script(&output.lock_code_hash)
+                || output
+                    .type_code_hash
+                    .as_ref()
+                    .is_some_and(|tc| is_stablepp_script(tc))
+        })
+    }
+
     fn detect(
         &self,
         tx: &TxView<'_>,

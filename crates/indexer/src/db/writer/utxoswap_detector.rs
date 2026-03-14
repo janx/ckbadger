@@ -28,6 +28,16 @@ impl ProtocolDetector for UtxoSwapDetector {
         "utxoswap"
     }
 
+    fn might_apply(&self, tx: &TxView<'_>) -> bool {
+        tx.inputs
+            .iter()
+            .any(|input| is_intent_lock(&input.lock_code_hash))
+            || tx
+                .outputs
+                .iter()
+                .any(|output| is_intent_lock(&output.lock_code_hash))
+    }
+
     fn detect(
         &self,
         tx: &TxView<'_>,

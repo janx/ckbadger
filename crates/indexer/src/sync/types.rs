@@ -103,7 +103,6 @@ pub(crate) struct CachedCellInfo {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)] // fields written to cache but read back from DB via get_udt_cells_info_batch
 pub(crate) struct CachedUdtCellInfo {
     pub(crate) type_script_hash: Vec<u8>,
     pub(crate) type_code_hash: Vec<u8>,
