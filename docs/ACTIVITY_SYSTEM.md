@@ -533,7 +533,7 @@ pub struct TypeCallResponse {
     pub type_args: String,
     pub script_hash: String,        // Computed from code_hash + hash_type + args
     pub script_name: Option<String>,    // Resolved from ScriptInfo DB
-    pub protocol_name: Option<String>,  // Resolved from PROTOCOL_INDEX
+    // protocol_name field removed — protocol identification now via ProtocolDetector actions
 }
 
 pub struct LockCallResponse {
@@ -839,40 +839,15 @@ Stats are accumulated in memory during batch processing, then merged with existi
 
 ## Protocol Grouping
 
-Added to support grouping type calls by protocol (e.g., "Stable++", "Godwoken").
+Protocol identification is handled by Layer 3 `ProtocolDetector` implementations in the indexer. Each detector recognizes protocol-specific script patterns and emits `ProtocolAction` entries.
 
-### Data Source
+Active detectors:
 
-**File**: `docs/script-name-overrides.json`
+- **RgbppDetector** — RGB++ leap/transfer actions via lock script transitions
+- **FiberDetector** — Fiber Network channel lifecycle (open/close/force_close/settlement)
+- **StableppDetector** — Stable++ CDP vault lifecycle (open_vault/borrow/repay/close_vault/liquidation/redemption)
 
-The `protocols` field maps protocol names to arrays of code_hashes:
-
-```json
-{
-  "protocols": {
-    "Stable++": ["0x26a33e...", "0x56fb63...", "0x266221...", "0xff3520..."],
-    "Godwoken": ["0x628b5f...", "0x000f87...", ...]
-  }
-}
-```
-
-### Backend — Reverse Index
-
-**File**: `crates/api/src/routes/activities.rs`
-
-`PROTOCOL_INDEX` is a `LazyLock<HashMap<Vec<u8>, String>>` built from `docs/script-name-overrides.json` at first access. It maps code_hash bytes → protocol name. Used in `convert_type_call()` to populate `protocol_name` on `TypeCallResponse`.
-
-### Frontend — Protocol-Aware Display
-
-**Homepage** (`StreamItemTypeCall`): When `protocolName` exists, shows protocol name as amber prefix with separator:
-
-```
-⚙ Stable++ · Pool(0xab12...cd34)
-```
-
-Falls back to `⚙ Type call Pool(0xab12...cd34)` when no protocol.
-
-**Address page** (`getTypeEventParts`): Same pattern — protocol name replaces "Type call" in the badge.
+The `docs/script-name-overrides.json` `protocols` field retains code_hash groupings as reference metadata but is no longer used at runtime for protocol identification.
 
 ---
 
@@ -886,11 +861,13 @@ Falls back to `⚙ Type call Pool(0xab12...cd34)` when no protocol.
 
 ### Activity Builder
 
-| File                                             | Content                                                                                             |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `crates/indexer/src/db/writer/activities.rs`     | build_activity_bundles_for_block(), CodeHashes, classify_input/output, emit_object/identity_changes |
-| `crates/indexer/src/db/writer/rgbpp_detector.rs` | RgbppDetector: ProtocolDetector impl (leap_to_ckb, leap_to_btc, transfer, btc_time_locked, receive) |
-| `crates/indexer/build.rs`                        | Compile-time extraction of xudt_compatible code_hashes                                              |
+| File                                                | Content                                                                                                           |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `crates/indexer/src/db/writer/activities.rs`        | build_activity_bundles_for_block(), CodeHashes, classify_input/output, emit_object/identity_changes               |
+| `crates/indexer/src/db/writer/rgbpp_detector.rs`    | RgbppDetector: ProtocolDetector impl (leap_to_ckb, leap_to_btc, transfer, btc_time_locked, receive)               |
+| `crates/indexer/src/db/writer/fiber_detector.rs`    | FiberDetector: ProtocolDetector impl (open, close, force_close, settlement)                                       |
+| `crates/indexer/src/db/writer/stablepp_detector.rs` | StableppDetector: ProtocolDetector impl (open_vault, borrow, repay, close_vault, adjust, liquidation, redemption) |
+| `crates/indexer/build.rs`                           | Compile-time extraction of xudt_compatible code_hashes                                                            |
 
 ### Storage
 
@@ -903,9 +880,9 @@ Falls back to `⚙ Type call Pool(0xab12...cd34)` when no protocol.
 
 ### API
 
-| File                                  | Content                                                                                                       |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `crates/api/src/routes/activities.rs` | Endpoints, response types, canonicality validation, PROTOCOL_INDEX, LOCK_ARGS_DECODERS, PROTOCOL_ACTION_LOCKS |
+| File                                  | Content                                                                |
+| ------------------------------------- | ---------------------------------------------------------------------- |
+| `crates/api/src/routes/activities.rs` | Endpoints, response types, canonicality validation, LOCK_ARGS_DECODERS |
 
 ### Statistics
 
