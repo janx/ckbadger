@@ -11,7 +11,7 @@ use ckbadger_store::{
     CkbadgerStore,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 use crate::response::{
@@ -96,7 +96,6 @@ pub struct TypeCallResponse {
     pub type_args: String,
     pub script_hash: String,
     pub script_name: Option<String>,
-    pub protocol_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,7 +106,6 @@ pub struct LockCallResponse {
     pub lock_args: String,
     pub script_hash: String,
     pub script_name: Option<String>,
-    pub role: String,
     pub decoded: Option<serde_json::Value>,
 }
 
@@ -146,39 +144,6 @@ pub struct LatestActivityParams {
 fn default_latest_limit() -> usize {
     8
 }
-
-/// Reverse index: code_hash bytes → protocol name.
-/// Built once from `docs/script-name-overrides.json` (same source as `assets.rs`).
-static PROTOCOL_INDEX: LazyLock<HashMap<Vec<u8>, String>> = LazyLock::new(|| {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/script-name-overrides.json");
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read protocol index at {}: {}", path.display(), e));
-    let doc: serde_json::Value = serde_json::from_str(&content).unwrap_or_else(|e| {
-        panic!(
-            "failed to parse protocol index JSON at {}: {}",
-            path.display(),
-            e
-        )
-    });
-
-    let mut index = HashMap::new();
-    if let Some(protocols) = doc.get("protocols").and_then(|v| v.as_object()) {
-        for (protocol_name, code_hashes) in protocols {
-            if let Some(hashes) = code_hashes.as_array() {
-                for hash_val in hashes {
-                    if let Some(hex_str) = hash_val.as_str() {
-                        let hex = hex_str.strip_prefix("0x").unwrap_or(hex_str);
-                        if let Ok(bytes) = hex::decode(hex) {
-                            index.insert(bytes, protocol_name.clone());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    index
-});
 
 fn action_to_string(action: &AssetAction) -> String {
     match action {
@@ -285,7 +250,6 @@ fn convert_type_call(
         type_args: format!("0x{}", hex::encode(&call.type_args)),
         script_hash: format!("0x{}", hex::encode(script_hash)),
         script_name: normalized_script_name(script_info),
-        protocol_name: PROTOCOL_INDEX.get(&call.type_code_hash).cloned(),
     })
 }
 
@@ -300,19 +264,6 @@ fn convert_type_calls(
         .map(|call| convert_type_call(store, cache, call))
         .collect()
 }
-
-/// Protocol action lock code_hashes — locks where creating a cell IS the protocol action.
-static PROTOCOL_ACTION_LOCKS: LazyLock<HashSet<Vec<u8>>> = LazyLock::new(|| {
-    let hashes: &[&str] = &[
-        // Fiber funding lock (mainnet, testnet)
-        "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1",
-        "0x6c67887fe201ee0c7853f1682c0b77c0e6214044c156c7558269390a8afa6d7c",
-        // Fiber commitment lock (mainnet, testnet)
-        "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c",
-        "0x740dee83f87c6f309824d8fd3fbdd3c8380ee6fc9acc90b1a748438afcdf81d8",
-    ];
-    hashes.iter().map(|h| parse_hex_code_hash(h)).collect()
-});
 
 type ArgsDecoder = fn(&[u8]) -> Option<serde_json::Value>;
 
@@ -436,14 +387,6 @@ fn decode_fiber_commitment_lock_args(args: &[u8]) -> Option<serde_json::Value> {
     }))
 }
 
-fn lock_call_role(code_hash: &[u8]) -> &'static str {
-    if PROTOCOL_ACTION_LOCKS.contains(code_hash) {
-        "protocol_action"
-    } else {
-        "access_control"
-    }
-}
-
 fn convert_lock_call(
     store: &CkbadgerStore,
     cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
@@ -461,7 +404,6 @@ fn convert_lock_call(
         &call.lock_args,
     );
     let script_info = resolve_script_info_cached(store, cache, &call.lock_code_hash)?;
-    let role = lock_call_role(&call.lock_code_hash);
 
     Ok(LockCallResponse {
         lock_code_hash: format!("0x{}", hex::encode(&call.lock_code_hash)),
@@ -469,7 +411,6 @@ fn convert_lock_call(
         lock_args: format!("0x{}", hex::encode(&call.lock_args)),
         script_hash: format!("0x{}", hex::encode(script_hash)),
         script_name: normalized_script_name(script_info),
-        role: role.to_string(),
         decoded: LOCK_ARGS_DECODERS
             .get(call.lock_code_hash.as_slice())
             .and_then(|decoder| decoder(&call.lock_args)),
@@ -1067,20 +1008,6 @@ mod tests {
     fn test_decode_fiber_commitment_lock_args_too_short() {
         let args = vec![0; 56]; // 1 byte short of minimum 57
         assert!(decode_fiber_commitment_lock_args(&args).is_none());
-    }
-
-    #[test]
-    fn test_fiber_locks_in_protocol_action_locks() {
-        // Verify Fiber code hashes are recognized as protocol_action locks
-        let funding_mainnet = parse_hex_code_hash(
-            "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1",
-        );
-        let commitment_testnet = parse_hex_code_hash(
-            "0x740dee83f87c6f309824d8fd3fbdd3c8380ee6fc9acc90b1a748438afcdf81d8",
-        );
-        assert!(PROTOCOL_ACTION_LOCKS.contains(&funding_mainnet));
-        assert!(PROTOCOL_ACTION_LOCKS.contains(&commitment_testnet));
-        assert_eq!(PROTOCOL_ACTION_LOCKS.len(), 4);
     }
 
     #[test]
