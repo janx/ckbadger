@@ -15,7 +15,10 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
-use crate::response::{ok, ApiError, ApiResult, ApiRouteError, SyncStatusResponse as SyncStatus};
+use crate::response::{
+    chart_response_has_data, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint, ChartResponse,
+    SyncStatusResponse as SyncStatus,
+};
 use crate::utils::{apply_live_capacity_delta, format_duration};
 use crate::warmup::{
     CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN, CACHE_KEY_SCRIPTS_ALL,
@@ -430,27 +433,6 @@ pub struct TxStatsResponse {
     pub current_day: i64,
     pub hourly_data: Vec<TxStatsDataPoint>,
     pub daily_data: Vec<TxStatsDataPoint>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChartDataPoint {
-    pub date: String,
-    pub value: String,
-    pub value2: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChartResponse {
-    pub data: Vec<ChartDataPoint>,
-    pub title: String,
-    pub y_axis_label: String,
-    pub y2_axis_label: Option<String>,
-}
-
-fn chart_response_has_data(response: &ChartResponse) -> bool {
-    !response.data.is_empty()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

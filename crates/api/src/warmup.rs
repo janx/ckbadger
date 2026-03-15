@@ -1,8 +1,9 @@
 use crate::cache::CacheTtl;
+use crate::response::ChartResponse;
 use crate::routes::assets::AssetResponse;
 use crate::routes::statistics::{
     build_address_cohort_response, build_block_time_distribution_response, build_cell_age_response,
-    build_cell_size_response, ChartResponse, StackedAreaChartResponse,
+    build_cell_size_response, StackedAreaChartResponse,
 };
 use crate::utils::{
     accumulate_live_capacity, resolve_collection_standard, resolve_dob_collection_name,

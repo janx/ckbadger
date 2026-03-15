@@ -293,12 +293,18 @@ export default function ScriptDetailPage({
     error: namedDeploymentsError,
   } = useQuery({
     queryKey: ['script', name],
-    queryFn: () => api.getScript(name!),
+    queryFn: () => {
+      if (!name) throw new Error('script name is required');
+      return api.getScript(name);
+    },
     enabled: Boolean(name) && !isCodeHashMode,
   });
   const { data: usage, isLoading: isUsageLoading } = useQuery({
     queryKey: ['script-usage', name],
-    queryFn: () => api.getScriptUsage(name!),
+    queryFn: () => {
+      if (!name) throw new Error('script name is required');
+      return api.getScriptUsage(name);
+    },
     enabled: Boolean(name) && !isCodeHashMode,
   });
   const { data: codeHashLookup, isLoading: isCodeHashLookupLoading } = useQuery({

@@ -16,6 +16,7 @@ pub(crate) const UNDO_SEQ_LOCAL_MAX: u64 = (1u64 << UNDO_SEQ_SCOPE_SHIFT) - 1;
 #[repr(u16)]
 pub(crate) enum UndoSeqScope {
     TxContext = 0x0001,
+    DotBit = 0x0002,
 }
 
 // ── Sync / Reorg action enums ──────────────────────────────────────────

@@ -11,7 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::response::{
-    default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
+    chart_response_has_data, default_limit, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint,
+    ChartResponse, CursorPaginatedResponse,
 };
 use crate::utils::{script_to_address, shannon_to_ckb, shannon_to_ckb_signed};
 use crate::AppState;
@@ -1078,27 +1079,6 @@ fn extract_ar(dao: &[u8]) -> Option<u64> {
     }
     let bytes: [u8; 8] = dao[8..16].try_into().ok()?;
     Some(u64::from_le_bytes(bytes))
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChartDataPoint {
-    pub date: String,
-    pub value: String,
-    pub value2: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChartResponse {
-    pub data: Vec<ChartDataPoint>,
-    pub title: String,
-    pub y_axis_label: String,
-    pub y2_axis_label: Option<String>,
-}
-
-fn chart_response_has_data(response: &ChartResponse) -> bool {
-    !response.data.is_empty()
 }
 
 fn build_total_depositors_series(

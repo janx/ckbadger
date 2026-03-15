@@ -11,7 +11,7 @@ mod reorg;
 mod sync_mode;
 mod token_helpers;
 pub(crate) mod types;
-mod undo;
+pub(crate) mod undo;
 
 pub use indexer::Indexer;
 pub use progress::SyncProgress;

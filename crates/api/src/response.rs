@@ -171,6 +171,27 @@ pub struct ScriptResponse {
     pub args: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartDataPoint {
+    pub date: String,
+    pub value: String,
+    pub value2: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartResponse {
+    pub data: Vec<ChartDataPoint>,
+    pub title: String,
+    pub y_axis_label: String,
+    pub y2_axis_label: Option<String>,
+}
+
+pub fn chart_response_has_data(response: &ChartResponse) -> bool {
+    !response.data.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
