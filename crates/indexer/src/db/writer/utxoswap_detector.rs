@@ -28,6 +28,14 @@ impl ProtocolDetector for UtxoSwapDetector {
         "utxoswap"
     }
 
+    fn might_apply_batch(
+        &self,
+        lock_code_hashes: &std::collections::HashSet<[u8; 32]>,
+        _type_code_hashes: &std::collections::HashSet<[u8; 32]>,
+    ) -> bool {
+        lock_code_hashes.iter().any(|h| is_intent_lock(h))
+    }
+
     fn might_apply(&self, tx: &TxView<'_>) -> bool {
         tx.inputs
             .iter()

@@ -1125,6 +1125,46 @@ impl Indexer {
             }
         }
 
+        // Collect unique code_hashes for batch-level detector pre-filtering.
+        // This allows entire detectors to be skipped when none of their
+        // protocol scripts appear anywhere in the batch.
+        let mut batch_lock_code_hashes: HashSet<[u8; 32]> = HashSet::new();
+        let mut batch_type_code_hashes: HashSet<[u8; 32]> = HashSet::new();
+
+        // Collect from output cells
+        for tx_data in &all_tx_data {
+            for cell in &tx_data.cells {
+                if cell.lock_code_hash.len() == 32 {
+                    let mut h = [0u8; 32];
+                    h.copy_from_slice(&cell.lock_code_hash);
+                    batch_lock_code_hashes.insert(h);
+                }
+                if let Some(ref tc) = cell.type_code_hash {
+                    if tc.len() == 32 {
+                        let mut h = [0u8; 32];
+                        h.copy_from_slice(tc);
+                        batch_type_code_hashes.insert(h);
+                    }
+                }
+            }
+        }
+
+        // Collect from resolved input cells (DB-fetched and same-batch)
+        for info in input_cell_info.values().chain(batch_cell_infos.values()) {
+            if info.lock_code_hash.len() == 32 {
+                let mut h = [0u8; 32];
+                h.copy_from_slice(&info.lock_code_hash);
+                batch_lock_code_hashes.insert(h);
+            }
+            if let Some(ref tc) = info.type_code_hash {
+                if tc.len() == 32 {
+                    let mut h = [0u8; 32];
+                    h.copy_from_slice(tc);
+                    batch_type_code_hashes.insert(h);
+                }
+            }
+        }
+
         // Pre-compute cell index keys for T1b (parallel cell index writes).
         // Each op holds the 74-byte encoded keys so T1b can write them without
         // re-encoding or needing access to ParsedCell / LiveCellInfo.
@@ -1704,20 +1744,25 @@ impl Indexer {
             let writer = &self.writer;
             let dao_withdraw_outpoints = dao_withdraw_outpoints_from_map(&consumed_dao_map);
 
-            let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> = vec![
-                Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new(
-                    self.config.is_mainnet(),
-                )),
-                Box::new(crate::db::writer::fiber_detector::FiberDetector::new(
-                    self.config.is_mainnet(),
-                )),
-                Box::new(crate::db::writer::stablepp_detector::StableppDetector::new(
-                    self.config.is_mainnet(),
-                )),
-                Box::new(crate::db::writer::utxoswap_detector::UtxoSwapDetector::new(
-                    self.config.is_mainnet(),
-                )),
-            ];
+            let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> =
+                vec![
+                    Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new(
+                        self.config.is_mainnet(),
+                    ))
+                        as Box<dyn crate::db::writer::activities::ProtocolDetector>,
+                    Box::new(crate::db::writer::fiber_detector::FiberDetector::new(
+                        self.config.is_mainnet(),
+                    )),
+                    Box::new(crate::db::writer::stablepp_detector::StableppDetector::new(
+                        self.config.is_mainnet(),
+                    )),
+                    Box::new(crate::db::writer::utxoswap_detector::UtxoSwapDetector::new(
+                        self.config.is_mainnet(),
+                    )),
+                ]
+                .into_iter()
+                .filter(|d| d.might_apply_batch(&batch_lock_code_hashes, &batch_type_code_hashes))
+                .collect();
 
             let tt;
             (
@@ -4159,20 +4204,25 @@ impl Indexer {
             )?;
 
             // Activity writes (live sync)
-            let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> = vec![
-                Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new(
-                    self.config.is_mainnet(),
-                )),
-                Box::new(crate::db::writer::fiber_detector::FiberDetector::new(
-                    self.config.is_mainnet(),
-                )),
-                Box::new(crate::db::writer::stablepp_detector::StableppDetector::new(
-                    self.config.is_mainnet(),
-                )),
-                Box::new(crate::db::writer::utxoswap_detector::UtxoSwapDetector::new(
-                    self.config.is_mainnet(),
-                )),
-            ];
+            let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> =
+                vec![
+                    Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new(
+                        self.config.is_mainnet(),
+                    ))
+                        as Box<dyn crate::db::writer::activities::ProtocolDetector>,
+                    Box::new(crate::db::writer::fiber_detector::FiberDetector::new(
+                        self.config.is_mainnet(),
+                    )),
+                    Box::new(crate::db::writer::stablepp_detector::StableppDetector::new(
+                        self.config.is_mainnet(),
+                    )),
+                    Box::new(crate::db::writer::utxoswap_detector::UtxoSwapDetector::new(
+                        self.config.is_mainnet(),
+                    )),
+                ]
+                .into_iter()
+                .filter(|d| d.might_apply_batch(&batch_lock_code_hashes, &batch_type_code_hashes))
+                .collect();
             let mut activity_batch = StoreBatch::new(self.writer.store());
             {
                 let token_info_cache = load_activity_token_info_cache(

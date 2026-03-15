@@ -179,6 +179,17 @@ pub(crate) trait ProtocolDetector: Send + Sync {
     #[allow(dead_code)] // Part of trait interface; used by future detector management/logging
     fn protocol_name(&self) -> &str;
 
+    /// Batch-level pre-filter: returns false if no code_hash in the entire batch
+    /// matches this detector. Called once per batch (not per TX).
+    /// Default implementation returns true (opt-in optimization).
+    fn might_apply_batch(
+        &self,
+        _lock_code_hashes: &std::collections::HashSet<[u8; 32]>,
+        _type_code_hashes: &std::collections::HashSet<[u8; 32]>,
+    ) -> bool {
+        true // default: don't skip
+    }
+
     /// Fast pre-filter: returns false if this detector definitely has no match for the tx.
     /// Called once per tx (not per owner). Implementations should check lock/type code_hashes
     /// without allocating or building data structures.
@@ -2187,5 +2198,100 @@ mod tests {
             !utxoswap.might_apply(&tx),
             "utxoswap should not apply to plain tx"
         );
+    }
+
+    #[test]
+    fn test_might_apply_batch_empty_sets_returns_false() {
+        use super::super::fiber_detector::FiberDetector;
+        use super::super::rgbpp_detector::RgbppDetector;
+        use super::super::stablepp_detector::StableppDetector;
+        use super::super::utxoswap_detector::UtxoSwapDetector;
+        use std::collections::HashSet;
+
+        let empty_locks: HashSet<[u8; 32]> = HashSet::new();
+        let empty_types: HashSet<[u8; 32]> = HashSet::new();
+
+        let rgbpp = RgbppDetector::new(true);
+        let fiber = FiberDetector::new(true);
+        let stablepp = StableppDetector::new(true);
+        let utxoswap = UtxoSwapDetector::new(true);
+
+        assert!(!rgbpp.might_apply_batch(&empty_locks, &empty_types));
+        assert!(!fiber.might_apply_batch(&empty_locks, &empty_types));
+        assert!(!stablepp.might_apply_batch(&empty_locks, &empty_types));
+        assert!(!utxoswap.might_apply_batch(&empty_locks, &empty_types));
+    }
+
+    #[test]
+    fn test_might_apply_batch_with_matching_code_hash() {
+        use super::super::fiber_detector::FiberDetector;
+        use super::super::rgbpp_detector::RgbppDetector;
+        use super::super::stablepp_detector::StableppDetector;
+        use super::super::utxoswap_detector::UtxoSwapDetector;
+        use crate::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET;
+        use crate::parser::rgbpp::RGBPP_LOCK_CODE_HASH_MAINNET;
+        use crate::parser::stablepp::VAULT_LOCK_CODE_HASH_MAINNET as STABLEPP_VAULT;
+        use crate::parser::utxoswap::INTENT_LOCK_CODE_HASH_MAINNET;
+        use crate::rpc::parse_hex_to_bytes;
+        use std::collections::HashSet;
+
+        let empty_types: HashSet<[u8; 32]> = HashSet::new();
+
+        // RgbppDetector should match when rgbpp lock code_hash is in the set
+        let rgbpp_hash = parse_hex_to_bytes(RGBPP_LOCK_CODE_HASH_MAINNET);
+        let mut locks: HashSet<[u8; 32]> = HashSet::new();
+        let mut h = [0u8; 32];
+        h.copy_from_slice(&rgbpp_hash);
+        locks.insert(h);
+        let rgbpp = RgbppDetector::new(true);
+        assert!(rgbpp.might_apply_batch(&locks, &empty_types));
+
+        // FiberDetector should match when funding lock code_hash is in the set
+        let fiber_hash = parse_hex_to_bytes(FUNDING_LOCK_CODE_HASH_MAINNET);
+        let mut locks: HashSet<[u8; 32]> = HashSet::new();
+        let mut h = [0u8; 32];
+        h.copy_from_slice(&fiber_hash);
+        locks.insert(h);
+        let fiber = FiberDetector::new(true);
+        assert!(fiber.might_apply_batch(&locks, &empty_types));
+
+        // StableppDetector should match when vault lock code_hash is in the set
+        let stablepp_hash = parse_hex_to_bytes(STABLEPP_VAULT);
+        let mut locks: HashSet<[u8; 32]> = HashSet::new();
+        let mut h = [0u8; 32];
+        h.copy_from_slice(&stablepp_hash);
+        locks.insert(h);
+        let stablepp = StableppDetector::new(true);
+        assert!(stablepp.might_apply_batch(&locks, &empty_types));
+
+        // UtxoSwapDetector should match when intent lock code_hash is in the set
+        let utxoswap_hash = parse_hex_to_bytes(INTENT_LOCK_CODE_HASH_MAINNET);
+        let mut locks: HashSet<[u8; 32]> = HashSet::new();
+        let mut h = [0u8; 32];
+        h.copy_from_slice(&utxoswap_hash);
+        locks.insert(h);
+        let utxoswap = UtxoSwapDetector::new(true);
+        assert!(utxoswap.might_apply_batch(&locks, &empty_types));
+    }
+
+    #[test]
+    fn test_might_apply_batch_unrelated_code_hash_returns_false() {
+        use super::super::fiber_detector::FiberDetector;
+        use super::super::rgbpp_detector::RgbppDetector;
+        use super::super::stablepp_detector::StableppDetector;
+        use super::super::utxoswap_detector::UtxoSwapDetector;
+        use std::collections::HashSet;
+
+        // An unrelated code_hash should not trigger any detector
+        let unrelated = [0xFFu8; 32];
+        let mut locks: HashSet<[u8; 32]> = HashSet::new();
+        locks.insert(unrelated);
+        let mut types: HashSet<[u8; 32]> = HashSet::new();
+        types.insert(unrelated);
+
+        assert!(!RgbppDetector::new(true).might_apply_batch(&locks, &types));
+        assert!(!FiberDetector::new(true).might_apply_batch(&locks, &types));
+        assert!(!StableppDetector::new(true).might_apply_batch(&locks, &types));
+        assert!(!UtxoSwapDetector::new(true).might_apply_batch(&locks, &types));
     }
 }

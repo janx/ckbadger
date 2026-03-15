@@ -286,6 +286,16 @@ impl ProtocolDetector for FiberDetector {
         "fiber"
     }
 
+    fn might_apply_batch(
+        &self,
+        lock_code_hashes: &std::collections::HashSet<[u8; 32]>,
+        _type_code_hashes: &std::collections::HashSet<[u8; 32]>,
+    ) -> bool {
+        lock_code_hashes
+            .iter()
+            .any(|h| classify_lock(h) != FiberLockType::Other)
+    }
+
     fn might_apply(&self, tx: &TxView<'_>) -> bool {
         tx.inputs
             .iter()

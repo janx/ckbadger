@@ -169,6 +169,15 @@ impl ProtocolDetector for StableppDetector {
         "stablepp"
     }
 
+    fn might_apply_batch(
+        &self,
+        lock_code_hashes: &std::collections::HashSet<[u8; 32]>,
+        type_code_hashes: &std::collections::HashSet<[u8; 32]>,
+    ) -> bool {
+        lock_code_hashes.iter().any(|h| is_stablepp_script(h))
+            || type_code_hashes.iter().any(|h| is_stablepp_script(h))
+    }
+
     fn might_apply(&self, tx: &TxView<'_>) -> bool {
         tx.inputs.iter().any(|input| {
             is_stablepp_script(&input.lock_code_hash)
