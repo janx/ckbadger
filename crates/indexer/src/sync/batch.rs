@@ -2956,7 +2956,7 @@ impl Indexer {
                                         &tx_views,
                                         token_info_cache,
                                         &protocol_detectors,
-                                    );
+                                    )?;
 
                                 for bundle in bundles {
                                     for owner in &bundle.owners {
@@ -4265,7 +4265,7 @@ impl Indexer {
                         &tx_views,
                         &token_info_cache,
                         &protocol_detectors,
-                    );
+                    )?;
 
                     for bundle in bundles {
                         for owner in &bundle.owners {

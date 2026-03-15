@@ -332,7 +332,8 @@ mod tests {
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
         let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors);
+            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
+                .unwrap();
 
         assert_eq!(bundles.len(), 1);
         for owner in &bundles[0].owners {
@@ -397,7 +398,8 @@ mod tests {
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
         let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors);
+            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
+                .unwrap();
 
         assert_eq!(bundles.len(), 1);
 
@@ -471,7 +473,8 @@ mod tests {
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
         let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors);
+            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
+                .unwrap();
 
         assert_eq!(bundles.len(), 1);
 
@@ -549,7 +552,8 @@ mod tests {
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
         let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors);
+            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
+                .unwrap();
 
         assert_eq!(bundles.len(), 1);
 
@@ -634,7 +638,8 @@ mod tests {
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
         let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors);
+            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
+                .unwrap();
 
         assert_eq!(bundles.len(), 1);
 
@@ -695,7 +700,8 @@ mod tests {
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
         let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors);
+            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
+                .unwrap();
 
         assert_eq!(bundles.len(), 1);
 
@@ -796,7 +802,8 @@ mod tests {
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
         let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors);
+            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
+                .unwrap();
 
         assert_eq!(bundles.len(), 1);
 

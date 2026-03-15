@@ -1,5 +1,6 @@
 //! Activity builder: derives per-owner position changes from parsed block data.
 
+use anyhow::{bail, Result};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::OnceLock;
 
@@ -215,7 +216,7 @@ pub type OwnerActivity = (Vec<u8>, Vec<Vec<u8>>, ActivityEntry);
 pub fn build_activity_bundles_for_block(
     txs: &[TxView<'_>],
     token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-) -> Vec<TxActivityBundle> {
+) -> Result<Vec<TxActivityBundle>> {
     build_activity_bundles_for_block_with_detectors(txs, token_info_cache, &[])
 }
 
@@ -224,7 +225,7 @@ pub fn build_activity_bundles_for_block_with_detectors(
     txs: &[TxView<'_>],
     token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
     detectors: &[Box<dyn ProtocolDetector>],
-) -> Vec<TxActivityBundle> {
+) -> Result<Vec<TxActivityBundle>> {
     let hashes = code_hashes();
     txs.iter()
         .map(|tx| build_tx_activity_bundle(tx, hashes, token_info_cache, detectors))
@@ -238,11 +239,11 @@ pub fn build_activity_bundles_for_block_with_detectors(
 pub fn build_activities_for_block(
     txs: &[TxView<'_>],
     token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-) -> Vec<OwnerActivity> {
-    build_activity_bundles_for_block(txs, token_info_cache)
+) -> Result<Vec<OwnerActivity>> {
+    Ok(build_activity_bundles_for_block(txs, token_info_cache)?
         .into_iter()
         .flat_map(flatten_tx_activity_bundle)
-        .collect()
+        .collect())
 }
 
 /// Accumulator for per-owner position within one transaction.
@@ -297,33 +298,50 @@ fn record_owner_lock_script(
     lock_code_hash: &[u8],
     lock_hash_type: i16,
     lock_args: &[u8],
-) {
+) -> Result<()> {
     match (
         accum.lock_code_hash.as_ref(),
         accum.lock_hash_type,
         accum.lock_args.as_ref(),
     ) {
         (Some(existing_code_hash), Some(existing_hash_type), Some(existing_args)) => {
-            assert_eq!(
-                existing_code_hash, lock_code_hash,
-                "owner lock_code_hash mismatch for same lock hash"
-            );
-            assert_eq!(
-                existing_hash_type, lock_hash_type,
-                "owner lock_hash_type mismatch for same lock hash"
-            );
-            assert_eq!(
-                existing_args, lock_args,
-                "owner lock_args mismatch for same lock hash"
-            );
+            if existing_code_hash != lock_code_hash {
+                bail!(
+                    "owner lock_code_hash mismatch for same lock hash: existing=0x{}, new=0x{}",
+                    hex::encode(existing_code_hash),
+                    hex::encode(lock_code_hash)
+                );
+            }
+            if existing_hash_type != lock_hash_type {
+                bail!(
+                    "owner lock_hash_type mismatch for same lock hash: existing={}, new={}, lock_code_hash=0x{}",
+                    existing_hash_type,
+                    lock_hash_type,
+                    hex::encode(lock_code_hash)
+                );
+            }
+            if existing_args != lock_args {
+                bail!(
+                    "owner lock_args mismatch for same lock hash: existing_len={}, new_len={}, lock_code_hash=0x{}",
+                    existing_args.len(),
+                    lock_args.len(),
+                    hex::encode(lock_code_hash)
+                );
+            }
         }
         (None, None, None) => {
             accum.lock_code_hash = Some(lock_code_hash.to_vec());
             accum.lock_hash_type = Some(lock_hash_type);
             accum.lock_args = Some(lock_args.to_vec());
         }
-        _ => panic!("owner lock script state partially initialized"),
+        _ => bail!(
+            "owner lock script state partially initialized: code_hash={}, hash_type={}, args={}",
+            accum.lock_code_hash.is_some(),
+            accum.lock_hash_type.is_some(),
+            accum.lock_args.is_some()
+        ),
     }
+    Ok(())
 }
 
 fn build_tx_activity_bundle(
@@ -331,7 +349,7 @@ fn build_tx_activity_bundle(
     hashes: &CodeHashes,
     token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
     detectors: &[Box<dyn ProtocolDetector>],
-) -> TxActivityBundle {
+) -> Result<TxActivityBundle> {
     let mut owners: HashMap<Vec<u8>, OwnerAccum> = HashMap::new();
 
     // Process inputs (skip inputs with unknown cell info — empty lock_script_hash)
@@ -345,7 +363,7 @@ fn build_tx_activity_bundle(
             &input.lock_code_hash,
             input.lock_hash_type,
             &input.lock_args,
-        );
+        )?;
         accum.involved_scripts.insert(input.lock_code_hash.clone());
         accum.input_capacity += input.capacity as i128;
         accum.input_used += input.occupied_capacity;
@@ -363,7 +381,7 @@ fn build_tx_activity_bundle(
                 input.is_dao_withdraw_request,
                 hashes,
                 input.capacity,
-            );
+            )?;
         }
     }
 
@@ -375,7 +393,7 @@ fn build_tx_activity_bundle(
             &cell.lock_code_hash,
             cell.lock_hash_type,
             &cell.lock_args,
-        );
+        )?;
         accum.involved_scripts.insert(cell.lock_code_hash.clone());
         accum.output_capacity += cell.capacity as i128;
 
@@ -401,7 +419,7 @@ fn build_tx_activity_bundle(
                 &cell.data,
                 hashes,
                 cell.capacity,
-            );
+            )?;
         }
     }
 
@@ -595,7 +613,7 @@ fn build_tx_activity_bundle(
         });
     }
 
-    TxActivityBundle {
+    Ok(TxActivityBundle {
         tx_hash: tx.tx_hash.to_vec(),
         block_hash: tx.block_hash.to_vec(),
         block_number: tx.block_number,
@@ -603,7 +621,7 @@ fn build_tx_activity_bundle(
         timestamp: tx.timestamp,
         is_cellbase: tx.is_cellbase,
         owners: bundle_owners,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -644,7 +662,7 @@ fn classify_input(
     is_dao_withdraw_request: bool,
     hashes: &CodeHashes,
     capacity: i64,
-) {
+) -> Result<()> {
     accum.has_type_script = true;
     match hashes.classify(type_code_hash) {
         Some(AssetKind::Udt) => {
@@ -687,9 +705,10 @@ fn classify_input(
             }
         }
         None => {
-            record_script_call(accum, type_code_hash, type_hash_type, type_args);
+            record_script_call(accum, type_code_hash, type_hash_type, type_args)?;
         }
     }
+    Ok(())
 }
 
 fn classify_output(
@@ -701,7 +720,7 @@ fn classify_output(
     cell_data: &[u8],
     hashes: &CodeHashes,
     capacity: i64,
-) {
+) -> Result<()> {
     accum.has_type_script = true;
     match hashes.classify(type_code_hash) {
         Some(AssetKind::Udt) => {
@@ -714,12 +733,12 @@ fn classify_output(
         }
         Some(AssetKind::Dao) => {
             if cell_data.len() == 8 {
-                let bytes: [u8; 8] = cell_data.try_into().unwrap_or_else(|_| {
-                    panic!(
+                let bytes: [u8; 8] = cell_data[..8].try_into().map_err(|_| {
+                    anyhow::anyhow!(
                         "failed to decode DAO output data while classifying activity: len={}",
                         cell_data.len()
                     )
-                });
+                })?;
                 let deposit_block = u64::from_le_bytes(bytes);
                 if deposit_block == 0 {
                     accum.dao_deposits.push(capacity);
@@ -757,9 +776,10 @@ fn classify_output(
             }
         }
         None => {
-            record_script_call(accum, type_code_hash, type_hash_type, type_args);
+            record_script_call(accum, type_code_hash, type_hash_type, type_args)?;
         }
     }
+    Ok(())
 }
 
 fn record_script_call(
@@ -767,22 +787,23 @@ fn record_script_call(
     type_code_hash: &[u8],
     type_hash_type: Option<i16>,
     type_args: Option<&[u8]>,
-) {
-    let hash_type = type_hash_type.unwrap_or_else(|| {
-        panic!(
+) -> Result<()> {
+    let hash_type = type_hash_type.ok_or_else(|| {
+        anyhow::anyhow!(
             "missing type_hash_type while recording script call: type_code_hash=0x{}",
             hex::encode(type_code_hash)
         )
-    });
-    let args = type_args.unwrap_or_else(|| {
-        panic!(
+    })?;
+    let args = type_args.ok_or_else(|| {
+        anyhow::anyhow!(
             "missing type_args while recording script call: type_code_hash=0x{}",
             hex::encode(type_code_hash)
         )
-    });
+    })?;
     accum
         .unrecognized_type_calls
         .insert((type_code_hash.to_vec(), hash_type, args.to_vec()));
+    Ok(())
 }
 
 fn resolve_dotbit_account_id(type_args: Option<&[u8]>, cell_data: &[u8]) -> Option<Vec<u8>> {
@@ -943,7 +964,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new());
+        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
         assert_eq!(bundles.len(), 1);
         assert_eq!(bundles[0].owners.len(), 1);
 
@@ -975,7 +996,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new());
+        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
         assert_eq!(bundles.len(), 1);
         let owner_hashes: Vec<Vec<u8>> = bundles[0]
             .owners
@@ -1008,7 +1029,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
         assert_eq!(activities.len(), 2);
 
         let alice_act = activities
@@ -1049,7 +1070,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
         assert_eq!(activities.len(), 1);
         let (lock_hash, _, entry) = &activities[0];
         assert_eq!(lock_hash, &vec![miner; 32]);
@@ -1083,7 +1104,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
         assert_eq!(activities.len(), 1);
         let (_, _, entry) = &activities[0];
         assert_eq!(entry.ckb_delta, 0);
@@ -1116,7 +1137,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
         assert_eq!(activities.len(), 3);
 
         for (lock_hash, _, entry) in &activities {
@@ -1158,7 +1179,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let activities = build_activities_for_block(&[tx1, tx2], &HashMap::new());
+        let activities = build_activities_for_block(&[tx1, tx2], &HashMap::new()).unwrap();
         assert_eq!(activities.len(), 3);
 
         let alice_entries: Vec<_> = activities
@@ -1217,7 +1238,7 @@ mod tests {
             (Some("SEAL".to_string()), Some(8u8)),
         );
 
-        let activities = build_activities_for_block(&[tx], &token_cache);
+        let activities = build_activities_for_block(&[tx], &token_cache).unwrap();
 
         let alice_act = activities
             .iter()
@@ -1313,7 +1334,7 @@ mod tests {
             (Some("SEAL".to_string()), Some(8u8)),
         );
 
-        let activities = build_activities_for_block(&[tx], &token_cache);
+        let activities = build_activities_for_block(&[tx], &token_cache).unwrap();
         let alice_act = activities
             .iter()
             .find(|(lh, _, _)| lh == &vec![alice; 32])
@@ -1332,7 +1353,7 @@ mod tests {
 
     #[test]
     fn test_no_activities_for_empty_block() {
-        let activities = build_activities_for_block(&[], &HashMap::new());
+        let activities = build_activities_for_block(&[], &HashMap::new()).unwrap();
         assert!(activities.is_empty());
     }
 
@@ -1367,7 +1388,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
         assert_eq!(activities.len(), 1);
         let (_, _, entry) = &activities[0];
 
@@ -1418,7 +1439,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
         assert_eq!(activities.len(), 1);
         let (_, _, entry) = &activities[0];
 
@@ -1464,7 +1485,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
         assert_eq!(activities.len(), 1);
         let (_, _, entry) = &activities[0];
         assert!(entry.has_type_script);
@@ -1496,7 +1517,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
         let (_, alice_scripts, _) = activities
             .iter()
             .find(|(lh, _, _)| lh == &vec![alice; 32])
@@ -1547,7 +1568,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
 
         let alice_act = activities
             .iter()
@@ -1604,7 +1625,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
         for (_, _, entry) in &activities {
             assert!(!entry.has_type_script);
             assert!(entry.asset_changes.is_empty());
@@ -1656,7 +1677,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
         let (_, _, entry) = &activities[0];
         assert!(entry.has_type_script);
         assert!(entry
@@ -1749,7 +1770,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
 
         // Alice should have a Token asset change (negative delta), NOT a script_call
         let alice_act = activities
@@ -1797,7 +1818,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new());
+        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
         let alice_delta = bundles[0]
             .owners
             .iter()
@@ -1840,7 +1861,7 @@ mod tests {
             witnesses: &[],
         };
 
-        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new());
+        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
         let alice_delta = bundles[0]
             .owners
             .iter()
@@ -1962,7 +1983,8 @@ mod tests {
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
         let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors);
+            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
+                .unwrap();
 
         assert_eq!(bundles.len(), 1);
 
@@ -2040,7 +2062,8 @@ mod tests {
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
         let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors);
+            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
+                .unwrap();
 
         assert_eq!(bundles.len(), 1);
 
@@ -2112,7 +2135,8 @@ mod tests {
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
         let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors);
+            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
+                .unwrap();
 
         assert_eq!(bundles.len(), 1);
         for owner in &bundles[0].owners {

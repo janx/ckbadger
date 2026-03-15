@@ -14,6 +14,11 @@ pub const BLOCK_OUTPOINT_KEY_SIZE: usize = BLOCK_NUM_KEY_SIZE + OUTPOINT_KEY_SIZ
 pub const REORG_UNDO_LOG_KEY_SIZE: usize = 16;
 
 pub fn encode_outpoint(tx_hash: &[u8], output_index: i16) -> [u8; OUTPOINT_KEY_SIZE] {
+    assert!(
+        output_index >= 0,
+        "encode_outpoint: expected non-negative output_index, got {}",
+        output_index
+    );
     let mut key = [0u8; OUTPOINT_KEY_SIZE];
     key[..32].copy_from_slice(&tx_hash[..32]);
     key[32..34].copy_from_slice(&output_index.to_be_bytes());
@@ -27,6 +32,11 @@ pub fn decode_outpoint(key: &[u8]) -> (Vec<u8>, i16) {
 }
 
 pub fn encode_block_num(n: i64) -> [u8; BLOCK_NUM_KEY_SIZE] {
+    assert!(
+        n >= 0,
+        "encode_block_num: expected non-negative block_num, got {}",
+        n
+    );
     n.to_be_bytes()
 }
 
@@ -860,12 +870,10 @@ pub fn decode_script_daily_key(key: &[u8]) -> (Vec<u8>, bool, u32) {
 /// Token transfer key: type_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 44 bytes
 /// Uses descending block_num and tx_idx so newest transfers come first in prefix scan.
 pub fn encode_token_transfer_key(type_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
-    let block_desc = (i64::MAX - block_num).to_be_bytes();
-    let tx_idx_desc = (i32::MAX - tx_idx).to_be_bytes();
     let mut key = Vec::with_capacity(44);
     key.extend_from_slice(&type_hash[..32]);
-    key.extend_from_slice(&block_desc);
-    key.extend_from_slice(&tx_idx_desc);
+    key.extend_from_slice(&encode_desc_block_num(block_num));
+    key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
     key
 }
 
@@ -964,8 +972,7 @@ pub fn encode_dao_by_block_key(
         outpoint_key.len()
     );
     let mut key = [0u8; DAO_BY_BLOCK_KEY_SIZE];
-    let block_desc = (i64::MAX - deposit_block).to_be_bytes();
-    key[..8].copy_from_slice(&block_desc);
+    key[..8].copy_from_slice(&encode_desc_block_num(deposit_block));
     key[8..42].copy_from_slice(outpoint_key);
     key
 }
@@ -1000,9 +1007,8 @@ pub fn encode_dao_by_lock_block_key(
         outpoint_key.len()
     );
     let mut key = [0u8; DAO_BY_LOCK_BLOCK_KEY_SIZE];
-    let block_desc = (i64::MAX - deposit_block).to_be_bytes();
     key[..32].copy_from_slice(lock_hash);
-    key[32..40].copy_from_slice(&block_desc);
+    key[32..40].copy_from_slice(&encode_desc_block_num(deposit_block));
     key[40..74].copy_from_slice(outpoint_key);
     key
 }
@@ -1044,9 +1050,8 @@ pub fn encode_dao_by_status_block_key(
         outpoint_key.len()
     );
     let mut key = [0u8; DAO_BY_STATUS_BLOCK_KEY_SIZE];
-    let block_desc = (i64::MAX - deposit_block).to_be_bytes();
     key[..2].copy_from_slice(&status.to_be_bytes());
-    key[2..10].copy_from_slice(&block_desc);
+    key[2..10].copy_from_slice(&encode_desc_block_num(deposit_block));
     key[10..44].copy_from_slice(outpoint_key);
     key
 }
