@@ -1,6 +1,6 @@
 'use client';
 import React, { useEffect, useMemo, useState } from 'react';
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useQueries, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams } from '@/src/navigation';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
@@ -14,7 +14,6 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Capacity } from '@/components/ui/capacity';
-import { CodeCellsList } from '@/components/ui/code-cells-list';
 import { HMultiplier } from '@/components/ui/h-multiplier';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
@@ -23,18 +22,30 @@ import { api } from '@/lib/api';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import {
-  getScriptRefBadgeLabel,
   getScriptRefQueryHashType,
   normalizeScriptRefHashType,
   type ScriptRefHashType,
 } from '@/lib/script-ref';
 import { formatCkbCompact } from '@/lib/utils';
 import type { KnownScript, ScriptLookupInfo } from '@/lib/api';
-interface SelectedDeployment {
+
+interface SelectedVersion {
   codeHash: string;
-  hashType: ScriptRefHashType;
   scriptKind?: 'lock' | 'type';
 }
+
+interface ScriptVersionGroup {
+  codeHash: string;
+  deployments: KnownScript[];
+  primaryDeployment: KnownScript;
+}
+
+interface VersionUsageReference {
+  key: string;
+  referenceHash: string;
+  hashType: ScriptRefHashType;
+}
+
 function compareDeploymentsByDeployedAt(a: KnownScript, b: KnownScript): number {
   const aTs = a.deployedAt ?? null;
   const bTs = b.deployedAt ?? null;
@@ -53,6 +64,132 @@ function normalizeHash(value: string | null | undefined): string | null {
 function isHexScriptHash(value: string): boolean {
   return /^0x[0-9a-fA-F]{64}$/.test(value);
 }
+
+function deploymentOutpointKey(
+  txHash: string | null | undefined,
+  outputIndex: number | null | undefined
+): string | null {
+  if (!txHash || outputIndex == null) {
+    return null;
+  }
+
+  return `${txHash}:${outputIndex}`;
+}
+
+function compareCellsByCreatedAt(
+  a: { cell: { createdAtBlock: number; txHash: string; outputIndex: number } },
+  b: { cell: { createdAtBlock: number; txHash: string; outputIndex: number } }
+): number {
+  if (a.cell.createdAtBlock !== b.cell.createdAtBlock) {
+    return a.cell.createdAtBlock - b.cell.createdAtBlock;
+  }
+  if (a.cell.txHash !== b.cell.txHash) {
+    return a.cell.txHash.localeCompare(b.cell.txHash);
+  }
+  return a.cell.outputIndex - b.cell.outputIndex;
+}
+
+function hexToBytes(hex: string): number[] {
+  const normalized = hex.startsWith('0x') ? hex.slice(2) : hex;
+  if (normalized.length % 2 !== 0) {
+    throw new Error(`Invalid hex length for cursor encoding: ${hex}`);
+  }
+
+  const bytes: number[] = [];
+  for (let index = 0; index < normalized.length; index += 2) {
+    const pair = normalized.slice(index, index + 2);
+    const value = Number.parseInt(pair, 16);
+    if (Number.isNaN(value)) {
+      throw new Error(`Invalid hex value for cursor encoding: ${hex}`);
+    }
+    bytes.push(value);
+  }
+  return bytes;
+}
+
+function encodeVersionCellCursor(
+  referenceHash: string,
+  createdAtBlock: number,
+  txHash: string,
+  outputIndex: number
+): string {
+  const bytes = [
+    ...hexToBytes(referenceHash),
+    ...Array.from(new Uint8Array(new BigInt64Array([BigInt(createdAtBlock)]).buffer).reverse()),
+    ...hexToBytes(txHash),
+    ...Array.from(new Uint8Array(new Int16Array([outputIndex]).buffer).reverse()),
+  ];
+  return bytes.map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+function decodeVersionCellsCursorState(
+  cursor: string | undefined
+): Record<string, string | undefined> {
+  if (!cursor) {
+    return {};
+  }
+
+  const parsed = JSON.parse(cursor);
+  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(parsed).filter(
+      (entry): entry is [string, string] =>
+        typeof entry[0] === 'string' && typeof entry[1] === 'string'
+    )
+  );
+}
+
+function encodeVersionCellsCursorState(state: Record<string, string | undefined>): string {
+  return JSON.stringify(state);
+}
+
+function formatDeploymentTimestamp(timestamp: number | null | undefined): string {
+  if (timestamp == null) {
+    return '-';
+  }
+
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return '-';
+  }
+
+  return date.toLocaleString();
+}
+
+function compareDeploymentCreatedAt(
+  left: { deployedAt?: number | null; createdAtBlock?: number | null },
+  right: { deployedAt?: number | null; createdAtBlock?: number | null }
+): number {
+  const leftTimestamp = left.deployedAt ?? null;
+  const rightTimestamp = right.deployedAt ?? null;
+  if (leftTimestamp != null && rightTimestamp != null && leftTimestamp !== rightTimestamp) {
+    return leftTimestamp - rightTimestamp;
+  }
+  if (leftTimestamp != null && rightTimestamp == null) {
+    return -1;
+  }
+  if (leftTimestamp == null && rightTimestamp != null) {
+    return 1;
+  }
+
+  const leftBlock = left.createdAtBlock ?? null;
+  const rightBlock = right.createdAtBlock ?? null;
+  if (leftBlock != null && rightBlock != null && leftBlock !== rightBlock) {
+    return leftBlock - rightBlock;
+  }
+  if (leftBlock != null && rightBlock == null) {
+    return -1;
+  }
+  if (leftBlock == null && rightBlock != null) {
+    return 1;
+  }
+
+  return 0;
+}
+
 function deploymentReferenceHashes(
   deployment: KnownScript,
   lookupInfo?: ScriptLookupInfo
@@ -65,19 +202,15 @@ function deploymentReferenceHashes(
   const lookupTypeRef = normalizeHash(lookupInfo?.deploymentTypeHash);
   const lookupDataRef = normalizeHash(lookupInfo?.deploymentDataHash);
   const typeRef =
-    lookupTypeRef ??
     deployment.typeHash ??
+    lookupTypeRef ??
     (normalizedHashType === 'type' ? deployment.codeHash : null);
   const dataRef =
-    lookupDataRef ??
     deployment.dataHash ??
+    lookupDataRef ??
     (normalizedHashType !== 'type' ? deployment.codeHash : null);
-  const baseDataRefType =
-    normalizedHashType !== 'type' ? getScriptRefQueryHashType(deployment.hashType, 'data') : 'data';
   const dataRefType =
-    lookupInfo?.hashType && lookupInfo.hashType !== 'type'
-      ? getScriptRefQueryHashType(lookupInfo.hashType, baseDataRefType)
-      : baseDataRefType;
+    normalizedHashType !== 'type' ? getScriptRefQueryHashType(deployment.hashType, 'data') : 'data';
   return { typeRef, dataRef, dataRefType };
 }
 export interface ScriptDetailPageProps {
@@ -93,7 +226,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
       : null;
   const selectedRefHashType = normalizeScriptRefHashType(searchParams.get('hashType'));
   const [capacityRange, setCapacityRange] = useState<CapacityRangeKey>('all');
-  const [selectedDeployment, setSelectedDeployment] = useState<SelectedDeployment | null>(null);
+  const [selectedVersion, setSelectedVersion] = useState<SelectedVersion | null>(null);
   const cellsPagination = useCursorPagination();
   const capacityRangeParams = getCapacityRangeParams(capacityRange);
   const {
@@ -108,6 +241,27 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
     queryKey: ['script-usage', name],
     queryFn: () => api.getScriptUsage(name),
   });
+  const sortedDeployments = useMemo(
+    () => (deployments ? [...deployments].sort(compareDeploymentsByDeployedAt) : []),
+    [deployments]
+  );
+  const versionGroups = useMemo<ScriptVersionGroup[]>(() => {
+    const groups = new Map<string, KnownScript[]>();
+    for (const deployment of sortedDeployments) {
+      const existing = groups.get(deployment.codeHash);
+      if (existing) {
+        existing.push(deployment);
+      } else {
+        groups.set(deployment.codeHash, [deployment]);
+      }
+    }
+
+    return Array.from(groups.entries()).map(([codeHash, groupedDeployments]) => ({
+      codeHash,
+      deployments: groupedDeployments,
+      primaryDeployment: groupedDeployments[0],
+    }));
+  }, [sortedDeployments]);
   const lookupCodeHashes = useMemo(() => {
     const refs = new Set<string>((deployments ?? []).map((deployment) => deployment.codeHash));
     if (selectedRef) {
@@ -121,105 +275,224 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
     enabled: lookupCodeHashes.length > 0,
     staleTime: Infinity,
   });
+  useEffect(() => {
+    if (versionGroups.length > 0 && usage && !selectedVersion) {
+      const usageByCodeHash = new Map(usage.byDeployment.map((d) => [d.codeHash, d]));
+      const selectedByRef = selectedRef
+        ? versionGroups.find((group) => {
+            if (group.codeHash === selectedRef) {
+              return true;
+            }
+
+            return group.deployments.some((deployment) => {
+              const refs = deploymentReferenceHashes(
+                deployment,
+                deploymentLookup?.[deployment.codeHash]
+              );
+              const matchesTypeRef =
+                refs.typeRef === selectedRef &&
+                (!selectedRefHashType || selectedRefHashType === 'type');
+              const matchesDataRef =
+                refs.dataRef === selectedRef &&
+                (!selectedRefHashType || selectedRefHashType === refs.dataRefType);
+              return matchesTypeRef || matchesDataRef;
+            });
+          })
+        : null;
+      const firstWithUsage = versionGroups.find((group) => {
+        const stats = usageByCodeHash.get(group.codeHash);
+        return Boolean(stats && stats.liveCellsCount > 0);
+      });
+      const target = selectedByRef || firstWithUsage || versionGroups[0];
+      const stats = usageByCodeHash.get(target.codeHash);
+
+      setSelectedVersion({
+        codeHash: target.codeHash,
+        scriptKind: stats?.scriptKind as 'lock' | 'type' | undefined,
+      });
+    }
+  }, [deploymentLookup, selectedRef, selectedRefHashType, selectedVersion, usage, versionGroups]);
+  const selectedVersionDeployments = useMemo(
+    () =>
+      sortedDeployments.filter((deployment) => deployment.codeHash === selectedVersion?.codeHash),
+    [selectedVersion?.codeHash, sortedDeployments]
+  );
+  const versionUsageReferences = useMemo<VersionUsageReference[]>(() => {
+    const references = new Map<string, VersionUsageReference>();
+
+    for (const deployment of selectedVersionDeployments) {
+      const resolved = deploymentReferenceHashes(
+        deployment,
+        deploymentLookup?.[deployment.codeHash]
+      );
+
+      if (resolved.typeRef) {
+        references.set(`${resolved.typeRef}:type`, {
+          key: `${resolved.typeRef}:type`,
+          referenceHash: resolved.typeRef,
+          hashType: 'type',
+        });
+      }
+
+      if (resolved.dataRef) {
+        const key = `${resolved.dataRef}:${resolved.dataRefType}`;
+        references.set(key, {
+          key,
+          referenceHash: resolved.dataRef,
+          hashType: resolved.dataRefType,
+        });
+      }
+    }
+
+    return Array.from(references.values()).sort((a, b) => a.key.localeCompare(b.key));
+  }, [deploymentLookup, selectedVersionDeployments]);
+  const versionCellsCursorState = useMemo(
+    () => decodeVersionCellsCursorState(cellsPagination.cursor),
+    [cellsPagination.cursor]
+  );
+  const deploymentCellQueries = useQueries({
+    queries: sortedDeployments.map((deployment) => ({
+      queryKey: ['cell', deployment.codeCellTxHash, deployment.codeCellOutputIndex],
+      queryFn: () => api.getCell(deployment.codeCellTxHash!, deployment.codeCellOutputIndex!),
+      enabled: Boolean(deployment.codeCellTxHash != null && deployment.codeCellOutputIndex != null),
+      staleTime: Infinity,
+    })),
+  });
   const selectedScriptKindForChart =
-    selectedDeployment?.scriptKind === 'lock' || selectedDeployment?.scriptKind === 'type'
-      ? selectedDeployment.scriptKind
+    selectedVersion?.scriptKind === 'lock' || selectedVersion?.scriptKind === 'type'
+      ? selectedVersion.scriptKind
       : undefined;
   const { data: selectedCapacityChart, isLoading: isSelectedCapacityChartLoading } = useQuery({
     queryKey: [
       'script-capacity-chart',
-      'deployment',
-      selectedDeployment?.codeHash,
+      'version',
+      selectedVersion?.codeHash,
       selectedScriptKindForChart,
       capacityRange,
     ],
     queryFn: () =>
       capacityRangeParams
         ? api.getScriptCapacityChartByCodeHash(
-            selectedDeployment!.codeHash,
+            selectedVersion!.codeHash,
             selectedScriptKindForChart,
             capacityRangeParams
           )
         : api.getScriptCapacityChartByCodeHash(
-            selectedDeployment!.codeHash,
+            selectedVersion!.codeHash,
             selectedScriptKindForChart
           ),
-    enabled: !!selectedDeployment,
+    enabled: Boolean(selectedVersion),
   });
-  useEffect(() => {
-    if (deployments && deployments.length > 0 && usage && !selectedDeployment) {
-      const sortedDeployments = [...deployments].sort(compareDeploymentsByDeployedAt);
-      const usageByCodeHash = new Map(usage.byDeployment.map((d) => [d.codeHash, d]));
-      const selectedByRef = selectedRef
-        ? sortedDeployments.find((deployment) => {
-            const normalizedHashType = normalizeScriptRefHashType(deployment.hashType);
-            if (
-              deployment.codeHash === selectedRef &&
-              (!selectedRefHashType || selectedRefHashType === normalizedHashType)
-            ) {
-              return true;
-            }
-            const refs = deploymentReferenceHashes(
-              deployment,
-              deploymentLookup?.[deployment.codeHash]
-            );
-            const matchesTypeRef =
-              refs.typeRef === selectedRef &&
-              (!selectedRefHashType || selectedRefHashType === 'type');
-            const matchesDataRef =
-              refs.dataRef === selectedRef &&
-              (!selectedRefHashType || selectedRefHashType === refs.dataRefType);
-            return matchesTypeRef || matchesDataRef;
-          })
-        : null;
-      const firstWithCells = sortedDeployments.find((d) => {
-        const normalizedHashType = normalizeScriptRefHashType(d.hashType);
-        const stats = usageByCodeHash.get(d.codeHash);
-        return normalizedHashType && stats && stats.liveCellsCount > 0;
-      });
-      const target = selectedByRef || firstWithCells || sortedDeployments[0];
-      const stats = usageByCodeHash.get(target.codeHash);
-      let hashType = normalizeScriptRefHashType(target.hashType);
-      if (selectedByRef && selectedRef && selectedRefHashType) {
-        const selectedRefs = deploymentReferenceHashes(target, deploymentLookup?.[target.codeHash]);
-        if (selectedRefHashType === 'type' && selectedRefs.typeRef === selectedRef) {
-          hashType = 'type';
-        } else if (
-          selectedRefHashType !== 'type' &&
-          selectedRefs.dataRef === selectedRef &&
-          selectedRefs.dataRefType === selectedRefHashType
-        ) {
-          hashType = selectedRefHashType;
-        }
+  const selectedVersionCellsQueries = useQueries({
+    queries: versionUsageReferences.map((reference) => ({
+      queryKey: [
+        'script-version-cells',
+        selectedVersion?.codeHash,
+        reference.referenceHash,
+        reference.hashType,
+        selectedScriptKindForChart,
+        versionCellsCursorState[reference.key] ?? null,
+      ],
+      queryFn: () =>
+        api.getCellsByScriptRef({
+          codeHash: reference.referenceHash,
+          hashType: reference.hashType,
+          scriptKind: selectedScriptKindForChart,
+          limit: DEFAULT_PAGE_SIZE,
+          cursor: versionCellsCursorState[reference.key],
+        }),
+      enabled: Boolean(selectedVersion),
+      placeholderData: keepPreviousData,
+    })),
+  });
+  const usageByCodeHash = new Map(
+    usage?.byDeployment.map((deployment) => [deployment.codeHash, deployment]) ?? []
+  );
+  const selectedVersionUsage = selectedVersion
+    ? usageByCodeHash.get(selectedVersion.codeHash)
+    : undefined;
+  const selectedVersionCellsData = useMemo(() => {
+    const total = selectedVersionUsage?.liveCellsCount ?? 0;
+    const merged = new Map<
+      string,
+      {
+        cell: NonNullable<(typeof selectedVersionCellsQueries)[number]['data']>['data'][number];
+        sourceKeys: Set<string>;
       }
-      if (hashType) {
-        setSelectedDeployment({
-          codeHash: target.codeHash,
-          hashType,
-          scriptKind: stats?.scriptKind as 'lock' | 'type' | undefined,
+    >();
+
+    for (const [index, query] of selectedVersionCellsQueries.entries()) {
+      const reference = versionUsageReferences[index];
+      if (!reference || !query.data) {
+        continue;
+      }
+
+      for (const cell of query.data.data) {
+        const outpointKey = `${cell.txHash}:${cell.outputIndex}`;
+        const existing = merged.get(outpointKey);
+        if (existing) {
+          existing.sourceKeys.add(reference.key);
+          continue;
+        }
+
+        merged.set(outpointKey, {
+          cell,
+          sourceKeys: new Set([reference.key]),
         });
       }
     }
-  }, [deploymentLookup, deployments, selectedDeployment, selectedRef, selectedRefHashType, usage]);
-  const { data: cellsData, isLoading: isCellsLoading } = useQuery({
-    queryKey: [
-      'script-cells',
-      selectedDeployment?.codeHash,
-      selectedDeployment?.hashType,
-      selectedDeployment?.scriptKind,
-      cellsPagination.cursor,
-    ],
-    queryFn: () =>
-      api.getCellsByScriptRef({
-        codeHash: selectedDeployment!.codeHash,
-        hashType: selectedDeployment!.hashType,
-        scriptKind: selectedDeployment!.scriptKind,
-        limit: DEFAULT_PAGE_SIZE,
-        cursor: cellsPagination.cursor,
-      }),
-    enabled: !!selectedDeployment,
-    placeholderData: keepPreviousData,
-  });
+
+    const mergedEntries = Array.from(merged.values()).sort(compareCellsByCreatedAt);
+    const pageEntries = mergedEntries.slice(0, DEFAULT_PAGE_SIZE);
+    const includedOutpoints = new Set(
+      pageEntries.map((entry) => `${entry.cell.txHash}:${entry.cell.outputIndex}`)
+    );
+    const nextCursorState: Record<string, string | undefined> = {
+      ...versionCellsCursorState,
+    };
+
+    for (const [index, query] of selectedVersionCellsQueries.entries()) {
+      const reference = versionUsageReferences[index];
+      if (!reference || !query.data) {
+        continue;
+      }
+
+      let lastConsumedCell: NonNullable<(typeof query.data)['data']>[number] | undefined;
+      for (const cell of query.data.data) {
+        const outpointKey = `${cell.txHash}:${cell.outputIndex}`;
+        if (includedOutpoints.has(outpointKey)) {
+          lastConsumedCell = cell;
+        }
+      }
+
+      if (lastConsumedCell) {
+        nextCursorState[reference.key] = encodeVersionCellCursor(
+          reference.referenceHash,
+          lastConsumedCell.createdAtBlock,
+          lastConsumedCell.txHash,
+          lastConsumedCell.outputIndex
+        );
+      }
+    }
+
+    const hasMore =
+      mergedEntries.length > DEFAULT_PAGE_SIZE ||
+      selectedVersionCellsQueries.some((query) => Boolean(query.data?.hasMore));
+
+    return {
+      data: pageEntries.map((entry) => entry.cell),
+      total,
+      hasMore,
+      nextCursor:
+        hasMore && pageEntries.length > 0 ? encodeVersionCellsCursorState(nextCursorState) : null,
+      currentCount: pageEntries.length,
+    };
+  }, [
+    selectedVersionCellsQueries,
+    selectedVersionUsage?.liveCellsCount,
+    versionCellsCursorState,
+    versionUsageReferences,
+  ]);
   const isLoading = isDeploymentsLoading || isUsageLoading;
   if (isLoading) {
     return (
@@ -253,52 +526,106 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat().format(num);
   };
-  const usageByCodeHash = new Map(usage?.byDeployment.map((d) => [d.codeHash, d]) ?? []);
   const inferredScriptKind = usage?.byDeployment.find((d) => d.scriptKind)?.scriptKind;
-  const sortedDeployments = [...deployments].sort(compareDeploymentsByDeployedAt);
-  const deploymentCountLabel = formatNumber(sortedDeployments.length);
-  const selectedDeploymentUsage = selectedDeployment
-    ? usageByCodeHash.get(selectedDeployment.codeHash)
-    : undefined;
-  const selectedDeploymentInfo =
-    selectedDeployment &&
-    sortedDeployments.find((d) => {
-      const hashType = normalizeScriptRefHashType(d.hashType);
-      return d.codeHash === selectedDeployment.codeHash && hashType === selectedDeployment.hashType;
-    });
-  const selectedDeploymentRefs = selectedDeploymentInfo
-    ? deploymentReferenceHashes(
-        selectedDeploymentInfo,
-        deploymentLookup?.[selectedDeploymentInfo.codeHash]
-      )
-    : {
-        typeRef: selectedDeployment?.hashType === 'type' ? selectedDeployment.codeHash : null,
-        dataRef: selectedDeployment?.hashType !== 'type' ? selectedDeployment?.codeHash : null,
-        dataRefType:
-          selectedDeployment?.hashType && selectedDeployment.hashType !== 'type'
-            ? selectedDeployment.hashType
-            : 'data',
-      };
-  const handleDeploymentClick = (deployment: KnownScript) => {
-    const hashType = normalizeScriptRefHashType(deployment.hashType);
-    if (!hashType) return;
-    const stats = usageByCodeHash.get(deployment.codeHash);
-    const newSelected = {
-      codeHash: deployment.codeHash,
-      hashType,
-      scriptKind: stats?.scriptKind as 'lock' | 'type' | undefined,
+  const deploymentCellsByOutpoint = new Map(
+    deploymentCellQueries
+      .map((query) => query.data)
+      .filter((cell): cell is NonNullable<typeof cell> => cell != null)
+      .map((cell) => [`${cell.txHash}:${cell.outputIndex}`, cell])
+  );
+  const versionRows = versionGroups.map((group) => {
+    const stats = usageByCodeHash.get(group.codeHash);
+    const firstDeployment = group.deployments.reduce((earliest, deployment) => {
+      const earliestOutpointKey = deploymentOutpointKey(
+        earliest.codeCellTxHash,
+        earliest.codeCellOutputIndex
+      );
+      const deploymentOutpointKeyValue = deploymentOutpointKey(
+        deployment.codeCellTxHash,
+        deployment.codeCellOutputIndex
+      );
+      const earliestCell = earliestOutpointKey
+        ? deploymentCellsByOutpoint.get(earliestOutpointKey)
+        : undefined;
+      const deploymentCell = deploymentOutpointKeyValue
+        ? deploymentCellsByOutpoint.get(deploymentOutpointKeyValue)
+        : undefined;
+
+      return compareDeploymentCreatedAt(
+        {
+          deployedAt: deployment.deployedAt,
+          createdAtBlock: deploymentCell?.createdAtBlock,
+        },
+        {
+          deployedAt: earliest.deployedAt,
+          createdAtBlock: earliestCell?.createdAtBlock,
+        }
+      ) < 0
+        ? deployment
+        : earliest;
+    }, group.deployments[0]);
+    const firstDeploymentOutpointKey = deploymentOutpointKey(
+      firstDeployment.codeCellTxHash,
+      firstDeployment.codeCellOutputIndex
+    );
+
+    return {
+      ...group,
+      firstDeployment,
+      firstDeploymentCell: firstDeploymentOutpointKey
+        ? deploymentCellsByOutpoint.get(firstDeploymentOutpointKey)
+        : undefined,
+      deploymentsCount: group.deployments.length,
+      liveCellsCount: stats?.liveCellsCount ?? 0,
+      liveCapacitySum: stats?.liveCapacitySum ?? '0',
+      scriptKind:
+        (stats?.scriptKind as 'lock' | 'type' | undefined) ??
+        (group.primaryDeployment.scriptKind as 'lock' | 'type' | undefined),
     };
-    if (
-      selectedDeployment?.codeHash !== newSelected.codeHash ||
-      selectedDeployment?.hashType !== newSelected.hashType
-    ) {
-      setSelectedDeployment(newSelected);
+  });
+  const selectedVersionDeploymentRows = selectedVersionDeployments.map((deployment) => {
+    const outpointKey = deploymentOutpointKey(
+      deployment.codeCellTxHash,
+      deployment.codeCellOutputIndex
+    );
+
+    return {
+      deployment,
+      outpointKey,
+      codeCell: outpointKey ? deploymentCellsByOutpoint.get(outpointKey) : undefined,
+      references: deploymentReferenceHashes(deployment, deploymentLookup?.[deployment.codeHash]),
+    };
+  });
+  const isSelectedVersionCodeCellsLoading = selectedVersionDeployments.some((deployment) => {
+    const outpointKey = deploymentOutpointKey(
+      deployment.codeCellTxHash,
+      deployment.codeCellOutputIndex
+    );
+    if (!outpointKey) {
+      return false;
+    }
+
+    const queryIndex = sortedDeployments.findIndex(
+      (candidate) =>
+        candidate.codeCellTxHash === deployment.codeCellTxHash &&
+        candidate.codeCellOutputIndex === deployment.codeCellOutputIndex
+    );
+
+    return queryIndex >= 0 ? Boolean(deploymentCellQueries[queryIndex]?.isLoading) : false;
+  });
+  const isVersionCellsLoading = selectedVersionCellsQueries.some((query) => query.isLoading);
+
+  const handleVersionClick = (versionRow: (typeof versionRows)[number]) => {
+    if (selectedVersion?.codeHash !== versionRow.codeHash) {
+      setSelectedVersion({
+        codeHash: versionRow.codeHash,
+        scriptKind: versionRow.scriptKind,
+      });
       cellsPagination.reset();
     }
   };
-  const isSelected = (deployment: KnownScript) =>
-    selectedDeployment?.codeHash === deployment.codeHash &&
-    selectedDeployment?.hashType === normalizeScriptRefHashType(deployment.hashType);
+  const isSelected = (versionRow: (typeof versionRows)[number]) =>
+    selectedVersion?.codeHash === versionRow.codeHash;
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -352,136 +679,101 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
           }
         />
         <TerminalPanel className="border-base-border/80 mb-6">
-          <TerminalPanelHeader indicator="active">Deployments</TerminalPanelHeader>
+          <TerminalPanelHeader indicator="active">Script Versions</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
-            <div className="border-base-border bg-base-surface/30 border-b px-4 py-3">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-                <span className="text-text font-mono">{deploymentCountLabel} deployments</span>
-                {usage && (
-                  <>
-                    <span className="text-text-dim">·</span>
-                    <span className="text-text-dim">
-                      {formatNumber(usage.liveCellsCount)} live cells
-                    </span>
-                    <span className="text-text-dim">·</span>
-                    <span className="text-text-dim">
-                      {formatCkbCompact(usage.liveCapacitySum).value} CKB live capacity
-                    </span>
-                  </>
-                )}
-              </div>
-            </div>
             <div className="overflow-x-auto">
               <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                <div className="flex-1">Version</div>
-                <div className="w-56">Deployed At</div>
-                <div className="w-24">Kind</div>
-                <div className="w-24 text-right">Live Cells</div>
-                <div className="w-32 text-right">Live Capacity</div>
+                <div className="flex-1">Code Hash</div>
+                <div className="w-40 shrink-0">First Deployed At</div>
+                <div className="w-24 shrink-0">Used As</div>
+                <div className="w-32 shrink-0 text-right">Deployments</div>
+                <div className="w-40 shrink-0 text-right">Cells Using It</div>
+                <div className="w-48 shrink-0 text-right">Capacity Using It</div>
               </div>
-              {sortedDeployments.map((deployment) => {
-                const stats = usageByCodeHash.get(deployment.codeHash);
-                const selected = isSelected(deployment);
-                const normalizedHashType =
-                  normalizeScriptRefHashType(deployment.hashType) ?? 'unknown';
-                const refs = deploymentReferenceHashes(
-                  deployment,
-                  deploymentLookup?.[deployment.codeHash]
-                );
+              {versionRows.map((versionRow) => {
+                const selected = isSelected(versionRow);
                 return (
-                  <React.Fragment key={`${deployment.codeHash}-${normalizedHashType}`}>
+                  <React.Fragment key={versionRow.codeHash}>
                     <TerminalRow
-                      data-testid={`deployment-row-${deployment.codeHash}-${normalizedHashType}`}
-                      onClick={() => handleDeploymentClick(deployment)}
+                      data-testid={`version-row-${versionRow.codeHash}`}
+                      onClick={() => handleVersionClick(versionRow)}
                       className={`cursor-pointer ${selected ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}`}
                     >
-                      <div className="flex w-full items-center gap-3">
-                        <div className="min-w-0 flex-1 py-0.5">
-                          <div className="mb-2 flex flex-wrap items-center gap-2">
-                            <span className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                              Code Hash
-                            </span>
-                            <span className="inline-flex" onClick={(e) => e.stopPropagation()}>
-                              <HexDisplay
-                                value={deployment.codeHash}
-                                size="sm"
-                                startChars={10}
-                                endChars={8}
-                              />
-                            </span>
+                      <div className="grid w-full grid-cols-[minmax(0,1fr)_10rem_6rem_8rem_10rem_12rem] items-center gap-3">
+                        <div className="col-start-1 row-start-1 min-w-0 py-0.5 pr-14">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <HexDisplay
+                              value={versionRow.codeHash}
+                              size="sm"
+                              startChars={10}
+                              endChars={8}
+                              copyable={false}
+                            />
                             {selected && <Badge variant="green">Selected</Badge>}
                           </div>
-                          <div className="space-y-1 text-xs">
-                            <div className="flex items-center gap-2">
-                              <span className="border-base-border/80 bg-base-elevated/70 text-text-dim inline-flex rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide">
-                                type
-                              </span>
-                              {refs.typeRef ? (
-                                <span className="inline-flex" onClick={(e) => e.stopPropagation()}>
-                                  <HexDisplay
-                                    value={refs.typeRef}
-                                    size="sm"
-                                    startChars={10}
-                                    endChars={8}
-                                  />
-                                </span>
-                              ) : (
-                                <span className="text-text-dim font-mono">Unavailable</span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="border-base-border/80 bg-base-elevated/70 text-text-dim inline-flex rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide">
-                                {getScriptRefBadgeLabel(refs.dataRefType)}
-                              </span>
-                              {refs.dataRef ? (
-                                <span className="inline-flex" onClick={(e) => e.stopPropagation()}>
-                                  <HexDisplay
-                                    value={refs.dataRef}
-                                    size="sm"
-                                    startChars={10}
-                                    endChars={8}
-                                  />
-                                </span>
-                              ) : (
-                                <span className="text-text-dim font-mono">Unavailable</span>
-                              )}
-                            </div>
-                          </div>
                         </div>
-                        <div
-                          className="text-text-dim w-56 font-mono text-xs"
-                          title={
-                            deployment.deployedAt
-                              ? new Date(deployment.deployedAt).toISOString()
-                              : undefined
-                          }
+                        <button
+                          type="button"
+                          className="text-text-dim border-base-border hover:bg-base-elevated/60 col-start-1 row-start-1 mr-1 justify-self-end rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-wide"
+                          title={`Click to copy: ${versionRow.codeHash}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (
+                              typeof navigator !== 'undefined' &&
+                              navigator.clipboard?.writeText
+                            ) {
+                              void navigator.clipboard.writeText(versionRow.codeHash).catch(() => {
+                                // Ignore clipboard failures for the explicit copy affordance.
+                              });
+                            }
+                          }}
                         >
-                          {deployment.deployedAt
-                            ? new Date(deployment.deployedAt).toLocaleString()
-                            : '-'}
+                          Copy
+                        </button>
+                        <div className="col-start-2 py-0.5">
+                          {versionRow.firstDeploymentCell ? (
+                            <Link
+                              href={`/blocks/${versionRow.firstDeploymentCell.createdAtBlock}`}
+                              className="block text-right hover:underline"
+                            >
+                              <div className="text-emphasis font-mono text-xs">
+                                #{formatNumber(versionRow.firstDeploymentCell.createdAtBlock)}
+                              </div>
+                              <div className="text-text-dim font-mono text-xs">
+                                {formatDeploymentTimestamp(versionRow.firstDeployment.deployedAt)}
+                              </div>
+                            </Link>
+                          ) : (
+                            <span className="text-text-dim">-</span>
+                          )}
                         </div>
-                        <div className="text-text-dim w-24">
-                          {stats?.scriptKind ? (
+                        <div className="text-text-dim col-start-3 py-0.5">
+                          {versionRow.scriptKind ? (
                             <Badge variant="neutral" className="px-1.5 py-0.5 text-[10px]">
-                              {stats.scriptKind.toUpperCase()}
+                              {versionRow.scriptKind.toUpperCase()}
                             </Badge>
                           ) : (
                             <span className="text-text-dim">-</span>
                           )}
                         </div>
-                        <div className="text-text w-24 text-right font-mono tabular-nums">
-                          {stats ? (
-                            <span title={`Total: ${formatNumber(stats.cellsCount)}`}>
-                              {formatNumber(stats.liveCellsCount)}
+                        <div className="text-text col-start-4 py-0.5 text-right font-mono tabular-nums">
+                          {formatNumber(versionRow.deploymentsCount)}
+                        </div>
+                        <div className="text-text col-start-5 py-0.5 text-right font-mono tabular-nums">
+                          {versionRow.liveCellsCount > 0 ? (
+                            <span title={`Total: ${formatNumber(versionRow.liveCellsCount)}`}>
+                              {formatNumber(versionRow.liveCellsCount)}
                             </span>
                           ) : (
                             '-'
                           )}
                         </div>
-                        <div className="text-text w-32 text-right font-mono tabular-nums">
-                          {stats ? (
-                            <span title={`${formatCkbCompact(stats.liveCapacitySum).full} CKB`}>
-                              {formatCkbCompact(stats.liveCapacitySum).value} CKB
+                        <div className="text-text col-start-6 py-0.5 text-right font-mono tabular-nums">
+                          {versionRow.liveCapacitySum !== '0' ? (
+                            <span
+                              title={`${formatCkbCompact(versionRow.liveCapacitySum).full} CKB`}
+                            >
+                              {formatCkbCompact(versionRow.liveCapacitySum).value} CKB
                             </span>
                           ) : (
                             '-'
@@ -496,14 +788,15 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                 <>
                   <div className="border-base-border bg-base-bg/95 sticky bottom-0 z-10 flex border-t px-4 py-3 font-medium backdrop-blur">
                     <div className="text-text-dim flex-1">Total</div>
-                    <div className="w-56" />
-                    <div className="w-24" />
-                    <div className="text-emphasis w-24 text-right font-mono tabular-nums">
+                    <div className="w-40 shrink-0" />
+                    <div className="w-24 shrink-0" />
+                    <div className="w-32 shrink-0" />
+                    <div className="text-emphasis w-40 shrink-0 text-right font-mono tabular-nums">
                       <span title={`Total: ${formatNumber(usage.cellsCount)}`}>
                         {formatNumber(usage.liveCellsCount)}
                       </span>
                     </div>
-                    <div className="text-emphasis w-32 text-right font-mono tabular-nums">
+                    <div className="text-emphasis w-48 shrink-0 text-right font-mono tabular-nums">
                       <span title={`${formatCkbCompact(usage.liveCapacitySum).full} CKB`}>
                         {formatCkbCompact(usage.liveCapacitySum).value} CKB
                       </span>
@@ -514,95 +807,170 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
             </div>
           </TerminalPanelContent>
         </TerminalPanel>
-        {selectedDeployment && (
+        {selectedVersion && (
           <>
             <TerminalPanel className="mb-6">
-              <TerminalPanelHeader indicator="none">References</TerminalPanelHeader>
-              <TerminalPanelContent className="space-y-4">
-                <div className="grid gap-4 md:grid-cols-[120px_minmax(0,1fr)] md:items-start">
-                  <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
-                    Type Ref
-                  </div>
-                  <div className="min-w-0">
-                    {selectedDeploymentRefs.typeRef ? (
-                      <HexDisplay
-                        value={selectedDeploymentRefs.typeRef}
-                        size="sm"
-                        startChars={10}
-                        endChars={8}
-                      />
-                    ) : (
-                      <span className="text-text-dim font-mono">Unavailable</span>
-                    )}
-                  </div>
-                </div>
-                <div className="grid gap-4 md:grid-cols-[120px_minmax(0,1fr)] md:items-start">
-                  <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
-                    {getScriptRefBadgeLabel(selectedDeploymentRefs.dataRefType)}
-                  </div>
-                  <div className="min-w-0">
-                    {selectedDeploymentRefs.dataRef ? (
-                      <HexDisplay
-                        value={selectedDeploymentRefs.dataRef}
-                        size="sm"
-                        startChars={10}
-                        endChars={8}
-                      />
-                    ) : (
-                      <span className="text-text-dim font-mono">Unavailable</span>
-                    )}
-                  </div>
-                </div>
-                <div className="border-base-border bg-base-surface/40 rounded-md border px-3 py-3 text-sm">
-                  <div className="mb-1 flex items-center gap-2">
-                    <span className="text-text font-mono text-xs uppercase tracking-wider">
-                      How refs work
-                    </span>
-                  </div>
-                  <div className="text-text-dim text-xs">
-                    `type ref` tracks the latest script code, while the `data` family pins a
-                    specific bytecode hash for reproducible execution.
-                  </div>
-                  <a
-                    href="https://docs.nervos.org/docs/tech-explanation/data-type-diff"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-emphasis mt-2 inline-block text-xs hover:underline"
-                  >
-                    Reference doc: data vs type hash semantics
-                  </a>
-                </div>
-              </TerminalPanelContent>
-            </TerminalPanel>
-            <TerminalPanel className="mb-6">
-              <TerminalPanelHeader indicator="none">Code Cells</TerminalPanelHeader>
+              <TerminalPanelHeader indicator="none">Version Deployments</TerminalPanelHeader>
               <TerminalPanelContent padding="none">
-                <CodeCellsList
-                  codeHash={selectedDeployment.codeHash}
-                  hashType={selectedDeployment.hashType}
-                />
+                <div className="overflow-x-auto">
+                  <div className="border-base-border bg-base-surface/50 text-text-dim grid grid-cols-[12rem_6rem_minmax(16rem,1fr)_minmax(18rem,1fr)_10rem_10rem] gap-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
+                    <div>Outpoint</div>
+                    <div>Status</div>
+                    <div>Governance</div>
+                    <div>References</div>
+                    <div className="text-right">Deployed At</div>
+                    <div className="text-right">Used Capacity</div>
+                  </div>
+                </div>
+                {selectedVersionDeploymentRows.length > 0 ? (
+                  selectedVersionDeploymentRows.map(
+                    ({ deployment, outpointKey, codeCell, references }) => (
+                      <TerminalRow key={outpointKey ?? deployment.codeHash}>
+                        <div className="grid w-full grid-cols-[12rem_6rem_minmax(16rem,1fr)_minmax(18rem,1fr)_10rem_10rem] items-start gap-4">
+                          <div
+                            className="min-w-0"
+                            title={outpointKey ? `Click to copy: ${outpointKey}` : undefined}
+                          >
+                            {deployment.codeCellTxHash != null &&
+                            deployment.codeCellOutputIndex != null ? (
+                              <Link
+                                href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
+                                className="text-emphasis hover:underline"
+                              >
+                                <HexDisplay
+                                  value={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
+                                  size="sm"
+                                  startChars={8}
+                                  endChars={8}
+                                  copyable={false}
+                                />
+                              </Link>
+                            ) : (
+                              <span className="text-text-dim font-mono text-xs">Unavailable</span>
+                            )}
+                          </div>
+                          <div>
+                            {codeCell ? (
+                              <Badge variant={codeCell.status === 'live' ? 'green' : 'gray'}>
+                                {codeCell.status === 'live' ? 'Live' : 'Consumed'}
+                              </Badge>
+                            ) : (
+                              <span className="text-text-dim font-mono text-xs">-</span>
+                            )}
+                          </div>
+                          <div className="min-w-0 space-y-2">
+                            {codeCell?.lock ? (
+                              <>
+                                <div className="flex items-center gap-2">
+                                  <Badge variant="gray">{codeCell.lock.hashType}</Badge>
+                                  <HexDisplay
+                                    value={codeCell.lock.codeHash}
+                                    size="sm"
+                                    startChars={10}
+                                    endChars={8}
+                                  />
+                                </div>
+                                <div className="pl-1">
+                                  <HexDisplay
+                                    value={codeCell.lock.args}
+                                    size="sm"
+                                    startChars={10}
+                                    endChars={8}
+                                  />
+                                </div>
+                              </>
+                            ) : (
+                              <span className="text-text-dim font-mono text-xs">-</span>
+                            )}
+                          </div>
+                          <div className="min-w-0 space-y-2">
+                            <div className="flex items-start gap-2">
+                              <span className="text-text-dim font-mono text-xs">type:</span>
+                              {references.typeRef ? (
+                                <HexDisplay
+                                  value={references.typeRef}
+                                  size="sm"
+                                  startChars={10}
+                                  endChars={8}
+                                />
+                              ) : (
+                                <span className="text-text-dim font-mono text-xs">Unavailable</span>
+                              )}
+                            </div>
+                            <div className="flex items-start gap-2">
+                              <span className="text-text-dim font-mono text-xs">
+                                {references.dataRefType}:
+                              </span>
+                              {references.dataRef ? (
+                                <HexDisplay
+                                  value={references.dataRef}
+                                  size="sm"
+                                  startChars={10}
+                                  endChars={8}
+                                />
+                              ) : (
+                                <span className="text-text-dim font-mono text-xs">Unavailable</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="space-y-1 text-right">
+                            <div>
+                              {codeCell ? (
+                                <Link
+                                  href={`/blocks/${codeCell.createdAtBlock}`}
+                                  className="text-emphasis font-mono text-xs hover:underline"
+                                >
+                                  #{formatNumber(codeCell.createdAtBlock)}
+                                </Link>
+                              ) : (
+                                <span className="text-text-dim font-mono text-xs">-</span>
+                              )}
+                            </div>
+                            <div className="text-text-dim font-mono text-xs">
+                              {formatDeploymentTimestamp(deployment.deployedAt)}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            {codeCell?.usedCapacity != null ? (
+                              <Capacity value={String(codeCell.usedCapacity)} className="text-sm" />
+                            ) : (
+                              <span className="text-text-dim font-mono text-xs">-</span>
+                            )}
+                          </div>
+                        </div>
+                      </TerminalRow>
+                    )
+                  )
+                ) : (
+                  <div className="text-text-dim px-4 py-8 text-center">
+                    No deployments found for this version
+                  </div>
+                )}
+                {isSelectedVersionCodeCellsLoading && selectedVersionDeploymentRows.length > 0 && (
+                  <div className="text-text-dim border-base-border border-t px-4 py-3 text-xs">
+                    Loading deployment status, block, and capacity...
+                  </div>
+                )}
               </TerminalPanelContent>
             </TerminalPanel>
             <TerminalPanel>
               <TerminalPanelHeader indicator="none">Usage</TerminalPanelHeader>
               <TerminalPanelContent padding="none">
-                {selectedDeploymentUsage && (
+                {selectedVersionUsage && (
                   <div className="border-base-border border-b px-4 py-4">
                     <HMultiplier
-                      totalCapacity={selectedDeploymentUsage.liveCapacitySum}
-                      usedCapacity={selectedDeploymentUsage.liveUsedCapacitySum}
+                      totalCapacity={selectedVersionUsage.liveCapacitySum}
+                      usedCapacity={selectedVersionUsage.liveUsedCapacitySum}
                     />
                   </div>
                 )}
                 <div className="border-base-border border-b px-4 py-4">
                   <div className="text-text-dim mb-3 text-xs">
-                    Historical used/unused live capacity for the selected deployment.
+                    Historical used/unused live capacity for the selected version.
                   </div>
                   <CapacityRangeSelector value={capacityRange} onChange={setCapacityRange} />
                   {isSelectedCapacityChartLoading ? (
-                    <div className="text-text-dim py-6 text-center">
-                      Loading deployment history...
-                    </div>
+                    <div className="text-text-dim py-6 text-center">Loading version history...</div>
                   ) : selectedCapacityChart && selectedCapacityChart.data.length > 0 ? (
                     <StackedAreaChart
                       data={selectedCapacityChart.data}
@@ -611,17 +979,17 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                       valueUnit="shannon"
                     />
                   ) : (
-                    <div className="text-text-dim py-6 text-center">No deployment history yet</div>
+                    <div className="text-text-dim py-6 text-center">No version history yet</div>
                   )}
                 </div>
                 <div className="px-4 py-4">
                   <div className="text-text-dim mb-3 text-xs">
-                    Live cells currently using the selected deployment.
+                    Live cells currently using the selected version.
                   </div>
                 </div>
-                {isCellsLoading ? (
+                {isVersionCellsLoading ? (
                   <div className="text-text-dim py-8 text-center">Loading cells...</div>
-                ) : cellsData && cellsData.data.length > 0 ? (
+                ) : selectedVersionCellsData.data.length > 0 ? (
                   <>
                     <div className="border-base-border bg-base-surface/50 text-text-dim flex border-y px-4 py-2 font-mono text-xs uppercase tracking-wider">
                       <div className="flex-1">Cell</div>
@@ -629,7 +997,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                       <div className="w-24 shrink-0 text-right">Data Size</div>
                       <div className="w-28 shrink-0 text-right">Created At</div>
                     </div>
-                    {cellsData.data.map((cell) => (
+                    {selectedVersionCellsData.data.map((cell) => (
                       <TerminalRow key={`${cell.txHash}-${cell.outputIndex}`}>
                         <div className="flex items-center">
                           <div className="flex-1">
@@ -668,13 +1036,14 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                     ))}
                     <div className="border-base-border border-t p-4">
                       <CursorPagination
-                        total={cellsData.total}
+                        total={selectedVersionCellsData.total}
                         totalLabel="cells"
                         pageSize={DEFAULT_PAGE_SIZE}
                         page={cellsPagination.page}
-                        hasMore={cellsData.hasMore}
+                        currentCount={selectedVersionCellsData.currentCount}
+                        hasMore={selectedVersionCellsData.hasMore}
                         hasPrevious={cellsPagination.hasPrevious}
-                        onNext={() => cellsPagination.goToNext(cellsData.nextCursor)}
+                        onNext={() => cellsPagination.goToNext(selectedVersionCellsData.nextCursor)}
                         onPrevious={cellsPagination.goToPrevious}
                       />
                     </div>

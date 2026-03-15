@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { render } from '../utils/test-utils';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api } from '@/lib/api';
@@ -11,7 +10,7 @@ vi.mock('@/lib/api', () => ({
     getScriptUsage: vi.fn(),
     getScriptCapacityChart: vi.fn(),
     getScriptCapacityChartByCodeHash: vi.fn(),
-    getCodeCells: vi.fn(),
+    getCell: vi.fn(),
     getCellsByScriptRef: vi.fn(),
     lookupScripts: vi.fn(),
   },
@@ -27,18 +26,39 @@ vi.mock('@/src/navigation', () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
-const olderCodeHash = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-const newerCodeHash = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-const olderDataHash = '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
-const newerDataHash = '0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
-const olderDeployedAt = Date.parse('2024-01-01T00:00:00.000Z');
-const newerDeployedAt = Date.parse('2024-02-01T00:00:00.000Z');
-const olderCodeCellTxHash = '0x1111111111111111111111111111111111111111111111111111111111111111';
-const newerCodeCellTxHash = '0x2222222222222222222222222222222222222222222222222222222222222222';
+const sharedVersionCodeHash = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const legacyVersionCodeHash = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const firstDeploymentDataHash =
+  '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+const secondDeploymentDataHash =
+  '0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
+const legacyDeploymentDataHash =
+  '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+const firstDeploymentAt = Date.parse('2024-01-01T00:00:00.000Z');
+const secondDeploymentAt = Date.parse('2024-02-01T00:00:00.000Z');
+const legacyDeploymentAt = Date.parse('2023-12-01T00:00:00.000Z');
+const firstDeploymentTxHash = '0x1111111111111111111111111111111111111111111111111111111111111111';
+const secondDeploymentTxHash = '0x2222222222222222222222222222222222222222222222222222222222222222';
+const legacyDeploymentTxHash = '0x3333333333333333333333333333333333333333333333333333333333333333';
+const firstDeploymentBlock = 12344;
+const secondDeploymentBlock = 12345;
+const legacyDeploymentBlock = 12000;
+const firstDeploymentTimestampLabel = new Date(firstDeploymentAt).toLocaleString();
+const secondDeploymentTimestampLabel = new Date(secondDeploymentAt).toLocaleString();
+const legacyDeploymentTimestampLabel = new Date(legacyDeploymentAt).toLocaleString();
+const firstGovernanceCodeHash =
+  '0xf111111111111111111111111111111111111111111111111111111111111111';
+const secondGovernanceCodeHash =
+  '0xf222222222222222222222222222222222222222222222222222222222222222';
+const legacyGovernanceCodeHash =
+  '0xf333333333333333333333333333333333333333333333333333333333333333';
+const firstGovernanceArgs = '0xa111111111111111111111111111111111111111';
+const secondGovernanceArgs = '0xa222222222222222222222222222222222222222';
+const legacyGovernanceArgs = '0xa333333333333333333333333333333333333333';
 
 const mockDeployments = [
   {
-    codeHash: olderCodeHash,
+    codeHash: sharedVersionCodeHash,
     name: 'SECP256K1_BLAKE160',
     description: 'Default lock script',
     scriptKind: 'lock',
@@ -48,17 +68,37 @@ const mockDeployments = [
     decoderType: null,
     network: 'mainnet',
     hashType: 'type',
-    dataHash: olderDataHash,
-    typeHash: olderCodeHash,
+    dataHash: firstDeploymentDataHash,
+    typeHash: sharedVersionCodeHash,
     tag: null,
     deprecated: false,
     isSystem: true,
-    codeCellTxHash: olderCodeCellTxHash,
+    codeCellTxHash: firstDeploymentTxHash,
     codeCellOutputIndex: 0,
-    deployedAt: olderDeployedAt,
+    deployedAt: firstDeploymentAt,
   },
   {
-    codeHash: newerCodeHash,
+    codeHash: sharedVersionCodeHash,
+    name: 'SECP256K1_BLAKE160',
+    description: 'Default lock script',
+    scriptKind: 'lock',
+    rfc: null,
+    website: null,
+    sourceUrl: null,
+    decoderType: null,
+    network: 'mainnet',
+    hashType: 'data',
+    dataHash: secondDeploymentDataHash,
+    typeHash: sharedVersionCodeHash,
+    tag: null,
+    deprecated: false,
+    isSystem: true,
+    codeCellTxHash: secondDeploymentTxHash,
+    codeCellOutputIndex: 1,
+    deployedAt: secondDeploymentAt,
+  },
+  {
+    codeHash: legacyVersionCodeHash,
     name: 'SECP256K1_BLAKE160',
     description: 'Default lock script',
     scriptKind: 'lock',
@@ -68,14 +108,14 @@ const mockDeployments = [
     decoderType: null,
     network: 'mainnet',
     hashType: 'type',
-    dataHash: newerDataHash,
-    typeHash: newerCodeHash,
+    dataHash: legacyDeploymentDataHash,
+    typeHash: legacyVersionCodeHash,
     tag: null,
     deprecated: false,
     isSystem: true,
-    codeCellTxHash: newerCodeCellTxHash,
-    codeCellOutputIndex: 1,
-    deployedAt: newerDeployedAt,
+    codeCellTxHash: legacyDeploymentTxHash,
+    codeCellOutputIndex: 0,
+    deployedAt: legacyDeploymentAt,
   },
 ];
 
@@ -89,17 +129,7 @@ const mockUsage = {
   liveUsedCapacitySum: '6100000000',
   byDeployment: [
     {
-      codeHash: olderCodeHash,
-      scriptKind: 'lock',
-      cellsCount: 2,
-      liveCellsCount: 1,
-      capacitySum: '2000000000',
-      liveCapacitySum: '1000000000',
-      usedCapacitySum: '1200000000',
-      liveUsedCapacitySum: '610000000',
-    },
-    {
-      codeHash: newerCodeHash,
+      codeHash: sharedVersionCodeHash,
       scriptKind: 'lock',
       cellsCount: 8,
       liveCellsCount: 7,
@@ -107,6 +137,16 @@ const mockUsage = {
       liveCapacitySum: '9000000000',
       usedCapacitySum: '4900000000',
       liveUsedCapacitySum: '5490000000',
+    },
+    {
+      codeHash: legacyVersionCodeHash,
+      scriptKind: 'lock',
+      cellsCount: 2,
+      liveCellsCount: 1,
+      capacitySum: '2000000000',
+      liveCapacitySum: '1000000000',
+      usedCapacitySum: '1200000000',
+      liveUsedCapacitySum: '610000000',
     },
   ],
 };
@@ -133,19 +173,75 @@ const emptyCells = {
   nextCursor: null,
 };
 
-const mockCodeCells = {
-  codeCells: [
-    {
-      txHash: newerCodeCellTxHash,
-      outputIndex: 1,
-      status: 'live' as const,
-      createdAtBlock: 12345,
-      capacity: '16200000000',
-    },
-  ],
-  liveCount: 1,
-  totalCount: 1,
+const sharedVersionUsageCellsByRef = {
+  type: {
+    data: [
+      {
+        txHash: '0x4444444444444444444444444444444444444444444444444444444444444444',
+        outputIndex: 0,
+        capacity: '10000000000',
+        lockScriptHash: '0xlive1',
+        dataSize: 0,
+        createdAtBlock: 12340,
+      },
+    ],
+    total: 1,
+    limit: 50,
+    hasMore: false,
+    nextCursor: null,
+  },
+  firstData: {
+    data: [
+      {
+        txHash: '0x5555555555555555555555555555555555555555555555555555555555555555',
+        outputIndex: 1,
+        capacity: '11000000000',
+        lockScriptHash: '0xlive2',
+        dataSize: 16,
+        createdAtBlock: 12341,
+      },
+    ],
+    total: 1,
+    limit: 50,
+    hasMore: false,
+    nextCursor: null,
+  },
+  secondData: {
+    data: [
+      {
+        txHash: '0x6666666666666666666666666666666666666666666666666666666666666666',
+        outputIndex: 2,
+        capacity: '12000000000',
+        lockScriptHash: '0xlive3',
+        dataSize: 32,
+        createdAtBlock: 12342,
+      },
+    ],
+    total: 1,
+    limit: 50,
+    hasMore: false,
+    nextCursor: null,
+  },
 };
+
+function findNearestContainer(
+  start: HTMLElement,
+  predicate: (element: HTMLElement) => boolean
+): HTMLElement {
+  let current: HTMLElement | null = start;
+  while (current) {
+    if (predicate(current)) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+
+  throw new Error('Unable to find matching container');
+}
+
+function hasTextContent(element: HTMLElement, text: string): boolean {
+  return element.textContent?.replace(/\s+/g, '').includes(text.replace(/\s+/g, '')) ?? false;
+}
 
 describe('ScriptDetailPage', () => {
   beforeEach(() => {
@@ -154,98 +250,279 @@ describe('ScriptDetailPage', () => {
     vi.mocked(api.getScriptUsage).mockResolvedValue(mockUsage);
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(mockCapacityChart);
     vi.mocked(api.getScriptCapacityChartByCodeHash).mockResolvedValue(mockCapacityChart);
-    vi.mocked(api.getCodeCells).mockResolvedValue(mockCodeCells);
-    vi.mocked(api.getCellsByScriptRef).mockResolvedValue(emptyCells);
+    vi.mocked(api.getCell).mockImplementation(async (txHash, outputIndex) => {
+      if (txHash === firstDeploymentTxHash && outputIndex === 0) {
+        return {
+          txHash,
+          outputIndex,
+          capacity: '16100000000',
+          usedCapacity: 6100000000,
+          lockScriptHash: '0xlock1',
+          dataSize: 0,
+          createdAtBlock: firstDeploymentBlock,
+          status: 'live',
+          lock: {
+            codeHash: firstGovernanceCodeHash,
+            hashType: 'type',
+            args: firstGovernanceArgs,
+          },
+        };
+      }
+
+      if (txHash === secondDeploymentTxHash && outputIndex === 1) {
+        return {
+          txHash,
+          outputIndex,
+          capacity: '16200000000',
+          usedCapacity: 6200000000,
+          lockScriptHash: '0xlock2',
+          dataSize: 0,
+          createdAtBlock: secondDeploymentBlock,
+          status: 'live',
+          lock: {
+            codeHash: secondGovernanceCodeHash,
+            hashType: 'type',
+            args: secondGovernanceArgs,
+          },
+        };
+      }
+
+      if (txHash === legacyDeploymentTxHash && outputIndex === 0) {
+        return {
+          txHash,
+          outputIndex,
+          capacity: '16000000000',
+          usedCapacity: 6000000000,
+          lockScriptHash: '0xlock3',
+          dataSize: 0,
+          createdAtBlock: legacyDeploymentBlock,
+          status: 'dead',
+          consumedAtBlock: legacyDeploymentBlock + 1,
+          lock: {
+            codeHash: legacyGovernanceCodeHash,
+            hashType: 'type',
+            args: legacyGovernanceArgs,
+          },
+        };
+      }
+
+      throw new Error(`unexpected outpoint ${txHash}:${outputIndex}`);
+    });
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(async ({ codeHash, hashType }) => {
+      if (codeHash === sharedVersionCodeHash && hashType === 'type') {
+        return sharedVersionUsageCellsByRef.type;
+      }
+
+      if (codeHash === firstDeploymentDataHash && hashType === 'data') {
+        return sharedVersionUsageCellsByRef.firstData;
+      }
+
+      if (codeHash === secondDeploymentDataHash && hashType === 'data') {
+        return sharedVersionUsageCellsByRef.secondData;
+      }
+
+      return emptyCells;
+    });
     vi.mocked(api.lookupScripts).mockResolvedValue({
-      [olderCodeHash]: {
-        codeHash: olderCodeHash,
+      [sharedVersionCodeHash]: {
+        codeHash: sharedVersionCodeHash,
         name: 'SECP256K1_BLAKE160',
         scriptKind: 'lock',
         decoderType: null,
         hashType: 'type',
-        deploymentTypeHash: olderCodeHash,
-        deploymentDataHash: olderDataHash,
-        codeCellTxHash: olderCodeCellTxHash,
+        deploymentTypeHash: sharedVersionCodeHash,
+        deploymentDataHash: firstDeploymentDataHash,
+        codeCellTxHash: firstDeploymentTxHash,
+        codeCellOutputIndex: 0,
+        liveCellsCount: 7,
+        liveCapacitySum: '9000000000',
+        liveUsedCapacitySum: '5490000000',
+        codeCellsLiveCount: 2,
+        codeCellsTotal: 2,
+      },
+      [legacyVersionCodeHash]: {
+        codeHash: legacyVersionCodeHash,
+        name: 'SECP256K1_BLAKE160',
+        scriptKind: 'lock',
+        decoderType: null,
+        hashType: 'type',
+        deploymentTypeHash: legacyVersionCodeHash,
+        deploymentDataHash: legacyDeploymentDataHash,
+        codeCellTxHash: legacyDeploymentTxHash,
         codeCellOutputIndex: 0,
         liveCellsCount: 1,
         liveCapacitySum: '1000000000',
         liveUsedCapacitySum: '610000000',
-        codeCellsLiveCount: 1,
-        codeCellsTotal: 1,
-      },
-      [newerCodeHash]: {
-        codeHash: newerCodeHash,
-        name: 'SECP256K1_BLAKE160',
-        scriptKind: 'lock',
-        decoderType: null,
-        hashType: 'type',
-        deploymentTypeHash: newerCodeHash,
-        deploymentDataHash: newerDataHash,
-        codeCellTxHash: newerCodeCellTxHash,
-        codeCellOutputIndex: 1,
-        liveCellsCount: 7,
-        liveCapacitySum: '9000000000',
-        liveUsedCapacitySum: '5490000000',
-        codeCellsLiveCount: 1,
+        codeCellsLiveCount: 0,
         codeCellsTotal: 1,
       },
     });
   });
 
-  it('prioritizes deployments and renders selected deployment detail sections', async () => {
-    const user = userEvent.setup();
-
+  it('renders versions first and shows deployment-bound references in version deployments', async () => {
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
 
     await waitFor(() => {
-      expect(api.getScriptCapacityChartByCodeHash).toHaveBeenCalledWith(newerCodeHash, 'lock');
-      expect(api.getCellsByScriptRef).toHaveBeenCalledWith({
-        codeHash: newerCodeHash,
-        hashType: 'type',
-        scriptKind: 'lock',
-        limit: 50,
-        cursor: undefined,
-      });
+      expect(api.getScript).toHaveBeenCalledWith('SECP256K1_BLAKE160');
+      expect(api.getScriptUsage).toHaveBeenCalledWith('SECP256K1_BLAKE160');
+      expect(screen.getByText('SECP256K1_BLAKE160')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('Deployments')).toBeInTheDocument();
-    expect(screen.getByText('Deployed At')).toBeInTheDocument();
-    expect(screen.queryByTestId('script-ref-semantics')).not.toBeInTheDocument();
-    expect(screen.getByText('References')).toBeInTheDocument();
-    expect(screen.getByText('Code Cells')).toBeInTheDocument();
-    expect(screen.getByText('Usage')).toBeInTheDocument();
-    expect(screen.queryByText('Capacity Statistics')).not.toBeInTheDocument();
-    expect(screen.queryByText('1 live')).not.toBeInTheDocument();
-    expect(screen.queryByText('Deployment 1')).not.toBeInTheDocument();
-    expect(screen.queryByText('Deployment 2')).not.toBeInTheDocument();
-
-    const olderDeploymentRow = screen.getByTestId(`deployment-row-${olderCodeHash}-type`);
+    const versionsHeader = screen.getByText('Script Versions');
+    const versionsPanel = findNearestContainer(versionsHeader, (element) => {
+      const queries = within(element);
+      return (
+        queries.queryByText('Script Versions') !== null &&
+        queries.queryByText('Code Hash') !== null &&
+        queries.queryByText('First Deployed At') !== null &&
+        queries.queryByText('Deployments') !== null &&
+        queries.queryByText('Cells Using It') !== null
+      );
+    });
+    expect(within(versionsPanel).getByText('Code Hash')).toBeInTheDocument();
+    expect(within(versionsPanel).getByText('First Deployed At')).toBeInTheDocument();
+    expect(within(versionsPanel).getByText('Used As')).toBeInTheDocument();
+    expect(within(versionsPanel).getByText('Deployments')).toBeInTheDocument();
+    expect(within(versionsPanel).getByText('Cells Using It')).toBeInTheDocument();
+    expect(within(versionsPanel).getByText('Capacity Using It')).toBeInTheDocument();
+    expect(within(versionsPanel).queryByText('2 versions')).toBeNull();
+    expect(screen.queryByText('Script Code Cells')).toBeNull();
     expect(
-      within(olderDeploymentRow).getAllByTitle(`Click to copy: ${olderCodeHash}`).length
-    ).toBeGreaterThan(0);
-
-    await user.click(
-      within(olderDeploymentRow).getAllByTitle(`Click to copy: ${olderCodeHash}`)[0]
+      within(versionsPanel).getAllByTitle(`Click to copy: ${sharedVersionCodeHash}`)
+    ).toHaveLength(1);
+    const sharedVersionRow = findNearestContainer(
+      within(versionsPanel).getByTitle(`Click to copy: ${sharedVersionCodeHash}`),
+      (element) => {
+        const queries = within(element);
+        return (
+          queries.queryByTitle(`Click to copy: ${sharedVersionCodeHash}`) !== null &&
+          queries.queryByTitle(`Click to copy: ${legacyVersionCodeHash}`) === null
+        );
+      }
     );
+    expect(within(sharedVersionRow).getByText('#12,344')).toBeInTheDocument();
+    expect(within(sharedVersionRow).getByText(firstDeploymentTimestampLabel)).toBeInTheDocument();
+    expect(within(sharedVersionRow).getByText(/^2$/)).toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(api.getScriptCapacityChartByCodeHash).toHaveBeenCalledTimes(1);
-      expect(api.getCellsByScriptRef).toHaveBeenCalledTimes(1);
-      expect(api.getCodeCells).toHaveBeenCalledTimes(1);
+    const deploymentsHeader = screen.getByText('Version Deployments');
+    const deploymentsPanel = findNearestContainer(deploymentsHeader, (element) => {
+      const queries = within(element);
+      return (
+        queries.queryByText('Version Deployments') !== null &&
+        queries.queryByText('Outpoint') !== null &&
+        queries.queryByText('Governance') !== null &&
+        queries.queryByText('References') !== null &&
+        queries.queryByText('Used Capacity') !== null
+      );
     });
+    expect(within(deploymentsPanel).getByText('Outpoint')).toBeInTheDocument();
+    expect(within(deploymentsPanel).getByText('Status')).toBeInTheDocument();
+    expect(within(deploymentsPanel).getByText('Governance')).toBeInTheDocument();
+    expect(within(deploymentsPanel).getByText('References')).toBeInTheDocument();
+    expect(within(deploymentsPanel).getByText('Deployed At')).toBeInTheDocument();
+    expect(within(deploymentsPanel).getByText('Used Capacity')).toBeInTheDocument();
+    expect(within(deploymentsPanel).queryByText('Type Ref')).toBeNull();
+    expect(within(deploymentsPanel).queryByText('How refs work')).toBeNull();
 
-    await user.click(olderDeploymentRow);
+    const firstDeploymentRow = findNearestContainer(
+      within(deploymentsPanel).getByTitle(`Click to copy: ${firstDeploymentTxHash}:0`),
+      (element) => {
+        const queries = within(element);
+        return (
+          queries.queryByTitle(`Click to copy: ${firstDeploymentTxHash}:0`) !== null &&
+          queries.queryByTitle(`Click to copy: ${secondDeploymentTxHash}:1`) === null
+        );
+      }
+    );
+    expect(within(firstDeploymentRow).getByText(/^type:/i)).toBeInTheDocument();
+    expect(
+      within(firstDeploymentRow).getByTitle(`Click to copy: ${sharedVersionCodeHash}`)
+    ).toBeInTheDocument();
+    expect(
+      within(firstDeploymentRow).getByTitle(`Click to copy: ${firstDeploymentDataHash}`)
+    ).toBeInTheDocument();
+    expect(
+      within(firstDeploymentRow).getByTitle(`Click to copy: ${firstGovernanceCodeHash}`)
+    ).toBeInTheDocument();
+    expect(
+      within(firstDeploymentRow).getByTitle(`Click to copy: ${firstGovernanceArgs}`)
+    ).toBeInTheDocument();
+    expect(hasTextContent(firstDeploymentRow, '61.00000000 CKB')).toBe(true);
+    expect(within(firstDeploymentRow).getByText(firstDeploymentTimestampLabel)).toBeInTheDocument();
 
+    const secondDeploymentRow = findNearestContainer(
+      within(deploymentsPanel).getByTitle(`Click to copy: ${secondDeploymentTxHash}:1`),
+      (element) => {
+        const queries = within(element);
+        return (
+          queries.queryByTitle(`Click to copy: ${secondDeploymentTxHash}:1`) !== null &&
+          queries.queryByTitle(`Click to copy: ${firstDeploymentTxHash}:0`) === null
+        );
+      }
+    );
+    expect(within(secondDeploymentRow).getByText(/^type:/i)).toBeInTheDocument();
+    expect(
+      within(secondDeploymentRow).getByTitle(`Click to copy: ${sharedVersionCodeHash}`)
+    ).toBeInTheDocument();
+    expect(
+      within(secondDeploymentRow).getByTitle(`Click to copy: ${secondDeploymentDataHash}`)
+    ).toBeInTheDocument();
+    expect(
+      within(secondDeploymentRow).getByTitle(`Click to copy: ${secondGovernanceCodeHash}`)
+    ).toBeInTheDocument();
+    expect(
+      within(secondDeploymentRow).getByTitle(`Click to copy: ${secondGovernanceArgs}`)
+    ).toBeInTheDocument();
+    expect(hasTextContent(secondDeploymentRow, '62.00000000 CKB')).toBe(true);
+    expect(
+      within(secondDeploymentRow).getByText(secondDeploymentTimestampLabel)
+    ).toBeInTheDocument();
     await waitFor(() => {
-      expect(api.getScriptCapacityChartByCodeHash).toHaveBeenCalledWith(olderCodeHash, 'lock');
+      expect(api.getCell).toHaveBeenCalledWith(firstDeploymentTxHash, 0);
+      expect(api.getCell).toHaveBeenCalledWith(secondDeploymentTxHash, 1);
+      expect(api.getCell).toHaveBeenCalledWith(legacyDeploymentTxHash, 0);
       expect(api.getCellsByScriptRef).toHaveBeenCalledWith({
-        codeHash: olderCodeHash,
+        codeHash: sharedVersionCodeHash,
         hashType: 'type',
         scriptKind: 'lock',
         limit: 50,
         cursor: undefined,
       });
-      expect(api.getCodeCells).toHaveBeenCalledWith(olderCodeHash, 'type');
+      expect(api.getCellsByScriptRef).toHaveBeenCalledWith({
+        codeHash: firstDeploymentDataHash,
+        hashType: 'data',
+        scriptKind: 'lock',
+        limit: 50,
+        cursor: undefined,
+      });
+      expect(api.getCellsByScriptRef).toHaveBeenCalledWith({
+        codeHash: secondDeploymentDataHash,
+        hashType: 'data',
+        scriptKind: 'lock',
+        limit: 50,
+        cursor: undefined,
+      });
     });
+    expect(
+      screen.getByText('Historical used/unused live capacity for the selected version.')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Live cells currently using the selected version.')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTitle(
+        'Click to copy: 0x4444444444444444444444444444444444444444444444444444444444444444:0'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTitle(
+        'Click to copy: 0x5555555555555555555555555555555555555555555555555555555555555555:1'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTitle(
+        'Click to copy: 0x6666666666666666666666666666666666666666666666666666666666666666:2'
+      )
+    ).toBeInTheDocument();
   });
 });
