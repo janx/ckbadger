@@ -68,3 +68,4 @@ frontend/tsconfig.tsbuildinfo
 .sisyphus
 .claude
 .worktrees/
+docs/plans/
