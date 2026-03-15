@@ -67,14 +67,14 @@ For any non-trivial task, use this structure in the final summary or PR descript
 - **Indexer owns all RocksDB writes**: any operation that creates/updates/deletes persistent DB state must be executed by `ckbadger-indexer`.
 - **API is read-only for RocksDB**: `ckbadger-api` must only read from store (secondary/open_secondary path) and must not write persistent state.
 - If API needs missing derived data, API must trigger indexer to compute and write it, then wait/poll for result instead of writing DB directly.
-- **Domain store responsibility**: domain store (`[store].domain_data_path`, 47 CFs) holds all mutable canonical/query state including activities, addr_txs, live/consumed cell markers, and all indexes. May perform create/update/delete as required by chain progression and reorg handling, but only via indexer.
+- **Domain store responsibility**: domain store (`[store].domain_data_path`, 51 CFs) holds all mutable canonical/query state including activities, addr_txs, live/consumed cell markers, and all indexes. May perform create/update/delete as required by chain progression and reorg handling, but only via indexer.
 - **Append-only store responsibility**: append-only store (`[store].append_only_data_path`, 1 CF: `CF_CELLS`) holds only immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 - **Append-only correction policy**: if cell payload data in the append-only store is wrong, fix indexer logic and rebuild from genesis; do not patch cell data with in-place update/delete.
 - **Cross-store cell reads**: live/consumed markers live in domain store; cell payloads live in append-only store. Reading a full cell requires both stores.
 
 ## Store Boundary Check Rules (MANDATORY)
 
-- `CF_CELLS` is the only append-only CF. All other CFs (47) are domain (canonical mutable view).
+- `CF_CELLS` is the only append-only CF. All other CFs (51) are domain (canonical mutable view).
 - Every storage PR must explicitly state which logical store each new/changed write path targets (`domain` or `append-only`).
 - Any write path to the append-only store (`CF_CELLS`) must be reviewed as append-only semantics: new-key append only, no update, no delete, no overwrite.
 - Do not add helper APIs that allow generic mutation on append-only store (for example update-by-key or delete-by-key operations).
@@ -158,7 +158,7 @@ crates/
   api/            # Axum REST/WebSocket server library (port 8101)
   indexer/        # Blockchain sync daemon library (three-stage pipeline)
     src/verify/   #   Data integrity verification suite (56 checks)
-  ckbadger-store/ # Embedded RocksDB storage engine (dual-store, 47 domain + 1 append-only CFs)
+  ckbadger-store/ # Embedded RocksDB storage engine (dual-store, 51 domain + 1 append-only CFs)
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
   tui/            # Terminal monitoring UI library (sync/memory/throughput)
@@ -166,7 +166,7 @@ frontend/         # Vite + React SPA
 docs/ARCHITECTURE_MAP.md     # Module ownership and entry points
 docs/POSTMORTEM.md           # Historical bugs - READ BEFORE CKB/DAO WORK
 docs/INDEXER_PIPELINE.md     # Pipeline architecture and progress tracking
-docs/STORE_SCHEMA.md         # Column families reference (47 domain + 1 append-only)
+docs/STORE_SCHEMA.md         # Column families reference (51 domain + 1 append-only)
 docs/VERIFY.md               # Data integrity verification details
 ```
 
@@ -189,7 +189,7 @@ Sync progress and memory stats are stored in RocksDB (`get_sync_tip()`/`get_sync
 
 ## ckbadger-store (Embedded Storage Engine)
 
-Two logical RocksDB stores: domain (`[store].domain_data_path`, default `data/domain`, 47 CFs) and append-only (`[store].append_only_data_path`, default `data/append-only`, 1 CF: `CF_CELLS`). Indexer opens read-write; API opens secondary (read-only). The append-only store holds only immutable cell payloads keyed by outpoint; all other state (activities, indexes, stats, etc.) lives in the domain store. See `docs/STORE_SCHEMA.md` for full column family reference.
+Two logical RocksDB stores: domain (`[store].domain_data_path`, default `data/domain`, 51 CFs) and append-only (`[store].append_only_data_path`, default `data/append-only`, 1 CF: `CF_CELLS`). Indexer opens read-write; API opens secondary (read-only). The append-only store holds only immutable cell payloads keyed by outpoint; all other state (activities, indexes, stats, etc.) lives in the domain store. See `docs/STORE_SCHEMA.md` for full column family reference.
 
 Memory: ~22GB peak (>=32GB RAM), ~8GB peak (<32GB RAM).
 
@@ -327,28 +327,28 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 
 ## File Locations
 
-| What             | Where                                                                                                                   |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| CLI binary       | `crates/cli/src/main.rs` (subcommands, supervisor)                                                                      |
-| Config           | `crates/config/src/lib.rs` (ckbadger.toml parsing)                                                                      |
-| IPC protocol     | `crates/ipc/src/` (Unix socket server/client)                                                                           |
-| Storage engine   | `crates/ckbadger-store/src/` (types, store, keys, \*\_ops.rs)                                                           |
-| API routes       | `crates/api/src/routes/*.rs` (16 modules)                                                                               |
-| Response types   | `crates/api/src/response.rs`                                                                                            |
-| WebSocket        | `crates/api/src/ws/`                                                                                                    |
-| RPC client       | `crates/indexer/src/rpc/client.rs`                                                                                      |
-| Parsers          | `crates/indexer/src/parser/*.rs` (block, cell, dao, script, spore, dotbit, mnft, transaction, udt, rgbpp, media_source) |
-| DB writers       | `crates/indexer/src/db/writer/*.rs` (15 modules, includes rgbpp_detector.rs)                                            |
-| Label import     | `crates/indexer/src/label_import.rs`                                                                                    |
-| Verify checks    | `crates/indexer/src/verify/*.rs`                                                                                        |
-| TUI              | `crates/tui/src/`                                                                                                       |
-| Frontend API     | `frontend/lib/api.ts`                                                                                                   |
-| LLM discovery    | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                             |
-| UI components    | `frontend/components/ui/`                                                                                               |
-| Pages            | `frontend/app/` (dynamic routes split: `page.tsx` wrapper + `client-page.tsx`)                                          |
-| Tests (Rust)     | Inline `#[cfg(test)]`, `crates/api/tests/api_integration.rs`                                                            |
-| Tests (Frontend) | `frontend/__tests__/**/*.test.{ts,tsx}`, `frontend/__tests__/msw/handlers.ts`                                           |
-| CI               | `.github/workflows/ci.yml`                                                                                              |
+| What             | Where                                                                                                                                              |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CLI binary       | `crates/cli/src/main.rs` (subcommands, supervisor)                                                                                                 |
+| Config           | `crates/config/src/lib.rs` (ckbadger.toml parsing)                                                                                                 |
+| IPC protocol     | `crates/ipc/src/` (Unix socket server/client)                                                                                                      |
+| Storage engine   | `crates/ckbadger-store/src/` (types, store, keys, \*\_ops.rs)                                                                                      |
+| API routes       | `crates/api/src/routes/*.rs` (18 modules)                                                                                                          |
+| Response types   | `crates/api/src/response.rs`                                                                                                                       |
+| WebSocket        | `crates/api/src/ws/`                                                                                                                               |
+| RPC client       | `crates/indexer/src/rpc/client.rs`                                                                                                                 |
+| Parsers          | `crates/indexer/src/parser/*.rs` (block, cell, dao, dotbit, fiber, media_source, mnft, rgbpp, script, spore, stablepp, transaction, udt, utxoswap) |
+| DB writers       | `crates/indexer/src/db/writer/*.rs` (20 modules)                                                                                                   |
+| Label import     | `crates/indexer/src/label_import.rs`                                                                                                               |
+| Verify checks    | `crates/indexer/src/verify/*.rs`                                                                                                                   |
+| TUI              | `crates/tui/src/`                                                                                                                                  |
+| Frontend API     | `frontend/lib/api.ts`                                                                                                                              |
+| LLM discovery    | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                                                        |
+| UI components    | `frontend/components/ui/`                                                                                                                          |
+| Pages            | `frontend/app/` (dynamic routes split: `page.tsx` wrapper + `client-page.tsx`)                                                                     |
+| Tests (Rust)     | Inline `#[cfg(test)]`, `crates/api/tests/api_integration.rs`                                                                                       |
+| Tests (Frontend) | `frontend/__tests__/**/*.test.{ts,tsx}`, `frontend/__tests__/msw/handlers.ts`                                                                      |
+| CI               | `.github/workflows/ci.yml`                                                                                                                         |
 
 ## Dependencies
 

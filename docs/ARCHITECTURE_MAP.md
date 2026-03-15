@@ -20,7 +20,7 @@ Quick navigation map for humans and agents working in `ckbadger`.
 | API                      | `crates/api/src/main.rs`, `crates/api/src/lib.rs`         | `crates/api/src/routes/mod.rs`, `crates/api/src/routes/*.rs`, `crates/api/src/ws/*.rs`, `crates/api/src/response.rs`                                  | `cargo test -p ckbadger-api`, `crates/api/tests/api_integration.rs`                       |
 | Shared types             | `crates/common/src/lib.rs`                                | `crates/common/src/types.rs`, `crates/common/src/sync.rs`, `crates/common/src/dao.rs`                                                                 | `cargo test -p ckbadger-common`                                                           |
 | Optional direct CKB read | `crates/ckb-store-reader/src/lib.rs`                      | `crates/ckb-store-reader/src/convert.rs`                                                                                                              | `cargo test -p ckb-store-reader`                                                          |
-| Frontend                 | `frontend/src/main.tsx`, `frontend/src/routes/router.tsx` | `frontend/src/app/*.tsx`, `frontend/app/**/page.tsx`, `frontend/lib/api.ts`, `frontend/components/**/*.tsx`                                           | `cd frontend && pnpm build`, `cd frontend && pnpm test`, `cd frontend && pnpm type-check` |
+| Frontend                 | `frontend/src/main.tsx`, `frontend/src/routes/router.tsx` | `frontend/app/**/page.tsx`, `frontend/lib/api.ts`, `frontend/components/**/*.tsx`                                                                     | `cd frontend && pnpm build`, `cd frontend && pnpm test`, `cd frontend && pnpm type-check` |
 
 ## Common Change Entry Points
 

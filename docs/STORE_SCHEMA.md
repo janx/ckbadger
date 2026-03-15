@@ -1,8 +1,8 @@
-# ckbadger-store Column Families (48 total: 47 domain + 1 append-only)
+# ckbadger-store Column Families (52 total: 51 domain + 1 append-only)
 
 ckbadger runs two logical RocksDB stores (both backed by `ckbadger-store`):
 
-- **Domain store** (`[store].domain_data_path`, 47 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
+- **Domain store** (`[store].domain_data_path`, 51 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 
 The indexer opens both stores read-write; the API opens both in secondary (read-only) mode. Cell reads are cross-store: live/consumed markers in domain, cell payloads in append-only.
@@ -49,6 +49,10 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `stats_identity`                 | collection_id + lock_hash                             | i64 (owner count)       | Per-owner identity counts by collection                                                   |
 | `activities`                     | block_num_desc + tx_idx_desc + tx_hash (44B)          | TxActivityBundle        | Per-tx activity bundle (all owner deltas, includes protocol_actions per owner)            |
 | `pending_proposals`              | proposal_id (10B hex string)                          | CachedProposal (JSON)   | Ephemeral pending proposal cache (live sync only)                                         |
+| `fiber_channels`                 | channel_id (32B blake2b)                              | FiberChannel            | Fiber Network channel registry                                                            |
+| `fiber_channel_by_commitment`    | commitment_hash                                       | channel_id (32B)        | Fiber channel index by commitment                                                         |
+| `fiber_channel_by_funding_args`  | funding_lock_args                                     | channel_id (32B)        | Fiber channel index by funding args                                                       |
+| `addr_fiber_channels`            | lock_hash (32B) + channel_id (32B)                    | empty                   | Address-to-Fiber-channels index                                                           |
 | `cluster_agg`                    | cluster_id                                            | ClusterAgg              | Spore cluster aggregate stats                                                             |
 | `script_info`                    | code_hash (32B)                                       | ScriptInfo              | Known script metadata                                                                     |
 | `stats_chain`                    | prefixed keys                                         | chain chart snapshots   | Daily/hourly/epoch/miner/block stats (DailyActivityStats includes protocol_action_counts) |
