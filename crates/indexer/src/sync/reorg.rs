@@ -1,13 +1,11 @@
 #![allow(clippy::type_complexity)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 use tracing::{error, info, warn};
 
-use ckbadger_store::types::{
-    AddressBalance, AddressCohortEntry, DailyAddressCohort, PositionedCellInfo,
-};
+use ckbadger_store::types::{AddressBalance, PositionedCellInfo};
 
 use crate::cache::CacheInvalidator;
 use crate::config::DEEP_FORK_DEPTH;
@@ -136,9 +134,21 @@ impl Indexer {
         all_tx_data: &[TxData],
         input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+        address_balance_changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
     ) -> Result<()> {
         let mut tracker = self.cell_dist_tracker.lock().unwrap();
         let store = self.writer.store();
+
+        // Read address balances for cohort delta computation (live sync path)
+        let lock_hash_refs: Vec<&Vec<u8>> = address_balance_changes.keys().collect();
+        let balance_map = if lock_hash_refs.is_empty() {
+            HashMap::new()
+        } else {
+            self.writer.read_address_balances(&lock_hash_refs)?
+        };
+
+        // Update cohort accumulator before the block loop so snapshots are up-to-date
+        tracker.update_cohort_deltas(address_balance_changes, &balance_map);
 
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
@@ -184,8 +194,8 @@ impl Indexer {
                 let date_str = snapshot_date.format("%Y%m%d").to_string();
                 store.put_cell_distribution(&date_str, &snapshot)?;
 
-                // Materialize address cohort snapshot at the same day boundary
-                let cohort = Self::compute_address_cohort_snapshot(store, &tracker, &date_str)?;
+                // Materialize address cohort snapshot from incremental accumulator
+                let cohort = tracker.cohort_snapshot();
                 store.put_address_cohort(&date_str, &cohort)?;
             }
         }
@@ -211,6 +221,10 @@ impl Indexer {
         let mut hodl = self.hodl_tracker.lock().unwrap();
         let mut cell_dist = self.cell_dist_tracker.lock().unwrap();
         let store = self.writer.store();
+
+        // Update cohort accumulator from address balance changes (before block loop
+        // so that cohort_snapshot() is up-to-date at day boundaries)
+        cell_dist.update_cohort_deltas(address_balance_changes, prefetched_addr_balances);
 
         // Phase 1: Single traversal over blocks/txs/cells for both trackers
         let mut block_tx_idx = 0usize;
@@ -267,8 +281,8 @@ impl Indexer {
                 let date_str = snapshot_date.format("%Y%m%d").to_string();
                 store.put_cell_distribution(&date_str, &snapshot)?;
 
-                // Materialize address cohort snapshot at the same day boundary
-                let cohort = Self::compute_address_cohort_snapshot(store, &cell_dist, &date_str)?;
+                // Materialize address cohort snapshot from incremental accumulator
+                let cohort = cell_dist.cohort_snapshot();
                 store.put_address_cohort(&date_str, &cohort)?;
             }
         }
@@ -317,67 +331,6 @@ impl Indexer {
         store.put_cell_dist_tracker_state(&cell_dist.to_state())?;
 
         Ok(())
-    }
-
-    /// Compute an address cohort snapshot by scanning all address balances.
-    ///
-    /// For each address with a positive balance, looks up the creation month
-    /// (from `first_seen_block` via block-date transitions) and accumulates
-    /// `used_capacity` and `balance` per cohort month.
-    fn compute_address_cohort_snapshot(
-        store: &ckbadger_store::CkbadgerStore,
-        tracker: &crate::db::writer::cell_distribution::CellDistributionTracker,
-        date_str: &str,
-    ) -> Result<DailyAddressCohort> {
-        let mut cohorts: BTreeMap<String, (i128, i128)> = BTreeMap::new();
-
-        let iter = store.iterator_cf(store.cf_addr_balance(), rocksdb::IteratorMode::Start);
-
-        for item in iter {
-            let (_key, value) = item.map_err(|e| {
-                anyhow!(
-                    "failed to iterate addr_balance for address cohort snapshot (date={}): {}",
-                    date_str,
-                    e
-                )
-            })?;
-            let balance: AddressBalance = bincode::deserialize(&value).map_err(|e| {
-                anyhow!(
-                    "failed to deserialize address balance for address cohort snapshot (date={}): {}",
-                    date_str,
-                    e
-                )
-            })?;
-            // Only include addresses with positive balance
-            if balance.balance <= 0 {
-                continue;
-            }
-            let first_seen_date = tracker
-                .block_number_to_date(balance.first_seen_block)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "missing block-date transition for address cohort snapshot: first_seen_block={}, date={}, transitions={}",
-                        balance.first_seen_block,
-                        date_str,
-                        tracker.transition_count()
-                    )
-                })?;
-            let cohort_month = first_seen_date.format("%Y-%m").to_string();
-            let entry = cohorts.entry(cohort_month).or_insert((0, 0));
-            entry.0 += balance.used_capacity;
-            entry.1 += balance.balance;
-        }
-
-        let entries: Vec<AddressCohortEntry> = cohorts
-            .into_iter()
-            .map(|(month, (used, total))| AddressCohortEntry {
-                cohort_month: month,
-                used_capacity: used,
-                total_balance: total,
-            })
-            .collect();
-
-        Ok(DailyAddressCohort { cohorts: entries })
     }
 
     // === get_chain_block_hash, get_chain_tip ===

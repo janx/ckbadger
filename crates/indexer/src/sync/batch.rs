@@ -4693,6 +4693,7 @@ impl Indexer {
                 &all_tx_data,
                 &input_cell_info,
                 &batch_cell_infos,
+                &address_balance_changes,
             )?;
         }
 

@@ -525,9 +525,10 @@ fn truncate_cell_dist_tracker_state_for_rollback(
         }
     }
 
-    // Note: count_by_bucket (cell counts per size bucket) cannot be precisely
-    // adjusted without per-cell tracking. For shallow reorgs (1-2 blocks), the
-    // drift is negligible. The next forward sync corrects incrementally.
+    // Note: count_by_bucket (cell counts per size bucket) and cohort_accum
+    // (address cohort accumulator) cannot be precisely adjusted without per-cell
+    // or per-address tracking. For shallow reorgs (1-2 blocks), the drift is
+    // negligible. The next forward sync corrects incrementally.
 
     Ok(changed)
 }
@@ -4682,6 +4683,7 @@ mod tests {
                 total_capacity_by_bucket: [100, 200, 0, 0, 0, 0],
                 date_transitions: vec![(1, "20231114".to_string()), (2, "20231115".to_string())],
                 last_snapshot_date: Some("20231115".to_string()),
+                cohort_accum: vec![],
             })
             .unwrap();
 
@@ -4717,6 +4719,7 @@ mod tests {
                 (200, "20231116".to_string()),
             ],
             last_snapshot_date: Some("20231116".to_string()),
+            cohort_accum: vec![],
         };
 
         let changed = truncate_cell_dist_tracker_state_for_rollback(&mut state, 150).unwrap();
@@ -4737,6 +4740,7 @@ mod tests {
             total_capacity_by_bucket: [100, 0, 0, 0, 0, 0],
             date_transitions: vec![(100, "20231115".to_string())],
             last_snapshot_date: Some("20231115".to_string()),
+            cohort_accum: vec![],
         };
         // Rollback to block 50 — before any transition → should error.
         let err = truncate_cell_dist_tracker_state_for_rollback(&mut state, 50).unwrap_err();

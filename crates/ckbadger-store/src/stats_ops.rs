@@ -1618,6 +1618,7 @@ mod cell_distribution_tests {
             total_capacity_by_bucket: [1000, 2000, 3000, 4000, 5000, 6000],
             date_transitions: vec![(0, "20240101".to_string()), (100, "20240102".to_string())],
             last_snapshot_date: Some("20240102".to_string()),
+            cohort_accum: vec![],
         };
 
         store.put_cell_dist_tracker_state(&state).unwrap();

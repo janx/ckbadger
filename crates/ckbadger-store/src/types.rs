@@ -788,6 +788,9 @@ pub struct CellDistributionTrackerState {
     pub total_capacity_by_bucket: [i128; 6],
     pub date_transitions: Vec<(i64, String)>,
     pub last_snapshot_date: Option<String>,
+    /// Incremental address cohort accumulator: (YYYY-MM, used_capacity, balance).
+    #[serde(default)]
+    pub cohort_accum: Vec<(String, i128, i128)>,
 }
 
 // ============================================
