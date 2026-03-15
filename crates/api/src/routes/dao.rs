@@ -1097,6 +1097,10 @@ pub struct ChartResponse {
     pub y2_axis_label: Option<String>,
 }
 
+fn chart_response_has_data(response: &ChartResponse) -> bool {
+    !response.data.is_empty()
+}
+
 fn build_total_depositors_series(
     snapshots: &[ckbadger_store::DaoDailySnapshot],
 ) -> Result<HashMap<String, i64>, ApiRouteError> {
@@ -1113,11 +1117,17 @@ fn build_total_depositors_series(
 async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
     let cache_key = "chart:dao-total-deposit";
     if let Some(cached) = state.mem_cache.get::<ChartResponse>(cache_key) {
-        return ok(cached);
+        if chart_response_has_data(&cached) {
+            return ok(cached);
+        }
+        state.mem_cache.delete(cache_key);
     }
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
-        state.mem_cache.set(cache_key, &cached, CHART_CACHE_TTL);
-        return ok(cached);
+        if chart_response_has_data(&cached) {
+            state.mem_cache.set(cache_key, &cached, CHART_CACHE_TTL);
+            return ok(cached);
+        }
+        state.cache.delete(cache_key).await;
     }
 
     let store = state.store.clone();
@@ -1145,8 +1155,10 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         y2_axis_label: Some("Depositors".to_string()),
     };
 
-    state.cache.set(cache_key, &response, CHART_CACHE_TTL).await;
-    state.mem_cache.set(cache_key, &response, CHART_CACHE_TTL);
+    if chart_response_has_data(&response) {
+        state.cache.set(cache_key, &response, CHART_CACHE_TTL).await;
+        state.mem_cache.set(cache_key, &response, CHART_CACHE_TTL);
+    }
     ok(response)
 }
 

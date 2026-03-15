@@ -17,12 +17,13 @@ use ckbadger_api::{create_router, AppConfig, AppState};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ActivityEntry, AssetAction, AssetChange, CachedBlockHeader, ClusterAggregate,
-    ClusterDailyDelta, DailyBlockStats, DailyStats, DaoDailySnapshot, DaoDepositCacheEntry,
-    DeepForkInfo, EpochStats, HourlyStats, IdentityCollectionAggregate, IdentityEntry,
-    IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats, ObjectCollectionActivityEntry,
-    ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry, ObjectExtra, ObjectStandard,
-    OwnerActivityDelta, ProtocolAction, ReorgEvent, ScriptDailyDelta, ScriptInfo, SporeDailyDelta,
-    SporeMediaProfile, TokenDailyDelta, TokenInfo, TxActivityBundle, TxIndexEntry, TypeCallEntry,
+    ClusterDailyDelta, DailyBlockStats, DailyCellDistribution, DailyStats, DaoDailySnapshot,
+    DaoDepositCacheEntry, DeepForkInfo, EpochStats, HourlyStats, IdentityCollectionAggregate,
+    IdentityEntry, IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats,
+    ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry,
+    ObjectExtra, ObjectStandard, OwnerActivityDelta, ProtocolAction, ReorgEvent, ScriptDailyDelta,
+    ScriptInfo, SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo, TxActivityBundle,
+    TxIndexEntry, TypeCallEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -2056,6 +2057,172 @@ async fn test_charts_average_block_time_empty_db() {
 }
 
 #[tokio::test]
+async fn test_average_block_time_chart_recomputes_after_initial_empty_response() {
+    let store = test_store();
+    let config = test_config(store.clone());
+    let app = create_router(config).await;
+
+    let first_request = Request::builder()
+        .uri("/api/v1/charts/average-block-time")
+        .body(Body::empty())
+        .unwrap();
+    let first_response = app.clone().oneshot(first_request).await.unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_body = first_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let first_json: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+    assert_eq!(first_json["data"], serde_json::json!([]));
+
+    store
+        .put_daily_stats(
+            "20240115",
+            &DailyStats {
+                avg_block_time_ms: Some(12_000),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let second_request = Request::builder()
+        .uri("/api/v1/charts/average-block-time")
+        .body(Body::empty())
+        .unwrap();
+    let second_response = app.oneshot(second_request).await.unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = second_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let second_json: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
+    let second_data = second_json["data"].as_array().unwrap();
+    assert_eq!(second_data.len(), 1);
+    assert_eq!(second_data[0]["date"], "20240115");
+    assert_eq!(second_data[0]["value"], "12.00");
+}
+
+#[tokio::test]
+async fn test_total_deposit_chart_recomputes_after_initial_empty_response() {
+    let store = test_store();
+    let config = test_config(store.clone());
+    let app = create_router(config).await;
+
+    let first_request = Request::builder()
+        .uri("/api/v1/dao/charts/total-deposit")
+        .body(Body::empty())
+        .unwrap();
+    let first_response = app.clone().oneshot(first_request).await.unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_body = first_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let first_json: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+    assert_eq!(first_json["data"], serde_json::json!([]));
+
+    let snapshot = DaoDailySnapshot {
+        date: "2024-01-15".to_string(),
+        total_deposited: 123_00000000,
+        depositors_count: 7,
+        new_deposits: 0,
+        withdrawals: 0,
+        compensation: 0,
+        cumulative_deposit_amount: 123_00000000,
+        total_issuance: 0,
+        secondary_pool: 0,
+        occupied_capacity: 0,
+        cum_miner_secondary: 0,
+        cum_dao_compensation: 0,
+        cum_treasury: 0,
+        unclaimed_compensation: 0,
+    };
+    let key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+        b"20240115",
+    );
+    let value = bincode::serialize(&snapshot).unwrap();
+    store.put_cf(store.cf_stats_dao(), &key, &value).unwrap();
+
+    let second_request = Request::builder()
+        .uri("/api/v1/dao/charts/total-deposit")
+        .body(Body::empty())
+        .unwrap();
+    let second_response = app.oneshot(second_request).await.unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = second_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let second_json: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
+    let second_data = second_json["data"].as_array().unwrap();
+    assert_eq!(second_data.len(), 1);
+    assert_eq!(second_data[0]["date"], "2024-01-15");
+    assert_eq!(second_data[0]["value"], "123");
+    assert_eq!(second_data[0]["value2"], "7");
+}
+
+#[tokio::test]
+async fn test_cell_age_used_capacity_route_recomputes_after_initial_empty_response() {
+    let store = test_store();
+    let config = test_config(store.clone());
+    let app = create_router(config).await;
+
+    let first_request = Request::builder()
+        .uri("/api/v1/charts/cell-age-vs-used-capacity")
+        .body(Body::empty())
+        .unwrap();
+    let first_response = app.clone().oneshot(first_request).await.unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_body = first_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let first_json: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+    assert_eq!(first_json["data"], serde_json::json!([]));
+
+    store
+        .put_cell_distribution(
+            "20240115",
+            &DailyCellDistribution {
+                age_band_lt1d: 100,
+                age_band_1d_7d: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let second_request = Request::builder()
+        .uri("/api/v1/charts/cell-age-vs-used-capacity")
+        .body(Body::empty())
+        .unwrap();
+    let second_response = app.oneshot(second_request).await.unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = second_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let second_json: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
+    let second_data = second_json["data"].as_array().unwrap();
+    assert_eq!(second_data.len(), 2);
+    assert_eq!(second_data[1]["date"], "2024-01-15");
+    assert_eq!(second_data[1]["values"]["lt1d"], "0.000001");
+    assert_eq!(second_data[1]["values"]["d1to7d"], "0.0000005");
+}
+
+#[tokio::test]
 async fn test_new_capacity_charts_empty_db() {
     let store = test_store();
     let config = test_config(store);
@@ -2063,6 +2230,7 @@ async fn test_new_capacity_charts_empty_db() {
 
     for uri in [
         "/api/v1/charts/cell-age-vs-occupied-capacity",
+        "/api/v1/charts/cell-age-vs-used-capacity",
         "/api/v1/charts/capacity-turnover-ratio",
         "/api/v1/charts/cell-size-distribution",
         "/api/v1/charts/address-cohort-retention",

@@ -51,6 +51,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_cell_age_vs_occupied_capacity_chart),
         )
         .route(
+            "/charts/cell-age-vs-used-capacity",
+            get(get_cell_age_vs_occupied_capacity_chart),
+        )
+        .route(
             "/charts/capacity-turnover-ratio",
             get(get_capacity_turnover_ratio_chart),
         )
@@ -445,6 +449,10 @@ pub struct ChartResponse {
     pub y2_axis_label: Option<String>,
 }
 
+fn chart_response_has_data(response: &ChartResponse) -> bool {
+    !response.data.is_empty()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StackedAreaDataPoint {
@@ -466,6 +474,10 @@ pub struct StackedAreaChartResponse {
     pub data: Vec<StackedAreaDataPoint>,
     pub series: Vec<StackedAreaSeries>,
     pub title: String,
+}
+
+fn stacked_chart_response_has_data(response: &StackedAreaChartResponse) -> bool {
+    !response.data.is_empty()
 }
 
 const MOST_UTILIZED_LIMIT: usize = 20;
@@ -1186,7 +1198,10 @@ async fn get_cell_count_chart(
 async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
     let cache_key = "chart:knowledge-size:v2";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
-        return ok(cached);
+        if chart_response_has_data(&cached) {
+            return ok(cached);
+        }
+        state.cache.delete(cache_key).await;
     }
 
     let store = state.store.clone();
@@ -1232,7 +1247,9 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
         y2_axis_label: Some("Utilization (%)".to_string()),
     };
 
-    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    if chart_response_has_data(&response) {
+        state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    }
 
     ok(response)
 }
@@ -1330,7 +1347,10 @@ async fn get_common_knowledge_composition_chart(
 ) -> ApiResult<StackedAreaChartResponse> {
     let cache_key = "chart:common-knowledge-composition:v1";
     if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
-        return ok(cached);
+        if stacked_chart_response_has_data(&cached) {
+            return ok(cached);
+        }
+        state.cache.delete(cache_key).await;
     }
 
     let store = state.store.clone();
@@ -1508,7 +1528,9 @@ async fn get_common_knowledge_composition_chart(
         title: "Common Knowledge Bytes Composition".to_string(),
     };
 
-    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    if stacked_chart_response_has_data(&response) {
+        state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    }
 
     ok(response)
 }
@@ -1682,7 +1704,10 @@ async fn get_cell_age_vs_occupied_capacity_chart(
 ) -> ApiResult<StackedAreaChartResponse> {
     let cache_key = "chart:cell-age-vs-occupied-capacity:v1";
     if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
-        return ok(cached);
+        if stacked_chart_response_has_data(&cached) {
+            return ok(cached);
+        }
+        state.cache.delete(cache_key).await;
     }
 
     let latest_snapshot = state
@@ -1694,7 +1719,9 @@ async fn get_cell_age_vs_occupied_capacity_chart(
     };
 
     let response = build_cell_age_response(&snapshot, &date_key);
-    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    if stacked_chart_response_has_data(&response) {
+        state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    }
     ok(response)
 }
 
@@ -1981,7 +2008,10 @@ async fn get_average_block_time_chart(
 ) -> ApiResult<ChartResponse> {
     let cache_key = "chart:average-block-time";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
-        return ok(cached);
+        if chart_response_has_data(&cached) {
+            return ok(cached);
+        }
+        state.cache.delete(cache_key).await;
     }
 
     let store = state.store.clone();
@@ -2008,7 +2038,9 @@ async fn get_average_block_time_chart(
         y2_axis_label: None,
     };
 
-    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    if chart_response_has_data(&response) {
+        state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    }
 
     ok(response)
 }
@@ -2395,7 +2427,10 @@ async fn fetch_network_stats_from_db(
 async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
     let cache_key = "chart:hash-rate";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
-        return ok(cached);
+        if chart_response_has_data(&cached) {
+            return ok(cached);
+        }
+        state.cache.delete(cache_key).await;
     }
 
     let store = state.store.clone();
@@ -2435,7 +2470,9 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
         y2_axis_label: None,
     };
 
-    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    if chart_response_has_data(&response) {
+        state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    }
 
     ok(response)
 }
