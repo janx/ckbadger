@@ -9,6 +9,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getGlobalActivities: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 function makeActivity(

@@ -1,6 +1,5 @@
 import { MemoryRouter, useLocation, useRoutes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/__tests__/utils/test-utils';
 import { Header } from '@/components/layout/header';
 import { useHomeScrollStore } from '@/hooks/useHomeScrollStore';
@@ -68,9 +67,7 @@ describe('fiber navigation', () => {
     expect(screen.queryByText('not found page')).not.toBeInTheDocument();
   });
 
-  it('navigates to fiber channels when the header Fiber link is clicked', async () => {
-    const user = userEvent.setup();
-
+  it('does not expose a stale Fiber header link after the nav refresh', async () => {
     render(
       <MemoryRouter initialEntries={['/']}>
         <AppHarness />
@@ -78,11 +75,9 @@ describe('fiber navigation', () => {
     );
 
     await screen.findByText('home page');
-    await user.click(screen.getAllByRole('link', { name: 'Fiber' })[0]);
-
     await waitFor(() => {
-      expect(screen.getByTestId('pathname')).toHaveTextContent('/fiber/channels');
-      expect(screen.getByText('fiber channels page')).toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: 'Fiber' })).not.toBeInTheDocument();
     });
+    expect(screen.getByRole('link', { name: 'Activities' })).toHaveAttribute('href', '/activities');
   });
 });

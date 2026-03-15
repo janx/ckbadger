@@ -6,6 +6,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getCapacityTurnoverRatioChart: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/charts/chart-page', () => ({

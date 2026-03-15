@@ -19,6 +19,7 @@ vi.mock('@/lib/api', () => ({
     getMnftItemDetail: vi.fn(),
     getMnftItemActivities: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 describe('renderMarkdownPage', () => {

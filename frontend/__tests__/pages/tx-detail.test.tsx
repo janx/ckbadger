@@ -101,6 +101,7 @@ vi.mock('@/lib/api', () => ({
     getTransactionLifecycle: vi.fn(),
     lookupScripts: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/hooks/useCyclesCalculation', () => ({

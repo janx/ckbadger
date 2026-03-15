@@ -24,6 +24,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     search: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 import { SearchBar } from '@/components/search-bar';

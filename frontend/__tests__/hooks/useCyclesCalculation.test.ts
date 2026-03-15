@@ -10,6 +10,7 @@ vi.mock('@/lib/api', () => ({
     triggerCyclesCalculation: vi.fn(),
     getCyclesStatus: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 function createWrapper() {

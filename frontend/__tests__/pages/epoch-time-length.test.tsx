@@ -10,6 +10,7 @@ vi.mock('@/lib/api', () => ({
     getEpochTimeLengthChart: vi.fn(),
     getHardforks: getHardforksMock,
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/charts/chart-page', () => ({

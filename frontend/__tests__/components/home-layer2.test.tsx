@@ -13,6 +13,7 @@ vi.mock('@/lib/api', () => ({
     getHashRateChart: vi.fn(),
     getActivitySummary24h: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 function mockChartResponse(overrides: Partial<ChartResponse> = {}): ChartResponse {

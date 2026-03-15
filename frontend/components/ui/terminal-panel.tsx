@@ -15,9 +15,8 @@ const accentColorValues: Record<AccentColor, string> = {
   amber: 'rgba(212, 136, 58, 0.4)',
 };
 
-interface TerminalPanelProps {
+interface TerminalPanelProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
-  className?: string;
   variant?: 'default' | 'elevated' | 'inset';
   glow?: boolean;
   accentColor?: AccentColor;
@@ -29,6 +28,8 @@ export function TerminalPanel({
   variant = 'default',
   glow = false,
   accentColor = 'jade',
+  style,
+  ...props
 }: TerminalPanelProps) {
   const variantClasses = {
     default: 'bg-base-surface border-base-border',
@@ -38,13 +39,19 @@ export function TerminalPanel({
 
   return (
     <div
+      {...props}
       className={cn(
         'neon-edge-top relative overflow-hidden rounded-lg border transition-shadow duration-300',
         variantClasses[variant],
         glow && 'hover:shadow-glow',
         className
       )}
-      style={{ '--neon-color': accentColorValues[accentColor] } as CSSProperties}
+      style={
+        {
+          '--neon-color': accentColorValues[accentColor],
+          ...style,
+        } as CSSProperties
+      }
     >
       <div className="pointer-events-none absolute inset-0">
         <div

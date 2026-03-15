@@ -35,6 +35,7 @@ vi.mock('@/lib/api', () => ({
     getHodlWaveChart: vi.fn(),
     getHardforks: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

@@ -11,6 +11,7 @@ vi.mock('@/lib/api', () => ({
     getDidCkbItemActivities: vi.fn(),
     getAddress: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

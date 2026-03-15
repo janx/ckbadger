@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getGlobalActivities: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -40,7 +41,7 @@ describe('activities navigation', () => {
     window.scrollTo = vi.fn();
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [],
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
@@ -56,7 +57,7 @@ describe('activities navigation', () => {
     expect(await screen.findByText('Activities')).toBeInTheDocument();
     await waitFor(() => {
       expect(api.getGlobalActivities).toHaveBeenCalledWith(
-        expect.objectContaining({ filter: 'all', limit: 20 })
+        expect.objectContaining({ cursor: undefined, filter: 'all', limit: 50 })
       );
     });
     expect(screen.getByTestId('pathname')).toHaveTextContent('/activities');

@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getKnowledgeSizeChart: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

@@ -178,6 +178,7 @@ vi.mock('@/lib/api', () => ({
     getCellGraph: vi.fn(() => Promise.resolve({ nodes: [], links: [] })),
     lookupScripts: vi.fn(() => Promise.resolve({})),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 import { api } from '@/lib/api';

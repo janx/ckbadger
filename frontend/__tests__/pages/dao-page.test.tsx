@@ -11,6 +11,7 @@ vi.mock('@/lib/api', () => ({
     getDaoTopDepositors: vi.fn(),
     lookupScripts: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

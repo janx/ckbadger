@@ -7,6 +7,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getBlocks: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 function mockBlock(number: number): Block {

@@ -19,6 +19,7 @@ vi.mock('@/lib/api', () => ({
     getObjectCollectionHolders: vi.fn(),
     getObjectCollectionActivities: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

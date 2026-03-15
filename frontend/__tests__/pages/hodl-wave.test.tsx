@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getHodlWaveChart: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

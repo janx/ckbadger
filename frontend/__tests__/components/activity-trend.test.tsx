@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
     getDailyActivityStats: vi.fn(),
     getActivitySummary24h: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 function mockDailyStats(): DailyActivityStats[] {

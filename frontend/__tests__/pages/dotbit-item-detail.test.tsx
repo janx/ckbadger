@@ -11,6 +11,7 @@ vi.mock('@/lib/api', () => ({
     getDotbitItemActivities: vi.fn(),
     getAddress: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

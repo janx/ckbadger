@@ -13,6 +13,7 @@ vi.mock('@/lib/api', () => ({
     getIdentityCollectionHolders: vi.fn(),
     getIdentityCollectionActivities: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

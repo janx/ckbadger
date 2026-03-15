@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getLatestActivities: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 function makeActivity(

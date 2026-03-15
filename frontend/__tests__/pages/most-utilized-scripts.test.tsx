@@ -10,6 +10,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getMostUtilizedScriptsChart: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

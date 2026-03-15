@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getHardforks: getHardforksMock,
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({

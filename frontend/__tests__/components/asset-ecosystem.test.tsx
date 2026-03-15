@@ -7,6 +7,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getAssetEcosystem: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 function mockAssetEcosystem(

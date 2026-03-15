@@ -7,6 +7,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getNetworkStats: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 describe('GlobalStatsBar', () => {
