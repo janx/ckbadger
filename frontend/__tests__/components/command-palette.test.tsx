@@ -36,6 +36,30 @@ describe('CommandPalette', () => {
     expect(pushMock).toHaveBeenCalledWith('/blocks');
   });
 
+  it('executes the activities command from the palette', () => {
+    render(<CommandPalette />);
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+
+    const input = screen.getByLabelText('Command palette input');
+    fireEvent.change(input, { target: { value: 'activities' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(pushMock).toHaveBeenCalledWith('/activities');
+  });
+
+  it('keeps the fiber command available in the palette', () => {
+    render(<CommandPalette />);
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+
+    const input = screen.getByLabelText('Command palette input');
+    fireEvent.change(input, { target: { value: 'fiber' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(pushMock).toHaveBeenCalledWith('/fiber/channels');
+  });
+
   it('executes highlighted go-to command when query is empty', () => {
     render(<CommandPalette />);
 

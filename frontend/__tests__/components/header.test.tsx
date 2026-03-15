@@ -54,6 +54,10 @@ describe('Header', () => {
     expect(screen.getByTestId('global-stats-bar')).toBeInTheDocument();
     expect(searchBarMock.mock.calls.some(([props]) => props.variant === 'compact')).toBeTruthy();
     expect(screen.getAllByRole('link', { name: 'DAO' }).at(0)).toHaveAttribute('href', '/dao');
+    expect(screen.getAllByRole('link', { name: 'Activities' }).at(0)).toHaveAttribute(
+      'href',
+      '/activities'
+    );
     expect(screen.getAllByRole('link', { name: 'Assets' }).at(0)).toHaveAttribute(
       'href',
       '/assets'
@@ -66,6 +70,7 @@ describe('Header', () => {
       'href',
       '/charts'
     );
+    expect(screen.queryByRole('link', { name: 'Fiber' })).not.toBeInTheDocument();
   });
 
   it('opens and closes the mobile menu with navigation links', () => {
@@ -77,7 +82,9 @@ describe('Header', () => {
     fireEvent.click(toggleMenu);
 
     expect(screen.getAllByRole('link', { name: 'DAO' })).toHaveLength(2);
+    expect(screen.getAllByRole('link', { name: 'Activities' })).toHaveLength(2);
     expect(screen.getAllByRole('link', { name: 'Assets' })).toHaveLength(2);
+    expect(screen.queryByRole('link', { name: 'Fiber' })).not.toBeInTheDocument();
     expect(searchBarMock.mock.calls.every(([props]) => props.variant === 'compact')).toBe(true);
 
     fireEvent.click(toggleMenu);

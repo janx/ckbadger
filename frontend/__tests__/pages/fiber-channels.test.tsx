@@ -34,7 +34,12 @@ describe('FiberChannelsPage', () => {
     render(<FiberChannelsPage />);
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
-    expect(screen.getByText('Fiber Network')).toBeInTheDocument();
+    expect(screen.getByText('Fiber Channels')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Follow the living circuitry of Fiber on Nervos, where nodes whisper value through channels like signals across a sleepless mind.'
+      )
+    ).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText('Closed Channels')).toBeInTheDocument();

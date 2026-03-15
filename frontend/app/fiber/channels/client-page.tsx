@@ -75,7 +75,10 @@ export default function FiberChannelsPage() {
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-4">
-        <PageHeader title="Fiber Network" subtitle="Payment Channel Explorer" />
+        <PageHeader
+          title="Fiber Channels"
+          subtitle="Follow the living circuitry of Fiber on Nervos, where nodes whisper value through channels like signals across a sleepless mind."
+        />
 
         {stats && (
           <TerminalPanel className="mb-8">
