@@ -2,10 +2,13 @@ import type { ScriptRefHashType } from '@/lib/script-ref';
 import {
   api,
   type Address,
+  type ActivitySummary24h,
   type Block,
   type Cell,
   type ChartResponse,
   type DaoDeposit,
+  type GlobalActivity,
+  type GlobalActivityFilter,
   type GraphResponse,
   type HardforkTimelineResponse,
   type MinerDistributionResponse,
@@ -20,6 +23,7 @@ import {
   type TransactionDetail,
   type TransactionLifecycle,
 } from '@/lib/api';
+import { classifyActivity } from '@/lib/activity-classify';
 import { buildMarkdownDocument, markdownList, markdownTable } from '@/lib/ai/markdown-format';
 import { CHART_PAGE_SLUGS, type ParsedMarkdownPage } from '@/lib/ai/markdown-route';
 import { resolveBuildVersion } from '@/lib/runtime-config';
@@ -27,6 +31,16 @@ import { analyzeWitness, buildScriptGroupLens, inferWitnessInsights } from '@/li
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 200;
+const GLOBAL_ACTIVITY_FILTERS = [
+  'all',
+  'ckb',
+  'token',
+  'object',
+  'identity',
+  'dao',
+  'script',
+  'protocol',
+] as const;
 
 type MarkdownChartPayload =
   | ChartResponse
@@ -144,6 +158,17 @@ function parseScriptHashType(raw: string | null): ScriptRefHashType {
   );
 }
 
+function parseGlobalActivityFilter(raw: string | null): GlobalActivityFilter {
+  if (raw === null) return 'all';
+  if ((GLOBAL_ACTIVITY_FILTERS as readonly string[]).includes(raw)) {
+    return raw as GlobalActivityFilter;
+  }
+  throw new MarkdownRenderError(
+    400,
+    `Invalid query param "filter": ${raw}. Expected one of ${GLOBAL_ACTIVITY_FILTERS.join(',')}`
+  );
+}
+
 function parseMnftActivityAction(raw: string | null): 'mint' | 'transfer' | 'burn' | undefined {
   if (raw === null) return undefined;
   if (raw === 'mint' || raw === 'transfer' || raw === 'burn') {
@@ -184,6 +209,81 @@ function renderTxRows(txs: Transaction[]): unknown[][] {
     tx.fee,
     tx.timestamp,
   ]);
+}
+
+function renderActivitySummary(summary: ActivitySummary24h): string {
+  return markdownTable(
+    ['field', 'value'],
+    [
+      ['hoursCovered', summary.hoursCovered],
+      ['transferCount', summary.transferCount],
+      ['daoDepositCount', summary.daoDepositCount],
+      ['daoWithdrawRequestCount', summary.daoWithdrawRequestCount],
+      ['daoWithdrawCompleteCount', summary.daoWithdrawCompleteCount],
+      ['tokenCount', summary.tokenCount],
+      ['objectCount', summary.objectCount],
+      ['identityCount', summary.identityCount],
+      ['scriptCallCount', summary.scriptCallCount],
+      ['unknownCount', summary.unknownCount],
+      ['coinbaseCount', summary.coinbaseCount],
+      ['uniqueAddressCount', summary.uniqueAddressCount],
+      ['totalCkbMoved', summary.totalCkbMoved],
+    ]
+  );
+}
+
+function renderActivityDetail(activity: GlobalActivity): string {
+  const classified = classifyActivity(activity);
+
+  if (classified.primaryProtocolAction) {
+    return `${classified.primaryProtocolAction.protocol}:${classified.primaryProtocolAction.action}`;
+  }
+
+  if (classified.primaryAssetChange) {
+    switch (classified.primaryAssetChange.type) {
+      case 'token':
+        return `${classified.primaryAssetChange.symbol ?? hashShort(classified.primaryAssetChange.typeScriptHash)} delta=${classified.primaryAssetChange.delta}`;
+      case 'object':
+        return `${classified.primaryAssetChange.standard}:${classified.primaryAssetChange.action} ${hashShort(classified.primaryAssetChange.objectId)}`;
+      case 'identity':
+        return `${classified.primaryAssetChange.standard}:${classified.primaryAssetChange.action} ${hashShort(classified.primaryAssetChange.identityId)}`;
+      case 'daoDeposit':
+        return `capacity=${classified.primaryAssetChange.capacity}`;
+      case 'daoWithdrawRequest':
+        return `capacity=${classified.primaryAssetChange.capacity} depositBlock=${classified.primaryAssetChange.depositBlock}`;
+      case 'daoWithdrawComplete':
+        return `capacity=${classified.primaryAssetChange.capacity} compensation=${classified.primaryAssetChange.compensation}`;
+    }
+  }
+
+  if (classified.primaryTypeCall) {
+    return (
+      classified.primaryTypeCall.scriptName ?? hashShort(classified.primaryTypeCall.typeCodeHash)
+    );
+  }
+
+  if (classified.primaryLockCall) {
+    return (
+      classified.primaryLockCall.scriptName ?? hashShort(classified.primaryLockCall.lockCodeHash)
+    );
+  }
+
+  return '-';
+}
+
+function renderGlobalActivityRows(activities: GlobalActivity[]): unknown[][] {
+  return activities.map((activity) => {
+    const classified = classifyActivity(activity);
+    return [
+      activity.timestamp,
+      hashShort(activity.address),
+      hashShort(activity.txHash),
+      activity.blockNumber,
+      classified.displayType,
+      activity.ckbDelta,
+      renderActivityDetail(activity),
+    ];
+  });
 }
 
 function renderChartData(chart: ChartResponse): string {
@@ -583,6 +683,53 @@ export async function renderMarkdownPage(
         markdownTable(
           ['hash', 'blockNumber', 'inputs', 'outputs', 'fee', 'timestamp'],
           renderTxRows(txs.data)
+        ),
+      ]);
+      return { status: 200, body };
+    }
+    case 'activities_list': {
+      const limit = parseLimit(searchParams);
+      const cursor = searchParams.get('cursor') ?? undefined;
+      const filter = parseGlobalActivityFilter(searchParams.get('filter'));
+      const [summary, activities] = await Promise.all([
+        api.getActivitySummary24h(),
+        api.getGlobalActivities({ limit, cursor, filter }),
+      ]);
+      const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+        '# Activities',
+        '',
+        '## Query',
+        '',
+        markdownTable(
+          ['param', 'value'],
+          [
+            ['limit', limit],
+            ['cursor', cursor ?? '-'],
+            ['filter', filter],
+          ]
+        ),
+        '',
+        '## Last 24 Hours',
+        '',
+        renderActivitySummary(summary),
+        '',
+        '## Results',
+        '',
+        activities.data.length === 0
+          ? 'No activities found.'
+          : markdownTable(
+              ['timestamp', 'address', 'txHash', 'blockNumber', 'kind', 'ckbDelta', 'detail'],
+              renderGlobalActivityRows(activities.data)
+            ),
+        '',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['limit', activities.limit],
+            ['total', activities.total ?? '-'],
+            ['hasMore', activities.hasMore],
+            ['nextCursor', activities.nextCursor ?? '-'],
+          ]
         ),
       ]);
       return { status: 200, body };

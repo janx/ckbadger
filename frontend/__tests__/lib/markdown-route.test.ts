@@ -54,6 +54,7 @@ function collectMarkdownRoutes(): string[] {
 describe('parseMarkdownSourcePath', () => {
   it('parses representative routes', () => {
     expect(parseMarkdownSourcePath('/').kind).toBe('home');
+    expect(parseMarkdownSourcePath('/activities').kind).toBe('activities_list');
     expect(parseMarkdownSourcePath('/blocks').kind).toBe('blocks_list');
     expect(parseMarkdownSourcePath('/blocks/123').kind).toBe('block_detail');
     expect(parseMarkdownSourcePath('/tx/0x123').kind).toBe('tx_detail');

@@ -31,6 +31,7 @@ export type ChartPageSlug = (typeof CHART_PAGE_SLUGS)[number];
 
 export type ParsedMarkdownPage =
   | { kind: 'home'; pathname: '/' }
+  | { kind: 'activities_list'; pathname: '/activities' }
   | { kind: 'address_detail'; pathname: string; addr: string }
   | { kind: 'assets_list'; pathname: '/assets' }
   | { kind: 'blocks_list'; pathname: '/blocks' }
@@ -63,6 +64,7 @@ export type ParsedMarkdownPage =
 
 export const MARKDOWN_ROUTE_PATTERNS = [
   '/',
+  '/activities',
   '/address/{addr}',
   '/assets',
   '/blocks',
@@ -115,6 +117,9 @@ export function parseMarkdownSourcePath(pathname: string): ParsedMarkdownPage {
   const normalized = normalizePathname(pathname);
 
   if (normalized === '/') return { kind: 'home', pathname: '/' };
+  if (normalized === '/activities') {
+    return { kind: 'activities_list', pathname: '/activities' };
+  }
   if (normalized === '/assets') return { kind: 'assets_list', pathname: '/assets' };
   if (normalized === '/blocks') return { kind: 'blocks_list', pathname: '/blocks' };
   if (normalized === '/charts') return { kind: 'charts_overview', pathname: '/charts' };

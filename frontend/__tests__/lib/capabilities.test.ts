@@ -23,6 +23,7 @@ describe('buildAiCapabilities', () => {
   it('declares tx debugger profile in raw route matrix', () => {
     const capabilities = buildAiCapabilities();
 
+    expect(capabilities.routes.markdown).toContain('/activities');
     expect(capabilities.routes.markdown).toContain('/identities/dotbit/{identityId}');
     expect(capabilities.routes.markdown).toContain('/identities/did/{identityId}');
     expect(capabilities.routes.markdown).toContain('/objects/mnft/{objectId}');

@@ -5,7 +5,9 @@ import { api } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
   api: {
+    getActivitySummary24h: vi.fn(),
     getBlocks: vi.fn(),
+    getGlobalActivities: vi.fn(),
     getTransactionDetail: vi.fn(),
     getTransactionLifecycle: vi.fn(),
     getTransactionCellDeps: vi.fn(),
@@ -71,6 +73,66 @@ describe('renderMarkdownPage', () => {
     expect(result.body).toContain('# Blocks');
     expect(result.body).toContain('| number | hash | txs | proposals | timestamp |');
     expect(result.body).toContain('| 123 |');
+  });
+
+  it('renders activities markdown', async () => {
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      transferCount: 12,
+      daoDepositCount: 3,
+      daoWithdrawRequestCount: 1,
+      daoWithdrawCompleteCount: 1,
+      tokenCount: 4,
+      objectCount: 2,
+      identityCount: 1,
+      scriptCallCount: 5,
+      unknownCount: 0,
+      coinbaseCount: 1,
+      uniqueAddressCount: 9,
+      totalCkbMoved: '123000000000',
+      scriptCounts: [],
+      hoursCovered: 24,
+    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [
+        {
+          address: 'ckt1qyq9sampleaddress0000000000000000000000000',
+          txHash: `0x${'a'.repeat(64)}`,
+          blockNumber: 123,
+          txIndex: 0,
+          timestamp: '1700000000',
+          ckbDelta: '10000000000',
+          usedDelta: '0',
+          isCellbase: false,
+          hasTypeScript: true,
+          assetChanges: [{ type: 'daoDeposit', capacity: '10000000000' }],
+          typeCalls: [],
+          lockCalls: [],
+          protocolActions: [],
+          peers: [],
+        },
+      ],
+      total: 1,
+      limit: 1,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/activities'),
+      searchParams: new URLSearchParams('limit=1&filter=dao'),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('# Activities');
+    expect(result.body).toContain('## Last 24 Hours');
+    expect(result.body).toContain('daoDeposit');
+    expect(result.body).toContain('daoDepositCount');
+    expect(api.getGlobalActivities).toHaveBeenCalledWith({
+      limit: 1,
+      cursor: undefined,
+      filter: 'dao',
+    });
   });
 
   it('fails fast on invalid limit query param', async () => {
