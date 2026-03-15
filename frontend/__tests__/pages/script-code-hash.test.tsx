@@ -8,6 +8,8 @@ vi.mock('@/lib/api', () => ({
   api: {
     lookupScripts: vi.fn(),
     getCodeCell: vi.fn(),
+    getCodeCells: vi.fn(),
+    getCell: vi.fn(),
     getScriptCapacityChartByCodeHash: vi.fn(),
     getCellsByScriptRef: vi.fn(),
   },
@@ -20,6 +22,9 @@ vi.mock('@/components/layout/header', () => ({
 
 const mockCodeHash = '0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075';
 const mockDataHash = '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649';
+const mockGovernanceCodeHash = '0xf222222222222222222222222222222222222222222222222222222222222222';
+const mockGovernanceArgs = '0xa222222222222222222222222222222222222222';
+const mockDeploymentTxHash = '0x4444444444444444444444444444444444444444444444444444444444444444';
 const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
 let currentCodeHashParam = mockCodeHash;
 
@@ -41,25 +46,78 @@ describe('ScriptByCodeHashPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     currentCodeHashParam = mockCodeHash;
-    vi.mocked(api.lookupScripts).mockResolvedValue({
-      [mockCodeHash]: {
-        codeHash: mockCodeHash,
-        name: 'Unknown',
-        scriptKind: 'type',
-        decoderType: null,
-        hashType: 'type',
-        deploymentTypeHash: mockCodeHash,
-        deploymentDataHash: mockDataHash,
-        codeCellTxHash: null,
-        codeCellOutputIndex: null,
-        liveCellsCount: 15,
-        liveCapacitySum: '25000000000',
-        liveUsedCapacitySum: '14000000000',
-        codeCellsLiveCount: 0,
-        codeCellsTotal: 0,
-      },
+    vi.mocked(api.lookupScripts).mockImplementation(async (codeHashes) => {
+      const response: Record<string, any> = {};
+
+      if (codeHashes.includes(mockCodeHash)) {
+        response[mockCodeHash] = {
+          codeHash: mockCodeHash,
+          name: 'Unknown',
+          scriptKind: 'type',
+          decoderType: null,
+          hashType: 'type',
+          deploymentTypeHash: mockCodeHash,
+          deploymentDataHash: mockDataHash,
+          codeCellTxHash: mockDeploymentTxHash,
+          codeCellOutputIndex: 0,
+          liveCellsCount: 15,
+          liveCapacitySum: '25000000000',
+          liveUsedCapacitySum: '14000000000',
+          codeCellsLiveCount: 1,
+          codeCellsTotal: 1,
+        };
+      }
+
+      if (codeHashes.includes(mockGovernanceCodeHash)) {
+        response[mockGovernanceCodeHash] = {
+          codeHash: mockGovernanceCodeHash,
+          name: 'Governance Lock',
+          scriptKind: 'lock',
+          decoderType: null,
+          hashType: 'type',
+          deploymentTypeHash: mockGovernanceCodeHash,
+          deploymentDataHash: null,
+          codeCellTxHash: null,
+          codeCellOutputIndex: null,
+          liveCellsCount: 0,
+          liveCapacitySum: '0',
+          liveUsedCapacitySum: '0',
+          codeCellsLiveCount: 0,
+          codeCellsTotal: 0,
+        };
+      }
+
+      return response;
     });
     vi.mocked(api.getCodeCell).mockResolvedValue({ txHash: null, outputIndex: null });
+    vi.mocked(api.getCodeCells).mockResolvedValue({
+      codeCells: [
+        {
+          txHash: mockDeploymentTxHash,
+          outputIndex: 0,
+          status: 'live',
+          createdAtBlock: 123456,
+          capacity: '16100000000',
+        },
+      ],
+      liveCount: 1,
+      totalCount: 1,
+    });
+    vi.mocked(api.getCell).mockResolvedValue({
+      txHash: mockDeploymentTxHash,
+      outputIndex: 0,
+      capacity: '16100000000',
+      usedCapacity: 6100000000,
+      lockScriptHash: '0xlock1',
+      dataSize: 0,
+      createdAtBlock: 123456,
+      status: 'live',
+      lock: {
+        codeHash: mockGovernanceCodeHash,
+        hashType: 'type',
+        args: mockGovernanceArgs,
+      },
+    });
     vi.mocked(api.getScriptCapacityChartByCodeHash).mockResolvedValue({
       title: 'Capacity History',
       series: [
@@ -76,45 +134,24 @@ describe('ScriptByCodeHashPage', () => {
     vi.mocked(api.getCellsByScriptRef).mockResolvedValue(emptyCells);
   });
 
-  it('renders deployment refs and queries cells for the script code hash', async () => {
+  it('renders unknown code hash with the unified script detail layout', async () => {
     render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
 
     await waitFor(() => {
-      expect(api.getScriptCapacityChartByCodeHash).toHaveBeenCalledWith(mockCodeHash, 'both');
-      expect(api.getCellsByScriptRef).toHaveBeenCalledWith({
-        codeHash: mockCodeHash,
-        hashType: 'type',
-        scriptKind: 'both',
-        limit: 50,
-        cursor: undefined,
-      });
-      expect(screen.getByText('Capacity History')).toBeInTheDocument();
-      expect(screen.getByText('Cells Capacity')).toBeInTheDocument();
-      expect(screen.getByText(/HMul:/)).toBeInTheDocument();
+      expect(screen.getByText('Script Versions')).toBeInTheDocument();
+      expect(screen.getByText('Version Deployments')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Explain Script Versions' })).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Explain Version Deployments' })
+      ).toBeInTheDocument();
     });
-    expect(screen.getByText('Same Deployment References')).toBeInTheDocument();
-    expect(screen.getByText('Reference Semantics')).toBeInTheDocument();
-    expect(screen.getByText(/bytecode hash ref family \(data\/data1\/data2\)/)).toBeInTheDocument();
-    expect(screen.getByText(/Tradeoff: choose type for upgradeability/)).toBeInTheDocument();
+    expect(screen.queryByText('Same Deployment References')).toBeNull();
+    expect(screen.getByText('Usage')).toBeInTheDocument();
     expect(
-      screen.getByRole('link', { name: 'Reference doc: data vs type hash semantics' })
-    ).toHaveAttribute('href', 'https://docs.nervos.org/docs/tech-explanation/data-type-diff');
-    expect(screen.getByText('type (upgradeable ref)')).toBeInTheDocument();
-    expect(screen.getByText('Type + Data')).toBeInTheDocument();
-    expect(
-      screen
-        .getAllByRole('link')
-        .some(
-          (link) => link.getAttribute('href') === `/script/${mockCodeHash}?hashType=type&kind=type`
-        )
-    ).toBe(true);
-    expect(
-      screen
-        .getAllByRole('link')
-        .some(
-          (link) => link.getAttribute('href') === `/script/${mockDataHash}?hashType=data&kind=type`
-        )
-    ).toBe(true);
+      screen.getByText('Historical used/unused live capacity for the selected version.')
+    ).toBeInTheDocument();
+    expect(screen.getAllByTitle(`Click to copy: ${mockCodeHash}`).length).toBeGreaterThan(0);
+    expect(screen.getByTitle(`Click to copy: ${mockDeploymentTxHash}:0`)).toBeInTheDocument();
   });
 
   it('redirects known script hash to the unified named script detail page', async () => {
