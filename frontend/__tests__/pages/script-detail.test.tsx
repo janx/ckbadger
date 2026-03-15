@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { render } from '../utils/test-utils';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api } from '@/lib/api';
@@ -10,9 +11,11 @@ vi.mock('@/lib/api', () => ({
     getScriptUsage: vi.fn(),
     getScriptCapacityChart: vi.fn(),
     getScriptCapacityChartByCodeHash: vi.fn(),
+    getCodeCells: vi.fn(),
     getCellsByScriptRef: vi.fn(),
     lookupScripts: vi.fn(),
   },
+  isWarmupPendingError: vi.fn(() => false),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -130,6 +133,20 @@ const emptyCells = {
   nextCursor: null,
 };
 
+const mockCodeCells = {
+  codeCells: [
+    {
+      txHash: newerCodeCellTxHash,
+      outputIndex: 1,
+      status: 'live' as const,
+      createdAtBlock: 12345,
+      capacity: '16200000000',
+    },
+  ],
+  liveCount: 1,
+  totalCount: 1,
+};
+
 describe('ScriptDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -137,6 +154,7 @@ describe('ScriptDetailPage', () => {
     vi.mocked(api.getScriptUsage).mockResolvedValue(mockUsage);
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(mockCapacityChart);
     vi.mocked(api.getScriptCapacityChartByCodeHash).mockResolvedValue(mockCapacityChart);
+    vi.mocked(api.getCodeCells).mockResolvedValue(mockCodeCells);
     vi.mocked(api.getCellsByScriptRef).mockResolvedValue(emptyCells);
     vi.mocked(api.lookupScripts).mockResolvedValue({
       [olderCodeHash]: {
@@ -174,7 +192,9 @@ describe('ScriptDetailPage', () => {
     });
   });
 
-  it('renders separate capacity and cells sections for the latest deployment', async () => {
+  it('prioritizes deployments and renders selected deployment detail sections', async () => {
+    const user = userEvent.setup();
+
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
 
     await waitFor(() => {
@@ -188,25 +208,44 @@ describe('ScriptDetailPage', () => {
       });
     });
 
-    expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
+    expect(screen.getByText('Deployments')).toBeInTheDocument();
     expect(screen.getByText('Deployed At')).toBeInTheDocument();
-    expect(screen.getAllByText('Cells').length).toBeGreaterThan(0);
-    expect(screen.queryByText('Capacity History')).not.toBeInTheDocument();
-    expect(screen.queryByText('Selected Deployment Utilization')).not.toBeInTheDocument();
-    const refSemantics = screen.getByTestId('script-ref-semantics');
-    expect(refSemantics).toBeInTheDocument();
-    expect(
-      within(refSemantics).getByRole('link', { name: 'Reference doc: data vs type hash semantics' })
-    ).toHaveAttribute('href', 'https://docs.nervos.org/docs/tech-explanation/data-type-diff');
-    const capacityRefs = screen.getByTestId('capacity-selected-refs');
-    const cellsRefs = screen.getByTestId('cells-selected-refs');
-    expect(within(capacityRefs).getByText('type')).toBeInTheDocument();
-    expect(within(capacityRefs).getByText('bytecode(data)')).toBeInTheDocument();
-    expect(within(cellsRefs).getByText('type')).toBeInTheDocument();
-    expect(within(cellsRefs).getByText('bytecode(data)')).toBeInTheDocument();
+    expect(screen.queryByTestId('script-ref-semantics')).not.toBeInTheDocument();
+    expect(screen.getByText('References')).toBeInTheDocument();
+    expect(screen.getByText('Code Cells')).toBeInTheDocument();
+    expect(screen.getByText('Usage')).toBeInTheDocument();
+    expect(screen.queryByText('Capacity Statistics')).not.toBeInTheDocument();
+    expect(screen.queryByText('1 live')).not.toBeInTheDocument();
+    expect(screen.queryByText('Deployment 1')).not.toBeInTheDocument();
+    expect(screen.queryByText('Deployment 2')).not.toBeInTheDocument();
 
-    // Code cell summaries show "X live" instead of direct links (expanded via CodeCellsList)
-    const liveBadges = screen.getAllByText('1 live');
-    expect(liveBadges.length).toBeGreaterThanOrEqual(2);
+    const olderDeploymentRow = screen.getByTestId(`deployment-row-${olderCodeHash}-type`);
+    expect(
+      within(olderDeploymentRow).getAllByTitle(`Click to copy: ${olderCodeHash}`).length
+    ).toBeGreaterThan(0);
+
+    await user.click(
+      within(olderDeploymentRow).getAllByTitle(`Click to copy: ${olderCodeHash}`)[0]
+    );
+
+    await waitFor(() => {
+      expect(api.getScriptCapacityChartByCodeHash).toHaveBeenCalledTimes(1);
+      expect(api.getCellsByScriptRef).toHaveBeenCalledTimes(1);
+      expect(api.getCodeCells).toHaveBeenCalledTimes(1);
+    });
+
+    await user.click(olderDeploymentRow);
+
+    await waitFor(() => {
+      expect(api.getScriptCapacityChartByCodeHash).toHaveBeenCalledWith(olderCodeHash, 'lock');
+      expect(api.getCellsByScriptRef).toHaveBeenCalledWith({
+        codeHash: olderCodeHash,
+        hashType: 'type',
+        scriptKind: 'lock',
+        limit: 50,
+        cursor: undefined,
+      });
+      expect(api.getCodeCells).toHaveBeenCalledWith(olderCodeHash, 'type');
+    });
   });
 });

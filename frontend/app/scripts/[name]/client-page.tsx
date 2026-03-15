@@ -14,7 +14,7 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Capacity } from '@/components/ui/capacity';
-import { CodeCellsList, CodeCellsSummary } from '@/components/ui/code-cells-list';
+import { CodeCellsList } from '@/components/ui/code-cells-list';
 import { HMultiplier } from '@/components/ui/h-multiplier';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
@@ -94,7 +94,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
   const selectedRefHashType = normalizeScriptRefHashType(searchParams.get('hashType'));
   const [capacityRange, setCapacityRange] = useState<CapacityRangeKey>('all');
   const [selectedDeployment, setSelectedDeployment] = useState<SelectedDeployment | null>(null);
-  const [expandedCodeCells, setExpandedCodeCells] = useState<string | null>(null);
   const cellsPagination = useCursorPagination();
   const capacityRangeParams = getCapacityRangeParams(capacityRange);
   const {
@@ -257,6 +256,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
   const usageByCodeHash = new Map(usage?.byDeployment.map((d) => [d.codeHash, d]) ?? []);
   const inferredScriptKind = usage?.byDeployment.find((d) => d.scriptKind)?.scriptKind;
   const sortedDeployments = [...deployments].sort(compareDeploymentsByDeployedAt);
+  const deploymentCountLabel = formatNumber(sortedDeployments.length);
   const selectedDeploymentUsage = selectedDeployment
     ? usageByCodeHash.get(selectedDeployment.codeHash)
     : undefined;
@@ -354,108 +354,62 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
         <TerminalPanel className="border-base-border/80 mb-6">
           <TerminalPanelHeader indicator="active">Deployments</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
-            <div
-              data-testid="script-ref-semantics"
-              className="border-base-border grid gap-3 border-b px-4 py-4 md:grid-cols-3"
-            >
-              <div className="border-base-border bg-base-surface/60 rounded-md border p-3">
-                <div className="text-text-dim mb-1 font-mono text-[11px] uppercase tracking-wider">
-                  Script Ref
-                </div>
-                <div className="text-text font-mono text-xs">type ref</div>
-                <div className="text-text-dim mt-1 text-xs">
-                  Resolves by type script hash. Upgradeable flow, executes on latest CKB-VM.
-                </div>
-              </div>
-              <div className="border-base-border bg-base-surface/60 rounded-md border p-3">
-                <div className="text-text-dim mb-1 font-mono text-[11px] uppercase tracking-wider">
-                  Script Ref
-                </div>
-                <div className="text-text font-mono text-xs">data/data1/data2</div>
-                <div className="text-text-dim mt-1 text-xs">
-                  Resolves by bytecode hash. Immutable binary, VM version fixed to v0/v1/v2.
-                </div>
-              </div>
-              <div className="border-base-border bg-base-surface/60 rounded-md border p-3">
-                <div className="text-text-dim mb-1 font-mono text-[11px] uppercase tracking-wider">
-                  Tradeoff
-                </div>
-                <div className="text-text-dim text-xs">
-                  `type` favors upgradability; `data` family favors deterministic, reproducible
-                  execution.
-                </div>
-                <a
-                  href="https://docs.nervos.org/docs/tech-explanation/data-type-diff"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-emphasis mt-2 inline-block text-xs hover:underline"
-                >
-                  Reference doc: data vs type hash semantics
-                </a>
+            <div className="border-base-border bg-base-surface/30 border-b px-4 py-3">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                <span className="text-text font-mono">{deploymentCountLabel} deployments</span>
+                {usage && (
+                  <>
+                    <span className="text-text-dim">·</span>
+                    <span className="text-text-dim">
+                      {formatNumber(usage.liveCellsCount)} live cells
+                    </span>
+                    <span className="text-text-dim">·</span>
+                    <span className="text-text-dim">
+                      {formatCkbCompact(usage.liveCapacitySum).value} CKB live capacity
+                    </span>
+                  </>
+                )}
               </div>
             </div>
             <div className="overflow-x-auto">
               <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                <div className="flex-1">Code Cells</div>
+                <div className="flex-1">Version</div>
                 <div className="w-56">Deployed At</div>
                 <div className="w-24">Kind</div>
-                <div className="w-24 text-right">Cells</div>
-                <div className="w-32 text-right">Capacity</div>
+                <div className="w-24 text-right">Live Cells</div>
+                <div className="w-32 text-right">Live Capacity</div>
               </div>
-              {sortedDeployments.map((deployment, idx) => {
+              {sortedDeployments.map((deployment) => {
                 const stats = usageByCodeHash.get(deployment.codeHash);
                 const selected = isSelected(deployment);
+                const normalizedHashType =
+                  normalizeScriptRefHashType(deployment.hashType) ?? 'unknown';
                 const refs = deploymentReferenceHashes(
                   deployment,
                   deploymentLookup?.[deployment.codeHash]
                 );
                 return (
-                  <React.Fragment key={idx}>
+                  <React.Fragment key={`${deployment.codeHash}-${normalizedHashType}`}>
                     <TerminalRow
+                      data-testid={`deployment-row-${deployment.codeHash}-${normalizedHashType}`}
+                      onClick={() => handleDeploymentClick(deployment)}
                       className={`cursor-pointer ${selected ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}`}
                     >
-                      <div
-                        className="flex w-full items-center gap-3"
-                        onClick={() => handleDeploymentClick(deployment)}
-                      >
+                      <div className="flex w-full items-center gap-3">
                         <div className="min-w-0 flex-1 py-0.5">
-                          <div className="mb-2">
-                            {(() => {
-                              const lookupInfo = deploymentLookup?.[deployment.codeHash];
-                              return lookupInfo ? (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setExpandedCodeCells(
-                                      expandedCodeCells === deployment.codeHash
-                                        ? null
-                                        : deployment.codeHash
-                                    );
-                                  }}
-                                  className="text-left hover:underline"
-                                >
-                                  <CodeCellsSummary
-                                    liveCount={lookupInfo.codeCellsLiveCount}
-                                    totalCount={lookupInfo.codeCellsTotal}
-                                  />
-                                </button>
-                              ) : deployment.codeCellTxHash &&
-                                deployment.codeCellOutputIndex !== null ? (
-                                <Link
-                                  href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="text-emphasis text-xs hover:underline"
-                                >
-                                  <HexDisplay
-                                    value={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
-                                    startChars={8}
-                                    endChars={8}
-                                  />
-                                </Link>
-                              ) : (
-                                <span className="text-text-dim">-</span>
-                              );
-                            })()}
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <span className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                              Code Hash
+                            </span>
+                            <span className="inline-flex" onClick={(e) => e.stopPropagation()}>
+                              <HexDisplay
+                                value={deployment.codeHash}
+                                size="sm"
+                                startChars={10}
+                                endChars={8}
+                              />
+                            </span>
+                            {selected && <Badge variant="green">Selected</Badge>}
                           </div>
                           <div className="space-y-1 text-xs">
                             <div className="flex items-center gap-2">
@@ -463,12 +417,14 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                                 type
                               </span>
                               {refs.typeRef ? (
-                                <HexDisplay
-                                  value={refs.typeRef}
-                                  size="sm"
-                                  startChars={10}
-                                  endChars={8}
-                                />
+                                <span className="inline-flex" onClick={(e) => e.stopPropagation()}>
+                                  <HexDisplay
+                                    value={refs.typeRef}
+                                    size="sm"
+                                    startChars={10}
+                                    endChars={8}
+                                  />
+                                </span>
                               ) : (
                                 <span className="text-text-dim font-mono">Unavailable</span>
                               )}
@@ -478,12 +434,14 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                                 {getScriptRefBadgeLabel(refs.dataRefType)}
                               </span>
                               {refs.dataRef ? (
-                                <HexDisplay
-                                  value={refs.dataRef}
-                                  size="sm"
-                                  startChars={10}
-                                  endChars={8}
-                                />
+                                <span className="inline-flex" onClick={(e) => e.stopPropagation()}>
+                                  <HexDisplay
+                                    value={refs.dataRef}
+                                    size="sm"
+                                    startChars={10}
+                                    endChars={8}
+                                  />
+                                </span>
                               ) : (
                                 <span className="text-text-dim font-mono">Unavailable</span>
                               )}
@@ -505,7 +463,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                         <div className="text-text-dim w-24">
                           {stats?.scriptKind ? (
                             <Badge variant="neutral" className="px-1.5 py-0.5 text-[10px]">
-                              {stats.scriptKind}
+                              {stats.scriptKind.toUpperCase()}
                             </Badge>
                           ) : (
                             <span className="text-text-dim">-</span>
@@ -531,14 +489,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                         </div>
                       </div>
                     </TerminalRow>
-                    {expandedCodeCells === deployment.codeHash && (
-                      <div className="border-base-border bg-base-bg/50 border-b">
-                        <CodeCellsList
-                          codeHash={deployment.codeHash}
-                          hashType={(deployment.hashType as ScriptRefHashType) ?? 'data'}
-                        />
-                      </div>
-                    )}
                   </React.Fragment>
                 );
               })}
@@ -567,15 +517,13 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
         {selectedDeployment && (
           <>
             <TerminalPanel className="mb-6">
-              <TerminalPanelHeader indicator="none">
-                <div className="flex items-center gap-2">
-                  <span>Capacity Statistics</span>
-                  <span className="text-text-dim">|</span>
-                  <div
-                    data-testid="capacity-selected-refs"
-                    className="flex flex-wrap items-center gap-2 text-xs"
-                  >
-                    <Badge variant="gray">type</Badge>
+              <TerminalPanelHeader indicator="none">References</TerminalPanelHeader>
+              <TerminalPanelContent className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-[120px_minmax(0,1fr)] md:items-start">
+                  <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
+                    Type Ref
+                  </div>
+                  <div className="min-w-0">
                     {selectedDeploymentRefs.typeRef ? (
                       <HexDisplay
                         value={selectedDeploymentRefs.typeRef}
@@ -586,9 +534,13 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                     ) : (
                       <span className="text-text-dim font-mono">Unavailable</span>
                     )}
-                    <Badge variant="gray">
-                      {getScriptRefBadgeLabel(selectedDeploymentRefs.dataRefType)}
-                    </Badge>
+                  </div>
+                </div>
+                <div className="grid gap-4 md:grid-cols-[120px_minmax(0,1fr)] md:items-start">
+                  <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
+                    {getScriptRefBadgeLabel(selectedDeploymentRefs.dataRefType)}
+                  </div>
+                  <div className="min-w-0">
                     {selectedDeploymentRefs.dataRef ? (
                       <HexDisplay
                         value={selectedDeploymentRefs.dataRef}
@@ -601,7 +553,38 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                     )}
                   </div>
                 </div>
-              </TerminalPanelHeader>
+                <div className="border-base-border bg-base-surface/40 rounded-md border px-3 py-3 text-sm">
+                  <div className="mb-1 flex items-center gap-2">
+                    <span className="text-text font-mono text-xs uppercase tracking-wider">
+                      How refs work
+                    </span>
+                  </div>
+                  <div className="text-text-dim text-xs">
+                    `type ref` tracks the latest script code, while the `data` family pins a
+                    specific bytecode hash for reproducible execution.
+                  </div>
+                  <a
+                    href="https://docs.nervos.org/docs/tech-explanation/data-type-diff"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-emphasis mt-2 inline-block text-xs hover:underline"
+                  >
+                    Reference doc: data vs type hash semantics
+                  </a>
+                </div>
+              </TerminalPanelContent>
+            </TerminalPanel>
+            <TerminalPanel className="mb-6">
+              <TerminalPanelHeader indicator="none">Code Cells</TerminalPanelHeader>
+              <TerminalPanelContent padding="none">
+                <CodeCellsList
+                  codeHash={selectedDeployment.codeHash}
+                  hashType={selectedDeployment.hashType}
+                />
+              </TerminalPanelContent>
+            </TerminalPanel>
+            <TerminalPanel>
+              <TerminalPanelHeader indicator="none">Usage</TerminalPanelHeader>
               <TerminalPanelContent padding="none">
                 {selectedDeploymentUsage && (
                   <div className="border-base-border border-b px-4 py-4">
@@ -611,7 +594,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                     />
                   </div>
                 )}
-                <div className="px-4 py-4">
+                <div className="border-base-border border-b px-4 py-4">
                   <div className="text-text-dim mb-3 text-xs">
                     Historical used/unused live capacity for the selected deployment.
                   </div>
@@ -631,50 +614,16 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                     <div className="text-text-dim py-6 text-center">No deployment history yet</div>
                   )}
                 </div>
-              </TerminalPanelContent>
-            </TerminalPanel>
-            <TerminalPanel>
-              <TerminalPanelHeader indicator="none">
-                <div className="flex items-center gap-2">
-                  <span>Cells</span>
-                  <span className="text-text-dim">|</span>
-                  <div
-                    data-testid="cells-selected-refs"
-                    className="flex flex-wrap items-center gap-2 text-xs"
-                  >
-                    <Badge variant="gray">type</Badge>
-                    {selectedDeploymentRefs.typeRef ? (
-                      <HexDisplay
-                        value={selectedDeploymentRefs.typeRef}
-                        size="sm"
-                        startChars={10}
-                        endChars={8}
-                      />
-                    ) : (
-                      <span className="text-text-dim font-mono">Unavailable</span>
-                    )}
-                    <Badge variant="gray">
-                      {getScriptRefBadgeLabel(selectedDeploymentRefs.dataRefType)}
-                    </Badge>
-                    {selectedDeploymentRefs.dataRef ? (
-                      <HexDisplay
-                        value={selectedDeploymentRefs.dataRef}
-                        size="sm"
-                        startChars={10}
-                        endChars={8}
-                      />
-                    ) : (
-                      <span className="text-text-dim font-mono">Unavailable</span>
-                    )}
+                <div className="px-4 py-4">
+                  <div className="text-text-dim mb-3 text-xs">
+                    Live cells currently using the selected deployment.
                   </div>
                 </div>
-              </TerminalPanelHeader>
-              <TerminalPanelContent padding="none">
                 {isCellsLoading ? (
                   <div className="text-text-dim py-8 text-center">Loading cells...</div>
                 ) : cellsData && cellsData.data.length > 0 ? (
                   <>
-                    <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
+                    <div className="border-base-border bg-base-surface/50 text-text-dim flex border-y px-4 py-2 font-mono text-xs uppercase tracking-wider">
                       <div className="flex-1">Cell</div>
                       <div className="w-52 shrink-0 text-right">Capacity</div>
                       <div className="w-24 shrink-0 text-right">Data Size</div>
