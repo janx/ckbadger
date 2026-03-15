@@ -1688,7 +1688,7 @@ impl Indexer {
         let t_write = Instant::now();
         let mut write_commit_ms = 0.0_f64;
         let mut batch_stats;
-        let mut thread_times: Option<[f64; 9]> = None;
+        let mut thread_times: Option<[f64; 10]> = None;
         let mut daily_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
         let mut daily_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
         let mut hourly_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
@@ -1731,7 +1731,7 @@ impl Indexer {
             ) = std::thread::scope(
                 |s| -> Result<(
                     BatchStats,
-                    [f64; 9],
+                    [f64; 10],
                     f64,
                     HashMap<String, DailyActivityStats>,
                     HashMap<String, HashSet<[u8; 32]>>,
@@ -2985,6 +2985,21 @@ impl Indexer {
                         None
                     };
 
+                    // T_TRACK: Merged HODL wave + cell distribution trackers
+                    // CFs: CF_SYNC_META (tracker states), CF_STATS (cell_distribution, address_cohort, hodl_wave)
+                    let h_track = s.spawn(|| -> Result<f64> {
+                        let t = Instant::now();
+                        self.update_trackers(
+                            all_parsed_blocks,
+                            &all_tx_data,
+                            &input_cell_info,
+                            &batch_cell_infos,
+                            &address_balance_changes,
+                            &prefetched_addr_balances,
+                        )?;
+                        Ok(t.elapsed().as_secs_f64() * 1000.0)
+                    });
+
                     let (t1_ms, t1_commit_ms) = h1.join().expect("T1 panicked")?;
                     let (t1b_ms, t1b_commit_ms) = h1b.join().expect("T1b panicked")?;
                     let (t2_ms, t2_commit_ms) = h2.join().expect("T2 panicked")?;
@@ -3011,6 +3026,7 @@ impl Indexer {
                                 HashMap::new(),
                             ),
                         };
+                    let t_track_ms = h_track.join().expect("T_TRACK panicked")?;
 
                     // Apply activity count deltas that T6a/T6b collected but could
                     // not apply inside their parallel threads (aggregates were
@@ -3065,6 +3081,7 @@ impl Indexer {
                         stats,
                         [
                             t1_ms, t1b_ms, t2_ms, t4_ms, t5_ms, t6a_ms, t6b_ms, t7_ms, t_act_ms,
+                            t_track_ms,
                         ],
                         commit_total_ms,
                         act_accum,
@@ -4611,22 +4628,23 @@ impl Indexer {
             }
         }
 
-        // HODL wave tracker update
-        self.update_hodl_wave(
-            all_parsed_blocks,
-            &all_tx_data,
-            &input_cell_info,
-            &batch_cell_infos,
-            &address_balance_changes,
-        )?;
-
-        // Cell distribution tracker update
-        self.update_cell_distribution(
-            all_parsed_blocks,
-            &all_tx_data,
-            &input_cell_info,
-            &batch_cell_infos,
-        )?;
+        // Tracker updates: in bulk sync these run inside T_TRACK thread;
+        // in live sync they run serially here.
+        if !bulk_sync_mode {
+            self.update_hodl_wave(
+                all_parsed_blocks,
+                &all_tx_data,
+                &input_cell_info,
+                &batch_cell_infos,
+                &address_balance_changes,
+            )?;
+            self.update_cell_distribution(
+                all_parsed_blocks,
+                &all_tx_data,
+                &input_cell_info,
+                &batch_cell_infos,
+            )?;
+        }
 
         // Lightweight async cache update (no DB write)
         if let Some((block_number, ref block_hash)) = batch_stats.last_block {
@@ -4663,41 +4681,43 @@ impl Indexer {
             .filter(|t| !t.is_cellbase)
             .map(|t| t.inputs.len())
             .sum();
-        let thread_ms = if let Some([t1, t1b, t2, t4, t5, t6a, t6b, t7, t_act]) = thread_times {
-            info!(
-                precompute_ms = format!("{:.1}", precompute_ms),
-                prefetch_ms = format!("{:.1}", prefetch_ms),
-                write_ms = format!("{:.1}", write_ms),
-                write_commit_ms = format!("{:.1}", write_commit_ms),
-                finalize_ms = format!("{:.1}", finalize_ms),
-                t1_ms = format!("{:.1}", t1),
-                t1b_ms = format!("{:.1}", t1b),
-                t2_ms = format!("{:.1}", t2),
-                t4_ms = format!("{:.1}", t4),
-                t5_ms = format!("{:.1}", t5),
-                t6a_ms = format!("{:.1}", t6a),
-                t6b_ms = format!("{:.1}", t6b),
-                t7_ms = format!("{:.1}", t7),
-                t_act_ms = format!("{:.1}", t_act),
-                txs = batch_tx_count,
-                cells = batch_cell_count,
-                inputs = batch_input_count,
-                "Batch write breakdown"
-            );
-            [t1, t1b, t2, t4, t5, t6a, t6b, t7, t_act]
-        } else {
-            info!(
-                precompute_ms = format!("{:.1}", precompute_ms),
-                write_ms = format!("{:.1}", write_ms),
-                write_commit_ms = format!("{:.1}", write_commit_ms),
-                finalize_ms = format!("{:.1}", finalize_ms),
-                txs = batch_tx_count,
-                cells = batch_cell_count,
-                inputs = batch_input_count,
-                "Batch write breakdown"
-            );
-            [0.0; 9]
-        };
+        let thread_ms =
+            if let Some([t1, t1b, t2, t4, t5, t6a, t6b, t7, t_act, t_track]) = thread_times {
+                info!(
+                    precompute_ms = format!("{:.1}", precompute_ms),
+                    prefetch_ms = format!("{:.1}", prefetch_ms),
+                    write_ms = format!("{:.1}", write_ms),
+                    write_commit_ms = format!("{:.1}", write_commit_ms),
+                    finalize_ms = format!("{:.1}", finalize_ms),
+                    t1_ms = format!("{:.1}", t1),
+                    t1b_ms = format!("{:.1}", t1b),
+                    t2_ms = format!("{:.1}", t2),
+                    t4_ms = format!("{:.1}", t4),
+                    t5_ms = format!("{:.1}", t5),
+                    t6a_ms = format!("{:.1}", t6a),
+                    t6b_ms = format!("{:.1}", t6b),
+                    t7_ms = format!("{:.1}", t7),
+                    t_act_ms = format!("{:.1}", t_act),
+                    t_track_ms = format!("{:.1}", t_track),
+                    txs = batch_tx_count,
+                    cells = batch_cell_count,
+                    inputs = batch_input_count,
+                    "Batch write breakdown"
+                );
+                [t1, t1b, t2, t4, t5, t6a, t6b, t7, t_act, t_track]
+            } else {
+                info!(
+                    precompute_ms = format!("{:.1}", precompute_ms),
+                    write_ms = format!("{:.1}", write_ms),
+                    write_commit_ms = format!("{:.1}", write_commit_ms),
+                    finalize_ms = format!("{:.1}", finalize_ms),
+                    txs = batch_tx_count,
+                    cells = batch_cell_count,
+                    inputs = batch_input_count,
+                    "Batch write breakdown"
+                );
+                [0.0; 10]
+            };
         Ok(BatchWriteMetrics {
             commit_ms: write_commit_ms,
             write_ms,
@@ -4713,6 +4733,7 @@ impl Indexer {
             t6b_ms: thread_ms[6],
             t7_ms: thread_ms[7],
             t_act_ms: thread_ms[8],
+            t_track_ms: thread_ms[9],
         })
     }
 

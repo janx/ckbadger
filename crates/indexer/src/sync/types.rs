@@ -152,6 +152,7 @@ pub(crate) struct BatchWriteMetrics {
     pub(crate) t6b_ms: f64,
     pub(crate) t7_ms: f64,
     pub(crate) t_act_ms: f64,
+    pub(crate) t_track_ms: f64,
 }
 
 // ── Unresolved outpoint probe summaries ────────────────────────────────

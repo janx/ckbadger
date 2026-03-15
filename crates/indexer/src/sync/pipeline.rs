@@ -2475,6 +2475,7 @@ impl Indexer {
                             t6b_ms: write_metrics.t6b_ms,
                             t7_ms: write_metrics.t7_ms,
                             t_act_ms: write_metrics.t_act_ms,
+                            t_track_ms: write_metrics.t_track_ms,
                             ..BatchSample::new(
                                 u64::try_from(all_parsed_blocks.len())
                                     .expect("parsed block count exceeds u64"),
