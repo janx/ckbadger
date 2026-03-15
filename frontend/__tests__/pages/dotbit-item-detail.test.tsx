@@ -42,7 +42,7 @@ describe('DotbitItemDetailPage', () => {
     } as any);
     vi.mocked(api.getDotbitItemActivities).mockResolvedValue({
       data: [],
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     } as any);
@@ -66,7 +66,7 @@ describe('DotbitItemDetailPage', () => {
 
     await waitFor(() => {
       expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', {
-        limit: 20,
+        limit: 50,
         cursor: '500:0',
       });
     });
@@ -124,7 +124,7 @@ describe('DotbitItemDetailPage', () => {
           actions: ['burn', 'transfer'],
         },
       ],
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     } as any);
@@ -132,7 +132,7 @@ describe('DotbitItemDetailPage', () => {
     render(<DotbitItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
-      expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', { limit: 20 });
+      expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', { limit: 50 });
     });
 
     await waitFor(() => {
@@ -169,7 +169,7 @@ describe('DotbitItemDetailPage', () => {
               actions: ['mint'],
             },
           ],
-          limit: 20,
+          limit: 50,
           hasMore: false,
           nextCursor: null,
         } as any;
@@ -184,7 +184,7 @@ describe('DotbitItemDetailPage', () => {
             actions: ['transfer'],
           },
         ],
-        limit: 20,
+        limit: 50,
         hasMore: true,
         nextCursor: '500:0',
       } as any;
@@ -193,7 +193,7 @@ describe('DotbitItemDetailPage', () => {
     render(<DotbitItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
-      expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', { limit: 20 });
+      expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', { limit: 50 });
     });
 
     await waitFor(() => {
@@ -204,7 +204,7 @@ describe('DotbitItemDetailPage', () => {
 
     await waitFor(() => {
       expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', {
-        limit: 20,
+        limit: 50,
         cursor: '500:0',
       });
     });

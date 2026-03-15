@@ -28,9 +28,10 @@ import {
   getTokenDetailHref,
 } from '@/lib/detail-routes';
 import { formatTokenBalance } from '@/lib/format-asset';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { cn, formatCkbAmount, formatTimeAgo, truncateHash } from '@/lib/utils';
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const POLL_INTERVAL_MS = 10_000;
 const NEAR_TOP_THRESHOLD_PX = 120;
 const ROW_HIGHLIGHT_DURATION_MS = 2_000;

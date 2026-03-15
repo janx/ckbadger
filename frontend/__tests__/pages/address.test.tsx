@@ -93,7 +93,7 @@ const emptyTokens = {
 const emptyCells = {
   data: [],
   total: 0,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -101,7 +101,7 @@ const emptyCells = {
 const emptyTransactions = {
   data: [],
   total: 0,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -137,7 +137,7 @@ const mockDaoSummary = {
 const emptyDaoDeposits = {
   data: [],
   total: 0,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -154,7 +154,7 @@ describe('AddressDetailPage', () => {
     vi.mocked(api.getAddressActivities).mockResolvedValue({
       data: [],
       total: 0,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
@@ -330,7 +330,7 @@ describe('AddressDetailPage', () => {
         },
       ],
       total: 1,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
@@ -379,7 +379,7 @@ describe('AddressDetailPage', () => {
       ) => ({
         data: [],
         total: 0,
-        limit: 20,
+        limit: 50,
         hasMore: false,
         nextCursor: null,
       })
@@ -406,7 +406,7 @@ describe('AddressDetailPage', () => {
               },
             ],
             total: 2,
-            limit: 20,
+            limit: 50,
             hasMore: true,
             nextCursor: '100:0',
           };
@@ -430,7 +430,7 @@ describe('AddressDetailPage', () => {
               },
             ],
             total: 2,
-            limit: 20,
+            limit: 50,
             hasMore: false,
             nextCursor: null,
           };
@@ -454,7 +454,7 @@ describe('AddressDetailPage', () => {
               },
             ],
             total: 1,
-            limit: 20,
+            limit: 50,
             hasMore: false,
             nextCursor: null,
           };
@@ -546,7 +546,7 @@ describe('AddressDetailPage', () => {
         },
       ],
       total: 1,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
@@ -587,7 +587,7 @@ describe('AddressDetailPage', () => {
         },
       ],
       total: 1,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
@@ -637,7 +637,7 @@ describe('AddressDetailPage', () => {
         },
       ],
       total: 1,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });

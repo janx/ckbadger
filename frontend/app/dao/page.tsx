@@ -16,6 +16,7 @@ import { StatCard, FilterButtonGroup } from '@/components/ui/chart-card';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, DaoDeposit, DaoTopDepositor, ScriptLookupResponse } from '@/lib/api';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import {
   formatTimeAgo,
   formatCkbAmount,
@@ -142,7 +143,12 @@ export default function DaoPage() {
 
   const { data: deposits, isLoading } = useQuery({
     queryKey: ['dao-deposits', depositsPagination.cursor, status],
-    queryFn: () => api.getDaoDeposits({ limit: 20, status, cursor: depositsPagination.cursor }),
+    queryFn: () =>
+      api.getDaoDeposits({
+        limit: DEFAULT_PAGE_SIZE,
+        status,
+        cursor: depositsPagination.cursor,
+      }),
     placeholderData: keepPreviousData,
   });
 
@@ -631,7 +637,7 @@ export default function DaoPage() {
                       <CursorPagination
                         total={deposits.total ?? undefined}
                         totalLabel="deposits"
-                        pageSize={20}
+                        pageSize={DEFAULT_PAGE_SIZE}
                         page={depositsPagination.page}
                         currentCount={deposits.data.length}
                         hasMore={deposits.hasMore}

@@ -125,7 +125,7 @@ const mockCapacityChart = {
 const emptyCells = {
   data: [],
   total: 0,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -183,7 +183,7 @@ describe('ScriptDetailPage', () => {
         codeHash: newerCodeHash,
         hashType: 'type',
         scriptKind: 'lock',
-        limit: 20,
+        limit: 50,
         cursor: undefined,
       });
     });

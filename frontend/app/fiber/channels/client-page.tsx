@@ -17,6 +17,7 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type FiberChannel, type FiberChannelState } from '@/lib/api';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 import { Badge } from '@/components/ui/page-header';
 
@@ -63,7 +64,7 @@ export default function FiberChannelsPage() {
     queryKey: ['fiber-channels', stateFilter, pagination.cursor],
     queryFn: () =>
       api.getFiberChannels({
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: pagination.cursor,
         state: stateFilter === 'all' ? undefined : stateFilter,
       }),
@@ -214,7 +215,7 @@ export default function FiberChannelsPage() {
               <CursorPagination
                 total={channels?.total}
                 totalLabel="channels"
-                pageSize={20}
+                pageSize={DEFAULT_PAGE_SIZE}
                 hasMore={channels?.hasMore ?? false}
                 hasPrevious={pagination.hasPrevious}
                 page={pagination.page}

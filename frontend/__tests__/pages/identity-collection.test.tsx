@@ -48,20 +48,20 @@ describe('IdentityCollectionPage', () => {
     vi.mocked(api.getIdentityCollectionItems).mockResolvedValue({
       data: [],
       total: 0,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
     vi.mocked(api.getIdentityCollectionHolders).mockResolvedValue({
       data: [],
       total: 0,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
     vi.mocked(api.getIdentityCollectionActivities).mockResolvedValue({
       data: [],
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     } as any);
@@ -107,7 +107,7 @@ describe('IdentityCollectionPage', () => {
     await waitFor(() => {
       expect(api.getIdentityCollectionItems).toHaveBeenCalledWith(
         mockCollectionId,
-        expect.objectContaining({ limit: 20, search: undefined, status: 'all' })
+        expect.objectContaining({ limit: 50, search: undefined, status: 'all' })
       );
     });
 
@@ -118,7 +118,7 @@ describe('IdentityCollectionPage', () => {
     await waitFor(() => {
       expect(api.getIdentityCollectionItems).toHaveBeenCalledWith(
         mockCollectionId,
-        expect.objectContaining({ limit: 20, search: undefined, status: 'live' })
+        expect.objectContaining({ limit: 50, search: undefined, status: 'live' })
       );
     });
 
@@ -129,7 +129,7 @@ describe('IdentityCollectionPage', () => {
     await waitFor(() => {
       expect(api.getIdentityCollectionItems).toHaveBeenCalledWith(
         mockCollectionId,
-        expect.objectContaining({ limit: 20, search: 'alice', status: 'live' })
+        expect.objectContaining({ limit: 50, search: 'alice', status: 'live' })
       );
     });
   });
@@ -151,7 +151,7 @@ describe('IdentityCollectionPage', () => {
         },
       ],
       total: 1,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
@@ -188,7 +188,7 @@ describe('IdentityCollectionPage', () => {
         },
       ],
       total: 1,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
@@ -224,7 +224,7 @@ describe('IdentityCollectionPage', () => {
     );
     expect(api.getIdentityCollectionHolders).toHaveBeenCalledWith(
       mockCollectionId,
-      expect.objectContaining({ limit: 20 })
+      expect.objectContaining({ limit: 50 })
     );
   });
 
@@ -234,7 +234,7 @@ describe('IdentityCollectionPage', () => {
     vi.mocked(api.getIdentityCollectionHolders).mockResolvedValue({
       data: [],
       total: 0,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });

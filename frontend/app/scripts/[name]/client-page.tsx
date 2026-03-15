@@ -21,6 +21,7 @@ import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api } from '@/lib/api';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import {
   getScriptRefBadgeLabel,
   getScriptRefQueryHashType,
@@ -214,7 +215,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
         codeHash: selectedDeployment!.codeHash,
         hashType: selectedDeployment!.hashType,
         scriptKind: selectedDeployment!.scriptKind,
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: cellsPagination.cursor,
       }),
     enabled: !!selectedDeployment,
@@ -720,7 +721,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                       <CursorPagination
                         total={cellsData.total}
                         totalLabel="cells"
-                        pageSize={20}
+                        pageSize={DEFAULT_PAGE_SIZE}
                         page={cellsPagination.page}
                         hasMore={cellsData.hasMore}
                         hasPrevious={cellsPagination.hasPrevious}

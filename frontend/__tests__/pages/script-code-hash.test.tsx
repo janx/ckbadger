@@ -31,7 +31,7 @@ vi.mock('@/src/navigation', () => ({
 const emptyCells = {
   data: [],
   total: 0,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -84,7 +84,7 @@ describe('ScriptByCodeHashPage', () => {
         codeHash: mockCodeHash,
         hashType: 'type',
         scriptKind: 'both',
-        limit: 20,
+        limit: 50,
         cursor: undefined,
       });
       expect(screen.getByText('Capacity History')).toBeInTheDocument();

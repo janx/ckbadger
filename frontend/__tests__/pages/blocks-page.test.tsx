@@ -70,7 +70,7 @@ const mockBlocksResponse = {
     },
   ],
   total: 2,
-  limit: 25,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -85,7 +85,7 @@ describe('BlocksPage', () => {
     render(<BlocksPage />);
 
     await waitFor(() => {
-      expect(api.getBlocks).toHaveBeenCalledWith({ cursor: undefined, limit: 25 });
+      expect(api.getBlocks).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
     });
     await waitFor(() => {
       expect(screen.getAllByText('HF · MIRANA').length).toBeGreaterThan(0);

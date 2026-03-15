@@ -22,6 +22,7 @@ import { ObjectActivityCard } from '@/components/object/object-activity-card';
 import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { ClusterDescription } from '@/components/spore/cluster-description';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatNumber } from '@/lib/utils';
@@ -95,7 +96,10 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
   const { data: sporesData, isLoading: sporesLoading } = useQuery({
     queryKey: ['cluster-spores', clusterId, sporesPagination.cursor],
     queryFn: () =>
-      api.getSporesByCluster(clusterId, { limit: 20, cursor: sporesPagination.cursor }),
+      api.getSporesByCluster(clusterId, {
+        limit: DEFAULT_PAGE_SIZE,
+        cursor: sporesPagination.cursor,
+      }),
     enabled: !!clusterId,
     placeholderData: keepPreviousData,
   });
@@ -107,7 +111,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     queryKey: ['cluster-holders', clusterId, clusterHoldersPagination.cursor],
     queryFn: () =>
       api.getSporeClusterHolders(clusterId, {
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: clusterHoldersPagination.cursor,
       }),
     enabled: !!clusterId && activeCollectionTab === 'holders',
@@ -121,7 +125,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     queryKey: ['cluster-activities', clusterId, clusterActivitiesPagination.cursor],
     queryFn: () =>
       api.getSporeClusterActivities(clusterId, {
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: clusterActivitiesPagination.cursor,
       }),
     enabled: !!clusterId && activeCollectionTab === 'activities',
@@ -606,7 +610,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                   <TerminalPanelFooter>
                     <CursorPagination
                       totalLabel="Activities"
-                      pageSize={20}
+                      pageSize={DEFAULT_PAGE_SIZE}
                       page={clusterActivitiesPagination.page}
                       currentCount={clusterActivities?.data?.length ?? 0}
                       hasMore={clusterActivities?.hasMore ?? false}
@@ -796,7 +800,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                       <CursorPagination
                         total={cluster.sporesCount}
                         totalLabel="Spores"
-                        pageSize={20}
+                        pageSize={DEFAULT_PAGE_SIZE}
                         page={sporesPagination.page}
                         currentCount={filteredAndSortedSpores.length}
                         hasMore={sporesData.hasMore}
@@ -855,7 +859,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                     <CursorPagination
                       total={clusterHolders?.total}
                       totalLabel="Holders"
-                      pageSize={20}
+                      pageSize={DEFAULT_PAGE_SIZE}
                       page={clusterHoldersPagination.page}
                       currentCount={clusterHolders?.data?.length ?? 0}
                       hasMore={clusterHolders?.hasMore ?? false}

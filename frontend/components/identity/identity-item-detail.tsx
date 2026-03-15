@@ -31,6 +31,7 @@ import {
   normalizeActivityAction,
   formatExpiry,
 } from '@/lib/asset-utils';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatNumber } from '@/lib/utils';
 
 export interface IdentityItemDetailConfig {
@@ -87,7 +88,7 @@ export function IdentityItemDetail({ config, identityId: routeIdentityId }: Prop
   const { data: itemActivities, isLoading: isActivitiesLoading } = useQuery({
     queryKey: [`${config.standard}-item-activities`, detail?.nftId, activityCursor],
     queryFn: () => {
-      const queryParams: { limit: number; cursor?: string } = { limit: 20 };
+      const queryParams: { limit: number; cursor?: string } = { limit: DEFAULT_PAGE_SIZE };
       if (activityCursor) {
         queryParams.cursor = activityCursor;
       }
@@ -316,7 +317,7 @@ export function IdentityItemDetail({ config, identityId: routeIdentityId }: Prop
               <CursorPagination
                 total={itemActivities?.total ?? undefined}
                 totalLabel="activities"
-                pageSize={20}
+                pageSize={DEFAULT_PAGE_SIZE}
                 page={activityCursorHistory.length + 1}
                 hasMore={itemActivities?.hasMore ?? false}
                 hasPrevious={activityCursorHistory.length > 0}

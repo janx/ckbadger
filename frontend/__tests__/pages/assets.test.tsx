@@ -55,7 +55,7 @@ const mockTokenAssets = {
     },
   ],
   total: 1,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -90,7 +90,7 @@ const mockClusterAssets = {
     },
   ],
   total: 1,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -122,7 +122,7 @@ const mockDotbitIdentityAssets = {
     },
   ],
   total: 1,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -154,7 +154,7 @@ const mockDidCkbIdentityAssets = {
     },
   ],
   total: 1,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -215,7 +215,7 @@ const mockMixedObjectAssets = {
     },
   ],
   total: 2,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -223,7 +223,7 @@ const mockMixedObjectAssets = {
 const emptyAssets = {
   data: [],
   total: 0,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -278,7 +278,7 @@ const sortableTokenAssets = {
     },
   ],
   total: 2,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };

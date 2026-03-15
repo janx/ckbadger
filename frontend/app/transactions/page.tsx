@@ -16,11 +16,12 @@ import { PageHeader } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatTimeAgo } from '@/lib/utils';
 
 export default function TransactionsPage() {
   const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
-  const limit = 25;
+  const limit = DEFAULT_PAGE_SIZE;
 
   const { data, isLoading } = useQuery({
     queryKey: ['transactions', cursor, limit],

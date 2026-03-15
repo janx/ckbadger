@@ -42,7 +42,7 @@ describe('ForksPage', () => {
         },
       ],
       total: 1,
-      limit: 25,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
@@ -53,7 +53,7 @@ describe('ForksPage', () => {
     expect(screen.getByText('Fork Events')).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(api.getForks).toHaveBeenCalledWith({ cursor: undefined, limit: 25 });
+      expect(api.getForks).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
       expect(screen.getAllByText('DEEP_FORK').length).toBeGreaterThan(0);
     });
 

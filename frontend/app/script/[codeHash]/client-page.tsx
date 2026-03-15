@@ -20,6 +20,7 @@ import { CodeCellsList, CodeCellsSummary } from '@/components/ui/code-cells-list
 import { HMultiplier } from '@/components/ui/h-multiplier';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import {
   getScriptRefBadgeLabel,
   getScriptRefQueryHashType,
@@ -145,7 +146,7 @@ export default function ScriptByCodeHashPage({
         codeHash,
         hashType,
         scriptKind,
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: cellsPagination.cursor,
       }),
     enabled: isCodeHashIdentifier,
@@ -471,7 +472,7 @@ export default function ScriptByCodeHashPage({
               <CursorPagination
                 total={cellsData.total}
                 totalLabel="cells"
-                pageSize={20}
+                pageSize={DEFAULT_PAGE_SIZE}
                 page={cellsPagination.page}
                 hasMore={cellsData.hasMore}
                 hasPrevious={cellsPagination.hasPrevious}

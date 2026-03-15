@@ -72,7 +72,7 @@ const mockSpores = {
     },
   ],
   total: 2,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -80,7 +80,7 @@ const mockSpores = {
 const emptySpores = {
   data: [],
   total: 0,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -105,13 +105,13 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeClusterHolders).mockResolvedValue({
       data: [],
       total: 0,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
     vi.mocked(api.getSporeClusterActivities).mockResolvedValue({
       data: [],
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     } as any);
@@ -210,7 +210,7 @@ describe('ClusterDetailPage', () => {
         } as any,
       ],
       total: 1,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
@@ -399,7 +399,7 @@ describe('ClusterDetailPage', () => {
     });
     expect(api.getSporeClusterHolders).toHaveBeenCalledWith(
       mockClusterId,
-      expect.objectContaining({ limit: 20 })
+      expect.objectContaining({ limit: 50 })
     );
   });
 
@@ -539,7 +539,7 @@ describe('ClusterDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
-      expect(screen.getByText('Showing 1-2 of 5 Spores, 20 per page')).toBeInTheDocument();
+      expect(screen.getByText('Showing 1-2 of 5 Spores, 50 per page')).toBeInTheDocument();
       expect(screen.getByText('Page 1 of 1')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
       expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();

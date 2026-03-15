@@ -57,14 +57,14 @@ const mockToken = {
 const mockHolders = {
   data: [],
   total: 0,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
 
 const mockActivities = {
   data: [],
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -161,7 +161,7 @@ describe('TokenDetailPage', () => {
           ],
         },
       ],
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });

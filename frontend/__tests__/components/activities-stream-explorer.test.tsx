@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@/__tests__/utils/test-
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import type { GlobalActivity } from '@/lib/api';
 import { api } from '@/lib/api';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -97,7 +98,7 @@ describe('ActivitiesStreamExplorer', () => {
             blockNumber: 500,
           }),
         ],
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         hasMore: true,
         nextCursor: '500:0:0',
       })
@@ -110,7 +111,7 @@ describe('ActivitiesStreamExplorer', () => {
             blockNumber: 500,
           }),
         ],
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         hasMore: true,
         nextCursor: '500:0:0',
       })
@@ -123,7 +124,7 @@ describe('ActivitiesStreamExplorer', () => {
             blockNumber: 499,
           }),
         ],
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         hasMore: false,
         nextCursor: null,
       })
@@ -144,7 +145,7 @@ describe('ActivitiesStreamExplorer', () => {
             blockNumber: 480,
           }),
         ],
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         hasMore: false,
         nextCursor: null,
       })
@@ -165,7 +166,7 @@ describe('ActivitiesStreamExplorer', () => {
             blockNumber: 480,
           }),
         ],
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         hasMore: false,
         nextCursor: null,
       });
@@ -181,7 +182,7 @@ describe('ActivitiesStreamExplorer', () => {
 
     await waitFor(() => {
       expect(api.getGlobalActivities).toHaveBeenCalledWith(
-        expect.objectContaining({ cursor: '500:0:0', filter: 'all', limit: 20 })
+        expect.objectContaining({ cursor: '500:0:0', filter: 'all', limit: DEFAULT_PAGE_SIZE })
       );
     });
     expect(await screen.findByText('+2.00000000 CKB')).toBeInTheDocument();
@@ -190,7 +191,7 @@ describe('ActivitiesStreamExplorer', () => {
 
     await waitFor(() => {
       expect(api.getGlobalActivities).toHaveBeenCalledWith(
-        expect.objectContaining({ filter: 'token', limit: 20 })
+        expect.objectContaining({ filter: 'token', limit: DEFAULT_PAGE_SIZE })
       );
     });
     expect(await screen.findByText(/TKN Transfer/)).toBeInTheDocument();
@@ -199,7 +200,7 @@ describe('ActivitiesStreamExplorer', () => {
   it('renders an empty state when the selected filter has no activities', async () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [],
-      limit: 20,
+      limit: DEFAULT_PAGE_SIZE,
       hasMore: false,
       nextCursor: null,
     });
@@ -216,7 +217,7 @@ describe('ActivitiesStreamExplorer', () => {
     vi.mocked(api.getGlobalActivities)
       .mockResolvedValueOnce({
         data: [],
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         hasMore: false,
         nextCursor: null,
       })
@@ -229,7 +230,7 @@ describe('ActivitiesStreamExplorer', () => {
             blockNumber: 777,
           }),
         ],
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         hasMore: false,
         nextCursor: null,
       });
@@ -240,7 +241,7 @@ describe('ActivitiesStreamExplorer', () => {
     await waitFor(() => {
       expect(api.getGlobalActivities).toHaveBeenNthCalledWith(2, {
         filter: 'all',
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
       });
     });
     expect(screen.queryByText('No activities yet')).not.toBeInTheDocument();
@@ -263,7 +264,7 @@ describe('ActivitiesStreamExplorer', () => {
             blockNumber: 900,
           }),
         ],
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         hasMore: false,
         nextCursor: null,
       })
@@ -282,7 +283,7 @@ describe('ActivitiesStreamExplorer', () => {
             blockNumber: 900,
           }),
         ],
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         hasMore: false,
         nextCursor: null,
       });
@@ -307,7 +308,7 @@ describe('ActivitiesStreamExplorer', () => {
       configurable: true,
     });
 
-    const headPageOne = Array.from({ length: 20 }, (_, index) =>
+    const headPageOne = Array.from({ length: DEFAULT_PAGE_SIZE }, (_, index) =>
       makeActivity({
         address: `ckb1qhead${String(index).padStart(2, '0')}111111111111111111111111111111111111`,
         txHash: `0xhead-page-one-${index}`,
@@ -326,13 +327,13 @@ describe('ActivitiesStreamExplorer', () => {
             blockNumber: 900,
           }),
         ],
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         hasMore: false,
         nextCursor: null,
       })
       .mockResolvedValueOnce({
         data: headPageOne,
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         hasMore: true,
         nextCursor: 'head-page-1',
       })
@@ -351,7 +352,7 @@ describe('ActivitiesStreamExplorer', () => {
             blockNumber: 900,
           }),
         ],
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         hasMore: false,
         nextCursor: null,
       });
@@ -359,20 +360,22 @@ describe('ActivitiesStreamExplorer', () => {
     render(<ActivitiesStreamExplorer />);
 
     expect(await screen.findByText('+1.00000000 CKB')).toBeInTheDocument();
-    const banner = await screen.findByRole('button', { name: '21 new activities' });
+    const banner = await screen.findByRole('button', {
+      name: `${DEFAULT_PAGE_SIZE + 1} new activities`,
+    });
 
     await waitFor(() => {
       expect(api.getGlobalActivities).toHaveBeenNthCalledWith(3, {
         cursor: 'head-page-1',
         filter: 'all',
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
       });
     });
 
     fireEvent.click(banner);
 
-    expect(await screen.findByText('22 loaded')).toBeInTheDocument();
-    expect(screen.getByText('#980')).toBeInTheDocument();
+    expect(await screen.findByText(`${DEFAULT_PAGE_SIZE + 2} loaded`)).toBeInTheDocument();
+    expect(screen.getAllByText('#980').length).toBeGreaterThan(0);
   });
 
   it('shows a soft head refresh warning without clearing visible rows', async () => {
@@ -386,7 +389,7 @@ describe('ActivitiesStreamExplorer', () => {
             blockNumber: 321,
           }),
         ],
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         hasMore: false,
         nextCursor: null,
       })

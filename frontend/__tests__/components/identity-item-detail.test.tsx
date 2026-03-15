@@ -80,7 +80,7 @@ describe('IdentityItemDetail', () => {
     } as any);
     mockFetchActivities.mockResolvedValue({
       data: [],
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });

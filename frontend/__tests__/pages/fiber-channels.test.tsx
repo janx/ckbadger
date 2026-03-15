@@ -22,7 +22,7 @@ describe('FiberChannelsPage', () => {
         HttpResponse.json({
           data: [],
           total: 0,
-          limit: 20,
+          limit: 50,
           hasMore: false,
           nextCursor: null,
         })

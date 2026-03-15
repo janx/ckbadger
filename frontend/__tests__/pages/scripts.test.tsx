@@ -66,7 +66,7 @@ const mockScriptsResponse = {
     } satisfies KnownScript,
   ],
   total: 2,
-  limit: 20,
+  limit: 50,
   hasMore: false,
   nextCursor: null,
 };
@@ -84,7 +84,7 @@ describe('ScriptsPage', () => {
     await waitFor(() => {
       expect(api.getScripts).toHaveBeenCalledWith(
         expect.objectContaining({
-          limit: 20,
+          limit: 50,
           sortKey: 'capacity',
           sortDirection: 'desc',
         })
@@ -124,7 +124,7 @@ describe('ScriptsPage', () => {
     await waitFor(() => {
       expect(api.getScripts).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          limit: 20,
+          limit: 50,
           sortKey: 'used',
           sortDirection: 'desc',
         })
@@ -162,7 +162,7 @@ describe('ScriptsPage', () => {
         } satisfies KnownScript,
       ],
       total: 1,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });

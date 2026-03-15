@@ -42,7 +42,7 @@ describe('DidCkbItemDetailPage', () => {
     } as any);
     vi.mocked(api.getDidCkbItemActivities).mockResolvedValue({
       data: [],
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     } as any);
@@ -65,7 +65,7 @@ describe('DidCkbItemDetailPage', () => {
 
     await waitFor(() => {
       expect(api.getDidCkbItemActivities).toHaveBeenCalledWith('0xabc', {
-        limit: 20,
+        limit: 50,
         cursor: '500:0',
       });
     });
@@ -122,7 +122,7 @@ describe('DidCkbItemDetailPage', () => {
           actions: ['burn', 'transfer'],
         },
       ],
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     } as any);
@@ -130,7 +130,7 @@ describe('DidCkbItemDetailPage', () => {
     render(<DidCkbItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
-      expect(api.getDidCkbItemActivities).toHaveBeenCalledWith('0xabc', { limit: 20 });
+      expect(api.getDidCkbItemActivities).toHaveBeenCalledWith('0xabc', { limit: 50 });
     });
 
     await waitFor(() => {
@@ -162,7 +162,7 @@ describe('DidCkbItemDetailPage', () => {
               actions: ['mint'],
             },
           ],
-          limit: 20,
+          limit: 50,
           hasMore: false,
           nextCursor: null,
         } as any;
@@ -177,7 +177,7 @@ describe('DidCkbItemDetailPage', () => {
             actions: ['transfer'],
           },
         ],
-        limit: 20,
+        limit: 50,
         hasMore: true,
         nextCursor: '500:0',
       } as any;
@@ -186,7 +186,7 @@ describe('DidCkbItemDetailPage', () => {
     render(<DidCkbItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
-      expect(api.getDidCkbItemActivities).toHaveBeenCalledWith('0xabc', { limit: 20 });
+      expect(api.getDidCkbItemActivities).toHaveBeenCalledWith('0xabc', { limit: 50 });
     });
 
     await waitFor(() => {
@@ -196,7 +196,7 @@ describe('DidCkbItemDetailPage', () => {
 
     await waitFor(() => {
       expect(api.getDidCkbItemActivities).toHaveBeenCalledWith('0xabc', {
-        limit: 20,
+        limit: 50,
         cursor: '500:0',
       });
     });

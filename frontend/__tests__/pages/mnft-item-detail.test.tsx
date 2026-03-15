@@ -42,7 +42,7 @@ describe('MnftItemDetailPage', () => {
     } as any);
     vi.mocked(api.getMnftItemActivities).mockResolvedValue({
       data: [],
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     } as any);

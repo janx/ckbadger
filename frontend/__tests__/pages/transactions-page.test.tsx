@@ -35,7 +35,7 @@ describe('TransactionsPage', () => {
         },
       ],
       total: 1,
-      limit: 25,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
@@ -47,7 +47,7 @@ describe('TransactionsPage', () => {
     expect(screen.getByText('Browse all transactions on the CKB network')).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(api.getTransactions).toHaveBeenCalledWith({ cursor: undefined, limit: 25 });
+      expect(api.getTransactions).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
     });
 
     await waitFor(() => {

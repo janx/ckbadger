@@ -18,6 +18,7 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { Address } from '@/components/ui/address';
 import { api } from '@/lib/api';
 import { normalizeAssetId, parseActivityCursor } from '@/lib/asset-utils';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatNumber } from '@/lib/utils';
 function decodeTokenState(state: number): string {
   switch (state) {
@@ -66,7 +67,7 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
   const { data: itemActivities, isLoading: isActivitiesLoading } = useQuery({
     queryKey: ['mnft-item-activities', detail?.nftId, activityCursor],
     queryFn: () => {
-      const queryParams: { limit: number; cursor?: string } = { limit: 20 };
+      const queryParams: { limit: number; cursor?: string } = { limit: DEFAULT_PAGE_SIZE };
       if (activityCursor) {
         queryParams.cursor = activityCursor;
       }
@@ -369,7 +370,7 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
               <CursorPagination
                 total={itemActivities?.total ?? undefined}
                 totalLabel="activities"
-                pageSize={20}
+                pageSize={DEFAULT_PAGE_SIZE}
                 page={activityCursorHistory.length + 1}
                 currentCount={itemActivities?.data?.length ?? 0}
                 hasMore={itemActivities?.hasMore ?? false}

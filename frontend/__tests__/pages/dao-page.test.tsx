@@ -49,7 +49,7 @@ describe('DaoPage', () => {
         },
       ],
       total: 1,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     } as any);
@@ -68,7 +68,7 @@ describe('DaoPage', () => {
 
     await waitFor(() => {
       expect(api.getDaoDeposits).toHaveBeenCalledWith({
-        limit: 20,
+        limit: 50,
         status: 0,
         cursor: undefined,
       });
@@ -84,7 +84,7 @@ describe('DaoPage', () => {
     expect(screen.getByRole('button', { name: 'Depositors' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'All' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Status' })).not.toBeInTheDocument();
-    expect(screen.getByText('Showing 1-1 of 1 deposits, 20 per page')).toBeInTheDocument();
+    expect(screen.getByText('Showing 1-1 of 1 deposits, 50 per page')).toBeInTheDocument();
     expect(screen.getByText('Page 1 of 1')).toBeInTheDocument();
   });
 
@@ -108,7 +108,7 @@ describe('DaoPage', () => {
         },
       ],
       total: 1,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     } as any);
@@ -148,7 +148,7 @@ describe('DaoPage', () => {
         },
       ],
       total: 1,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     } as any);

@@ -21,6 +21,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { CapacityStatisticsSection } from '@/components/ui/capacity-statistics-section';
 import { api, TokenHolder, TokenActivity, TokenTransferDetail } from '@/lib/api';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatTimeAgo, formatNumber } from '@/lib/utils';
 function actionBadgeVariant(action: string): 'green' | 'red' | 'neutral' {
   if (action === 'mint') return 'green';
@@ -46,14 +47,21 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
   });
   const { data: holders } = useQuery({
     queryKey: ['token-holders', typeHash, holdersPagination.cursor],
-    queryFn: () => api.getTokenHolders(typeHash, { limit: 20, cursor: holdersPagination.cursor }),
+    queryFn: () =>
+      api.getTokenHolders(typeHash, {
+        limit: DEFAULT_PAGE_SIZE,
+        cursor: holdersPagination.cursor,
+      }),
     enabled: !!token && activeTab === 'holders',
     placeholderData: keepPreviousData,
   });
   const { data: activities } = useQuery({
     queryKey: ['token-activities', typeHash, activitiesPagination.cursor],
     queryFn: () =>
-      api.getTokenActivities(typeHash, { limit: 20, cursor: activitiesPagination.cursor }),
+      api.getTokenActivities(typeHash, {
+        limit: DEFAULT_PAGE_SIZE,
+        cursor: activitiesPagination.cursor,
+      }),
     enabled: !!token && activeTab === 'activities',
     placeholderData: keepPreviousData,
   });
@@ -412,7 +420,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                   <CursorPagination
                     total={activities.total ?? undefined}
                     totalLabel="activities"
-                    pageSize={20}
+                    pageSize={DEFAULT_PAGE_SIZE}
                     page={activitiesPagination.page}
                     currentCount={activities.data?.length ?? 0}
                     hasMore={activities.hasMore}
@@ -462,7 +470,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                   <CursorPagination
                     total={holders.total ?? undefined}
                     totalLabel="holders"
-                    pageSize={20}
+                    pageSize={DEFAULT_PAGE_SIZE}
                     page={holdersPagination.page}
                     hasMore={holders.hasMore}
                     hasPrevious={holdersPagination.hasPrevious}

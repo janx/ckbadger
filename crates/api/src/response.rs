@@ -140,7 +140,7 @@ pub fn ok<T: Serialize>(data: T) -> ApiResult<T> {
 
 /// Default pagination limit shared across all route modules.
 pub fn default_limit() -> i64 {
-    20
+    50
 }
 
 /// Map CKB script hash_type integer to its string representation.
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_default_limit() {
-        assert_eq!(default_limit(), 20);
+        assert_eq!(default_limit(), 50);
     }
 
     #[test]

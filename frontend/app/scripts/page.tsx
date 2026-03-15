@@ -16,6 +16,7 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, KnownScript } from '@/lib/api';
 import { getScriptDetailHref } from '@/lib/detail-routes';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import {
   getScriptRefBadgeLabel,
   getScriptRefVerboseLabel,
@@ -40,7 +41,7 @@ export default function ScriptsPage() {
     queryKey: ['scripts', pagination.cursor, decoderType, search, sortKey, sortDirection],
     queryFn: () =>
       api.getScripts({
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: pagination.cursor,
         decoderType,
         search,
@@ -370,7 +371,7 @@ export default function ScriptsPage() {
               <CursorPagination
                 total={data.total ?? undefined}
                 totalLabel="scripts"
-                pageSize={20}
+                pageSize={DEFAULT_PAGE_SIZE}
                 page={pagination.page}
                 hasMore={data.hasMore}
                 hasPrevious={pagination.hasPrevious}

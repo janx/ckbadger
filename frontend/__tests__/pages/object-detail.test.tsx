@@ -174,20 +174,20 @@ describe('SporeDetailPage', () => {
     vi.mocked(api.getObjectCollectionItems).mockResolvedValue({
       data: [],
       total: 0,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
     vi.mocked(api.getObjectCollectionHolders).mockResolvedValue({
       data: [],
       total: 0,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
     vi.mocked(api.getObjectCollectionActivities).mockResolvedValue({
       data: [],
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     } as any);
@@ -382,7 +382,7 @@ describe('SporeDetailPage', () => {
         },
       ],
       total: 1,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });
@@ -411,7 +411,7 @@ describe('SporeDetailPage', () => {
     expect(screen.queryByLabelText('Search .bit')).not.toBeInTheDocument();
     expect(api.getObjectCollectionItems).toHaveBeenCalledWith(
       mockCollection.collectionId,
-      expect.objectContaining({ limit: 20 })
+      expect.objectContaining({ limit: 50 })
     );
   });
 
@@ -427,7 +427,7 @@ describe('SporeDetailPage', () => {
     });
     expect(api.getObjectCollectionHolders).toHaveBeenCalledWith(
       mockCollection.collectionId,
-      expect.objectContaining({ limit: 20 })
+      expect.objectContaining({ limit: 50 })
     );
   });
 
@@ -511,7 +511,7 @@ describe('SporeDetailPage', () => {
         },
       ],
       total: 1,
-      limit: 20,
+      limit: 50,
       hasMore: false,
       nextCursor: null,
     });

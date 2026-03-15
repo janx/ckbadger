@@ -23,6 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { ObjectActivityCard } from '@/components/object/object-activity-card';
 import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 
 function isDotbitAlias(assetId: string): boolean {
@@ -90,7 +91,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
     ],
     queryFn: () =>
       api.getIdentityCollectionItems(collectionId, {
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: itemsPagination.cursor,
         search: searchKeyword || undefined,
         status: statusFilter,
@@ -107,7 +108,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
     queryKey: ['identity-collection-holders', collectionId, holdersPagination.cursor],
     queryFn: () =>
       api.getIdentityCollectionHolders(collectionId, {
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: holdersPagination.cursor,
       }),
     enabled: !!collection && activeTab === 'holders',
@@ -122,7 +123,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
     queryKey: ['identity-collection-activities', collectionId, activitiesPagination.cursor],
     queryFn: () =>
       api.getIdentityCollectionActivities(collectionId, {
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: activitiesPagination.cursor,
       }),
     enabled: !!collection && activeTab === 'activities',
@@ -304,7 +305,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                   <CursorPagination
                     total={collectionActivities?.total ?? undefined}
                     totalLabel="Activities"
-                    pageSize={20}
+                    pageSize={DEFAULT_PAGE_SIZE}
                     page={activitiesPagination.page}
                     currentCount={collectionActivities?.data?.length ?? 0}
                     hasMore={collectionActivities?.hasMore ?? false}
@@ -409,7 +410,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                   <CursorPagination
                     total={collectionItems?.total ?? undefined}
                     totalLabel="Identities"
-                    pageSize={20}
+                    pageSize={DEFAULT_PAGE_SIZE}
                     page={itemsPagination.page}
                     currentCount={collectionItems?.data?.length ?? 0}
                     hasMore={collectionItems?.hasMore ?? false}
@@ -468,7 +469,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                   <CursorPagination
                     total={collectionHolders?.total}
                     totalLabel="Holders"
-                    pageSize={20}
+                    pageSize={DEFAULT_PAGE_SIZE}
                     page={holdersPagination.page}
                     currentCount={collectionHolders?.data?.length ?? 0}
                     hasMore={collectionHolders?.hasMore ?? false}

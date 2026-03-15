@@ -24,6 +24,7 @@ import {
   getObjectDetailHref,
   getTokenDetailHref,
 } from '@/lib/detail-routes';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatCkbCompact } from '@/lib/utils';
 type AssetTab = 'token' | 'object' | 'identity';
 type SortDirection = 'asc' | 'desc';
@@ -174,7 +175,7 @@ function AssetTable({
     ],
     queryFn: () =>
       api.getAssets({
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         type: assetType,
         cursor: pagination.cursor,
         search,
@@ -546,7 +547,7 @@ function AssetTable({
         <CursorPagination
           total={data.total ?? undefined}
           totalLabel="items"
-          pageSize={20}
+          pageSize={DEFAULT_PAGE_SIZE}
           page={pagination.page}
           hasMore={data.hasMore}
           hasPrevious={pagination.hasPrevious}

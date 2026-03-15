@@ -26,6 +26,7 @@ import {
 } from '@/lib/api';
 import { ActivityEventGroup } from '@/components/activity-event-row';
 import { useParams } from '@/src/navigation';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 import { formatTokenBalance } from '@/lib/format-asset';
 export default function AddressDetailPage() {
@@ -99,7 +100,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     ],
     queryFn: () =>
       api.getAddressActivities(address!.lockScriptHash, {
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: activitiesPagination.cursor,
         filter: activityFilter,
       }),
@@ -130,7 +131,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
         lockScriptHash: address!.lockScriptHash,
         typeScriptHash: cellsTypeFilter ?? undefined,
         typeCodeHash: cellsCodeHashFilter,
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: cellsPagination.cursor,
       }),
     enabled: !!address,
@@ -155,7 +156,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     queryKey: ['address-transactions', address?.lockScriptHash, txPagination.cursor],
     queryFn: () =>
       api.getAddressTransactions(address!.lockScriptHash, {
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: txPagination.cursor,
       }),
     enabled: !!address,
@@ -165,7 +166,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     queryKey: ['address-fiber-channels', address?.lockScriptHash, fiberPagination.cursor],
     queryFn: () =>
       api.getAddressFiberChannels(address!.lockScriptHash, {
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: fiberPagination.cursor,
       }),
     enabled: !!address,
@@ -710,7 +711,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 <CursorPagination
                   total={fiberChannels.total}
                   totalLabel="channels"
-                  pageSize={20}
+                  pageSize={DEFAULT_PAGE_SIZE}
                   hasMore={fiberChannels.hasMore}
                   hasPrevious={fiberPagination.hasPrevious}
                   page={fiberPagination.page}
@@ -866,7 +867,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                         <CursorPagination
                           total={activityFilter === 'all' ? address.transactionsCount : undefined}
                           totalLabel="activities"
-                          pageSize={20}
+                          pageSize={DEFAULT_PAGE_SIZE}
                           hasMore={activities?.hasMore ?? false}
                           hasPrevious={activitiesPagination.hasPrevious}
                           page={activitiesPagination.page}
@@ -1038,7 +1039,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                               !selectedToken && !selectedDao ? address.liveCellsCount : undefined
                             }
                             totalLabel="cells"
-                            pageSize={20}
+                            pageSize={DEFAULT_PAGE_SIZE}
                             hasMore={cells?.hasMore ?? false}
                             hasPrevious={cellsPagination.hasPrevious}
                             page={cellsPagination.page}
@@ -1196,7 +1197,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                         <CursorPagination
                           total={address.transactionsCount}
                           totalLabel="transactions"
-                          pageSize={20}
+                          pageSize={DEFAULT_PAGE_SIZE}
                           hasMore={transactions.hasMore}
                           hasPrevious={txPagination.hasPrevious}
                           page={txPagination.page}

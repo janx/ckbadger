@@ -27,6 +27,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { ObjectActivityCard } from '@/components/object/object-activity-card';
 import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
+import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 
@@ -214,7 +215,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     ],
     queryFn: () =>
       api.getObjectCollectionItems(collectionAssetId, {
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: collectionItemsPagination.cursor,
         search: collectionSearchKeyword || undefined,
         status: supportsCollectionFilters ? collectionStatusFilter : undefined,
@@ -230,7 +231,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     queryKey: ['object-collection-holders', collectionAssetId, collectionHoldersPagination.cursor],
     queryFn: () =>
       api.getObjectCollectionHolders(collectionAssetId, {
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: collectionHoldersPagination.cursor,
       }),
     enabled: !!collection && activeCollectionTab === 'holders',
@@ -248,7 +249,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     ],
     queryFn: () =>
       api.getObjectCollectionActivities(collectionAssetId, {
-        limit: 20,
+        limit: DEFAULT_PAGE_SIZE,
         cursor: collectionActivitiesPagination.cursor,
       }),
     enabled: !!collection && activeCollectionTab === 'activities',
@@ -540,7 +541,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                     <CursorPagination
                       total={collectionActivities?.total ?? undefined}
                       totalLabel="Activities"
-                      pageSize={20}
+                      pageSize={DEFAULT_PAGE_SIZE}
                       page={collectionActivitiesPagination.page}
                       currentCount={collectionActivities?.data?.length ?? 0}
                       hasMore={collectionActivities?.hasMore ?? false}
@@ -737,7 +738,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                     <CursorPagination
                       total={collectionItems?.total ?? undefined}
                       totalLabel="Objects"
-                      pageSize={20}
+                      pageSize={DEFAULT_PAGE_SIZE}
                       page={collectionItemsPagination.page}
                       hasMore={collectionItems?.hasMore ?? false}
                       hasPrevious={collectionItemsPagination.hasPrevious}
@@ -794,7 +795,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                     <CursorPagination
                       total={collectionHolders?.total}
                       totalLabel="Holders"
-                      pageSize={20}
+                      pageSize={DEFAULT_PAGE_SIZE}
                       page={collectionHoldersPagination.page}
                       currentCount={collectionHolders?.data?.length ?? 0}
                       hasMore={collectionHolders?.hasMore ?? false}
