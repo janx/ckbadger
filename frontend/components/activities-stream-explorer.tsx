@@ -1,14 +1,7 @@
 'use client';
 
 import Link from '@/components/ui/link';
-import { FilterButtonGroup } from '@/components/ui/chart-card';
-import {
-  TerminalDivider,
-  TerminalPanel,
-  TerminalPanelContent,
-  TerminalPanelHeader,
-  TerminalRow,
-} from '@/components/ui/terminal-panel';
+import { TerminalPanel, TerminalPanelContent, TerminalRow } from '@/components/ui/terminal-panel';
 import {
   CkbDelta,
   LockCallBadge,
@@ -206,6 +199,10 @@ function formatAddress(address: string): string {
   return truncateHash(address);
 }
 
+function getDayDividerTestId(label: string): string {
+  return `activity-day-divider-${label.toLowerCase().replace(/\s+/g, '-')}`;
+}
+
 interface TypeBadgeInfo {
   icon: string;
   label: string;
@@ -213,72 +210,103 @@ interface TypeBadgeInfo {
 }
 
 function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
-  const { displayType, primaryAssetChange } = classified;
+  const { displayType } = classified;
 
   switch (displayType) {
     case 'daoDeposit':
-      return { icon: '\u25C6', label: 'DAO Deposit', colorClass: 'text-gold' };
     case 'daoWithdrawRequest':
-      return { icon: '\u25C6', label: 'DAO Withdraw Request', colorClass: 'text-gold' };
     case 'daoWithdrawComplete':
-      return { icon: '\u25C6', label: 'DAO Withdraw Complete', colorClass: 'text-positive' };
+      return { icon: '\u25C6', label: 'DAO', colorClass: 'text-gold' };
+    case 'token':
+      return { icon: '\u25CE', label: 'Token', colorClass: 'text-[#ff66aa]' };
+    case 'object':
+      return { icon: '\u2B21', label: 'Object', colorClass: 'text-lavender' };
+    case 'identity':
+      return { icon: '\u2726', label: 'Identity', colorClass: 'text-aqua' };
+    case 'protocolAction':
+      return { icon: '\u26A1', label: 'Protocol', colorClass: 'text-violet' };
+    case 'typeCall':
+      return { icon: '\u2699', label: 'Script', colorClass: 'text-amber' };
+    case 'ckbTransfer':
+      return { icon: '\u2197', label: 'CKB', colorClass: 'text-jade' };
+    default:
+      return { icon: '\u2197', label: 'Activity', colorClass: 'text-jade' };
+  }
+}
+
+function formatProtocolName(protocol: string): string {
+  if (protocol === 'rgbpp') return 'RGB++';
+  if (protocol === 'utxoswap') return 'UTXOSwap';
+  return protocol.charAt(0).toUpperCase() + protocol.slice(1);
+}
+
+function titleize(value: string): string {
+  return value
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function getActivityHeadline(classified: ClassifiedActivity): string {
+  const { primaryAssetChange, primaryProtocolAction } = classified;
+
+  switch (classified.displayType) {
+    case 'daoDeposit':
+      return 'DAO Deposit';
+    case 'daoWithdrawRequest':
+      return 'DAO Withdraw Request';
+    case 'daoWithdrawComplete':
+      return 'DAO Withdraw Complete';
     case 'token': {
       const change = primaryAssetChange;
       if (change && change.type === 'token') {
-        const label = change.symbol ?? truncateHash(change.typeScriptHash, 8, 6);
-        return { icon: '\u25CE', label: `${label} Transfer`, colorClass: 'text-[#ff66aa]' };
+        return `${change.symbol ?? truncateHash(change.typeScriptHash, 8, 6)} Transfer`;
       }
-      return { icon: '\u25CE', label: 'Token Transfer', colorClass: 'text-[#ff66aa]' };
+      return 'Token Transfer';
     }
     case 'object': {
       const change = primaryAssetChange;
       if (change && change.type === 'object') {
-        return {
-          icon: '\u2B21',
-          label: `${formatStandard(change.standard)} ${capitalizeAction(change.action)}`,
-          colorClass: 'text-lavender',
-        };
+        return `${formatStandard(change.standard)} ${capitalizeAction(change.action)}`;
       }
-      return { icon: '\u2B21', label: 'Object', colorClass: 'text-lavender' };
+      return 'Object Activity';
     }
     case 'identity': {
       const change = primaryAssetChange;
       if (change && change.type === 'identity') {
-        return {
-          icon: '\u2726',
-          label: `${formatStandard(change.standard)} ${capitalizeAction(change.action)}`,
-          colorClass: 'text-aqua',
-        };
+        return `${formatStandard(change.standard)} ${capitalizeAction(change.action)}`;
       }
-      return { icon: '\u2726', label: 'Identity', colorClass: 'text-aqua' };
+      return 'Identity Activity';
     }
     case 'protocolAction': {
-      const pa = classified.primaryProtocolAction;
-      return {
-        icon: '\u26A1',
-        label: pa ? pa.protocol.toUpperCase() : 'Protocol',
-        colorClass: 'text-violet',
-      };
+      if (!primaryProtocolAction) {
+        return 'Protocol Action';
+      }
+      return `${formatProtocolName(primaryProtocolAction.protocol)} \u00B7 ${titleize(primaryProtocolAction.action)}`;
     }
     case 'typeCall':
-      return { icon: '\u2699', label: TYPE_SCRIPT_CALL_LABEL, colorClass: 'text-amber' };
+      return TYPE_SCRIPT_CALL_LABEL;
     case 'ckbTransfer':
-      return { icon: '\u2197', label: 'CKB Transfer', colorClass: 'text-jade' };
+      return 'CKB Transfer';
     default:
-      return { icon: '\u2197', label: 'Transfer', colorClass: 'text-jade' };
+      return 'Activity';
   }
 }
 
-function AddressLink({ address }: { address: string }) {
+function AddressLink({ address, className }: { address: string; className?: string }) {
   return (
-    <Link href={`/address/${address}`} className="text-text hover:text-aqua font-mono text-xs">
+    <Link
+      href={`/address/${address}`}
+      className={cn('text-text hover:text-aqua font-mono text-xs transition-colors', className)}
+    >
       {formatAddress(address)}
     </Link>
   );
 }
 
 function renderPrimaryValue(classified: ClassifiedActivity) {
-  const { activity, primaryAssetChange, primaryProtocolAction, primaryTypeCall } = classified;
+  const { activity, primaryAssetChange, primaryProtocolAction } = classified;
 
   switch (classified.displayType) {
     case 'daoDeposit': {
@@ -341,120 +369,317 @@ function renderPrimaryValue(classified: ClassifiedActivity) {
       );
     }
     case 'object': {
-      if (primaryAssetChange?.type !== 'object') {
-        return <CkbDelta delta={activity.ckbDelta} />;
-      }
-      return (
-        <Link
-          href={getObjectDetailHref(primaryAssetChange.objectId)}
-          className="text-lavender/80 hover:text-lavender font-mono text-xs"
-        >
-          {truncateHash(primaryAssetChange.objectId, 8, 6)}
-        </Link>
-      );
+      return <CkbDelta delta={activity.ckbDelta} />;
     }
     case 'identity': {
-      if (primaryAssetChange?.type !== 'identity') {
-        return <CkbDelta delta={activity.ckbDelta} />;
-      }
-      return (
-        <Link
-          href={getIdentityItemDetailHref(
-            primaryAssetChange.standard,
-            primaryAssetChange.identityId
-          )}
-          className="text-aqua/80 hover:text-aqua font-mono text-xs"
-        >
-          {truncateHash(primaryAssetChange.identityId, 8, 6)}
-        </Link>
-      );
+      return <CkbDelta delta={activity.ckbDelta} />;
     }
-    case 'protocolAction':
-      return (
-        <span className="text-violet font-mono text-xs uppercase">
-          {primaryProtocolAction?.action ?? 'action'}
-        </span>
-      );
+    case 'protocolAction': {
+      if (primaryAssetChange?.type === 'token') {
+        const delta = BigInt(primaryAssetChange.delta);
+        const prefix = delta > BigInt(0) ? '+' : delta < BigInt(0) ? '-' : '';
+        const balance = formatTokenBalance(
+          primaryAssetChange.delta.startsWith('-')
+            ? primaryAssetChange.delta.slice(1)
+            : primaryAssetChange.delta,
+          primaryAssetChange.decimals ?? 0
+        );
+        const label =
+          primaryAssetChange.symbol ?? truncateHash(primaryAssetChange.typeScriptHash, 8, 6);
+        const colorClass =
+          delta > BigInt(0)
+            ? 'text-positive'
+            : delta < BigInt(0)
+              ? 'text-negative'
+              : 'text-text-dim';
+        return (
+          <Link
+            href={getTokenDetailHref(primaryAssetChange.typeScriptHash)}
+            className={cn('font-mono text-xs tabular-nums hover:underline', colorClass)}
+          >
+            {prefix}
+            {balance} {label}
+          </Link>
+        );
+      }
+
+      const capacity = primaryProtocolAction?.metadata?.capacity;
+      if (typeof capacity === 'string') {
+        return (
+          <span className="text-text font-mono text-xs tabular-nums">
+            {formatCkbAmount(capacity).full} CKB
+          </span>
+        );
+      }
+
+      return <CkbDelta delta={activity.ckbDelta} />;
+    }
     case 'typeCall':
-      return primaryTypeCall ? (
-        <span className="font-mono text-xs">
-          <TypeCallExpr sc={primaryTypeCall} />
-        </span>
-      ) : (
-        <span className="text-amber font-mono text-xs">{TYPE_SCRIPT_CALL_LABEL}</span>
-      );
+      return <CkbDelta delta={activity.ckbDelta} />;
     case 'ckbTransfer':
     default:
       return <CkbDelta delta={activity.ckbDelta} />;
   }
 }
 
-function renderDetailLine(classified: ClassifiedActivity) {
+function MetaChip({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <span
+      className={cn(
+        'border-base-border/50 bg-base-elevated/70 text-text-dim inline-flex items-center rounded-md border px-2 py-1 font-mono text-[10px] leading-none',
+        className
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+function getFilterLabel(filter: GlobalActivityFilter): string {
+  return FILTER_OPTIONS.find((option) => option.value === filter)?.label ?? 'All';
+}
+
+function ActivityStreamToolbar({
+  selectedFilter,
+  visibleItemsCount,
+  statusLabel,
+  stacked = false,
+  onFilterChange,
+}: {
+  selectedFilter: GlobalActivityFilter;
+  visibleItemsCount: number;
+  statusLabel: 'active' | 'inactive';
+  stacked?: boolean;
+  onFilterChange: (value: string | number | undefined) => void;
+}) {
+  const activeLabel = getFilterLabel(selectedFilter).toUpperCase();
+  const indicatorClass =
+    statusLabel === 'active' ? 'bg-jade shadow-[0_0_8px_rgba(46,219,163,0.3)]' : 'bg-jade/35';
+
+  return (
+    <div
+      data-testid="activities-stream-toolbar"
+      className={cn(
+        'bg-[#060810]',
+        stacked ? 'border-jade/10 border-b' : 'border-jade/10 border-y'
+      )}
+    >
+      <div className="container mx-auto flex min-h-12 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-0 overflow-x-auto font-mono text-[11px] tabular-nums leading-none">
+          <span className={cn('mr-2 inline-block h-1.5 w-1.5 rounded-full', indicatorClass)} />
+          <span className="text-jade/50 uppercase tracking-wider">filter</span>
+          <span className="text-jade ml-1.5 font-bold transition-colors">{activeLabel}</span>
+          <span className="text-jade/20 mx-2.5 select-none">|</span>
+          <span className="text-jade/50 uppercase tracking-wider">loaded</span>
+          <span className="text-jade ml-1.5 font-bold transition-colors">
+            {visibleItemsCount.toLocaleString()}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          {FILTER_OPTIONS.map((option) => {
+            const isActive = selectedFilter === option.value;
+
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => onFilterChange(option.value)}
+                className={cn(
+                  'rounded-sm border px-2 py-1 font-mono text-[11px] uppercase tracking-[0.16em] transition-colors',
+                  isActive
+                    ? 'border-jade/20 bg-jade/8 text-jade'
+                    : 'text-jade/45 hover:bg-jade/[0.04] hover:text-jade/80 border-transparent bg-transparent'
+                )}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ActivityDayDivider({ label }: { label: string }) {
+  return (
+    <div
+      className="flex items-center gap-2 px-4 pb-1.5 pt-3.5"
+      data-testid={getDayDividerTestId(label)}
+    >
+      <span className="bg-jade/55 block h-1 w-1 rounded-full" />
+      <span className="text-text-dim font-mono text-[10px] uppercase tracking-[0.22em]">
+        {label}
+      </span>
+      <div className="from-jade/12 via-base-border/55 h-px flex-1 bg-gradient-to-r to-transparent" />
+    </div>
+  );
+}
+
+function renderSubjectLine(classified: ClassifiedActivity) {
   const { activity, primaryProtocolAction, primaryAssetChange, primaryTypeCall, primaryLockCall } =
     classified;
-  const pieces: ReactNode[] = [];
 
-  if (
-    !['ckbTransfer', 'daoDeposit', 'daoWithdrawRequest', 'daoWithdrawComplete'].includes(
-      classified.displayType
-    ) &&
-    activity.ckbDelta !== '0'
-  ) {
-    pieces.push(<CkbDelta key="ckb-delta" delta={activity.ckbDelta} />);
-  }
+  switch (classified.displayType) {
+    case 'daoDeposit':
+      return <span className="text-text-dim">NervosDAO position created</span>;
+    case 'daoWithdrawRequest':
+      return primaryAssetChange?.type === 'daoWithdrawRequest' ? (
+        <>
+          <span className="text-text-dim">deposit block</span>
+          <MetaChip>#{primaryAssetChange.depositBlock.toLocaleString()}</MetaChip>
+        </>
+      ) : (
+        <span className="text-text-dim">NervosDAO withdraw request</span>
+      );
+    case 'daoWithdrawComplete':
+      return primaryAssetChange?.type === 'daoWithdrawComplete' ? (
+        <>
+          <span className="text-text-dim">compensation</span>
+          <span className="text-positive font-mono text-xs tabular-nums">
+            +{formatCkbAmount(primaryAssetChange.compensation).full} CKB
+          </span>
+        </>
+      ) : (
+        <span className="text-text-dim">NervosDAO withdrawal completed</span>
+      );
+    case 'token':
+      return primaryAssetChange?.type === 'token' ? (
+        <>
+          <Link
+            href={getTokenDetailHref(primaryAssetChange.typeScriptHash)}
+            className="font-mono text-xs text-[#ff66aa]/85 transition-colors hover:text-[#ff66aa]"
+          >
+            {primaryAssetChange.symbol ?? truncateHash(primaryAssetChange.typeScriptHash, 8, 6)}
+          </Link>
+          {activity.ckbDelta !== '0' && (
+            <>
+              <span className="text-text-dim">ckb</span>
+              <CkbDelta delta={activity.ckbDelta} />
+            </>
+          )}
+        </>
+      ) : null;
+    case 'object':
+      return primaryAssetChange?.type === 'object' ? (
+        <>
+          <Link
+            href={getObjectDetailHref(primaryAssetChange.objectId)}
+            className="text-lavender/80 hover:text-lavender font-mono text-xs transition-colors"
+          >
+            {truncateHash(primaryAssetChange.objectId, 8, 6)}
+          </Link>
+          {activity.ckbDelta !== '0' && (
+            <>
+              <span className="text-text-dim">ckb</span>
+              <CkbDelta delta={activity.ckbDelta} />
+            </>
+          )}
+        </>
+      ) : null;
+    case 'identity':
+      return primaryAssetChange?.type === 'identity' ? (
+        <>
+          <Link
+            href={getIdentityItemDetailHref(
+              primaryAssetChange.standard,
+              primaryAssetChange.identityId
+            )}
+            className="text-aqua/80 hover:text-aqua font-mono text-xs transition-colors"
+          >
+            {truncateHash(primaryAssetChange.identityId, 8, 6)}
+          </Link>
+          {activity.ckbDelta !== '0' && (
+            <>
+              <span className="text-text-dim">ckb</span>
+              <CkbDelta delta={activity.ckbDelta} />
+            </>
+          )}
+        </>
+      ) : null;
+    case 'protocolAction': {
+      const pieces: ReactNode[] = [];
+      const btcTxid = primaryProtocolAction?.metadata?.btcTxid;
+      const capacity = primaryProtocolAction?.metadata?.capacity;
 
-  if (primaryProtocolAction) {
-    const btcTxid = primaryProtocolAction.metadata?.btcTxid;
-    pieces.push(
-      <span key="protocol-action" className="text-violet font-mono text-[11px] uppercase">
-        {primaryProtocolAction.protocol}:{primaryProtocolAction.action}
-      </span>
-    );
-    if (typeof btcTxid === 'string') {
-      pieces.push(
-        <span key="btc-txid" className="text-text-dim font-mono text-[11px]">
-          btc:{truncateHash(btcTxid, 8, 6)}
+      if (primaryAssetChange?.type === 'token') {
+        const label =
+          primaryAssetChange.symbol ?? truncateHash(primaryAssetChange.typeScriptHash, 8, 6);
+        pieces.push(
+          <Link
+            key="token"
+            href={getTokenDetailHref(primaryAssetChange.typeScriptHash)}
+            className="font-mono text-xs text-[#ff66aa]/85 transition-colors hover:text-[#ff66aa]"
+          >
+            {label}
+          </Link>
+        );
+      }
+
+      if (typeof capacity === 'string') {
+        pieces.push(
+          <span key="capacity" className="text-text-dim font-mono text-xs tabular-nums">
+            capacity {formatCkbAmount(capacity).full} CKB
+          </span>
+        );
+      }
+
+      if (typeof btcTxid === 'string') {
+        pieces.push(
+          <span key="btc" className="text-text-dim font-mono text-xs">
+            btc {truncateHash(btcTxid, 8, 6)}
+          </span>
+        );
+      }
+
+      if (primaryTypeCall) {
+        pieces.push(
+          <span key="type-call" className="font-mono text-xs">
+            <TypeCallExpr sc={primaryTypeCall} />
+          </span>
+        );
+      } else if (primaryLockCall) {
+        pieces.push(
+          <span key="lock-call" className="font-mono text-xs">
+            <LockCallExpr lc={primaryLockCall} />
+          </span>
+        );
+      }
+
+      return pieces.length > 0 ? pieces : <span className="text-text-dim">Protocol activity</span>;
+    }
+    case 'typeCall':
+      return primaryTypeCall ? (
+        <span className="font-mono text-xs">
+          <TypeCallExpr sc={primaryTypeCall} />
+        </span>
+      ) : primaryLockCall ? (
+        <span className="font-mono text-xs">
+          <LockCallExpr lc={primaryLockCall} />
+        </span>
+      ) : (
+        <span className="text-text-dim">Type script activity</span>
+      );
+    case 'ckbTransfer':
+    default:
+      if (activity.peers.length === 0) {
+        return <span className="text-text-dim">Owner balance change</span>;
+      }
+      if (activity.peers.length === 1) {
+        return (
+          <>
+            <span className="text-text-dim">with</span>
+            <AddressLink address={activity.peers[0]} className="text-xs" />
+          </>
+        );
+      }
+      return (
+        <span className="text-text-dim font-mono text-xs">
+          {activity.peers.length} counterparties
         </span>
       );
-    }
-    if (primaryAssetChange?.type === 'token') {
-      pieces.push(
-        <span key="protocol-token" className="text-text-dim font-mono text-[11px]">
-          token {primaryAssetChange.symbol ?? truncateHash(primaryAssetChange.typeScriptHash, 8, 6)}
-        </span>
-      );
-    }
-  } else if (primaryTypeCall) {
-    pieces.push(
-      <span key="type-call" className="text-text-dim font-mono text-[11px]">
-        <TypeCallExpr sc={primaryTypeCall} />
-      </span>
-    );
-  } else if (primaryLockCall) {
-    pieces.push(
-      <span key="lock-call" className="text-text-dim font-mono text-[11px]">
-        <LockCallExpr lc={primaryLockCall} />
-      </span>
-    );
-  } else if (primaryAssetChange?.type === 'daoWithdrawComplete') {
-    pieces.push(
-      <span key="dao-compensation" className="text-positive font-mono text-[11px] tabular-nums">
-        +{formatCkbAmount(primaryAssetChange.compensation).full} CKB compensation
-      </span>
-    );
-  } else if (activity.lockCalls.length > 0 && !primaryLockCall) {
-    pieces.push(
-      <span key="lock-call-fallback" className="text-text-dim font-mono text-[11px]">
-        <LockCallExpr lc={activity.lockCalls[0]} />
-      </span>
-    );
   }
-
-  if (pieces.length === 0) {
-    return null;
-  }
-
-  return <div className="flex flex-wrap items-center gap-x-3 gap-y-1">{pieces}</div>;
 }
 
 interface ActivityStreamRowProps {
@@ -465,46 +690,71 @@ interface ActivityStreamRowProps {
 function ActivityStreamRow({ activity, isNew = false }: ActivityStreamRowProps) {
   const classified = classifyActivity(activity);
   const badge = getTypeBadge(classified);
+  const headline = getActivityHeadline(classified);
   const txHref = `/tx/${activity.txHash}`;
   const blockHref = `/blocks/${activity.blockNumber}`;
-  const detailLine = renderDetailLine(classified);
+  const subjectLine = renderSubjectLine(classified);
+  const metaChipClass =
+    'border-base-border/45 bg-base-elevated/55 text-text-dim hover:text-aqua inline-flex items-center rounded-md border px-2 py-1 font-mono text-[10px] leading-none transition-colors';
+  const rowAnimation = isNew
+    ? {
+        animation:
+          'activity-stream-row-enter 280ms ease-out, activity-stream-row-glow 2s ease-out forwards',
+      }
+    : undefined;
 
   return (
     <TerminalRow
-      className="space-y-2"
-      style={
-        isNew
-          ? {
-              animation:
-                'activity-stream-row-enter 280ms ease-out, activity-stream-row-glow 2s ease-out forwards',
-            }
-          : undefined
-      }
+      role="article"
+      aria-label={headline}
+      className="px-4 py-4 sm:px-5"
+      style={rowAnimation}
     >
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className={cn('font-mono text-xs', badge.colorClass)}>
-            {badge.icon} {badge.label}
-          </span>
-          {classified.primaryLockCall && <LockCallBadge lc={classified.primaryLockCall} />}
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start lg:gap-4">
+        <div className="min-w-0 space-y-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={cn(
+                'border-base-border/50 bg-base-elevated/70 inline-flex items-center rounded-md border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em]',
+                badge.colorClass
+              )}
+            >
+              {badge.icon} {badge.label}
+            </span>
+            {classified.primaryLockCall && <LockCallBadge lc={classified.primaryLockCall} />}
+          </div>
+
+          <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+            <h2 className="text-text-bright font-mono text-base font-semibold tracking-tight sm:text-[17px]">
+              {headline}
+            </h2>
+          </div>
+
+          {subjectLine && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">{subjectLine}</div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+            <span className="text-text-dim font-mono text-[10px] uppercase tracking-[0.18em]">
+              Owner
+            </span>
+            <AddressLink address={activity.address} className="text-[11px]" />
+            <Link href={txHref} className={metaChipClass}>
+              tx {truncateHash(activity.txHash, 8, 6)}
+            </Link>
+            <Link href={blockHref} className={metaChipClass}>
+              #{activity.blockNumber.toLocaleString()}
+            </Link>
+            <MetaChip>{formatActivityTimeAgo(activity.timestamp)}</MetaChip>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 font-mono text-[10px]">
-          <Link href={txHref} className="text-text-dim hover:text-aqua">
-            tx {truncateHash(activity.txHash, 8, 6)}
-          </Link>
-          <Link href={blockHref} className="text-text-dim hover:text-text">
-            #{activity.blockNumber.toLocaleString()}
-          </Link>
-          <span className="text-text-dim">{formatActivityTimeAgo(activity.timestamp)}</span>
+
+        <div className="flex items-start justify-start pt-0.5 lg:justify-end">
+          <div className="border-base-border/40 bg-base-bg/50 min-w-[10.5rem] rounded-lg border px-3 py-2">
+            {renderPrimaryValue(classified)}
+          </div>
         </div>
       </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <AddressLink address={activity.address} />
-        {renderPrimaryValue(classified)}
-      </div>
-
-      {detailLine && <div>{detailLine}</div>}
     </TerminalRow>
   );
 }
@@ -683,39 +933,11 @@ export function ActivitiesStreamExplorer() {
   const statusLabel = isFetchingNextPage || headQuery.isFetching ? 'active' : 'inactive';
   const initialError = !isLoading && !!error && visibleItems.length === 0;
   const emptyState = !isLoading && !error && visibleItems.length === 0;
+  const hasPending = pendingNewItems.length > 0;
 
   return (
     <div className="space-y-4">
       <div ref={topAnchorRef} />
-
-      <div className="bg-base-bg/95 border-base-border sticky top-[4.5rem] z-20 rounded-lg border backdrop-blur-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
-          <div className="text-text-dim font-mono text-[11px] uppercase tracking-widest">
-            Stream Filters
-          </div>
-          <div className="text-text-dim font-mono text-[11px]">
-            {visibleItems.length.toLocaleString()} loaded
-          </div>
-        </div>
-        <div className="px-3 pb-3">
-          <FilterButtonGroup
-            options={FILTER_OPTIONS}
-            selected={selectedFilter}
-            onChange={handleFilterChange}
-            className="flex-wrap"
-          />
-        </div>
-      </div>
-
-      {pendingNewItems.length > 0 && (
-        <button
-          type="button"
-          onClick={handleMergePending}
-          className="border-jade/40 bg-jade/10 text-jade hover:bg-jade/15 sticky top-[8.75rem] z-10 w-full rounded-lg border px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors"
-        >
-          {pendingNewItems.length} new activit{pendingNewItems.length === 1 ? 'y' : 'ies'}
-        </button>
-      )}
 
       {headQuery.isError && visibleItems.length > 0 && (
         <div className="border-base-border bg-base-surface/90 text-text-dim rounded-lg border px-3 py-2 font-mono text-xs">
@@ -726,9 +948,47 @@ export function ActivitiesStreamExplorer() {
         </div>
       )}
 
-      <TerminalPanel className="min-h-[44rem]">
-        <TerminalPanelHeader indicator={statusLabel}>Global Activity Stream</TerminalPanelHeader>
+      <TerminalPanel
+        className="min-h-[44rem] overflow-visible"
+        data-testid="activities-stream-panel"
+      >
         <TerminalPanelContent padding="none">
+          <div
+            data-testid="activities-stream-sticky-stack"
+            className={cn(
+              'border-jade/10 sticky top-[5.25rem] z-30 border-x',
+              hasPending && 'shadow-[0_10px_24px_rgba(0,0,0,0.28)]'
+            )}
+          >
+            {hasPending && (
+              <button
+                type="button"
+                onClick={handleMergePending}
+                aria-label={`${pendingNewItems.length} new activit${pendingNewItems.length === 1 ? 'y' : 'ies'}`}
+                className="border-jade/10 w-full rounded-none border-y bg-[#04070d] px-4 py-2 text-left transition-colors hover:bg-[#060a11]"
+              >
+                <div className="flex flex-wrap items-center gap-0 font-mono text-[11px] tabular-nums leading-none">
+                  <span className="bg-jade/80 mr-2 block h-2 w-2 rounded-full shadow-[0_0_10px_rgba(46,219,163,0.35)]" />
+                  <span className="text-jade/55 uppercase tracking-wider">LIVE BUFFER</span>
+                  <span className="text-jade/20 mx-2.5 select-none">|</span>
+                  <span className="text-jade font-bold uppercase tracking-[0.14em]">
+                    {pendingNewItems.length} new activit
+                    {pendingNewItems.length === 1 ? 'y' : 'ies'}
+                  </span>
+                  <span className="text-jade/20 mx-2.5 select-none">|</span>
+                  <span className="text-text-dim uppercase tracking-[0.18em]">merge at top</span>
+                </div>
+              </button>
+            )}
+
+            <ActivityStreamToolbar
+              selectedFilter={selectedFilter}
+              visibleItemsCount={visibleItems.length}
+              statusLabel={statusLabel}
+              stacked={hasPending}
+              onFilterChange={handleFilterChange}
+            />
+          </div>
           {isLoading ? (
             <LoadingRows />
           ) : initialError ? (
@@ -756,9 +1016,7 @@ export function ActivitiesStreamExplorer() {
 
                 return (
                   <div key={key}>
-                    {showDayDivider && (
-                      <TerminalDivider className="px-3 py-2" label={currentLabel} />
-                    )}
+                    {showDayDivider && <ActivityDayDivider label={currentLabel} />}
                     <ActivityStreamRow activity={activity} isNew={highlightedKeys.has(key)} />
                   </div>
                 );

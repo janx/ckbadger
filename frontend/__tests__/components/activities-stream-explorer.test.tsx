@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@/__tests__/utils/test-utils';
+import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import type { GlobalActivity } from '@/lib/api';
 import { api } from '@/lib/api';
@@ -182,7 +182,11 @@ describe('ActivitiesStreamExplorer', () => {
 
     await waitFor(() => {
       expect(api.getGlobalActivities).toHaveBeenCalledWith(
-        expect.objectContaining({ cursor: '500:0:0', filter: 'all', limit: DEFAULT_PAGE_SIZE })
+        expect.objectContaining({
+          cursor: '500:0:0',
+          filter: 'all',
+          limit: DEFAULT_PAGE_SIZE,
+        })
       );
     });
     expect(await screen.findByText('+2.00000000 CKB')).toBeInTheDocument();
@@ -207,10 +211,82 @@ describe('ActivitiesStreamExplorer', () => {
 
     render(<ActivitiesStreamExplorer />);
 
+    const toolbar = screen.getByTestId('activities-stream-toolbar');
+    const stickyStack = screen.getByTestId('activities-stream-sticky-stack');
+    const panel = screen.getByTestId('activities-stream-panel');
+    const allFilter = within(toolbar).getByRole('button', { name: 'All' });
+    const ckbFilter = within(toolbar).getByRole('button', { name: 'CKB' });
+
+    expect(panel.contains(toolbar)).toBe(true);
+    expect(panel.contains(stickyStack)).toBe(true);
+    expect(toolbar.textContent).toContain('filter');
+    expect(toolbar.textContent).toContain('ALL');
+    expect(within(toolbar).queryByText('STREAM CTRL')).not.toBeInTheDocument();
+    expect(stickyStack.className).toContain('sticky');
+    expect(stickyStack.className).toContain('top-[5.25rem]');
+    expect(stickyStack.className).toContain('z-30');
+    expect(stickyStack.className).toContain('border-x');
+    expect(toolbar.className).toContain('bg-[#060810]');
+    expect(toolbar.className).toContain('border-y');
+    expect(toolbar.className).not.toContain('border-x');
+    expect(allFilter.className).toContain('bg-jade/8');
+    expect(allFilter.className).toContain('border-jade/20');
+    expect(ckbFilter.className).toContain('border-transparent');
+    expect(ckbFilter.className).toContain('hover:bg-jade/[0.04]');
+    expect(panel.className).toContain('overflow-visible');
+    expect(screen.queryByText('Global Activity Stream')).not.toBeInTheDocument();
     expect(await screen.findByText('No activities yet')).toBeInTheDocument();
     expect(
       screen.getByText('This filter has no canonical activity rows in the current window.')
     ).toBeInTheDocument();
+  });
+
+  it('renders each activity row with separate headline, subject, and owner metadata zones', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [
+        makeActivity({
+          address: 'ckb1qzdaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaq3q7ue',
+          txHash: '0xscriptcall0000000000000000000000000000000000000000000000000001',
+          blockNumber: 123_456,
+          timestamp: String(Date.now() - 23_000),
+          ckbDelta: '-30000',
+          hasTypeScript: true,
+          typeCalls: [
+            {
+              scriptHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
+              scriptName: '.bit Time Index State',
+              typeCodeHash: '0x2222222222222222222222222222222222222222222222222222222222222222',
+              typeHashType: 'type',
+              typeArgs: '0x00',
+            },
+          ],
+        }),
+      ],
+      limit: DEFAULT_PAGE_SIZE,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<ActivitiesStreamExplorer />);
+
+    const row = await screen.findByRole('article', { name: /script call/i });
+    const heading = within(row).getByRole('heading', { name: 'Script Call (type)' });
+    const divider = screen.getByTestId('activity-day-divider-today');
+    const dividerDot = divider.querySelector('span');
+
+    expect(screen.getByText('Today')).toBeInTheDocument();
+    expect(within(row).getByText('Script Call (type)')).toBeInTheDocument();
+    expect(within(row).getByText('.bit Time Index State')).toBeInTheDocument();
+    expect(within(row).getByText('Owner')).toBeInTheDocument();
+    expect(within(row).getByText(/tx 0xscript/i)).toBeInTheDocument();
+    expect(within(row).getByText('#123,456')).toBeInTheDocument();
+    expect(within(row).getByText(/ago$/i)).toBeInTheDocument();
+    expect(row.className).toContain('py-4');
+    expect(heading.className).toContain('text-base');
+    expect(row.className).not.toContain('grid-cols-[0.625rem_minmax(0,1fr)]');
+    expect(within(row).queryByTestId('activity-terminal-marker')).not.toBeInTheDocument();
+    expect(divider.className).toContain('gap-2');
+    expect(dividerDot?.className).toContain('h-1');
   });
 
   it('keeps polling when the current filter is empty and renders new head activity', async () => {
@@ -293,7 +369,30 @@ describe('ActivitiesStreamExplorer', () => {
     expect(await screen.findByText('+1.00000000 CKB')).toBeInTheDocument();
 
     const banner = await screen.findByRole('button', { name: '1 new activity' });
-    expect(banner.className).toContain('sticky');
+    const toolbar = screen.getByTestId('activities-stream-toolbar');
+    const stickyStack = screen.getByTestId('activities-stream-sticky-stack');
+    const panel = screen.getByTestId('activities-stream-panel');
+    expect(stickyStack.className).toContain('sticky');
+    expect(stickyStack.className).toContain('top-[5.25rem]');
+    expect(stickyStack.className).toContain('z-30');
+    expect(stickyStack.className).toContain('border-x');
+    expect(stickyStack.className).toContain('shadow-[');
+    expect(banner.className).toContain('bg-[#04070d]');
+    expect(banner.className).not.toContain('bg-[#060810]');
+    expect(banner.className).not.toContain('/92');
+    expect(banner.className).toContain('rounded-none');
+    expect(banner.className).not.toContain('border-x');
+    expect(banner.className).toContain('border-y');
+    expect(banner.className).not.toContain('shadow-[');
+    expect(panel.contains(banner)).toBe(true);
+    expect(stickyStack.contains(banner)).toBe(true);
+    expect(stickyStack.contains(toolbar)).toBe(true);
+    expect(toolbar.className).toContain('border-b');
+    expect(toolbar.className).not.toContain('border-y');
+    expect(toolbar.className).not.toContain('border-x');
+    expect(banner.textContent).toContain('|');
+    expect(banner.textContent).toContain('LIVE BUFFER');
+    expect(banner.textContent).toContain('1 new activity');
     expect(screen.queryByText('+4.00000000 CKB')).not.toBeInTheDocument();
 
     fireEvent.click(banner);
@@ -340,8 +439,8 @@ describe('ActivitiesStreamExplorer', () => {
       .mockResolvedValueOnce({
         data: [
           makeActivity({
-            address: 'ckb1qhead20111111111111111111111111111111111111111111',
-            txHash: '0xhead-page-two-20',
+            address: `ckb1qhead${String(DEFAULT_PAGE_SIZE).padStart(2, '0')}111111111111111111111111111111111111`,
+            txHash: `0xhead-page-two-${DEFAULT_PAGE_SIZE}`,
             ckbDelta: '2200000000',
             blockNumber: 980,
           }),
@@ -374,7 +473,11 @@ describe('ActivitiesStreamExplorer', () => {
 
     fireEvent.click(banner);
 
-    expect(await screen.findByText(`${DEFAULT_PAGE_SIZE + 2} loaded`)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('activities-stream-toolbar').textContent).toContain(
+        `${DEFAULT_PAGE_SIZE + 2}`
+      );
+    });
     expect(screen.getAllByText('#980').length).toBeGreaterThan(0);
   });
 
