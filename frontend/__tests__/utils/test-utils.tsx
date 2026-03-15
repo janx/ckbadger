@@ -1,19 +1,16 @@
 import { render, RenderOptions } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { ReactNode, ReactElement } from 'react';
+import { WarmupPendingBanner } from '@/components/ui/warmup-pending-banner';
+import { createAppQueryClient } from '@/lib/query-client';
 
 function createTestQueryClient() {
-  return new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-        gcTime: Infinity,
-        staleTime: Infinity,
-      },
-      mutations: {
-        retry: false,
-      },
-    },
+  return createAppQueryClient({
+    nonWarmupRetry: false,
+    gcTime: Infinity,
+    staleTime: Infinity,
+    warmupRetryLimit: 2,
+    warmupRetryDelayMs: 10,
   });
 }
 
@@ -23,7 +20,12 @@ interface AllProvidersProps {
 
 function AllProviders({ children }: AllProvidersProps) {
   const queryClient = createTestQueryClient();
-  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={queryClient}>
+      <WarmupPendingBanner />
+      {children}
+    </QueryClientProvider>
+  );
 }
 
 const customRender = (ui: ReactElement, options?: Omit<RenderOptions, 'wrapper'>) =>

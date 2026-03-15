@@ -425,7 +425,7 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(tokens);
             } else {
-                return Err(ApiError::internal(
+                return Err(ApiError::warmup_pending(
                     "token asset cache unavailable; warmup in progress",
                 ));
             }
@@ -438,7 +438,7 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(nfts);
             } else {
-                return Err(ApiError::internal(
+                return Err(ApiError::warmup_pending(
                     "nft asset cache unavailable; warmup in progress",
                 ));
             }
@@ -450,7 +450,7 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(nfts.into_iter().filter(|e| e.asset_type == "object"));
             } else {
-                return Err(ApiError::internal(
+                return Err(ApiError::warmup_pending(
                     "nft asset cache unavailable; warmup in progress",
                 ));
             }
@@ -462,7 +462,7 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(nfts.into_iter().filter(|e| e.asset_type == "identity"));
             } else {
-                return Err(ApiError::internal(
+                return Err(ApiError::warmup_pending(
                     "nft asset cache unavailable; warmup in progress",
                 ));
             }
@@ -474,7 +474,7 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(tokens);
             } else {
-                return Err(ApiError::internal(
+                return Err(ApiError::warmup_pending(
                     "token asset cache unavailable; warmup in progress",
                 ));
             }
@@ -485,7 +485,7 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(nfts);
             } else {
-                return Err(ApiError::internal(
+                return Err(ApiError::warmup_pending(
                     "nft asset cache unavailable; warmup in progress",
                 ));
             }

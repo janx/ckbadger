@@ -8,6 +8,13 @@ vi.mock('@/lib/api', () => ({
   api: {
     getScripts: vi.fn(),
   },
+  isWarmupPendingError: (error: unknown) =>
+    Boolean(
+      error &&
+      typeof error === 'object' &&
+      (error as { code?: string; status?: number }).code === 'warmup_pending' &&
+      (error as { code?: string; status?: number }).status === 503
+    ),
 }));
 
 vi.mock('@/components/layout/header', () => ({
@@ -217,5 +224,36 @@ describe('ScriptsPage', () => {
 
     expect(screen.getByText(/negative live capacity in list scripts/i)).toBeInTheDocument();
     expect(screen.queryByText('No scripts found')).toBeNull();
+  });
+
+  it('shows warmup message and retries until scripts become available', async () => {
+    const warmupError = Object.assign(
+      new Error('API error: 503 - script cache unavailable; warmup in progress'),
+      {
+        code: 'warmup_pending',
+        status: 503,
+        apiMessage: 'script cache unavailable; warmup in progress',
+      }
+    );
+
+    vi.mocked(api.getScripts)
+      .mockRejectedValueOnce(warmupError)
+      .mockResolvedValueOnce(mockScriptsResponse);
+
+    render(<ScriptsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/data is being prepared/i)).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(api.getScripts).toHaveBeenCalledTimes(2);
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('link', { name: 'SECP256K1_BLAKE160' })[0]).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/data is being prepared/i)).toBeNull();
   });
 });

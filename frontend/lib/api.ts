@@ -4,6 +4,64 @@ export { resolveApiBase } from '@/lib/runtime-config';
 
 const API_BASE = resolveApiBase();
 
+interface ApiErrorPayload {
+  error?: unknown;
+  message?: unknown;
+}
+
+export class ApiRequestError extends Error {
+  status: number;
+  code: string;
+  apiMessage: string;
+
+  constructor(status: number, code: string, apiMessage: string) {
+    super(apiMessage ? `API error: ${status} - ${apiMessage}` : `API error: ${status}`);
+    this.name = 'ApiRequestError';
+    this.status = status;
+    this.code = code;
+    this.apiMessage = apiMessage;
+  }
+}
+
+function parseApiErrorPayload(
+  payload: ApiErrorPayload | undefined,
+  status: number
+): ApiRequestError {
+  const code =
+    typeof payload?.error === 'string' && payload.error.trim().length > 0
+      ? payload.error.trim()
+      : 'unknown_error';
+  const apiMessage =
+    typeof payload?.message === 'string' && payload.message.trim().length > 0
+      ? payload.message.trim()
+      : '';
+  return new ApiRequestError(status, code, apiMessage);
+}
+
+async function readApiErrorPayload(res: Response): Promise<ApiErrorPayload | undefined> {
+  try {
+    return (await res.json()) as ApiErrorPayload;
+  } catch {
+    return undefined;
+  }
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    throw parseApiErrorPayload(await readApiErrorPayload(res), res.status);
+  }
+  return res.json();
+}
+
+export function isWarmupPendingError(error: unknown): error is ApiRequestError {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const candidate = error as Partial<ApiRequestError>;
+  return candidate.code === 'warmup_pending' && candidate.status === 503;
+}
+
 interface PaginatedResponse<T> {
   data: T[];
   total: number;
@@ -1312,20 +1370,7 @@ interface TransactionLifecycle {
 }
 
 async function fetchApi<T>(endpoint: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${endpoint}`);
-  if (!res.ok) {
-    let detail = '';
-    try {
-      const payload = (await res.json()) as { message?: unknown };
-      if (typeof payload?.message === 'string' && payload.message.trim().length > 0) {
-        detail = payload.message.trim();
-      }
-    } catch {
-      // Ignore parse failures and keep the status-only error.
-    }
-    throw new Error(detail ? `API error: ${res.status} - ${detail}` : `API error: ${res.status}`);
-  }
-  return res.json();
+  return fetchJson(`${API_BASE}${endpoint}`);
 }
 
 interface TopTokenEntry {
@@ -2265,15 +2310,11 @@ export const api = {
 
   lookupScripts: async (codeHashes: string[]): Promise<ScriptLookupResponse> => {
     if (codeHashes.length === 0) return {};
-    const res = await fetch(`${API_BASE}/scripts/lookup`, {
+    return fetchJson(`${API_BASE}/scripts/lookup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ codeHashes }),
     });
-    if (!res.ok) {
-      throw new Error(`API error: ${res.status}`);
-    }
-    return res.json();
   },
 
   getCodeCell: (
@@ -2298,13 +2339,9 @@ export const api = {
   },
 
   triggerCyclesCalculation: async (hash: string): Promise<CyclesStatusResponse> => {
-    const res = await fetch(`${API_BASE}/transactions/${hash}/calculate-cycles`, {
+    return fetchJson(`${API_BASE}/transactions/${hash}/calculate-cycles`, {
       method: 'POST',
     });
-    if (!res.ok) {
-      throw new Error(`API error: ${res.status}`);
-    }
-    return res.json();
   },
 
   getActivityVolumeChart: async (): Promise<ChartResponse> => {

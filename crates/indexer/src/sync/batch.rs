@@ -935,6 +935,7 @@ impl Indexer {
             && std::path::Path::new(&token_labels_path)
                 .join("information")
                 .exists();
+        let network = self.config.network.clone();
 
         let core_store = Arc::clone(self.writer.store());
         let ckb_store = self.ckb_store.clone();
@@ -972,7 +973,7 @@ impl Indexer {
                     crate::label_import::run_label_import_bundled(
                         core_store.as_ref(),
                         ckb_store.as_deref(),
-                        "mainnet",
+                        &network,
                     )
                 })
                 .await;

@@ -8,8 +8,12 @@ use uuid::Uuid;
 use wiremock::matchers::{body_partial_json, method};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use ckbadger_api::cache::{CacheBackend, InMemoryCache};
+use ckbadger_api::cycles::CyclesClient;
+use ckbadger_api::routes::api_routes;
 use ckbadger_api::utils::address::compute_script_hash;
-use ckbadger_api::{create_router, AppConfig};
+use ckbadger_api::ws::WsManager;
+use ckbadger_api::{create_router, AppConfig, AppState};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ActivityEntry, AssetAction, AssetChange, CachedBlockHeader, ClusterAggregate,
@@ -80,6 +84,24 @@ fn test_config_with_ckb_db_path(
 
 fn test_config(store: Arc<CkbadgerStore>) -> AppConfig {
     test_config_with_append_only(store.clone(), store)
+}
+
+fn create_router_without_warmup(config: AppConfig) -> axum::Router {
+    let state = Arc::new(AppState {
+        store: config.store,
+        append_only_store: config.append_only_store,
+        ws_manager: Arc::new(WsManager::new()),
+        cache: CacheBackend::new(),
+        ckb_rpc_url: config.ckb_rpc_url,
+        ckb_network: config.ckb_network,
+        cycles_client: CyclesClient::disabled(),
+        ckb_store: None,
+        mem_cache: InMemoryCache::new(),
+    });
+
+    axum::Router::new()
+        .nest("/api/v1", api_routes())
+        .with_state(state)
 }
 
 fn insert_ckb_cell_data(ckb_db_path: &str, tx_hash: &[u8; 32], index: u32, data: &[u8]) {
@@ -2485,6 +2507,29 @@ async fn test_scripts_list_empty_db() {
 }
 
 #[tokio::test]
+async fn test_scripts_list_returns_warmup_pending_when_script_cache_missing() {
+    let store = test_store();
+    let config = test_config(store);
+    let app = create_router_without_warmup(config);
+
+    let request = Request::builder()
+        .uri("/api/v1/scripts")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "warmup_pending");
+    assert_eq!(
+        json["message"],
+        "script cache unavailable; warmup in progress"
+    );
+}
+
+#[tokio::test]
 async fn test_scripts_list_supports_cursor_pagination() {
     let store = test_store();
 
@@ -2753,6 +2798,80 @@ async fn test_script_lookup_and_code_cell_resolve_deployment_reference_alias() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["txHash"], code_cell_tx_hash_hex);
     assert_eq!(json["outputIndex"], 1);
+}
+
+#[tokio::test]
+async fn test_script_code_cells_resolve_type_code_hash_with_data_reference_query() {
+    let store = test_store();
+
+    let data_hash = vec![0x70; 32];
+    let type_hash = vec![0x9b; 32];
+    let code_cell_tx_hash = vec![0xe2; 32];
+    let code_cell_output_index = 1i16;
+
+    store
+        .put_script_info_direct(
+            &type_hash,
+            &ScriptInfo {
+                code_hash: type_hash.clone(),
+                hash_type: 1,
+                name: Some("Default Lock".to_string()),
+                dep_type_hash: Some(type_hash.clone()),
+                dep_data_hash: Some(data_hash.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &code_cell_tx_hash,
+        code_cell_output_index,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(vec![0x33; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        123,
+    );
+    batch.put_cell_by_type(&type_hash, 123, &code_cell_tx_hash, code_cell_output_index);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+    let code_cell_tx_hash_hex = format!("0x{}", hex::encode(&code_cell_tx_hash));
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cells?code_hash={}&hash_type=data",
+            type_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["liveCount"], 1);
+    assert_eq!(json["totalCount"], 1);
+    assert_eq!(json["codeCells"][0]["txHash"], code_cell_tx_hash_hex);
+    assert_eq!(json["codeCells"][0]["outputIndex"], 1);
+    assert_eq!(json["codeCells"][0]["status"], "live");
+    assert_eq!(json["codeCells"][0]["createdAtBlock"], 123);
 }
 
 #[tokio::test]

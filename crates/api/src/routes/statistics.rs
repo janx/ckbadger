@@ -28,7 +28,7 @@ fn load_script_infos_cached(
     state
         .mem_cache
         .get::<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>>(CACHE_KEY_SCRIPTS_ALL)
-        .ok_or_else(|| ApiError::internal("script cache unavailable; warmup in progress"))
+        .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -895,7 +895,9 @@ async fn get_most_utilized_assets_chart(
     let token_assets = state
         .mem_cache
         .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
-        .ok_or_else(|| ApiError::internal("token asset cache unavailable; warmup in progress"))?;
+        .ok_or_else(|| {
+            ApiError::warmup_pending("token asset cache unavailable; warmup in progress")
+        })?;
     for token in token_assets {
         let type_hash = hex::decode(token.id.strip_prefix("0x").unwrap_or(token.id.as_str()))
             .map_err(|_| {
@@ -950,7 +952,9 @@ async fn get_most_utilized_assets_chart(
     let nft_assets = state
         .mem_cache
         .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
-        .ok_or_else(|| ApiError::internal("nft asset cache unavailable; warmup in progress"))?;
+        .ok_or_else(|| {
+            ApiError::warmup_pending("nft asset cache unavailable; warmup in progress")
+        })?;
     for nft in nft_assets {
         if nft.standard == "spore" {
             let cluster_id = nft.cluster_id.clone().unwrap_or_else(|| nft.id.clone());
@@ -3285,7 +3289,9 @@ async fn get_asset_ecosystem(
     let token_assets = state
         .mem_cache
         .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
-        .ok_or_else(|| ApiError::internal("token asset cache unavailable; warmup in progress"))?;
+        .ok_or_else(|| {
+            ApiError::warmup_pending("token asset cache unavailable; warmup in progress")
+        })?;
 
     let top_tokens: Vec<TopTokenEntry> = token_assets
         .iter()
@@ -3320,7 +3326,9 @@ async fn get_asset_ecosystem(
     let nft_assets = state
         .mem_cache
         .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
-        .ok_or_else(|| ApiError::internal("nft asset cache unavailable; warmup in progress"))?;
+        .ok_or_else(|| {
+            ApiError::warmup_pending("nft asset cache unavailable; warmup in progress")
+        })?;
 
     let total_object_capacity: i128 = nft_assets
         .iter()

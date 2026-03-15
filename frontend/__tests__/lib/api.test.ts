@@ -888,6 +888,23 @@ describe('api', () => {
         'API error: 500 - negative live capacity in list scripts'
       );
     });
+
+    it('preserves structured warmup_pending error details', async () => {
+      server.use(
+        http.get('*/api/v1/statistics/network', () => {
+          return HttpResponse.json(
+            { error: 'warmup_pending', message: 'script cache unavailable; warmup in progress' },
+            { status: 503 }
+          );
+        })
+      );
+
+      await expect(api.getNetworkStats()).rejects.toMatchObject({
+        code: 'warmup_pending',
+        status: 503,
+        apiMessage: 'script cache unavailable; warmup in progress',
+      });
+    });
   });
 
   describe('specific endpoints', () => {

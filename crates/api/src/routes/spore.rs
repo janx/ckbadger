@@ -1101,7 +1101,7 @@ async fn list_clusters(
         return serve_clusters_from_cache(cached_nfts, cursor_block, limit, &state);
     }
 
-    Err(ApiError::internal(
+    Err(ApiError::warmup_pending(
         "cluster cache unavailable; warmup in progress",
     ))
 }
@@ -1231,7 +1231,7 @@ fn load_spores_cached_or_store(state: &Arc<AppState>) -> Result<CachedSporeRows,
     if let Some(cached) = state.mem_cache.get::<CachedSporeRows>(CACHE_KEY_SPORES_ALL) {
         return Ok(cached);
     }
-    Err(ApiError::internal(
+    Err(ApiError::warmup_pending(
         "spore cache unavailable; warmup in progress",
     ))
 }

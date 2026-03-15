@@ -389,6 +389,10 @@ impl Indexer {
         Arc::clone(&self.shutdown_requested)
     }
 
+    pub fn mark_label_import_started(&self) {
+        self.label_import_started.store(true, Ordering::SeqCst);
+    }
+
     pub fn is_bulk_sync_active(&self) -> bool {
         self.is_bulk_sync_enabled_for_lag(self.progress.blocks_remaining())
     }

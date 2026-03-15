@@ -10,7 +10,7 @@ use ckbadger_store::{types::SyncStatus, CkbadgerStore, RuntimeStatus, StoreRunti
 
 use crate::cycles_worker::spawn_cycles_task_worker;
 use crate::db::Repository;
-use crate::label_import::run_label_import_staged;
+use crate::label_import::{run_label_import_bundled, run_label_import_staged};
 use crate::runtime_diag::{generate_run_id, read_cgroup_memory_snapshot};
 use crate::sync::Indexer;
 use crate::Config;
@@ -76,6 +76,57 @@ pub async fn run_indexer(config: IndexerServiceConfig) -> Result<()> {
     let config: Config = config.into();
     config.validate()?;
     run_indexer_sync(config).await
+}
+
+async fn run_startup_label_import(store: Arc<CkbadgerStore>, config: &Config) -> Result<()> {
+    let token_labels_path = config.token_labels_path.clone();
+    let has_fs_labels = !token_labels_path.is_empty()
+        && std::path::Path::new(&token_labels_path)
+            .join("information")
+            .exists();
+    let network = config.network.clone();
+    let ckb_db_path = config.ckb_db_path.clone();
+
+    info!(
+        has_filesystem_labels = has_fs_labels,
+        network = %network,
+        "Running label import before sync startup"
+    );
+
+    let summary = tokio::task::spawn_blocking(move || {
+        let reader = CkbChainReader::open(&ckb_db_path)?;
+        let ckb_store = Some(Arc::new(reader));
+
+        if has_fs_labels {
+            let label_config = LabelImportConfig {
+                token_labels_path,
+                network,
+                import_udt: true,
+                import_scripts: true,
+            };
+            run_label_import_staged(store.as_ref(), ckb_store.as_deref(), &label_config)
+        } else {
+            run_label_import_bundled(store.as_ref(), ckb_store.as_deref(), &network)
+        }
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("startup label import task panicked: {}", e))??;
+
+    if summary.errors.is_empty() {
+        info!(
+            "Startup label import completed: {} UDT, {} scripts, 0 errors",
+            summary.udt_labels_imported, summary.script_labels_imported
+        );
+    } else {
+        warn!(
+            "Startup label import completed with {} errors: {} UDT, {} scripts",
+            summary.errors.len(),
+            summary.udt_labels_imported,
+            summary.script_labels_imported
+        );
+    }
+
+    Ok(())
 }
 
 /// Run the indexer sync daemon from an internal Config. Blocks until shutdown signal or error.
@@ -250,6 +301,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     }
 
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
+    run_startup_label_import(store.clone(), &config).await?;
 
     let indexer = Indexer::new(
         run_id,
@@ -259,6 +311,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     )
     .await?;
     let indexer = Arc::new(indexer);
+    indexer.mark_label_import_started();
 
     let (_cycles_tx, _cycles_result_store) =
         spawn_cycles_task_worker(store.clone(), config.ckb_rpc_url.clone());

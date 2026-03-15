@@ -33,6 +33,13 @@ impl ApiError {
         )
     }
 
+    pub fn warmup_pending(message: impl Into<String>) -> (StatusCode, Json<Self>) {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(Self::new("warmup_pending", message)),
+        )
+    }
+
     pub fn unauthorized(message: impl Into<String>) -> (StatusCode, Json<Self>) {
         (
             StatusCode::UNAUTHORIZED,

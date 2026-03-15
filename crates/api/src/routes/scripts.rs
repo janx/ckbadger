@@ -29,7 +29,7 @@ fn load_script_infos_cached(
     state
         .mem_cache
         .get::<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>>(CACHE_KEY_SCRIPTS_ALL)
-        .ok_or_else(|| ApiError::internal("script cache unavailable; warmup in progress"))
+        .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
 }
 
 pub fn routes() -> Router<Arc<AppState>> {

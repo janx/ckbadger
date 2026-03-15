@@ -1922,7 +1922,7 @@ fn load_script_infos_cached(
         .mem_cache
         .get::<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>>(CACHE_KEY_SCRIPTS_ALL)
         .map(|rows| rows.into_iter().map(|(_, info)| info).collect())
-        .ok_or_else(|| ApiError::internal("script cache unavailable; warmup in progress"))
+        .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
 }
 
 async fn list_cells_by_script(
@@ -2544,7 +2544,7 @@ async fn get_top_addresses(
     {
         return ok(top_addresses_from_cache(cached, limit));
     }
-    Err(ApiError::internal(
+    Err(ApiError::warmup_pending(
         "top addresses cache unavailable; warmup in progress",
     ))
 }
@@ -2572,7 +2572,7 @@ async fn get_active_addresses(
     {
         return ok(active_addresses_from_cache(cached, min_block, limit));
     }
-    Err(ApiError::internal(
+    Err(ApiError::warmup_pending(
         "active addresses cache unavailable; warmup in progress",
     ))
 }

@@ -69,6 +69,22 @@ fn checked_next_script_metric_i128(
     Ok(next)
 }
 
+fn overlay_script_metadata(
+    mut base: ckbadger_store::types::ScriptInfo,
+    fresh: &ckbadger_store::types::ScriptInfo,
+) -> ckbadger_store::types::ScriptInfo {
+    base.hash_type = fresh.hash_type;
+    base.name = fresh.name.clone();
+    base.category = fresh.category.clone();
+    base.website = fresh.website.clone();
+    base.description = fresh.description.clone();
+    base.dep_type_hash = fresh.dep_type_hash.clone();
+    base.dep_data_hash = fresh.dep_data_hash.clone();
+    base.code_cell_tx_hash = fresh.code_cell_tx_hash.clone();
+    base.code_cell_output_index = fresh.code_cell_output_index;
+    base
+}
+
 impl BatchWriter {
     pub fn read_address_balances(
         &self,
@@ -314,10 +330,14 @@ impl BatchWriter {
             }
 
             let info = updated_map.entry(code_hash).or_insert_with(|| {
-                existing_info.unwrap_or_else(|| ckbadger_store::types::ScriptInfo {
+                let mut info = existing_info.unwrap_or_else(|| ckbadger_store::types::ScriptInfo {
                     code_hash: code_hash.clone(),
                     ..Default::default()
-                })
+                });
+                if let Ok(Some(fresh)) = self.store.get_script_info(code_hash) {
+                    info = overlay_script_metadata(info, &fresh);
+                }
+                info
             });
 
             if *is_type {
@@ -772,6 +792,49 @@ mod tests {
         let updated = store.get_script_info(&code_hash).unwrap().unwrap();
         assert_eq!(updated.lock_capacity_sum, huge_delta);
         assert_eq!(updated.lock_live_capacity_sum, huge_delta);
+    }
+
+    #[test]
+    fn test_apply_script_usage_deltas_preserves_fresh_script_metadata_when_snapshot_is_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let code_hash = vec![0x9b; 32];
+        let dep_data_hash = vec![0x70; 32];
+        let latest = ScriptInfo {
+            code_hash: code_hash.clone(),
+            hash_type: 1,
+            name: Some("Default Lock".to_string()),
+            description: Some("mainnet default lock".to_string()),
+            dep_type_hash: Some(code_hash.clone()),
+            dep_data_hash: Some(dep_data_hash.clone()),
+            ..Default::default()
+        };
+        store.put_script_info_direct(&code_hash, &latest).unwrap();
+
+        let existing = HashMap::new();
+        let mut changes = HashMap::new();
+        changes.insert((code_hash.clone(), false), (1, 1, 100, 100, 61, 61));
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let updated = store.get_script_info(&code_hash).unwrap().unwrap();
+        assert_eq!(updated.hash_type, 1);
+        assert_eq!(updated.name.as_deref(), Some("Default Lock"));
+        assert_eq!(updated.description.as_deref(), Some("mainnet default lock"));
+        assert_eq!(updated.dep_type_hash, Some(code_hash.clone()));
+        assert_eq!(updated.dep_data_hash, Some(dep_data_hash));
+        assert_eq!(updated.lock_cells_count, 1);
+        assert_eq!(updated.lock_live_cells_count, 1);
+        assert_eq!(updated.lock_capacity_sum, 100);
+        assert_eq!(updated.lock_live_capacity_sum, 100);
+        assert_eq!(updated.lock_used_capacity_sum, 61);
+        assert_eq!(updated.lock_live_used_capacity_sum, 61);
     }
 
     #[test]

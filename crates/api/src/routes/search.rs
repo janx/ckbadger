@@ -559,7 +559,7 @@ async fn search(
 
         if scope_allows(scope, &[SearchScope::Script]) {
             let cached = cached_scripts.as_ref().ok_or_else(|| {
-                ApiError::internal("named script cache unavailable; warmup in progress")
+                ApiError::warmup_pending("named script cache unavailable; warmup in progress")
             })?;
             let mut script_matches: Vec<(String, String)> = cached
                 .iter()
@@ -588,7 +588,7 @@ async fn search(
 
         if scope_allows(scope, &[SearchScope::Token, SearchScope::Asset]) {
             let cached = cached_tokens.as_ref().ok_or_else(|| {
-                ApiError::internal("token asset cache unavailable; warmup in progress")
+                ApiError::warmup_pending("token asset cache unavailable; warmup in progress")
             })?;
             let mut token_matches: Vec<CachedTokenMatch> = cached
                 .iter()
@@ -632,7 +632,7 @@ async fn search(
 
         if scope_allows(scope, &[SearchScope::Cluster, SearchScope::Asset]) {
             let cached = cached_nfts.as_ref().ok_or_else(|| {
-                ApiError::internal("nft asset cache unavailable; warmup in progress")
+                ApiError::warmup_pending("nft asset cache unavailable; warmup in progress")
             })?;
             let mut cluster_matches: Vec<(String, String, i64)> = cached
                 .iter()
@@ -653,7 +653,7 @@ async fn search(
 
         if scope_allows(scope, &[SearchScope::Asset]) {
             let cached = cached_nfts.as_ref().ok_or_else(|| {
-                ApiError::internal("nft asset cache unavailable; warmup in progress")
+                ApiError::warmup_pending("nft asset cache unavailable; warmup in progress")
             })?;
             let mut nft_collection_matches: Vec<(String, String, i64)> = cached
                 .iter()
@@ -675,9 +675,9 @@ async fn search(
         }
 
         if scope_allows(scope, &[SearchScope::Spore]) {
-            let cached = cached_spores
-                .as_ref()
-                .ok_or_else(|| ApiError::internal("spore cache unavailable; warmup in progress"))?;
+            let cached = cached_spores.as_ref().ok_or_else(|| {
+                ApiError::warmup_pending("spore cache unavailable; warmup in progress")
+            })?;
             let mut spore_matches: Vec<_> = cached
                 .iter()
                 .take(SPORE_NAME_SCAN_LIMIT)
