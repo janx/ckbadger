@@ -54,9 +54,6 @@ pub(crate) const ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS: u64 = 40_000;
 pub(crate) const ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT: u64 = 6;
 pub(crate) const ADAPTIVE_BATCH_BULK_SEVERE_MIN_TARGET_TXS: u64 = ADAPTIVE_BATCH_BASE_MIN_TXS;
 pub(crate) const ADAPTIVE_BATCH_BULK_SEVERE_MIN_INFLIGHT: u64 = 2;
-pub(crate) const ADAPTIVE_BATCH_BULK_L0_MODERATE: u64 = 64;
-pub(crate) const ADAPTIVE_BATCH_BULK_L0_SEVERE: u64 = 96;
-
 // ── Non-adaptive constants that live alongside the batch controller ──
 
 pub(crate) const BULK_PHASE_COMMIT_SLOW_WARN_MS: f64 = 2_000.0;
@@ -116,8 +113,6 @@ pub(crate) struct AdaptiveBatchInput {
     pub(crate) moderate_pending_threshold: u64,
     pub(crate) severe_imm_threshold: u64,
     pub(crate) moderate_imm_threshold: u64,
-    /// Whether currently in bulk sync mode (affects L0 pressure thresholds)
-    pub(crate) is_bulk_sync: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -352,26 +347,16 @@ impl AdaptiveBatchController {
 
         // RocksDB internal pressure signals: detect compaction backlog, L0 pile-up,
         // and immutable memtable accumulation BEFORE they cause write stalls.
-        // L0 thresholds scale with sync mode: bulk mode uses higher thresholds
-        // (64/96) aligned with RocksDB's bulk-mode L0 slowdown (96 files);
-        // live mode uses tighter thresholds (20/40). Pending bytes and immutable
-        // memtable thresholds scale with the memory profile.
-        let (l0_moderate, l0_severe) = if input.is_bulk_sync {
-            (
-                ADAPTIVE_BATCH_BULK_L0_MODERATE,
-                ADAPTIVE_BATCH_BULK_L0_SEVERE,
-            )
-        } else {
-            (20, 40)
-        };
-        let rocksdb_severe_pressure = input.l0_files_max.is_some_and(|l0| l0 >= l0_severe)
+        // L0 thresholds (40/20) are architectural; pending bytes and immutable memtable
+        // thresholds scale with the memory profile.
+        let rocksdb_severe_pressure = input.l0_files_max.is_some_and(|l0| l0 >= 40)
             || input
                 .compaction_pending_bytes
                 .is_some_and(|b| b >= input.severe_pending_threshold)
             || input
                 .immutable_memtables
                 .is_some_and(|imm| imm >= input.severe_imm_threshold);
-        let rocksdb_moderate_pressure = input.l0_files_max.is_some_and(|l0| l0 >= l0_moderate)
+        let rocksdb_moderate_pressure = input.l0_files_max.is_some_and(|l0| l0 >= 20)
             || input
                 .compaction_pending_bytes
                 .is_some_and(|b| b >= input.moderate_pending_threshold)
@@ -677,7 +662,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("moderate pressure should reduce target");
         assert_eq!(adjustment.reason, "moderate_backoff");
@@ -722,7 +706,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("first severe hint should still adjust (min floor sync)");
         assert_eq!(
@@ -749,7 +732,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("consecutive severe hints should produce severe_pressure_backoff");
 
@@ -777,7 +759,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("healthy signal should adjust inflight first");
         assert_eq!(adjustment.reason, "healthy_step_up");
@@ -814,7 +795,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("far bulk mode should enforce minimum floors");
         assert_eq!(
@@ -862,7 +842,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("first severe hint should still adjust (min floor sync)");
         assert_eq!(
@@ -889,7 +868,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("sustained severe pressure should relax far-bulk floors");
         assert_eq!(second.reason, "severe_pressure_backoff");
@@ -930,7 +908,6 @@ mod tests {
             moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
             severe_imm_threshold: 60,
             moderate_imm_threshold: 30,
-            is_bulk_sync: false,
         });
         assert!(
             first.is_none(),
@@ -954,7 +931,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("consecutive severe pressure at floor should lower adaptive min floor");
 
@@ -992,7 +968,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("healthy throughput should recover adaptive min floor");
 
@@ -1024,7 +999,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("first severe sample should only moderate-backoff");
         assert_eq!(first.reason, "moderate_backoff");
@@ -1046,7 +1020,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("second severe sample should trigger severe backoff");
         assert_eq!(second.reason, "severe_pressure_backoff");
@@ -1075,7 +1048,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("first healthy sample should step up");
         assert_eq!(first.reason, "healthy_step_up");
@@ -1096,7 +1068,6 @@ mod tests {
             moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
             severe_imm_threshold: 60,
             moderate_imm_threshold: 30,
-            is_bulk_sync: false,
         });
         assert!(
             no_adjustment.is_none(),
@@ -1127,7 +1098,6 @@ mod tests {
             moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
             severe_imm_threshold: 60,
             moderate_imm_threshold: 30,
-            is_bulk_sync: false,
         });
         assert!(
             no_adjustment.is_none(),
@@ -1168,7 +1138,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("near-tip path should allow lower min floor");
 
@@ -1200,7 +1169,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("first healthy sample should step up");
         assert_eq!(first.reason, "healthy_step_up");
@@ -1221,7 +1189,6 @@ mod tests {
             moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
             severe_imm_threshold: 60,
             moderate_imm_threshold: 30,
-            is_bulk_sync: false,
         });
         assert!(
             no_adjustment.is_none(),
@@ -1249,7 +1216,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("first pressure sample should adjust");
         let _ = controller
@@ -1269,7 +1235,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("second pressure sample should trigger cooldown");
         let snapshot_after_pressure = controller.snapshot();
@@ -1290,7 +1255,6 @@ mod tests {
             moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
             severe_imm_threshold: 60,
             moderate_imm_threshold: 30,
-            is_bulk_sync: false,
         });
         assert!(no_adjustment.is_none());
         let snapshot_after_healthy = controller.snapshot();
@@ -1477,7 +1441,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("healthy conditions should produce a step-up, not a backoff");
 
@@ -1525,7 +1488,6 @@ mod tests {
                 moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
-                is_bulk_sync: false,
             })
             .expect("l0_max=25 (moderate) should trigger backoff even with healthy write cost");
 
@@ -1539,84 +1501,5 @@ mod tests {
         assert_eq!(bump_pipeline_reset_epoch(&epoch), 1);
         assert_eq!(bump_pipeline_reset_epoch(&epoch), 2);
         assert_eq!(epoch.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn test_bulk_sync_l0_moderate_threshold_is_higher() {
-        let controller = AdaptiveBatchController::new(8);
-        controller
-            .target_batch_txs
-            .store(ADAPTIVE_BATCH_MAX_TXS, Ordering::Relaxed);
-        controller
-            .inflight_limit
-            .store(ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT, Ordering::Relaxed);
-        controller.min_target_batch_txs.store(
-            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS,
-            Ordering::Relaxed,
-        );
-
-        let adjustment = controller
-            .update_after_write(AdaptiveBatchInput {
-                write_ms: 500.0,
-                commit_ms: 50.0,
-                batch_tx_count: 10_000,
-                blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
-                parse_queue_fill_pct: Some(10.0),
-                writer_queue_fill_pct: Some(10.0),
-                memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
-                l0_files_max: Some(30),
-                compaction_pending_bytes: None,
-                immutable_memtables: None,
-                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
-                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
-                severe_imm_threshold: 60,
-                moderate_imm_threshold: 30,
-                is_bulk_sync: true,
-            })
-            .expect("healthy conditions in bulk mode should step up");
-
-        assert_eq!(
-            adjustment.reason, "healthy_step_up",
-            "l0_max=30 in bulk mode should not trigger backoff (bulk moderate threshold=64)"
-        );
-    }
-
-    #[test]
-    fn test_bulk_sync_l0_65_triggers_moderate_backoff() {
-        let controller = AdaptiveBatchController::new(8);
-        controller
-            .target_batch_txs
-            .store(ADAPTIVE_BATCH_MAX_TXS, Ordering::Relaxed);
-        controller
-            .inflight_limit
-            .store(ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT, Ordering::Relaxed);
-        controller.min_target_batch_txs.store(
-            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS,
-            Ordering::Relaxed,
-        );
-
-        let adjustment = controller
-            .update_after_write(AdaptiveBatchInput {
-                write_ms: 500.0,
-                commit_ms: 50.0,
-                batch_tx_count: 10_000,
-                blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
-                parse_queue_fill_pct: Some(10.0),
-                writer_queue_fill_pct: Some(10.0),
-                memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
-                l0_files_max: Some(65),
-                compaction_pending_bytes: None,
-                immutable_memtables: None,
-                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
-                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
-                severe_imm_threshold: 60,
-                moderate_imm_threshold: 30,
-                is_bulk_sync: true,
-            })
-            .expect("l0_max=65 in bulk mode should trigger moderate_backoff");
-
-        assert_eq!(adjustment.reason, "moderate_backoff");
     }
 }

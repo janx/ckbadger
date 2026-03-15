@@ -2394,7 +2394,6 @@ impl Indexer {
                             None
                         };
                         let mem_profile = self.writer.store().memory_profile();
-                        let is_bulk = self.writer.store().is_bulk_sync_mode();
                         if let Some(adjustment) =
                             self.adaptive_batch_controller
                                 .update_after_write(AdaptiveBatchInput {
@@ -2413,20 +2412,13 @@ impl Indexer {
                                     immutable_memtables: Some(
                                         compaction_pressure.immutable_memtables,
                                     ),
-                                    severe_pending_threshold: if is_bulk {
-                                        mem_profile.severe_compaction_pending_bytes_bulk
-                                    } else {
-                                        mem_profile.severe_compaction_pending_bytes
-                                    },
-                                    moderate_pending_threshold: if is_bulk {
-                                        mem_profile.moderate_compaction_pending_bytes_bulk
-                                    } else {
-                                        mem_profile.moderate_compaction_pending_bytes
-                                    },
+                                    severe_pending_threshold: mem_profile
+                                        .severe_compaction_pending_bytes,
+                                    moderate_pending_threshold: mem_profile
+                                        .moderate_compaction_pending_bytes,
                                     severe_imm_threshold: mem_profile.severe_immutable_memtables,
                                     moderate_imm_threshold: mem_profile
                                         .moderate_immutable_memtables,
-                                    is_bulk_sync: is_bulk,
                                 })
                         {
                             info!(
