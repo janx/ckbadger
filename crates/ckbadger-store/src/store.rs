@@ -113,6 +113,8 @@ pub struct MemoryProfile {
     pub moderate_compaction_pending_bytes: u64,
     pub severe_immutable_memtables: u64,
     pub moderate_immutable_memtables: u64,
+    pub severe_compaction_pending_bytes_bulk: u64,
+    pub moderate_compaction_pending_bytes_bulk: u64,
     pub drain_pending_bytes_threshold: u64,
 }
 
@@ -175,6 +177,12 @@ impl MemoryProfile {
         let moderate_imm = scale_clamp(30, wbm_scale, 8, 120) as u64;
         let drain_pending = scale_clamp(2 * GB, wbm_scale, 512 * MB, 8 * GB) as u64;
 
+        // Bulk sync pending thresholds: scale from wbm_bulk size (larger budget → higher tolerance).
+        // Normal thresholds use wbm_normal scale; bulk thresholds use wbm_bulk scale.
+        let wbm_bulk_scale = wbm_bulk as f64 / (8.0 * GB as f64);
+        let severe_pending_bulk = scale_clamp(8 * GB, wbm_bulk_scale, 2 * GB, 48 * GB) as u64;
+        let moderate_pending_bulk = scale_clamp(4 * GB, wbm_bulk_scale, GB, 24 * GB) as u64;
+
         Self {
             system_ram_bytes,
             cpu_count,
@@ -198,6 +206,8 @@ impl MemoryProfile {
             moderate_compaction_pending_bytes: moderate_pending,
             severe_immutable_memtables: severe_imm,
             moderate_immutable_memtables: moderate_imm,
+            severe_compaction_pending_bytes_bulk: severe_pending_bulk,
+            moderate_compaction_pending_bytes_bulk: moderate_pending_bulk,
             drain_pending_bytes_threshold: drain_pending,
         }
     }
@@ -1511,6 +1521,9 @@ impl CkbadgerStore {
             target_file_size_base_bulk_mb = p.bulk_target_file_size_base / (1024 * 1024),
             severe_pending_gb = p.severe_compaction_pending_bytes / (1024 * 1024 * 1024),
             moderate_pending_gb = p.moderate_compaction_pending_bytes / (1024 * 1024 * 1024),
+            severe_pending_bulk_gb = p.severe_compaction_pending_bytes_bulk / (1024 * 1024 * 1024),
+            moderate_pending_bulk_gb =
+                p.moderate_compaction_pending_bytes_bulk / (1024 * 1024 * 1024),
             severe_immutable_memtables = p.severe_immutable_memtables,
             moderate_immutable_memtables = p.moderate_immutable_memtables,
             drain_pending_mb = p.drain_pending_bytes_threshold / (1024 * 1024),
@@ -2560,6 +2573,24 @@ mod tests {
         assert_eq!(profile.severe_immutable_memtables, 60);
         assert_eq!(profile.moderate_immutable_memtables, 30);
         assert_eq!(profile.drain_pending_bytes_threshold, 2 * GB);
+    }
+
+    #[test]
+    fn test_memory_profile_bulk_pending_thresholds_are_higher() {
+        let profile = MemoryProfile::compute(96 * GB, 24, false);
+        assert!(
+            profile.severe_compaction_pending_bytes_bulk > profile.severe_compaction_pending_bytes,
+            "bulk severe pending threshold ({}) should exceed normal ({})",
+            profile.severe_compaction_pending_bytes_bulk,
+            profile.severe_compaction_pending_bytes,
+        );
+        assert!(
+            profile.moderate_compaction_pending_bytes_bulk
+                > profile.moderate_compaction_pending_bytes,
+            "bulk moderate pending threshold ({}) should exceed normal ({})",
+            profile.moderate_compaction_pending_bytes_bulk,
+            profile.moderate_compaction_pending_bytes,
+        );
     }
 
     #[test]
