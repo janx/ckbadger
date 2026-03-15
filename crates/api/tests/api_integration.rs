@@ -97,27 +97,12 @@ fn create_router_without_warmup(config: AppConfig) -> axum::Router {
         cycles_client: CyclesClient::disabled(),
         ckb_store: None,
         mem_cache: InMemoryCache::new(),
+        asset_cache_warmup_error: Arc::new(std::sync::RwLock::new(None)),
     });
 
     axum::Router::new()
         .nest("/api/v1", api_routes())
         .with_state(state)
-}
-
-fn insert_ckb_cell_data(ckb_db_path: &str, tx_hash: &[u8; 32], index: u32, data: &[u8]) {
-    let mut db_opts = Options::default();
-    db_opts.create_if_missing(false);
-    let cf_descriptors: Vec<ColumnFamilyDescriptor> = (0..=18)
-        .map(|cf_index| ColumnFamilyDescriptor::new(cf_index.to_string(), Options::default()))
-        .collect();
-    let db = DB::open_cf_descriptors(&db_opts, ckb_db_path, cf_descriptors).unwrap();
-    let cf = db.cf_handle("12").unwrap();
-
-    let mut key = Vec::with_capacity(36);
-    key.extend_from_slice(tx_hash);
-    key.extend_from_slice(&index.to_le_bytes());
-
-    db.put_cf(cf, &key, data).unwrap();
 }
 
 fn compute_blake2b_data_hash(data: &[u8]) -> Vec<u8> {
@@ -2927,22 +2912,13 @@ async fn test_scripts_list_merges_unknown_reference_into_known_deployment() {
 }
 
 #[tokio::test]
-async fn test_unknown_data_hash_script_resolves_code_cell_via_ckb_reader() {
+async fn test_unknown_data_hash_script_resolves_code_cell_via_data_hash_index() {
     let store = test_store();
-    let append_only_store = test_append_only_store();
-    let ckb_db_path = test_ckb_db_path();
 
     let code_bytes = b"unknown-script-code-cell";
     let data_hash = compute_blake2b_data_hash(code_bytes);
-    let code_cell_tx_hash = [0xcdu8; 32];
-    let code_cell_output_index = 2u32;
-
-    insert_ckb_cell_data(
-        &ckb_db_path,
-        &code_cell_tx_hash,
-        code_cell_output_index,
-        code_bytes,
-    );
+    let code_cell_tx_hash = vec![0xcd; 32];
+    let code_cell_output_index = 2i16;
 
     store
         .put_script_info_direct(
@@ -2956,11 +2932,35 @@ async fn test_unknown_data_hash_script_resolves_code_cell_via_ckb_reader() {
         )
         .unwrap();
 
-    let config = test_config_with_ckb_db_path(store, append_only_store, ckb_db_path);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &code_cell_tx_hash,
+        code_cell_output_index,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: code_bytes.len() as i32,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        123,
+    );
+    batch.put_cell_by_data_hash(&data_hash, 123, &code_cell_tx_hash, code_cell_output_index);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
     let app = create_router(config).await;
 
     let data_hash_hex = format!("0x{}", hex::encode(&data_hash));
-    let code_cell_tx_hash_hex = format!("0x{}", hex::encode(code_cell_tx_hash));
+    let code_cell_tx_hash_hex = format!("0x{}", hex::encode(&code_cell_tx_hash));
 
     let request = Request::builder()
         .method("POST")
@@ -5299,7 +5299,9 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"], "internal_error");
     let message = json["message"].as_str().unwrap();
-    assert!(message.contains("token asset cache unavailable; warmup in progress"));
+    assert!(message.contains("asset cache warmup failed"));
+    assert!(message.contains("invalid token daily deltas during warmup"));
+    assert!(message.contains(&format!("type_hash=0x{}", hex::encode(broken_token))));
 }
 
 #[tokio::test]

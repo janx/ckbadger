@@ -2013,7 +2013,7 @@ mod tests {
     #[test]
     fn test_list_params_defaults() {
         let params: ListParams = serde_json::from_str("{}").unwrap();
-        assert_eq!(params.limit, 20);
+        assert_eq!(params.limit, 50);
         assert!(params.block_number.is_none());
         assert!(params.cursor.is_none());
     }

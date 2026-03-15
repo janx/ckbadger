@@ -588,7 +588,7 @@ async fn search(
 
         if scope_allows(scope, &[SearchScope::Token, SearchScope::Asset]) {
             let cached = cached_tokens.as_ref().ok_or_else(|| {
-                ApiError::warmup_pending("token asset cache unavailable; warmup in progress")
+                state.asset_cache_unavailable("token asset cache unavailable; warmup in progress")
             })?;
             let mut token_matches: Vec<CachedTokenMatch> = cached
                 .iter()
@@ -632,7 +632,7 @@ async fn search(
 
         if scope_allows(scope, &[SearchScope::Cluster, SearchScope::Asset]) {
             let cached = cached_nfts.as_ref().ok_or_else(|| {
-                ApiError::warmup_pending("nft asset cache unavailable; warmup in progress")
+                state.asset_cache_unavailable("nft asset cache unavailable; warmup in progress")
             })?;
             let mut cluster_matches: Vec<(String, String, i64)> = cached
                 .iter()
@@ -653,7 +653,7 @@ async fn search(
 
         if scope_allows(scope, &[SearchScope::Asset]) {
             let cached = cached_nfts.as_ref().ok_or_else(|| {
-                ApiError::warmup_pending("nft asset cache unavailable; warmup in progress")
+                state.asset_cache_unavailable("nft asset cache unavailable; warmup in progress")
             })?;
             let mut nft_collection_matches: Vec<(String, String, i64)> = cached
                 .iter()

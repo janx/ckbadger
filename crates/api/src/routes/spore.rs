@@ -1101,9 +1101,7 @@ async fn list_clusters(
         return serve_clusters_from_cache(cached_nfts, cursor_block, limit, &state);
     }
 
-    Err(ApiError::warmup_pending(
-        "cluster cache unavailable; warmup in progress",
-    ))
+    Err(state.asset_cache_unavailable("cluster cache unavailable; warmup in progress"))
 }
 
 fn serve_clusters_from_cache(

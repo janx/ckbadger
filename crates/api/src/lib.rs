@@ -11,7 +11,7 @@ pub mod ws;
 
 use axum::{routing::get, Router};
 use ckbadger_store::CkbadgerStore;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -20,6 +20,7 @@ use cache::{CacheBackend, InMemoryCache};
 use ckb_store_reader::CkbChainReader;
 use cycles::CyclesClient;
 use middleware::IpRateLimitLayer;
+use response::{ApiError, ApiRouteError};
 use ws::WsManager;
 
 #[derive(Clone)]
@@ -35,6 +36,38 @@ pub struct AppState {
     pub ckb_store: Option<Arc<CkbChainReader>>,
     /// In-memory cache for assets/tokens/NFT data (refreshed by background loop).
     pub mem_cache: InMemoryCache,
+    /// Last asset cache warmup failure. `None` means warmup is still pending or last refresh succeeded.
+    pub asset_cache_warmup_error: Arc<RwLock<Option<String>>>,
+}
+
+impl AppState {
+    pub fn record_asset_cache_warmup_error(&self, message: impl Into<String>) {
+        *self
+            .asset_cache_warmup_error
+            .write()
+            .expect("asset cache warmup error lock poisoned") = Some(message.into());
+    }
+
+    pub fn clear_asset_cache_warmup_error(&self) {
+        *self
+            .asset_cache_warmup_error
+            .write()
+            .expect("asset cache warmup error lock poisoned") = None;
+    }
+
+    pub fn asset_cache_unavailable(&self, pending_message: &'static str) -> ApiRouteError {
+        let warmup_error = self
+            .asset_cache_warmup_error
+            .read()
+            .expect("asset cache warmup error lock poisoned")
+            .clone();
+
+        if let Some(message) = warmup_error {
+            ApiError::internal(format!("asset cache warmup failed: {message}"))
+        } else {
+            ApiError::warmup_pending(pending_message)
+        }
+    }
 }
 
 pub struct AppConfig {
@@ -86,6 +119,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         cycles_client,
         ckb_store,
         mem_cache,
+        asset_cache_warmup_error: Arc::new(RwLock::new(None)),
     });
 
     if let Err(e) = warmup::warmup_assets_cache_once(state.clone()).await {

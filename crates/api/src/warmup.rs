@@ -409,8 +409,9 @@ fn refresh_named_script_cache_sync(state: &AppState) -> anyhow::Result<()> {
 /// Sync function that computes and caches all asset lists.
 /// Uses pre-aggregated CFs for NFTs, including Spore/DOB collections.
 /// Uses a single scan for all token 24h transfers instead of N+1 per-token queries.
-fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
-    let ttl = CacheTtl::ASSETS;
+fn build_asset_caches_sync(
+    state: &AppState,
+) -> anyhow::Result<(Vec<CachedAssetEntry>, Vec<CachedAssetEntry>)> {
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     // -- Token assets (2 scans: list_tokens + scan_all_token_24h_transfers) --
@@ -473,10 +474,6 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             .cmp(&a.transfers_24h)
             .then_with(|| b.holders_count.cmp(&a.holders_count))
     });
-
-    state
-        .mem_cache
-        .set(CACHE_KEY_ASSETS_TOKEN, &token_assets, ttl);
 
     // -- NFT assets, including Spore/DOB collections --
     let mut nft_assets: Vec<CachedAssetEntry> = Vec::new();
@@ -698,7 +695,26 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             .then_with(|| b.holders_count.cmp(&a.holders_count))
     });
 
+    Ok((token_assets, nft_assets))
+}
+
+fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
+    let ttl = CacheTtl::ASSETS;
+    let (token_assets, nft_assets) = match build_asset_caches_sync(state) {
+        Ok(caches) => caches,
+        Err(err) => {
+            state.mem_cache.delete(CACHE_KEY_ASSETS_TOKEN);
+            state.mem_cache.delete(CACHE_KEY_ASSETS_NFT);
+            state.record_asset_cache_warmup_error(err.to_string());
+            return Err(err);
+        }
+    };
+
+    state
+        .mem_cache
+        .set(CACHE_KEY_ASSETS_TOKEN, &token_assets, ttl);
     state.mem_cache.set(CACHE_KEY_ASSETS_NFT, &nft_assets, ttl);
+    state.clear_asset_cache_warmup_error();
     refresh_address_cache_sync(state)?;
     refresh_spore_cache_sync(state)?;
     refresh_named_script_cache_sync(state)?;

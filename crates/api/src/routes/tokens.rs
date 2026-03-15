@@ -267,9 +267,7 @@ async fn list_tokens(
         return serve_tokens_from_cache(cached_tokens, &params, limit);
     }
 
-    Err(ApiError::warmup_pending(
-        "token cache unavailable; warmup in progress",
-    ))
+    Err(state.asset_cache_unavailable("token cache unavailable; warmup in progress"))
 }
 
 /// Serve token list from pre-computed cache.

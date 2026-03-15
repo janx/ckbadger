@@ -425,9 +425,8 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(tokens);
             } else {
-                return Err(ApiError::warmup_pending(
-                    "token asset cache unavailable; warmup in progress",
-                ));
+                return Err(state
+                    .asset_cache_unavailable("token asset cache unavailable; warmup in progress"));
             }
         }
         Some(AssetFilterType::Nft) => {
@@ -438,9 +437,8 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(nfts);
             } else {
-                return Err(ApiError::warmup_pending(
-                    "nft asset cache unavailable; warmup in progress",
-                ));
+                return Err(state
+                    .asset_cache_unavailable("nft asset cache unavailable; warmup in progress"));
             }
         }
         Some(AssetFilterType::Object) => {
@@ -450,9 +448,8 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(nfts.into_iter().filter(|e| e.asset_type == "object"));
             } else {
-                return Err(ApiError::warmup_pending(
-                    "nft asset cache unavailable; warmup in progress",
-                ));
+                return Err(state
+                    .asset_cache_unavailable("nft asset cache unavailable; warmup in progress"));
             }
         }
         Some(AssetFilterType::Identity) => {
@@ -462,9 +459,8 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(nfts.into_iter().filter(|e| e.asset_type == "identity"));
             } else {
-                return Err(ApiError::warmup_pending(
-                    "nft asset cache unavailable; warmup in progress",
-                ));
+                return Err(state
+                    .asset_cache_unavailable("nft asset cache unavailable; warmup in progress"));
             }
         }
         None => {
@@ -474,9 +470,8 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(tokens);
             } else {
-                return Err(ApiError::warmup_pending(
-                    "token asset cache unavailable; warmup in progress",
-                ));
+                return Err(state
+                    .asset_cache_unavailable("token asset cache unavailable; warmup in progress"));
             }
 
             if let Some(nfts) = state
@@ -485,9 +480,8 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(nfts);
             } else {
-                return Err(ApiError::warmup_pending(
-                    "nft asset cache unavailable; warmup in progress",
-                ));
+                return Err(state
+                    .asset_cache_unavailable("nft asset cache unavailable; warmup in progress"));
             }
         }
     }

@@ -896,7 +896,7 @@ async fn get_most_utilized_assets_chart(
         .mem_cache
         .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
         .ok_or_else(|| {
-            ApiError::warmup_pending("token asset cache unavailable; warmup in progress")
+            state.asset_cache_unavailable("token asset cache unavailable; warmup in progress")
         })?;
     for token in token_assets {
         let type_hash = hex::decode(token.id.strip_prefix("0x").unwrap_or(token.id.as_str()))
@@ -953,7 +953,7 @@ async fn get_most_utilized_assets_chart(
         .mem_cache
         .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
         .ok_or_else(|| {
-            ApiError::warmup_pending("nft asset cache unavailable; warmup in progress")
+            state.asset_cache_unavailable("nft asset cache unavailable; warmup in progress")
         })?;
     for nft in nft_assets {
         if nft.standard == "spore" {
@@ -1558,33 +1558,45 @@ pub(crate) fn build_cell_age_response(
                 values: snapshot_values,
             },
         ],
-        series: vec![
-            StackedAreaSeries {
-                key: "lt1d".to_string(),
-                label: "< 1d".to_string(),
-                color: "#22c55e".to_string(),
-            },
-            StackedAreaSeries {
-                key: "d1to7d".to_string(),
-                label: "1-7d".to_string(),
-                color: "#84cc16".to_string(),
-            },
-            StackedAreaSeries {
-                key: "d7to30d".to_string(),
-                label: "7-30d".to_string(),
-                color: "#f59e0b".to_string(),
-            },
-            StackedAreaSeries {
-                key: "d30to180d".to_string(),
-                label: "30-180d".to_string(),
-                color: "#f97316".to_string(),
-            },
-            StackedAreaSeries {
-                key: "gt180d".to_string(),
-                label: "> 180d".to_string(),
-                color: "#ef4444".to_string(),
-            },
-        ],
+        series: cell_age_series(),
+        title: "Cell Age vs Used Capacity".to_string(),
+    }
+}
+
+fn cell_age_series() -> Vec<StackedAreaSeries> {
+    vec![
+        StackedAreaSeries {
+            key: "lt1d".to_string(),
+            label: "< 1d".to_string(),
+            color: "#22c55e".to_string(),
+        },
+        StackedAreaSeries {
+            key: "d1to7d".to_string(),
+            label: "1-7d".to_string(),
+            color: "#84cc16".to_string(),
+        },
+        StackedAreaSeries {
+            key: "d7to30d".to_string(),
+            label: "7-30d".to_string(),
+            color: "#f59e0b".to_string(),
+        },
+        StackedAreaSeries {
+            key: "d30to180d".to_string(),
+            label: "30-180d".to_string(),
+            color: "#f97316".to_string(),
+        },
+        StackedAreaSeries {
+            key: "gt180d".to_string(),
+            label: "> 180d".to_string(),
+            color: "#ef4444".to_string(),
+        },
+    ]
+}
+
+pub(crate) fn empty_cell_age_response() -> StackedAreaChartResponse {
+    StackedAreaChartResponse {
+        data: Vec::new(),
+        series: cell_age_series(),
         title: "Cell Age vs Used Capacity".to_string(),
     }
 }
@@ -1612,6 +1624,15 @@ pub(crate) fn build_cell_size_response(snapshot: &DailyCellDistribution) -> Char
 
     ChartResponse {
         data,
+        title: "Cell Size Distribution".to_string(),
+        y_axis_label: "Live Cells".to_string(),
+        y2_axis_label: Some("Used Capacity (CKB)".to_string()),
+    }
+}
+
+pub(crate) fn empty_cell_size_response() -> ChartResponse {
+    ChartResponse {
+        data: Vec::new(),
         title: "Cell Size Distribution".to_string(),
         y_axis_label: "Live Cells".to_string(),
         y2_axis_label: Some("Used Capacity (CKB)".to_string()),
@@ -1647,6 +1668,15 @@ pub(crate) fn build_address_cohort_response(cohort: &DailyAddressCohort) -> Char
     }
 }
 
+pub(crate) fn empty_address_cohort_response() -> ChartResponse {
+    ChartResponse {
+        data: Vec::new(),
+        title: "Address Cohort Retention".to_string(),
+        y_axis_label: "Used / Balance (%)".to_string(),
+        y2_axis_label: Some("Used Capacity (CKB)".to_string()),
+    }
+}
+
 async fn get_cell_age_vs_occupied_capacity_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
@@ -1655,13 +1685,13 @@ async fn get_cell_age_vs_occupied_capacity_chart(
         return ok(cached);
     }
 
-    let (date_key, snapshot) = state
+    let latest_snapshot = state
         .store
         .get_latest_cell_distribution()
-        .map_err(|e| ApiError::internal(format!("failed to read cell distribution: {e}")))?
-        .ok_or_else(|| {
-            ApiError::internal("cell distribution data not yet available".to_string())
-        })?;
+        .map_err(|e| ApiError::internal(format!("failed to read cell distribution: {e}")))?;
+    let Some((date_key, snapshot)) = latest_snapshot else {
+        return ok(empty_cell_age_response());
+    };
 
     let response = build_cell_age_response(&snapshot, &date_key);
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
@@ -1750,13 +1780,13 @@ async fn get_cell_size_distribution_chart(
         return ok(cached);
     }
 
-    let (_, snapshot) = state
+    let latest_snapshot = state
         .store
         .get_latest_cell_distribution()
-        .map_err(|e| ApiError::internal(format!("failed to read cell distribution: {e}")))?
-        .ok_or_else(|| {
-            ApiError::internal("cell distribution data not yet available".to_string())
-        })?;
+        .map_err(|e| ApiError::internal(format!("failed to read cell distribution: {e}")))?;
+    let Some((_, snapshot)) = latest_snapshot else {
+        return ok(empty_cell_size_response());
+    };
 
     let response = build_cell_size_response(&snapshot);
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
@@ -1771,11 +1801,13 @@ async fn get_address_cohort_retention_chart(
         return ok(cached);
     }
 
-    let (_, snapshot) = state
+    let latest_snapshot = state
         .store
         .get_latest_address_cohort()
-        .map_err(|e| ApiError::internal(format!("failed to read address cohort: {e}")))?
-        .ok_or_else(|| ApiError::internal("address cohort data not yet available".to_string()))?;
+        .map_err(|e| ApiError::internal(format!("failed to read address cohort: {e}")))?;
+    let Some((_, snapshot)) = latest_snapshot else {
+        return ok(empty_address_cohort_response());
+    };
 
     let response = build_address_cohort_response(&snapshot);
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
@@ -3290,7 +3322,7 @@ async fn get_asset_ecosystem(
         .mem_cache
         .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
         .ok_or_else(|| {
-            ApiError::warmup_pending("token asset cache unavailable; warmup in progress")
+            state.asset_cache_unavailable("token asset cache unavailable; warmup in progress")
         })?;
 
     let top_tokens: Vec<TopTokenEntry> = token_assets
@@ -3327,7 +3359,7 @@ async fn get_asset_ecosystem(
         .mem_cache
         .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
         .ok_or_else(|| {
-            ApiError::warmup_pending("nft asset cache unavailable; warmup in progress")
+            state.asset_cache_unavailable("nft asset cache unavailable; warmup in progress")
         })?;
 
     let total_object_capacity: i128 = nft_assets
@@ -3793,6 +3825,14 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_cell_age_response_has_metadata() {
+        let response = empty_cell_age_response();
+        assert_eq!(response.title, "Cell Age vs Used Capacity");
+        assert_eq!(response.series.len(), 5);
+        assert!(response.data.is_empty());
+    }
+
+    #[test]
     fn test_build_cell_size_response_from_snapshot() {
         let snapshot = DailyCellDistribution {
             age_band_lt1d: 0,
@@ -3821,6 +3861,18 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_cell_size_response_has_metadata() {
+        let response = empty_cell_size_response();
+        assert_eq!(response.title, "Cell Size Distribution");
+        assert_eq!(response.y_axis_label, "Live Cells");
+        assert_eq!(
+            response.y2_axis_label.as_deref(),
+            Some("Used Capacity (CKB)")
+        );
+        assert!(response.data.is_empty());
+    }
+
+    #[test]
     fn test_build_address_cohort_response_from_snapshot() {
         let cohort = DailyAddressCohort {
             cohorts: vec![
@@ -3846,5 +3898,17 @@ mod tests {
         // 2024-01: 100/500 * 100 = 20.0
         assert_eq!(response.data[0].value, "20.000000");
         assert_eq!(response.data[0].value2.as_deref(), Some("100"));
+    }
+
+    #[test]
+    fn test_empty_address_cohort_response_has_metadata() {
+        let response = empty_address_cohort_response();
+        assert_eq!(response.title, "Address Cohort Retention");
+        assert_eq!(response.y_axis_label, "Used / Balance (%)");
+        assert_eq!(
+            response.y2_axis_label.as_deref(),
+            Some("Used Capacity (CKB)")
+        );
+        assert!(response.data.is_empty());
     }
 }
