@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api } from '@/lib/api';
@@ -47,7 +47,7 @@ const firstDeploymentTimestampLabel = new Date(firstDeploymentAt).toLocaleString
 const secondDeploymentTimestampLabel = new Date(secondDeploymentAt).toLocaleString();
 const legacyDeploymentTimestampLabel = new Date(legacyDeploymentAt).toLocaleString();
 const firstGovernanceCodeHash =
-  '0xf111111111111111111111111111111111111111111111111111111111111111';
+  '0x0000000000000000000000000000000000000000000000000000000000000000';
 const secondGovernanceCodeHash =
   '0xf222222222222222222222222222222222222222222222222222222222222222';
 const legacyGovernanceCodeHash =
@@ -55,6 +55,7 @@ const legacyGovernanceCodeHash =
 const firstGovernanceArgs = '0xa111111111111111111111111111111111111111';
 const secondGovernanceArgs = '0xa222222222222222222222222222222222222222';
 const legacyGovernanceArgs = '0xa333333333333333333333333333333333333333';
+const secondGovernanceScriptName = 'Secp256k1Blake160';
 
 const mockDeployments = [
   {
@@ -243,9 +244,19 @@ function hasTextContent(element: HTMLElement, text: string): boolean {
   return element.textContent?.replace(/\s+/g, '').includes(text.replace(/\s+/g, '')) ?? false;
 }
 
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, 'innerWidth', {
+    configurable: true,
+    writable: true,
+    value: width,
+  });
+  window.dispatchEvent(new Event('resize'));
+}
+
 describe('ScriptDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setViewportWidth(1280);
     vi.mocked(api.getScript).mockResolvedValue(mockDeployments);
     vi.mocked(api.getScriptUsage).mockResolvedValue(mockUsage);
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(mockCapacityChart);
@@ -356,6 +367,22 @@ describe('ScriptDetailPage', () => {
         codeCellsLiveCount: 0,
         codeCellsTotal: 1,
       },
+      [secondGovernanceCodeHash]: {
+        codeHash: secondGovernanceCodeHash,
+        name: secondGovernanceScriptName,
+        scriptKind: 'lock',
+        decoderType: null,
+        hashType: 'type',
+        deploymentTypeHash: secondGovernanceCodeHash,
+        deploymentDataHash: null,
+        codeCellTxHash: null,
+        codeCellOutputIndex: null,
+        liveCellsCount: 0,
+        liveCapacitySum: '0',
+        liveUsedCapacitySum: '0',
+        codeCellsLiveCount: 0,
+        codeCellsTotal: 0,
+      },
     });
   });
 
@@ -387,19 +414,14 @@ describe('ScriptDetailPage', () => {
     expect(within(versionsPanel).getByText('Capacity Using It')).toBeInTheDocument();
     expect(within(versionsPanel).queryByText('2 versions')).toBeNull();
     expect(screen.queryByText('Script Code Cells')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Explain Script Versions' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Explain Script Versions' }));
+    expect(screen.getByText('What this section shows')).toBeInTheDocument();
+    expect(screen.getByText(/one row = one script version/i)).toBeInTheDocument();
     expect(
       within(versionsPanel).getAllByTitle(`Click to copy: ${sharedVersionCodeHash}`)
     ).toHaveLength(1);
-    const sharedVersionRow = findNearestContainer(
-      within(versionsPanel).getByTitle(`Click to copy: ${sharedVersionCodeHash}`),
-      (element) => {
-        const queries = within(element);
-        return (
-          queries.queryByTitle(`Click to copy: ${sharedVersionCodeHash}`) !== null &&
-          queries.queryByTitle(`Click to copy: ${legacyVersionCodeHash}`) === null
-        );
-      }
-    );
+    const sharedVersionRow = screen.getByTestId(`version-row-${sharedVersionCodeHash}`);
     expect(within(sharedVersionRow).getByText('#12,344')).toBeInTheDocument();
     expect(within(sharedVersionRow).getByText(firstDeploymentTimestampLabel)).toBeInTheDocument();
     expect(within(sharedVersionRow).getByText(/^2$/)).toBeInTheDocument();
@@ -421,8 +443,25 @@ describe('ScriptDetailPage', () => {
     expect(within(deploymentsPanel).getByText('References')).toBeInTheDocument();
     expect(within(deploymentsPanel).getByText('Deployed At')).toBeInTheDocument();
     expect(within(deploymentsPanel).getByText('Used Capacity')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Explain Version Deployments' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Explain Version Deployments' }));
+    expect(screen.getAllByText('What this section shows').length).toBeGreaterThan(1);
+    expect(screen.getByText(/one row = one deployment code cell/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Explain References' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Explain References' }));
+    expect(screen.getByText('Reference Semantics')).toBeInTheDocument();
+    expect(screen.getByText('type ref')).toBeInTheDocument();
+    expect(screen.getByText(/data\/data1\/data2/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: 'Reference doc: data vs type hash semantics' })
+    ).toBeInTheDocument();
     expect(within(deploymentsPanel).queryByText('Type Ref')).toBeNull();
     expect(within(deploymentsPanel).queryByText('How refs work')).toBeNull();
+    const deploymentsScroll = within(deploymentsPanel).getByTestId('version-deployments-scroll');
+    expect(within(deploymentsScroll).getByText('Governance')).toBeInTheDocument();
+    expect(
+      within(deploymentsScroll).getByTitle(`Click to copy: ${firstDeploymentTxHash}:0`)
+    ).toBeInTheDocument();
 
     const firstDeploymentRow = findNearestContainer(
       within(deploymentsPanel).getByTitle(`Click to copy: ${firstDeploymentTxHash}:0`),
@@ -441,12 +480,7 @@ describe('ScriptDetailPage', () => {
     expect(
       within(firstDeploymentRow).getByTitle(`Click to copy: ${firstDeploymentDataHash}`)
     ).toBeInTheDocument();
-    expect(
-      within(firstDeploymentRow).getByTitle(`Click to copy: ${firstGovernanceCodeHash}`)
-    ).toBeInTheDocument();
-    expect(
-      within(firstDeploymentRow).getByTitle(`Click to copy: ${firstGovernanceArgs}`)
-    ).toBeInTheDocument();
+    expect(within(firstDeploymentRow).getByText('Immutable (all-zero lock)')).toBeInTheDocument();
     expect(hasTextContent(firstDeploymentRow, '61.00000000 CKB')).toBe(true);
     expect(within(firstDeploymentRow).getByText(firstDeploymentTimestampLabel)).toBeInTheDocument();
 
@@ -466,12 +500,6 @@ describe('ScriptDetailPage', () => {
     ).toBeInTheDocument();
     expect(
       within(secondDeploymentRow).getByTitle(`Click to copy: ${secondDeploymentDataHash}`)
-    ).toBeInTheDocument();
-    expect(
-      within(secondDeploymentRow).getByTitle(`Click to copy: ${secondGovernanceCodeHash}`)
-    ).toBeInTheDocument();
-    expect(
-      within(secondDeploymentRow).getByTitle(`Click to copy: ${secondGovernanceArgs}`)
     ).toBeInTheDocument();
     expect(hasTextContent(secondDeploymentRow, '62.00000000 CKB')).toBe(true);
     expect(
@@ -502,6 +530,17 @@ describe('ScriptDetailPage', () => {
         limit: 50,
         cursor: undefined,
       });
+      expect(
+        vi
+          .mocked(api.lookupScripts)
+          .mock.calls.some(
+            ([codeHashes]) =>
+              Array.isArray(codeHashes) &&
+              codeHashes.includes(secondGovernanceCodeHash) &&
+              codeHashes.includes(legacyGovernanceCodeHash)
+          )
+      ).toBe(true);
+      expect(within(secondDeploymentRow).getByText(secondGovernanceScriptName)).toBeInTheDocument();
     });
     expect(
       screen.getByText('Historical used/unused live capacity for the selected version.')
@@ -524,5 +563,104 @@ describe('ScriptDetailPage', () => {
         'Click to copy: 0x6666666666666666666666666666666666666666666666666666666666666666:2'
       )
     ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId(`version-row-${legacyVersionCodeHash}`));
+
+    const legacyDeploymentRow = await waitFor(() =>
+      findNearestContainer(
+        within(deploymentsPanel).getByTitle(`Click to copy: ${legacyDeploymentTxHash}:0`),
+        (element) => {
+          const queries = within(element);
+          return (
+            queries.queryByTitle(`Click to copy: ${legacyDeploymentTxHash}:0`) !== null &&
+            queries.queryByText(secondGovernanceScriptName) === null
+          );
+        }
+      )
+    );
+    expect(
+      within(legacyDeploymentRow).getByTitle(`Click to copy: ${legacyGovernanceCodeHash}`)
+    ).toBeInTheDocument();
+    expect(
+      within(legacyDeploymentRow).getByTitle(`Click to copy: ${legacyGovernanceArgs}`)
+    ).toBeInTheDocument();
+  });
+
+  it('keeps compact tables on tablet widths instead of switching to cards', async () => {
+    setViewportWidth(900);
+
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+
+    await waitFor(() => {
+      expect(api.getScript).toHaveBeenCalledWith('SECP256K1_BLAKE160');
+      expect(screen.getByText('SECP256K1_BLAKE160')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId('script-versions-compact')).toBeNull();
+    expect(screen.queryByTestId('version-deployments-compact')).toBeNull();
+
+    expect(screen.getByRole('button', { name: 'Explain Script Versions' })).toBeInTheDocument();
+    expect(screen.getByText('Code Hash')).toBeInTheDocument();
+    expect(screen.getByText('First Deployed At')).toBeInTheDocument();
+    expect(screen.getByText('Deployments')).toBeInTheDocument();
+    expect(screen.getByText('Cells Using It')).toBeInTheDocument();
+    expect(screen.getByText('Capacity Using It')).toBeInTheDocument();
+    expect(screen.queryByText('Used As')).toBeNull();
+
+    const sharedVersionRow = screen.getByTestId(`version-row-${sharedVersionCodeHash}`);
+    expect(within(sharedVersionRow).getByText('LOCK')).toBeInTheDocument();
+
+    expect(screen.getByText('Outpoint')).toBeInTheDocument();
+    expect(screen.getByText('Governance')).toBeInTheDocument();
+    expect(screen.getByText('References')).toBeInTheDocument();
+    expect(screen.getByText('Deployed At')).toBeInTheDocument();
+    expect(screen.getByText('Used Capacity')).toBeInTheDocument();
+    expect(screen.queryByText('Status')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Explain Version Deployments' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Explain References' })).toBeInTheDocument();
+
+    const firstDeploymentRow = findNearestContainer(
+      screen.getByTitle(`Click to copy: ${firstDeploymentTxHash}:0`),
+      (element) => {
+        const queries = within(element);
+        return (
+          queries.queryByTitle(`Click to copy: ${firstDeploymentTxHash}:0`) !== null &&
+          queries.queryByTitle(`Click to copy: ${secondDeploymentTxHash}:1`) === null
+        );
+      }
+    );
+    expect(within(firstDeploymentRow).getByText('Live')).toBeInTheDocument();
+    expect(within(firstDeploymentRow).getByText('Immutable (all-zero lock)')).toBeInTheDocument();
+  });
+
+  it('switches to cards on mobile widths', async () => {
+    setViewportWidth(640);
+
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+
+    await waitFor(() => {
+      expect(api.getScript).toHaveBeenCalledWith('SECP256K1_BLAKE160');
+      expect(screen.getByText('SECP256K1_BLAKE160')).toBeInTheDocument();
+    });
+
+    const compactVersions = screen.getByTestId('script-versions-compact');
+    expect(
+      within(compactVersions).getByTitle(`Click to copy: ${sharedVersionCodeHash}`)
+    ).toBeInTheDocument();
+    expect(within(compactVersions).getAllByText('First deployed').length).toBeGreaterThan(0);
+    expect(within(compactVersions).getAllByText('Cells using it').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Explain Script Versions' })).toBeInTheDocument();
+    expect(screen.queryByText('Code Hash')).toBeNull();
+    expect(screen.queryByText('Capacity Using It')).toBeNull();
+
+    const compactDeployments = screen.getByTestId('version-deployments-compact');
+    expect(within(compactDeployments).getAllByText('Governance').length).toBeGreaterThan(0);
+    expect(within(compactDeployments).getByText('Immutable (all-zero lock)')).toBeInTheDocument();
+    expect(within(compactDeployments).getAllByText('Used capacity').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Explain Version Deployments' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Explain References' })).toBeNull();
+    expect(screen.queryByText('Status')).toBeNull();
+    expect(screen.queryByText('Deployed At')).toBeNull();
+    expect(screen.queryByText('Used Capacity')).toBeNull();
   });
 });
