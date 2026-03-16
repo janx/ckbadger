@@ -295,6 +295,7 @@ fn apply_object_collection_activity_count_deltas_with_pending(
     batch: &mut StoreBatch,
     deltas: HashMap<Vec<u8>, i64>,
     pending_aggregates: &HashMap<Vec<u8>, ckbadger_store::types::ObjectCollectionAggregate>,
+    pending_cluster_ids: &HashSet<Vec<u8>>,
 ) -> Result<()> {
     if deltas.is_empty() {
         return Ok(());
@@ -318,7 +319,9 @@ fn apply_object_collection_activity_count_deltas_with_pending(
             match loaded {
                 Some(loaded) => aggregates.entry(collection_id.clone()).or_insert(loaded),
                 None => {
-                    if store.get_cluster_aggregate(&collection_id)?.is_some() {
+                    if store.get_cluster_aggregate(&collection_id)?.is_some()
+                        || pending_cluster_ids.contains(&collection_id)
+                    {
                         // Spore cluster activities share the same append-only CF but do not
                         // belong to nft_collection_agg.
                         continue;
@@ -4364,6 +4367,7 @@ impl Indexer {
             let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
 
             let mut pending_object_collection_aggs = HashMap::new();
+            let mut pending_cluster_ids = HashSet::new();
             let mut pending_identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate> =
                 HashMap::new();
 
@@ -4857,6 +4861,7 @@ impl Indexer {
 
                 mnft_state
                     .extend_pending_collection_aggregates(&mut pending_object_collection_aggs);
+                spore_state.extend_pending_cluster_ids(&mut pending_cluster_ids);
 
                 pending_identity_aggs.extend(
                     spore_state
@@ -4876,6 +4881,7 @@ impl Indexer {
                 &mut data_batch,
                 object_activity_count_deltas,
                 &pending_object_collection_aggs,
+                &pending_cluster_ids,
             )?;
             apply_identity_collection_activity_count_deltas(
                 self.writer.store(),
@@ -5338,6 +5344,7 @@ impl Indexer {
                     &mut core_batch,
                     deferred_object_deltas,
                     &empty_object_aggs,
+                    &HashSet::new(),
                 )?;
             }
 
@@ -5820,6 +5827,7 @@ mod tests {
             &mut batch,
             deltas,
             &HashMap::new(),
+            &HashSet::new(),
         )
         .unwrap();
         batch.commit().unwrap();
@@ -5852,7 +5860,11 @@ mod tests {
         deltas.insert(collection_id.clone(), 1);
 
         apply_object_collection_activity_count_deltas_with_pending(
-            &store, &mut batch, deltas, &pending,
+            &store,
+            &mut batch,
+            deltas,
+            &pending,
+            &HashSet::new(),
         )
         .unwrap();
         batch.commit().unwrap();
@@ -5863,6 +5875,45 @@ mod tests {
             .unwrap();
         assert_eq!(agg.activities_count, 1);
         assert_eq!(agg.name.as_deref(), Some("fresh collection"));
+    }
+
+    #[test]
+    fn test_apply_nft_collection_activity_count_deltas_uses_pending_cluster_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let cluster_id = vec![0x44; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cluster_aggregate(
+            &cluster_id,
+            &ckbadger_store::types::ClusterAggregate {
+                name: Some("fresh cluster".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let mut pending_cluster_ids = HashSet::new();
+        pending_cluster_ids.insert(cluster_id.clone());
+
+        let mut deltas = HashMap::new();
+        deltas.insert(cluster_id.clone(), 1);
+
+        apply_object_collection_activity_count_deltas_with_pending(
+            &store,
+            &mut batch,
+            deltas,
+            &HashMap::new(),
+            &pending_cluster_ids,
+        )
+        .unwrap();
+        batch.commit().unwrap();
+
+        let cluster = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
+        assert_eq!(cluster.name.as_deref(), Some("fresh cluster"));
+        assert!(store
+            .get_object_collection_aggregate(&cluster_id)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::parser::{analyze_spore_media_profile, ParsedClusterCell, ParsedSporeCell};
 use ckbadger_store::batch::StoreBatch;
@@ -187,6 +187,10 @@ impl SporeBatchState {
 
     pub(crate) fn pending_identity_aggs(&self) -> &HashMap<Vec<u8>, IdentityCollectionAggregate> {
         &self.identity_aggs
+    }
+
+    pub(crate) fn extend_pending_cluster_ids(&self, target: &mut HashSet<Vec<u8>>) {
+        target.extend(self.cluster_aggs.keys().cloned());
     }
 
     fn get_spore_hourly_transfer(&mut self, store: &CkbadgerStore, key: &[u8]) -> Result<i64> {
