@@ -778,6 +778,51 @@ impl CkbadgerStore {
         }
     }
 
+    /// Batch-fetch multiple cell script version entries in a single RocksDB multi_get.
+    pub fn get_cell_script_versions_batch(
+        &self,
+        outpoints: &[(&[u8], i16)],
+    ) -> anyhow::Result<HashMap<(Vec<u8>, i16), crate::types::CellScriptVersionInfo>> {
+        let mut result = HashMap::with_capacity(outpoints.len());
+        if outpoints.is_empty() {
+            return Ok(result);
+        }
+        let cf = self.cf_cell_script_versions();
+        let keys: Vec<[u8; keys::OUTPOINT_KEY_SIZE]> = outpoints
+            .iter()
+            .map(|(tx_hash, idx)| keys::encode_outpoint(tx_hash, *idx))
+            .collect();
+        let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+            keys.iter().map(|k| (cf, k.as_slice())).collect();
+        let values = self.multi_get_cf(cf_keys);
+        for (i, value_result) in values.into_iter().enumerate() {
+            match value_result {
+                Ok(Some(value)) => {
+                    let info = bincode::deserialize(&value).map_err(|e| {
+                        anyhow::anyhow!(
+                            "rocksdb multi_get failed to deserialize cell script version: outpoint=0x{}:{}, error={}",
+                            bytes_to_hex(outpoints[i].0),
+                            outpoints[i].1,
+                            e
+                        )
+                    })?;
+                    let (tx_hash, idx) = outpoints[i];
+                    result.insert((tx_hash.to_vec(), idx), info);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "rocksdb multi_get failed in get_cell_script_versions_batch: outpoint=0x{}:{}, error={}",
+                        bytes_to_hex(outpoints[i].0),
+                        outpoints[i].1,
+                        e
+                    ));
+                }
+            }
+        }
+        Ok(result)
+    }
+
     pub fn put_cell_script_version(
         &self,
         tx_hash: &[u8],
