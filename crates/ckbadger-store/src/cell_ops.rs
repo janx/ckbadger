@@ -1167,7 +1167,7 @@ mod tests {
         let info = crate::types::CellScriptVersionInfo {
             lock_reference_hash: vec![0x11; 32],
             lock_hash_type: 1,
-            lock_version_hash: vec![0x22; 32],
+            lock_version_hash: Some(vec![0x22; 32]),
             type_reference_hash: Some(vec![0x33; 32]),
             type_hash_type: Some(0),
             type_version_hash: Some(vec![0x44; 32]),
@@ -1179,7 +1179,7 @@ mod tests {
 
         let loaded = store.get_cell_script_version(&tx_hash, 1).unwrap().unwrap();
         assert_eq!(loaded.lock_hash_type, 1);
-        assert_eq!(loaded.lock_version_hash, vec![0x22; 32]);
+        assert_eq!(loaded.lock_version_hash, Some(vec![0x22; 32]));
         assert_eq!(loaded.type_hash_type, Some(0));
         assert_eq!(loaded.type_version_hash, Some(vec![0x44; 32]));
     }

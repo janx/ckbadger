@@ -818,7 +818,7 @@ fn truncate_to_hour(dt: DateTime<Utc>) -> DateTime<Utc> {
 
 pub(super) type ScriptUsageChanges = HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
 type ScriptReferenceVersionChanges =
-    HashMap<(Vec<u8>, u8, Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
+    HashMap<(Vec<u8>, u8, Option<Vec<u8>>, bool), (i64, i64, i128, i128, i128, i128)>;
 
 fn checked_hash_type_u8(hash_type: i16, context: &str) -> Result<u8> {
     match hash_type {
@@ -872,7 +872,7 @@ fn add_script_reference_version_delta(
     changes: &mut ScriptReferenceVersionChanges,
     reference_hash: Vec<u8>,
     hash_type: u8,
-    version_hash: Vec<u8>,
+    version_hash: Option<Vec<u8>>,
     is_type: bool,
     delta: (i64, i64, i128, i128, i128, i128),
 ) {
@@ -1143,7 +1143,7 @@ fn build_script_reference_version_state(
                         &mut changes,
                         type_reference_hash,
                         type_hash_type,
-                        type_version_hash,
+                        Some(type_version_hash),
                         true,
                         (
                             0,
@@ -1168,12 +1168,17 @@ fn build_script_reference_version_state(
             );
 
             let lock_hash_type = checked_hash_type_u8(cell.lock_hash_type, "lock script")?;
-            let lock_version_hash = resolve_version_hash_for_reference(
-                &tx_data.hash,
-                &cell.lock_code_hash,
-                lock_hash_type,
-                &dep_cells,
-            )?;
+            let lock_version_hash =
+                if lock_hash_type == 1 && cell.lock_code_hash.as_slice() != TYPE_ID_CODE_HASH {
+                    None
+                } else {
+                    Some(resolve_version_hash_for_reference(
+                        &tx_data.hash,
+                        &cell.lock_code_hash,
+                        lock_hash_type,
+                        &dep_cells,
+                    )?)
+                };
             add_script_reference_version_delta(
                 &mut changes,
                 cell.lock_code_hash.clone(),
@@ -1205,7 +1210,7 @@ fn build_script_reference_version_state(
                         &mut changes,
                         type_code_hash.clone(),
                         type_hash_type,
-                        type_version_hash.clone(),
+                        Some(type_version_hash.clone()),
                         true,
                         (
                             1,
@@ -6375,12 +6380,13 @@ mod tests {
     }
 
     #[test]
-    fn test_build_script_reference_version_state_persists_created_output_versions() {
+    fn test_build_script_reference_version_state_persists_created_output_type_versions() {
         let dir = tempfile::tempdir().unwrap();
         let store = ckbadger_store::CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let reference_hash = vec![0x11; 32];
         let version_hash = vec![0x22; 32];
         let dep_tx_hash = [0x33; 32];
+        let lock_reference_hash = vec![0x55; 32];
 
         let dep_cell = LiveCellInfo {
             capacity: 500,
@@ -6399,13 +6405,19 @@ mod tests {
         };
         let mut seed = StoreBatch::new(&store);
         seed.put_cell(&dep_tx_hash, 0, &dep_cell, 1);
+        seed.put_cell_by_type(&reference_hash, 1, &dep_tx_hash, 0);
         seed.commit().unwrap();
+
+        let mut output = parsed_cell(100, lock_reference_hash.clone(), 0);
+        output.type_code_hash = Some(reference_hash.clone());
+        output.type_hash_type = Some(1);
+        output.type_args = Some(vec![]);
 
         let mut tx = dummy_tx_data(
             [0x77; 32],
             false,
             vec![],
-            vec![parsed_cell(100, reference_hash.clone(), 1)],
+            vec![output],
             vec![],
             vec!["0x".to_string()],
         );
@@ -6425,13 +6437,82 @@ mod tests {
         )
         .unwrap();
 
-        let occupied_capacity = occupied_capacity_shannons_i64(0, None, 0);
+        let occupied_capacity = occupied_capacity_shannons_i64(0, Some(0), 0);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].2.lock_reference_hash, reference_hash);
-        assert_eq!(rows[0].2.lock_hash_type, 1);
-        assert_eq!(rows[0].2.lock_version_hash, version_hash.clone());
+        assert_eq!(rows[0].2.lock_reference_hash, lock_reference_hash.clone());
+        assert_eq!(rows[0].2.lock_hash_type, 0);
         assert_eq!(
-            changes.get(&(vec![0x11; 32], 1, version_hash, false)),
+            rows[0].2.lock_version_hash,
+            Some(lock_reference_hash.clone())
+        );
+        assert_eq!(rows[0].2.type_reference_hash, Some(reference_hash.clone()));
+        assert_eq!(rows[0].2.type_hash_type, Some(1));
+        assert_eq!(rows[0].2.type_version_hash, Some(version_hash.clone()));
+        assert_eq!(
+            changes.get(&(lock_reference_hash, 0, Some(vec![0x55; 32]), false)),
+            Some(&(
+                1,
+                1,
+                100,
+                100,
+                i128::from(occupied_capacity),
+                i128::from(occupied_capacity)
+            ))
+        );
+        assert_eq!(
+            changes.get(&(vec![0x11; 32], 1, Some(version_hash), true)),
+            Some(&(
+                1,
+                1,
+                100,
+                100,
+                i128::from(occupied_capacity),
+                i128::from(occupied_capacity)
+            ))
+        );
+    }
+
+    #[test]
+    fn test_build_script_reference_version_state_allows_unresolved_type_hash_lock_on_created_output(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference_hash = vec![0x31; 32];
+
+        let mut deployment_cell = parsed_cell(500, vec![0x41; 32], 0);
+        deployment_cell.type_script_hash = Some(reference_hash.clone());
+        deployment_cell.data_hash = vec![0x32; 32];
+
+        let locked_output = parsed_cell(100, reference_hash.clone(), 1);
+
+        let tx = dummy_tx_data(
+            [0x77; 32],
+            false,
+            vec![],
+            vec![deployment_cell, locked_output],
+            vec![],
+            vec!["0x".to_string(), "0x".to_string()],
+        );
+
+        let (changes, rows) = build_script_reference_version_state(
+            &[tx],
+            &store,
+            &store,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+        )
+        .unwrap();
+
+        let occupied_capacity = occupied_capacity_shannons_i64(0, None, 0);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].0, vec![0x77; 32]);
+        assert_eq!(rows[1].1, 1);
+        assert_eq!(rows[1].2.lock_reference_hash, reference_hash);
+        assert_eq!(rows[1].2.lock_hash_type, 1);
+        assert_eq!(rows[1].2.lock_version_hash, None);
+        assert_eq!(
+            changes.get(&(vec![0x31; 32], 1, None, false)),
             Some(&(
                 1,
                 1,
@@ -6458,7 +6539,7 @@ mod tests {
                 &CellScriptVersionInfo {
                     lock_reference_hash: reference_hash.clone(),
                     lock_hash_type: 0,
-                    lock_version_hash: version_hash.clone(),
+                    lock_version_hash: Some(version_hash.clone()),
                     type_reference_hash: None,
                     type_hash_type: None,
                     type_version_hash: None,
@@ -6481,11 +6562,19 @@ mod tests {
             vec![],
         );
 
+        let mut input_cell = dummy_live_cell_info();
+        input_cell.data_hash = Some(vec![0x45; 32]);
+        let mut input_cell_info = HashMap::new();
+        input_cell_info.insert(
+            (previous_tx_hash.to_vec(), 0),
+            PositionedCellInfo::new(input_cell, 1),
+        );
+
         let (changes, rows) = build_script_reference_version_state(
             &[tx],
             &store,
             &store,
-            &HashMap::new(),
+            &input_cell_info,
             &HashMap::new(),
             None,
         )
@@ -6493,7 +6582,7 @@ mod tests {
 
         assert!(rows.is_empty());
         assert_eq!(
-            changes.get(&(reference_hash, 0, version_hash, false)),
+            changes.get(&(reference_hash, 0, Some(version_hash), false)),
             Some(&(0, -1, 0, -100, 0, -61))
         );
     }

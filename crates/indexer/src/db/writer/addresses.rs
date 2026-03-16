@@ -701,7 +701,7 @@ impl BatchWriter {
         &self,
         existing_references: &HashMap<(Vec<u8>, u8), Option<ScriptReferenceInfo>>,
         existing_versions: &HashMap<Vec<u8>, Option<ScriptVersionInfo>>,
-        changes: &HashMap<(Vec<u8>, u8, Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>,
+        changes: &HashMap<(Vec<u8>, u8, Option<Vec<u8>>, bool), (i64, i64, i128, i128, i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if changes.is_empty() {
@@ -839,128 +839,130 @@ impl BatchWriter {
                 )?;
             }
 
-            let existing_version = existing_versions
-                .get(version_hash)
-                .and_then(|entry| entry.clone());
-            if existing_version.is_none()
-                && (*cells_delta < 0
-                    || *live_delta < 0
-                    || *cap_delta < 0
-                    || *live_cap_delta < 0
-                    || *used_delta < 0
-                    || *live_used_delta < 0)
-            {
-                bail!(
-                    "script version delta underflow for unseen version: version_hash=0x{}, cells_delta={}, live_delta={}, capacity_delta={}, live_capacity_delta={}, used_delta={}, live_used_delta={}",
-                    hex::encode(version_hash),
-                    cells_delta,
-                    live_delta,
-                    cap_delta,
-                    live_cap_delta,
-                    used_delta,
-                    live_used_delta
-                );
-            }
+            if let Some(version_hash) = version_hash.as_ref() {
+                let existing_version = existing_versions
+                    .get(version_hash)
+                    .and_then(|entry| entry.clone());
+                if existing_version.is_none()
+                    && (*cells_delta < 0
+                        || *live_delta < 0
+                        || *cap_delta < 0
+                        || *live_cap_delta < 0
+                        || *used_delta < 0
+                        || *live_used_delta < 0)
+                {
+                    bail!(
+                        "script version delta underflow for unseen version: version_hash=0x{}, cells_delta={}, live_delta={}, capacity_delta={}, live_capacity_delta={}, used_delta={}, live_used_delta={}",
+                        hex::encode(version_hash),
+                        cells_delta,
+                        live_delta,
+                        cap_delta,
+                        live_cap_delta,
+                        used_delta,
+                        live_used_delta
+                    );
+                }
 
-            let version = updated_versions
-                .entry(version_hash.clone())
-                .or_insert_with(|| {
-                    let mut info = existing_version.unwrap_or_else(|| ScriptVersionInfo {
-                        version_hash: version_hash.clone(),
-                        ..Default::default()
+                let version = updated_versions
+                    .entry(version_hash.clone())
+                    .or_insert_with(|| {
+                        let mut info = existing_version.unwrap_or_else(|| ScriptVersionInfo {
+                            version_hash: version_hash.clone(),
+                            ..Default::default()
+                        });
+                        if let Ok(Some(fresh)) = self.store.get_script_version(version_hash) {
+                            info = overlay_script_version_metadata(info, &fresh);
+                        }
+                        info
                     });
-                    if let Ok(Some(fresh)) = self.store.get_script_version(version_hash) {
-                        info = overlay_script_version_metadata(info, &fresh);
-                    }
-                    info
-                });
 
-            if *is_type {
-                version.type_cells_count = checked_next_script_metric_i64(
-                    version_hash,
-                    "type",
-                    "cells_count",
-                    version.type_cells_count,
-                    *cells_delta,
-                )?;
-                version.type_live_cells_count = checked_next_script_metric_i64(
-                    version_hash,
-                    "type",
-                    "live_cells_count",
-                    version.type_live_cells_count,
-                    *live_delta,
-                )?;
-                version.type_capacity_sum = checked_next_script_metric_i128(
-                    version_hash,
-                    "type",
-                    "capacity_sum",
-                    version.type_capacity_sum,
-                    *cap_delta,
-                )?;
-                version.type_live_capacity_sum = checked_next_script_metric_i128(
-                    version_hash,
-                    "type",
-                    "live_capacity_sum",
-                    version.type_live_capacity_sum,
-                    *live_cap_delta,
-                )?;
-                version.type_used_capacity_sum = checked_next_script_metric_i128(
-                    version_hash,
-                    "type",
-                    "used_capacity_sum",
-                    version.type_used_capacity_sum,
-                    *used_delta,
-                )?;
-                version.type_live_used_capacity_sum = checked_next_script_metric_i128(
-                    version_hash,
-                    "type",
-                    "live_used_capacity_sum",
-                    version.type_live_used_capacity_sum,
-                    *live_used_delta,
-                )?;
-            } else {
-                version.lock_cells_count = checked_next_script_metric_i64(
-                    version_hash,
-                    "lock",
-                    "cells_count",
-                    version.lock_cells_count,
-                    *cells_delta,
-                )?;
-                version.lock_live_cells_count = checked_next_script_metric_i64(
-                    version_hash,
-                    "lock",
-                    "live_cells_count",
-                    version.lock_live_cells_count,
-                    *live_delta,
-                )?;
-                version.lock_capacity_sum = checked_next_script_metric_i128(
-                    version_hash,
-                    "lock",
-                    "capacity_sum",
-                    version.lock_capacity_sum,
-                    *cap_delta,
-                )?;
-                version.lock_live_capacity_sum = checked_next_script_metric_i128(
-                    version_hash,
-                    "lock",
-                    "live_capacity_sum",
-                    version.lock_live_capacity_sum,
-                    *live_cap_delta,
-                )?;
-                version.lock_used_capacity_sum = checked_next_script_metric_i128(
-                    version_hash,
-                    "lock",
-                    "used_capacity_sum",
-                    version.lock_used_capacity_sum,
-                    *used_delta,
-                )?;
-                version.lock_live_used_capacity_sum = checked_next_script_metric_i128(
-                    version_hash,
-                    "lock",
-                    "live_used_capacity_sum",
-                    version.lock_live_used_capacity_sum,
-                    *live_used_delta,
-                )?;
+                if *is_type {
+                    version.type_cells_count = checked_next_script_metric_i64(
+                        version_hash,
+                        "type",
+                        "cells_count",
+                        version.type_cells_count,
+                        *cells_delta,
+                    )?;
+                    version.type_live_cells_count = checked_next_script_metric_i64(
+                        version_hash,
+                        "type",
+                        "live_cells_count",
+                        version.type_live_cells_count,
+                        *live_delta,
+                    )?;
+                    version.type_capacity_sum = checked_next_script_metric_i128(
+                        version_hash,
+                        "type",
+                        "capacity_sum",
+                        version.type_capacity_sum,
+                        *cap_delta,
+                    )?;
+                    version.type_live_capacity_sum = checked_next_script_metric_i128(
+                        version_hash,
+                        "type",
+                        "live_capacity_sum",
+                        version.type_live_capacity_sum,
+                        *live_cap_delta,
+                    )?;
+                    version.type_used_capacity_sum = checked_next_script_metric_i128(
+                        version_hash,
+                        "type",
+                        "used_capacity_sum",
+                        version.type_used_capacity_sum,
+                        *used_delta,
+                    )?;
+                    version.type_live_used_capacity_sum = checked_next_script_metric_i128(
+                        version_hash,
+                        "type",
+                        "live_used_capacity_sum",
+                        version.type_live_used_capacity_sum,
+                        *live_used_delta,
+                    )?;
+                } else {
+                    version.lock_cells_count = checked_next_script_metric_i64(
+                        version_hash,
+                        "lock",
+                        "cells_count",
+                        version.lock_cells_count,
+                        *cells_delta,
+                    )?;
+                    version.lock_live_cells_count = checked_next_script_metric_i64(
+                        version_hash,
+                        "lock",
+                        "live_cells_count",
+                        version.lock_live_cells_count,
+                        *live_delta,
+                    )?;
+                    version.lock_capacity_sum = checked_next_script_metric_i128(
+                        version_hash,
+                        "lock",
+                        "capacity_sum",
+                        version.lock_capacity_sum,
+                        *cap_delta,
+                    )?;
+                    version.lock_live_capacity_sum = checked_next_script_metric_i128(
+                        version_hash,
+                        "lock",
+                        "live_capacity_sum",
+                        version.lock_live_capacity_sum,
+                        *live_cap_delta,
+                    )?;
+                    version.lock_used_capacity_sum = checked_next_script_metric_i128(
+                        version_hash,
+                        "lock",
+                        "used_capacity_sum",
+                        version.lock_used_capacity_sum,
+                        *used_delta,
+                    )?;
+                    version.lock_live_used_capacity_sum = checked_next_script_metric_i128(
+                        version_hash,
+                        "lock",
+                        "live_used_capacity_sum",
+                        version.lock_live_used_capacity_sum,
+                        *live_used_delta,
+                    )?;
+                }
             }
         }
 
@@ -976,7 +978,7 @@ impl BatchWriter {
 
     pub fn update_script_reference_version_batch(
         &self,
-        changes: &HashMap<(Vec<u8>, u8, Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>,
+        changes: &HashMap<(Vec<u8>, u8, Option<Vec<u8>>, bool), (i64, i64, i128, i128, i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if changes.is_empty() {
@@ -1002,6 +1004,7 @@ impl BatchWriter {
             changes
                 .keys()
                 .filter_map(|(_, _, version_hash, _)| {
+                    let version_hash = version_hash.as_ref()?;
                     if seen.insert(version_hash.clone()) {
                         Some(version_hash.clone())
                     } else {
@@ -1326,7 +1329,12 @@ mod tests {
         let version_hash = vec![0x22; 32];
         let mut changes = HashMap::new();
         changes.insert(
-            (reference_hash.clone(), 1u8, version_hash.clone(), true),
+            (
+                reference_hash.clone(),
+                1u8,
+                Some(version_hash.clone()),
+                true,
+            ),
             (1, 1, 1_000, 1_000, 610, 610),
         );
 
@@ -1364,11 +1372,21 @@ mod tests {
         let version_hash = vec![0x44; 32];
         let mut changes = HashMap::new();
         changes.insert(
-            (reference_hash.clone(), 1u8, version_hash.clone(), true),
+            (
+                reference_hash.clone(),
+                1u8,
+                Some(version_hash.clone()),
+                true,
+            ),
             (1, 1, 100, 100, 60, 60),
         );
         changes.insert(
-            (reference_hash.clone(), 0u8, version_hash.clone(), false),
+            (
+                reference_hash.clone(),
+                0u8,
+                Some(version_hash.clone()),
+                false,
+            ),
             (2, 2, 200, 200, 120, 120),
         );
 
@@ -1417,7 +1435,12 @@ mod tests {
 
         let mut changes = HashMap::new();
         changes.insert(
-            (reference_hash.clone(), 1u8, version_hash.clone(), true),
+            (
+                reference_hash.clone(),
+                1u8,
+                Some(version_hash.clone()),
+                true,
+            ),
             (1, 1, 100, 100, 61, 61),
         );
 
@@ -1434,5 +1457,35 @@ mod tests {
         assert_eq!(version.website.as_deref(), Some("https://nervos.org"));
         assert_eq!(version.type_cells_count, 1);
         assert_eq!(version.type_live_cells_count, 1);
+    }
+
+    #[test]
+    fn test_apply_script_reference_version_deltas_skips_version_row_for_unresolved_lock_ref() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let reference_hash = vec![0x77; 32];
+        let mut changes = HashMap::new();
+        changes.insert(
+            (reference_hash.clone(), 1u8, None, false),
+            (1, 1, 100, 100, 61, 61),
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .update_script_reference_version_batch(&changes, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let reference = store
+            .get_script_reference(&reference_hash, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reference.lock_cells_count, 1);
+        assert_eq!(reference.lock_live_cells_count, 1);
+        assert_eq!(reference.lock_capacity_sum, 100);
+        assert_eq!(reference.lock_used_capacity_sum, 61);
+        assert!(store.list_script_versions().unwrap().is_empty());
     }
 }

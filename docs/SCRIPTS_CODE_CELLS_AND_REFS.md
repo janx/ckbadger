@@ -169,7 +169,7 @@ This is the shortest way to reason about reference behavior:
 Two important consequences:
 
 - "currently unique" is not the same thing as "historically immutable"
-- when analyzing a historical transaction, the canonical answer comes from that transaction's
+- when analyzing historical script execution, the canonical answer comes from that transaction's
   actual `cell_deps`, not from today's live-state lookup
 
 ### Historical Attribution
@@ -184,7 +184,7 @@ For `data` / `data1` / `data2`, those answers line up naturally.
 For `type`, they do not.
 
 - a `type` reference may resolve to a different version after an upgrade
-- therefore version-level historical usage must be attributed from each transaction's actual
+- therefore version-level historical execution must be attributed from each transaction's actual
   `cell_deps`
 - it must not be recomputed later from today's live cells
 
@@ -193,6 +193,17 @@ This matters for indexing:
 - reference-level stats can be aggregated by `(reference_hash, hash_type)`
 - version-level stats must be aggregated by the exact `version = H(script_code)` resolved at the
   time the transaction is indexed
+
+Created output locks are a separate case.
+
+- creating an output does not execute its lock script
+- therefore an output lock with `hash_type=type` does not get an exact version from the creating
+  transaction's `cell_deps`
+- the referenced code cell may even be absent from chain state entirely; this dead-ref output is
+  still protocol-valid
+- indexer state should still record the reference `(reference_hash, hash_type)` for that cell, but
+  version-level attribution may be absent until a later spending transaction actually executes the
+  lock with concrete deps
 
 ### Label to Versions
 

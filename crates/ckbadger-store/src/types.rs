@@ -722,7 +722,7 @@ pub struct ScriptVersionInfo {
 pub struct CellScriptVersionInfo {
     pub lock_reference_hash: Vec<u8>,
     pub lock_hash_type: u8,
-    pub lock_version_hash: Vec<u8>,
+    pub lock_version_hash: Option<Vec<u8>>,
     pub type_reference_hash: Option<Vec<u8>>,
     pub type_hash_type: Option<u8>,
     pub type_version_hash: Option<Vec<u8>>,
