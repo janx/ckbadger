@@ -530,13 +530,8 @@ impl SecondaryDir {
             "/tmp/ckbadger-rocksdb-secondary-{}",
             std::process::id()
         ));
-        std::fs::create_dir_all(&path).map_err(|e| {
-            anyhow!(
-                "Failed to create secondary path {}: {}",
-                path.display(),
-                e
-            )
-        })?;
+        std::fs::create_dir_all(&path)
+            .map_err(|e| anyhow!("Failed to create secondary path {}: {}", path.display(), e))?;
         Ok(Self { path })
     }
 
@@ -600,8 +595,10 @@ mod tests {
         let _primary_db =
             DB::open_cf_descriptors(&db_opts, primary_dir.path(), cf_descriptors).unwrap();
 
-        let secondary_path =
-            std::path::PathBuf::from(format!("/tmp/ckbadger-rocksdb-secondary-{}", std::process::id()));
+        let secondary_path = std::path::PathBuf::from(format!(
+            "/tmp/ckbadger-rocksdb-secondary-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&secondary_path);
 
         {

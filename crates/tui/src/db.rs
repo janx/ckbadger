@@ -675,8 +675,7 @@ mod tests {
         IpcHandler, IpcRequest, IpcResponse, IpcServer, ServiceInfo, ServiceStatus,
     };
     use ckbadger_store::{
-        secondary_store_path, CkbadgerStore, RuntimeStatus, SecondaryStoreOwner,
-        StoreRuntimeConfig,
+        secondary_store_path, CkbadgerStore, RuntimeStatus, SecondaryStoreOwner, StoreRuntimeConfig,
     };
     use std::future::Future;
     use std::path::Path;
