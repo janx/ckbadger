@@ -85,11 +85,9 @@ impl MnftParser {
         let data = parse_hex_to_bytes(data_hex);
         let issuer_data = Self::parse_issuer_data(&data)?;
 
-        let type_script_hash = ScriptParser::compute_script_hash(type_script)
-            .unwrap_or_else(|e| panic!("mNFT type script hash failed: {}", e));
+        let type_script_hash = ScriptParser::compute_script_hash(type_script).ok()?;
         let issuer_id = type_script_hash[..20].to_vec();
-        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock)
-            .unwrap_or_else(|e| panic!("mNFT lock script hash failed: {}", e));
+        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock).ok()?;
 
         Some(ParsedMnftIssuer {
             issuer_id,
@@ -109,10 +107,7 @@ impl MnftParser {
         }
 
         let issuer_data = Self::parse_issuer_data(&cell.data)?;
-        let type_script_hash = cell
-            .type_script_hash
-            .clone()
-            .expect("mNFT issuer parsed cell missing type_script_hash");
+        let type_script_hash = cell.type_script_hash.clone()?;
 
         Some(ParsedMnftIssuer {
             issuer_id: type_script_hash[..20].to_vec(),
@@ -143,10 +138,8 @@ impl MnftParser {
         let data = parse_hex_to_bytes(data_hex);
         let class_data = Self::parse_class_data(&data)?;
 
-        let type_script_hash = ScriptParser::compute_script_hash(type_script)
-            .unwrap_or_else(|e| panic!("mNFT type script hash failed: {}", e));
-        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock)
-            .unwrap_or_else(|e| panic!("mNFT lock script hash failed: {}", e));
+        let type_script_hash = ScriptParser::compute_script_hash(type_script).ok()?;
+        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock).ok()?;
 
         Some(ParsedMnftClass {
             // mNFT class identity is issuer_id(20B) + class_index(4B).
@@ -171,10 +164,7 @@ impl MnftParser {
             return None;
         }
 
-        let args = cell
-            .type_args
-            .as_ref()
-            .expect("mNFT class parsed cell missing type_args");
+        let args = cell.type_args.as_ref()?;
         if args.len() < 24 {
             return None;
         }
@@ -183,10 +173,7 @@ impl MnftParser {
 
         Some(ParsedMnftClass {
             class_id: args[..24].to_vec(),
-            type_script_hash: cell
-                .type_script_hash
-                .clone()
-                .expect("mNFT class parsed cell missing type_script_hash"),
+            type_script_hash: cell.type_script_hash.clone()?,
             issuer_id: args[..20].to_vec(),
             name: class_data.name,
             description: class_data.description,
@@ -217,10 +204,8 @@ impl MnftParser {
         let data = parse_hex_to_bytes(data_hex);
         let token_data = Self::parse_token_data(&data)?;
 
-        let type_script_hash = ScriptParser::compute_script_hash(type_script)
-            .unwrap_or_else(|e| panic!("mNFT type script hash failed: {}", e));
-        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock)
-            .unwrap_or_else(|e| panic!("mNFT lock script hash failed: {}", e));
+        let type_script_hash = ScriptParser::compute_script_hash(type_script).ok()?;
+        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock).ok()?;
 
         Some(ParsedMnftToken {
             token_id: args,
@@ -240,10 +225,7 @@ impl MnftParser {
             return None;
         }
 
-        let args = cell
-            .type_args
-            .as_ref()
-            .expect("mNFT token parsed cell missing type_args");
+        let args = cell.type_args.as_ref()?;
         if args.len() < 28 {
             return None;
         }
@@ -252,10 +234,7 @@ impl MnftParser {
 
         Some(ParsedMnftToken {
             token_id: args.clone(),
-            type_script_hash: cell
-                .type_script_hash
-                .clone()
-                .expect("mNFT token parsed cell missing type_script_hash"),
+            type_script_hash: cell.type_script_hash.clone()?,
             class_id: args[..24].to_vec(),
             token_index: u32::from_le_bytes(args[24..28].try_into().ok()?),
             characteristic: token_data.characteristic,

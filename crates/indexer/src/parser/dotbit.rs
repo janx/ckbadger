@@ -139,10 +139,7 @@ impl DotbitParser {
             return None;
         }
 
-        let account_id_from_args = cell
-            .type_args
-            .as_ref()
-            .expect("dotbit parsed cell missing type_args");
+        let account_id_from_args = cell.type_args.as_ref()?;
         let account_id_from_data = data[HASH_BYTES_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN].to_vec();
 
         let account_id = if account_id_from_args.len() == ACCOUNT_ID_LEN
@@ -178,10 +175,7 @@ impl DotbitParser {
         Some(ParsedDotbitAccount {
             account_id,
             account: None,
-            type_script_hash: cell
-                .type_script_hash
-                .clone()
-                .expect("dotbit parsed cell missing type_script_hash"),
+            type_script_hash: cell.type_script_hash.clone()?,
             next_account_id,
             expired_at,
             registered_at: None,

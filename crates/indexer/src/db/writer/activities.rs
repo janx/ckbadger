@@ -1,6 +1,6 @@
 //! Activity builder: derives per-owner position changes from parsed block data.
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::OnceLock;
 
@@ -681,9 +681,13 @@ fn classify_input(
         }
         Some(AssetKind::Dao) => {
             if is_dao_withdraw_request {
-                accum
-                    .dao_withdraw_completes
-                    .push((capacity, dao_compensation.unwrap_or(0)));
+                let compensation = dao_compensation.ok_or_else(|| {
+                    anyhow!(
+                        "DAO withdraw-complete input has is_dao_withdraw_request=true but \
+                         dao_compensation is None (pre-computation failed or missing)"
+                    )
+                })?;
+                accum.dao_withdraw_completes.push((capacity, compensation));
             }
         }
         Some(AssetKind::SporeDid) => {

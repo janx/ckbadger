@@ -1,3 +1,4 @@
+use anyhow::Result;
 use chrono::{DateTime, TimeZone, Utc};
 
 use crate::rpc::{parse_hex_to_bytes, BlockView, HeaderView};
@@ -26,9 +27,9 @@ pub struct ParsedBlock {
 pub struct BlockParser;
 
 impl BlockParser {
-    pub fn parse(block: &BlockView) -> ParsedBlock {
+    pub fn parse(block: &BlockView) -> Result<ParsedBlock> {
         let header = &block.header;
-        let (epoch_number, epoch_index, epoch_length) = Self::parse_epoch(&header.epoch);
+        let (epoch_number, epoch_index, epoch_length) = Self::parse_epoch(&header.epoch)?;
 
         let proposals: Vec<Vec<u8>> = block
             .proposals
@@ -36,50 +37,50 @@ impl BlockParser {
             .map(|p| parse_hex_to_bytes(p))
             .collect();
 
-        ParsedBlock {
-            number: Self::parse_hex_i64(&header.number),
+        Ok(ParsedBlock {
+            number: Self::parse_hex_i64(&header.number)?,
             hash: parse_hex_to_bytes(&header.hash),
             parent_hash: parse_hex_to_bytes(&header.parent_hash),
-            timestamp: Self::parse_timestamp(&header.timestamp),
-            version: Self::parse_hex_i32(&header.version),
-            compact_target: Self::parse_hex_i64(&header.compact_target),
-            transactions_count: i32::try_from(block.transactions.len()).unwrap_or_else(|_| {
-                panic!(
+            timestamp: Self::parse_timestamp(&header.timestamp)?,
+            version: Self::parse_hex_i32(&header.version)?,
+            compact_target: Self::parse_hex_i64(&header.compact_target)?,
+            transactions_count: i32::try_from(block.transactions.len()).map_err(|_| {
+                anyhow::anyhow!(
                     "block transactions_count exceeds i32: {}",
                     block.transactions.len()
                 )
-            }),
-            proposals_count: i32::try_from(block.proposals.len()).unwrap_or_else(|_| {
-                panic!(
+            })?,
+            proposals_count: i32::try_from(block.proposals.len()).map_err(|_| {
+                anyhow::anyhow!(
                     "block proposals_count exceeds i32: {}",
                     block.proposals.len()
                 )
-            }),
-            uncles_count: i32::try_from(block.uncles.len()).unwrap_or_else(|_| {
-                panic!("block uncles_count exceeds i32: {}", block.uncles.len())
-            }),
+            })?,
+            uncles_count: i32::try_from(block.uncles.len()).map_err(|_| {
+                anyhow::anyhow!("block uncles_count exceeds i32: {}", block.uncles.len())
+            })?,
             epoch_number,
             epoch_index,
             epoch_length,
             dao: parse_hex_to_bytes(&header.dao),
-            nonce: Self::parse_nonce(&header.nonce),
+            nonce: Self::parse_nonce(&header.nonce)?,
             extra_hash: parse_hex_to_bytes(&header.extra_hash),
             proposals_hash: parse_hex_to_bytes(&header.proposals_hash),
             transactions_root: parse_hex_to_bytes(&header.transactions_root),
             proposals,
-        }
+        })
     }
 
-    pub fn parse_header(header: &HeaderView) -> ParsedBlock {
-        let (epoch_number, epoch_index, epoch_length) = Self::parse_epoch(&header.epoch);
+    pub fn parse_header(header: &HeaderView) -> Result<ParsedBlock> {
+        let (epoch_number, epoch_index, epoch_length) = Self::parse_epoch(&header.epoch)?;
 
-        ParsedBlock {
-            number: Self::parse_hex_i64(&header.number),
+        Ok(ParsedBlock {
+            number: Self::parse_hex_i64(&header.number)?,
             hash: parse_hex_to_bytes(&header.hash),
             parent_hash: parse_hex_to_bytes(&header.parent_hash),
-            timestamp: Self::parse_timestamp(&header.timestamp),
-            version: Self::parse_hex_i32(&header.version),
-            compact_target: Self::parse_hex_i64(&header.compact_target),
+            timestamp: Self::parse_timestamp(&header.timestamp)?,
+            version: Self::parse_hex_i32(&header.version)?,
+            compact_target: Self::parse_hex_i64(&header.compact_target)?,
             transactions_count: 0,
             proposals_count: 0,
             uncles_count: 0,
@@ -87,46 +88,50 @@ impl BlockParser {
             epoch_index,
             epoch_length,
             dao: parse_hex_to_bytes(&header.dao),
-            nonce: Self::parse_nonce(&header.nonce),
+            nonce: Self::parse_nonce(&header.nonce)?,
             extra_hash: parse_hex_to_bytes(&header.extra_hash),
             proposals_hash: parse_hex_to_bytes(&header.proposals_hash),
             transactions_root: parse_hex_to_bytes(&header.transactions_root),
             proposals: Vec::new(),
-        }
+        })
     }
 
-    fn parse_epoch(epoch_hex: &str) -> (i64, i32, i32) {
-        let epoch = Self::parse_hex_u64(epoch_hex);
+    fn parse_epoch(epoch_hex: &str) -> Result<(i64, i32, i32)> {
+        let epoch = Self::parse_hex_u64(epoch_hex)?;
         let length = (epoch >> 40) & 0xFFFF;
         let index = (epoch >> 24) & 0xFFFF;
         let number = epoch & 0xFFFFFF;
-        (number as i64, index as i32, length as i32)
+        Ok((number as i64, index as i32, length as i32))
     }
 
-    pub fn parse_timestamp(timestamp_hex: &str) -> DateTime<Utc> {
-        let ms = Self::parse_hex_u64(timestamp_hex);
-        let ms = i64::try_from(ms).unwrap_or_else(|_| {
-            panic!(
+    pub fn parse_timestamp(timestamp_hex: &str) -> Result<DateTime<Utc>> {
+        let ms = Self::parse_hex_u64(timestamp_hex)?;
+        let ms = i64::try_from(ms).map_err(|_| {
+            anyhow::anyhow!(
                 "timestamp over i64 range '{}': {} (max={})",
                 timestamp_hex,
                 ms,
                 i64::MAX
             )
-        });
-        Utc.timestamp_millis_opt(ms)
-            .single()
-            .expect("Invalid timestamp in block header")
+        })?;
+        Utc.timestamp_millis_opt(ms).single().ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid timestamp in block header: '{}' ({}ms)",
+                timestamp_hex,
+                ms
+            )
+        })
     }
 
-    fn parse_nonce(nonce_hex: &str) -> Vec<u8> {
-        let nonce = Self::parse_hex_u128(nonce_hex);
-        nonce.to_le_bytes().to_vec()
+    fn parse_nonce(nonce_hex: &str) -> Result<Vec<u8>> {
+        let nonce = Self::parse_hex_u128(nonce_hex)?;
+        Ok(nonce.to_le_bytes().to_vec())
     }
 
-    fn parse_hex_i64(hex: &str) -> i64 {
-        let parsed = Self::parse_hex_u64(hex);
-        i64::try_from(parsed).unwrap_or_else(|_| {
-            panic!(
+    fn parse_hex_i64(hex: &str) -> Result<i64> {
+        let parsed = Self::parse_hex_u64(hex)?;
+        i64::try_from(parsed).map_err(|_| {
+            anyhow::anyhow!(
                 "block hex over i64 range '{}': {} (max={})",
                 hex,
                 parsed,
@@ -135,10 +140,10 @@ impl BlockParser {
         })
     }
 
-    fn parse_hex_i32(hex: &str) -> i32 {
-        let parsed = Self::parse_hex_u64(hex);
-        i32::try_from(parsed).unwrap_or_else(|_| {
-            panic!(
+    fn parse_hex_i32(hex: &str) -> Result<i32> {
+        let parsed = Self::parse_hex_u64(hex)?;
+        i32::try_from(parsed).map_err(|_| {
+            anyhow::anyhow!(
                 "block hex over i32 range '{}': {} (max={})",
                 hex,
                 parsed,
@@ -147,22 +152,22 @@ impl BlockParser {
         })
     }
 
-    pub fn parse_block_number(block: &BlockView) -> u64 {
+    pub fn parse_block_number(block: &BlockView) -> Result<u64> {
         Self::parse_hex_u64(&block.header.number)
     }
 
-    fn parse_hex_u64(hex: &str) -> u64 {
+    fn parse_hex_u64(hex: &str) -> Result<u64> {
         let raw = hex;
         let hex = hex.strip_prefix("0x").unwrap_or(hex);
         u64::from_str_radix(hex, 16)
-            .unwrap_or_else(|e| panic!("invalid block hex '{}': {}", raw, e))
+            .map_err(|e| anyhow::anyhow!("invalid block hex '{}': {}", raw, e))
     }
 
-    fn parse_hex_u128(hex: &str) -> u128 {
+    fn parse_hex_u128(hex: &str) -> Result<u128> {
         let raw = hex;
         let hex = hex.strip_prefix("0x").unwrap_or(hex);
         u128::from_str_radix(hex, 16)
-            .unwrap_or_else(|e| panic!("invalid block hex '{}': {}", raw, e))
+            .map_err(|e| anyhow::anyhow!("invalid block hex '{}': {}", raw, e))
     }
 }
 
@@ -235,7 +240,7 @@ mod tests {
         // epoch format: upper 16 bits = length, middle 16 bits = index, lower 24 bits = number
         // 0x7080006000028 = length:1800 (0x708), index:6, number:40 (0x28)
         let epoch_hex = "0x7080006000028";
-        let (number, index, length) = BlockParser::parse_epoch(epoch_hex);
+        let (number, index, length) = BlockParser::parse_epoch(epoch_hex).unwrap();
 
         assert_eq!(number, 40, "epoch number should be 40");
         assert_eq!(index, 6, "epoch index should be 6");
@@ -246,7 +251,7 @@ mod tests {
     fn test_parse_epoch_genesis() {
         // Genesis epoch: number=0, index=0, length=1000
         let epoch_hex = "0x3e80000000000"; // length:1000 (0x3e8), index:0, number:0
-        let (number, index, length) = BlockParser::parse_epoch(epoch_hex);
+        let (number, index, length) = BlockParser::parse_epoch(epoch_hex).unwrap();
 
         assert_eq!(number, 0);
         assert_eq!(index, 0);
@@ -257,7 +262,7 @@ mod tests {
     fn test_parse_timestamp_converts_to_datetime() {
         // 1704067200000 ms = 2024-01-01 00:00:00 UTC
         let timestamp_hex = "0x18cc251f400";
-        let dt = BlockParser::parse_timestamp(timestamp_hex);
+        let dt = BlockParser::parse_timestamp(timestamp_hex).unwrap();
 
         assert_eq!(dt.year(), 2024);
         assert_eq!(dt.month(), 1);
@@ -269,7 +274,7 @@ mod tests {
     #[test]
     fn test_parse_nonce_converts_to_le_bytes() {
         let nonce_hex = "0x12345678";
-        let nonce_bytes = BlockParser::parse_nonce(nonce_hex);
+        let nonce_bytes = BlockParser::parse_nonce(nonce_hex).unwrap();
 
         // u128 in little-endian
         assert_eq!(nonce_bytes.len(), 16);
@@ -281,52 +286,55 @@ mod tests {
 
     #[test]
     fn test_parse_hex_u64_with_prefix() {
-        assert_eq!(BlockParser::parse_hex_u64("0x1234"), 0x1234);
-        assert_eq!(BlockParser::parse_hex_u64("0xff"), 255);
-        assert_eq!(BlockParser::parse_hex_u64("0x0"), 0);
+        assert_eq!(BlockParser::parse_hex_u64("0x1234").unwrap(), 0x1234);
+        assert_eq!(BlockParser::parse_hex_u64("0xff").unwrap(), 255);
+        assert_eq!(BlockParser::parse_hex_u64("0x0").unwrap(), 0);
     }
 
     #[test]
     fn test_parse_hex_u64_without_prefix() {
-        assert_eq!(BlockParser::parse_hex_u64("1234"), 0x1234);
-        assert_eq!(BlockParser::parse_hex_u64("ff"), 255);
+        assert_eq!(BlockParser::parse_hex_u64("1234").unwrap(), 0x1234);
+        assert_eq!(BlockParser::parse_hex_u64("ff").unwrap(), 255);
     }
 
     #[test]
-    #[should_panic(expected = "invalid block hex")]
-    fn test_parse_hex_u64_invalid_panics() {
-        let _ = BlockParser::parse_hex_u64("not_hex");
+    fn test_parse_hex_u64_invalid_returns_error() {
+        let err = BlockParser::parse_hex_u64("not_hex").unwrap_err();
+        assert!(err.to_string().contains("invalid block hex"));
     }
 
     #[test]
     fn test_parse_hex_i64_preserves_value() {
-        assert_eq!(BlockParser::parse_hex_i64("0x1234"), 0x1234);
-        assert_eq!(BlockParser::parse_hex_i64("0x7fffffffffffffff"), i64::MAX);
+        assert_eq!(BlockParser::parse_hex_i64("0x1234").unwrap(), 0x1234);
+        assert_eq!(
+            BlockParser::parse_hex_i64("0x7fffffffffffffff").unwrap(),
+            i64::MAX
+        );
     }
 
     #[test]
-    #[should_panic(expected = "block hex over i64 range")]
-    fn test_parse_hex_i64_overflow_panics() {
-        let _ = BlockParser::parse_hex_i64("0x8000000000000000");
+    fn test_parse_hex_i64_overflow_returns_error() {
+        let err = BlockParser::parse_hex_i64("0x8000000000000000").unwrap_err();
+        assert!(err.to_string().contains("block hex over i64 range"));
     }
 
     #[test]
     fn test_parse_hex_i32_preserves_value() {
-        assert_eq!(BlockParser::parse_hex_i32("0x0"), 0);
-        assert_eq!(BlockParser::parse_hex_i32("0x1"), 1);
-        assert_eq!(BlockParser::parse_hex_i32("0xff"), 255);
+        assert_eq!(BlockParser::parse_hex_i32("0x0").unwrap(), 0);
+        assert_eq!(BlockParser::parse_hex_i32("0x1").unwrap(), 1);
+        assert_eq!(BlockParser::parse_hex_i32("0xff").unwrap(), 255);
     }
 
     #[test]
-    #[should_panic(expected = "block hex over i32 range")]
-    fn test_parse_hex_i32_overflow_panics() {
-        let _ = BlockParser::parse_hex_i32("0x100000000");
+    fn test_parse_hex_i32_overflow_returns_error() {
+        let err = BlockParser::parse_hex_i32("0x100000000").unwrap_err();
+        assert!(err.to_string().contains("block hex over i32 range"));
     }
 
     #[test]
     fn test_parse_block_extracts_all_fields() {
         let block = create_test_block();
-        let parsed = BlockParser::parse(&block);
+        let parsed = BlockParser::parse(&block).unwrap();
 
         assert_eq!(parsed.number, 0x1234); // 4660
         assert_eq!(parsed.transactions_count, 1);
@@ -341,7 +349,7 @@ mod tests {
     #[test]
     fn test_parse_block_parses_proposals() {
         let block = create_test_block();
-        let parsed = BlockParser::parse(&block);
+        let parsed = BlockParser::parse(&block).unwrap();
 
         assert_eq!(parsed.proposals.len(), 1);
         assert_eq!(parsed.proposals[0].len(), 10); // 20 hex chars = 10 bytes
@@ -350,7 +358,7 @@ mod tests {
     #[test]
     fn test_parse_header_only() {
         let header = create_test_header();
-        let parsed = BlockParser::parse_header(&header);
+        let parsed = BlockParser::parse_header(&header).unwrap();
 
         assert_eq!(parsed.number, 0x1234);
         assert_eq!(parsed.transactions_count, 0); // No transactions in header-only parse
@@ -362,7 +370,7 @@ mod tests {
     #[test]
     fn test_parse_block_number() {
         let block = create_test_block();
-        let number = BlockParser::parse_block_number(&block);
+        let number = BlockParser::parse_block_number(&block).unwrap();
 
         assert_eq!(number, 0x1234); // 4660
     }
@@ -372,9 +380,9 @@ mod tests {
 
     #[test]
     fn test_parse_hex_u128() {
-        assert_eq!(BlockParser::parse_hex_u128("0x1"), 1u128);
+        assert_eq!(BlockParser::parse_hex_u128("0x1").unwrap(), 1u128);
         assert_eq!(
-            BlockParser::parse_hex_u128("0xffffffffffffffffffffffffffffffff"),
+            BlockParser::parse_hex_u128("0xffffffffffffffffffffffffffffffff").unwrap(),
             u128::MAX
         );
     }

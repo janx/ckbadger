@@ -68,7 +68,8 @@ impl CellParser {
             type_args,
             type_script_hash,
             data_hash,
-            data_size: i32::try_from(data.len()).expect("cell data size exceeds i32::MAX"),
+            data_size: i32::try_from(data.len())
+                .map_err(|_| anyhow::anyhow!("cell data size {} exceeds i32::MAX", data.len()))?,
             data,
         })
     }

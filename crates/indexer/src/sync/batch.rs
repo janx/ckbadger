@@ -1243,7 +1243,7 @@ pub(super) fn parse_blocks_parallel(
             .enumerate()
             .map(|(block_idx, block_response)| -> Result<_> {
                 let block = &block_response.block;
-                let parsed = BlockParser::parse(block);
+                let parsed = BlockParser::parse(block)?;
                 let tx_data_for_block_raw: Vec<Result<TxData>> = block
                     .transactions
                     .par_iter()

@@ -123,7 +123,13 @@ fn handle_channel_open(
 
     // Parse funding_lock_args from metadata
     let funding_lock_args = match metadata.get("fundingLockArgs").and_then(|v| v.as_str()) {
-        Some(hex_str) => decode_hex_with_prefix(hex_str).unwrap_or_default(),
+        Some(hex_str) => decode_hex_with_prefix(hex_str).ok_or_else(|| {
+            anyhow::anyhow!(
+                "fiber channel_open: failed to decode fundingLockArgs hex '{}' in tx 0x{}",
+                hex_str,
+                hex::encode(&bundle.tx_hash)
+            )
+        })?,
         None => Vec::new(),
     };
 
@@ -203,7 +209,13 @@ fn handle_channel_close(
         }
     };
 
-    let funding_lock_args = decode_hex_with_prefix(funding_lock_args_hex).unwrap_or_default();
+    let funding_lock_args = decode_hex_with_prefix(funding_lock_args_hex).ok_or_else(|| {
+        anyhow::anyhow!(
+            "fiber channel_close: failed to decode fundingLockArgs hex '{}' in tx 0x{}",
+            funding_lock_args_hex,
+            hex::encode(&bundle.tx_hash)
+        )
+    })?;
 
     let channel_id = match store.get_fiber_channel_id_by_funding_args(&funding_lock_args)? {
         Some(id) => id,
@@ -257,7 +269,13 @@ fn handle_force_close(
         }
     };
 
-    let funding_lock_args = decode_hex_with_prefix(funding_lock_args_hex).unwrap_or_default();
+    let funding_lock_args = decode_hex_with_prefix(funding_lock_args_hex).ok_or_else(|| {
+        anyhow::anyhow!(
+            "fiber force_close: failed to decode fundingLockArgs hex '{}' in tx 0x{}",
+            funding_lock_args_hex,
+            hex::encode(&bundle.tx_hash)
+        )
+    })?;
 
     let channel_id = match store.get_fiber_channel_id_by_funding_args(&funding_lock_args)? {
         Some(id) => id,
@@ -290,7 +308,13 @@ fn handle_force_close(
 
     // Store commitment info if present in metadata
     if let Some(commitment_args_hex) = metadata.get("commitmentLockArgs").and_then(|v| v.as_str()) {
-        let commitment_args = decode_hex_with_prefix(commitment_args_hex).unwrap_or_default();
+        let commitment_args = decode_hex_with_prefix(commitment_args_hex).ok_or_else(|| {
+            anyhow::anyhow!(
+                "fiber force_close: failed to decode commitmentLockArgs hex '{}' in tx 0x{}",
+                commitment_args_hex,
+                hex::encode(&bundle.tx_hash)
+            )
+        })?;
         if !commitment_args.is_empty() {
             // Use blake2b hash of commitment lock args as the commitment index key
             let commitment_hash = blake2b_hash(&commitment_args);
@@ -322,7 +346,13 @@ fn handle_settlement(
         }
     };
 
-    let commitment_args = decode_hex_with_prefix(commitment_args_hex).unwrap_or_default();
+    let commitment_args = decode_hex_with_prefix(commitment_args_hex).ok_or_else(|| {
+        anyhow::anyhow!(
+            "fiber settlement: failed to decode commitmentLockArgs hex '{}' in tx 0x{}",
+            commitment_args_hex,
+            hex::encode(&bundle.tx_hash)
+        )
+    })?;
     let commitment_hash = blake2b_hash(&commitment_args);
 
     let channel_id = match store.get_fiber_channel_id_by_commitment(&commitment_hash)? {
