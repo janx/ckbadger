@@ -12,6 +12,7 @@ use ckb_types::core::BlockView;
 use ckb_types::packed;
 use ckb_types::prelude::*;
 use rocksdb::{ColumnFamilyDescriptor, DBCompressionType, Options, DB};
+use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
 pub use convert::{
@@ -59,7 +60,9 @@ pub struct BlockHeaderInfo {
 /// is running. Unlike read-only mode, a secondary instance can see new writes from the
 /// primary (CKB node) by calling [`refresh()`](Self::refresh).
 pub struct CkbChainReader {
+    // Drop order matters: close RocksDB before removing the secondary directory.
     db: DB,
+    _secondary_dir: SecondaryDir,
 }
 
 // Safety: DB is Send+Sync — RocksDB handles internal synchronization for secondary instances
@@ -77,16 +80,19 @@ impl CkbChainReader {
     /// The secondary instance starts with a snapshot of the primary's state.
     /// Call [`refresh()`](Self::refresh) periodically to see new blocks written by the node.
     pub fn open(ckb_db_path: &str) -> Result<Self> {
-        let db_path = std::path::Path::new(ckb_db_path);
+        let db_path = Path::new(ckb_db_path);
         if !db_path.exists() {
             return Err(anyhow!("CKB RocksDB path does not exist: {}", ckb_db_path));
         }
 
-        // Secondary instances need their own directory for manifest tracking.
-        // Use a per-process path to allow multiple consumers (indexer, API, CLI tools).
-        let secondary_path = format!("/tmp/ckbadger-rocksdb-secondary-{}", std::process::id());
-        std::fs::create_dir_all(&secondary_path)
-            .map_err(|e| anyhow!("Failed to create secondary path {}: {}", secondary_path, e))?;
+        let secondary_dir = SecondaryDir::create_for_process()?;
+        let secondary_path = secondary_dir.path();
+        let secondary_path_str = secondary_path.to_str().ok_or_else(|| {
+            anyhow!(
+                "Secondary path is not valid UTF-8: {}",
+                secondary_path.display()
+            )
+        })?;
 
         let mut opts = Options::default();
         opts.set_compression_type(DBCompressionType::Lz4);
@@ -105,7 +111,7 @@ impl CkbChainReader {
         let db = DB::open_cf_descriptors_as_secondary(
             &opts,
             ckb_db_path,
-            &secondary_path,
+            secondary_path_str,
             cf_descriptors,
         )
         .map_err(|e| {
@@ -122,10 +128,14 @@ impl CkbChainReader {
 
         info!(
             "Opened CKB RocksDB at {} (secondary instance, path: {})",
-            ckb_db_path, secondary_path
+            ckb_db_path,
+            secondary_path.display()
         );
 
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            _secondary_dir: secondary_dir,
+        })
     }
 
     /// Refresh the secondary instance to see the latest writes from the CKB node.
@@ -508,9 +518,51 @@ impl CkbChainReader {
     }
 }
 
+struct SecondaryDir {
+    path: PathBuf,
+}
+
+impl SecondaryDir {
+    fn create_for_process() -> Result<Self> {
+        // Secondary instances need their own directory for manifest tracking.
+        // Keep the long-lived per-process naming so it is easy to inspect and correlate with logs.
+        let path = PathBuf::from(format!(
+            "/tmp/ckbadger-rocksdb-secondary-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).map_err(|e| {
+            anyhow!(
+                "Failed to create secondary path {}: {}",
+                path.display(),
+                e
+            )
+        })?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for SecondaryDir {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                debug!(
+                    "Failed to remove CKB secondary directory {}: {}",
+                    self.path.display(),
+                    error
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_column_family_names() {
@@ -533,5 +585,35 @@ mod tests {
         assert_eq!(key.len(), 8);
         let decoded = u64::from_le_bytes(key);
         assert_eq!(decoded, number);
+    }
+
+    #[test]
+    fn ckb_reader_drop_removes_secondary_directory() {
+        let primary_dir = tempdir().unwrap();
+        let mut db_opts = Options::default();
+        db_opts.create_if_missing(true);
+        db_opts.create_missing_column_families(true);
+        let cf_descriptors: Vec<ColumnFamilyDescriptor> = ALL_COLUMN_FAMILIES
+            .iter()
+            .map(|name| ColumnFamilyDescriptor::new(*name, Options::default()))
+            .collect();
+        let _primary_db =
+            DB::open_cf_descriptors(&db_opts, primary_dir.path(), cf_descriptors).unwrap();
+
+        let secondary_path =
+            std::path::PathBuf::from(format!("/tmp/ckbadger-rocksdb-secondary-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&secondary_path);
+
+        {
+            let reader = CkbChainReader::open(primary_dir.path().to_str().unwrap()).unwrap();
+            assert!(secondary_path.exists());
+            assert!(reader.tip_number().is_none());
+        }
+
+        assert!(
+            !secondary_path.exists(),
+            "secondary path should be removed when reader is dropped: {}",
+            secondary_path.display()
+        );
     }
 }

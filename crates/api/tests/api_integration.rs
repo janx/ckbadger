@@ -13,7 +13,7 @@ use ckbadger_api::cycles::CyclesClient;
 use ckbadger_api::routes::api_routes;
 use ckbadger_api::utils::address::compute_script_hash;
 use ckbadger_api::ws::WsManager;
-use ckbadger_api::{create_router, AppConfig, AppState};
+use ckbadger_api::{create_router, AppConfig, AppState, CleanupPathGuard};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ActivityEntry, AssetAction, AssetChange, CachedBlockHeader, ClusterAggregate,
@@ -46,7 +46,12 @@ fn split_test_stores() -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
     (store.clone(), store)
 }
 
-fn test_ckb_db_path() -> String {
+struct TestCkbDb {
+    path: String,
+    cleanup: Arc<CleanupPathGuard>,
+}
+
+fn test_ckb_db_path() -> TestCkbDb {
     let db_path = std::env::temp_dir().join(format!("ckbadger-api-test-ckb-db-{}", Uuid::new_v4()));
     let mut db_opts = Options::default();
     db_opts.create_if_missing(true);
@@ -55,21 +60,25 @@ fn test_ckb_db_path() -> String {
         .map(|index| ColumnFamilyDescriptor::new(index.to_string(), Options::default()))
         .collect();
     let _db = DB::open_cf_descriptors(&db_opts, &db_path, cf_descriptors).unwrap();
-    db_path.to_string_lossy().to_string()
+    TestCkbDb {
+        path: db_path.to_string_lossy().to_string(),
+        cleanup: Arc::new(CleanupPathGuard::new(db_path)),
+    }
 }
 
 fn test_config_with_append_only(
     store: Arc<CkbadgerStore>,
     append_only_store: Arc<CkbadgerStore>,
 ) -> AppConfig {
-    let ckb_db_path = test_ckb_db_path();
-    test_config_with_ckb_db_path(store, append_only_store, ckb_db_path)
+    let ckb_db = test_ckb_db_path();
+    test_config_with_ckb_db_path(store, append_only_store, ckb_db.path, Some(ckb_db.cleanup))
 }
 
 fn test_config_with_ckb_db_path(
     store: Arc<CkbadgerStore>,
     append_only_store: Arc<CkbadgerStore>,
     ckb_db_path: String,
+    ckb_db_cleanup: Option<Arc<CleanupPathGuard>>,
 ) -> AppConfig {
     AppConfig {
         append_only_store,
@@ -80,6 +89,7 @@ fn test_config_with_ckb_db_path(
         rate_limit_burst: Some(2000),
         start_background_tasks: false,
         ckb_db_path,
+        ckb_db_cleanup,
     }
 }
 
@@ -97,6 +107,7 @@ fn create_router_without_warmup(config: AppConfig) -> axum::Router {
         ckb_network: config.ckb_network,
         cycles_client: CyclesClient::disabled(),
         ckb_store: None,
+        ckb_db_cleanup: config.ckb_db_cleanup,
         mem_cache: InMemoryCache::new(),
         asset_cache_warmup_error: Arc::new(std::sync::RwLock::new(None)),
     });
@@ -104,6 +115,25 @@ fn create_router_without_warmup(config: AppConfig) -> axum::Router {
     axum::Router::new()
         .nest("/api/v1", api_routes())
         .with_state(state)
+}
+
+#[tokio::test]
+async fn test_router_drop_cleans_up_temp_ckb_db() {
+    let store = test_store();
+    let config = test_config(store);
+    let db_path = std::path::PathBuf::from(config.ckb_db_path.clone());
+    assert!(db_path.exists());
+
+    let app = create_router_without_warmup(config);
+    assert!(db_path.exists());
+
+    drop(app);
+
+    assert!(
+        !db_path.exists(),
+        "temporary ckb db path should be removed when router state is dropped: {}",
+        db_path.display()
+    );
 }
 
 fn compute_blake2b_data_hash(data: &[u8]) -> Vec<u8> {

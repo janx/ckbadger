@@ -80,6 +80,7 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
         rate_limit_burst: Some(config.rate_limit_burst),
         start_background_tasks: true,
         ckb_db_path: config.ckb_db_path,
+        ckb_db_cleanup: None,
     };
     let app = create_router(app_config).await;
 

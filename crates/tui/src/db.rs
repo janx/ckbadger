@@ -674,7 +674,10 @@ mod tests {
     use ckbadger_ipc::{
         IpcHandler, IpcRequest, IpcResponse, IpcServer, ServiceInfo, ServiceStatus,
     };
-    use ckbadger_store::{CkbadgerStore, RuntimeStatus, StoreRuntimeConfig};
+    use ckbadger_store::{
+        secondary_store_path, CkbadgerStore, RuntimeStatus, SecondaryStoreOwner,
+        StoreRuntimeConfig,
+    };
     use std::future::Future;
     use std::path::Path;
     use std::pin::Pin;
@@ -710,6 +713,15 @@ mod tests {
             adaptive_adjustment_seq: None,
             adaptive_backoff_streak: None,
             adaptive_last_adjusted_at: None,
+        }
+    }
+
+    fn cleanup_tui_temp_stores(domain_path: &Path, append_path: &Path) {
+        let secondary_path = secondary_store_path(domain_path, SecondaryStoreOwner::Tui);
+        for path in [secondary_path.as_path(), append_path, domain_path] {
+            if path.exists() {
+                std::fs::remove_dir_all(path).unwrap();
+            }
         }
     }
 
@@ -842,8 +854,44 @@ mod tests {
         assert_eq!(sync.eta.as_deref(), Some("1m 30s"));
         assert_eq!(sync.elapsed_time.as_deref(), Some("1m 30s"));
 
-        std::fs::remove_dir_all(domain_path).unwrap();
-        std::fs::remove_dir_all(append_path).unwrap();
+        cleanup_tui_temp_stores(&domain_path, &append_path);
+    }
+
+    #[tokio::test]
+    async fn tui_test_cleanup_must_remove_secondary_directory() {
+        let test_id = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let domain_path = std::env::temp_dir().join(format!("ckbadger-tui-{test_id}-domain"));
+        let append_path = std::env::temp_dir().join(format!("ckbadger-tui-{test_id}-append"));
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+        let _store = CkbadgerStore::open_domain(&domain_path).unwrap();
+
+        {
+            let _db = TuiDb::new(
+                "http://127.0.0.1:3001/api/v1",
+                domain_path.to_str().unwrap(),
+                append_path.to_str().unwrap(),
+            )
+            .await;
+        }
+
+        let secondary_path = secondary_store_path(&domain_path, SecondaryStoreOwner::Tui);
+        assert!(secondary_path.exists());
+
+        cleanup_tui_temp_stores(&domain_path, &append_path);
+
+        assert!(
+            !secondary_path.exists(),
+            "secondary path should be removed during test cleanup: {}",
+            secondary_path.display()
+        );
     }
 
     #[tokio::test]
@@ -901,8 +949,7 @@ mod tests {
         assert!(sync.rate_realtime.is_none());
         assert_eq!(sync.rate_ema, Some(42.0));
 
-        std::fs::remove_dir_all(domain_path).unwrap();
-        std::fs::remove_dir_all(append_path).unwrap();
+        cleanup_tui_temp_stores(&domain_path, &append_path);
     }
 
     #[tokio::test]
@@ -967,8 +1014,7 @@ mod tests {
         );
         assert_eq!(runtime.last_exit_code, Some(0));
 
-        std::fs::remove_dir_all(domain_path).unwrap();
-        std::fs::remove_dir_all(append_path).unwrap();
+        cleanup_tui_temp_stores(&domain_path, &append_path);
     }
 
     struct StaticStatusHandler;

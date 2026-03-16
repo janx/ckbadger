@@ -11,6 +11,7 @@ pub mod ws;
 
 use axum::{routing::get, Router};
 use ckbadger_store::CkbadgerStore;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
@@ -23,6 +24,31 @@ use middleware::IpRateLimitLayer;
 use response::{ApiError, ApiRouteError};
 use ws::WsManager;
 
+#[derive(Debug)]
+pub struct CleanupPathGuard {
+    path: PathBuf,
+}
+
+impl CleanupPathGuard {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+}
+
+impl Drop for CleanupPathGuard {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    "Failed to remove temporary directory {}: {}",
+                    self.path.display(),
+                    error
+                );
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<CkbadgerStore>,
@@ -34,6 +60,8 @@ pub struct AppState {
     pub cycles_client: Arc<CyclesClient>,
     /// Direct read-only access to the resolved CKB RocksDB path.
     pub ckb_store: Option<Arc<CkbChainReader>>,
+    /// Optional guard that keeps a temporary CKB RocksDB fixture alive for the router lifetime.
+    pub ckb_db_cleanup: Option<Arc<CleanupPathGuard>>,
     /// In-memory cache for assets/tokens/NFT data (refreshed by background loop).
     pub mem_cache: InMemoryCache,
     /// Last asset cache warmup failure. `None` means warmup is still pending or last refresh succeeded.
@@ -80,6 +108,8 @@ pub struct AppConfig {
     pub start_background_tasks: bool,
     /// Resolved path to the CKB node RocksDB directory for direct reads.
     pub ckb_db_path: String,
+    /// Optional guard that keeps a temporary CKB RocksDB fixture alive for the router lifetime.
+    pub ckb_db_cleanup: Option<Arc<CleanupPathGuard>>,
 }
 
 pub async fn create_router(config: AppConfig) -> Router {
@@ -118,6 +148,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         ckb_network: config.ckb_network,
         cycles_client,
         ckb_store,
+        ckb_db_cleanup: config.ckb_db_cleanup,
         mem_cache,
         asset_cache_warmup_error: Arc::new(RwLock::new(None)),
     });
