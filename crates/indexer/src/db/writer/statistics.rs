@@ -677,7 +677,7 @@ impl BatchWriter {
                 e.script_call_count += accumulated.script_call_count;
                 e.unknown_count += accumulated.unknown_count;
                 e.coinbase_count += accumulated.coinbase_count;
-                e.unique_address_count = unique_addresses;
+                e.unique_address_count += unique_addresses;
                 e.total_ckb_moved = e
                     .total_ckb_moved
                     .checked_add(accumulated.total_ckb_moved)
@@ -731,7 +731,7 @@ impl BatchWriter {
                 e.script_call_count += accumulated.script_call_count;
                 e.unknown_count += accumulated.unknown_count;
                 e.coinbase_count += accumulated.coinbase_count;
-                e.unique_address_count = unique_addresses;
+                e.unique_address_count += unique_addresses;
                 e.total_ckb_moved = e
                     .total_ckb_moved
                     .checked_add(accumulated.total_ckb_moved)
@@ -1992,7 +1992,7 @@ mod activity_stats_tests {
         assert_eq!(got.transfer_count, 15);
         assert_eq!(got.dao_deposit_count, 2);
         assert_eq!(got.total_ckb_moved, 150_00000000);
-        assert_eq!(got.unique_address_count, 7); // replaced, not summed
+        assert_eq!(got.unique_address_count, 10); // 3 + 7, summed across batches
     }
 
     #[test]

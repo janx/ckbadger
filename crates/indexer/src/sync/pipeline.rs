@@ -172,7 +172,10 @@ fn run_nft_precompute(
                     .as_ref()
                     .is_some_and(|tc| tc.as_slice() == dotbit_code_hash.as_slice())
             });
-            let witness_bundle = if has_dotbit_output {
+            // Parse DAS witness for ALL non-cellbase txs (not just those with .bit outputs).
+            // Pure-consumption txs (e.g. recycle_expired_account) still carry ActionData
+            // witnesses, and we need the DAS action for correct activity classification.
+            let witness_bundle = if has_dotbit_output || !tx_data.is_cellbase {
                 parse_dotbit_witness_bundle(&tx_data.witnesses)
             } else {
                 DotbitWitnessBundle::default()
@@ -196,10 +199,10 @@ fn run_nft_precompute(
             for (output_index, token) in scanned.mnft_tokens {
                 mnft_tokens.push((tx_global_index, output_index, token));
             }
-            if !scanned.dotbit_accounts.is_empty() {
-                if let Some(action) = scanned.dotbit_action {
-                    dotbit_tx_actions.insert(tx_global_index, action);
-                }
+            // Store DAS action for ALL txs that carry one, not just those with .bit outputs.
+            // Consumption-only txs need the action for correct activity classification.
+            if let Some(action) = scanned.dotbit_action {
+                dotbit_tx_actions.insert(tx_global_index, action);
             }
             for account in scanned.dotbit_accounts {
                 batch_dotbit_outpoints.insert(

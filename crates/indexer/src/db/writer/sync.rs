@@ -358,6 +358,19 @@ impl BatchWriter {
     }
 
     fn has_partial_data_after_block(&self, start_block: i64) -> Result<bool> {
+        // Check for a bulk batch-in-progress marker. If present, worker threads
+        // committed domain CFs but finalize never completed — partial data exists.
+        if self
+            .store
+            .get_cf(
+                self.store.cf_sync_meta(),
+                keys::sync_meta_keys::BULK_BATCH_IN_PROGRESS,
+            )?
+            .is_some()
+        {
+            return Ok(true);
+        }
+
         let start_key = keys::encode_block_num(start_block + 1);
 
         let header_iter = self.store.iterator_cf(
@@ -421,7 +434,8 @@ mod tests {
     use std::sync::Arc;
 
     use ckbadger_store::{
-        AddressBalance, CachedBlockHeader, CkbadgerStore, StoreBatch, SyncStatus, TxIndexEntry,
+        keys::sync_meta_keys, AddressBalance, CachedBlockHeader, CkbadgerStore, StoreBatch,
+        SyncStatus, TxIndexEntry,
     };
     use tempfile::TempDir;
 
@@ -748,5 +762,23 @@ mod tests {
         );
         assert_eq!(probe.missing_tx_incomplete_sample.len(), 1);
         assert_eq!(probe.missing_tx_incomplete_sample[0], (0, 3, 1));
+    }
+
+    #[test]
+    fn test_needs_startup_cleanup_detects_bulk_batch_in_progress_marker() {
+        let (_dir, store, _append_store, writer) = setup();
+        assert!(!writer.needs_startup_cleanup(0).unwrap());
+
+        // Simulate a bulk batch that started but finalize never completed:
+        // write the batch-in-progress marker directly.
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                sync_meta_keys::BULK_BATCH_IN_PROGRESS,
+                b"100-200",
+            )
+            .unwrap();
+
+        assert!(writer.needs_startup_cleanup(0).unwrap());
     }
 }

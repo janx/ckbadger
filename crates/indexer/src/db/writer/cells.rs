@@ -492,7 +492,13 @@ impl BatchWriter {
                         PositionedCellInfo::new(info, live_markers[batch_idx]),
                     );
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    bail!(
+                        "missing canonical cell for live marker in get_full_cells_info_batch: outpoint=0x{}:{}",
+                        hex::encode(tx_hash),
+                        output_index,
+                    );
+                }
                 Err(e) => {
                     bail!(
                         "failed to read canonical cell info: outpoint=0x{}:{}, error={}",
@@ -853,6 +859,33 @@ mod tests {
             err.to_string()
                 .contains("missing preloaded cell info during consumption"),
             "expected missing-preloaded-cell error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_get_full_cells_info_batch_errors_on_missing_append_only_payload() {
+        // Regression: if a live marker exists in domain store but the append-only
+        // cell payload is missing, this is an invariant violation that must fail-fast.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let tx_hash = vec![0xEE; 32];
+        let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, 0);
+
+        // Write only a live marker (domain) — no cell payload in append-only.
+        let marker = ckbadger_store::types::encode_live_cell_marker(100);
+        store
+            .put_cf(store.cf_live_cells(), &outpoint_key, &marker)
+            .unwrap();
+
+        let outpoints = vec![(tx_hash.as_slice(), 0i16)];
+        let err = writer.get_full_cells_info_batch(&outpoints).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("missing canonical cell for live marker"),
+            "expected invariant violation error, got: {}",
             err
         );
     }

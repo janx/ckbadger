@@ -1246,6 +1246,7 @@ pub mod sync_meta_keys {
     pub const CELL_DIST_TRACKER: &[u8] = b"cell_dist_tracker";
     pub const SYNC_PROGRESS: &[u8] = b"sync_progress";
     pub const MEMORY_STATS: &[u8] = b"memory_stats";
+    pub const BULK_BATCH_IN_PROGRESS: &[u8] = b"bulk_batch_in_progress";
 }
 
 // -- Fiber Channels --

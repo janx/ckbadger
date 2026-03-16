@@ -1198,6 +1198,10 @@ impl<'a> StoreBatch<'a> {
     pub fn put_sync_meta(&mut self, key: &[u8], value: &[u8]) {
         self.put_cf(self.store.cf_sync_meta(), key, value);
     }
+
+    pub fn delete_sync_meta(&mut self, key: &[u8]) {
+        self.delete_cf(self.store.cf_sync_meta(), key);
+    }
 }
 
 #[cfg(test)]

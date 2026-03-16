@@ -2321,6 +2321,18 @@ impl Indexer {
                 .filter(|d| d.might_apply_batch(&batch_lock_code_hashes, &batch_type_code_hashes))
                 .collect();
 
+            // Write a batch-in-progress marker BEFORE worker threads start.
+            // If a crash occurs after workers commit but before finalize,
+            // startup will detect this marker and trigger cleanup.
+            {
+                let marker_value = format!("{}-{}", first_block, last_block);
+                store.put_cf(
+                    store.cf_sync_meta(),
+                    ckbadger_store::keys::sync_meta_keys::BULK_BATCH_IN_PROGRESS,
+                    marker_value.as_bytes(),
+                )?;
+            }
+
             let tt;
             (
                 batch_stats,
@@ -2371,17 +2383,21 @@ impl Indexer {
                                 true,
                             )?;
                         }
-                        let commit_ms = commit_phase_no_wal(
-                            "T1_cells_domain",
-                            first_block,
-                            last_block,
-                            domain_batch,
-                        )?;
+                        // Commit append-only (cell payloads) BEFORE domain (live markers).
+                        // If crash between these two commits, orphaned payloads in append-only
+                        // are harmless (content-addressed, idempotent), whereas dangling live
+                        // markers without payloads would violate the split-store invariant.
                         let cells_commit_ms = commit_phase_no_wal(
                             "T1_cells_append",
                             first_block,
                             last_block,
                             cells_batch,
+                        )?;
+                        let commit_ms = commit_phase_no_wal(
+                            "T1_cells_domain",
+                            first_block,
+                            last_block,
+                            domain_batch,
                         )?;
                         Ok((
                             t.elapsed().as_secs_f64() * 1000.0,
@@ -4290,6 +4306,9 @@ impl Indexer {
                 let mut identity_activity_acc = ObjectCollectionActivityAccumulator::new();
                 let mut dotbit_tx_activity_data: HashMap<[u8; 32], DotbitTxActivityData> =
                     HashMap::new();
+                // Cache DAS actions for all non-cellbase txs so consumption-only
+                // txs can look up their action (not just txs with .bit outputs).
+                let mut das_action_cache: HashMap<[u8; 32], String> = HashMap::new();
                 let mut block_tx_idx = 0usize;
                 for (block_idx, block_response) in blocks.iter().enumerate() {
                     let parsed = &all_parsed_blocks[block_idx];
@@ -4441,9 +4460,16 @@ impl Indexer {
                                 true,
                             );
                         }
+                        // Parse DAS action for all non-cellbase txs so
+                        // consumption-only .bit txs can look up their action.
+                        if !tx_data.is_cellbase {
+                            if let Some(action) = DotbitParser::parse_das_action(&tx.witnesses) {
+                                das_action_cache.insert(tx_data.hash, action);
+                            }
+                        }
                         let dotbit_accounts = DotbitParser::parse_accounts(tx)?;
                         if !dotbit_accounts.is_empty() {
-                            let das_action = DotbitParser::parse_das_action(&tx.witnesses);
+                            let das_action = das_action_cache.get(&tx_data.hash).cloned();
                             let mut created_ids = HashSet::new();
                             for account in &dotbit_accounts {
                                 self.writer.insert_dotbit_account_with_state(
@@ -4691,7 +4717,7 @@ impl Indexer {
                                 let activity = dotbit_tx_activity_data
                                     .entry(tx_key)
                                     .or_insert_with(|| DotbitTxActivityData {
-                                        das_action: None,
+                                        das_action: das_action_cache.get(&tx_key).cloned(),
                                         created_account_ids: HashSet::new(),
                                         consumed_account_ids: HashSet::new(),
                                         block_number: *block_number,
@@ -5243,6 +5269,10 @@ impl Indexer {
             if bulk_sync_mode {
                 // Merge headers + stats into single batch to halve finalize commit cost.
                 core_batch.merge_from(stats_batch);
+                // Delete the batch-in-progress marker atomically with finalize.
+                // If crash occurs before this commit, startup detects the marker.
+                core_batch
+                    .delete_sync_meta(ckbadger_store::keys::sync_meta_keys::BULK_BATCH_IN_PROGRESS);
                 debug!(
                     phase = "finalize_headers_stats",
                     batch_start = first_block,
