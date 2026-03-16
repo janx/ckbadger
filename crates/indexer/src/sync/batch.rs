@@ -6053,6 +6053,142 @@ mod tests {
         }
     }
 
+    fn encode_dep_group_data(outpoints: &[([u8; 32], i16)]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(4 + outpoints.len() * 36);
+        bytes.extend_from_slice(
+            &u32::try_from(outpoints.len())
+                .expect("dep group member count exceeds u32")
+                .to_le_bytes(),
+        );
+        for (tx_hash, output_index) in outpoints {
+            bytes.extend_from_slice(tx_hash);
+            bytes.extend_from_slice(
+                &u32::try_from(*output_index)
+                    .expect("dep group output index must be non-negative")
+                    .to_le_bytes(),
+            );
+        }
+        bytes
+    }
+
+    #[test]
+    fn test_resolve_tx_dep_cells_expands_dep_groups_and_deduplicates_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let direct_tx_hash = [0x11; 32];
+        let grouped_tx_hash = [0x22; 32];
+        let dep_group_tx_hash = [0x33; 32];
+
+        let direct_info = PositionedCellInfo::new(
+            LiveCellInfo {
+                capacity: 100,
+                lock_script_hash: vec![0x41; 32],
+                lock_code_hash: vec![0x42; 32],
+                lock_hash_type: 0,
+                lock_args: vec![],
+                type_script_hash: None,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                data_size: 0,
+                occupied_capacity: 61,
+                udt_amount: None,
+                data_hash: Some(vec![0x43; 32]),
+            },
+            1,
+        );
+        let grouped_info = PositionedCellInfo::new(
+            LiveCellInfo {
+                capacity: 200,
+                lock_script_hash: vec![0x51; 32],
+                lock_code_hash: vec![0x52; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(vec![0x53; 32]),
+                type_code_hash: Some(vec![0x54; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 0,
+                occupied_capacity: 61,
+                udt_amount: None,
+                data_hash: Some(vec![0x55; 32]),
+            },
+            2,
+        );
+
+        let mut seed = StoreBatch::new(&store);
+        seed.put_cell(&direct_tx_hash, 1, &direct_info.cell, 1);
+        seed.put_cell(&grouped_tx_hash, 2, &grouped_info.cell, 2);
+        seed.commit().unwrap();
+
+        let dep_group_bytes = encode_dep_group_data(&[(direct_tx_hash, 1), (grouped_tx_hash, 2)]);
+        let mut dep_group_cell = parsed_cell(50, vec![0x66; 32], 0);
+        dep_group_cell.data = dep_group_bytes.clone();
+        dep_group_cell.data_size =
+            i32::try_from(dep_group_bytes.len()).expect("dep group data length exceeds i32");
+
+        let tx = TxData {
+            hash: [0x44; 32],
+            block_number: 14_000_000,
+            tx_index: 0,
+            inputs_count: 0,
+            outputs_count: 0,
+            is_cellbase: false,
+            inputs: vec![],
+            cell_deps: vec![
+                crate::parser::transaction::ParsedCellDep {
+                    out_point_tx_hash: direct_tx_hash,
+                    out_point_index: 1,
+                    dep_type: 0,
+                },
+                crate::parser::transaction::ParsedCellDep {
+                    out_point_tx_hash: dep_group_tx_hash,
+                    out_point_index: 0,
+                    dep_type: 1,
+                },
+            ],
+            cells: vec![],
+            witnesses: vec![],
+            outputs_data: vec![],
+            total_input_capacity: 0,
+            total_output_capacity: 0,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            timestamp: Utc::now(),
+        };
+
+        let mut batch_parsed_cells = HashMap::new();
+        batch_parsed_cells.insert((dep_group_tx_hash.to_vec(), 0), dep_group_cell);
+
+        let resolved = resolve_tx_dep_cells(
+            &tx,
+            &store,
+            &store,
+            &HashMap::new(),
+            &batch_parsed_cells,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(
+            resolved
+                .get(&(direct_tx_hash.to_vec(), 1))
+                .expect("direct dep cell should resolve")
+                .created_at_block,
+            1
+        );
+        assert_eq!(
+            resolved
+                .get(&(grouped_tx_hash.to_vec(), 2))
+                .expect("dep-group member should resolve")
+                .created_at_block,
+            2
+        );
+    }
+
     #[test]
     fn test_build_script_reference_version_state_persists_created_output_versions() {
         let dir = tempfile::tempdir().unwrap();

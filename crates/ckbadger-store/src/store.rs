@@ -2444,6 +2444,21 @@ mod tests {
     }
 
     #[test]
+    fn test_mega_write_cfs_excludes_script_reference_cfs() {
+        for cf in [
+            CF_CELL_SCRIPT_VERSIONS,
+            CF_SCRIPT_REFERENCES,
+            CF_SCRIPT_VERSIONS,
+            CF_SCRIPT_VERSIONS_BY_LABEL,
+        ] {
+            assert!(
+                !CkbadgerStore::is_mega_write_cf(cf),
+                "{cf} should NOT be in MEGA_WRITE_CFS"
+            );
+        }
+    }
+
+    #[test]
     fn test_mega_write_cfs_expected_members() {
         let expected = &[
             CF_CELLS,

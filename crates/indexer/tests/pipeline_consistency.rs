@@ -199,7 +199,9 @@ fn test_full_cells_info_returns_lock_and_type() {
     let info = result.get(&(tx_hash.clone(), 0)).unwrap();
 
     assert_eq!(info.lock_code_hash, vec![0x11u8; 32]);
+    assert_eq!(info.lock_hash_type, 0);
     assert_eq!(info.type_code_hash, Some(vec![0x44u8; 32]));
+    assert_eq!(info.type_hash_type, Some(1));
     assert_eq!(info.capacity, 300_00000000);
     assert_eq!(info.created_at_block, 1000);
 }
