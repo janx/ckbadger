@@ -239,12 +239,10 @@ pub(crate) fn atomic_checked_sub_u64(counter: &AtomicU64, value: u64) {
         let next = match current.checked_sub(value) {
             Some(n) => n,
             None => {
-                tracing::error!(
-                    "pipeline counter underflow: current={}, sub_value={}, clamping to 0",
-                    current,
-                    value,
+                panic!(
+                    "pipeline counter underflow: current={}, sub_value={}",
+                    current, value,
                 );
-                0
             }
         };
         if counter

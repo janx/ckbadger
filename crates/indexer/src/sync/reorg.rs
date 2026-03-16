@@ -41,6 +41,7 @@ impl Indexer {
     ) -> Result<()> {
         let mut tracker = self.hodl_tracker.lock().unwrap();
         let store = self.writer.store();
+        let mut batch = ckbadger_store::batch::StoreBatch::new(store);
 
         // Phase 1: Record block dates and cell creates/consumes
         let mut block_tx_idx = 0usize;
@@ -80,7 +81,7 @@ impl Indexer {
             // Check for day boundary and write snapshot
             if let Some((snapshot_date, snapshot)) = tracker.maybe_snapshot(block_date) {
                 let date_str = snapshot_date.format("%Y%m%d").to_string();
-                store.put_hodl_wave(&date_str, &snapshot)?;
+                batch.put_hodl_wave(&date_str, &snapshot);
             }
         }
 
@@ -112,8 +113,9 @@ impl Indexer {
             tracker.update_holder_count(old_live, post_live)?;
         }
 
-        // Phase 3: Persist tracker state
-        store.put_hodl_tracker_state(&tracker.to_state())?;
+        // Phase 3: Persist tracker state atomically with snapshots
+        batch.put_hodl_tracker_state(&tracker.to_state());
+        batch.commit()?;
 
         Ok(())
     }
@@ -138,6 +140,7 @@ impl Indexer {
     ) -> Result<()> {
         let mut tracker = self.cell_dist_tracker.lock().unwrap();
         let store = self.writer.store();
+        let mut batch = ckbadger_store::batch::StoreBatch::new(store);
 
         // Read address balances for cohort delta computation (live sync path)
         let lock_hash_refs: Vec<&Vec<u8>> = address_balance_changes.keys().collect();
@@ -192,16 +195,17 @@ impl Indexer {
             // Check for day boundary and write snapshot
             if let Some((snapshot_date, snapshot)) = tracker.maybe_snapshot(block_date) {
                 let date_str = snapshot_date.format("%Y%m%d").to_string();
-                store.put_cell_distribution(&date_str, &snapshot)?;
+                batch.put_cell_distribution(&date_str, &snapshot);
 
                 // Materialize address cohort snapshot from incremental accumulator
                 let cohort = tracker.cohort_snapshot();
-                store.put_address_cohort(&date_str, &cohort)?;
+                batch.put_address_cohort(&date_str, &cohort);
             }
         }
 
-        // Persist tracker state
-        store.put_cell_dist_tracker_state(&tracker.to_state())?;
+        // Persist tracker state atomically with snapshots
+        batch.put_cell_dist_tracker_state(&tracker.to_state());
+        batch.commit()?;
 
         Ok(())
     }
@@ -221,6 +225,7 @@ impl Indexer {
         let mut hodl = self.hodl_tracker.lock().unwrap();
         let mut cell_dist = self.cell_dist_tracker.lock().unwrap();
         let store = self.writer.store();
+        let mut batch = ckbadger_store::batch::StoreBatch::new(store);
 
         // Update cohort accumulator from address balance changes (before block loop
         // so that cohort_snapshot() is up-to-date at day boundaries)
@@ -273,17 +278,17 @@ impl Indexer {
             // HODL day boundary snapshot
             if let Some((snapshot_date, snapshot)) = hodl.maybe_snapshot(block_date) {
                 let date_str = snapshot_date.format("%Y%m%d").to_string();
-                store.put_hodl_wave(&date_str, &snapshot)?;
+                batch.put_hodl_wave(&date_str, &snapshot);
             }
 
             // Cell distribution day boundary snapshot + address cohort
             if let Some((snapshot_date, snapshot)) = cell_dist.maybe_snapshot(block_date) {
                 let date_str = snapshot_date.format("%Y%m%d").to_string();
-                store.put_cell_distribution(&date_str, &snapshot)?;
+                batch.put_cell_distribution(&date_str, &snapshot);
 
                 // Materialize address cohort snapshot from incremental accumulator
                 let cohort = cell_dist.cohort_snapshot();
-                store.put_address_cohort(&date_str, &cohort)?;
+                batch.put_address_cohort(&date_str, &cohort);
             }
         }
 
@@ -326,9 +331,10 @@ impl Indexer {
             hodl.update_holder_count(pre_live, post_live)?;
         }
 
-        // Phase 3: Persist both tracker states
-        store.put_hodl_tracker_state(&hodl.to_state())?;
-        store.put_cell_dist_tracker_state(&cell_dist.to_state())?;
+        // Phase 3: Persist both tracker states atomically with snapshots
+        batch.put_hodl_tracker_state(&hodl.to_state());
+        batch.put_cell_dist_tracker_state(&cell_dist.to_state());
+        batch.commit()?;
 
         Ok(())
     }

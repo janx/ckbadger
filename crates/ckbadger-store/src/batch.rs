@@ -1155,6 +1155,44 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_addr_fiber_channels(), &key);
     }
 
+    // ---- Tracker batch methods ----
+
+    pub fn put_hodl_wave(&mut self, date: &str, wave: &DailyHodlWave) {
+        let key = keys::encode_stats_key(keys::stats_prefix::HODL_WAVE, date.as_bytes());
+        let value = bincode::serialize(wave).expect("failed to serialize hodl wave");
+        self.put_cf(self.store.cf_stats_hodl(), &key, &value);
+    }
+
+    pub fn put_hodl_tracker_state(&mut self, state: &HodlTrackerState) {
+        let value = bincode::serialize(state).expect("failed to serialize hodl tracker state");
+        self.put_cf(
+            self.store.cf_sync_meta(),
+            keys::sync_meta_keys::HODL_TRACKER,
+            &value,
+        );
+    }
+
+    pub fn put_cell_distribution(&mut self, date: &str, snapshot: &DailyCellDistribution) {
+        let key = keys::encode_stats_key(keys::stats_prefix::CELL_DISTRIBUTION, date.as_bytes());
+        let value = bincode::serialize(snapshot).expect("failed to serialize cell distribution");
+        self.put_cf(self.store.cf_stats_hodl(), &key, &value);
+    }
+
+    pub fn put_address_cohort(&mut self, date: &str, snapshot: &DailyAddressCohort) {
+        let key = keys::encode_stats_key(keys::stats_prefix::ADDR_COHORT, date.as_bytes());
+        let value = bincode::serialize(snapshot).expect("failed to serialize address cohort");
+        self.put_cf(self.store.cf_stats_hodl(), &key, &value);
+    }
+
+    pub fn put_cell_dist_tracker_state(&mut self, state: &CellDistributionTrackerState) {
+        let value = bincode::serialize(state).expect("failed to serialize cell dist tracker state");
+        self.put_cf(
+            self.store.cf_sync_meta(),
+            keys::sync_meta_keys::CELL_DIST_TRACKER,
+            &value,
+        );
+    }
+
     // ---- Sync meta ----
 
     pub fn put_sync_meta(&mut self, key: &[u8], value: &[u8]) {

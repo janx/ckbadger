@@ -38,6 +38,8 @@ pub struct SyncProgress {
     ema_tx_rate: AtomicU64,
     /// Guard to ensure the refresher thread is only started once.
     refresher_running: AtomicBool,
+    /// Signal the refresher thread to exit.
+    shutdown: Arc<AtomicBool>,
 }
 
 impl SyncProgress {
@@ -52,6 +54,7 @@ impl SyncProgress {
             current_tx_rate: AtomicU64::new(0),
             ema_tx_rate: AtomicU64::new(0),
             refresher_running: AtomicBool::new(false),
+            shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -148,13 +151,22 @@ impl SyncProgress {
             return;
         }
         let progress = Arc::clone(self);
+        let shutdown = Arc::clone(&self.shutdown);
         std::thread::Builder::new()
             .name("rate-refresher".into())
             .spawn(move || loop {
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
                 std::thread::sleep(Duration::from_millis(REFRESH_INTERVAL_MS));
                 progress.refresh_rate();
             })
             .expect("failed to spawn rate-refresher thread");
+    }
+
+    /// Signal the refresher thread to exit.
+    pub fn stop_refresher(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
     }
 
     pub fn update_target(&self, target: u64) {

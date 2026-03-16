@@ -73,22 +73,20 @@ fn handle_channel_open(
     let channel_outpoint_hex = match metadata.get("channelOutpoint").and_then(|v| v.as_str()) {
         Some(s) => s,
         None => {
-            warn!(
-                tx_hash = %hex::encode(&bundle.tx_hash),
-                "fiber channel_open missing channelOutpoint metadata, skipping"
+            anyhow::bail!(
+                "fiber channel_open missing channelOutpoint metadata in tx 0x{} — detector bug",
+                hex::encode(&bundle.tx_hash)
             );
-            return Ok(());
         }
     };
 
     let capacity_str = match metadata.get("capacity").and_then(|v| v.as_str()) {
         Some(s) => s,
         None => {
-            warn!(
-                tx_hash = %hex::encode(&bundle.tx_hash),
-                "fiber channel_open missing capacity metadata, skipping"
+            anyhow::bail!(
+                "fiber channel_open missing capacity metadata in tx 0x{} — detector bug",
+                hex::encode(&bundle.tx_hash)
             );
-            return Ok(());
         }
     };
 
@@ -201,11 +199,10 @@ fn handle_channel_close(
     let funding_lock_args_hex = match metadata.get("fundingLockArgs").and_then(|v| v.as_str()) {
         Some(s) => s,
         None => {
-            warn!(
-                tx_hash = %hex::encode(&bundle.tx_hash),
-                "fiber channel_close missing fundingLockArgs metadata, skipping"
+            anyhow::bail!(
+                "fiber channel_close missing fundingLockArgs metadata in tx 0x{} — detector bug",
+                hex::encode(&bundle.tx_hash)
             );
-            return Ok(());
         }
     };
 
@@ -261,11 +258,10 @@ fn handle_force_close(
     let funding_lock_args_hex = match metadata.get("fundingLockArgs").and_then(|v| v.as_str()) {
         Some(s) => s,
         None => {
-            warn!(
-                tx_hash = %hex::encode(&bundle.tx_hash),
-                "fiber force_close missing fundingLockArgs metadata, skipping"
+            anyhow::bail!(
+                "fiber force_close missing fundingLockArgs metadata in tx 0x{} — detector bug",
+                hex::encode(&bundle.tx_hash)
             );
-            return Ok(());
         }
     };
 
@@ -338,11 +334,10 @@ fn handle_settlement(
     let commitment_args_hex = match metadata.get("commitmentLockArgs").and_then(|v| v.as_str()) {
         Some(s) => s,
         None => {
-            warn!(
-                tx_hash = %hex::encode(&bundle.tx_hash),
-                "fiber settlement missing commitmentLockArgs metadata, skipping"
+            anyhow::bail!(
+                "fiber settlement missing commitmentLockArgs metadata in tx 0x{} — detector bug",
+                hex::encode(&bundle.tx_hash)
             );
-            return Ok(());
         }
     };
 

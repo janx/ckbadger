@@ -752,7 +752,8 @@ impl BatchWriter {
     /// Returns `None` (identities have no collection hierarchy).
     ///
     /// For regular spores: returns the `collection_id` (cluster_id or sentinel)
-    /// if consumed, or `None` if entry not found or already consumed.
+    /// if consumed, or `None` if entry not found.
+    /// Bails on double-consume (identity or spore already consumed).
     pub(crate) fn consume_spore(
         &self,
         spore_id: &[u8],
@@ -764,7 +765,10 @@ impl BatchWriter {
         // Check identity store first (did:ckb)
         if let Some(mut identity) = state.get_identity(self.store.as_ref(), spore_id)? {
             if !identity.is_live {
-                return Ok(None);
+                bail!(
+                    "consume_spore: identity already consumed: spore_id=0x{}",
+                    hex::encode(spore_id)
+                );
             }
             let old_owner = identity.owner_lock_hash.clone();
             identity.is_live = false;
@@ -798,7 +802,10 @@ impl BatchWriter {
         // Check object store (regular spore)
         if let Some(mut entry) = state.get_spore(self.store.as_ref(), spore_id)? {
             if !entry.is_live {
-                return Ok(None);
+                bail!(
+                    "consume_spore: spore already consumed: spore_id=0x{}",
+                    hex::encode(spore_id)
+                );
             }
 
             let old_owner = entry.owner_lock_hash.clone();
