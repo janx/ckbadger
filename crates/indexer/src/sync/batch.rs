@@ -1001,6 +1001,13 @@ fn resolve_tx_dep_cells(
     Ok(resolved)
 }
 
+/// TYPE_ID is a CKB built-in virtual script with no on-chain dep cell.
+/// When used as a type script (hash_type=1), it cannot be resolved via dep cells.
+const TYPE_ID_CODE_HASH: [u8; 32] = [
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x54, 0x59, 0x50, 0x45, 0x5f, 0x49, 0x44,
+];
+
 fn resolve_version_hash_for_reference(
     tx_hash: &[u8; 32],
     reference_hash: &[u8],
@@ -1008,6 +1015,12 @@ fn resolve_version_hash_for_reference(
     dep_cells: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
 ) -> Result<Vec<u8>> {
     if hash_type != 1 {
+        return Ok(reference_hash.to_vec());
+    }
+
+    // TYPE_ID is a built-in virtual script — no dep cell exists on-chain.
+    // Return the code_hash directly as the version hash.
+    if reference_hash == TYPE_ID_CODE_HASH {
         return Ok(reference_hash.to_vec());
     }
 
@@ -6541,5 +6554,47 @@ mod tests {
         // Once the last batch output for the token is behind us, a later consume is real burn.
         assert!(should_consume_grouped_mnft_token(Some(5), 6));
         assert!(should_consume_grouped_mnft_token(None, 6));
+    }
+
+    #[test]
+    fn test_resolve_version_hash_type_id_returns_directly() {
+        // TYPE_ID is a built-in virtual script with no on-chain dep cell.
+        // resolve_version_hash_for_reference must return it directly
+        // instead of failing with "missing dep cell match".
+        let tx_hash = [0u8; 32];
+        let dep_cells = HashMap::new(); // empty — no dep cells
+
+        let result = resolve_version_hash_for_reference(
+            &tx_hash,
+            &TYPE_ID_CODE_HASH,
+            1, // hash_type = Type
+            &dep_cells,
+        );
+
+        assert!(result.is_ok(), "TYPE_ID should resolve without dep cells");
+        assert_eq!(result.unwrap(), TYPE_ID_CODE_HASH.to_vec());
+    }
+
+    #[test]
+    fn test_resolve_version_hash_non_type_id_fails_without_dep_cell() {
+        // A non-TYPE_ID reference with hash_type=1 must fail if no dep cell matches.
+        let tx_hash = [0u8; 32];
+        let reference_hash = [0xABu8; 32];
+        let dep_cells = HashMap::new();
+
+        let result = resolve_version_hash_for_reference(
+            &tx_hash,
+            &reference_hash,
+            1, // hash_type = Type
+            &dep_cells,
+        );
+
+        assert!(result.is_err(), "Non-TYPE_ID should fail without dep cells");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("missing dep cell match"),
+            "Expected 'missing dep cell match' error, got: {}",
+            err_msg
+        );
     }
 }
