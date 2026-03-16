@@ -56,6 +56,18 @@ fn ensure_hodl_tracker_state_consistent(
                 tip_block
             );
         }
+        // Detect tracker behind tip: if domain data was committed but tracker
+        // state wasn't persisted before a crash, the tracker silently lags.
+        // Fail-fast rather than serving stale derived statistics.
+        if *last_block < tip_block {
+            bail!(
+                "invalid HODL tracker state: last transition block {} behind sync tip {} \
+                 (likely crash between domain commit and tracker persist). \
+                 automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+                last_block,
+                tip_block
+            );
+        }
     }
     Ok(())
 }
@@ -97,6 +109,15 @@ fn ensure_cell_dist_tracker_state_consistent(
         if *last_block > tip_block {
             bail!(
                 "invalid cell distribution tracker state: last transition block {} ahead of sync tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+                last_block,
+                tip_block
+            );
+        }
+        if *last_block < tip_block {
+            bail!(
+                "invalid cell distribution tracker state: last transition block {} behind sync tip {} \
+                 (likely crash between domain commit and tracker persist). \
+                 automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
                 last_block,
                 tip_block
             );
@@ -444,6 +465,13 @@ impl Indexer {
                 );
                 domain_store.restore_normal_compaction_options();
                 append_store.restore_normal_compaction_options();
+                // Permanently disable bulk sync re-entry: bulk semantics are only
+                // valid for fresh-DB rebuilds. Once we've caught up and exited bulk
+                // mode, falling behind again must use live catch-up (with reorg
+                // handling) instead of re-entering bulk paths on a non-fresh DB.
+                if self.bulk_sync_allowed.swap(false, Ordering::SeqCst) {
+                    info!("Bulk sync allowed permanently cleared after first catch-up");
+                }
             } else {
                 debug!(
                     l0_files_max = pressure.l0_files_max,
@@ -950,6 +978,43 @@ impl Indexer {
                     continuity_probe.tx_tip
                 )
             );
+        }
+
+        // Fail-fast on all other inconsistency conditions (tx_floor holes,
+        // missing tx_block0 samples, header/tx tip mismatch). Continuing
+        // incremental sync on a DB with known holes violates data integrity.
+        if continuity_probe.has_inconsistency() {
+            let mut reasons = Vec::new();
+            if let Some(tx_floor) = continuity_probe.tx_floor {
+                if tx_floor > 0 {
+                    reasons.push(format!("tx_index floor at block {} (expected 0)", tx_floor));
+                }
+            }
+            if let (Some(ht), Some(tt)) = (continuity_probe.header_tip, continuity_probe.tx_tip) {
+                if ht != tt {
+                    reasons.push(format!("header_tip={} != tx_tip={}", ht, tt));
+                }
+            }
+            if !continuity_probe.missing_header_sample.is_empty() {
+                reasons.push(format!(
+                    "missing headers at blocks {:?}",
+                    continuity_probe.missing_header_sample
+                ));
+            }
+            if !continuity_probe.missing_tx_block0_sample.is_empty() {
+                reasons.push(format!(
+                    "missing tx_index[block][0] at blocks {:?}",
+                    continuity_probe.missing_tx_block0_sample
+                ));
+            }
+            if !reasons.is_empty() {
+                bail!(
+                    "startup fail-fast: data inconsistency detected (sync_tip={}): {}. \
+                     delete RocksDB and re-sync from genesis",
+                    start_block,
+                    reasons.join("; ")
+                );
+            }
         }
 
         if bulk_sync_mode && actual_start < start_block {

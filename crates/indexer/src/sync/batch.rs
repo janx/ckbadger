@@ -582,12 +582,13 @@ pub(super) fn classify_unresolved_local_probe(
     let mut summary = UnresolvedLocalProbeSummary::default();
     let sampled = unresolved_outpoints.iter().take(sample_limit);
     let store = writer.store();
+    let cells_store = writer.append_only_store();
 
     for (tx_hash, output_index) in sampled {
         summary.sampled += 1;
         let outpoint_label = format!("0x{}:{}", short_tx_hash(tx_hash), output_index);
 
-        let live_exists = match store.get_cell(tx_hash, *output_index, store) {
+        let live_exists = match store.get_cell(tx_hash, *output_index, cells_store) {
             Ok(Some(_)) => true,
             Ok(None) => false,
             Err(_) => {
@@ -606,7 +607,7 @@ pub(super) fn classify_unresolved_local_probe(
             continue;
         }
 
-        let consumed_exists = match store.get_consumed_cell(tx_hash, *output_index, store) {
+        let consumed_exists = match store.get_consumed_cell(tx_hash, *output_index, cells_store) {
             Ok(Some(_)) => true,
             Ok(None) => false,
             Err(_) => {
@@ -5173,6 +5174,30 @@ impl Indexer {
                     &mut stats_batch,
                 )?;
             }
+            // Inject sync_status update into the finalize batch so it is
+            // committed atomically with block headers and domain data.
+            // Previously sync_status was written via a separate put_cf after
+            // commit, creating a crash window where totals could drift.
+            if let Some((block_number, ref block_hash)) = batch_stats.last_block {
+                let ema_rate = self.progress.ema_blocks_per_second();
+                let mut status = self.writer.store().get_sync_status()?;
+                status.tip_block_number = block_number;
+                status.tip_block_hash = block_hash.clone();
+                status.total_transactions += batch_stats.sync_totals.0;
+                status.total_cells_created += batch_stats.sync_totals.1;
+                status.total_cells_consumed += batch_stats.sync_totals.2;
+                status.last_synced_at = chrono::Utc::now().timestamp();
+                if ema_rate > 0.0 {
+                    status.sync_ema_rate = Some(ema_rate);
+                }
+                let status_bytes = bincode::serialize(&status)
+                    .with_context(|| "failed to serialize sync_status for atomic batch commit")?;
+                stats_batch.put_sync_meta(
+                    ckbadger_store::keys::sync_meta_keys::SYNC_STATUS,
+                    &status_bytes,
+                );
+            }
+
             let commit_started = Instant::now();
             if bulk_sync_mode {
                 // Merge headers + stats into single batch to halve finalize commit cost.
@@ -5251,22 +5276,30 @@ impl Indexer {
             )?;
         }
 
-        // Lightweight async cache update (no DB write)
+        // In-memory cache notification only — the DB sync_status update was
+        // already committed atomically in the finalize batch above.
         if let Some((block_number, ref block_hash)) = batch_stats.last_block {
             let ema_rate = self.progress.ema_blocks_per_second();
             let ema_rate_opt = if ema_rate > 0.0 { Some(ema_rate) } else { None };
-            self.writer
-                .update_sync_status(
-                    block_number,
-                    block_hash,
-                    batch_stats.sync_totals.0,
-                    batch_stats.sync_totals.1,
-                    batch_stats.sync_totals.2,
-                    batch_new_addresses,
-                    ema_rate_opt,
-                    !bulk_sync_mode,
-                )
-                .await?;
+            if !bulk_sync_mode {
+                self.writer.refresh_latest_dao_statistics()?;
+            }
+            if let Some(cache) = self.writer.cache_invalidator() {
+                let hash_hex = format!("0x{}", hex::encode(block_hash));
+                cache
+                    .update_sync_status(|status| {
+                        status.update_batch(
+                            block_number,
+                            &hash_hex,
+                            batch_stats.sync_totals.0,
+                            batch_stats.sync_totals.1,
+                            batch_stats.sync_totals.2,
+                            batch_new_addresses,
+                            ema_rate_opt,
+                        );
+                    })
+                    .await;
+            }
         }
 
         if !bulk_sync_mode {
