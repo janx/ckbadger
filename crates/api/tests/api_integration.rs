@@ -2877,43 +2877,44 @@ async fn test_scripts_list_keeps_unknown_entries_distinct() {
 }
 
 #[tokio::test]
-async fn test_script_lookup_and_code_cell_resolve_deployment_reference_alias() {
+async fn test_script_lookup_and_code_cell_resolve_data_reference() {
     let store = test_store();
 
-    let data_hash = vec![0x70; 32];
-    let type_hash = vec![0x9b; 32];
+    let version_hash = vec![0x70; 32];
     let code_cell_tx_hash = vec![0xe2; 32];
     let code_cell_output_index = 1i16;
 
-    store
-        .put_script_info_direct(
-            &type_hash,
-            &ScriptInfo {
-                code_hash: type_hash.clone(),
-                hash_type: 1,
-                name: Some("Default Lock".to_string()),
-                dep_type_hash: Some(type_hash.clone()),
-                dep_data_hash: Some(data_hash.clone()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-    store
-        .put_script_info_direct(
-            &data_hash,
-            &ScriptInfo {
-                code_hash: data_hash.clone(),
-                hash_type: 0,
-                lock_live_cells_count: 10,
-                lock_live_capacity_sum: 1_000_000_000,
-                lock_live_used_capacity_sum: 600_000_000,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
     let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_reference(
+        &version_hash,
+        0,
+        &ScriptReferenceInfo {
+            reference_hash: version_hash.clone(),
+            hash_type: 0,
+            lock_cells_count: 10,
+            lock_live_cells_count: 10,
+            lock_capacity_sum: 1_000_000_000,
+            lock_live_capacity_sum: 1_000_000_000,
+            lock_used_capacity_sum: 600_000_000,
+            lock_live_used_capacity_sum: 600_000_000,
+            ..Default::default()
+        },
+    );
+    batch.put_script_version(
+        &version_hash,
+        &ScriptVersionInfo {
+            version_hash: version_hash.clone(),
+            name: Some("Default Lock".to_string()),
+            category: Some("lock".to_string()),
+            lock_cells_count: 10,
+            lock_live_cells_count: 10,
+            lock_capacity_sum: 1_000_000_000,
+            lock_live_capacity_sum: 1_000_000_000,
+            lock_used_capacity_sum: 600_000_000,
+            lock_live_used_capacity_sum: 600_000_000,
+            ..Default::default()
+        },
+    );
     batch.put_cell(
         &code_cell_tx_hash,
         code_cell_output_index,
@@ -2923,24 +2924,29 @@ async fn test_script_lookup_and_code_cell_resolve_deployment_reference_alias() {
             lock_code_hash: vec![0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(vec![0x33; 32]),
-            type_hash_type: Some(1),
-            type_args: Some(vec![]),
-            data_size: 0,
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 32,
             occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: None,
+            data_hash: Some(version_hash.clone()),
         },
         123,
     );
-    batch.put_cell_by_type(&type_hash, 123, &code_cell_tx_hash, code_cell_output_index);
+    batch.put_cell_by_data_hash(
+        &version_hash,
+        123,
+        &code_cell_tx_hash,
+        code_cell_output_index,
+    );
     batch.commit().unwrap();
 
     let config = test_config(store);
     let app = create_router(config).await;
 
-    let data_hash_hex = format!("0x{}", hex::encode(&data_hash));
+    let version_hash_hex = format!("0x{}", hex::encode(&version_hash));
     let code_cell_tx_hash_hex = format!("0x{}", hex::encode(&code_cell_tx_hash));
 
     let request = Request::builder()
@@ -2949,7 +2955,7 @@ async fn test_script_lookup_and_code_cell_resolve_deployment_reference_alias() {
         .header("content-type", "application/json")
         .body(Body::from(format!(
             r#"{{"codeHashes":["{}"]}}"#,
-            data_hash_hex
+            version_hash_hex
         )))
         .unwrap();
 
@@ -2958,18 +2964,19 @@ async fn test_script_lookup_and_code_cell_resolve_deployment_reference_alias() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json[&data_hash_hex]["name"], "Default Lock");
-    assert_eq!(json[&data_hash_hex]["hashType"], "data");
+    assert_eq!(json[&version_hash_hex]["name"], "Default Lock");
+    assert_eq!(json[&version_hash_hex]["codeHash"], version_hash_hex);
+    assert_eq!(json[&version_hash_hex]["hashType"], "data");
     assert_eq!(
-        json[&data_hash_hex]["codeCellTxHash"],
+        json[&version_hash_hex]["codeCellTxHash"],
         code_cell_tx_hash_hex
     );
-    assert_eq!(json[&data_hash_hex]["codeCellOutputIndex"], 1);
+    assert_eq!(json[&version_hash_hex]["codeCellOutputIndex"], 1);
 
     let request = Request::builder()
         .uri(format!(
             "/api/v1/scripts/code-cell?code_hash={}&hash_type=data",
-            data_hash_hex
+            version_hash_hex
         ))
         .body(Body::empty())
         .unwrap();
@@ -2983,29 +2990,32 @@ async fn test_script_lookup_and_code_cell_resolve_deployment_reference_alias() {
 }
 
 #[tokio::test]
-async fn test_script_code_cells_resolve_type_code_hash_with_data_reference_query() {
+async fn test_script_code_cells_resolve_unique_type_reference() {
     let store = test_store();
 
-    let data_hash = vec![0x70; 32];
+    let version_hash = vec![0x70; 32];
     let type_hash = vec![0x9b; 32];
     let code_cell_tx_hash = vec![0xe2; 32];
     let code_cell_output_index = 1i16;
 
-    store
-        .put_script_info_direct(
-            &type_hash,
-            &ScriptInfo {
-                code_hash: type_hash.clone(),
-                hash_type: 1,
-                name: Some("Default Lock".to_string()),
-                dep_type_hash: Some(type_hash.clone()),
-                dep_data_hash: Some(data_hash.clone()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
     let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_reference(
+        &type_hash,
+        1,
+        &ScriptReferenceInfo {
+            reference_hash: type_hash.clone(),
+            hash_type: 1,
+            ..Default::default()
+        },
+    );
+    batch.put_script_version(
+        &version_hash,
+        &ScriptVersionInfo {
+            version_hash: version_hash.clone(),
+            name: Some("Default Lock".to_string()),
+            ..Default::default()
+        },
+    );
     batch.put_cell(
         &code_cell_tx_hash,
         code_cell_output_index,
@@ -3019,25 +3029,32 @@ async fn test_script_code_cells_resolve_type_code_hash_with_data_reference_query
             type_code_hash: Some(vec![0x33; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
-            data_size: 0,
+            data_size: 32,
             occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: None,
+            data_hash: Some(version_hash.clone()),
         },
         123,
     );
     batch.put_cell_by_type(&type_hash, 123, &code_cell_tx_hash, code_cell_output_index);
+    batch.put_cell_by_data_hash(
+        &version_hash,
+        123,
+        &code_cell_tx_hash,
+        code_cell_output_index,
+    );
     batch.commit().unwrap();
 
     let config = test_config(store);
     let app = create_router(config).await;
 
+    let version_hash_hex = format!("0x{}", hex::encode(&version_hash));
     let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
     let code_cell_tx_hash_hex = format!("0x{}", hex::encode(&code_cell_tx_hash));
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/scripts/code-cells?code_hash={}&hash_type=data",
+            "/api/v1/scripts/code-cells?code_hash={}&hash_type=type",
             type_hash_hex
         ))
         .body(Body::empty())
@@ -3048,12 +3065,14 @@ async fn test_script_code_cells_resolve_type_code_hash_with_data_reference_query
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
+    assert_eq!(json["resolvedVersionHash"], version_hash_hex);
     assert_eq!(json["liveCount"], 1);
     assert_eq!(json["totalCount"], 1);
     assert_eq!(json["codeCells"][0]["txHash"], code_cell_tx_hash_hex);
     assert_eq!(json["codeCells"][0]["outputIndex"], 1);
     assert_eq!(json["codeCells"][0]["status"], "live");
     assert_eq!(json["codeCells"][0]["createdAtBlock"], 123);
+    assert_eq!(json["availableReferences"][0]["hashType"], "type");
 }
 
 #[tokio::test]
@@ -3076,7 +3095,6 @@ async fn test_scripts_list_merges_unknown_reference_into_known_deployment() {
             },
         )
         .unwrap();
-
     store
         .put_script_info_direct(
             &data_hash,
@@ -3117,19 +3135,25 @@ async fn test_unknown_data_hash_script_resolves_code_cell_via_data_hash_index() 
     let code_cell_tx_hash = vec![0xcd; 32];
     let code_cell_output_index = 2i16;
 
-    store
-        .put_script_info_direct(
-            &data_hash,
-            &ScriptInfo {
-                code_hash: data_hash.clone(),
-                hash_type: 0,
-                lock_live_cells_count: 3,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
     let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_reference(
+        &data_hash,
+        0,
+        &ScriptReferenceInfo {
+            reference_hash: data_hash.clone(),
+            hash_type: 0,
+            lock_live_cells_count: 3,
+            ..Default::default()
+        },
+    );
+    batch.put_script_version(
+        &data_hash,
+        &ScriptVersionInfo {
+            version_hash: data_hash.clone(),
+            lock_live_cells_count: 3,
+            ..Default::default()
+        },
+    );
     batch.put_cell(
         &code_cell_tx_hash,
         code_cell_output_index,
@@ -3146,7 +3170,7 @@ async fn test_unknown_data_hash_script_resolves_code_cell_via_data_hash_index() 
             data_size: code_bytes.len() as i32,
             occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: None,
+            data_hash: Some(data_hash.clone()),
         },
         123,
     );
@@ -3622,43 +3646,16 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
 }
 
 #[tokio::test]
-async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
+async fn test_get_script_returns_versions_sorted_by_deployed_at() {
     let store = test_store();
     let name = "SECP256K1_BLAKE160".to_string();
 
-    let older_code_hash = vec![0x11; 32];
-    let newer_code_hash = vec![0x22; 32];
-    let older_data_hash = vec![0x33; 32];
-    let newer_data_hash = vec![0x44; 32];
+    let older_type_hash = vec![0x11; 32];
+    let newer_type_hash = vec![0x22; 32];
+    let older_version_hash = vec![0x33; 32];
+    let newer_version_hash = vec![0x44; 32];
     let older_tx_hash = vec![0xaa; 32];
     let newer_tx_hash = vec![0xbb; 32];
-
-    store
-        .put_script_info_direct(
-            &older_code_hash,
-            &ScriptInfo {
-                code_hash: older_code_hash.clone(),
-                hash_type: 1, // type
-                name: Some(name.clone()),
-                dep_type_hash: Some(older_code_hash.clone()),
-                dep_data_hash: Some(older_data_hash.clone()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    store
-        .put_script_info_direct(
-            &newer_code_hash,
-            &ScriptInfo {
-                code_hash: newer_code_hash.clone(),
-                hash_type: 1, // type
-                name: Some(name.clone()),
-                dep_type_hash: Some(newer_code_hash.clone()),
-                dep_data_hash: Some(newer_data_hash.clone()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
 
     let older_block = 100i64;
     let newer_block = 200i64;
@@ -3690,6 +3687,58 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
             transactions_count: 1,
         },
     );
+    batch.put_script_version(
+        &older_version_hash,
+        &ScriptVersionInfo {
+            version_hash: older_version_hash.clone(),
+            name: Some(name.clone()),
+            ..Default::default()
+        },
+    );
+    batch.put_script_version(
+        &newer_version_hash,
+        &ScriptVersionInfo {
+            version_hash: newer_version_hash.clone(),
+            name: Some(name.clone()),
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference(
+        &older_type_hash,
+        1,
+        &ScriptReferenceInfo {
+            reference_hash: older_type_hash.clone(),
+            hash_type: 1,
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference(
+        &older_version_hash,
+        0,
+        &ScriptReferenceInfo {
+            reference_hash: older_version_hash.clone(),
+            hash_type: 0,
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference(
+        &newer_type_hash,
+        1,
+        &ScriptReferenceInfo {
+            reference_hash: newer_type_hash.clone(),
+            hash_type: 1,
+            ..Default::default()
+        },
+    );
+    batch.put_script_reference(
+        &newer_version_hash,
+        0,
+        &ScriptReferenceInfo {
+            reference_hash: newer_version_hash.clone(),
+            hash_type: 0,
+            ..Default::default()
+        },
+    );
     batch.put_cell(
         &older_tx_hash,
         0,
@@ -3699,18 +3748,19 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
             lock_code_hash: vec![0x20; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(older_code_hash.clone()),
+            type_script_hash: Some(older_type_hash.clone()),
             type_code_hash: Some(vec![0x30; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
-            data_size: 0,
+            data_size: 32,
             occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: None,
+            data_hash: Some(older_version_hash.clone()),
         },
         older_block,
     );
-    batch.put_cell_by_type(&older_code_hash, older_block, &older_tx_hash, 0);
+    batch.put_cell_by_type(&older_type_hash, older_block, &older_tx_hash, 0);
+    batch.put_cell_by_data_hash(&older_version_hash, older_block, &older_tx_hash, 0);
     batch.put_cell(
         &newer_tx_hash,
         1,
@@ -3720,18 +3770,19 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
             lock_code_hash: vec![0x21; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(newer_code_hash.clone()),
+            type_script_hash: Some(newer_type_hash.clone()),
             type_code_hash: Some(vec![0x31; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
-            data_size: 0,
+            data_size: 32,
             occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: None,
+            data_hash: Some(newer_version_hash.clone()),
         },
         newer_block,
     );
-    batch.put_cell_by_type(&newer_code_hash, newer_block, &newer_tx_hash, 1);
+    batch.put_cell_by_type(&newer_type_hash, newer_block, &newer_tx_hash, 1);
+    batch.put_cell_by_data_hash(&newer_version_hash, newer_block, &newer_tx_hash, 1);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -3752,28 +3803,28 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
     assert_eq!(items.len(), 2);
     assert_eq!(
         items[0]["codeHash"],
-        serde_json::Value::String(format!("0x{}", hex::encode(&newer_code_hash)))
+        serde_json::Value::String(format!("0x{}", hex::encode(&newer_version_hash)))
     );
     assert_eq!(
         items[0]["typeHash"],
-        serde_json::Value::String(format!("0x{}", hex::encode(&newer_code_hash)))
+        serde_json::Value::String(format!("0x{}", hex::encode(&newer_type_hash)))
     );
     assert_eq!(
         items[0]["dataHash"],
-        serde_json::Value::String(format!("0x{}", hex::encode(&newer_data_hash)))
+        serde_json::Value::String(format!("0x{}", hex::encode(&newer_version_hash)))
     );
     assert_eq!(items[0]["deployedAt"], newer_timestamp);
     assert_eq!(
         items[1]["codeHash"],
-        serde_json::Value::String(format!("0x{}", hex::encode(&older_code_hash)))
+        serde_json::Value::String(format!("0x{}", hex::encode(&older_version_hash)))
     );
     assert_eq!(
         items[1]["typeHash"],
-        serde_json::Value::String(format!("0x{}", hex::encode(&older_code_hash)))
+        serde_json::Value::String(format!("0x{}", hex::encode(&older_type_hash)))
     );
     assert_eq!(
         items[1]["dataHash"],
-        serde_json::Value::String(format!("0x{}", hex::encode(&older_data_hash)))
+        serde_json::Value::String(format!("0x{}", hex::encode(&older_version_hash)))
     );
     assert_eq!(items[1]["deployedAt"], older_timestamp);
 }
