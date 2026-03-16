@@ -1979,6 +1979,8 @@ impl Indexer {
                 .unwrap_or_default()
         };
         let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(disk_device);
+        let mut batches_since_last_flush: u32 = 0;
+        let mut compaction_checkpoint_done = false;
 
         loop {
             if self.shutdown_requested.load(Ordering::SeqCst) {
@@ -2466,6 +2468,8 @@ impl Indexer {
                             precompute_ms: parser_perf_sample.precompute_ms,
                             nft_precompute_ms: parser_perf_sample.nft_precompute_ms,
                             write_ms: write_metrics.write_ms,
+                            prefetch_ms: write_metrics.prefetch_ms,
+                            finalize_ms: write_metrics.finalize_ms,
                             t1_ms: write_metrics.t1_ms,
                             t1b_ms: write_metrics.t1b_ms,
                             t2_ms: write_metrics.t2_ms,
@@ -2511,6 +2515,57 @@ impl Indexer {
                         self.maybe_invalidate_chart_caches(end_block).await;
                         self.check_bulk_sync_completion().await;
                         self.ensure_compaction_mode(blocks_remaining);
+
+                        // Memory-pressure flush + compaction checkpoint
+                        batches_since_last_flush += 1;
+                        if self.writer.store().is_bulk_sync_mode() {
+                            let mem_flush_threshold_mb =
+                                self.writer.store().memory_profile().system_ram_bytes
+                                    / (1024 * 1024)
+                                    / 5; // 20% of total RAM
+                            if batch_env.mem_available_mb < mem_flush_threshold_mb
+                                && batches_since_last_flush >= 30
+                            {
+                                info!(
+                                    mem_available_mb = batch_env.mem_available_mb,
+                                    threshold_mb = mem_flush_threshold_mb,
+                                    "Memory pressure detected, flushing memtables"
+                                );
+                                if let Err(e) = self.writer.store().flush_all_memtables() {
+                                    warn!(error = %e, "Memory-pressure flush failed");
+                                }
+                                batches_since_last_flush = 0;
+
+                                let cp_pending_mb =
+                                    compaction_pressure.compaction_pending_bytes / (1024 * 1024);
+                                if cp_pending_mb > 6000 && !compaction_checkpoint_done {
+                                    info!(
+                                        compaction_pending_mb = cp_pending_mb,
+                                        "Compaction checkpoint: compacting hot CFs"
+                                    );
+                                    self.writer.store().compact_hot_cfs();
+
+                                    // Poll until pressure drains or timeout
+                                    let checkpoint_start = std::time::Instant::now();
+                                    loop {
+                                        let p = self.writer.store().compaction_pressure();
+                                        let pending_mb = p.compaction_pending_bytes / (1024 * 1024);
+                                        if pending_mb < 2000
+                                            || checkpoint_start.elapsed().as_secs() > 120
+                                        {
+                                            info!(
+                                                pending_mb,
+                                                elapsed_s = checkpoint_start.elapsed().as_secs(),
+                                                "Compaction checkpoint complete"
+                                            );
+                                            break;
+                                        }
+                                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                                    }
+                                    compaction_checkpoint_done = true;
+                                }
+                            }
+                        }
                     }
 
                     self.perf

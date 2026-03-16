@@ -142,6 +142,8 @@ pub(crate) struct TxData {
 pub(crate) struct BatchWriteMetrics {
     pub(crate) commit_ms: f64,
     pub(crate) write_ms: f64,
+    pub(crate) prefetch_ms: f64,
+    pub(crate) finalize_ms: f64,
     pub(crate) txs: u64,
     pub(crate) cells: u64,
     pub(crate) inputs: u64,

@@ -5054,24 +5054,18 @@ impl Indexer {
             }
             let commit_started = Instant::now();
             if bulk_sync_mode {
-                // Bulk sync: data already committed in parallel threads; commit
-                // headers and stats separately with WAL disabled.
+                // Merge headers + stats into single batch to halve finalize commit cost.
+                core_batch.merge_from(stats_batch);
                 debug!(
                     phase = "finalize_headers_stats",
                     batch_start = first_block,
                     batch_end = last_block,
                     bulk_sync_mode,
-                    "Batch finalize commit start"
+                    "Batch finalize commit start (merged)"
                 );
                 core_batch.commit_no_wal().with_context(|| {
                     format!(
-                        "core finalize commit_no_wal failed for blocks {}-{}",
-                        first_block, last_block
-                    )
-                })?;
-                stats_batch.commit_no_wal().with_context(|| {
-                    format!(
-                        "stats finalize commit_no_wal failed for blocks {}-{}",
+                        "finalize commit_no_wal failed for blocks {}-{}",
                         first_block, last_block
                     )
                 })?;
@@ -5211,6 +5205,8 @@ impl Indexer {
         Ok(BatchWriteMetrics {
             commit_ms: write_commit_ms,
             write_ms,
+            prefetch_ms,
+            finalize_ms,
             txs: u64::try_from(batch_tx_count).expect("parsed batch tx count exceeds u64"),
             cells: u64::try_from(batch_cell_count).expect("parsed batch cell count exceeds u64"),
             inputs: u64::try_from(batch_input_count).expect("parsed batch input count exceeds u64"),
