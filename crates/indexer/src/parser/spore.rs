@@ -167,12 +167,38 @@ impl SporeParser {
             .collect()
     }
 
+    pub fn parse_spores_with_output_indices(tx: &TransactionView) -> Vec<(usize, ParsedSporeCell)> {
+        super::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
+        tx.outputs
+            .iter()
+            .zip(tx.outputs_data.iter())
+            .enumerate()
+            .filter_map(|(output_index, (output, data_hex))| {
+                Self::parse_spore_cell(output, data_hex).map(|spore| (output_index, spore))
+            })
+            .collect()
+    }
+
     pub fn parse_clusters(tx: &TransactionView) -> Vec<ParsedClusterCell> {
         super::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
             .filter_map(|(output, data_hex)| Self::parse_cluster_cell(output, data_hex))
+            .collect()
+    }
+
+    pub fn parse_clusters_with_output_indices(
+        tx: &TransactionView,
+    ) -> Vec<(usize, ParsedClusterCell)> {
+        super::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
+        tx.outputs
+            .iter()
+            .zip(tx.outputs_data.iter())
+            .enumerate()
+            .filter_map(|(output_index, (output, data_hex))| {
+                Self::parse_cluster_cell(output, data_hex).map(|cluster| (output_index, cluster))
+            })
             .collect()
     }
 
@@ -636,5 +662,40 @@ mod tests {
             witnesses: vec![],
         };
         let _ = SporeParser::parse_clusters(&tx);
+    }
+
+    #[test]
+    fn test_parse_spores_with_output_indices_preserves_real_output_index() {
+        let spore_id = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        let non_spore_output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: None,
+        };
+        let spore_output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_spore_type_script(spore_id)),
+        };
+        let data = create_spore_data("image/png", b"test", None);
+        let data_hex = format!("0x{}", hex::encode(&data));
+
+        let tx = TransactionView {
+            hash: "0xaa".to_string(),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![non_spore_output, spore_output],
+            outputs_data: vec!["0x".to_string(), data_hex],
+            witnesses: vec![],
+        };
+
+        let parsed = SporeParser::parse_spores_with_output_indices(&tx);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(
+            parsed[0].0, 1,
+            "spore at output index 1 must preserve real index, not filtered index 0"
+        );
     }
 }

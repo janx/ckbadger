@@ -18,6 +18,7 @@ pub struct StartupContinuityProbe {
     pub recent_window_end: i64,
     pub missing_header_sample: Vec<i64>,
     pub missing_tx_block0_sample: Vec<i64>,
+    pub missing_tx_incomplete_sample: Vec<(i64, i32, i32)>,
     pub full_header_gap_scan: bool,
 }
 
@@ -31,6 +32,7 @@ impl StartupContinuityProbe {
             || self.tx_floor.is_some_and(|tx_floor| tx_floor > 0)
             || !self.missing_header_sample.is_empty()
             || !self.missing_tx_block0_sample.is_empty()
+            || !self.missing_tx_incomplete_sample.is_empty()
     }
 }
 
@@ -138,21 +140,47 @@ impl BatchWriter {
 
         let mut missing_header_sample = Vec::new();
         let mut missing_tx_block0_sample = Vec::new();
+        let mut missing_tx_incomplete_sample = Vec::new();
         let (recent_window_start, recent_window_end) = match header_tip {
             Some(header_tip) if header_tip >= 0 => {
                 let window_end = std::cmp::min(startup_tip.max(0), header_tip);
                 let window_start = (window_end - window_size + 1).max(0);
                 for block_num in window_start..=window_end {
-                    if self.store.get_block_header(block_num)?.is_none() {
-                        if missing_header_sample.len() < STARTUP_CONTINUITY_SAMPLE_LIMIT {
-                            missing_header_sample.push(block_num);
+                    let header = match self.store.get_block_header(block_num)? {
+                        Some(h) => h,
+                        None => {
+                            if missing_header_sample.len() < STARTUP_CONTINUITY_SAMPLE_LIMIT {
+                                missing_header_sample.push(block_num);
+                            }
+                            continue;
+                        }
+                    };
+                    if self.store.get_tx_index(block_num, 0)?.is_none() {
+                        if missing_tx_block0_sample.len() < STARTUP_CONTINUITY_SAMPLE_LIMIT {
+                            missing_tx_block0_sample.push(block_num);
                         }
                         continue;
                     }
-                    if self.store.get_tx_index(block_num, 0)?.is_none()
-                        && missing_tx_block0_sample.len() < STARTUP_CONTINUITY_SAMPLE_LIMIT
-                    {
-                        missing_tx_block0_sample.push(block_num);
+                    // Verify the last expected tx also exists to catch half-committed blocks
+                    let expected_tx_count = header.transactions_count;
+                    if expected_tx_count > 1 {
+                        let last_tx_idx = expected_tx_count - 1;
+                        if self.store.get_tx_index(block_num, last_tx_idx)?.is_none()
+                            && missing_tx_incomplete_sample.len() < STARTUP_CONTINUITY_SAMPLE_LIMIT
+                        {
+                            let mut last_found: i32 = 0;
+                            for idx in (1..last_tx_idx).rev() {
+                                if self.store.get_tx_index(block_num, idx)?.is_some() {
+                                    last_found = idx;
+                                    break;
+                                }
+                            }
+                            missing_tx_incomplete_sample.push((
+                                block_num,
+                                expected_tx_count,
+                                last_found,
+                            ));
+                        }
                     }
                 }
                 (window_start, window_end)
@@ -176,6 +204,7 @@ impl BatchWriter {
             recent_window_end,
             missing_header_sample,
             missing_tx_block0_sample,
+            missing_tx_incomplete_sample,
             full_header_gap_scan: include_full_header_gap_scan,
         })
     }
@@ -697,5 +726,27 @@ mod tests {
             .init_sync_start(append_store.as_ref(), -2, false)
             .unwrap_err();
         assert!(err.to_string().contains("expected >= -1"));
+    }
+
+    #[test]
+    fn test_probe_startup_continuity_detects_incomplete_tx_rows() {
+        let (_dir, store, _append_store, writer) = setup();
+
+        let mut header = make_header(0x80, 1_700_000_000_000);
+        header.transactions_count = 3;
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(0, &header);
+        // Only write tx0 and tx1, but header claims 3 txs
+        batch.put_tx_index(0, 0, &make_tx_index_entry());
+        batch.put_tx_index(0, 1, &make_tx_index_entry());
+        batch.commit().unwrap();
+
+        let probe = writer.probe_startup_continuity(0, 32, false).unwrap();
+        assert!(
+            probe.has_inconsistency(),
+            "should detect incomplete tx rows: header claims 3 txs but only 2 exist"
+        );
+        assert_eq!(probe.missing_tx_incomplete_sample.len(), 1);
+        assert_eq!(probe.missing_tx_incomplete_sample[0], (0, 3, 1));
     }
 }

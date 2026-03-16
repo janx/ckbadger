@@ -253,6 +253,20 @@ impl MnftParser {
             .collect()
     }
 
+    pub fn parse_issuers_with_output_indices(
+        tx: &TransactionView,
+    ) -> Vec<(usize, ParsedMnftIssuer)> {
+        super::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
+        tx.outputs
+            .iter()
+            .zip(tx.outputs_data.iter())
+            .enumerate()
+            .filter_map(|(output_index, (output, data_hex))| {
+                Self::parse_issuer_cell(output, data_hex).map(|issuer| (output_index, issuer))
+            })
+            .collect()
+    }
+
     pub fn parse_classes_with_output_indices(
         tx: &TransactionView,
     ) -> Vec<(usize, ParsedMnftClass)> {
@@ -810,6 +824,37 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].0, 2);
         assert_eq!(parsed[0].1.total, 10);
+    }
+
+    #[test]
+    fn test_parse_issuers_with_output_indices_preserves_real_output_index() {
+        let type_id = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        let non_mnft_output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: None,
+        };
+        let issuer_output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_issuer_type_script(type_id)),
+        };
+
+        let info = r#"{"name":"Test Issuer"}"#;
+        let data = create_issuer_data(5, 2, Some(info));
+        let data_hex = format!("0x{}", hex::encode(&data));
+
+        let tx = create_dummy_tx(
+            vec![non_mnft_output.clone(), non_mnft_output, issuer_output],
+            vec!["0x".to_string(), "0x".to_string(), data_hex],
+        );
+
+        let parsed = MnftParser::parse_issuers_with_output_indices(&tx);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(
+            parsed[0].0, 2,
+            "issuer at output index 2 must preserve real index, not 0"
+        );
     }
 
     #[test]

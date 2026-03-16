@@ -1536,7 +1536,7 @@ impl Indexer {
         cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
         object_type_index_changes: HashMap<Vec<u8>, ObjectTypeIndex>,
         object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
-        pre_parsed_spore_data: Vec<(Vec<ParsedSporeCell>, Vec<ParsedClusterCell>)>,
+        pre_parsed_spore_data: Vec<(Vec<(usize, ParsedSporeCell)>, Vec<ParsedClusterCell>)>,
         pre_parsed_nft_data: PreParsedNftData,
         chain_tip: u64,
     ) -> Result<BatchWriteMetrics> {
@@ -2269,6 +2269,8 @@ impl Indexer {
         let mut daily_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
         let mut hourly_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
         let mut hourly_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
+        let mut deferred_identity_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
+        let mut deferred_object_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         let mut data_batch = StoreBatch::new(self.writer.store());
         if bulk_sync_mode {
             // Parallel write path: each thread writes to its own StoreBatch and commits independently.
@@ -2310,6 +2312,8 @@ impl Indexer {
                 daily_activity_addrs,
                 hourly_activity_accum,
                 hourly_activity_addrs,
+                deferred_identity_deltas,
+                deferred_object_deltas,
             ) = std::thread::scope(
                 |s| -> Result<(
                     BatchStats,
@@ -2319,6 +2323,8 @@ impl Indexer {
                     HashMap<String, HashSet<[u8; 32]>>,
                     HashMap<String, DailyActivityStats>,
                     HashMap<String, HashSet<[u8; 32]>>,
+                    HashMap<Vec<u8>, i64>,
+                    HashMap<Vec<u8>, i64>,
                 )> {
                     // T1: Cells + Consumption (cell data only)
                     // CFs: CELLS (append-only), LIVE_CELLS, CONSUMED_CELLS (domain)
@@ -2817,7 +2823,7 @@ impl Indexer {
                                         &mut spore_state,
                                     )?;
                                 }
-                                for (output_index, spore) in pre_spores.iter().enumerate() {
+                                for &(output_index, ref spore) in pre_spores.iter() {
                                     let output_index_i16 = checked_usize_to_i16(
                                         output_index,
                                         "spore output index while flushing pre-parsed spores",
@@ -2982,12 +2988,20 @@ impl Indexer {
                     }
 
                     // Phase 1: Insert mNFT issuers/classes/tokens from pre-parsed data.
-                    for &(tx_gi, ref issuer) in &pre_parsed_nft_data.mnft_issuers {
+                    for &(tx_gi, output_index, ref issuer) in &pre_parsed_nft_data.mnft_issuers {
                         let (_, block_number, _, _) = tx_lookup[tx_gi];
+                        let output_index_i16 = i16::try_from(output_index).map_err(|_| {
+                            anyhow!(
+                                "mNFT issuer output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
+                                block_number,
+                                hex::encode(all_tx_data[tx_gi].hash),
+                                output_index
+                            )
+                        })?;
                         writer.insert_mnft_issuer(
                             issuer,
                             &all_tx_data[tx_gi].hash,
-                            0,
+                            output_index_i16,
                             block_number,
                             &mut batch,
                         )?;
@@ -3620,10 +3634,11 @@ impl Indexer {
                         };
                     let t_track_ms = h_track.join().expect("T_TRACK panicked")?;
 
-                    // Apply activity count deltas that T6a/T6b collected but could
-                    // not apply inside their parallel threads (aggregates were
-                    // committed before deltas were known).
-                    let mut delta_commit_ms = 0.0_f64;
+                    // Combine activity count deltas from T6a/T6b. These are NOT
+                    // committed here — they are deferred and merged into the
+                    // finalize batch so that a crash between worker commits and
+                    // finalize cannot leave aggregates incremented without the
+                    // corresponding block headers committed.
                     let combined_identity_deltas = {
                         let mut m = t6a_identity_deltas;
                         for (k, v) in t6b_identity_deltas {
@@ -3634,31 +3649,6 @@ impl Indexer {
                         }
                         m
                     };
-                    if !combined_identity_deltas.is_empty() || !t6b_object_deltas.is_empty() {
-                        let mut delta_batch = StoreBatch::new(store);
-                        let empty_identity_aggs = HashMap::new();
-                        apply_identity_collection_activity_count_deltas(
-                            store,
-                            &mut delta_batch,
-                            combined_identity_deltas,
-                            &empty_identity_aggs,
-                        )?;
-                        let empty_object_aggs = HashMap::new();
-                        apply_object_collection_activity_count_deltas_with_pending(
-                            store,
-                            &mut delta_batch,
-                            t6b_object_deltas,
-                            &empty_object_aggs,
-                        )?;
-                        if !delta_batch.is_empty() {
-                            delta_commit_ms = commit_phase_no_wal(
-                                "T6_activity_deltas",
-                                first_block,
-                                last_block,
-                                delta_batch,
-                            )?;
-                        }
-                    }
 
                     let commit_total_ms = t1_commit_ms
                         + t1b_commit_ms
@@ -3667,8 +3657,7 @@ impl Indexer {
                         + t5_commit_ms
                         + t6a_commit_ms
                         + t6b_commit_ms
-                        + t_act_commit_ms
-                        + delta_commit_ms;
+                        + t_act_commit_ms;
                     Ok((
                         stats,
                         [
@@ -3680,6 +3669,8 @@ impl Indexer {
                         act_addrs,
                         h_accum,
                         h_addrs,
+                        combined_identity_deltas,
+                        t6b_object_deltas,
                     ))
                 },
             )?;
@@ -4302,8 +4293,8 @@ impl Indexer {
                                     &mut spore_state,
                                 )?;
                             }
-                            for (output_index, spore) in
-                                SporeParser::parse_spores(tx).iter().enumerate()
+                            for (output_index, ref spore) in
+                                SporeParser::parse_spores_with_output_indices(tx)
                             {
                                 let output_index_i16 = checked_usize_to_i16(
                                     output_index,
@@ -4356,11 +4347,21 @@ impl Indexer {
                                 }
                             }
                         }
-                        for issuer in MnftParser::parse_issuers(tx) {
+                        for (output_index, issuer) in
+                            MnftParser::parse_issuers_with_output_indices(tx)
+                        {
+                            let output_index_i16 = i16::try_from(output_index).map_err(|_| {
+                                anyhow!(
+                                    "mNFT issuer output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
+                                    parsed.number,
+                                    hex::encode(tx_data.hash),
+                                    output_index
+                                )
+                            })?;
                             self.writer.insert_mnft_issuer(
                                 &issuer,
                                 &tx_data.hash,
-                                0,
+                                output_index_i16,
                                 parsed.number,
                                 &mut data_batch,
                             )?;
@@ -5196,6 +5197,28 @@ impl Indexer {
                     ckbadger_store::keys::sync_meta_keys::SYNC_STATUS,
                     &status_bytes,
                 );
+            }
+
+            // Apply deferred activity count deltas atomically with finalize.
+            // In bulk mode, T6a/T6b worker threads commit aggregates independently
+            // before finalize. Applying deltas here (instead of as a separate commit)
+            // ensures a crash between worker commits and finalize cannot leave
+            // aggregate counters incremented without corresponding block headers.
+            if !deferred_identity_deltas.is_empty() || !deferred_object_deltas.is_empty() {
+                let empty_identity_aggs = HashMap::new();
+                apply_identity_collection_activity_count_deltas(
+                    self.writer.store(),
+                    &mut core_batch,
+                    deferred_identity_deltas,
+                    &empty_identity_aggs,
+                )?;
+                let empty_object_aggs = HashMap::new();
+                apply_object_collection_activity_count_deltas_with_pending(
+                    self.writer.store(),
+                    &mut core_batch,
+                    deferred_object_deltas,
+                    &empty_object_aggs,
+                )?;
             }
 
             let commit_started = Instant::now();

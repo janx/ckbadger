@@ -32,7 +32,7 @@ pub(crate) enum ReorgAction {
 /// Pre-parsed mNFT/DotBit data computed in the parser stage.
 /// Moves all CPU-intensive parsing out of the t6b writer thread.
 pub(crate) struct PreParsedNftData {
-    pub(crate) mnft_issuers: Vec<(usize, ParsedMnftIssuer)>,
+    pub(crate) mnft_issuers: Vec<(usize, usize, ParsedMnftIssuer)>,
     pub(crate) mnft_classes: Vec<(usize, usize, ParsedMnftClass)>,
     pub(crate) mnft_tokens: Vec<(usize, usize, ParsedMnftToken)>,
     pub(crate) dotbit_accounts: Vec<(usize, ParsedDotbitAccountOutput)>,

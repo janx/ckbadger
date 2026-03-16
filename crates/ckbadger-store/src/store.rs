@@ -1463,6 +1463,14 @@ impl CkbadgerStore {
         self.put_cf(cf, key, value)
     }
 
+    /// Returns true if the CF_CELLS column family contains at least one entry.
+    /// Used by bulk sync guard to verify append-only store is empty.
+    pub fn has_any_data_in_cells_cf(&self) -> anyhow::Result<bool> {
+        let cf = self.cf_cells();
+        let mut iter = self.db.iterator_cf(cf, rocksdb::IteratorMode::Start);
+        Ok(iter.next().is_some())
+    }
+
     /// Iterate over a CF starting from a specific key.
     pub fn iterator_cf(
         &self,

@@ -71,7 +71,7 @@ struct ParserBatchPerfSample {
 
 #[derive(Debug, Default)]
 struct ScannedPreParsedNftTx {
-    mnft_issuers: Vec<ParsedMnftIssuer>,
+    mnft_issuers: Vec<(usize, ParsedMnftIssuer)>,
     mnft_classes: Vec<(usize, ParsedMnftClass)>,
     mnft_tokens: Vec<(usize, ParsedMnftToken)>,
     dotbit_accounts: Vec<ParsedDotbitAccountOutput>,
@@ -94,7 +94,7 @@ fn scan_preparsed_nft_tx(
 
     for (output_index, cell) in tx_data.cells.iter().enumerate() {
         if let Some(issuer) = MnftParser::parse_issuer_parsed_cell(cell) {
-            scanned.mnft_issuers.push(issuer);
+            scanned.mnft_issuers.push((output_index, issuer));
         }
         if let Some(class) = MnftParser::parse_class_parsed_cell(cell) {
             scanned.mnft_classes.push((output_index, class));
@@ -148,7 +148,7 @@ fn run_nft_precompute(
     batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     dotbit_outpoint_fallback: &HashMap<(Vec<u8>, i16), Vec<u8>>,
 ) -> Result<PreParsedNftData> {
-    let mut mnft_issuers: Vec<(usize, ParsedMnftIssuer)> = Vec::new();
+    let mut mnft_issuers: Vec<(usize, usize, ParsedMnftIssuer)> = Vec::new();
     let mut mnft_classes: Vec<(usize, usize, ParsedMnftClass)> = Vec::new();
     let mut mnft_tokens: Vec<(usize, usize, ParsedMnftToken)> = Vec::new();
     let mut dotbit_accounts: Vec<(usize, ParsedDotbitAccountOutput)> = Vec::new();
@@ -187,8 +187,8 @@ fn run_nft_precompute(
             let dotbit_create_order = dotbit_create_event_order(tx_global_index)
                 .map_err(|e| anyhow!("dotbit_create_event_order overflow: {}", e))?;
 
-            for issuer in scanned.mnft_issuers {
-                mnft_issuers.push((tx_global_index, issuer));
+            for (output_index, issuer) in scanned.mnft_issuers {
+                mnft_issuers.push((tx_global_index, output_index, issuer));
             }
             for (output_index, class) in scanned.mnft_classes {
                 mnft_classes.push((tx_global_index, output_index, class));
@@ -378,7 +378,7 @@ impl Indexer {
         /// Pre-parsed spore/cluster data per-tx (flattened across all blocks).
         /// Each entry corresponds to one tx in all_tx_data, containing
         /// (parsed_spores, parsed_clusters) for that transaction.
-        type PreParsedSporeData = Vec<(Vec<ParsedSporeCell>, Vec<ParsedClusterCell>)>;
+        type PreParsedSporeData = Vec<(Vec<(usize, ParsedSporeCell)>, Vec<ParsedClusterCell>)>;
 
         struct ParsedBatch {
             batch_epoch: u64,
@@ -1657,7 +1657,7 @@ impl Indexer {
                 let spore_precompute_started = Instant::now();
                 let pre_parsed_spore_data: PreParsedSporeData = {
                     // Pass 1: Parse all clusters and spores per-tx.
-                    let mut per_tx: Vec<(Vec<ParsedSporeCell>, Vec<ParsedClusterCell>)> =
+                    let mut per_tx: Vec<(Vec<(usize, ParsedSporeCell)>, Vec<ParsedClusterCell>)> =
                         Vec::with_capacity(all_tx_data.len());
                     let mut batch_cluster_descriptions: HashMap<Vec<u8>, Option<String>> =
                         HashMap::new();
@@ -1665,7 +1665,7 @@ impl Indexer {
                     for block_response in blocks.iter() {
                         for tx in &block_response.block.transactions {
                             let clusters = SporeParser::parse_clusters(tx);
-                            let spores = SporeParser::parse_spores(tx);
+                            let spores = SporeParser::parse_spores_with_output_indices(tx);
 
                             // Record cluster descriptions from this batch.
                             for cluster in &clusters {
@@ -1677,7 +1677,7 @@ impl Indexer {
 
                             // Collect cluster IDs referenced by spores that aren't
                             // in this batch yet — we'll fetch them from DB.
-                            for spore in &spores {
+                            for (_, spore) in &spores {
                                 if let Some(ref cid) = spore.cluster_id {
                                     if !batch_cluster_descriptions.contains_key(cid) {
                                         missing_cluster_ids.push(cid.clone());
@@ -1729,7 +1729,7 @@ impl Indexer {
 
                     // Pass 2: Compute media profiles with cluster descriptions.
                     for (spores, _clusters) in &mut per_tx {
-                        for spore in spores.iter_mut() {
+                        for (_, spore) in spores.iter_mut() {
                             if spore.is_did {
                                 continue;
                             }
@@ -2113,6 +2113,42 @@ impl Indexer {
                             "Pipeline mismatch drain completed"
                         );
                         continue;
+                    }
+
+                    // Validate that the batch's first block is a child of db_tip.
+                    // The position check (start_block == expected_start) alone cannot
+                    // detect a reorg that replaced blocks above db_tip while this
+                    // batch was in the parse queue. Comparing parent_hash catches
+                    // stale-fork batches without an extra RPC round-trip.
+                    if let Some(ref stored_hash) = db_tip_hash {
+                        if let Some(first_parsed) = all_parsed_blocks.first() {
+                            if first_parsed.parent_hash != *stored_hash {
+                                warn!(
+                                    run_id = %self.run_id,
+                                    pipeline_epoch = current_epoch,
+                                    db_tip,
+                                    start_block,
+                                    expected_parent = %hex::encode(stored_hash),
+                                    actual_parent = %hex::encode(&first_parsed.parent_hash),
+                                    "Stale fork batch detected: first block parent_hash does not match db_tip hash"
+                                );
+                                self.request_pipeline_reset(
+                                    "stale fork batch (parent_hash mismatch)",
+                                    Some(expected_start),
+                                    Some(start_block),
+                                    None,
+                                );
+                                let drained = Self::drain_channel(&mut parse_rx).await;
+                                parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
+                                info!(
+                                    run_id = %self.run_id,
+                                    pipeline_epoch = current_epoch,
+                                    drained,
+                                    "Stale fork drain completed"
+                                );
+                                continue;
+                            }
+                        }
                     }
 
                     let blocks_behind =

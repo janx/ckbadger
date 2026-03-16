@@ -922,7 +922,12 @@ impl Indexer {
             );
         }
 
-        ensure_bulk_sync_fresh_start(bulk_sync_mode, start_block, &start_block_hash)?;
+        ensure_bulk_sync_fresh_start(
+            bulk_sync_mode,
+            start_block,
+            &start_block_hash,
+            &self.append_only_store,
+        )?;
         let consistent_block = self.writer.find_last_consistent_block()?;
         let actual_start = match consistent_block {
             Some(cb) if cb < start_block => {
@@ -951,6 +956,7 @@ impl Indexer {
                 window_end = continuity_probe.recent_window_end,
                 missing_header_sample = ?continuity_probe.missing_header_sample,
                 missing_tx_block0_sample = ?continuity_probe.missing_tx_block0_sample,
+                missing_tx_incomplete_sample = ?continuity_probe.missing_tx_incomplete_sample,
                 full_header_gap_scan = continuity_probe.full_header_gap_scan,
                 "Startup continuity probe detected inconsistencies"
             );
@@ -1005,6 +1011,12 @@ impl Indexer {
                 reasons.push(format!(
                     "missing tx_index[block][0] at blocks {:?}",
                     continuity_probe.missing_tx_block0_sample
+                ));
+            }
+            if !continuity_probe.missing_tx_incomplete_sample.is_empty() {
+                reasons.push(format!(
+                    "incomplete tx rows (block, expected, last_found): {:?}",
+                    continuity_probe.missing_tx_incomplete_sample
                 ));
             }
             if !reasons.is_empty() {
