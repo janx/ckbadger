@@ -1,8 +1,8 @@
-# ckbadger-store Column Families (52 total: 51 domain + 1 append-only)
+# ckbadger-store Column Families (55 total: 54 domain + 1 append-only)
 
 ckbadger runs two logical RocksDB stores (both backed by `ckbadger-store`):
 
-- **Domain store** (`[store].domain_data_path`, 51 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
+- **Domain store** (`[store].domain_data_path`, 54 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 
 The indexer opens both stores read-write; the API opens both in secondary (read-only) mode. Cell reads are cross-store: live/consumed markers in domain, cell payloads in append-only.
@@ -62,7 +62,25 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `stats_token`                    | prefixed keys                                         | token rollups + deltas  | Token transfer/hourly/daily stats                                                         |
 | `stats_spore`                    | prefixed keys                                         | spore rollups/indexes   | Spore/cluster daily + owner/index stats                                                   |
 | `stats_object`                   | prefixed keys                                         | object rollups/indexes  | Object/mNFT daily + hourly + indexes                                                      |
+| `script_references`              | reference_hash + hash_type                            | ScriptReferenceInfo     | Canonical script reference rows keyed by `(reference_hash, hash_type)`                    |
+| `script_versions`                | version_hash                                          | ScriptVersionInfo       | Canonical script code version rows keyed by `H(script_code)`                              |
+| `script_versions_by_label`       | label_len + label_key + version_hash                  | empty                   | Label-to-version index for named script family lookups                                    |
 | `sync_meta`                      | fixed keys                                            | SyncStatus/ReorgEvent   | Sync progress, deep-fork, reorg metadata                                                  |
+
+### Script Modeling Note
+
+`script_info` is the current script metadata CF, keyed only by bare `code_hash`.
+
+That is sufficient for some labeled-script lookups, but it is not a complete canonical model for
+CKB script resolution because:
+
+- runtime reference identity is `(reference_hash, hash_type)`, not bare `code_hash`
+- `type` references are current-state dependent and may resolve differently across upgrades
+- exact version attribution for historical usage must come from the transaction's actual
+  `cell_deps`
+
+See [docs/SCRIPTS_CODE_CELLS_AND_REFS.md](./SCRIPTS_CODE_CELLS_AND_REFS.md) for the terminology and
+model that future script schema refactors should follow.
 
 ### DAO Secondary Index Notes
 
