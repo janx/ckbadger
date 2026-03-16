@@ -67,7 +67,12 @@ export default function ScriptByCodeHashPage({
   const knownScript = lookupResult;
 
   useEffect(() => {
-    if (!isCodeHashIdentifier || !knownScript || !hasKnownScriptName(knownScript.name)) {
+    if (
+      !isCodeHashIdentifier ||
+      !knownScript ||
+      knownScript.resolutionState !== 'resolved' ||
+      !hasKnownScriptName(knownScript.name)
+    ) {
       return;
     }
 

@@ -15,8 +15,8 @@ use tracing::{debug, info, warn};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, ObjectTypeIndex,
-    PositionedCellInfo, SporeTypeIndex, SOLE_SPORES_SENTINEL_COLLECTION,
+    CellScriptVersionInfo, DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate,
+    ObjectTypeIndex, PositionedCellInfo, SporeTypeIndex, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -702,6 +702,418 @@ fn truncate_to_hour(dt: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 pub(super) type ScriptUsageChanges = HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
+type ScriptReferenceVersionChanges =
+    HashMap<(Vec<u8>, u8, Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
+
+fn checked_hash_type_u8(hash_type: i16, context: &str) -> Result<u8> {
+    match hash_type {
+        0 | 1 | 2 | 4 => Ok(hash_type as u8),
+        other => bail!("invalid hash_type in {}: {}", context, other),
+    }
+}
+
+fn parse_dep_group_outpoints(data: &[u8]) -> Result<Vec<([u8; 32], i16)>> {
+    if data.len() < 40 || !(data.len() - 4).is_multiple_of(36) {
+        bail!(
+            "invalid dep group data length: expected 4 + n * 36 bytes, got {}",
+            data.len()
+        );
+    }
+    let count = u32::from_le_bytes(data[0..4].try_into().expect("length checked")) as usize;
+    let expected_size = 4 + count * 36;
+    if count == 0 || expected_size != data.len() {
+        bail!(
+            "invalid dep group item count: count={}, data_len={}, expected_len={}",
+            count,
+            data.len(),
+            expected_size
+        );
+    }
+
+    let mut outpoints = Vec::with_capacity(count);
+    for index in 0..count {
+        let offset = 4 + index * 36;
+        let mut tx_hash = [0u8; 32];
+        tx_hash.copy_from_slice(&data[offset..offset + 32]);
+        let output_index_u32 = u32::from_le_bytes(
+            data[offset + 32..offset + 36]
+                .try_into()
+                .expect("slice length checked"),
+        );
+        let output_index = i16::try_from(output_index_u32).map_err(|_| {
+            anyhow!(
+                "dep group output index exceeds i16 range: item={}, output_index={}",
+                index,
+                output_index_u32
+            )
+        })?;
+        outpoints.push((tx_hash, output_index));
+    }
+
+    Ok(outpoints)
+}
+
+fn add_script_reference_version_delta(
+    changes: &mut ScriptReferenceVersionChanges,
+    reference_hash: Vec<u8>,
+    hash_type: u8,
+    version_hash: Vec<u8>,
+    is_type: bool,
+    delta: (i64, i64, i128, i128, i128, i128),
+) {
+    let entry = changes
+        .entry((reference_hash, hash_type, version_hash, is_type))
+        .or_insert((0, 0, 0, 0, 0, 0));
+    entry.0 += delta.0;
+    entry.1 += delta.1;
+    entry.2 += delta.2;
+    entry.3 += delta.3;
+    entry.4 += delta.4;
+    entry.5 += delta.5;
+}
+
+fn load_dep_cell_info(
+    tx_hash: &[u8; 32],
+    output_index: i16,
+    domain_store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+) -> Result<PositionedCellInfo> {
+    let key = (tx_hash.to_vec(), output_index);
+    if let Some(info) = batch_cell_infos.get(&key) {
+        return Ok(info.clone());
+    }
+    if let Some(info) = domain_store.get_cell(tx_hash, output_index, append_only_store)? {
+        return Ok(info);
+    }
+    if let Some(info) = domain_store.get_consumed_cell(tx_hash, output_index, append_only_store)? {
+        return Ok(info);
+    }
+    bail!(
+        "missing dep cell while resolving script version: outpoint=0x{}:{}",
+        hex::encode(tx_hash),
+        output_index
+    )
+}
+
+fn load_dep_cell_data(
+    tx_hash: &[u8; 32],
+    output_index: i16,
+    batch_parsed_cells: &HashMap<(Vec<u8>, i16), crate::parser::cell::ParsedCell>,
+    ckb_store: Option<&ckb_store_reader::CkbChainReader>,
+) -> Result<Vec<u8>> {
+    let key = (tx_hash.to_vec(), output_index);
+    if let Some(cell) = batch_parsed_cells.get(&key) {
+        return Ok(cell.data.clone());
+    }
+    let ckb_store = ckb_store.ok_or_else(|| {
+        anyhow!(
+            "ckb_store is required to resolve dep group cell data: outpoint=0x{}:{}",
+            hex::encode(tx_hash),
+            output_index
+        )
+    })?;
+    let output_index_u32 = u32::try_from(output_index).map_err(|_| {
+        anyhow!(
+            "negative dep group output index while reading CKB store: outpoint=0x{}:{}",
+            hex::encode(tx_hash),
+            output_index
+        )
+    })?;
+    ckb_store
+        .get_cell_data(tx_hash, output_index_u32)
+        .ok_or_else(|| {
+            anyhow!(
+                "missing dep group cell data in CKB store: outpoint=0x{}:{}",
+                hex::encode(tx_hash),
+                output_index
+            )
+        })
+}
+
+fn resolve_tx_dep_cells(
+    tx_data: &TxData,
+    domain_store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    batch_parsed_cells: &HashMap<(Vec<u8>, i16), crate::parser::cell::ParsedCell>,
+    ckb_store: Option<&ckb_store_reader::CkbChainReader>,
+) -> Result<HashMap<(Vec<u8>, i16), PositionedCellInfo>> {
+    let mut resolved = HashMap::new();
+
+    for dep in &tx_data.cell_deps {
+        match dep.dep_type {
+            0 => {
+                let info = load_dep_cell_info(
+                    &dep.out_point_tx_hash,
+                    dep.out_point_index,
+                    domain_store,
+                    append_only_store,
+                    batch_cell_infos,
+                )?;
+                resolved.insert((dep.out_point_tx_hash.to_vec(), dep.out_point_index), info);
+            }
+            1 => {
+                let dep_group_data = load_dep_cell_data(
+                    &dep.out_point_tx_hash,
+                    dep.out_point_index,
+                    batch_parsed_cells,
+                    ckb_store,
+                )?;
+                for (member_tx_hash, member_output_index) in
+                    parse_dep_group_outpoints(&dep_group_data)?
+                {
+                    let info = load_dep_cell_info(
+                        &member_tx_hash,
+                        member_output_index,
+                        domain_store,
+                        append_only_store,
+                        batch_cell_infos,
+                    )?;
+                    resolved.insert((member_tx_hash.to_vec(), member_output_index), info);
+                }
+            }
+            other => {
+                bail!(
+                    "invalid dep_type while resolving tx deps: tx_hash=0x{}, dep_type={}",
+                    hex::encode(tx_data.hash),
+                    other
+                );
+            }
+        }
+    }
+
+    Ok(resolved)
+}
+
+fn resolve_version_hash_for_reference(
+    tx_hash: &[u8; 32],
+    reference_hash: &[u8],
+    hash_type: u8,
+    dep_cells: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+) -> Result<Vec<u8>> {
+    if hash_type != 1 {
+        return Ok(reference_hash.to_vec());
+    }
+
+    let mut resolved_version_hash: Option<Vec<u8>> = None;
+    for dep_cell in dep_cells.values() {
+        if dep_cell.type_script_hash.as_deref() != Some(reference_hash) {
+            continue;
+        }
+        let dep_version_hash = dep_cell.data_hash.clone().ok_or_else(|| {
+            anyhow!(
+                "missing dep cell data_hash while resolving type reference version: tx_hash=0x{}, reference_hash=0x{}",
+                hex::encode(tx_hash),
+                hex::encode(reference_hash)
+            )
+        })?;
+        match resolved_version_hash.as_ref() {
+            Some(existing) if existing != &dep_version_hash => {
+                bail!(
+                    "ambiguous type reference version resolution: tx_hash=0x{}, reference_hash=0x{}, first_version=0x{}, second_version=0x{}",
+                    hex::encode(tx_hash),
+                    hex::encode(reference_hash),
+                    hex::encode(existing),
+                    hex::encode(&dep_version_hash)
+                );
+            }
+            Some(_) => {}
+            None => resolved_version_hash = Some(dep_version_hash),
+        }
+    }
+
+    resolved_version_hash.ok_or_else(|| {
+        anyhow!(
+            "missing dep cell match for type reference: tx_hash=0x{}, reference_hash=0x{}",
+            hex::encode(tx_hash),
+            hex::encode(reference_hash)
+        )
+    })
+}
+
+fn build_script_reference_version_state(
+    txs: &[TxData],
+    domain_store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+    _input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    ckb_store: Option<&ckb_store_reader::CkbChainReader>,
+) -> Result<(
+    ScriptReferenceVersionChanges,
+    Vec<(Vec<u8>, i16, CellScriptVersionInfo)>,
+)> {
+    let mut changes = HashMap::new();
+    let mut created_rows = Vec::new();
+    let mut created_map: HashMap<(Vec<u8>, i16), CellScriptVersionInfo> = HashMap::new();
+    let mut batch_parsed_cells: HashMap<(Vec<u8>, i16), crate::parser::cell::ParsedCell> =
+        HashMap::new();
+
+    for tx_data in txs {
+        for (output_index, cell) in tx_data.cells.iter().enumerate() {
+            let output_index = checked_usize_to_i16(
+                output_index,
+                "script reference/version batch parsed cell index",
+            )?;
+            batch_parsed_cells.insert((tx_data.hash.to_vec(), output_index), cell.clone());
+        }
+    }
+
+    for tx_data in txs {
+        let dep_cells = resolve_tx_dep_cells(
+            tx_data,
+            domain_store,
+            append_only_store,
+            batch_cell_infos,
+            &batch_parsed_cells,
+            ckb_store,
+        )?;
+
+        if !tx_data.is_cellbase {
+            for input in &tx_data.inputs {
+                let output_index = parsed_input_outpoint_index_i16(
+                    input.previous_output_index,
+                    "script reference/version input",
+                );
+                let key = (input.previous_tx_hash.to_vec(), output_index);
+                let stored_version_info =
+                    domain_store.get_cell_script_version(&input.previous_tx_hash, output_index)?;
+                let version_info = created_map
+                    .get(&key)
+                    .cloned()
+                    .or(stored_version_info)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "missing stored cell script version info for consumed input: tx_hash=0x{}, input_outpoint=0x{}:{}",
+                            hex::encode(tx_data.hash),
+                            hex::encode(input.previous_tx_hash),
+                            output_index
+                        )
+                    })?;
+
+                add_script_reference_version_delta(
+                    &mut changes,
+                    version_info.lock_reference_hash.clone(),
+                    version_info.lock_hash_type,
+                    version_info.lock_version_hash.clone(),
+                    false,
+                    (
+                        0,
+                        -1,
+                        0,
+                        -i128::from(version_info.capacity),
+                        0,
+                        -i128::from(version_info.occupied_capacity),
+                    ),
+                );
+                if let (Some(type_reference_hash), Some(type_hash_type), Some(type_version_hash)) = (
+                    version_info.type_reference_hash.clone(),
+                    version_info.type_hash_type,
+                    version_info.type_version_hash.clone(),
+                ) {
+                    add_script_reference_version_delta(
+                        &mut changes,
+                        type_reference_hash,
+                        type_hash_type,
+                        type_version_hash,
+                        true,
+                        (
+                            0,
+                            -1,
+                            0,
+                            -i128::from(version_info.capacity),
+                            0,
+                            -i128::from(version_info.occupied_capacity),
+                        ),
+                    );
+                }
+            }
+        }
+
+        for (output_index, cell) in tx_data.cells.iter().enumerate() {
+            let output_index =
+                checked_usize_to_i16(output_index, "script reference/version output index")?;
+            let occupied_capacity = occupied_capacity_shannons_i64(
+                cell.lock_args.len(),
+                cell.type_args.as_ref().map(|args| args.len()),
+                cell.data_size,
+            );
+
+            let lock_hash_type = checked_hash_type_u8(cell.lock_hash_type, "lock script")?;
+            let lock_version_hash = resolve_version_hash_for_reference(
+                &tx_data.hash,
+                &cell.lock_code_hash,
+                lock_hash_type,
+                &dep_cells,
+            )?;
+            add_script_reference_version_delta(
+                &mut changes,
+                cell.lock_code_hash.clone(),
+                lock_hash_type,
+                lock_version_hash.clone(),
+                false,
+                (
+                    1,
+                    1,
+                    i128::from(cell.capacity),
+                    i128::from(cell.capacity),
+                    i128::from(occupied_capacity),
+                    i128::from(occupied_capacity),
+                ),
+            );
+
+            let (type_reference_hash, type_hash_type, type_version_hash) =
+                if let (Some(type_code_hash), Some(type_hash_type_i16)) =
+                    (cell.type_code_hash.as_ref(), cell.type_hash_type)
+                {
+                    let type_hash_type = checked_hash_type_u8(type_hash_type_i16, "type script")?;
+                    let type_version_hash = resolve_version_hash_for_reference(
+                        &tx_data.hash,
+                        type_code_hash,
+                        type_hash_type,
+                        &dep_cells,
+                    )?;
+                    add_script_reference_version_delta(
+                        &mut changes,
+                        type_code_hash.clone(),
+                        type_hash_type,
+                        type_version_hash.clone(),
+                        true,
+                        (
+                            1,
+                            1,
+                            i128::from(cell.capacity),
+                            i128::from(cell.capacity),
+                            i128::from(occupied_capacity),
+                            i128::from(occupied_capacity),
+                        ),
+                    );
+                    (
+                        Some(type_code_hash.clone()),
+                        Some(type_hash_type),
+                        Some(type_version_hash),
+                    )
+                } else {
+                    (None, None, None)
+                };
+
+            let info = CellScriptVersionInfo {
+                lock_reference_hash: cell.lock_code_hash.clone(),
+                lock_hash_type,
+                lock_version_hash,
+                type_reference_hash,
+                type_hash_type,
+                type_version_hash,
+                capacity: cell.capacity,
+                occupied_capacity,
+            };
+            created_rows.push((tx_data.hash.to_vec(), output_index, info.clone()));
+            created_map.insert((tx_data.hash.to_vec(), output_index), info);
+        }
+    }
+
+    Ok((changes, created_rows))
+}
 
 pub(super) fn parse_blocks_parallel(
     blocks: &[BlockResponseWithCycles],
@@ -733,6 +1145,14 @@ pub(super) fn parse_blocks_parallel(
                         let inputs = TransactionParser::parse_inputs(tx).map_err(|e| {
                             anyhow!(
                                 "failed to parse tx inputs for tx {} in block {}: {}",
+                                tx.hash,
+                                parsed.number,
+                                e
+                            )
+                        })?;
+                        let cell_deps = TransactionParser::parse_cell_deps(tx).map_err(|e| {
+                            anyhow!(
+                                "failed to parse tx cell deps for tx {} in block {}: {}",
                                 tx.hash,
                                 parsed.number,
                                 e
@@ -783,6 +1203,7 @@ pub(super) fn parse_blocks_parallel(
                             })?,
                             is_cellbase: parsed_tx.is_cellbase,
                             inputs,
+                            cell_deps,
                             cells,
                             witnesses,
                             outputs_data,
@@ -1293,6 +1714,15 @@ impl Indexer {
 
         let block_refs: Vec<&crate::parser::block::ParsedBlock> =
             all_parsed_blocks.iter().collect();
+        let (script_reference_version_changes, cell_script_version_rows) =
+            build_script_reference_version_state(
+                &all_tx_data,
+                self.writer.store(),
+                &self.append_only_store,
+                &input_cell_info,
+                &batch_cell_infos,
+                self.ckb_store.as_deref(),
+            )?;
 
         // Pass 4: Proposals (iterates all_parsed_blocks, spawns background cache task)
         let mut batch_proposals: Vec<(Vec<u8>, i64, i16)> = Vec::new();
@@ -1798,6 +2228,9 @@ impl Indexer {
                                 true,
                             )?;
                         }
+                        for (tx_hash, output_index, info) in &cell_script_version_rows {
+                            domain_batch.put_cell_script_version(tx_hash, *output_index, info);
+                        }
                         if !all_consumptions.is_empty() {
                             writer.consume_cells_batch_preloaded(
                                 &all_consumptions,
@@ -1876,6 +2309,12 @@ impl Indexer {
                             writer.apply_script_usage_deltas(
                                 &prefetched_script_info,
                                 &script_usage_changes,
+                                &mut batch,
+                            )?;
+                        }
+                        if !script_reference_version_changes.is_empty() {
+                            writer.update_script_reference_version_batch(
+                                &script_reference_version_changes,
                                 &mut batch,
                             )?;
                         }
@@ -3164,6 +3603,9 @@ impl Indexer {
                     cells_batch.commit()?;
                 }
             }
+            for (tx_hash, output_index, info) in &cell_script_version_rows {
+                data_batch.put_cell_script_version(tx_hash, *output_index, info);
+            }
             if !all_consumptions.is_empty() {
                 self.writer.consume_cells_batch_preloaded(
                     &all_consumptions,
@@ -3237,6 +3679,12 @@ impl Indexer {
                         &mut domain_analytics_batch,
                     )?;
                 }
+            }
+            if !script_reference_version_changes.is_empty() {
+                self.writer.update_script_reference_version_batch(
+                    &script_reference_version_changes,
+                    &mut domain_analytics_batch,
+                )?;
             }
             if !script_daily_changes.is_empty() {
                 self.writer.update_script_daily_deltas_batch(
@@ -5571,6 +6019,7 @@ mod tests {
             outputs_count,
             is_cellbase,
             inputs,
+            cell_deps: vec![],
             cells,
             witnesses,
             outputs_data,
@@ -5581,6 +6030,151 @@ mod tests {
             cycles: None,
             timestamp: Utc::now(),
         }
+    }
+
+    fn parsed_cell(
+        capacity: i64,
+        lock_code_hash: Vec<u8>,
+        lock_hash_type: i16,
+    ) -> crate::parser::cell::ParsedCell {
+        crate::parser::cell::ParsedCell {
+            capacity,
+            lock_code_hash,
+            lock_hash_type,
+            lock_args: vec![],
+            lock_script_hash: vec![0x88; 32],
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            type_script_hash: None,
+            data_hash: vec![0x99; 32],
+            data_size: 0,
+            data: vec![],
+        }
+    }
+
+    #[test]
+    fn test_build_script_reference_version_state_persists_created_output_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference_hash = vec![0x11; 32];
+        let version_hash = vec![0x22; 32];
+        let dep_tx_hash = [0x33; 32];
+
+        let dep_cell = LiveCellInfo {
+            capacity: 500,
+            lock_script_hash: vec![0x44; 32],
+            lock_code_hash: vec![0x55; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(reference_hash.clone()),
+            type_code_hash: Some(vec![0x66; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
+            data_size: 0,
+            occupied_capacity: 61,
+            udt_amount: None,
+            data_hash: Some(version_hash.clone()),
+        };
+        let mut seed = StoreBatch::new(&store);
+        seed.put_cell(&dep_tx_hash, 0, &dep_cell, 1);
+        seed.commit().unwrap();
+
+        let mut tx = dummy_tx_data(
+            [0x77; 32],
+            false,
+            vec![],
+            vec![parsed_cell(100, reference_hash.clone(), 1)],
+            vec![],
+            vec!["0x".to_string()],
+        );
+        tx.cell_deps = vec![crate::parser::transaction::ParsedCellDep {
+            out_point_tx_hash: dep_tx_hash,
+            out_point_index: 0,
+            dep_type: 0,
+        }];
+
+        let (changes, rows) = build_script_reference_version_state(
+            &[tx],
+            &store,
+            &store,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+        )
+        .unwrap();
+
+        let occupied_capacity = occupied_capacity_shannons_i64(0, None, 0);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].2.lock_reference_hash, reference_hash);
+        assert_eq!(rows[0].2.lock_hash_type, 1);
+        assert_eq!(rows[0].2.lock_version_hash, version_hash.clone());
+        assert_eq!(
+            changes.get(&(vec![0x11; 32], 1, version_hash, false)),
+            Some(&(
+                1,
+                1,
+                100,
+                100,
+                i128::from(occupied_capacity),
+                i128::from(occupied_capacity)
+            ))
+        );
+    }
+
+    #[test]
+    fn test_build_script_reference_version_state_uses_stored_versions_for_consumed_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let previous_tx_hash = [0x12; 32];
+        let reference_hash = vec![0x21; 32];
+        let version_hash = vec![0x22; 32];
+
+        store
+            .put_cell_script_version(
+                &previous_tx_hash,
+                0,
+                &CellScriptVersionInfo {
+                    lock_reference_hash: reference_hash.clone(),
+                    lock_hash_type: 0,
+                    lock_version_hash: version_hash.clone(),
+                    type_reference_hash: None,
+                    type_hash_type: None,
+                    type_version_hash: None,
+                    capacity: 100,
+                    occupied_capacity: 61,
+                },
+            )
+            .unwrap();
+
+        let tx = dummy_tx_data(
+            [0x34; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let (changes, rows) = build_script_reference_version_state(
+            &[tx],
+            &store,
+            &store,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+        )
+        .unwrap();
+
+        assert!(rows.is_empty());
+        assert_eq!(
+            changes.get(&(reference_hash, 0, version_hash, false)),
+            Some(&(0, -1, 0, -100, 0, -61))
+        );
     }
 
     #[test]

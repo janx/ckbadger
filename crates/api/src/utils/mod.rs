@@ -16,7 +16,9 @@ pub use format::{
 };
 pub use http::shared_http_client;
 pub use script_resolution::{
-    deployment_key_for_script, deployment_reference_hashes, is_known_script_name,
+    deployment_key_for_script, deployment_reference_hashes, hash_type_to_string, hash_type_to_u8,
+    is_known_script_name, list_current_references_for_version, list_version_code_cells,
     merge_script_info_for_reference, related_code_hashes_for_reference,
-    resolve_code_hash_for_hash_type,
+    resolve_code_hash_for_hash_type, resolve_script_version_by_reference,
+    CurrentScriptVersionResolution, VersionCodeCell,
 };

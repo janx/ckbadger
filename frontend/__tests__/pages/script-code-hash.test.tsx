@@ -51,6 +51,7 @@ describe('ScriptByCodeHashPage', () => {
 
       if (codeHashes.includes(mockCodeHash)) {
         response[mockCodeHash] = {
+          referenceHash: mockCodeHash,
           codeHash: mockCodeHash,
           name: 'Unknown',
           scriptKind: 'type',
@@ -65,11 +66,21 @@ describe('ScriptByCodeHashPage', () => {
           liveUsedCapacitySum: '14000000000',
           codeCellsLiveCount: 1,
           codeCellsTotal: 1,
+          availableReferences: [
+            {
+              referenceHash: mockCodeHash,
+              hashType: 'type',
+              scriptKind: 'type',
+            },
+          ],
+          resolutionState: 'resolved',
+          ambiguity: null,
         };
       }
 
       if (codeHashes.includes(mockGovernanceCodeHash)) {
         response[mockGovernanceCodeHash] = {
+          referenceHash: mockGovernanceCodeHash,
           codeHash: mockGovernanceCodeHash,
           name: 'Governance Lock',
           scriptKind: 'lock',
@@ -84,6 +95,9 @@ describe('ScriptByCodeHashPage', () => {
           liveUsedCapacitySum: '0',
           codeCellsLiveCount: 0,
           codeCellsTotal: 0,
+          availableReferences: [],
+          resolutionState: 'resolved',
+          ambiguity: null,
         };
       }
 
@@ -102,6 +116,15 @@ describe('ScriptByCodeHashPage', () => {
       ],
       liveCount: 1,
       totalCount: 1,
+      resolvedVersionHash: mockCodeHash,
+      availableReferences: [
+        {
+          referenceHash: mockCodeHash,
+          hashType: 'type',
+          scriptKind: 'type',
+        },
+      ],
+      ambiguity: null,
     });
     vi.mocked(api.getCell).mockResolvedValue({
       txHash: mockDeploymentTxHash,
@@ -157,6 +180,7 @@ describe('ScriptByCodeHashPage', () => {
   it('redirects known script hash to the unified named script detail page', async () => {
     vi.mocked(api.lookupScripts).mockResolvedValue({
       [mockCodeHash]: {
+        referenceHash: mockCodeHash,
         codeHash: mockCodeHash,
         name: 'Default Lock',
         scriptKind: 'lock',
@@ -171,6 +195,15 @@ describe('ScriptByCodeHashPage', () => {
         liveUsedCapacitySum: '14000000000',
         codeCellsLiveCount: 0,
         codeCellsTotal: 0,
+        availableReferences: [
+          {
+            referenceHash: mockCodeHash,
+            hashType: 'type',
+            scriptKind: 'lock',
+          },
+        ],
+        resolutionState: 'resolved',
+        ambiguity: null,
       },
     });
 

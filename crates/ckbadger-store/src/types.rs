@@ -671,6 +671,65 @@ pub struct ScriptInfo {
     pub code_cell_output_index: Option<u32>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScriptReferenceInfo {
+    pub reference_hash: Vec<u8>,
+    pub hash_type: u8,
+    pub lock_cells_count: i64,
+    pub lock_live_cells_count: i64,
+    pub lock_capacity_sum: i128,
+    pub lock_live_capacity_sum: i128,
+    #[serde(default)]
+    pub lock_used_capacity_sum: i128,
+    #[serde(default)]
+    pub lock_live_used_capacity_sum: i128,
+    pub type_cells_count: i64,
+    pub type_live_cells_count: i64,
+    pub type_capacity_sum: i128,
+    pub type_live_capacity_sum: i128,
+    #[serde(default)]
+    pub type_used_capacity_sum: i128,
+    #[serde(default)]
+    pub type_live_used_capacity_sum: i128,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScriptVersionInfo {
+    pub version_hash: Vec<u8>,
+    pub name: Option<String>,
+    pub category: Option<String>,
+    pub website: Option<String>,
+    pub description: Option<String>,
+    pub lock_cells_count: i64,
+    pub lock_live_cells_count: i64,
+    pub lock_capacity_sum: i128,
+    pub lock_live_capacity_sum: i128,
+    #[serde(default)]
+    pub lock_used_capacity_sum: i128,
+    #[serde(default)]
+    pub lock_live_used_capacity_sum: i128,
+    pub type_cells_count: i64,
+    pub type_live_cells_count: i64,
+    pub type_capacity_sum: i128,
+    pub type_live_capacity_sum: i128,
+    #[serde(default)]
+    pub type_used_capacity_sum: i128,
+    #[serde(default)]
+    pub type_live_used_capacity_sum: i128,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CellScriptVersionInfo {
+    pub lock_reference_hash: Vec<u8>,
+    pub lock_hash_type: u8,
+    pub lock_version_hash: Vec<u8>,
+    pub type_reference_hash: Option<Vec<u8>>,
+    pub type_hash_type: Option<u8>,
+    pub type_version_hash: Option<Vec<u8>>,
+    pub capacity: i64,
+    pub occupied_capacity: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScriptDailyDelta {
     /// Net live capacity change in shannons for this script deployment + kind + day.

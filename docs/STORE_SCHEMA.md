@@ -54,7 +54,7 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `fiber_channel_by_funding_args`  | funding_lock_args                                     | channel_id (32B)        | Fiber channel index by funding args                                                       |
 | `addr_fiber_channels`            | lock_hash (32B) + channel_id (32B)                    | empty                   | Address-to-Fiber-channels index                                                           |
 | `cluster_agg`                    | cluster_id                                            | ClusterAgg              | Spore cluster aggregate stats                                                             |
-| `script_info`                    | code_hash (32B)                                       | ScriptInfo              | Known script metadata                                                                     |
+| `script_info`                    | code_hash (32B)                                       | ScriptInfo              | Legacy/compatibility script metadata keyed by bare hash                                   |
 | `stats_chain`                    | prefixed keys                                         | chain chart snapshots   | Daily/hourly/epoch/miner/block stats (DailyActivityStats includes protocol_action_counts) |
 | `stats_dao`                      | prefixed keys                                         | DAO snapshots           | DAO daily snapshots                                                                       |
 | `stats_hodl`                     | prefixed keys                                         | HODL/chart snapshots    | HODL waves, cell distribution, address cohorts                                            |
@@ -65,19 +65,24 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `script_references`              | reference_hash + hash_type                            | ScriptReferenceInfo     | Canonical script reference rows keyed by `(reference_hash, hash_type)`                    |
 | `script_versions`                | version_hash                                          | ScriptVersionInfo       | Canonical script code version rows keyed by `H(script_code)`                              |
 | `script_versions_by_label`       | label_len + label_key + version_hash                  | empty                   | Label-to-version index for named script family lookups                                    |
+| `cell_script_versions`           | out_point                                             | CellScriptVersionInfo   | Per-cell resolved script version attribution derived from the creating transaction deps   |
 | `sync_meta`                      | fixed keys                                            | SyncStatus/ReorgEvent   | Sync progress, deep-fork, reorg metadata                                                  |
 
 ### Script Modeling Note
 
-`script_info` is the current script metadata CF, keyed only by bare `code_hash`.
+Canonical script identity now lives in the `script_references`, `script_versions`,
+`script_versions_by_label`, and `cell_script_versions` CFs.
 
-That is sufficient for some labeled-script lookups, but it is not a complete canonical model for
-CKB script resolution because:
+`script_info` remains as a compatibility cache keyed only by bare `code_hash`. That legacy shape is
+still useful for some old read paths, but it is not a complete canonical model for CKB script
+resolution because:
 
 - runtime reference identity is `(reference_hash, hash_type)`, not bare `code_hash`
 - `type` references are current-state dependent and may resolve differently across upgrades
 - exact version attribution for historical usage must come from the transaction's actual
   `cell_deps`
+- per-cell version attribution must be mutable in domain store so reorg rollback can delete and
+  rebuild it safely
 
 See [docs/SCRIPTS_CODE_CELLS_AND_REFS.md](./SCRIPTS_CODE_CELLS_AND_REFS.md) for the terminology and
 model that future script schema refactors should follow.

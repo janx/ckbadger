@@ -9,7 +9,10 @@ use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
 use crate::routes::tx_lookup::fetch_transaction_lookup;
-use crate::utils::{address_to_lock_script_hash, is_ckb_address, is_known_script_name};
+use crate::utils::{
+    address_to_lock_script_hash, is_ckb_address, is_known_script_name,
+    resolve_script_version_by_reference, CurrentScriptVersionResolution,
+};
 use crate::warmup::{
     CachedAssetEntry, CachedScriptEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN,
     CACHE_KEY_SCRIPTS_NAMED, CACHE_KEY_SPORES_ALL,
@@ -295,7 +298,6 @@ async fn search(
             let check_tx = scope_allows(scope, &[SearchScope::Transaction]);
             let check_block = scope_allows(scope, &[SearchScope::Block]);
             let check_addr = scope_allows(scope, &[SearchScope::Address]);
-            let check_script = scope_allows(scope, &[SearchScope::Script]);
             let check_token = scope_allows(scope, &[SearchScope::Token, SearchScope::Asset]);
             let check_spore = scope_allows(
                 scope,
@@ -306,14 +308,12 @@ async fn search(
                 Option<(i64, i32)>,
                 Option<i64>,
                 Option<ckbadger_store::AddressBalance>,
-                Option<ckbadger_store::ScriptInfo>,
                 Option<ckbadger_store::TokenInfo>,
                 Option<ckbadger_store::ObjectEntry>,
             ) = tokio::task::spawn_blocking(move || -> anyhow::Result<(
                 Option<(i64, i32)>,
                 Option<i64>,
                 Option<ckbadger_store::AddressBalance>,
-                Option<ckbadger_store::ScriptInfo>,
                 Option<ckbadger_store::TokenInfo>,
                 Option<ckbadger_store::ObjectEntry>,
             )> {
@@ -332,11 +332,6 @@ async fn search(
                 } else {
                     None
                 };
-                let script = if check_script {
-                    store.get_script_info(&hash_c)?
-                } else {
-                    None
-                };
                 let token = if check_token {
                     store.get_token(&hash_c)?
                 } else {
@@ -347,14 +342,13 @@ async fn search(
                 } else {
                     None
                 };
-                Ok((tx_loc, block_num, addr_bal, script, token, spore))
+                Ok((tx_loc, block_num, addr_bal, token, spore))
             })
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            let (tx_loc, block_num_result, addr_bal, script_info, token_info, spore_entry) =
-                hash_results;
+            let (tx_loc, block_num_result, addr_bal, token_info, spore_entry) = hash_results;
 
             if scope_allows(scope, &[SearchScope::Transaction]) {
                 if let Some((block_num, _)) = tx_loc {
@@ -365,10 +359,8 @@ async fn search(
                         url: format!("/tx/{}", hash_query),
                         match_kind: "exact_hash".to_string(),
                     });
-                } else if let Some(tx_lookup) =
-                    fetch_transaction_lookup(&state.ckb_rpc_url, &hash_query)
-                        .await
-                        .map_err(ApiError::internal)?
+                } else if let Ok(Some(tx_lookup)) =
+                    fetch_transaction_lookup(&state.ckb_rpc_url, &hash_query).await
                 {
                     if tx_lookup.is_pending_like() {
                         results.push(SearchResult {
@@ -409,20 +401,61 @@ async fn search(
             }
 
             if scope_allows(scope, &[SearchScope::Script]) {
-                if let Some(si) = script_info {
-                    let label = si
-                        .name
-                        .as_deref()
-                        .filter(|name| is_known_script_name(Some(name)))
-                        .map(|name| format!("Script {}", name))
-                        .unwrap_or_else(|| "Script".to_string());
-                    results.push(SearchResult {
-                        result_type: "script".to_string(),
-                        id: hash_query.clone(),
-                        label,
-                        url: format!("/script/{}", hash_query),
-                        match_kind: "exact_hash".to_string(),
-                    });
+                match resolve_script_version_by_reference(
+                    &state.store,
+                    &state.append_only_store,
+                    &hash_bytes,
+                    None,
+                )
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                {
+                    CurrentScriptVersionResolution::Resolved(resolved) => {
+                        let name = resolved
+                            .version_info
+                            .as_ref()
+                            .and_then(|version| version.name.as_deref())
+                            .filter(|name| is_known_script_name(Some(name)));
+                        let label = name
+                            .map(|name| format!("Script {}", name))
+                            .unwrap_or_else(|| "Script".to_string());
+                        results.push(SearchResult {
+                            result_type: "script".to_string(),
+                            id: hash_query.clone(),
+                            label,
+                            url: format!("/script/{}", hash_query),
+                            match_kind: "exact_hash".to_string(),
+                        });
+                    }
+                    CurrentScriptVersionResolution::Ambiguous(_) => {
+                        results.push(SearchResult {
+                            result_type: "script".to_string(),
+                            id: hash_query.clone(),
+                            label: "Script (ambiguous reference)".to_string(),
+                            url: format!("/script/{}", hash_query),
+                            match_kind: "exact_hash".to_string(),
+                        });
+                    }
+                    CurrentScriptVersionResolution::NotFound => {
+                        if let Some(version) = state
+                            .store
+                            .get_script_version(&hash_bytes)
+                            .map_err(|e| ApiError::internal(e.to_string()))?
+                        {
+                            let label = version
+                                .name
+                                .as_deref()
+                                .filter(|name| is_known_script_name(Some(name)))
+                                .map(|name| format!("Script {}", name))
+                                .unwrap_or_else(|| "Script".to_string());
+                            results.push(SearchResult {
+                                result_type: "script".to_string(),
+                                id: hash_query.clone(),
+                                label,
+                                url: format!("/script/{}", hash_query),
+                                match_kind: "exact_hash".to_string(),
+                            });
+                        }
+                    }
                 }
             }
 
@@ -578,9 +611,9 @@ async fn search(
             for (hash, name) in script_matches.into_iter().take(NAME_MATCH_LIMIT) {
                 results.push(SearchResult {
                     result_type: "script".to_string(),
-                    id: hash.clone(),
+                    id: hash,
                     label: format!("Script {}", name),
-                    url: format!("/script/{}", hash),
+                    url: format!("/scripts/{}", name.replace(' ', "%20")),
                     match_kind: "name_contains".to_string(),
                 });
             }

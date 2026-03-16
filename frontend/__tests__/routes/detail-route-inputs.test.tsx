@@ -7,6 +7,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     lookupScripts: vi.fn(),
     getCodeCell: vi.fn(),
+    getCodeCells: vi.fn(),
     getScriptCapacityChartByCodeHash: vi.fn(),
     getCellsByScriptRef: vi.fn(),
   },
@@ -31,6 +32,7 @@ describe('detail route inputs', () => {
     vi.clearAllMocks();
     vi.mocked(api.lookupScripts).mockResolvedValue({
       [mockCodeHash]: {
+        referenceHash: mockCodeHash,
         codeHash: mockCodeHash,
         name: 'Unknown',
         scriptKind: 'type',
@@ -45,9 +47,32 @@ describe('detail route inputs', () => {
         liveUsedCapacitySum: '14000000000',
         codeCellsLiveCount: 0,
         codeCellsTotal: 0,
+        availableReferences: [
+          {
+            referenceHash: mockCodeHash,
+            hashType: 'type',
+            scriptKind: 'type',
+          },
+        ],
+        resolutionState: 'resolved',
+        ambiguity: null,
       },
     });
     vi.mocked(api.getCodeCell).mockResolvedValue({ txHash: null, outputIndex: null });
+    vi.mocked(api.getCodeCells).mockResolvedValue({
+      codeCells: [],
+      liveCount: 0,
+      totalCount: 0,
+      resolvedVersionHash: mockCodeHash,
+      availableReferences: [
+        {
+          referenceHash: mockCodeHash,
+          hashType: 'type',
+          scriptKind: 'type',
+        },
+      ],
+      ambiguity: null,
+    });
     vi.mocked(api.getScriptCapacityChartByCodeHash).mockResolvedValue({
       title: 'Capacity History',
       series: [
@@ -74,7 +99,9 @@ describe('detail route inputs', () => {
     render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Capacity History')).toBeInTheDocument();
+      expect(
+        screen.getByText('Historical used/unused live capacity for the selected version.')
+      ).toBeInTheDocument();
     });
   });
 });

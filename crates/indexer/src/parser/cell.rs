@@ -4,6 +4,7 @@ use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::script::ScriptParser;
 
+#[derive(Debug, Clone)]
 pub struct ParsedCell {
     pub capacity: i64,
     pub lock_code_hash: Vec<u8>,

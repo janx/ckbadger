@@ -311,6 +311,10 @@ pub const CF_STATS_TOKEN: &str = "stats_token";
 pub const CF_STATS_SPORE: &str = "stats_spore";
 pub const CF_STATS_OBJECT: &str = "stats_object";
 pub const CF_SCRIPT_INFO: &str = "script_info";
+pub const CF_SCRIPT_REFERENCES: &str = "script_references";
+pub const CF_SCRIPT_VERSIONS: &str = "script_versions";
+pub const CF_SCRIPT_VERSIONS_BY_LABEL: &str = "script_versions_by_label";
+pub const CF_CELL_SCRIPT_VERSIONS: &str = "cell_script_versions";
 pub const CF_SYNC_META: &str = "sync_meta";
 pub const CF_SPORE_BY_CLUSTER: &str = "spore_by_cluster";
 pub const CF_CELL_BY_LOCK_CODE: &str = "cell_by_lock_code";
@@ -385,6 +389,10 @@ pub const ALL_CFS: &[&str] = &[
     CF_STATS_OBJECT,
     CF_STATS_IDENTITY,
     CF_SCRIPT_INFO,
+    CF_SCRIPT_REFERENCES,
+    CF_SCRIPT_VERSIONS,
+    CF_SCRIPT_VERSIONS_BY_LABEL,
+    CF_CELL_SCRIPT_VERSIONS,
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
@@ -441,6 +449,10 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_STATS_OBJECT,
     CF_STATS_IDENTITY,
     CF_SCRIPT_INFO,
+    CF_SCRIPT_REFERENCES,
+    CF_SCRIPT_VERSIONS,
+    CF_SCRIPT_VERSIONS_BY_LABEL,
+    CF_CELL_SCRIPT_VERSIONS,
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
@@ -1192,6 +1204,18 @@ impl CkbadgerStore {
     }
     pub fn cf_script_info(&self) -> &ColumnFamily {
         self.cf(CF_SCRIPT_INFO)
+    }
+    pub fn cf_script_references(&self) -> &ColumnFamily {
+        self.cf(CF_SCRIPT_REFERENCES)
+    }
+    pub fn cf_script_versions(&self) -> &ColumnFamily {
+        self.cf(CF_SCRIPT_VERSIONS)
+    }
+    pub fn cf_script_versions_by_label(&self) -> &ColumnFamily {
+        self.cf(CF_SCRIPT_VERSIONS_BY_LABEL)
+    }
+    pub fn cf_cell_script_versions(&self) -> &ColumnFamily {
+        self.cf(CF_CELL_SCRIPT_VERSIONS)
     }
     pub fn cf_sync_meta(&self) -> &ColumnFamily {
         self.cf(CF_SYNC_META)

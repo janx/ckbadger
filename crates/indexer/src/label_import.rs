@@ -547,6 +547,21 @@ fn upsert_script_label(
                 }
             }
         }
+        if let Ok(data_hash) = decode_hex(&deployment.data_hash) {
+            let is_zero_data = data_hash.iter().all(|&b| b == 0);
+            if !is_zero_data {
+                if let Ok(Some(mut version_info)) = store.get_script_version(&data_hash) {
+                    if version_info.name.as_deref() == Some(&script.name) {
+                        store.delete_script_version_by_label(&script.name, &data_hash)?;
+                        version_info.name = None;
+                        version_info.category = None;
+                        version_info.description = None;
+                        version_info.website = None;
+                        store.put_script_version(&data_hash, &version_info)?;
+                    }
+                }
+            }
+        }
     }
 
     for deployment in active {
@@ -581,6 +596,7 @@ fn import_single_deployment(
 
     // Update label fields (preserve indexer-maintained stats).
     info.name = Some(script.name.clone());
+    info.category = script.decoder_type.clone();
     info.description = Some(script.description.clone());
     info.website = Some(script.website.clone());
 
@@ -622,6 +638,31 @@ fn import_single_deployment(
     }
 
     store.put_script_info_direct(&code_hash, &info)?;
+
+    let version_hash = info.dep_data_hash.clone().ok_or_else(|| {
+        anyhow::anyhow!(
+            "script label deployment missing non-zero dataHash: script={}, code_hash=0x{}",
+            script.name,
+            hex::encode(&code_hash)
+        )
+    })?;
+    let mut version_info = store.get_script_version(&version_hash)?.unwrap_or_else(|| {
+        ckbadger_store::types::ScriptVersionInfo {
+            version_hash: version_hash.clone(),
+            ..Default::default()
+        }
+    });
+    if let Some(existing_name) = version_info.name.as_deref() {
+        if existing_name != script.name {
+            store.delete_script_version_by_label(existing_name, &version_hash)?;
+        }
+    }
+    version_info.name = Some(script.name.clone());
+    version_info.category = script.decoder_type.clone();
+    version_info.description = Some(script.description.clone());
+    version_info.website = Some(script.website.clone());
+    store.put_script_version(&version_hash, &version_info)?;
+    store.insert_script_version_by_label(&script.name, &version_hash)?;
     Ok(())
 }
 
@@ -815,6 +856,18 @@ mod tests {
                 .unwrap();
         let script = store.get_script_info(&code_hash).unwrap().unwrap();
         assert_eq!(script.name.as_deref(), Some("Test Script"));
+
+        let version_hash =
+            hex::decode("709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649")
+                .unwrap();
+        let version = store.get_script_version(&version_hash).unwrap().unwrap();
+        assert_eq!(version.name.as_deref(), Some("Test Script"));
+        assert_eq!(
+            store
+                .list_script_version_hashes_by_label("Test Script")
+                .unwrap(),
+            vec![version_hash]
+        );
     }
 
     #[test]

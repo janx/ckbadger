@@ -245,19 +245,28 @@ function deploymentReferenceHashes(
   dataRef: string | null;
   dataRefType: ScriptRefHashType;
 } {
+  const deploymentTypeReference =
+    deployment.availableReferences?.find((reference) => reference.hashType === 'type') ?? null;
+  const deploymentDataReference =
+    deployment.availableReferences?.find((reference) => reference.hashType !== 'type') ?? null;
   const normalizedHashType = normalizeScriptRefHashType(deployment.hashType);
   const lookupTypeRef = normalizeHash(lookupInfo?.deploymentTypeHash);
   const lookupDataRef = normalizeHash(lookupInfo?.deploymentDataHash);
   const typeRef =
+    deploymentTypeReference?.referenceHash ??
     deployment.typeHash ??
     lookupTypeRef ??
     (normalizedHashType === 'type' ? deployment.codeHash : null);
   const dataRef =
+    deploymentDataReference?.referenceHash ??
     deployment.dataHash ??
     lookupDataRef ??
     (normalizedHashType !== 'type' ? deployment.codeHash : null);
   const dataRefType =
-    normalizedHashType !== 'type' ? getScriptRefQueryHashType(deployment.hashType, 'data') : 'data';
+    deploymentDataReference?.hashType ??
+    (normalizedHashType !== 'type'
+      ? getScriptRefQueryHashType(deployment.hashType, 'data')
+      : 'data');
   return { typeRef, dataRef, dataRefType };
 }
 export interface ScriptDetailPageProps {
@@ -321,6 +330,10 @@ export default function ScriptDetailPage({
       return null;
     }
 
+    if (codeHashLookup?.resolutionState === 'ambiguous') {
+      return null;
+    }
+
     if (selectedRefHashType) {
       return selectedRefHashType;
     }
@@ -333,6 +346,7 @@ export default function ScriptDetailPage({
   }, [
     codeHashLookup?.deploymentTypeHash,
     codeHashLookup?.hashType,
+    codeHashLookup?.resolutionState,
     isCodeHashMode,
     selectedRefHashType,
   ]);
@@ -375,6 +389,7 @@ export default function ScriptDetailPage({
       liveCellsCount: codeHashLookup.liveCellsCount,
       codeCellsLiveCount: codeHashLookup.codeCellsLiveCount,
       codeCellsTotal: codeHashLookup.codeCellsTotal,
+      availableReferences: codeHashLookup.availableReferences,
     };
 
     const deploymentEntries = codeHashCodeCells?.codeCells.length
@@ -716,6 +731,75 @@ export default function ScriptDetailPage({
             <div className="bg-base-surface h-64 rounded" />
             <div className="bg-base-surface h-96 rounded" />
           </div>
+        </main>
+      </div>
+    );
+  }
+  const codeHashAmbiguity =
+    isCodeHashMode && codeHashLookup?.resolutionState === 'ambiguous'
+      ? codeHashLookup.ambiguity
+      : (codeHashCodeCells?.ambiguity ?? null);
+  if (isCodeHashMode && codeHashAmbiguity) {
+    return (
+      <div className="bg-base-bg min-h-screen">
+        <Header />
+        <main className="container mx-auto px-4 py-8">
+          <TerminalPanel>
+            <TerminalPanelHeader>
+              <div>
+                <div className="text-emphasis text-sm font-semibold">
+                  Ambiguous Script Reference
+                </div>
+                <div className="text-text-dim text-xs">
+                  Current live type resolution points to more than one bytecode version.
+                </div>
+              </div>
+            </TerminalPanelHeader>
+            <TerminalPanelContent className="space-y-4">
+              <div className="space-y-2">
+                <div className="text-text-dim text-xs uppercase tracking-[0.2em]">Reference</div>
+                <HexDisplay
+                  value={normalizedCodeHash ?? ''}
+                  size="sm"
+                  startChars={10}
+                  endChars={8}
+                />
+              </div>
+              <div className="space-y-2">
+                <div className="text-text-dim text-xs uppercase tracking-[0.2em]">
+                  Conflicting Versions
+                </div>
+                <div className="space-y-2">
+                  {codeHashAmbiguity.versionHashes.map((versionHash) => (
+                    <HexDisplay
+                      key={versionHash}
+                      value={versionHash}
+                      size="sm"
+                      startChars={10}
+                      endChars={8}
+                    />
+                  ))}
+                </div>
+              </div>
+              {codeHashLookup?.availableReferences?.length ? (
+                <div className="space-y-2">
+                  <div className="text-text-dim text-xs uppercase tracking-[0.2em]">
+                    Available References
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {codeHashLookup.availableReferences.map((reference) => (
+                      <Badge
+                        key={`${reference.referenceHash}:${reference.hashType}`}
+                        variant="neutral"
+                      >
+                        {reference.hashType}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </TerminalPanelContent>
+          </TerminalPanel>
         </main>
       </div>
     );

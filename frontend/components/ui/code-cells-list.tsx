@@ -25,6 +25,14 @@ export function CodeCellsList({ codeHash, hashType }: CodeCellsListProps) {
     return <div className="text-text-dim px-4 py-3 text-xs">Loading code cells...</div>;
   }
 
+  if (data?.ambiguity) {
+    return (
+      <div className="text-text-dim px-4 py-3 text-xs">
+        Current live script resolution is ambiguous across multiple bytecode versions.
+      </div>
+    );
+  }
+
   if (!data || data.codeCells.length === 0) {
     return <div className="text-text-dim px-4 py-3 text-xs">No code cells found</div>;
   }

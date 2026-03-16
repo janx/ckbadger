@@ -15,14 +15,14 @@ pub struct ParsedTransaction {
     pub tx_size: i32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParsedInput {
     pub previous_tx_hash: [u8; 32],
     pub previous_output_index: i32,
     pub since: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParsedCellDep {
     pub out_point_tx_hash: [u8; 32],
     pub out_point_index: i16,

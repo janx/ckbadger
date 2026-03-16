@@ -616,6 +616,7 @@ mod tests {
             outputs_count,
             is_cellbase,
             inputs,
+            cell_deps: vec![],
             cells,
             witnesses,
             outputs_data,

@@ -22,8 +22,8 @@ use ckbadger_store::types::{
     IdentityEntry, IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats,
     ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry,
     ObjectExtra, ObjectStandard, OwnerActivityDelta, ProtocolAction, ReorgEvent, ScriptDailyDelta,
-    ScriptInfo, SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo, TxActivityBundle,
-    TxIndexEntry, TypeCallEntry,
+    ScriptInfo, ScriptReferenceInfo, ScriptVersionInfo, SporeDailyDelta, SporeMediaProfile,
+    TokenDailyDelta, TokenInfo, TxActivityBundle, TxIndexEntry, TypeCallEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -1527,11 +1527,10 @@ async fn test_search_name_matches_script_token_and_cluster_assets() {
     let cluster_id = vec![0x33; 32];
 
     store
-        .put_script_info_direct(
+        .put_script_version(
             &script_hash,
-            &ScriptInfo {
-                code_hash: script_hash.clone(),
-                hash_type: 1,
+            &ScriptVersionInfo {
+                version_hash: script_hash.clone(),
                 name: Some("Alpha Lock".to_string()),
                 ..Default::default()
             },
@@ -1588,7 +1587,7 @@ async fn test_search_name_matches_script_token_and_cluster_assets() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let rows = json["results"].as_array().unwrap();
-    let expected_script_url = format!("/script/0x{}", hex::encode(&script_hash));
+    let expected_script_url = "/scripts/Alpha%20Lock".to_string();
     let expected_token_url = format!("/tokens/0x{}", hex::encode(&token_hash));
     let expected_cluster_url = format!("/clusters/0x{}", hex::encode(&cluster_id));
 
@@ -3167,6 +3166,270 @@ async fn test_unknown_data_hash_script_resolves_code_cell_via_data_hash_index() 
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["txHash"], code_cell_tx_hash_hex);
     assert_eq!(json["outputIndex"], 2);
+}
+
+#[tokio::test]
+async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash_type() {
+    let store = test_store();
+    let reference_hash = vec![0x77; 32];
+    let code_cell_tx_hash = vec![0xce; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_reference(
+        &reference_hash,
+        0,
+        &ScriptReferenceInfo {
+            reference_hash: reference_hash.clone(),
+            hash_type: 0,
+            lock_cells_count: 3,
+            lock_live_cells_count: 1,
+            lock_capacity_sum: 500,
+            lock_live_capacity_sum: 200,
+            lock_used_capacity_sum: 500,
+            lock_live_used_capacity_sum: 200,
+            ..Default::default()
+        },
+    );
+    batch.put_script_version(
+        &reference_hash,
+        &ScriptVersionInfo {
+            version_hash: reference_hash.clone(),
+            name: Some("UniqueScript".to_string()),
+            category: Some("lock".to_string()),
+            lock_cells_count: 3,
+            lock_live_cells_count: 1,
+            lock_capacity_sum: 500,
+            lock_live_capacity_sum: 200,
+            lock_used_capacity_sum: 500,
+            lock_live_used_capacity_sum: 200,
+            ..Default::default()
+        },
+    );
+    batch.put_cell(
+        &code_cell_tx_hash,
+        1,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 32,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: Some(reference_hash.clone()),
+        },
+        123,
+    );
+    batch.put_cell_by_data_hash(&reference_hash, 123, &code_cell_tx_hash, 1);
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let reference_hash_hex = format!("0x{}", hex::encode(&reference_hash));
+    let code_cell_tx_hash_hex = format!("0x{}", hex::encode(&code_cell_tx_hash));
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            r#"{{"codeHashes":["{}"]}}"#,
+            reference_hash_hex
+        )))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json[&reference_hash_hex]["resolutionState"], "resolved");
+    assert_eq!(json[&reference_hash_hex]["name"], "UniqueScript");
+    assert_eq!(json[&reference_hash_hex]["codeHash"], reference_hash_hex);
+    assert_eq!(
+        json[&reference_hash_hex]["availableReferences"][0]["hashType"],
+        "data"
+    );
+    assert_eq!(
+        json[&reference_hash_hex]["codeCellTxHash"],
+        code_cell_tx_hash_hex
+    );
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cells?code_hash={}",
+            reference_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["resolvedVersionHash"], reference_hash_hex);
+    assert_eq!(json["liveCount"], 1);
+    assert_eq!(json["totalCount"], 1);
+    assert_eq!(json["codeCells"][0]["txHash"], code_cell_tx_hash_hex);
+    assert_eq!(json["availableReferences"][0]["hashType"], "data");
+}
+
+#[tokio::test]
+async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
+    let store = test_store();
+    let reference_hash = vec![0x88; 32];
+    let version_hash_a = vec![0xa1; 32];
+    let version_hash_b = vec![0xb2; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_reference(
+        &reference_hash,
+        1,
+        &ScriptReferenceInfo {
+            reference_hash: reference_hash.clone(),
+            hash_type: 1,
+            type_cells_count: 2,
+            type_live_cells_count: 2,
+            ..Default::default()
+        },
+    );
+    batch.put_cell(
+        &[0xd1; 32],
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(reference_hash.clone()),
+            type_code_hash: Some(vec![0x33; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
+            data_size: 32,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: Some(version_hash_a.clone()),
+        },
+        100,
+    );
+    batch.put_cell_by_type(&reference_hash, 100, &[0xd1; 32], 0);
+    batch.put_cell(
+        &[0xd2; 32],
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x44; 32],
+            lock_code_hash: vec![0x55; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(reference_hash.clone()),
+            type_code_hash: Some(vec![0x66; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
+            data_size: 32,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: Some(version_hash_b.clone()),
+        },
+        101,
+    );
+    batch.put_cell_by_type(&reference_hash, 101, &[0xd2; 32], 0);
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let reference_hash_hex = format!("0x{}", hex::encode(&reference_hash));
+    let version_hash_a_hex = format!("0x{}", hex::encode(&version_hash_a));
+    let version_hash_b_hex = format!("0x{}", hex::encode(&version_hash_b));
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            r#"{{"codeHashes":["{}"]}}"#,
+            reference_hash_hex
+        )))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json[&reference_hash_hex]["resolutionState"], "ambiguous");
+    assert_eq!(
+        json[&reference_hash_hex]["ambiguity"]["versionHashes"],
+        serde_json::json!([version_hash_a_hex, version_hash_b_hex])
+    );
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cells?code_hash={}",
+            reference_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["codeCells"], serde_json::json!([]));
+    assert_eq!(
+        json["ambiguity"]["versionHashes"],
+        serde_json::json!([version_hash_a_hex, version_hash_b_hex])
+    );
+}
+
+#[tokio::test]
+async fn test_search_exact_script_hash_uses_reference_version_resolution() {
+    let store = test_store();
+    let reference_hash = vec![0x93; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_reference(
+        &reference_hash,
+        0,
+        &ScriptReferenceInfo {
+            reference_hash: reference_hash.clone(),
+            hash_type: 0,
+            lock_cells_count: 1,
+            lock_live_cells_count: 1,
+            ..Default::default()
+        },
+    );
+    batch.put_script_version(
+        &reference_hash,
+        &ScriptVersionInfo {
+            version_hash: reference_hash.clone(),
+            name: Some("SearchableScript".to_string()),
+            lock_cells_count: 1,
+            lock_live_cells_count: 1,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let reference_hash_hex = format!("0x{}", hex::encode(&reference_hash));
+    let request = Request::builder()
+        .uri(format!("/api/v1/search?q={}", reference_hash_hex))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let script_result = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["resultType"] == "script")
+        .expect("script result");
+    assert_eq!(
+        script_result["url"],
+        format!("/script/{}", reference_hash_hex)
+    );
+    assert_eq!(script_result["label"], "Script SearchableScript");
 }
 
 #[tokio::test]

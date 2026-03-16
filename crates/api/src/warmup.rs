@@ -13,7 +13,7 @@ use crate::AppState;
 use ckbadger_store::AddressBalance;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
@@ -28,6 +28,8 @@ pub const CACHE_KEY_ADDRESSES_ACTIVE: &str = "addresses:active";
 pub const CACHE_KEY_SPORES_ALL: &str = "spores:all";
 pub const CACHE_KEY_SCRIPTS_ALL: &str = "scripts:all";
 pub const CACHE_KEY_SCRIPTS_NAMED: &str = "scripts:named";
+pub const CACHE_KEY_SCRIPT_VERSIONS_ALL: &str = "scripts:versions:all";
+pub const CACHE_KEY_SCRIPT_REFERENCES_BY_HASH: &str = "scripts:references:by_hash";
 const ADDRESS_CACHE_LIMIT: usize = 500;
 const SPORE_CACHE_LIMIT: usize = 100_000;
 
@@ -75,6 +77,12 @@ pub struct CachedAddressEntry {
 pub struct CachedScriptEntry {
     pub code_hash: String,
     pub name: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CachedScriptReferenceEntry {
+    pub reference_hash: String,
+    pub hash_type: String,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -387,11 +395,18 @@ fn refresh_named_script_cache_sync(state: &AppState) -> anyhow::Result<()> {
         .mem_cache
         .set(CACHE_KEY_SCRIPTS_ALL, &script_infos, CacheTtl::ASSETS);
 
-    let mut scripts: Vec<CachedScriptEntry> = script_infos
+    let script_versions = state.store.list_script_versions()?;
+    state.mem_cache.set(
+        CACHE_KEY_SCRIPT_VERSIONS_ALL,
+        &script_versions,
+        CacheTtl::ASSETS,
+    );
+
+    let mut scripts: Vec<CachedScriptEntry> = script_versions
         .into_iter()
-        .filter_map(|(code_hash, info)| {
+        .filter_map(|(version_hash, info)| {
             info.name.map(|name| CachedScriptEntry {
-                code_hash: format!("0x{}", hex::encode(code_hash)),
+                code_hash: format!("0x{}", hex::encode(version_hash)),
                 name,
             })
         })
@@ -404,6 +419,27 @@ fn refresh_named_script_cache_sync(state: &AppState) -> anyhow::Result<()> {
     state
         .mem_cache
         .set(CACHE_KEY_SCRIPTS_NAMED, &scripts, CacheTtl::ASSETS);
+
+    let mut references_by_hash: HashMap<String, Vec<CachedScriptReferenceEntry>> = HashMap::new();
+    for ((reference_hash, hash_type), _info) in state.store.list_script_references()? {
+        let hash_type = hash_type_to_string(hash_type);
+        let reference_hash = format!("0x{}", hex::encode(reference_hash));
+        references_by_hash
+            .entry(reference_hash.clone())
+            .or_default()
+            .push(CachedScriptReferenceEntry {
+                reference_hash,
+                hash_type,
+            });
+    }
+    for entries in references_by_hash.values_mut() {
+        entries.sort_by(|left, right| left.hash_type.cmp(&right.hash_type));
+    }
+    state.mem_cache.set(
+        CACHE_KEY_SCRIPT_REFERENCES_BY_HASH,
+        &references_by_hash,
+        CacheTtl::ASSETS,
+    );
     Ok(())
 }
 

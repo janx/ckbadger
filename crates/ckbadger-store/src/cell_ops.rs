@@ -756,6 +756,39 @@ impl CkbadgerStore {
         Ok(stats)
     }
 
+    pub fn get_cell_script_version(
+        &self,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) -> anyhow::Result<Option<crate::types::CellScriptVersionInfo>> {
+        let key = keys::encode_outpoint(tx_hash, output_index);
+        match self.get_cf(self.cf_cell_script_versions(), &key)? {
+            Some(value) => {
+                let info = bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize cell script version: outpoint=0x{}:{}, error={}",
+                        bytes_to_hex(tx_hash),
+                        output_index,
+                        e
+                    )
+                })?;
+                Ok(Some(info))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn put_cell_script_version(
+        &self,
+        tx_hash: &[u8],
+        output_index: i16,
+        info: &crate::types::CellScriptVersionInfo,
+    ) -> anyhow::Result<()> {
+        let key = keys::encode_outpoint(tx_hash, output_index);
+        let value = bincode::serialize(info)?;
+        self.put_cf(self.cf_cell_script_versions(), &key, &value)
+    }
+
     fn accumulate_cell_stats(
         &self,
         outpoints: &[(Vec<u8>, i16)],
@@ -1125,5 +1158,29 @@ mod tests {
         assert!(results[0].3, "first cell should be live");
         assert_eq!(results[1].0, tx2);
         assert!(!results[1].3, "second cell should be consumed");
+    }
+
+    #[test]
+    fn test_cell_script_version_roundtrip() {
+        let (_dir, store) = test_store();
+        let tx_hash = [0xAA; 32];
+        let info = crate::types::CellScriptVersionInfo {
+            lock_reference_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_version_hash: vec![0x22; 32],
+            type_reference_hash: Some(vec![0x33; 32]),
+            type_hash_type: Some(0),
+            type_version_hash: Some(vec![0x44; 32]),
+            capacity: 1000,
+            occupied_capacity: 610,
+        };
+
+        store.put_cell_script_version(&tx_hash, 1, &info).unwrap();
+
+        let loaded = store.get_cell_script_version(&tx_hash, 1).unwrap().unwrap();
+        assert_eq!(loaded.lock_hash_type, 1);
+        assert_eq!(loaded.lock_version_hash, vec![0x22; 32]);
+        assert_eq!(loaded.type_hash_type, Some(0));
+        assert_eq!(loaded.type_version_hash, Some(vec![0x44; 32]));
     }
 }
