@@ -52,9 +52,9 @@ impl BatchWriter {
 pub mod activities;
 mod addresses;
 pub(crate) mod cell_distribution;
-mod cells;
+pub(super) mod cells;
 mod chain;
-mod dao;
+pub(crate) mod dao;
 pub(crate) mod dotbit;
 pub(crate) mod fiber;
 pub(crate) mod fiber_detector;

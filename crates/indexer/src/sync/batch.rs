@@ -106,6 +106,7 @@ fn build_activity_input_views(
     input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     dao_withdraw_outpoints: &HashSet<(Vec<u8>, i16)>,
+    dao_compensations: &HashMap<(Vec<u8>, i16), i64>,
 ) -> Result<Vec<crate::db::writer::activities::InputCellView>> {
     if tx_data.is_cellbase {
         return Ok(Vec::new());
@@ -144,6 +145,11 @@ fn build_activity_input_views(
                 })?;
             let is_dao_withdraw_request =
                 dao_withdraw_outpoints.contains(&key);
+            let dao_compensation = if is_dao_withdraw_request {
+                dao_compensations.get(&key).copied()
+            } else {
+                None
+            };
 
             Ok(crate::db::writer::activities::InputCellView {
                 lock_script_hash: info.lock_script_hash.clone(),
@@ -159,6 +165,7 @@ fn build_activity_input_views(
                 udt_amount: info.udt_amount,
                 data: Vec::new(),
                 is_dao_withdraw_request,
+                dao_compensation,
             })
         })
         .collect()
@@ -174,6 +181,113 @@ fn dao_withdraw_outpoints_from_map(
         .filter(|(_, row)| row.4 == 1) // status == 1 means withdraw request
         .map(|(k, _)| k.clone())
         .collect()
+}
+
+/// Pre-compute DAO compensation for each withdraw-complete outpoint.
+/// This allows the activity builder to include compensation in activities
+/// without duplicating the DAO processing logic.
+///
+/// The `consumed_dao_map` key is the withdraw-request outpoint (tx_hash, output_index)
+/// being consumed in Phase 2. The value tuple is
+/// (original_deposit_tx_hash, original_deposit_output_index, capacity_str, deposit_block, status).
+/// Only status==1 entries are withdraw completes.
+fn pre_compute_dao_compensations(
+    store: &CkbadgerStore,
+    consumed_dao_map: &HashMap<(Vec<u8>, i16), (Vec<u8>, i16, String, i64, i16)>,
+) -> Result<HashMap<(Vec<u8>, i16), i64>> {
+    use crate::db::writer::dao::{calculate_dao_compensation_from_ar, extract_ar_from_dao};
+
+    // Filter to status==1 entries only
+    let withdraw_entries: Vec<_> = consumed_dao_map
+        .iter()
+        .filter(|(_, row)| row.4 == 1)
+        .collect();
+
+    if withdraw_entries.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    // For each withdraw-complete entry, look up the DaoDepositCacheEntry
+    // to get withdraw_request_block (needed for AR lookup).
+    // The deposit is keyed by (original_tx_hash, original_output_index).
+    let mut blocks_needed: HashSet<i64> = HashSet::new();
+    let mut entries_with_request_block: Vec<(
+        &(Vec<u8>, i16), // withdraw outpoint key (for result map)
+        i64,             // capacity
+        i64,             // deposit_block
+        i64,             // withdraw_request_block
+    )> = Vec::new();
+
+    for (withdraw_key, (orig_tx_hash, orig_output_index, capacity_str, deposit_block, _status)) in
+        &withdraw_entries
+    {
+        let capacity: i64 = capacity_str.parse().map_err(|e| {
+            anyhow!(
+                "invalid DAO capacity string in compensation pre-compute: value='{}', error={}",
+                capacity_str,
+                e
+            )
+        })?;
+
+        // Look up the deposit entry to get withdraw_request_block
+        let outpoint_key = keys::encode_outpoint(orig_tx_hash, *orig_output_index);
+        let request_block = if let Some(value) =
+            store.get_cf(store.cf_dao_deposits(), &outpoint_key)?
+        {
+            let entry: ckbadger_store::types::DaoDepositCacheEntry =
+                bincode::deserialize(&value).map_err(|e| {
+                    anyhow!(
+                        "failed to deserialize DAO deposit for compensation pre-compute: outpoint=0x{}:{}, error={}",
+                        hex::encode(orig_tx_hash),
+                        orig_output_index,
+                        e
+                    )
+                })?;
+            match entry.withdraw_request_block {
+                Some(b) => b,
+                None => continue, // shouldn't happen for status==1, skip
+            }
+        } else {
+            continue; // deposit not found in store, skip
+        };
+
+        blocks_needed.insert(*deposit_block);
+        blocks_needed.insert(request_block);
+        entries_with_request_block.push((withdraw_key, capacity, *deposit_block, request_block));
+    }
+
+    // Batch-fetch DAO header fields for all needed blocks
+    let blocks_vec: Vec<i64> = blocks_needed.into_iter().collect();
+    let dao_fields = store.get_dao_fields_batch(&blocks_vec)?;
+
+    // Compute compensations
+    let mut compensations = HashMap::new();
+    for (withdraw_key, capacity, deposit_block, request_block) in entries_with_request_block {
+        let deposit_dao = match dao_fields.get(&deposit_block) {
+            Some(d) => d,
+            None => continue,
+        };
+        let withdraw_dao = match dao_fields.get(&request_block) {
+            Some(d) => d,
+            None => continue,
+        };
+        let ar_deposit = match extract_ar_from_dao(deposit_dao) {
+            Some(ar) => ar,
+            None => continue,
+        };
+        let ar_withdraw = match extract_ar_from_dao(withdraw_dao) {
+            Some(ar) => ar,
+            None => continue,
+        };
+        match calculate_dao_compensation_from_ar(capacity, ar_deposit, ar_withdraw) {
+            Ok(compensation) => {
+                compensations.insert(withdraw_key.clone(), compensation);
+            }
+            Err(_) => continue,
+        }
+    }
+
+    Ok(compensations)
 }
 
 fn apply_object_collection_activity_count_deltas_with_pending(
@@ -2164,6 +2278,7 @@ impl Indexer {
             let append_only_store = &self.append_only_store;
             let writer = &self.writer;
             let dao_withdraw_outpoints = dao_withdraw_outpoints_from_map(&consumed_dao_map);
+            let dao_compensations = pre_compute_dao_compensations(store, &consumed_dao_map)?;
 
             let protocol_detectors: Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>> =
                 vec![
@@ -3365,6 +3480,7 @@ impl Indexer {
                                                     &input_cell_info,
                                                     &batch_cell_infos,
                                                     &dao_withdraw_outpoints,
+                                                    &dao_compensations,
                                                 )?;
                                                 Ok(crate::db::writer::activities::TxView {
                                                     tx_hash: &td.hash,
@@ -3730,6 +3846,8 @@ impl Indexer {
 
             // DAO withdraw-request outpoints for activity classification (no per-input DB reads).
             let dao_withdraw_outpoints: HashSet<(Vec<u8>, i16)>;
+            // Pre-computed DAO compensations for activity entries.
+            let dao_compensations: HashMap<(Vec<u8>, i16), i64>;
 
             // Group A: DAO processing
             {
@@ -3801,6 +3919,8 @@ impl Indexer {
                     HashMap::new()
                 };
                 dao_withdraw_outpoints = dao_withdraw_outpoints_from_map(&consumed_dao_map);
+                dao_compensations =
+                    pre_compute_dao_compensations(self.writer.store(), &consumed_dao_map)?;
 
                 // Build a same-batch deposit map for deposits created in this
                 // batch that may also be consumed within the same batch.
@@ -4685,6 +4805,7 @@ impl Indexer {
                                 &input_cell_info,
                                 &batch_cell_infos,
                                 &dao_withdraw_outpoints,
+                                &dao_compensations,
                             )?;
                             Ok(crate::db::writer::activities::TxView {
                                 tx_hash: &td.hash,
@@ -5603,6 +5724,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
         ) {
             Ok(_) => panic!("missing input cell info should fail fast"),
             Err(err) => err,
@@ -5647,6 +5769,7 @@ mod tests {
             &HashMap::new(),
             &batch_cell_infos,
             &HashSet::new(),
+            &HashMap::new(),
         )
         .expect("input lookup should fall back to same-batch cell cache");
         assert_eq!(inputs.len(), 1);
@@ -5685,16 +5808,22 @@ mod tests {
         let mut dao_withdraw_outpoints = HashSet::new();
         dao_withdraw_outpoints.insert((previous_tx_hash.to_vec(), 1i16));
 
+        // Populate dao_compensations with a test compensation value
+        let mut dao_compensations = HashMap::new();
+        dao_compensations.insert((previous_tx_hash.to_vec(), 1i16), 5_00000000i64);
+
         let inputs = build_activity_input_views(
             &tx,
             200,
             &input_cell_info,
             &HashMap::new(),
             &dao_withdraw_outpoints,
+            &dao_compensations,
         )
         .unwrap();
         assert_eq!(inputs.len(), 1);
         assert!(inputs[0].is_dao_withdraw_request);
+        assert_eq!(inputs[0].dao_compensation, Some(5_00000000));
     }
 
     #[test]

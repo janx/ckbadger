@@ -105,7 +105,7 @@ impl DaoWithdrawalContextTrait for DaoWithdrawalContext {
     }
 }
 
-fn extract_ar_from_dao(dao: &[u8]) -> Option<u64> {
+pub(crate) fn extract_ar_from_dao(dao: &[u8]) -> Option<u64> {
     if dao.len() < 16 {
         return None;
     }
@@ -113,7 +113,7 @@ fn extract_ar_from_dao(dao: &[u8]) -> Option<u64> {
     Some(u64::from_le_bytes(bytes))
 }
 
-fn calculate_dao_compensation_from_ar(
+pub(crate) fn calculate_dao_compensation_from_ar(
     capacity: i64,
     ar_deposit: u64,
     ar_withdraw: u64,

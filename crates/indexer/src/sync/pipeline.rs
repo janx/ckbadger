@@ -380,31 +380,30 @@ impl Indexer {
         /// (parsed_spores, parsed_clusters) for that transaction.
         type PreParsedSporeData = Vec<(Vec<ParsedSporeCell>, Vec<ParsedClusterCell>)>;
 
-        type ParsedBatch = (
-            u64,
-            u64,
-            u64,
-            u64,
-            u64, // batch_tx_count
-            Arc<Vec<BlockResponseWithCycles>>,
-            Vec<crate::parser::block::ParsedBlock>,
-            Vec<TxData>,
-            HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-            // Pre-computed in parser stage:
-            HashMap<(Vec<u8>, i16), PositionedCellInfo>, // batch_cell_infos
-            HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>, // address_balance_changes
-            ScriptUsageChanges,                          // script_usage_changes
-            HashMap<(Vec<u8>, bool, u32), (i128, i128)>, // script_daily_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>,       // token_daily_changes
-            HashMap<Vec<u8>, SporeTypeIndex>,            // spore_type_index_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>,       // spore_daily_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>,       // cluster_daily_changes
-            HashMap<Vec<u8>, ObjectTypeIndex>,           // object_type_index_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>,       // object_daily_changes
-            PreParsedSporeData,                          // pre-parsed spore/cluster data
-            PreParsedNftData,                            // pre-parsed mNFT/DotBit data
-            ParserBatchPerfSample,                       // parser hotpath timings
-        );
+        struct ParsedBatch {
+            batch_epoch: u64,
+            start_block: u64,
+            end_block: u64,
+            chain_tip: u64,
+            batch_tx_count: u64,
+            blocks: Arc<Vec<BlockResponseWithCycles>>,
+            parsed_blocks: Vec<crate::parser::block::ParsedBlock>,
+            all_tx_data: Vec<TxData>,
+            input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+            batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+            address_balance_changes: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
+            script_usage_changes: ScriptUsageChanges,
+            script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
+            token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+            spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
+            spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+            cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+            object_type_index_changes: HashMap<Vec<u8>, ObjectTypeIndex>,
+            object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+            pre_parsed_spore_data: PreParsedSporeData,
+            pre_parsed_nft_data: PreParsedNftData,
+            parser_perf_sample: ParserBatchPerfSample,
+        }
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
         let (parse_tx, mut parse_rx) = mpsc::channel::<ParsedBatch>(self.config.pipeline_buffer);
@@ -1927,14 +1926,14 @@ impl Indexer {
                     nft_precompute_ms: precompute_phase_metrics.nft_precompute_ms,
                 };
                 if parse_tx
-                    .send((
+                    .send(ParsedBatch {
                         batch_epoch,
                         start_block,
                         end_block,
                         chain_tip,
-                        batch_tx_count_u64,
+                        batch_tx_count: batch_tx_count_u64,
                         blocks,
-                        all_parsed_blocks,
+                        parsed_blocks: all_parsed_blocks,
                         all_tx_data,
                         input_cell_info,
                         batch_cell_infos,
@@ -1950,7 +1949,7 @@ impl Indexer {
                         pre_parsed_spore_data,
                         pre_parsed_nft_data,
                         parser_perf_sample,
-                    ))
+                    })
                     .await
                     .is_err()
                 {
@@ -2017,14 +2016,14 @@ impl Indexer {
             let recv_timeout = Duration::from_millis(self.config.poll_interval_ms * 2);
             let t_recv = Instant::now();
             match tokio::time::timeout(recv_timeout, parse_rx.recv()).await {
-                Ok(Some((
+                Ok(Some(ParsedBatch {
                     batch_epoch,
                     start_block,
                     end_block,
                     chain_tip,
-                    parsed_batch_tx_count_u64,
+                    batch_tx_count: parsed_batch_tx_count_u64,
                     blocks,
-                    all_parsed_blocks,
+                    parsed_blocks: all_parsed_blocks,
                     all_tx_data,
                     input_cell_info,
                     batch_cell_infos,
@@ -2040,7 +2039,7 @@ impl Indexer {
                     pre_parsed_spore_data,
                     pre_parsed_nft_data,
                     parser_perf_sample,
-                ))) => {
+                })) => {
                     consecutive_idle_timeouts = 0;
                     atomic_checked_sub_u64(
                         &parse_tx_pending_txs_for_writer,
@@ -2262,7 +2261,13 @@ impl Indexer {
                                     anyhow!("batch cleanup end_block exceeds i64: {}", end_block)
                                 })?,
                             ) {
-                                error!("Failed to cleanup partial batch: {:?}", cleanup_err);
+                                return Err(cleanup_err).with_context(|| {
+                                    format!(
+                                        "failed to cleanup partial batch {}-{} (chain_tip={}): \
+                                         cannot recover from write failure; delete RocksDB and restart from genesis",
+                                        start_block, end_block, chain_tip
+                                    )
+                                });
                             } else {
                                 let cleanup_tip = i64::try_from(start_block).map_err(|_| {
                                     anyhow!(

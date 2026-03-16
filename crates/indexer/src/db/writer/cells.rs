@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
@@ -9,14 +9,35 @@ use crate::parser::cell::ParsedCell;
 
 use super::BatchWriter;
 
+/// Compute CKB occupied capacity in shannons for a cell.
+///
+/// `data_size`: length of cell data in bytes
+/// `lock_args_len`: length of lock script args in bytes
+/// `type_args_len`: Some(len) if type script present, None if no type script
+pub fn compute_occupied_capacity_shannons(
+    data_size: usize,
+    lock_args_len: usize,
+    type_args_len: Option<usize>,
+) -> Result<i64> {
+    let lock_script_size = 33_i128 + lock_args_len as i128;
+    let type_script_size = match type_args_len {
+        Some(len) => 33_i128 + len as i128,
+        None => 0,
+    };
+    let occupied = (8_i128 + lock_script_size + type_script_size + data_size as i128)
+        .checked_mul(100_000_000_i128)
+        .ok_or_else(|| anyhow!("occupied capacity overflow"))?;
+    i64::try_from(occupied).map_err(|_| anyhow!("occupied capacity exceeds i64: {}", occupied))
+}
+
 fn expected_occupied_capacity_for_cell(
     info: &LiveCellInfo,
     tx_hash: &[u8],
     output_index: i16,
     source: &str,
 ) -> Result<i64> {
-    let data_size = i128::from(info.data_size);
-    if data_size < 0 {
+    let data_size_i128 = i128::from(info.data_size);
+    if data_size_i128 < 0 {
         bail!(
             "negative data_size while loading {} cell: outpoint=0x{}:{}, data_size={}",
             source,
@@ -26,50 +47,41 @@ fn expected_occupied_capacity_for_cell(
         );
     }
 
-    let lock_script_size = 33_i128 + info.lock_args.len() as i128;
     let has_type_script = info.type_script_hash.is_some() || info.type_code_hash.is_some();
-    let type_script_size = if has_type_script {
-        let type_args = info.type_args.as_ref().ok_or_else(|| {
-            anyhow!(
-                "missing type_args for typed {} cell: outpoint=0x{}:{}, type_script_hash={}, type_code_hash=0x{}",
-                source,
-                hex::encode(tx_hash),
-                output_index,
-                info.type_script_hash
-                    .as_ref()
-                    .map(|v| format!("0x{}", hex::encode(v)))
-                    .unwrap_or_else(|| "none".to_string()),
-                info.type_code_hash
-                    .as_ref()
-                    .map(hex::encode)
-                    .unwrap_or_else(|| "none".to_string())
-            )
-        })?;
-        33_i128 + type_args.len() as i128
+    let type_args_len = if has_type_script {
+        Some(
+            info.type_args
+                .as_ref()
+                .ok_or_else(|| {
+                    anyhow!(
+                        "missing type_args for typed {} cell: outpoint=0x{}:{}, type_script_hash={}, type_code_hash=0x{}",
+                        source,
+                        hex::encode(tx_hash),
+                        output_index,
+                        info.type_script_hash
+                            .as_ref()
+                            .map(|v| format!("0x{}", hex::encode(v)))
+                            .unwrap_or_else(|| "none".to_string()),
+                        info.type_code_hash
+                            .as_ref()
+                            .map(hex::encode)
+                            .unwrap_or_else(|| "none".to_string())
+                    )
+                })?
+                .len(),
+        )
     } else {
-        0
+        None
     };
-
-    let occupied = (8_i128 + lock_script_size + type_script_size + data_size)
-        .checked_mul(100_000_000_i128)
-        .ok_or_else(|| {
-            anyhow!(
-                "occupied capacity overflow while loading {} cell: outpoint=0x{}:{}",
+    compute_occupied_capacity_shannons(info.data_size as usize, info.lock_args.len(), type_args_len)
+        .with_context(|| {
+            format!(
+                "while computing occupied capacity for {} cell: outpoint=0x{}:{}",
                 source,
                 hex::encode(tx_hash),
                 output_index
             )
-        })?;
-
-    i64::try_from(occupied).map_err(|_| {
-        anyhow!(
-            "occupied capacity over i64 range while loading {} cell: outpoint=0x{}:{}, occupied={}",
-            source,
-            hex::encode(tx_hash),
-            output_index,
-            occupied
-        )
-    })
+        })
 }
 
 fn validate_input_cell_occupied_capacity(
@@ -620,13 +632,13 @@ mod tests {
     }
 
     fn occupied_capacity_from_parsed_cell(cell: &ParsedCell) -> i64 {
-        let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
-        let type_script_size = cell
-            .type_args
-            .as_ref()
-            .map(|args| 32 + 1 + args.len() as i64)
-            .unwrap_or(0);
-        (8 + lock_script_size + type_script_size + i64::from(cell.data_size)) * 100_000_000
+        let type_args_len = cell.type_args.as_ref().map(|args| args.len());
+        compute_occupied_capacity_shannons(
+            cell.data_size as usize,
+            cell.lock_args.len(),
+            type_args_len,
+        )
+        .unwrap()
     }
 
     fn precomputed_info_map(
@@ -941,5 +953,41 @@ mod tests {
             results.is_empty(),
             "data hash index should be empty when skip_cell_indices=true"
         );
+    }
+
+    #[test]
+    fn test_compute_occupied_capacity_no_type_script() {
+        // 8 (capacity) + 33 (lock) + 20 (lock_args) + 0 (data) = 61 bytes
+        // 61 * 100_000_000 = 6_100_000_000
+        let result = compute_occupied_capacity_shannons(0, 20, None).unwrap();
+        assert_eq!(result, 6_100_000_000);
+    }
+
+    #[test]
+    fn test_compute_occupied_capacity_with_type_script() {
+        // 8 + 33 + 20 + 33 + 32 + 100 = 226 bytes
+        // 226 * 100_000_000 = 22_600_000_000
+        let result = compute_occupied_capacity_shannons(100, 20, Some(32)).unwrap();
+        assert_eq!(result, 22_600_000_000);
+    }
+
+    #[test]
+    fn test_compute_occupied_matches_old_inline_formula() {
+        // Verify the new function matches the old inline formula from activities.rs
+        let data_size = 50usize;
+        let lock_args_len = 20usize;
+        let type_args_len = 32usize;
+
+        // Old formula (from activities.rs): (32 + 1) for script size
+        let lock_script_size = 32 + 1 + lock_args_len as i64;
+        let type_script_size = 32 + 1 + type_args_len as i64;
+        let old_result = (8 + lock_script_size + type_script_size + data_size as i64) * 100_000_000;
+
+        // New function uses 33 for script size (same as 32+1)
+        let new_result =
+            compute_occupied_capacity_shannons(data_size, lock_args_len, Some(type_args_len))
+                .unwrap();
+
+        assert_eq!(old_result, new_result);
     }
 }

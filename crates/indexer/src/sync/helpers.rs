@@ -186,20 +186,11 @@ pub(crate) fn short_tx_hash(tx_hash: &[u8]) -> String {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn duration_from_millis(ms: f64) -> Duration {
-    debug_assert!(
+    assert!(
         ms >= 0.0,
         "duration_from_millis called with negative ms: {}",
         ms
     );
-    let ms = if ms < 0.0 {
-        tracing::warn!(
-            "duration_from_millis: negative ms value {}, clamping to 0",
-            ms
-        );
-        0.0
-    } else {
-        ms
-    };
     let micros = (ms * 1000.0).round();
     Duration::from_micros(micros as u64)
 }

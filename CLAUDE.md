@@ -176,10 +176,10 @@ Three-stage pipeline: **Fetcher** (RPC I/O) -> **Parser** (CPU + DB prefetch) ->
 
 | Parameter             | Default | Description                             |
 | --------------------- | ------- | --------------------------------------- |
-| `pipeline_buffer`     | `8`     | Channel capacity between stages         |
+| `pipeline_buffer`     | `16`    | Channel capacity between stages         |
 | `batch_size`          | `10000` | Blocks per batch                        |
 | `parallel_fetch_size` | `64`    | Concurrent RPC requests                 |
-| `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat as bulk sync |
+| `bulk_sync_threshold` | `72`    | Blocks behind tip to treat as bulk sync |
 
 Sync progress and memory stats are stored in RocksDB (`get_sync_tip()`/`get_sync_status()`/`get_sync_progress()`/`get_memory_stats()`).
 

@@ -384,6 +384,7 @@ mod tests {
             udt_amount: None,
             data: vec![],
             is_dao_withdraw_request: false,
+            dao_compensation: None,
         }
     }
 

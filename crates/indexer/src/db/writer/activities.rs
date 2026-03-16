@@ -159,6 +159,7 @@ pub struct InputCellView {
     pub udt_amount: Option<u128>,
     pub data: Vec<u8>,
     pub is_dao_withdraw_request: bool,
+    pub dao_compensation: Option<i64>,
 }
 
 /// Transaction data needed for activity building.
@@ -263,7 +264,8 @@ pub(crate) struct OwnerAccum {
     /// DAO withdraw requests (output cells with DAO type and non-zero deposit block)
     pub(crate) dao_withdraw_requests: Vec<(i64, i64)>,
     /// DAO withdraw completes (input cells with DAO withdraw request consumed without DAO output)
-    pub(crate) dao_withdraw_completes: Vec<i64>,
+    /// Each entry is (capacity, compensation).
+    pub(crate) dao_withdraw_completes: Vec<(i64, i64)>,
     /// Spore/DOB IDs seen as inputs
     pub(crate) spore_inputs: Vec<Vec<u8>>,
     /// Spore/DOB IDs seen as outputs
@@ -379,6 +381,7 @@ fn build_tx_activity_bundle(
                 input.udt_amount,
                 &input.data,
                 input.is_dao_withdraw_request,
+                input.dao_compensation,
                 hashes,
                 input.capacity,
             )?;
@@ -398,14 +401,16 @@ fn build_tx_activity_bundle(
         accum.output_capacity += cell.capacity as i128;
 
         // Compute occupied for output
-        let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
-        let type_script_size = if cell.type_code_hash.is_some() {
-            32 + 1 + cell.type_args.as_ref().map(|a| a.len() as i64).unwrap_or(0)
+        let type_args_len = if cell.type_code_hash.is_some() {
+            Some(cell.type_args.as_ref().map(|a| a.len()).unwrap_or(0))
         } else {
-            0
+            None
         };
-        let occupied =
-            (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
+        let occupied = super::cells::compute_occupied_capacity_shannons(
+            cell.data_size as usize,
+            cell.lock_args.len(),
+            type_args_len,
+        )?;
         accum.output_used += occupied;
 
         if let Some(ref type_code_hash) = cell.type_code_hash {
@@ -504,10 +509,10 @@ fn build_tx_activity_bundle(
         }
 
         // DAO withdraw completes
-        for capacity in &accum.dao_withdraw_completes {
+        for (capacity, compensation) in &accum.dao_withdraw_completes {
             asset_changes.push(AssetChange::DaoWithdrawComplete {
                 capacity: *capacity,
-                compensation: 0,
+                compensation: *compensation,
             });
         }
 
@@ -660,6 +665,7 @@ fn classify_input(
     udt_amount: Option<u128>,
     data: &[u8],
     is_dao_withdraw_request: bool,
+    dao_compensation: Option<i64>,
     hashes: &CodeHashes,
     capacity: i64,
 ) -> Result<()> {
@@ -675,7 +681,9 @@ fn classify_input(
         }
         Some(AssetKind::Dao) => {
             if is_dao_withdraw_request {
-                accum.dao_withdraw_completes.push(capacity);
+                accum
+                    .dao_withdraw_completes
+                    .push((capacity, dao_compensation.unwrap_or(0)));
             }
         }
         Some(AssetKind::SporeDid) => {
@@ -944,6 +952,7 @@ mod tests {
             udt_amount: None,
             data: vec![],
             is_dao_withdraw_request: false,
+            dao_compensation: None,
         }
     }
 
@@ -1470,6 +1479,7 @@ mod tests {
         let mut dao_input = make_input(owner, 102_00000000, 102_00000000);
         dao_input.type_code_hash = Some(dao_code_hash);
         dao_input.is_dao_withdraw_request = true;
+        dao_input.dao_compensation = Some(5_00000000);
 
         let outputs: Vec<ParsedCell> = vec![];
 
@@ -1489,10 +1499,13 @@ mod tests {
         assert_eq!(activities.len(), 1);
         let (_, _, entry) = &activities[0];
         assert!(entry.has_type_script);
-        assert!(entry
-            .asset_changes
-            .iter()
-            .any(|change| matches!(change, AssetChange::DaoWithdrawComplete { capacity, .. } if *capacity == 102_00000000)));
+        assert!(entry.asset_changes.iter().any(|change| matches!(
+            change,
+            AssetChange::DaoWithdrawComplete {
+                capacity,
+                compensation
+            } if *capacity == 102_00000000 && *compensation == 5_00000000
+        )));
     }
 
     #[test]
@@ -1908,6 +1921,7 @@ mod tests {
             udt_amount: None,
             data: vec![],
             is_dao_withdraw_request: false,
+            dao_compensation: None,
         }
     }
 
@@ -2171,6 +2185,7 @@ mod tests {
             udt_amount: None,
             data: vec![],
             is_dao_withdraw_request: false,
+            dao_compensation: None,
         };
 
         let output = ParsedCell {
