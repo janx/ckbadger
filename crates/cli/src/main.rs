@@ -462,12 +462,9 @@ async fn cmd_label_import(workdir: &Path) -> Result<()> {
     if use_bundled {
         info!("No filesystem token-labels found, will use bundled data");
     }
-    let ckb_paths = resolve_ckb_paths(workdir, &config.ckb)?;
-
     let import_config = LabelImportServiceConfig {
         domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
         append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
-        ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
         token_labels_path,
         network: config.ckb.network.clone(),
         import_udt: true,

@@ -80,10 +80,9 @@ fn overlay_script_metadata(
     base.category = fresh.category.clone();
     base.website = fresh.website.clone();
     base.description = fresh.description.clone();
-    base.dep_type_hash = fresh.dep_type_hash.clone();
-    base.dep_data_hash = fresh.dep_data_hash.clone();
-    base.code_cell_tx_hash = fresh.code_cell_tx_hash.clone();
-    base.code_cell_output_index = fresh.code_cell_output_index;
+    // Note: dep_type_hash, dep_data_hash, code_cell_tx_hash, code_cell_output_index
+    // are no longer overlaid here. Label import no longer writes these correctness
+    // fields; code cell resolution uses script_references/script_versions CFs instead.
     base
 }
 
@@ -1225,14 +1224,11 @@ mod tests {
         let writer = BatchWriter::new(store.clone(), store.clone());
 
         let code_hash = vec![0x9b; 32];
-        let dep_data_hash = vec![0x70; 32];
         let latest = ScriptInfo {
             code_hash: code_hash.clone(),
             hash_type: 1,
             name: Some("Default Lock".to_string()),
             description: Some("mainnet default lock".to_string()),
-            dep_type_hash: Some(code_hash.clone()),
-            dep_data_hash: Some(dep_data_hash.clone()),
             ..Default::default()
         };
         store.put_script_info_direct(&code_hash, &latest).unwrap();
@@ -1251,8 +1247,11 @@ mod tests {
         assert_eq!(updated.hash_type, 1);
         assert_eq!(updated.name.as_deref(), Some("Default Lock"));
         assert_eq!(updated.description.as_deref(), Some("mainnet default lock"));
-        assert_eq!(updated.dep_type_hash, Some(code_hash.clone()));
-        assert_eq!(updated.dep_data_hash, Some(dep_data_hash));
+        // Correctness fields (dep_type_hash, dep_data_hash, code_cell_tx_hash,
+        // code_cell_output_index) are NOT overlaid from existing records. Label import
+        // no longer writes these; code cell resolution uses script_references/versions CFs.
+        assert_eq!(updated.dep_type_hash, None);
+        assert_eq!(updated.dep_data_hash, None);
         assert_eq!(updated.lock_cells_count, 1);
         assert_eq!(updated.lock_live_cells_count, 1);
         assert_eq!(updated.lock_capacity_sum, 100);

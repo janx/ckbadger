@@ -1,5 +1,4 @@
 use anyhow::Result;
-use ckb_store_reader::CkbChainReader;
 use ckbadger_common::{LabelImportConfig, LabelImportResult};
 use ckbadger_store::CkbadgerStore;
 use serde::Deserialize;
@@ -114,7 +113,6 @@ struct ScriptNameOverrides {
 
 pub fn run_label_import(
     store: &CkbadgerStore,
-    ckb_store: Option<&CkbChainReader>,
     config: &LabelImportConfig,
 ) -> Result<LabelImportResult> {
     info!(
@@ -158,7 +156,7 @@ pub fn run_label_import(
         info!("Found {} script labels to import", scripts.len());
 
         for script in &scripts {
-            match upsert_script_label(store, ckb_store, script, &config.network) {
+            match upsert_script_label(store, script, &config.network) {
                 Ok(()) => {
                     result.script_labels_imported += 1;
                 }
@@ -183,7 +181,6 @@ pub fn run_label_import(
 /// This keeps per-kind import behavior consistent across CLI and background startup paths.
 pub fn run_label_import_staged(
     store: &CkbadgerStore,
-    ckb_store: Option<&CkbChainReader>,
     config: &LabelImportConfig,
 ) -> Result<LabelImportResult> {
     let mut summary = LabelImportResult::default();
@@ -191,7 +188,7 @@ pub fn run_label_import_staged(
     if config.import_udt {
         let mut udt_config = config.clone();
         udt_config.import_scripts = false;
-        let udt_result = run_label_import(store, ckb_store, &udt_config)?;
+        let udt_result = run_label_import(store, &udt_config)?;
         summary.udt_labels_imported += udt_result.udt_labels_imported;
         summary.script_labels_imported += udt_result.script_labels_imported;
         summary.errors.extend(udt_result.errors);
@@ -200,7 +197,7 @@ pub fn run_label_import_staged(
     if config.import_scripts {
         let mut script_config = config.clone();
         script_config.import_udt = false;
-        let script_result = run_label_import(store, ckb_store, &script_config)?;
+        let script_result = run_label_import(store, &script_config)?;
         summary.udt_labels_imported += script_result.udt_labels_imported;
         summary.script_labels_imported += script_result.script_labels_imported;
         summary.errors.extend(script_result.errors);
@@ -211,11 +208,7 @@ pub fn run_label_import_staged(
 
 /// Run label import using compile-time bundled data.
 /// Used as fallback when no filesystem token-labels directory is available.
-pub fn run_label_import_bundled(
-    store: &CkbadgerStore,
-    ckb_store: Option<&CkbChainReader>,
-    network: &str,
-) -> Result<LabelImportResult> {
+pub fn run_label_import_bundled(store: &CkbadgerStore, network: &str) -> Result<LabelImportResult> {
     info!(
         "Starting label import from bundled data (network={})",
         network
@@ -252,7 +245,7 @@ pub fn run_label_import_bundled(
     apply_script_overrides(&mut scripts, &overrides, &deprecated_set);
     info!("Bundled script labels: {}", scripts.len());
     for script in &scripts {
-        match upsert_script_label(store, ckb_store, script, network) {
+        match upsert_script_label(store, script, network) {
             Ok(()) => {
                 result.script_labels_imported += 1;
             }
@@ -506,7 +499,6 @@ fn load_script_overrides(base_path: &str) -> Result<ScriptNameOverrides> {
 
 fn upsert_script_label(
     store: &CkbadgerStore,
-    ckb_store: Option<&CkbChainReader>,
     script: &ScriptLabelInfo,
     network: &str,
 ) -> Result<()> {
@@ -523,7 +515,7 @@ fn upsert_script_label(
                 .collect();
             for deployment in all_deployments {
                 if !deployment.deprecated {
-                    import_single_deployment(store, ckb_store, script, deployment)?;
+                    import_single_deployment(store, script, deployment)?;
                 }
             }
             return Ok(());
@@ -539,10 +531,6 @@ fn upsert_script_label(
                     info.name = None;
                     info.description = None;
                     info.website = None;
-                    info.dep_type_hash = None;
-                    info.dep_data_hash = None;
-                    info.code_cell_tx_hash = None;
-                    info.code_cell_output_index = None;
                     store.put_script_info_direct(&code_hash, &info)?;
                 }
             }
@@ -566,7 +554,7 @@ fn upsert_script_label(
 
     for deployment in active {
         if !deployment.deprecated {
-            import_single_deployment(store, ckb_store, script, deployment)?;
+            import_single_deployment(store, script, deployment)?;
         }
     }
     Ok(())
@@ -574,7 +562,6 @@ fn upsert_script_label(
 
 fn import_single_deployment(
     store: &CkbadgerStore,
-    ckb_store: Option<&CkbChainReader>,
     script: &ScriptLabelInfo,
     deployment: &ScriptDeployment,
 ) -> Result<()> {
@@ -594,52 +581,25 @@ fn import_single_deployment(
     info.code_hash = code_hash.clone();
     info.hash_type = deployment_hash_type;
 
-    // Update label fields (preserve indexer-maintained stats).
+    // Update label fields only (preserve indexer-maintained stats).
+    // Label import does NOT write correctness metadata (dep_type_hash, dep_data_hash,
+    // code_cell_tx_hash, code_cell_output_index) — those are resolved by the sync
+    // pipeline from actual chain data via script_references and script_versions CFs.
     info.name = Some(script.name.clone());
     info.category = script.decoder_type.clone();
     info.description = Some(script.description.clone());
     info.website = Some(script.website.clone());
 
-    // Store deployment cell's type_hash and data_hash for code cell lookup.
-    let type_hash = decode_hex(&deployment.type_hash).ok();
-    let is_zero_type = type_hash
-        .as_ref()
-        .map(|h| h.iter().all(|&b| b == 0))
-        .unwrap_or(true);
-    info.dep_type_hash = if is_zero_type { None } else { type_hash };
+    store.put_script_info_direct(&code_hash, &info)?;
 
+    // Resolve version_hash from the deployment's data_hash.
     let data_hash = decode_hex(&deployment.data_hash).ok();
     let is_zero_data = data_hash
         .as_ref()
         .map(|h| h.iter().all(|&b| b == 0))
         .unwrap_or(true);
-    info.dep_data_hash = if is_zero_data { None } else { data_hash };
-
-    // Resolve code cell outpoint for scripts that can't use type index at runtime.
-    if info.hash_type != 1 && info.dep_type_hash.is_none() {
-        if let Some(ref dh) = info.dep_data_hash {
-            if dh.len() == 32 {
-                let mut hash = [0u8; 32];
-                hash.copy_from_slice(dh);
-                if let Some(ckb) = ckb_store {
-                    if let Some((tx_hash, idx)) = ckb.find_cell_by_data_hash(&hash) {
-                        info.code_cell_tx_hash = Some(tx_hash.to_vec());
-                        info.code_cell_output_index = Some(idx);
-                        debug!(
-                            "Resolved code cell for {}: {}:{}",
-                            script.name,
-                            hex::encode(tx_hash),
-                            idx
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    store.put_script_info_direct(&code_hash, &info)?;
-
-    let version_hash = info.dep_data_hash.clone().ok_or_else(|| {
+    let version_hash = if is_zero_data { None } else { data_hash };
+    let version_hash = version_hash.ok_or_else(|| {
         anyhow::anyhow!(
             "script label deployment missing non-zero dataHash: script={}, code_hash=0x{}",
             script.name,
@@ -695,7 +655,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = run_label_import(&store, None, &config).unwrap();
+        let result = run_label_import(&store, &config).unwrap();
         assert_eq!(result.udt_labels_imported, 0);
         assert_eq!(result.script_labels_imported, 0);
         assert!(result.errors.is_empty());
@@ -848,7 +808,7 @@ mod tests {
             import_scripts: true,
         };
 
-        let result = run_label_import_staged(&store, None, &config).unwrap();
+        let result = run_label_import_staged(&store, &config).unwrap();
         assert_eq!(result.script_labels_imported, 1);
 
         let code_hash =
@@ -856,6 +816,13 @@ mod tests {
                 .unwrap();
         let script = store.get_script_info(&code_hash).unwrap().unwrap();
         assert_eq!(script.name.as_deref(), Some("Test Script"));
+
+        // Label import must NOT write correctness metadata — those are resolved by
+        // the sync pipeline via script_references and script_versions CFs.
+        assert_eq!(script.dep_type_hash, None);
+        assert_eq!(script.dep_data_hash, None);
+        assert_eq!(script.code_cell_tx_hash, None);
+        assert_eq!(script.code_cell_output_index, None);
 
         let version_hash =
             hex::decode("709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649")
@@ -912,7 +879,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
 
-        let result = super::run_label_import_bundled(&store, None, "mainnet").unwrap();
+        let result = super::run_label_import_bundled(&store, "mainnet").unwrap();
         assert!(
             result.udt_labels_imported > 0,
             "expected UDT labels imported, got 0"
@@ -924,11 +891,62 @@ mod tests {
     }
 
     #[test]
+    fn test_label_import_does_not_write_correctness_metadata() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        super::run_label_import_bundled(&store, "mainnet").unwrap();
+
+        // SECP256K1_BLAKE160 is a well-known type-ref script with non-zero
+        // typeHash and dataHash in the label data. Label import must write
+        // name/description/website but NOT dep_type_hash, dep_data_hash,
+        // code_cell_tx_hash, or code_cell_output_index.
+        let secp_code_hash =
+            hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8")
+                .unwrap();
+        let info = store
+            .get_script_info(&secp_code_hash)
+            .unwrap()
+            .expect("SECP256K1_BLAKE160 script should be imported");
+
+        // Label metadata IS written
+        assert!(info.name.is_some(), "label import should write script name");
+
+        // Correctness metadata is NOT written
+        assert_eq!(
+            info.dep_type_hash, None,
+            "label import must not write dep_type_hash"
+        );
+        assert_eq!(
+            info.dep_data_hash, None,
+            "label import must not write dep_data_hash"
+        );
+        assert_eq!(
+            info.code_cell_tx_hash, None,
+            "label import must not write code_cell_tx_hash"
+        );
+        assert_eq!(
+            info.code_cell_output_index, None,
+            "label import must not write code_cell_output_index"
+        );
+
+        // Version enrichment IS written
+        let version_hash =
+            hex::decode("709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649")
+                .unwrap();
+        let version = store.get_script_version(&version_hash).unwrap();
+        assert!(
+            version.is_some(),
+            "label import should write script version"
+        );
+    }
+
+    #[test]
     fn test_run_label_import_bundled_imports_ckb_time_scripts() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
 
-        super::run_label_import_bundled(&store, None, "mainnet").unwrap();
+        super::run_label_import_bundled(&store, "mainnet").unwrap();
 
         let index_state_code_hash =
             hex::decode("3a468d53352eb855521dabed0dc7036929bfe72766ad58f801edfbae564f7b43")
@@ -962,7 +980,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
 
-        super::run_label_import_bundled(&store, None, "mainnet").unwrap();
+        super::run_label_import_bundled(&store, "mainnet").unwrap();
 
         let oracle_code_hash =
             hex::decode("92156e93acbad7b1ac26c6364efed9bdd5a4f866cecfdf6217e2ea4374f325f0")

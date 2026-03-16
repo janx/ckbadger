@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
-use ckb_store_reader::CkbChainReader;
 use ckbadger_common::LabelImportConfig;
 use ckbadger_store::{types::SyncStatus, CkbadgerStore, RuntimeStatus, StoreRuntimeConfig};
 
@@ -62,7 +61,6 @@ impl From<IndexerServiceConfig> for Config {
 pub struct LabelImportServiceConfig {
     pub domain_data_path: String,
     pub append_only_data_path: String,
-    pub ckb_db_path: String,
     pub token_labels_path: String,
     pub network: String,
     pub import_udt: bool,
@@ -85,7 +83,6 @@ async fn run_startup_label_import(store: Arc<CkbadgerStore>, config: &Config) ->
             .join("information")
             .exists();
     let network = config.network.clone();
-    let ckb_db_path = config.ckb_db_path.clone();
 
     info!(
         has_filesystem_labels = has_fs_labels,
@@ -94,9 +91,6 @@ async fn run_startup_label_import(store: Arc<CkbadgerStore>, config: &Config) ->
     );
 
     let summary = tokio::task::spawn_blocking(move || {
-        let reader = CkbChainReader::open(&ckb_db_path)?;
-        let ckb_store = Some(Arc::new(reader));
-
         if has_fs_labels {
             let label_config = LabelImportConfig {
                 token_labels_path,
@@ -104,9 +98,9 @@ async fn run_startup_label_import(store: Arc<CkbadgerStore>, config: &Config) ->
                 import_udt: true,
                 import_scripts: true,
             };
-            run_label_import_staged(store.as_ref(), ckb_store.as_deref(), &label_config)
+            run_label_import_staged(store.as_ref(), &label_config)
         } else {
-            run_label_import_bundled(store.as_ref(), ckb_store.as_deref(), &network)
+            run_label_import_bundled(store.as_ref(), &network)
         }
     })
     .await
@@ -642,21 +636,13 @@ pub async fn run_label_import(config: LabelImportServiceConfig) -> Result<()> {
         config.store_runtime_config,
     )?);
 
-    let reader = CkbChainReader::open(&config.ckb_db_path)?;
-    info!("CKB direct RocksDB reader opened at {}", config.ckb_db_path);
-    let ckb_store = Some(Arc::new(reader));
-
     let network = config.network.clone();
     let use_bundled = config.use_bundled;
 
     let result = if use_bundled {
         info!("Using bundled label data (no filesystem override found)");
         tokio::task::spawn_blocking(move || {
-            crate::label_import::run_label_import_bundled(
-                core_store.as_ref(),
-                ckb_store.as_deref(),
-                &network,
-            )
+            crate::label_import::run_label_import_bundled(core_store.as_ref(), &network)
         })
         .await
         .expect("label import task panicked")?
@@ -668,7 +654,7 @@ pub async fn run_label_import(config: LabelImportServiceConfig) -> Result<()> {
             import_scripts: config.import_scripts,
         };
         tokio::task::spawn_blocking(move || {
-            run_label_import_staged(core_store.as_ref(), ckb_store.as_deref(), &base_config)
+            run_label_import_staged(core_store.as_ref(), &base_config)
         })
         .await
         .expect("label import task panicked")?

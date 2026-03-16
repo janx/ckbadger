@@ -1359,7 +1359,6 @@ impl Indexer {
         let network = self.config.network.clone();
 
         let core_store = Arc::clone(self.writer.store());
-        let ckb_store = self.ckb_store.clone();
 
         if has_fs_labels {
             let config = LabelImportConfig {
@@ -1368,11 +1367,7 @@ impl Indexer {
             };
             tokio::spawn(async move {
                 let result = tokio::task::spawn_blocking(move || {
-                    crate::label_import::run_label_import_staged(
-                        core_store.as_ref(),
-                        ckb_store.as_deref(),
-                        &config,
-                    )
+                    crate::label_import::run_label_import_staged(core_store.as_ref(), &config)
                 })
                 .await;
 
@@ -1391,11 +1386,7 @@ impl Indexer {
             info!("No filesystem token-labels found, using bundled label data");
             tokio::spawn(async move {
                 let result = tokio::task::spawn_blocking(move || {
-                    crate::label_import::run_label_import_bundled(
-                        core_store.as_ref(),
-                        ckb_store.as_deref(),
-                        &network,
-                    )
+                    crate::label_import::run_label_import_bundled(core_store.as_ref(), &network)
                 })
                 .await;
 
