@@ -6737,6 +6737,147 @@ mod tests {
     }
 
     #[test]
+    fn test_build_script_reference_version_state_uses_parser_version_cache_for_consumed_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let previous_tx_hash = [0x12; 32];
+        let reference_hash = vec![0x21; 32];
+        let version_hash = vec![0x22; 32];
+
+        // Do NOT store version info in DB — it should come from parser_version_cache
+        let cached_info = CellScriptVersionInfo {
+            lock_reference_hash: reference_hash.clone(),
+            lock_hash_type: 0,
+            lock_version_hash: Some(version_hash.clone()),
+            type_reference_hash: None,
+            type_hash_type: None,
+            type_version_hash: None,
+            capacity: 100,
+            occupied_capacity: 61,
+        };
+        let mut parser_version_cache: HashMap<(Vec<u8>, i16), (i64, CellScriptVersionInfo)> =
+            HashMap::new();
+        parser_version_cache.insert((previous_tx_hash.to_vec(), 0), (5, cached_info));
+
+        let tx = dummy_tx_data(
+            [0x34; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let mut input_cell = dummy_live_cell_info();
+        input_cell.data_hash = Some(vec![0x45; 32]);
+        let mut batch_cell_infos = HashMap::new();
+        batch_cell_infos.insert(
+            (previous_tx_hash.to_vec(), 0),
+            PositionedCellInfo::new(input_cell, 1),
+        );
+
+        let (changes, rows) = build_script_reference_version_state(
+            &[tx],
+            &store,
+            &store,
+            &batch_cell_infos,
+            None,
+            &parser_version_cache,
+        )
+        .unwrap();
+
+        assert!(rows.is_empty());
+        assert_eq!(
+            changes.get(&(reference_hash, 0, Some(version_hash), false)),
+            Some(&(0, -1, 0, -100, 0, -61))
+        );
+    }
+
+    #[test]
+    fn test_build_script_reference_version_state_created_map_takes_priority_over_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let tx_hash_a = [0xAA; 32];
+        let tx_hash_b = [0xBB; 32];
+        let reference_hash_from_cache = vec![0xC1; 32];
+        let reference_hash_from_same_batch = vec![0xC2; 32];
+
+        // Cache has stale version info for the outpoint consumed in tx_b
+        let stale_info = CellScriptVersionInfo {
+            lock_reference_hash: reference_hash_from_cache.clone(),
+            lock_hash_type: 0,
+            lock_version_hash: Some(reference_hash_from_cache.clone()),
+            type_reference_hash: None,
+            type_hash_type: None,
+            type_version_hash: None,
+            capacity: 999,
+            occupied_capacity: 999,
+        };
+        let mut parser_version_cache: HashMap<(Vec<u8>, i16), (i64, CellScriptVersionInfo)> =
+            HashMap::new();
+        parser_version_cache.insert((tx_hash_a.to_vec(), 0), (1, stale_info));
+
+        // tx_a creates a cell at (tx_hash_a, 0) — this goes into created_map inside the function
+        let output = parsed_cell(200, reference_hash_from_same_batch.clone(), 0);
+        let tx_a = dummy_tx_data(
+            tx_hash_a,
+            false,
+            vec![],
+            vec![output],
+            vec![],
+            vec!["0x".to_string()],
+        );
+
+        // tx_b consumes (tx_hash_a, 0) — should use created_map, not cache
+        let tx_b = dummy_tx_data(
+            tx_hash_b,
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: tx_hash_a,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let mut input_cell = dummy_live_cell_info();
+        input_cell.data_hash = Some(vec![0x45; 32]);
+        let mut batch_cell_infos = HashMap::new();
+        batch_cell_infos.insert(
+            (tx_hash_a.to_vec(), 0),
+            PositionedCellInfo::new(input_cell, 1),
+        );
+
+        let (changes, _rows) = build_script_reference_version_state(
+            &[tx_a, tx_b],
+            &store,
+            &store,
+            &batch_cell_infos,
+            None,
+            &parser_version_cache,
+        )
+        .unwrap();
+
+        // Verify the consumed delta uses same-batch info (capacity=200), not cache (capacity=999)
+        let lock_consume_delta =
+            changes
+                .iter()
+                .find(|((ref_hash, _, _, is_type), (_, live_delta, _, _, _, _))| {
+                    ref_hash == &reference_hash_from_same_batch && !is_type && *live_delta == -1
+                });
+        assert!(
+            lock_consume_delta.is_some(),
+            "consumed delta should use same-batch reference_hash, not cache"
+        );
+    }
+
+    #[test]
     fn test_load_latest_dao_daily_snapshot_propagates_deserialize_error() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();

@@ -50,6 +50,7 @@ struct ParserPrecomputePhaseMetrics {
     cache_balance_and_script_ms: f64,
     spore_precompute_ms: f64,
     nft_precompute_ms: f64,
+    script_version_ms: f64,
 }
 
 impl ParserPrecomputePhaseMetrics {
@@ -59,6 +60,7 @@ impl ParserPrecomputePhaseMetrics {
             + self.cache_balance_and_script_ms
             + self.spore_precompute_ms
             + self.nft_precompute_ms
+            + self.script_version_ms
     }
 }
 
@@ -67,6 +69,7 @@ struct ParserBatchPerfSample {
     parse_ms: f64,
     precompute_ms: f64,
     nft_precompute_ms: f64,
+    script_version_ms: f64,
 }
 
 #[derive(Debug, Default)]
@@ -1893,6 +1896,8 @@ impl Indexer {
                         format!("{:.1}", precompute_phase_metrics.spore_precompute_ms),
                     nft_precompute_ms =
                         format!("{:.1}", precompute_phase_metrics.nft_precompute_ms),
+                    script_version_ms =
+                        format!("{:.1}", precompute_phase_metrics.script_version_ms),
                     total_ms = format!("{:.1}", total_parser_ms),
                     txs = tx_count,
                     cells = cell_count,
@@ -1927,6 +1932,7 @@ impl Indexer {
                     parse_ms: t_parse_ms,
                     precompute_ms: precompute_parser_ms,
                     nft_precompute_ms: precompute_phase_metrics.nft_precompute_ms,
+                    script_version_ms: precompute_phase_metrics.script_version_ms,
                 };
                 if parse_tx
                     .send(ParsedBatch {
@@ -2511,6 +2517,7 @@ impl Indexer {
                             parse_ms: parser_perf_sample.parse_ms,
                             precompute_ms: parser_perf_sample.precompute_ms,
                             nft_precompute_ms: parser_perf_sample.nft_precompute_ms,
+                            script_version_ms: parser_perf_sample.script_version_ms,
                             write_ms: write_metrics.write_ms,
                             prefetch_ms: write_metrics.prefetch_ms,
                             finalize_ms: write_metrics.finalize_ms,
@@ -3043,9 +3050,10 @@ mod tests {
             cache_balance_and_script_ms: 30.0,
             spore_precompute_ms: 40.0,
             nft_precompute_ms: 50.0,
+            script_version_ms: 60.0,
         };
 
-        assert!((metrics.total_ms() - 150.0).abs() < f64::EPSILON);
+        assert!((metrics.total_ms() - 210.0).abs() < f64::EPSILON);
     }
 
     #[test]
