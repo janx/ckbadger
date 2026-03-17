@@ -27,6 +27,12 @@ pub(crate) const ADAPTIVE_BATCH_WRITE_HI_US_PER_TX: f64 = 900.0;
 pub(crate) const ADAPTIVE_BATCH_SEVERE_WRITE_MS: f64 = 10_000.0;
 pub(crate) const ADAPTIVE_BATCH_SEVERE_COMMIT_MS: f64 = 3_000.0;
 pub(crate) const ADAPTIVE_BATCH_SEVERE_WRITE_US_PER_TX: f64 = 1_500.0;
+pub(crate) const ADAPTIVE_BATCH_PARSE_MODERATE_MS: f64 = 2_000.0;
+pub(crate) const ADAPTIVE_BATCH_PARSE_SEVERE_MS: f64 = 4_000.0;
+pub(crate) const ADAPTIVE_BATCH_PRECOMPUTE_MODERATE_MS: f64 = 5_000.0;
+pub(crate) const ADAPTIVE_BATCH_PRECOMPUTE_SEVERE_MS: f64 = 12_000.0;
+pub(crate) const ADAPTIVE_BATCH_NFT_PRECOMPUTE_MODERATE_MS: f64 = 3_000.0;
+pub(crate) const ADAPTIVE_BATCH_NFT_PRECOMPUTE_SEVERE_MS: f64 = 8_000.0;
 #[allow(dead_code)] // Kept for future use; removed from decision paths.
 pub(crate) const ADAPTIVE_BATCH_MODERATE_L0_TOTAL_FILES: u64 = 48;
 #[allow(dead_code)] // Kept for future use; removed from decision paths.
@@ -99,6 +105,9 @@ pub(crate) struct AdaptiveBatchInput {
     pub(crate) commit_ms: f64,
     pub(crate) batch_tx_count: usize,
     pub(crate) blocks_remaining: u64,
+    pub(crate) parse_ms: Option<f64>,
+    pub(crate) precompute_ms: Option<f64>,
+    pub(crate) nft_precompute_ms: Option<f64>,
     pub(crate) parse_queue_fill_pct: Option<f64>,
     pub(crate) writer_queue_fill_pct: Option<f64>,
     pub(crate) memory_ratio_pct: Option<f64>,
@@ -349,6 +358,24 @@ impl AdaptiveBatchController {
             || input
                 .writer_queue_fill_pct
                 .is_some_and(|pct| pct >= ADAPTIVE_BATCH_WRITER_PRESSURE_PCT);
+        let parser_moderate_pressure = input
+            .parse_ms
+            .is_some_and(|ms| ms >= ADAPTIVE_BATCH_PARSE_MODERATE_MS)
+            || input
+                .precompute_ms
+                .is_some_and(|ms| ms >= ADAPTIVE_BATCH_PRECOMPUTE_MODERATE_MS)
+            || input
+                .nft_precompute_ms
+                .is_some_and(|ms| ms >= ADAPTIVE_BATCH_NFT_PRECOMPUTE_MODERATE_MS);
+        let parser_severe_pressure = input
+            .parse_ms
+            .is_some_and(|ms| ms >= ADAPTIVE_BATCH_PARSE_SEVERE_MS)
+            || input
+                .precompute_ms
+                .is_some_and(|ms| ms >= ADAPTIVE_BATCH_PRECOMPUTE_SEVERE_MS)
+            || input
+                .nft_precompute_ms
+                .is_some_and(|ms| ms >= ADAPTIVE_BATCH_NFT_PRECOMPUTE_SEVERE_MS);
 
         // RocksDB internal pressure signals: detect compaction backlog, L0 pile-up,
         // and immutable memtable accumulation BEFORE they cause write stalls.
@@ -379,18 +406,20 @@ impl AdaptiveBatchController {
                 .immutable_memtables
                 .is_some_and(|imm| imm >= input.moderate_imm_threshold);
 
-        let severe_pressure_signal = input.write_ms >= ADAPTIVE_BATCH_SEVERE_WRITE_MS
+        let writer_severe_pressure_signal = input.write_ms >= ADAPTIVE_BATCH_SEVERE_WRITE_MS
             || input.commit_ms >= ADAPTIVE_BATCH_SEVERE_COMMIT_MS
             || write_us_per_tx.is_some_and(|us| us >= ADAPTIVE_BATCH_SEVERE_WRITE_US_PER_TX)
             || rocksdb_severe_pressure;
-        let severe_pressure_streak = if severe_pressure_signal {
+        let severe_pressure_streak = if writer_severe_pressure_signal {
             self.severe_pressure_streak.fetch_add(1, Ordering::Relaxed) + 1
         } else {
             self.severe_pressure_streak.store(0, Ordering::Relaxed);
             0
         };
-        let severe_pressure = severe_pressure_streak >= ADAPTIVE_BATCH_SEVERE_CONSECUTIVE_REQUIRED;
-        let moderate_pressure = target_unit_write_cost
+        let severe_pressure = parser_severe_pressure
+            || severe_pressure_streak >= ADAPTIVE_BATCH_SEVERE_CONSECUTIVE_REQUIRED;
+        let moderate_pressure = parser_moderate_pressure
+            || target_unit_write_cost
             || (input.write_ms > ADAPTIVE_BATCH_WRITE_HI_MS && throughput_drop_under_load)
             || (queue_pressure && throughput_drop_under_load)
             || input
@@ -411,17 +440,25 @@ impl AdaptiveBatchController {
                 reason = Some(
                     if new_min_target_batch_txs < previous_min_target_batch_txs {
                         "pressure_backoff_floor_down"
+                    } else if parser_severe_pressure {
+                        "parser_severe_backoff"
                     } else {
                         "severe_pressure_backoff"
                     },
                 );
+            } else if parser_severe_pressure {
+                reason = Some("parser_severe_backoff");
             } else {
                 reason = Some("severe_pressure_backoff");
             }
         } else if moderate_pressure {
             new_target_batch_txs = ((previous_target_batch_txs as f64) * 0.9).round() as u64;
             self.healthy_streak.store(0, Ordering::Relaxed);
-            reason = Some("moderate_backoff");
+            reason = Some(if parser_moderate_pressure {
+                "parser_moderate_backoff"
+            } else {
+                "moderate_backoff"
+            });
         } else {
             let cooldown = self.cooldown_steps.load(Ordering::Relaxed);
             if cooldown > 0 {
@@ -666,6 +703,9 @@ mod tests {
                 commit_ms: 0.0,
                 batch_tx_count: 8_000,
                 blocks_remaining: 0,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -711,6 +751,9 @@ mod tests {
                 commit_ms: 0.0,
                 batch_tx_count: 8_000,
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -738,6 +781,9 @@ mod tests {
                 commit_ms: 0.0,
                 batch_tx_count: 8_000,
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -766,6 +812,9 @@ mod tests {
                 commit_ms: 0.0,
                 batch_tx_count: 10_000,
                 blocks_remaining: 0,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -803,6 +852,9 @@ mod tests {
                 commit_ms: 0.0,
                 batch_tx_count: 5_000,
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 1,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -851,6 +903,9 @@ mod tests {
                 commit_ms: ADAPTIVE_BATCH_SEVERE_COMMIT_MS + 100.0,
                 batch_tx_count: 8_000,
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(98.0),
                 writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(85.0),
@@ -878,6 +933,9 @@ mod tests {
                 commit_ms: ADAPTIVE_BATCH_SEVERE_COMMIT_MS + 200.0,
                 batch_tx_count: 8_000,
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(98.0),
                 writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(85.0),
@@ -919,6 +977,9 @@ mod tests {
             commit_ms: 0.0,
             batch_tx_count: 8_000,
             blocks_remaining: 0,
+            parse_ms: None,
+            precompute_ms: None,
+            nft_precompute_ms: None,
             parse_queue_fill_pct: Some(97.0),
             writer_queue_fill_pct: Some(95.0),
             memory_ratio_pct: Some(85.0),
@@ -943,6 +1004,9 @@ mod tests {
                 commit_ms: ADAPTIVE_BATCH_SEVERE_COMMIT_MS + 100.0,
                 batch_tx_count: 8_000,
                 blocks_remaining: 0,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(97.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
@@ -981,6 +1045,9 @@ mod tests {
                 commit_ms: 0.0,
                 batch_tx_count: 10_000,
                 blocks_remaining: 0,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -1013,6 +1080,9 @@ mod tests {
                 commit_ms: 0.0,
                 batch_tx_count: 10_000,
                 blocks_remaining: 0,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(98.0),
                 writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(10.0),
@@ -1035,6 +1105,9 @@ mod tests {
                 commit_ms: ADAPTIVE_BATCH_SEVERE_COMMIT_MS + 100.0,
                 batch_tx_count: 10_000,
                 blocks_remaining: 0,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(98.0),
                 writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(10.0),
@@ -1064,6 +1137,9 @@ mod tests {
                 commit_ms: 0.0,
                 batch_tx_count: 10_000,
                 blocks_remaining: 0,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -1085,6 +1161,9 @@ mod tests {
             commit_ms: 0.0,
             batch_tx_count: 6_000,
             blocks_remaining: 0,
+            parse_ms: None,
+            precompute_ms: None,
+            nft_precompute_ms: None,
             parse_queue_fill_pct: Some(99.0),
             writer_queue_fill_pct: Some(99.0),
             memory_ratio_pct: Some(10.0),
@@ -1116,6 +1195,9 @@ mod tests {
             commit_ms: 0.0,
             batch_tx_count: 10_000,
             blocks_remaining: 0,
+            parse_ms: None,
+            precompute_ms: None,
+            nft_precompute_ms: None,
             parse_queue_fill_pct: Some(97.0),
             writer_queue_fill_pct: Some(95.0),
             memory_ratio_pct: Some(10.0),
@@ -1157,6 +1239,9 @@ mod tests {
                 commit_ms: 0.0,
                 batch_tx_count: 10_000,
                 blocks_remaining: 10_000,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(95.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(10.0),
@@ -1189,6 +1274,9 @@ mod tests {
                 commit_ms: 0.0,
                 batch_tx_count: 10_000,
                 blocks_remaining: 0,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -1210,6 +1298,9 @@ mod tests {
             commit_ms: 0.0,
             batch_tx_count: 10_000,
             blocks_remaining: 0,
+            parse_ms: None,
+            precompute_ms: None,
+            nft_precompute_ms: None,
             parse_queue_fill_pct: Some(10.0),
             writer_queue_fill_pct: Some(10.0),
             memory_ratio_pct: Some(10.0),
@@ -1238,6 +1329,9 @@ mod tests {
                 commit_ms: 0.0,
                 batch_tx_count: 10_000,
                 blocks_remaining: 0,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(95.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
@@ -1258,6 +1352,9 @@ mod tests {
                 commit_ms: ADAPTIVE_BATCH_SEVERE_COMMIT_MS + 100.0,
                 batch_tx_count: 10_000,
                 blocks_remaining: 0,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(95.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
@@ -1279,6 +1376,9 @@ mod tests {
             commit_ms: 0.0,
             batch_tx_count: 10_000,
             blocks_remaining: 0,
+            parse_ms: None,
+            precompute_ms: None,
+            nft_precompute_ms: None,
             parse_queue_fill_pct: Some(10.0),
             writer_queue_fill_pct: Some(10.0),
             memory_ratio_pct: Some(10.0),
@@ -1466,6 +1566,9 @@ mod tests {
                 commit_ms: 100.0,
                 batch_tx_count: 10_000,
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -1514,6 +1617,9 @@ mod tests {
                 commit_ms: 50.0,
                 batch_tx_count: 10_000,
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -1561,6 +1667,9 @@ mod tests {
                 commit_ms: 50.0,
                 batch_tx_count: 10_000,
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -1602,6 +1711,9 @@ mod tests {
                 commit_ms: 50.0,
                 batch_tx_count: 10_000,
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
+                parse_ms: None,
+                precompute_ms: None,
+                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -1618,5 +1730,55 @@ mod tests {
             .expect("l0_max=65 in bulk mode should trigger moderate_backoff");
 
         assert_eq!(adjustment.reason, "moderate_backoff");
+    }
+
+    #[test]
+    fn test_parser_severe_backoff_triggers_immediately_on_parser_bound_batch() {
+        let controller = AdaptiveBatchController::new(8);
+        controller
+            .target_batch_txs
+            .store(ADAPTIVE_BATCH_MAX_TXS, Ordering::Relaxed);
+        controller.inflight_limit.store(
+            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT + 2,
+            Ordering::Relaxed,
+        );
+        controller.min_target_batch_txs.store(
+            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS,
+            Ordering::Relaxed,
+        );
+
+        let adjustment = controller
+            .update_after_write(AdaptiveBatchInput {
+                write_ms: 500.0,
+                commit_ms: 50.0,
+                batch_tx_count: 74_703,
+                blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
+                parse_ms: Some(4_494.3),
+                precompute_ms: Some(26_414.2),
+                nft_precompute_ms: Some(24_990.3),
+                parse_queue_fill_pct: Some(0.0),
+                writer_queue_fill_pct: Some(0.0),
+                memory_ratio_pct: Some(10.0),
+                l0_files_total: None,
+                l0_files_max: Some(3),
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
+                is_bulk_sync: true,
+            })
+            .expect("parser-heavy batches should trigger immediate backoff");
+
+        assert_eq!(adjustment.reason, "parser_severe_backoff");
+        assert!(
+            adjustment.new_target_batch_txs < adjustment.previous_target_batch_txs,
+            "parser-heavy severe backoff should reduce target batch txs immediately"
+        );
+        assert!(
+            adjustment.new_inflight_limit < adjustment.previous_inflight_limit,
+            "parser-heavy severe backoff should reduce inflight immediately"
+        );
     }
 }

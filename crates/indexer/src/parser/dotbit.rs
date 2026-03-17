@@ -17,6 +17,7 @@ static DOTBIT_TYPE_ID_HASH: LazyLock<Vec<u8>> =
 const HASH_BYTES_LEN: usize = 32;
 const ACCOUNT_ID_LEN: usize = 20;
 const DAS_WITNESS_HEADER_LEN: usize = 7; // "das"(3) + action_data_type(4)
+const DAS_WITNESS_HEX_PREFIX: &str = "646173";
 const DAS_ACCOUNT_CELL_ACTION_DATA_TYPE: [u8; 4] = [0x01, 0x00, 0x00, 0x00];
 const DAS_ACTION_DATA_TYPE: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
 
@@ -253,6 +254,9 @@ pub(crate) fn parse_dotbit_witness_bundle(witnesses: &[String]) -> DotbitWitness
     let mut bundle = DotbitWitnessBundle::default();
 
     for witness in witnesses {
+        if !witness_has_das_hex_prefix(witness) {
+            continue;
+        }
         let witness_bytes = parse_hex_to_bytes(witness);
         if witness_bytes.len() <= DAS_WITNESS_HEADER_LEN {
             continue;
@@ -272,6 +276,26 @@ pub(crate) fn parse_dotbit_witness_bundle(witnesses: &[String]) -> DotbitWitness
     }
 
     bundle
+}
+
+pub(crate) fn may_contain_das_witness(witnesses: &[String]) -> bool {
+    witnesses
+        .iter()
+        .any(|witness| witness_has_das_hex_prefix(witness))
+}
+
+fn witness_has_das_hex_prefix(witness: &str) -> bool {
+    let Some(hex_body) = witness
+        .strip_prefix("0x")
+        .or_else(|| witness.strip_prefix("0X"))
+    else {
+        return false;
+    };
+
+    hex_body.len() > DAS_WITNESS_HEADER_LEN * 2
+        && hex_body
+            .get(..DAS_WITNESS_HEX_PREFIX.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(DAS_WITNESS_HEX_PREFIX))
 }
 
 fn parse_das_action_from_witness_bytes(witness_bytes: &[u8]) -> Option<String> {
@@ -1025,6 +1049,23 @@ mod tests {
 
         assert!(bundle.action.is_none());
         assert!(bundle.accounts.is_empty());
+    }
+
+    #[test]
+    fn test_may_contain_das_witness_detects_das_headers_without_full_decode() {
+        let account_id = [0x33u8; 20];
+        let account_witness = encode_dotbit_account_cell_witness(&account_id, "alice.bit");
+        let action_witness = encode_das_action_witness("transfer_account");
+
+        assert!(may_contain_das_witness(&[account_witness]));
+        assert!(may_contain_das_witness(&[action_witness]));
+    }
+
+    #[test]
+    fn test_may_contain_das_witness_rejects_non_das_and_too_short_witnesses() {
+        assert!(!may_contain_das_witness(&["0x".to_string()]));
+        assert!(!may_contain_das_witness(&["0x64617300000000".to_string()]));
+        assert!(!may_contain_das_witness(&["0xaabbccdd".to_string()]));
     }
 
     // ---- parse_das_action tests ----

@@ -35,6 +35,10 @@ pub struct BatchSample {
     pub parse_ms: f64,
     pub precompute_ms: f64,
     pub nft_precompute_ms: f64,
+    pub nft_fallback_db_ms: f64,
+    pub nft_dotbit_witness_parse_ms: f64,
+    pub nft_output_scan_ms: f64,
+    pub nft_input_scan_ms: f64,
     pub write_ms: f64,
     pub prefetch_ms: f64,
     pub finalize_ms: f64,
@@ -83,6 +87,10 @@ impl BatchSample {
             parse_ms: 0.0,
             precompute_ms: 0.0,
             nft_precompute_ms: 0.0,
+            nft_fallback_db_ms: 0.0,
+            nft_dotbit_witness_parse_ms: 0.0,
+            nft_output_scan_ms: 0.0,
+            nft_input_scan_ms: 0.0,
             write_ms: 0.0,
             prefetch_ms: 0.0,
             finalize_ms: 0.0,
@@ -1070,6 +1078,10 @@ mod tests {
         assert!(samples.contains("\"parse_ms\""));
         assert!(samples.contains("\"precompute_ms\""));
         assert!(samples.contains("\"nft_precompute_ms\""));
+        assert!(samples.contains("\"nft_fallback_db_ms\""));
+        assert!(samples.contains("\"nft_dotbit_witness_parse_ms\""));
+        assert!(samples.contains("\"nft_output_scan_ms\""));
+        assert!(samples.contains("\"nft_input_scan_ms\""));
         assert!(samples.contains("\"write_ms\""));
         assert!(samples.contains("\"t1_ms\""));
         assert!(samples.contains("\"t_act_ms\""));

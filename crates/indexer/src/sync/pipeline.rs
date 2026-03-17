@@ -13,7 +13,7 @@ use ckbadger_store::types::{LiveCellInfo, ObjectTypeIndex, PositionedCellInfo, S
 
 use crate::parser::{
     analyze_spore_media_profile,
-    dotbit::{parse_dotbit_witness_bundle, DotbitWitnessBundle},
+    dotbit::{may_contain_das_witness, parse_dotbit_witness_bundle, DotbitWitnessBundle},
     DotbitParser, MnftParser, ParsedClusterCell, ParsedDotbitAccountOutput, ParsedMnftClass,
     ParsedMnftIssuer, ParsedMnftToken, ParsedSporeCell, SporeParser,
 };
@@ -50,6 +50,10 @@ struct ParserPrecomputePhaseMetrics {
     cache_balance_and_script_ms: f64,
     spore_precompute_ms: f64,
     nft_precompute_ms: f64,
+    nft_fallback_db_ms: f64,
+    nft_dotbit_witness_parse_ms: f64,
+    nft_output_scan_ms: f64,
+    nft_input_scan_ms: f64,
 }
 
 impl ParserPrecomputePhaseMetrics {
@@ -67,6 +71,10 @@ struct ParserBatchPerfSample {
     parse_ms: f64,
     precompute_ms: f64,
     nft_precompute_ms: f64,
+    nft_fallback_db_ms: f64,
+    nft_dotbit_witness_parse_ms: f64,
+    nft_output_scan_ms: f64,
+    nft_input_scan_ms: f64,
 }
 
 fn parser_cache_committed_tip_from_sync_tip(sync_tip: i64) -> i64 {
@@ -153,6 +161,7 @@ fn run_nft_precompute(
     input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     dotbit_outpoint_fallback: &HashMap<(Vec<u8>, i16), Vec<u8>>,
+    metrics: &mut ParserPrecomputePhaseMetrics,
 ) -> Result<PreParsedNftData> {
     let mut mnft_issuers: Vec<(usize, usize, ParsedMnftIssuer)> = Vec::new();
     let mut mnft_classes: Vec<(usize, usize, ParsedMnftClass)> = Vec::new();
@@ -167,6 +176,8 @@ fn run_nft_precompute(
     let dotbit_code_hash =
         crate::rpc::parse_hex_to_bytes(crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID);
 
+    let output_scan_started = Instant::now();
+    let mut dotbit_witness_parse = Duration::ZERO;
     let mut block_tx_idx = 0usize;
     for parsed in all_parsed_blocks {
         let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
@@ -178,11 +189,17 @@ fn run_nft_precompute(
                     .as_ref()
                     .is_some_and(|tc| tc.as_slice() == dotbit_code_hash.as_slice())
             });
-            // Parse DAS witness for ALL non-cellbase txs (not just those with .bit outputs).
-            // Pure-consumption txs (e.g. recycle_expired_account) still carry ActionData
-            // witnesses, and we need the DAS action for correct activity classification.
-            let witness_bundle = if has_dotbit_output || !tx_data.is_cellbase {
-                parse_dotbit_witness_bundle(&tx_data.witnesses)
+            // Parse DAS witness when the tx creates a .bit cell, or when a non-cellbase tx
+            // actually carries a DAS witness header. Pure-consumption txs (e.g.
+            // recycle_expired_account) still need the DAS action for correct activity
+            // classification, but plain non-DAS txs should skip this hot path entirely.
+            let witness_bundle = if has_dotbit_output
+                || (!tx_data.is_cellbase && may_contain_das_witness(&tx_data.witnesses))
+            {
+                let witness_started = Instant::now();
+                let bundle = parse_dotbit_witness_bundle(&tx_data.witnesses);
+                dotbit_witness_parse += witness_started.elapsed();
+                bundle
             } else {
                 DotbitWitnessBundle::default()
             };
@@ -261,10 +278,15 @@ fn run_nft_precompute(
         }
         block_tx_idx += tx_count_for_block;
     }
+    metrics.nft_dotbit_witness_parse_ms = dotbit_witness_parse.as_secs_f64() * 1000.0;
+    metrics.nft_output_scan_ms = (output_scan_started.elapsed().as_secs_f64() * 1000.0
+        - metrics.nft_dotbit_witness_parse_ms)
+        .max(0.0);
 
     let mut consumed_dotbit: Vec<DotbitConsumptionEvent> = Vec::new();
     let mut consumed_spore: Vec<SporeConsumptionEvent> = Vec::new();
     let mut consumed_mnft: Vec<MnftConsumptionEvent> = Vec::new();
+    let input_scan_started = Instant::now();
     let mut block_tx_idx = 0usize;
     for parsed in all_parsed_blocks {
         let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
@@ -364,6 +386,7 @@ fn run_nft_precompute(
         }
         block_tx_idx += tx_count_for_block;
     }
+    metrics.nft_input_scan_ms = input_scan_started.elapsed().as_secs_f64() * 1000.0;
 
     Ok(PreParsedNftData {
         mnft_issuers,
@@ -779,16 +802,16 @@ impl Indexer {
                             Ok(v) => v,
                             Err(e) => {
                                 record_worker_exit_reason(
-                                        &parser_exit_reason_for_parser,
-                                        format!(
-                                            "pipeline parser batch cell output index conversion failed for range {}-{}: tx_hash=0x{}, output_index={}, error={}",
-                                            start_block,
-                                            end_block,
-                                            hex::encode(td.hash),
-                                            idx,
-                                            e
-                                        ),
-                                    );
+                                    &parser_exit_reason_for_parser,
+                                    format!(
+                                        "pipeline parser batch cell output index conversion failed for range {}-{}: tx_hash=0x{}, output_index={}, error={}",
+                                        start_block,
+                                        end_block,
+                                        hex::encode(td.hash),
+                                        idx,
+                                        e
+                                    ),
+                                );
                                 return;
                             }
                         };
@@ -1793,8 +1816,10 @@ impl Indexer {
                         }
                     }
                     if needs_resolution.is_empty() {
+                        precompute_phase_metrics.nft_fallback_db_ms = 0.0;
                         HashMap::new()
                     } else {
+                        let fallback_db_started = Instant::now();
                         let wr = writer_for_parser.clone();
                         let nr = needs_resolution;
                         let db_query = tokio::task::spawn_blocking(move || {
@@ -1804,6 +1829,8 @@ impl Indexer {
                         });
                         match tokio::time::timeout(Duration::from_secs(10), db_query).await {
                             Ok(Ok(Ok(resolved))) => {
+                                precompute_phase_metrics.nft_fallback_db_ms =
+                                    fallback_db_started.elapsed().as_secs_f64() * 1000.0;
                                 let mut map = HashMap::with_capacity(resolved.len());
                                 for (tx_hash, idx, account_id) in resolved {
                                     map.insert((tx_hash, idx), account_id);
@@ -1846,6 +1873,7 @@ impl Indexer {
                     &input_cell_info,
                     &batch_cell_infos,
                     &dotbit_outpoint_fallback,
+                    &mut precompute_phase_metrics,
                 ) {
                     Ok(data) => data,
                     Err(e) => {
@@ -1902,6 +1930,16 @@ impl Indexer {
                         format!("{:.1}", precompute_phase_metrics.spore_precompute_ms),
                     nft_precompute_ms =
                         format!("{:.1}", precompute_phase_metrics.nft_precompute_ms),
+                    nft_fallback_db_ms =
+                        format!("{:.1}", precompute_phase_metrics.nft_fallback_db_ms),
+                    nft_dotbit_witness_parse_ms = format!(
+                        "{:.1}",
+                        precompute_phase_metrics.nft_dotbit_witness_parse_ms
+                    ),
+                    nft_output_scan_ms =
+                        format!("{:.1}", precompute_phase_metrics.nft_output_scan_ms),
+                    nft_input_scan_ms =
+                        format!("{:.1}", precompute_phase_metrics.nft_input_scan_ms),
                     total_ms = format!("{:.1}", total_parser_ms),
                     txs = tx_count,
                     cells = cell_count,
@@ -1938,6 +1976,11 @@ impl Indexer {
                     parse_ms: t_parse_ms,
                     precompute_ms: precompute_parser_ms,
                     nft_precompute_ms: precompute_phase_metrics.nft_precompute_ms,
+                    nft_fallback_db_ms: precompute_phase_metrics.nft_fallback_db_ms,
+                    nft_dotbit_witness_parse_ms: precompute_phase_metrics
+                        .nft_dotbit_witness_parse_ms,
+                    nft_output_scan_ms: precompute_phase_metrics.nft_output_scan_ms,
+                    nft_input_scan_ms: precompute_phase_metrics.nft_input_scan_ms,
                 };
                 if parse_tx
                     .send(ParsedBatch {
@@ -2462,6 +2505,9 @@ impl Indexer {
                                     commit_ms: write_metrics.commit_ms,
                                     batch_tx_count,
                                     blocks_remaining,
+                                    parse_ms: Some(parser_perf_sample.parse_ms),
+                                    precompute_ms: Some(parser_perf_sample.precompute_ms),
+                                    nft_precompute_ms: Some(parser_perf_sample.nft_precompute_ms),
                                     parse_queue_fill_pct: queue_pressure.parse_queue_fill_pct,
                                     writer_queue_fill_pct: queue_pressure.writer_queue_fill_pct,
                                     memory_ratio_pct,
@@ -2525,6 +2571,11 @@ impl Indexer {
                             parse_ms: parser_perf_sample.parse_ms,
                             precompute_ms: parser_perf_sample.precompute_ms,
                             nft_precompute_ms: parser_perf_sample.nft_precompute_ms,
+                            nft_fallback_db_ms: parser_perf_sample.nft_fallback_db_ms,
+                            nft_dotbit_witness_parse_ms: parser_perf_sample
+                                .nft_dotbit_witness_parse_ms,
+                            nft_output_scan_ms: parser_perf_sample.nft_output_scan_ms,
+                            nft_input_scan_ms: parser_perf_sample.nft_input_scan_ms,
                             write_ms: write_metrics.write_ms,
                             prefetch_ms: write_metrics.prefetch_ms,
                             finalize_ms: write_metrics.finalize_ms,
@@ -3056,6 +3107,7 @@ mod tests {
             cache_balance_and_script_ms: 30.0,
             spore_precompute_ms: 40.0,
             nft_precompute_ms: 50.0,
+            ..Default::default()
         };
 
         assert!((metrics.total_ms() - 150.0).abs() < f64::EPSILON);
@@ -3089,6 +3141,7 @@ mod tests {
             create_test_tx_data(&consume_tx),
         ];
         let parsed_blocks = vec![create_test_parsed_block(14_000_000, 2, 0)];
+        let mut metrics = ParserPrecomputePhaseMetrics::default();
 
         let output = run_nft_precompute(
             &parsed_blocks,
@@ -3096,6 +3149,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            &mut metrics,
         )
         .expect("precompute");
 
@@ -3108,6 +3162,68 @@ mod tests {
                 .get(&0)
                 .map(std::string::String::as_str),
             Some("transfer_account")
+        );
+        assert!(
+            metrics.nft_dotbit_witness_parse_ms > 0.0,
+            "dotbit witness parse phase should be measured"
+        );
+        assert!(
+            metrics.nft_output_scan_ms > 0.0,
+            "nft output scan phase should be measured"
+        );
+        assert!(
+            metrics.nft_input_scan_ms > 0.0,
+            "nft input scan phase should be measured"
+        );
+        assert_eq!(
+            metrics.nft_fallback_db_ms, 0.0,
+            "test fixture does not hit fallback DB path"
+        );
+    }
+
+    #[test]
+    fn test_run_nft_precompute_skips_non_das_witness_parse_for_plain_tx() {
+        let large_non_das_witness = format!("0x{}", "aa".repeat(32 * 1024));
+        let tx = TransactionView {
+            hash: "0xabababababababababababababababababababababababababababababababab".to_string(),
+            version: "0x0".to_string(),
+            cell_deps: Vec::<CellDep>::new(),
+            header_deps: Vec::new(),
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+                        .to_string(),
+                    index: "0x0".to_string(),
+                },
+            }],
+            outputs: vec![CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: create_lock_script(),
+                type_: None,
+            }],
+            outputs_data: vec!["0x".to_string()],
+            witnesses: vec![large_non_das_witness],
+        };
+        let all_tx_data = vec![create_test_tx_data(&tx)];
+        let parsed_blocks = vec![create_test_parsed_block(14_000_001, 1, 0)];
+        let mut metrics = ParserPrecomputePhaseMetrics::default();
+
+        let output = run_nft_precompute(
+            &parsed_blocks,
+            &all_tx_data,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut metrics,
+        )
+        .expect("precompute");
+
+        assert!(output.dotbit_accounts.is_empty());
+        assert!(output.dotbit_tx_actions.is_empty());
+        assert_eq!(
+            metrics.nft_dotbit_witness_parse_ms, 0.0,
+            "plain transactions without DAS headers should skip DotBit witness parsing"
         );
     }
 
@@ -3182,6 +3298,7 @@ mod tests {
             &input_cell_info,
             &HashMap::new(),
             &dotbit_outpoint_fallback,
+            &mut ParserPrecomputePhaseMetrics::default(),
         )
         .expect("precompute");
 
@@ -3349,6 +3466,7 @@ mod tests {
             &input_cell_info,
             &HashMap::new(),
             &HashMap::new(),
+            &mut ParserPrecomputePhaseMetrics::default(),
         )
         .expect("precompute");
 
@@ -3391,6 +3509,7 @@ mod tests {
             &input_cell_info,
             &HashMap::new(),
             &HashMap::new(),
+            &mut ParserPrecomputePhaseMetrics::default(),
         )
         .expect("precompute");
 
@@ -3441,6 +3560,7 @@ mod tests {
             &input_cell_info,
             &HashMap::new(),
             &HashMap::new(),
+            &mut ParserPrecomputePhaseMetrics::default(),
         )
         .expect("precompute");
 
@@ -3490,6 +3610,7 @@ mod tests {
             &input_cell_info,
             &HashMap::new(),
             &HashMap::new(),
+            &mut ParserPrecomputePhaseMetrics::default(),
         )
         .expect("precompute");
 
