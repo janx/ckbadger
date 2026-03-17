@@ -16,7 +16,8 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
     CellScriptVersionInfo, DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate,
-    ObjectTypeIndex, PositionedCellInfo, SporeTypeIndex, SOLE_SPORES_SENTINEL_COLLECTION,
+    LiveCellInfo, ObjectTypeIndex, PositionedCellInfo, SporeTypeIndex,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -912,6 +913,7 @@ fn load_dep_cell_info(
     domain_store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
     batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    ckb_store: Option<&ckb_store_reader::CkbChainReader>,
     cache: &mut DepCellCache,
 ) -> Result<PositionedCellInfo> {
     if let Some(info) = cache.info.get(&(*tx_hash, output_index)) {
@@ -930,11 +932,124 @@ fn load_dep_cell_info(
         cache.info.insert((*tx_hash, output_index), info.clone());
         return Ok(info);
     }
+    // Fallback: read from CKB node's RocksDB when ckbadger stores don't have the
+    // cell yet (handles cross-batch pipeline races where the parser runs ahead of
+    // the writer and dep cells from a prior batch haven't been committed).
+    if let Some(ckb_store) = ckb_store {
+        if let Some(info) = load_dep_cell_info_from_ckb_store(tx_hash, output_index, ckb_store)? {
+            cache.info.insert((*tx_hash, output_index), info.clone());
+            return Ok(info);
+        }
+    }
     bail!(
         "missing dep cell while resolving script version: outpoint=0x{}:{}",
         hex::encode(tx_hash),
         output_index
     )
+}
+
+/// Read a cell output from the CKB node's RocksDB and construct a PositionedCellInfo.
+/// This is a last-resort fallback for dep cells not yet committed to ckbadger stores.
+fn load_dep_cell_info_from_ckb_store(
+    tx_hash: &[u8; 32],
+    output_index: i16,
+    ckb_store: &ckb_store_reader::CkbChainReader,
+) -> Result<Option<PositionedCellInfo>> {
+    use ckb_types::prelude::Unpack;
+
+    let output_index_u32 = u32::try_from(output_index).map_err(|_| {
+        anyhow!(
+            "negative dep cell output index while reading CKB store: outpoint=0x{}:{}",
+            hex::encode(tx_hash),
+            output_index
+        )
+    })?;
+    let (tx, block_number) = match ckb_store.get_transaction_with_block_number(tx_hash) {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+    let output = tx.output(output_index_u32 as usize).ok_or_else(|| {
+        anyhow!(
+            "dep cell output index out of range in CKB store: outpoint=0x{}:{}, outputs_count={}",
+            hex::encode(tx_hash),
+            output_index,
+            tx.outputs().len()
+        )
+    })?;
+    let data = tx
+        .outputs_data()
+        .get(output_index_u32 as usize)
+        .map(|d| d.raw_data().to_vec())
+        .unwrap_or_default();
+
+    let capacity: u64 = output.capacity().unpack();
+    let lock = output.lock();
+    let lock_code_hash = lock.code_hash().raw_data().to_vec();
+    let lock_hash_type = lock.hash_type().as_slice()[0] as i16;
+    let lock_args = lock.args().raw_data().to_vec();
+    let lock_script_hash = lock.calc_script_hash().raw_data().to_vec();
+
+    let (type_script_hash, type_code_hash, type_hash_type, type_args) =
+        if let Some(type_script) = output.type_().to_opt() {
+            (
+                Some(type_script.calc_script_hash().raw_data().to_vec()),
+                Some(type_script.code_hash().raw_data().to_vec()),
+                Some(type_script.hash_type().as_slice()[0] as i16),
+                Some(type_script.args().raw_data().to_vec()),
+            )
+        } else {
+            (None, None, None, None)
+        };
+
+    let data_size = i32::try_from(data.len()).map_err(|_| {
+        anyhow!(
+            "dep cell data size exceeds i32 in CKB store: outpoint=0x{}:{}, data_len={}",
+            hex::encode(tx_hash),
+            output_index,
+            data.len()
+        )
+    })?;
+    let data_hash = Some(ScriptParser::compute_data_hash(&data));
+    let occupied_capacity = occupied_capacity_shannons_i64(
+        lock_args.len(),
+        type_args.as_ref().map(|a| a.len()),
+        data_size,
+    );
+    let capacity_i64 = i64::try_from(capacity).map_err(|_| {
+        anyhow!(
+            "dep cell capacity exceeds i64 in CKB store: outpoint=0x{}:{}, capacity={}",
+            hex::encode(tx_hash),
+            output_index,
+            capacity
+        )
+    })?;
+    let block_number_i64 = i64::try_from(block_number).map_err(|_| {
+        anyhow!(
+            "dep cell block number exceeds i64 in CKB store: outpoint=0x{}:{}, block={}",
+            hex::encode(tx_hash),
+            output_index,
+            block_number
+        )
+    })?;
+
+    Ok(Some(PositionedCellInfo::new(
+        LiveCellInfo {
+            capacity: capacity_i64,
+            lock_script_hash,
+            lock_code_hash,
+            lock_hash_type,
+            lock_args,
+            type_script_hash,
+            type_code_hash,
+            type_hash_type,
+            type_args,
+            data_size,
+            occupied_capacity,
+            udt_amount: None,
+            data_hash,
+        },
+        block_number_i64,
+    )))
 }
 
 fn load_dep_cell_data(
@@ -1001,6 +1116,7 @@ fn resolve_tx_dep_cells(
                     domain_store,
                     append_only_store,
                     batch_cell_infos,
+                    ckb_store,
                     cache,
                 )?;
                 resolved.insert((dep.out_point_tx_hash.to_vec(), dep.out_point_index), info);
@@ -1035,6 +1151,7 @@ fn resolve_tx_dep_cells(
                         domain_store,
                         append_only_store,
                         batch_cell_infos,
+                        ckb_store,
                         cache,
                     )?;
                     resolved.insert((member_tx_hash.to_vec(), *member_output_index), info);
