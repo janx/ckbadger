@@ -5,7 +5,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use ckb_hash::new_blake2b;
 
 use crate::runtime_diag::CgroupMemorySnapshot;
@@ -258,24 +258,16 @@ pub(crate) fn atomic_checked_sub_u64(counter: &AtomicU64, value: u64) {
 // Hex parsing
 // ---------------------------------------------------------------------------
 
-pub(crate) fn parse_prefixed_hex_u32(field: &str, label: &str) -> Result<u32> {
-    let Some(hex) = field.strip_prefix("0x") else {
-        bail!("{} missing 0x prefix: {}", label, field);
-    };
-    u32::from_str_radix(hex, 16)
-        .map_err(|e| anyhow::anyhow!("invalid {} hex '{}': {}", label, field, e))
+pub(crate) fn parse_prefixed_hex_u32(field: &str) -> u32 {
+    u32::from_str_radix(&field[2..], 16).unwrap_or_else(|e| panic!("hex parse '{}': {}", field, e))
 }
 
-pub(crate) fn parse_prefixed_hex_u64(field: &str, label: &str) -> Result<u64> {
-    let Some(hex) = field.strip_prefix("0x") else {
-        bail!("{} missing 0x prefix: {}", label, field);
-    };
-    u64::from_str_radix(hex, 16)
-        .map_err(|e| anyhow::anyhow!("invalid {} hex '{}': {}", label, field, e))
+pub(crate) fn parse_prefixed_hex_u64(field: &str) -> u64 {
+    u64::from_str_radix(&field[2..], 16).unwrap_or_else(|e| panic!("hex parse '{}': {}", field, e))
 }
 
 pub(crate) fn parse_outpoint_index_i16(field: &str, label: &str) -> Result<i16> {
-    let value = parse_prefixed_hex_u32(field, label)?;
+    let value = parse_prefixed_hex_u32(field);
     i16::try_from(value).map_err(|_| anyhow::anyhow!("{} exceeds i16 range: {}", label, value))
 }
 
@@ -394,21 +386,17 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_prefixed_hex_u32_errors_on_invalid_input() {
-        let err = parse_prefixed_hex_u32("1234", "test field").unwrap_err();
-        assert!(err.to_string().contains("missing 0x prefix"));
-
-        let err = parse_prefixed_hex_u32("0xzz", "test field").unwrap_err();
-        assert!(err.to_string().contains("invalid test field hex"));
+    fn test_parse_prefixed_hex_u32_parses_valid_hex() {
+        assert_eq!(parse_prefixed_hex_u32("0x0"), 0);
+        assert_eq!(parse_prefixed_hex_u32("0xff"), 255);
+        assert_eq!(parse_prefixed_hex_u32("0xffffffff"), u32::MAX);
     }
 
     #[test]
-    fn test_parse_prefixed_hex_u64_errors_on_invalid_input() {
-        let err = parse_prefixed_hex_u64("1234", "test field").unwrap_err();
-        assert!(err.to_string().contains("missing 0x prefix"));
-
-        let err = parse_prefixed_hex_u64("0xzz", "test field").unwrap_err();
-        assert!(err.to_string().contains("invalid test field hex"));
+    fn test_parse_prefixed_hex_u64_parses_valid_hex() {
+        assert_eq!(parse_prefixed_hex_u64("0x0"), 0);
+        assert_eq!(parse_prefixed_hex_u64("0xff"), 255);
+        assert_eq!(parse_prefixed_hex_u64("0xffffffffffffffff"), u64::MAX);
     }
 
     #[test]

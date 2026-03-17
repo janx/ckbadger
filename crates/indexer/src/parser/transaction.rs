@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 
 use crate::rpc::{parse_hex_to_bytes, TransactionView};
 
@@ -38,8 +38,8 @@ impl TransactionParser {
                 == "0x0000000000000000000000000000000000000000000000000000000000000000"
         });
 
-        let hash = Self::parse_hex_hash32(&tx.hash, "transaction.hash")?;
-        let version = Self::parse_hex_u32(&tx.version, "transaction.version")?;
+        let hash = Self::parse_hex_hash32(&tx.hash);
+        let version = Self::parse_hex_u32(&tx.version);
         let version = i32::try_from(version).map_err(|_| {
             anyhow!(
                 "transaction.version exceeds i32 range for tx 0x{}: {}",
@@ -173,25 +173,12 @@ impl TransactionParser {
             .iter()
             .enumerate()
             .map(|(input_idx, input)| {
-                let previous_tx_hash = Self::parse_hex_hash32(
-                    &input.previous_output.tx_hash,
-                    "input.previous_output.tx_hash",
-                )
-                .map_err(|e| anyhow!("invalid tx input #{}: {}", input_idx, e))?;
-                let previous_output_index_u32 = Self::parse_hex_u32(
-                    &input.previous_output.index,
-                    "input.previous_output.index",
-                )
-                .map_err(|e| anyhow!("invalid tx input #{}: {}", input_idx, e))?;
+                let previous_tx_hash =
+                    Self::parse_hex_hash32(&input.previous_output.tx_hash);
+                let previous_output_index_u32 =
+                    Self::parse_hex_u32(&input.previous_output.index);
                 let previous_output_index = if previous_output_index_u32 == u32::MAX {
-                    if previous_tx_hash == [0u8; 32] {
-                        -1
-                    } else {
-                        return Err(anyhow!(
-                            "invalid tx input #{}: input.previous_output.index uses cellbase sentinel 0xffffffff with non-zero tx hash",
-                            input_idx
-                        ));
-                    }
+                    -1 // cellbase sentinel
                 } else {
                     let previous_output_index_i16 =
                         i16::try_from(previous_output_index_u32).map_err(|_| {
@@ -218,14 +205,8 @@ impl TransactionParser {
             .iter()
             .enumerate()
             .map(|(dep_idx, cell_dep)| {
-                let out_point_tx_hash = Self::parse_hex_hash32(
-                    &cell_dep.out_point.tx_hash,
-                    "cell_dep.out_point.tx_hash",
-                )
-                .map_err(|e| anyhow!("invalid cell dep #{}: {}", dep_idx, e))?;
-                let out_point_index_u32 =
-                    Self::parse_hex_u32(&cell_dep.out_point.index, "cell_dep.out_point.index")
-                        .map_err(|e| anyhow!("invalid cell dep #{}: {}", dep_idx, e))?;
+                let out_point_tx_hash = Self::parse_hex_hash32(&cell_dep.out_point.tx_hash);
+                let out_point_index_u32 = Self::parse_hex_u32(&cell_dep.out_point.index);
                 let out_point_index = i16::try_from(out_point_index_u32).map_err(|_| {
                     anyhow!(
                         "invalid cell dep #{}: cell_dep.out_point.index exceeds i16 range: {}",
@@ -240,11 +221,7 @@ impl TransactionParser {
                     dep_type: match cell_dep.dep_type.as_str() {
                         "code" => 0,
                         "dep_group" => 1,
-                        other => bail!(
-                            "invalid cell dep #{}: unknown dep_type '{}'",
-                            dep_idx,
-                            other
-                        ),
+                        _ => unreachable!("node-validated dep_type: '{}'", cell_dep.dep_type),
                     },
                 })
             })
@@ -274,31 +251,17 @@ impl TransactionParser {
             .unwrap_or_else(|e| panic!("invalid capacity hex '{}': {}", raw, e)) as u128
     }
 
-    fn parse_hex_u32(field: &str, label: &str) -> Result<u32> {
-        let Some(hex) = field.strip_prefix("0x") else {
-            return Err(anyhow!("{} missing 0x prefix: {}", label, field));
-        };
-        u32::from_str_radix(hex, 16)
-            .map_err(|e| anyhow!("invalid {} hex '{}': {}", label, field, e))
+    fn parse_hex_u32(field: &str) -> u32 {
+        u32::from_str_radix(&field[2..], 16)
+            .unwrap_or_else(|e| panic!("hex parse '{}': {}", field, e))
     }
 
-    fn parse_hex_hash32(field: &str, label: &str) -> Result<[u8; 32]> {
-        let Some(hex) = field.strip_prefix("0x") else {
-            return Err(anyhow!("{} missing 0x prefix: {}", label, field));
-        };
+    fn parse_hex_hash32(field: &str) -> [u8; 32] {
         let bytes =
-            hex::decode(hex).map_err(|e| anyhow!("invalid {} hex '{}': {}", label, field, e))?;
-        if bytes.len() != 32 {
-            return Err(anyhow!(
-                "{} must be 32 bytes, got {} bytes",
-                label,
-                bytes.len()
-            ));
-        }
-
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&bytes);
-        Ok(out)
+            hex::decode(&field[2..]).unwrap_or_else(|e| panic!("hex decode '{}': {}", field, e));
+        bytes
+            .try_into()
+            .unwrap_or_else(|v: Vec<u8>| panic!("hash must be 32 bytes, got {}", v.len()))
     }
 }
 
@@ -598,42 +561,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_inputs_rejects_cellbase_sentinel_with_non_zero_tx_hash() {
-        let mut tx = create_normal_tx();
-        tx.inputs[0].previous_output.index = "0xffffffff".to_string();
-        let err = TransactionParser::parse_inputs(&tx).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("cellbase sentinel 0xffffffff with non-zero tx hash"));
-    }
-
-    #[test]
-    fn test_parse_errors_when_tx_hash_invalid() {
-        let mut tx = create_normal_tx();
-        tx.hash = "0x1234".to_string();
-        let err = TransactionParser::parse(&tx).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("transaction.hash must be 32 bytes"));
-    }
-
-    #[test]
     fn test_parse_cell_deps_errors_when_index_exceeds_i16() {
         let mut tx = create_normal_tx();
         tx.cell_deps[0].out_point.index = "0x10000".to_string();
         let err = TransactionParser::parse_cell_deps(&tx).unwrap_err();
         assert!(err.to_string().contains("exceeds i16 range"));
-    }
-
-    #[test]
-    fn test_parse_cell_deps_errors_on_unknown_dep_type() {
-        let mut tx = create_normal_tx();
-        tx.cell_deps[0].dep_type = "unknown_type".to_string();
-        let err = TransactionParser::parse_cell_deps(&tx).unwrap_err();
-        assert!(
-            err.to_string().contains("unknown dep_type 'unknown_type'"),
-            "expected unknown dep_type error, got: {}",
-            err
-        );
     }
 }

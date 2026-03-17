@@ -606,14 +606,8 @@ impl Indexer {
 
         let mut all_mempool_txs: HashMap<String, &crate::rpc::TxPoolEntry> = HashMap::new();
         for (tx_hash, entry) in mempool.pending.iter().chain(mempool.proposed.iter()) {
-            match mempool_short_tx_id(tx_hash) {
-                Ok(short_id) => {
-                    all_mempool_txs.insert(short_id.to_string(), entry);
-                }
-                Err(e) => {
-                    warn!(tx_hash, error = %e, "Skipping malformed mempool tx hash in proposal cache");
-                }
-            }
+            let short_id = mempool_short_tx_id(tx_hash);
+            all_mempool_txs.insert(short_id.to_string(), entry);
         }
 
         let mut cached_proposals = Vec::with_capacity(proposals.len());
@@ -622,34 +616,18 @@ impl Indexer {
             let proposal_id = hex::encode(proposal_bytes);
 
             if let Some(entry) = all_mempool_txs.get(&proposal_id) {
-                match (
-                    parse_prefixed_hex_u64(&entry.fee, "mempool proposal fee"),
-                    parse_prefixed_hex_u64(&entry.size, "mempool proposal size"),
-                    parse_prefixed_hex_u64(&entry.cycles, "mempool proposal cycles"),
-                ) {
-                    (Ok(fee), Ok(size), Ok(cycles)) => {
-                        cached_proposals.push(CachedProposal::new_with_details(
-                            proposal_id,
-                            String::new(),
-                            *block_number,
-                            *idx,
-                            fee,
-                            size,
-                            cycles,
-                        ));
-                    }
-                    _ => {
-                        warn!(
-                            "Invalid mempool entry fields for proposal {}, using minimal",
-                            proposal_id
-                        );
-                        cached_proposals.push(CachedProposal::new_minimal(
-                            proposal_id,
-                            *block_number,
-                            *idx,
-                        ));
-                    }
-                }
+                let fee = parse_prefixed_hex_u64(&entry.fee);
+                let size = parse_prefixed_hex_u64(&entry.size);
+                let cycles = parse_prefixed_hex_u64(&entry.cycles);
+                cached_proposals.push(CachedProposal::new_with_details(
+                    proposal_id,
+                    String::new(),
+                    *block_number,
+                    *idx,
+                    fee,
+                    size,
+                    cycles,
+                ));
             } else {
                 cached_proposals.push(CachedProposal::new_minimal(
                     proposal_id,

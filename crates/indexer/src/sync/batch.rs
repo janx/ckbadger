@@ -449,13 +449,7 @@ where
             continue;
         };
 
-        let type_script_hash = ScriptParser::compute_script_hash(type_script).map_err(|e| {
-            anyhow!(
-                "compute_script_hash failed for type script in tx {}: {}",
-                tx.hash,
-                e
-            )
-        })?;
+        let type_script_hash = ScriptParser::compute_script_hash(type_script);
         let standard_hint = if let Some(cached) = standard_cache.get(&type_script_hash) {
             cached.clone()
         } else {
@@ -2099,11 +2093,9 @@ impl Indexer {
                                     for tx in &block_response.block.transactions {
                                         for output in &tx.outputs {
                                             if let Some(type_script) = output.type_.as_ref() {
-                                                if let Ok(hash) =
-                                                    ScriptParser::compute_script_hash(type_script)
-                                                {
-                                                    unique_type_hashes.insert(hash);
-                                                }
+                                                let hash =
+                                                    ScriptParser::compute_script_hash(type_script);
+                                                unique_type_hashes.insert(hash);
                                             }
                                         }
                                     }

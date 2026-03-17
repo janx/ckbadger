@@ -99,10 +99,8 @@ impl SporeParser {
         }
 
         let spore_id = parse_hex_to_bytes(&type_script.args);
-        let type_script_hash = ScriptParser::compute_script_hash(type_script)
-            .unwrap_or_else(|e| panic!("spore type script hash failed: {}", e));
-        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock)
-            .unwrap_or_else(|e| panic!("spore lock script hash failed: {}", e));
+        let type_script_hash = ScriptParser::compute_script_hash(type_script);
+        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock);
 
         if is_did {
             return Some(ParsedSporeCell {
@@ -144,10 +142,8 @@ impl SporeParser {
         let cluster_data = Self::parse_cluster_data(&data)?;
 
         let cluster_id = parse_hex_to_bytes(&type_script.args);
-        let type_script_hash = ScriptParser::compute_script_hash(type_script)
-            .unwrap_or_else(|e| panic!("spore type script hash failed: {}", e));
-        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock)
-            .unwrap_or_else(|e| panic!("spore lock script hash failed: {}", e));
+        let type_script_hash = ScriptParser::compute_script_hash(type_script);
+        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock);
 
         Some(ParsedClusterCell {
             cluster_id,

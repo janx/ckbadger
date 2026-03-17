@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
@@ -24,14 +24,6 @@ pub struct CellParser;
 
 impl CellParser {
     pub fn parse_outputs(tx: &TransactionView) -> Result<Vec<ParsedCell>> {
-        if tx.outputs.len() != tx.outputs_data.len() {
-            bail!(
-                "transaction outputs mismatch: tx_hash={}, outputs={}, outputs_data={}",
-                tx.hash,
-                tx.outputs.len(),
-                tx.outputs_data.len()
-            );
-        }
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -43,15 +35,15 @@ impl CellParser {
         let data = parse_hex_to_bytes(data_hex);
         let data_hash = ScriptParser::compute_data_hash(&data);
 
-        let lock_script_hash = ScriptParser::compute_script_hash(&output.lock)?;
+        let lock_script_hash = ScriptParser::compute_script_hash(&output.lock);
 
         let (type_code_hash, type_hash_type, type_args, type_script_hash) =
             if let Some(ref type_script) = output.type_ {
                 (
                     Some(parse_hex_to_bytes(&type_script.code_hash)),
-                    Some(ScriptParser::hash_type_to_i16(&type_script.hash_type)?),
+                    Some(ScriptParser::hash_type_to_i16(&type_script.hash_type)),
                     Some(parse_hex_to_bytes(&type_script.args)),
-                    Some(ScriptParser::compute_script_hash(type_script)?),
+                    Some(ScriptParser::compute_script_hash(type_script)),
                 )
             } else {
                 (None, None, None, None)
@@ -60,7 +52,7 @@ impl CellParser {
         Ok(ParsedCell {
             capacity: super::parse_capacity_i64(&output.capacity),
             lock_code_hash: parse_hex_to_bytes(&output.lock.code_hash),
-            lock_hash_type: ScriptParser::hash_type_to_i16(&output.lock.hash_type)?,
+            lock_hash_type: ScriptParser::hash_type_to_i16(&output.lock.hash_type),
             lock_args: parse_hex_to_bytes(&output.lock.args),
             lock_script_hash,
             type_code_hash,
@@ -208,17 +200,6 @@ mod tests {
         };
         let parsed = CellParser::parse_outputs(&tx).unwrap();
         assert!(parsed.is_empty());
-    }
-
-    #[test]
-    fn test_parse_outputs_errors_on_outputs_data_length_mismatch() {
-        let mut tx = create_test_tx();
-        tx.outputs_data.pop();
-        let err = match CellParser::parse_outputs(&tx) {
-            Ok(_) => panic!("expected outputs/data length mismatch error"),
-            Err(err) => err,
-        };
-        assert!(err.to_string().contains("transaction outputs mismatch"));
     }
 
     #[test]

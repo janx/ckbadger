@@ -107,8 +107,7 @@ impl DaoParser {
         }
         let state = Self::parse_dao_state(&data)
             .unwrap_or_else(|| panic!("DAO state parse failed with validated 8-byte data"));
-        let lock_script_hash = ScriptParser::compute_script_hash(&output.lock)
-            .unwrap_or_else(|e| panic!("DAO lock script hash failed: {}", e));
+        let lock_script_hash = ScriptParser::compute_script_hash(&output.lock);
         let deposit_block_number = Self::parse_deposit_block_number(&data);
 
         Some(ParsedDaoCell {

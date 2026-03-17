@@ -221,27 +221,9 @@ fn startup_header_gap_fail_fast_message(
     )
 }
 
-pub(super) fn mempool_short_tx_id(tx_hash: &str) -> Result<&str> {
-    let raw_hash = tx_hash.strip_prefix("0x").ok_or_else(|| {
-        anyhow!(
-            "mempool tx hash missing 0x prefix in proposal cache: tx_hash={}",
-            tx_hash
-        )
-    })?;
-    if raw_hash.len() < 20 {
-        bail!(
-            "mempool tx hash too short in proposal cache: tx_hash={}, hex_len={}",
-            tx_hash,
-            raw_hash.len()
-        );
-    }
-    if !raw_hash.is_ascii() {
-        bail!(
-            "mempool tx hash must be ASCII hex in proposal cache: tx_hash={}",
-            tx_hash
-        );
-    }
-    Ok(&raw_hash[..20])
+pub(super) fn mempool_short_tx_id(tx_hash: &str) -> &str {
+    // Node-provided tx hashes are always "0x" + 64 hex chars; skip prefix, take first 20.
+    &tx_hash[2..22]
 }
 
 const STARTUP_CONTINUITY_WINDOW_BLOCKS: i64 = 512;
@@ -1186,13 +1168,11 @@ mod tests {
     }
 
     #[test]
-    fn test_mempool_short_tx_id_validates_shape() {
+    fn test_mempool_short_tx_id_extracts_first_20_hex_chars() {
         assert_eq!(
-            mempool_short_tx_id("0x1234567890abcdef123456").unwrap(),
+            mempool_short_tx_id("0x1234567890abcdef123456"),
             "1234567890abcdef1234"
         );
-        assert!(mempool_short_tx_id("1234").is_err());
-        assert!(mempool_short_tx_id("0x1234").is_err());
     }
 
     #[test]
