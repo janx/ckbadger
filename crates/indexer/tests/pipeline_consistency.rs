@@ -7,6 +7,13 @@
 
 use ckbadger_indexer::db::BatchWriter;
 use ckbadger_indexer::parser::cell::ParsedCell;
+use ckbadger_indexer::parser::CellParser;
+use ckbadger_indexer::parser::udt::SUDT_CODE_HASH;
+use ckbadger_indexer::rpc::{
+    BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
+    TransactionView,
+};
+use ckbadger_indexer::sync::build_facts_arena_snapshot_for_test;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::LiveCellInfo;
 use ckbadger_store::CkbadgerStore;
@@ -48,6 +55,90 @@ fn occupied_capacity_from_cell(cell: &ParsedCell) -> i64 {
         .map(|args| 32 + 1 + args.len() as i64)
         .unwrap_or(0);
     (8 + lock_script_size + type_script_size + i64::from(cell.data_size)) * 100_000_000
+}
+
+fn facts_fixture_lock_script() -> Script {
+    Script {
+        code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+            .to_string(),
+        hash_type: "type".to_string(),
+        args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
+    }
+}
+
+fn facts_fixture_header(number: u64) -> HeaderView {
+    HeaderView {
+        version: "0x0".to_string(),
+        compact_target: "0x1a08a97e".to_string(),
+        timestamp: "0x18c7b3b2b00".to_string(),
+        number: format!("0x{number:x}"),
+        epoch: "0x7080006000028".to_string(),
+        parent_hash: format!("0x{}", "11".repeat(32)),
+        transactions_root: format!("0x{}", "22".repeat(32)),
+        proposals_hash: format!("0x{}", "33".repeat(32)),
+        extra_hash: format!("0x{}", "44".repeat(32)),
+        dao: format!("0x{}", "00".repeat(32)),
+        nonce: "0x1".to_string(),
+        hash: format!("0x{}", "55".repeat(32)),
+    }
+}
+
+fn facts_fixture_block() -> BlockResponseWithCycles {
+    let tx0 = TransactionView {
+        hash: format!("0x{}", "aa".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: facts_fixture_lock_script(),
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let tx1 = TransactionView {
+        hash: format!("0x{}", "bb".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "cc".repeat(32)),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: facts_fixture_lock_script(),
+            type_: Some(Script {
+                code_hash: SUDT_CODE_HASH.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", "12".repeat(32)),
+            }),
+        }],
+        outputs_data: vec![format!("0x{}", hex::encode(42u128.to_le_bytes()))],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    BlockResponseWithCycles {
+        block: BlockView {
+            header: facts_fixture_header(14_000_123),
+            uncles: vec![],
+            transactions: vec![tx0, tx1],
+            proposals: vec![],
+        },
+        cycles: None,
+    }
 }
 
 fn precomputed_infos_for_insert(
@@ -668,4 +759,31 @@ fn test_skip_cell_indices_omits_index_entries() {
         by_type_code.is_empty(),
         "type_code index should be empty when skipped"
     );
+}
+
+#[test]
+fn facts_arena_snapshot_matches_direct_cell_math() {
+    let block = facts_fixture_block();
+    let snapshot = build_facts_arena_snapshot_for_test(std::slice::from_ref(&block)).unwrap();
+
+    let expected_occupied: Vec<i64> = block
+        .block
+        .transactions
+        .iter()
+        .flat_map(|tx| {
+            CellParser::parse_outputs(tx)
+                .unwrap()
+                .into_iter()
+                .map(|cell| occupied_capacity_from_cell(&cell))
+                .collect::<Vec<i64>>()
+        })
+        .collect();
+    let actual_occupied: Vec<i64> = snapshot
+        .cells
+        .iter()
+        .map(|cell| cell.occupied_capacity)
+        .collect();
+
+    assert_eq!(snapshot.tx_count, 2);
+    assert_eq!(actual_occupied, expected_occupied);
 }

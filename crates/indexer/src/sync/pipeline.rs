@@ -11,11 +11,16 @@ use tracing::{debug, error, info, warn};
 
 use ckbadger_store::types::{LiveCellInfo, ObjectTypeIndex, PositionedCellInfo, SporeTypeIndex};
 
+use crate::parser::block::BlockParser;
+use crate::parser::cell::{CellParser, ParsedCell};
+use crate::parser::dao::DaoParser;
+use crate::parser::transaction::TransactionParser;
+use crate::parser::udt::UdtStandard;
 use crate::parser::{
     analyze_spore_media_profile,
     dotbit::{may_contain_das_witness, parse_dotbit_witness_bundle, DotbitWitnessBundle},
     DotbitParser, MnftParser, ParsedClusterCell, ParsedDotbitAccountOutput, ParsedMnftClass,
-    ParsedMnftIssuer, ParsedMnftToken, ParsedSporeCell, SporeParser,
+    ParsedMnftIssuer, ParsedMnftToken, ParsedSporeCell, SporeParser, UdtParser,
 };
 use crate::rpc::BlockResponseWithCycles;
 use crate::runtime_diag::read_cgroup_memory_snapshot;
@@ -26,6 +31,8 @@ use rayon::prelude::*;
 
 use super::adaptive::*;
 use super::batch::*;
+use super::bulk_build::facts::{CellFacts, CellSemanticTag, FactsArena};
+use super::bulk_build::interner::IdentityInterner;
 use super::checked_tx_count;
 use super::dao_helpers::*;
 use super::diagnostics::*;
@@ -75,6 +82,96 @@ struct ParserBatchPerfSample {
     nft_dotbit_witness_parse_ms: f64,
     nft_output_scan_ms: f64,
     nft_input_scan_ms: f64,
+}
+
+fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemanticTag {
+    let Some(type_code_hash) = cell.type_code_hash.as_deref() else {
+        return CellSemanticTag::Plain;
+    };
+
+    if DaoParser::is_dao_code_hash(type_code_hash) {
+        return CellSemanticTag::Dao;
+    }
+
+    if let Some(hash_type) = cell.type_hash_type {
+        if let Some(standard) = UdtParser::is_udt_code_hash_bytes(type_code_hash, hash_type) {
+            return match standard {
+                UdtStandard::Sudt => CellSemanticTag::Sudt,
+                UdtStandard::Xudt => CellSemanticTag::Xudt,
+            };
+        }
+    }
+
+    if DotbitParser::is_account_cell_type_script(type_code_hash) {
+        return CellSemanticTag::Dotbit;
+    }
+
+    if MnftParser::is_issuer_type_script(type_code_hash)
+        || MnftParser::is_class_type_script(type_code_hash)
+        || MnftParser::is_token_type_script(type_code_hash)
+    {
+        return CellSemanticTag::Mnft;
+    }
+
+    if SporeParser::is_cluster_type_script(type_code_hash) {
+        return CellSemanticTag::Cluster;
+    }
+
+    if SporeParser::is_spore_type_script(type_code_hash) {
+        return CellSemanticTag::Spore;
+    }
+
+    CellSemanticTag::Plain
+}
+
+pub(crate) fn build_bulk_facts_arena_from_blocks(
+    blocks: &[BlockResponseWithCycles],
+    interner: &mut IdentityInterner,
+) -> Result<FactsArena> {
+    let mut arena = FactsArena::default();
+
+    for block in blocks {
+        let _parsed_block = BlockParser::parse(&block.block)?;
+        arena.blocks.push(super::bulk_build::facts::BlockFacts);
+
+        for tx in &block.block.transactions {
+            crate::parser::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
+            let parsed_tx = TransactionParser::parse(tx)?;
+            let parsed_cells = CellParser::parse_outputs(tx)?;
+            arena.txs.push(super::bulk_build::facts::TxFacts);
+
+            for (output_index, cell) in parsed_cells.iter().enumerate() {
+                let output_index_i16 =
+                    checked_usize_to_i16(output_index, "bulk facts arena output index")?;
+                arena.cells.push(CellFacts {
+                    lock_script_hash_id: interner.intern_bytes(cell.lock_script_hash.clone()),
+                    lock_code_hash_id: interner.intern_bytes(cell.lock_code_hash.clone()),
+                    type_script_hash_id: cell
+                        .type_script_hash
+                        .clone()
+                        .map(|value| interner.intern_bytes(value)),
+                    type_code_hash_id: cell
+                        .type_code_hash
+                        .clone()
+                        .map(|value| interner.intern_bytes(value)),
+                    occupied_capacity: occupied_capacity_shannons_i64(
+                        cell.lock_args.len(),
+                        cell.type_args.as_ref().map(|args| args.len()),
+                        cell.data_size,
+                    ),
+                    udt_amount: parse_parsed_cell_udt_amount(
+                        cell,
+                        &parsed_tx.hash,
+                        output_index_i16,
+                        None,
+                    )?,
+                    semantic_tag: classify_bulk_cell_semantic_tag(cell),
+                });
+            }
+        }
+    }
+
+    Ok(arena)
 }
 
 fn parser_cache_committed_tip_from_sync_tip(sync_tip: i64) -> i64 {
@@ -2831,14 +2928,20 @@ impl Indexer {
 mod tests {
     use chrono::{TimeZone, Utc};
 
+    use super::super::bulk_build::facts::CellSemanticTag;
+    use super::super::bulk_build::interner::IdentityInterner;
     use super::super::types::TxData;
     use super::*;
     use crate::parser::block::ParsedBlock;
     use crate::parser::cell::CellParser;
     use crate::parser::dotbit::{parse_dotbit_witness_bundle, DOTBIT_ACCOUNT_CELL_TYPE_ID};
     use crate::parser::mnft::MNFT_TOKEN_CODE_HASH;
+    use crate::parser::udt::SUDT_CODE_HASH;
     use crate::parser::transaction::TransactionParser;
-    use crate::rpc::{CellDep, CellInput, CellOutput, OutPoint, Script, TransactionView};
+    use crate::rpc::{
+        BlockResponseWithCycles, BlockView, CellDep, CellInput, CellOutput, HeaderView, OutPoint,
+        Script, TransactionView,
+    };
 
     fn create_lock_script() -> Script {
         Script {
@@ -3097,6 +3200,106 @@ mod tests {
             transactions_root: vec![0; 32],
             proposals: Vec::new(),
         }
+    }
+
+    fn create_facts_fixture_header(number: u64) -> HeaderView {
+        HeaderView {
+            version: "0x0".to_string(),
+            compact_target: "0x1a08a97e".to_string(),
+            timestamp: "0x18c7b3b2b00".to_string(),
+            number: format!("0x{number:x}"),
+            epoch: "0x7080006000028".to_string(),
+            parent_hash: format!("0x{}", "11".repeat(32)),
+            transactions_root: format!("0x{}", "22".repeat(32)),
+            proposals_hash: format!("0x{}", "33".repeat(32)),
+            extra_hash: format!("0x{}", "44".repeat(32)),
+            dao: format!("0x{}", "00".repeat(32)),
+            nonce: "0x1".to_string(),
+            hash: format!("0x{}", "55".repeat(32)),
+        }
+    }
+
+    fn create_facts_fixture_block_with_two_txs() -> BlockResponseWithCycles {
+        let tx0 = TransactionView {
+            hash: format!("0x{}", "aa".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", "00".repeat(32)),
+                    index: "0xffffffff".to_string(),
+                },
+            }],
+            outputs: vec![CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: create_lock_script(),
+                type_: None,
+            }],
+            outputs_data: vec!["0x".to_string()],
+            witnesses: vec!["0x".to_string()],
+        };
+        let tx1 = TransactionView {
+            hash: format!("0x{}", "bb".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", "cc".repeat(32)),
+                    index: "0x0".to_string(),
+                },
+            }],
+            outputs: vec![CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: create_lock_script(),
+                type_: Some(Script {
+                    code_hash: SUDT_CODE_HASH.to_string(),
+                    hash_type: "type".to_string(),
+                    args: format!("0x{}", "12".repeat(32)),
+                }),
+            }],
+            outputs_data: vec![format!("0x{}", hex::encode(42u128.to_le_bytes()))],
+            witnesses: vec!["0x".to_string()],
+        };
+
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: create_facts_fixture_header(14_000_123),
+                uncles: vec![],
+                transactions: vec![tx0, tx1],
+                proposals: vec![],
+            },
+            cycles: None,
+        }
+    }
+
+    #[test]
+    fn build_facts_arena_captures_exact_cell_semantics() {
+        let blocks = vec![create_facts_fixture_block_with_two_txs()];
+        let mut interner = IdentityInterner::default();
+        let arena = build_bulk_facts_arena_from_blocks(&blocks, &mut interner).expect("facts");
+
+        assert_eq!(arena.txs.len(), 2);
+        assert!(arena.cells.iter().any(|cell| cell.occupied_capacity > 0));
+        assert!(
+            arena.cells.iter().all(|cell| {
+                matches!(
+                    cell.semantic_tag,
+                    CellSemanticTag::Plain
+                        | CellSemanticTag::Dao
+                        | CellSemanticTag::Sudt
+                        | CellSemanticTag::Xudt
+                        | CellSemanticTag::Dotbit
+                        | CellSemanticTag::Mnft
+                        | CellSemanticTag::Spore
+                        | CellSemanticTag::Cluster
+                )
+            }),
+            "all cells must have semantic tags"
+        );
     }
 
     #[test]
