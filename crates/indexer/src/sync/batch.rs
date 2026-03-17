@@ -6864,16 +6864,28 @@ mod tests {
         )
         .unwrap();
 
-        // Verify the consumed delta uses same-batch info (capacity=200), not cache (capacity=999)
-        let lock_consume_delta =
-            changes
-                .iter()
-                .find(|((ref_hash, _, _, is_type), (_, live_delta, _, _, _, _))| {
-                    ref_hash == &reference_hash_from_same_batch && !is_type && *live_delta == -1
-                });
+        // If cache were used, reference_hash_from_cache would appear in changes.
+        // Since created_map takes priority, only reference_hash_from_same_batch should appear.
+        let has_cache_ref = changes
+            .keys()
+            .any(|(ref_hash, _, _, _)| ref_hash == &reference_hash_from_cache);
         assert!(
-            lock_consume_delta.is_some(),
-            "consumed delta should use same-batch reference_hash, not cache"
+            !has_cache_ref,
+            "cache reference_hash should NOT appear in changes — created_map must take priority"
+        );
+
+        // The same-batch reference hash must be present (creation + consumption both use it).
+        // Net live_delta is 0 (created +1, consumed -1), confirming consumption used created_map.
+        let version_hash = reference_hash_from_same_batch.clone(); // hash_type=0 → version = reference
+        let net = changes.get(&(reference_hash_from_same_batch, 0, Some(version_hash), false));
+        assert!(
+            net.is_some(),
+            "same-batch reference_hash must appear in changes"
+        );
+        let (_, live_delta, _, _, _, _) = net.unwrap();
+        assert_eq!(
+            *live_delta, 0,
+            "net live_delta should be 0 (created +1, consumed -1 from same batch)"
         );
     }
 
