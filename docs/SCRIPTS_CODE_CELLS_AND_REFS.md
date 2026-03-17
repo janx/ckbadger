@@ -351,6 +351,23 @@ Wrong because:
 - labels are optional
 - unlabeled versions must still be fully queryable and resolvable from chain-derived indexes
 
+## Script Resolution Implementation
+
+Script resolution (`reference -> version -> code cell instances`) is performed at API query time
+using the existing cell indexes rather than via dedicated indexer-time CFs:
+
+- `cell_by_data_hash` — resolves data-hash references to code cell instances
+- `cell_by_type` / `cell_by_type_code` — resolves type-hash references to code cell instances
+- `script_versions` / `script_versions_by_label` — version and label metadata written by
+  `label_import`
+
+The indexer does not maintain per-cell version attribution CFs or canonical reference CFs. All
+resolution that was previously done at index time is now done at query time. This means:
+
+- historical attribution for `type` references is resolved from current live cell state at the time
+  of the API query, not from a precomputed indexer snapshot
+- version identity (`H(script_code)`) is always derived from cell data at query time
+
 ## Practical Implications For ckbadger
 
 The backend should own correctness with this chain:
