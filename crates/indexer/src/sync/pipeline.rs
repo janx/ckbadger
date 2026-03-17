@@ -31,7 +31,9 @@ use rayon::prelude::*;
 
 use super::adaptive::*;
 use super::batch::*;
-use super::bulk_build::facts::{CellFacts, CellSemanticTag, FactsArena};
+use super::bulk_build::facts::{
+    BlockFacts, CellFacts, CellSemanticTag, FactsArena, OutPointKey, TxFacts,
+};
 use super::bulk_build::interner::IdentityInterner;
 use super::checked_tx_count;
 use super::dao_helpers::*;
@@ -131,19 +133,60 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
     let mut arena = FactsArena::default();
 
     for block in blocks {
-        let _parsed_block = BlockParser::parse(&block.block)?;
-        arena.blocks.push(super::bulk_build::facts::BlockFacts);
+        let parsed_block = BlockParser::parse(&block.block)?;
+        let block_tx_start = arena.txs.len();
 
-        for tx in &block.block.transactions {
+        for (tx_position, tx) in block.block.transactions.iter().enumerate() {
             crate::parser::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
             let parsed_tx = TransactionParser::parse(tx)?;
+            let parsed_inputs = TransactionParser::parse_inputs(tx)?;
             let parsed_cells = CellParser::parse_outputs(tx)?;
-            arena.txs.push(super::bulk_build::facts::TxFacts);
+            let tx_index = i32::try_from(tx_position).map_err(|_| {
+                anyhow!(
+                    "bulk facts tx index exceeds i32 range: block={} tx_position={}",
+                    parsed_block.number,
+                    tx_position
+                )
+            })?;
+            let output_start = arena.cells.len();
+            let input_outpoints = if parsed_tx.is_cellbase {
+                Vec::new()
+            } else {
+                parsed_inputs
+                    .iter()
+                    .enumerate()
+                    .map(|(input_position, input)| {
+                        let output_index =
+                            u32::try_from(input.previous_output_index).map_err(|_| {
+                                anyhow!(
+                                    "negative previous_output_index in bulk facts: block={} tx=0x{} tx_index={} input_index={} previous_output_index={}",
+                                    parsed_block.number,
+                                    hex::encode(parsed_tx.hash),
+                                    tx_index,
+                                    input_position,
+                                    input.previous_output_index
+                                )
+                            })?;
+                        Ok(OutPointKey::new(input.previous_tx_hash, output_index))
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            };
 
             for (output_index, cell) in parsed_cells.iter().enumerate() {
                 let output_index_i16 =
                     checked_usize_to_i16(output_index, "bulk facts arena output index")?;
                 arena.cells.push(CellFacts {
+                    outpoint: OutPointKey::new(
+                        parsed_tx.hash,
+                        u32::try_from(output_index).unwrap_or_else(|_| {
+                            panic!(
+                                "bulk facts arena output index {} exceeds u32::MAX",
+                                output_index
+                            )
+                        }),
+                    ),
+                    created_at_block: parsed_block.number,
+                    capacity: cell.capacity,
                     lock_script_hash_id: interner.intern_bytes(cell.lock_script_hash.clone()),
                     lock_code_hash_id: interner.intern_bytes(cell.lock_code_hash.clone()),
                     type_script_hash_id: cell
@@ -159,6 +202,7 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
                         cell.type_args.as_ref().map(|args| args.len()),
                         cell.data_size,
                     ),
+                    data_size: cell.data_size,
                     udt_amount: parse_parsed_cell_udt_amount(
                         cell,
                         &parsed_tx.hash,
@@ -168,7 +212,21 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
                     semantic_tag: classify_bulk_cell_semantic_tag(cell),
                 });
             }
+
+            arena.txs.push(TxFacts {
+                hash: parsed_tx.hash,
+                block_number: parsed_block.number,
+                tx_index,
+                is_cellbase: parsed_tx.is_cellbase,
+                input_outpoints,
+                output_range: output_start..arena.cells.len(),
+            });
         }
+
+        arena.blocks.push(BlockFacts {
+            number: parsed_block.number,
+            tx_range: block_tx_start..arena.txs.len(),
+        });
     }
 
     Ok(arena)
