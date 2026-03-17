@@ -420,7 +420,12 @@ impl Indexer {
         let parse_tx_pending_txs = Arc::new(AtomicU64::new(0));
         let parser_exit_reason = Arc::new(std::sync::Mutex::new(None::<String>));
         let fetcher_exit_reason = Arc::new(std::sync::Mutex::new(None::<String>));
-        let committed_tip_for_cache = Arc::new(AtomicI64::new(self.repo.get_sync_tip().await?.0));
+        // Subtract 1 so that cells at the sync tip block are retained in parser
+        // caches until the writer actually commits them in this run.  For a fresh
+        // DB (tip=0) this gives -1, keeping genesis block cells in parser_version_cache
+        // instead of immediately pruning them via the `block_number > committed` check.
+        let committed_tip_for_cache =
+            Arc::new(AtomicI64::new(self.repo.get_sync_tip().await?.0 - 1));
         self.pipeline_perf
             .set_queue_capacities(self.config.pipeline_buffer, self.config.pipeline_buffer);
 
