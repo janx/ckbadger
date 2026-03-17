@@ -85,6 +85,16 @@ pub(crate) fn resolve_dotbit_account_id_for_outpoint(
     })
 }
 
+pub(crate) fn resolve_dotbit_account_id_from_type_args_or_fallback(
+    type_args: Option<&[u8]>,
+    fallback_account_id: Option<Vec<u8>>,
+) -> Option<Vec<u8>> {
+    type_args
+        .filter(|args| args.len() == 20 && !args.iter().all(|&b| b == 0))
+        .map(|args| args.to_vec())
+        .or(fallback_account_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +194,38 @@ mod tests {
         let resolved =
             resolve_dotbit_account_id_for_outpoint(None, &tx_hash, 3, &batch_dotbit_outpoints);
         assert_eq!(resolved, Some(batch_account));
+    }
+
+    #[test]
+    fn test_resolve_dotbit_account_id_from_type_args_or_fallback_prefers_type_args() {
+        let type_args = [0x66; 20];
+        let fallback = vec![0x77; 20];
+
+        let resolved = resolve_dotbit_account_id_from_type_args_or_fallback(
+            Some(type_args.as_slice()),
+            Some(fallback),
+        );
+        assert_eq!(resolved, Some(type_args.to_vec()));
+    }
+
+    #[test]
+    fn test_resolve_dotbit_account_id_from_type_args_or_fallback_uses_fallback_when_missing() {
+        let fallback = vec![0x88; 20];
+
+        let resolved =
+            resolve_dotbit_account_id_from_type_args_or_fallback(None, Some(fallback.clone()));
+        assert_eq!(resolved, Some(fallback));
+    }
+
+    #[test]
+    fn test_resolve_dotbit_account_id_from_type_args_or_fallback_rejects_zero_type_args() {
+        let zero_args = [0x00; 20];
+        let fallback = vec![0x99; 20];
+
+        let resolved = resolve_dotbit_account_id_from_type_args_or_fallback(
+            Some(zero_args.as_slice()),
+            Some(fallback.clone()),
+        );
+        assert_eq!(resolved, Some(fallback));
     }
 }

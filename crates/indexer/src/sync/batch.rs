@@ -66,6 +66,36 @@ pub(super) fn collect_missing_input_outpoints<T>(
         .collect()
 }
 
+fn wait_for_bulk_cells_commit_signal(cells_ready_rx: std::sync::mpsc::Receiver<()>) -> Result<()> {
+    cells_ready_rx.recv().map_err(|_| {
+        anyhow!("cells commit phase ended before T6b commit could observe cells readiness")
+    })
+}
+
+fn resolve_live_dotbit_account_id_for_consume(
+    key: &(Vec<u8>, i16),
+    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    dotbit_map: &HashMap<(Vec<u8>, i16), Vec<u8>>,
+) -> Option<Vec<u8>> {
+    match input_cell_info
+        .get(key)
+        .or_else(|| batch_cell_infos.get(key))
+    {
+        Some(info) => info
+            .type_code_hash
+            .as_deref()
+            .filter(|tc| DotbitParser::is_account_cell_type_script(tc))
+            .and_then(|_| {
+                resolve_dotbit_account_id_from_type_args_or_fallback(
+                    info.type_args.as_deref(),
+                    dotbit_map.get(key).cloned(),
+                )
+            }),
+        None => dotbit_map.get(key).cloned(),
+    }
+}
+
 /// Resolve consumed data_size and used_capacity from input cell info maps.
 /// Fails fast if any input is unresolved — at this point all inputs should be resolved.
 fn resolve_consumed_stats(
@@ -1877,6 +1907,7 @@ impl Indexer {
                     marker_value.as_bytes(),
                 )?;
             }
+            let (cells_ready_tx, cells_ready_rx) = std::sync::mpsc::channel();
 
             let tt;
             (
@@ -1905,6 +1936,7 @@ impl Indexer {
                     // CFs: CELLS (append-only), LIVE_CELLS, CONSUMED_CELLS (domain)
                     let h1 = s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
+                        let cells_ready_tx = cells_ready_tx;
                         let mut domain_batch = StoreBatch::new(store);
                         let mut cells_batch = StoreBatch::new(append_only_store);
                         if !all_cells.is_empty() {
@@ -1941,6 +1973,9 @@ impl Indexer {
                             last_block,
                             domain_batch,
                         )?;
+                        // If the receiver is already gone, T6b has already failed.
+                        // Preserve that original error instead of replacing it here.
+                        let _ = cells_ready_tx.send(());
                         Ok((
                             t.elapsed().as_secs_f64() * 1000.0,
                             commit_ms + cells_commit_ms,
@@ -2766,6 +2801,10 @@ impl Indexer {
                             anyhow!("nft activity delta overflow in T6b pipeline")
                         })?;
                     }
+                    // DotBit identities become user-visible only after T1 has committed
+                    // append-only payloads and live markers, otherwise API can observe
+                    // live `.bit` entries whose backing cells are not readable yet.
+                    wait_for_bulk_cells_commit_signal(cells_ready_rx)?;
                     let mut commit_ms =
                         commit_phase_no_wal("T6b_mnft_dotbit", first_block, last_block, batch)?;
                     if !activity_batch.is_empty() {
@@ -4221,7 +4260,15 @@ impl Indexer {
                                 }
                             }
                         }
-                        if let Some(account_id) = dotbit_map.get(&key) {
+                        // Match bulk precompute semantics: if resolved input metadata exists,
+                        // only treat it as dotbit when the input cell itself is dotbit.
+                        let dotbit_account_id = resolve_live_dotbit_account_id_for_consume(
+                            &key,
+                            &input_cell_info,
+                            &batch_cell_infos,
+                            &dotbit_map,
+                        );
+                        if let Some(account_id) = dotbit_account_id.as_ref() {
                             let latest_create_order =
                                 batch_dotbit_latest_create_order.get(account_id).copied();
                             if should_consume_dotbit_account(
@@ -5205,6 +5252,8 @@ impl Indexer {
 mod tests {
     use super::*;
     use ckbadger_store::LiveCellInfo;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     fn dummy_live_cell_info() -> LiveCellInfo {
         LiveCellInfo {
@@ -5238,6 +5287,86 @@ mod tests {
             tx_size: 1,
             cycles: None,
         }
+    }
+
+    #[test]
+    fn test_wait_for_bulk_cells_commit_signal_blocks_until_cells_are_ready() {
+        let (tx, rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            wait_for_bulk_cells_commit_signal(rx).expect("cells readiness wait should succeed");
+            done_tx.send(()).expect("done signal");
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "dotbit-visible bulk commit must stay blocked until cells are committed"
+        );
+
+        tx.send(()).expect("cells ready signal");
+
+        done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("wait should unblock after cells are committed");
+    }
+
+    #[test]
+    fn test_wait_for_bulk_cells_commit_signal_errors_when_cells_phase_exits_early() {
+        let (_tx, rx) = mpsc::channel::<()>();
+        drop(_tx);
+
+        let err = wait_for_bulk_cells_commit_signal(rx).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("cells commit phase ended before T6b commit could observe cells readiness"));
+    }
+
+    #[test]
+    fn test_resolve_live_dotbit_account_id_for_consume_skips_outpoint_fallback_when_metadata_is_not_dotbit(
+    ) {
+        let key = (vec![0x11; 32], 0i16);
+        let mut live_info = dummy_live_cell_info();
+        live_info.type_code_hash = Some(crate::rpc::parse_hex_to_bytes(
+            crate::parser::dao::DAO_CODE_HASH,
+        ));
+        let info = PositionedCellInfo::new(live_info, 1);
+
+        let mut input_cell_info = HashMap::new();
+        input_cell_info.insert(key.clone(), info);
+
+        let mut dotbit_map = HashMap::new();
+        dotbit_map.insert(key.clone(), vec![0x22; 20]);
+
+        let resolved = resolve_live_dotbit_account_id_for_consume(
+            &key,
+            &input_cell_info,
+            &HashMap::new(),
+            &dotbit_map,
+        );
+
+        assert!(
+            resolved.is_none(),
+            "live sync must not consume dotbit from stale outpoint index when metadata resolves to a non-dotbit cell"
+        );
+    }
+
+    #[test]
+    fn test_resolve_live_dotbit_account_id_for_consume_uses_outpoint_fallback_when_metadata_is_missing(
+    ) {
+        let key = (vec![0x33; 32], 1i16);
+        let expected_account_id = vec![0x44; 20];
+        let mut dotbit_map = HashMap::new();
+        dotbit_map.insert(key.clone(), expected_account_id.clone());
+
+        let resolved = resolve_live_dotbit_account_id_for_consume(
+            &key,
+            &HashMap::new(),
+            &HashMap::new(),
+            &dotbit_map,
+        );
+
+        assert_eq!(resolved, Some(expected_account_id));
     }
 
     #[test]

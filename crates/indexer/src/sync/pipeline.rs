@@ -304,12 +304,10 @@ fn run_nft_precompute(
                     if let Some(ref tc) = cell_info.type_code_hash {
                         // DotBit check (existing)
                         if DotbitParser::is_account_cell_type_script(tc) {
-                            let account_id = cell_info
-                                .type_args
-                                .as_ref()
-                                .filter(|args| args.len() == 20 && !args.iter().all(|&b| b == 0))
-                                .cloned()
-                                .or_else(|| dotbit_outpoint_fallback.get(&key).cloned());
+                            let account_id = resolve_dotbit_account_id_from_type_args_or_fallback(
+                                cell_info.type_args.as_deref(),
+                                dotbit_outpoint_fallback.get(&key).cloned(),
+                            );
                             if let Some(account_id) = account_id {
                                 let latest_create_order =
                                     batch_dotbit_latest_create_order.get(&account_id).copied();
