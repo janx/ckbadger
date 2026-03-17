@@ -10,8 +10,8 @@ use std::sync::Arc;
 use crate::response::{ok, ApiError, ApiResult};
 use crate::routes::tx_lookup::fetch_transaction_lookup;
 use crate::utils::{
-    address_to_lock_script_hash, is_ckb_address, is_known_script_name,
-    resolve_script_version_by_reference, CurrentScriptVersionResolution,
+    address_to_lock_script_hash, is_ckb_address, is_known_script_name, resolve_script_by_hash,
+    CurrentScriptVersionResolution,
 };
 use crate::warmup::{
     CachedAssetEntry, CachedScriptEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN,
@@ -401,13 +401,8 @@ async fn search(
             }
 
             if scope_allows(scope, &[SearchScope::Script]) {
-                match resolve_script_version_by_reference(
-                    &state.store,
-                    &state.append_only_store,
-                    &hash_bytes,
-                    None,
-                )
-                .map_err(|e| ApiError::internal(e.to_string()))?
+                match resolve_script_by_hash(&state.store, &state.append_only_store, &hash_bytes)
+                    .map_err(|e| ApiError::internal(e.to_string()))?
                 {
                     CurrentScriptVersionResolution::Resolved(resolved) => {
                         let name = resolved
@@ -435,27 +430,7 @@ async fn search(
                             match_kind: "exact_hash".to_string(),
                         });
                     }
-                    CurrentScriptVersionResolution::NotFound => {
-                        if let Some(version) = state
-                            .store
-                            .get_script_version(&hash_bytes)
-                            .map_err(|e| ApiError::internal(e.to_string()))?
-                        {
-                            let label = version
-                                .name
-                                .as_deref()
-                                .filter(|name| is_known_script_name(Some(name)))
-                                .map(|name| format!("Script {}", name))
-                                .unwrap_or_else(|| "Script".to_string());
-                            results.push(SearchResult {
-                                result_type: "script".to_string(),
-                                id: hash_query.clone(),
-                                label,
-                                url: format!("/script/{}", hash_query),
-                                match_kind: "exact_hash".to_string(),
-                            });
-                        }
-                    }
+                    CurrentScriptVersionResolution::NotFound => {}
                 }
             }
 

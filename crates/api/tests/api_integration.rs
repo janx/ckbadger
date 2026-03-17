@@ -22,8 +22,8 @@ use ckbadger_store::types::{
     IdentityEntry, IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats,
     ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry,
     ObjectExtra, ObjectStandard, OwnerActivityDelta, ProtocolAction, ReorgEvent, ScriptDailyDelta,
-    ScriptInfo, ScriptReferenceInfo, ScriptVersionInfo, SporeDailyDelta, SporeMediaProfile,
-    TokenDailyDelta, TokenInfo, TxActivityBundle, TxIndexEntry, TypeCallEntry,
+    ScriptInfo, ScriptVersionInfo, SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo,
+    TxActivityBundle, TxIndexEntry, TypeCallEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -2884,22 +2884,25 @@ async fn test_script_lookup_and_code_cell_resolve_data_reference() {
     let code_cell_tx_hash = vec![0xe2; 32];
     let code_cell_output_index = 1i16;
 
+    store
+        .put_script_info_direct(
+            &version_hash,
+            &ScriptInfo {
+                code_hash: version_hash.clone(),
+                hash_type: 0,
+                name: Some("Default Lock".to_string()),
+                lock_cells_count: 10,
+                lock_live_cells_count: 10,
+                lock_capacity_sum: 1_000_000_000,
+                lock_live_capacity_sum: 1_000_000_000,
+                lock_used_capacity_sum: 600_000_000,
+                lock_live_used_capacity_sum: 600_000_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_script_reference(
-        &version_hash,
-        0,
-        &ScriptReferenceInfo {
-            reference_hash: version_hash.clone(),
-            hash_type: 0,
-            lock_cells_count: 10,
-            lock_live_cells_count: 10,
-            lock_capacity_sum: 1_000_000_000,
-            lock_live_capacity_sum: 1_000_000_000,
-            lock_used_capacity_sum: 600_000_000,
-            lock_live_used_capacity_sum: 600_000_000,
-            ..Default::default()
-        },
-    );
     batch.put_script_version(
         &version_hash,
         &ScriptVersionInfo {
@@ -2999,15 +3002,6 @@ async fn test_script_code_cells_resolve_unique_type_reference() {
     let code_cell_output_index = 1i16;
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_script_reference(
-        &type_hash,
-        1,
-        &ScriptReferenceInfo {
-            reference_hash: type_hash.clone(),
-            hash_type: 1,
-            ..Default::default()
-        },
-    );
     batch.put_script_version(
         &version_hash,
         &ScriptVersionInfo {
@@ -3072,7 +3066,6 @@ async fn test_script_code_cells_resolve_unique_type_reference() {
     assert_eq!(json["codeCells"][0]["outputIndex"], 1);
     assert_eq!(json["codeCells"][0]["status"], "live");
     assert_eq!(json["codeCells"][0]["createdAtBlock"], 123);
-    assert_eq!(json["availableReferences"][0]["hashType"], "type");
 }
 
 #[tokio::test]
@@ -3135,17 +3128,19 @@ async fn test_unknown_data_hash_script_resolves_code_cell_via_data_hash_index() 
     let code_cell_tx_hash = vec![0xcd; 32];
     let code_cell_output_index = 2i16;
 
+    store
+        .put_script_info_direct(
+            &data_hash,
+            &ScriptInfo {
+                code_hash: data_hash.clone(),
+                hash_type: 0,
+                lock_live_cells_count: 3,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_script_reference(
-        &data_hash,
-        0,
-        &ScriptReferenceInfo {
-            reference_hash: data_hash.clone(),
-            hash_type: 0,
-            lock_live_cells_count: 3,
-            ..Default::default()
-        },
-    );
     batch.put_script_version(
         &data_hash,
         &ScriptVersionInfo {
@@ -3228,22 +3223,24 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
     let reference_hash = vec![0x77; 32];
     let code_cell_tx_hash = vec![0xce; 32];
 
+    store
+        .put_script_info_direct(
+            &reference_hash,
+            &ScriptInfo {
+                code_hash: reference_hash.clone(),
+                hash_type: 0,
+                lock_cells_count: 3,
+                lock_live_cells_count: 1,
+                lock_capacity_sum: 500,
+                lock_live_capacity_sum: 200,
+                lock_used_capacity_sum: 500,
+                lock_live_used_capacity_sum: 200,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_script_reference(
-        &reference_hash,
-        0,
-        &ScriptReferenceInfo {
-            reference_hash: reference_hash.clone(),
-            hash_type: 0,
-            lock_cells_count: 3,
-            lock_live_cells_count: 1,
-            lock_capacity_sum: 500,
-            lock_live_capacity_sum: 200,
-            lock_used_capacity_sum: 500,
-            lock_live_used_capacity_sum: 200,
-            ..Default::default()
-        },
-    );
     batch.put_script_version(
         &reference_hash,
         &ScriptVersionInfo {
@@ -3302,10 +3299,7 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
     assert_eq!(json[&reference_hash_hex]["resolutionState"], "resolved");
     assert_eq!(json[&reference_hash_hex]["name"], "UniqueScript");
     assert_eq!(json[&reference_hash_hex]["codeHash"], reference_hash_hex);
-    assert_eq!(
-        json[&reference_hash_hex]["availableReferences"][0]["hashType"],
-        "data"
-    );
+    assert_eq!(json[&reference_hash_hex]["hashType"], "data");
     assert_eq!(
         json[&reference_hash_hex]["codeCellTxHash"],
         code_cell_tx_hash_hex
@@ -3326,7 +3320,6 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
     assert_eq!(json["liveCount"], 1);
     assert_eq!(json["totalCount"], 1);
     assert_eq!(json["codeCells"][0]["txHash"], code_cell_tx_hash_hex);
-    assert_eq!(json["availableReferences"][0]["hashType"], "data");
 }
 
 #[tokio::test]
@@ -3337,17 +3330,6 @@ async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
     let version_hash_b = vec![0xb2; 32];
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_script_reference(
-        &reference_hash,
-        1,
-        &ScriptReferenceInfo {
-            reference_hash: reference_hash.clone(),
-            hash_type: 1,
-            type_cells_count: 2,
-            type_live_cells_count: 2,
-            ..Default::default()
-        },
-    );
     batch.put_cell(
         &[0xd1; 32],
         0,
@@ -3439,18 +3421,20 @@ async fn test_search_exact_script_hash_uses_reference_version_resolution() {
     let store = test_store();
     let reference_hash = vec![0x93; 32];
 
+    store
+        .put_script_info_direct(
+            &reference_hash,
+            &ScriptInfo {
+                code_hash: reference_hash.clone(),
+                hash_type: 0,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_script_reference(
-        &reference_hash,
-        0,
-        &ScriptReferenceInfo {
-            reference_hash: reference_hash.clone(),
-            hash_type: 0,
-            lock_cells_count: 1,
-            lock_live_cells_count: 1,
-            ..Default::default()
-        },
-    );
     batch.put_script_version(
         &reference_hash,
         &ScriptVersionInfo {
@@ -3703,42 +3687,35 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
             ..Default::default()
         },
     );
-    batch.put_script_reference(
-        &older_type_hash,
-        1,
-        &ScriptReferenceInfo {
-            reference_hash: older_type_hash.clone(),
-            hash_type: 1,
-            ..Default::default()
-        },
-    );
-    batch.put_script_reference(
-        &older_version_hash,
-        0,
-        &ScriptReferenceInfo {
-            reference_hash: older_version_hash.clone(),
-            hash_type: 0,
-            ..Default::default()
-        },
-    );
-    batch.put_script_reference(
-        &newer_type_hash,
-        1,
-        &ScriptReferenceInfo {
-            reference_hash: newer_type_hash.clone(),
-            hash_type: 1,
-            ..Default::default()
-        },
-    );
-    batch.put_script_reference(
-        &newer_version_hash,
-        0,
-        &ScriptReferenceInfo {
-            reference_hash: newer_version_hash.clone(),
-            hash_type: 0,
-            ..Default::default()
-        },
-    );
+    batch.commit().unwrap();
+
+    // Add ScriptInfo entries so get_script can derive typeHash/dataHash
+    store
+        .put_script_info_direct(
+            &older_version_hash,
+            &ScriptInfo {
+                code_hash: older_version_hash.clone(),
+                hash_type: 0,
+                dep_type_hash: Some(older_type_hash.clone()),
+                dep_data_hash: Some(older_version_hash.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_info_direct(
+            &newer_version_hash,
+            &ScriptInfo {
+                code_hash: newer_version_hash.clone(),
+                hash_type: 0,
+                dep_type_hash: Some(newer_type_hash.clone()),
+                dep_data_hash: Some(newer_version_hash.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
     batch.put_cell(
         &older_tx_hash,
         0,

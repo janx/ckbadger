@@ -17,10 +17,9 @@ use crate::response::{
 };
 use crate::utils::{
     apply_live_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
-    hash_type_to_string, hash_type_to_u8, is_known_script_name,
-    list_current_references_for_version, list_version_code_cells, merge_script_info_for_reference,
-    parse_chart_date_range, related_code_hashes_for_reference, resolve_script_version_by_reference,
-    CurrentScriptVersionResolution, VersionCodeCell,
+    hash_type_to_string, is_known_script_name, list_version_code_cells,
+    merge_script_info_for_reference, parse_chart_date_range, related_code_hashes_for_reference,
+    resolve_script_by_hash, CurrentScriptVersionResolution, VersionCodeCell,
 };
 use crate::warmup::{CACHE_KEY_SCRIPTS_ALL, CACHE_KEY_SCRIPT_VERSIONS_ALL};
 use crate::AppState;
@@ -111,14 +110,6 @@ fn default_sort_direction() -> SortDirection {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ScriptReferenceResponse {
-    pub reference_hash: String,
-    pub hash_type: String,
-    pub script_kind: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ScriptResolutionAmbiguityResponse {
     pub version_hashes: Vec<String>,
 }
@@ -150,8 +141,6 @@ pub struct ScriptResponse {
     pub live_used_capacity_sum: String,
     pub code_cells_live_count: i64,
     pub code_cells_total: i64,
-    #[serde(default)]
-    pub available_references: Vec<ScriptReferenceResponse>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -207,8 +196,6 @@ pub struct ScriptLookupInfo {
     pub live_used_capacity_sum: String,
     pub code_cells_live_count: i64,
     pub code_cells_total: i64,
-    #[serde(default)]
-    pub available_references: Vec<ScriptReferenceResponse>,
     pub resolution_state: String,
     pub ambiguity: Option<ScriptResolutionAmbiguityResponse>,
 }
@@ -373,29 +360,8 @@ fn version_totals(
     )
 }
 
-fn reference_script_kind(info: &ckbadger_store::types::ScriptReferenceInfo) -> Option<String> {
-    script_kind_from_counts(info.lock_cells_count, info.type_cells_count)
-}
-
 fn version_script_kind(info: &ckbadger_store::types::ScriptVersionInfo) -> Option<String> {
     script_kind_from_counts(info.lock_cells_count, info.type_cells_count)
-}
-
-fn reference_to_response(
-    variant: &crate::utils::script_resolution::ScriptReferenceVariant,
-) -> Result<ScriptReferenceResponse, ApiRouteError> {
-    let hash_type = hash_type_to_string(variant.hash_type).ok_or_else(|| {
-        ApiError::internal(format!(
-            "unknown script hash type in reference response: reference_hash=0x{}, hash_type={}",
-            hex::encode(&variant.reference_hash),
-            variant.hash_type
-        ))
-    })?;
-    Ok(ScriptReferenceResponse {
-        reference_hash: format!("0x{}", hex::encode(&variant.reference_hash)),
-        hash_type: hash_type.to_string(),
-        script_kind: reference_script_kind(&variant.info),
-    })
 }
 
 fn sort_code_cells(code_cells: &mut [VersionCodeCell]) {
@@ -412,12 +378,10 @@ fn sort_code_cells(code_cells: &mut [VersionCodeCell]) {
 struct ResolvedScriptIdentifier {
     version_hash: Vec<u8>,
     version_info: ckbadger_store::types::ScriptVersionInfo,
-    available_references: Vec<crate::utils::script_resolution::ScriptReferenceVariant>,
     code_cells: Vec<VersionCodeCell>,
 }
 
 struct AmbiguousScriptIdentifier {
-    available_references: Vec<crate::utils::script_resolution::ScriptReferenceVariant>,
     version_hashes: Vec<Vec<u8>>,
 }
 
@@ -430,15 +394,9 @@ enum ScriptIdentifierResolution {
 fn resolve_script_identifier(
     state: &AppState,
     hash_bytes: &[u8],
-    requested_hash_type: Option<u8>,
 ) -> Result<ScriptIdentifierResolution, ApiRouteError> {
-    match resolve_script_version_by_reference(
-        &state.store,
-        &state.append_only_store,
-        hash_bytes,
-        requested_hash_type,
-    )
-    .map_err(|e| ApiError::internal(e.to_string()))?
+    match resolve_script_by_hash(&state.store, &state.append_only_store, hash_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
     {
         CurrentScriptVersionResolution::Resolved(resolved) => {
             let resolved = *resolved;
@@ -458,7 +416,6 @@ fn resolve_script_identifier(
                 ResolvedScriptIdentifier {
                     version_hash: resolved.version_hash,
                     version_info,
-                    available_references: resolved.available_references,
                     code_cells,
                 },
             )))
@@ -467,48 +424,12 @@ fn resolve_script_identifier(
             let ambiguous = *ambiguous;
             Ok(ScriptIdentifierResolution::Ambiguous(
                 AmbiguousScriptIdentifier {
-                    available_references: ambiguous.available_references,
                     version_hashes: ambiguous.version_hashes,
                 },
             ))
         }
-        CurrentScriptVersionResolution::NotFound => {
-            let Some(version_info) = state
-                .store
-                .get_script_version(hash_bytes)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-            else {
-                return Ok(ScriptIdentifierResolution::NotFound);
-            };
-            let available_references = list_current_references_for_version(
-                &state.store,
-                &state.append_only_store,
-                hash_bytes,
-            )
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-            let code_cells =
-                list_version_code_cells(&state.store, &state.append_only_store, hash_bytes)
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-            Ok(ScriptIdentifierResolution::Resolved(Box::new(
-                ResolvedScriptIdentifier {
-                    version_hash: hash_bytes.to_vec(),
-                    version_info,
-                    available_references,
-                    code_cells,
-                },
-            )))
-        }
+        CurrentScriptVersionResolution::NotFound => Ok(ScriptIdentifierResolution::NotFound),
     }
-}
-
-fn first_reference_hash_by_type(
-    references: &[ScriptReferenceResponse],
-    wanted_hash_type: &str,
-) -> Option<String> {
-    references
-        .iter()
-        .find(|reference| reference.hash_type == wanted_hash_type)
-        .map(|reference| reference.reference_hash.clone())
 }
 
 fn script_display_name(info: &ckbadger_store::ScriptInfo) -> &str {
@@ -729,7 +650,6 @@ fn script_info_to_response(
         live_used_capacity_sum,
         code_cells_live_count,
         code_cells_total,
-        available_references: vec![],
     })
 }
 
@@ -760,21 +680,16 @@ async fn lookup_scripts(
 
     for code_hash in &code_hash_bytes {
         let reference_hash_hex = format!("0x{}", hex::encode(code_hash));
-        match resolve_script_identifier(&state, code_hash, None)? {
+        match resolve_script_identifier(&state, code_hash)? {
             ScriptIdentifierResolution::Resolved(resolved) => {
                 let ResolvedScriptIdentifier {
                     version_hash,
                     version_info,
-                    available_references,
                     mut code_cells,
                 } = *resolved;
                 sort_code_cells(&mut code_cells);
-                let available_references: Vec<ScriptReferenceResponse> = available_references
-                    .iter()
-                    .map(reference_to_response)
-                    .collect::<Result<_, _>>()?;
                 let (
-                    cells_count,
+                    _cells_count,
                     live_cells_count,
                     _capacity_sum,
                     live_capacity_sum,
@@ -782,11 +697,29 @@ async fn lookup_scripts(
                     live_used_sum,
                 ) = version_totals(&version_info);
                 let code_cell = code_cells.first();
-                let hash_type = if available_references.len() == 1 {
-                    Some(available_references[0].hash_type.clone())
-                } else {
-                    None
-                };
+
+                // Derive hash_type from ScriptInfo if available
+                let hash_type = state
+                    .store
+                    .get_script_info(code_hash)
+                    .ok()
+                    .flatten()
+                    .and_then(|info| hash_type_to_string(info.hash_type).map(|s| s.to_string()));
+
+                // Derive deployment hashes from ScriptInfo
+                let (deployment_type_hash, deployment_data_hash) = state
+                    .store
+                    .get_script_info(code_hash)
+                    .ok()
+                    .flatten()
+                    .map(|info| {
+                        let (type_ref, data_ref) = deployment_reference_hashes(&info);
+                        (
+                            type_ref.map(|h| format!("0x{}", hex::encode(h))),
+                            data_ref.map(|h| format!("0x{}", hex::encode(h))),
+                        )
+                    })
+                    .unwrap_or((None, None));
 
                 result.insert(
                     reference_hash_hex.clone(),
@@ -800,14 +733,8 @@ async fn lookup_scripts(
                         script_kind: version_script_kind(&version_info),
                         decoder_type: version_info.category.clone(),
                         hash_type,
-                        deployment_type_hash: first_reference_hash_by_type(
-                            &available_references,
-                            "type",
-                        ),
-                        deployment_data_hash: available_references
-                            .iter()
-                            .find(|reference| reference.hash_type != "type")
-                            .map(|reference| reference.reference_hash.clone()),
+                        deployment_type_hash,
+                        deployment_data_hash,
                         code_cell_tx_hash: code_cell
                             .map(|(tx_hash, _, _, _)| format!("0x{}", hex::encode(tx_hash))),
                         code_cell_output_index: code_cell
@@ -820,22 +747,13 @@ async fn lookup_scripts(
                             .filter(|(_, _, _, is_live)| *is_live)
                             .count() as i64,
                         code_cells_total: code_cells.len() as i64,
-                        available_references,
                         resolution_state: "resolved".to_string(),
                         ambiguity: None,
                     },
                 );
-                let _ = cells_count;
             }
             ScriptIdentifierResolution::Ambiguous(ambiguous) => {
-                let AmbiguousScriptIdentifier {
-                    available_references,
-                    version_hashes,
-                } = ambiguous;
-                let available_references: Vec<ScriptReferenceResponse> = available_references
-                    .iter()
-                    .map(reference_to_response)
-                    .collect::<Result<_, _>>()?;
+                let AmbiguousScriptIdentifier { version_hashes } = ambiguous;
                 result.insert(
                     reference_hash_hex.clone(),
                     ScriptLookupInfo {
@@ -845,14 +763,8 @@ async fn lookup_scripts(
                         script_kind: None,
                         decoder_type: None,
                         hash_type: None,
-                        deployment_type_hash: first_reference_hash_by_type(
-                            &available_references,
-                            "type",
-                        ),
-                        deployment_data_hash: available_references
-                            .iter()
-                            .find(|reference| reference.hash_type != "type")
-                            .map(|reference| reference.reference_hash.clone()),
+                        deployment_type_hash: None,
+                        deployment_data_hash: None,
                         code_cell_tx_hash: None,
                         code_cell_output_index: None,
                         live_cells_count: 0,
@@ -860,7 +772,6 @@ async fn lookup_scripts(
                         live_used_capacity_sum: "0".to_string(),
                         code_cells_live_count: 0,
                         code_cells_total: 0,
-                        available_references,
                         resolution_state: "ambiguous".to_string(),
                         ambiguity: Some(ScriptResolutionAmbiguityResponse {
                             version_hashes: version_hashes
@@ -881,6 +792,7 @@ async fn lookup_scripts(
 #[derive(Debug, Deserialize)]
 pub struct CodeCellQuery {
     code_hash: String,
+    #[allow(dead_code)]
     hash_type: Option<String>,
 }
 
@@ -924,8 +836,6 @@ pub struct CodeCellsResponse {
     pub live_count: i64,
     pub total_count: i64,
     pub resolved_version_hash: Option<String>,
-    #[serde(default)]
-    pub available_references: Vec<ScriptReferenceResponse>,
     pub ambiguity: Option<ScriptResolutionAmbiguityResponse>,
 }
 
@@ -941,9 +851,7 @@ async fn get_code_cell(
     )
     .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
 
-    let requested_hash_type = params.hash_type.as_deref().and_then(hash_type_to_u8);
-
-    match resolve_script_identifier(&state, &code_hash_bytes, requested_hash_type)? {
+    match resolve_script_identifier(&state, &code_hash_bytes)? {
         ScriptIdentifierResolution::Resolved(resolved) => {
             let ResolvedScriptIdentifier { mut code_cells, .. } = *resolved;
             sort_code_cells(&mut code_cells);
@@ -979,13 +887,10 @@ async fn get_code_cells(
     )
     .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
 
-    let requested_hash_type = params.hash_type.as_deref().and_then(hash_type_to_u8);
-
-    match resolve_script_identifier(&state, &code_hash_bytes, requested_hash_type)? {
+    match resolve_script_identifier(&state, &code_hash_bytes)? {
         ScriptIdentifierResolution::Resolved(resolved) => {
             let ResolvedScriptIdentifier {
                 version_hash,
-                available_references,
                 mut code_cells,
                 ..
             } = *resolved;
@@ -1011,10 +916,6 @@ async fn get_code_cells(
                 live_count,
                 total_count,
                 resolved_version_hash: Some(format!("0x{}", hex::encode(version_hash))),
-                available_references: available_references
-                    .iter()
-                    .map(reference_to_response)
-                    .collect::<Result<_, _>>()?,
                 ambiguity: None,
             })
         }
@@ -1023,11 +924,6 @@ async fn get_code_cells(
             live_count: 0,
             total_count: 0,
             resolved_version_hash: None,
-            available_references: ambiguous
-                .available_references
-                .iter()
-                .map(reference_to_response)
-                .collect::<Result<_, _>>()?,
             ambiguity: Some(ScriptResolutionAmbiguityResponse {
                 version_hashes: ambiguous
                     .version_hashes
@@ -1041,7 +937,6 @@ async fn get_code_cells(
             live_count: 0,
             total_count: 0,
             resolved_version_hash: None,
-            available_references: vec![],
             ambiguity: None,
         }),
     }
@@ -1173,16 +1068,6 @@ async fn get_script(
     let mut scripts = Vec::new();
 
     for (version_hash, version_info) in matching {
-        let available_references = list_current_references_for_version(
-            &state.store,
-            &state.append_only_store,
-            &version_hash,
-        )
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-        let available_references: Vec<ScriptReferenceResponse> = available_references
-            .iter()
-            .map(reference_to_response)
-            .collect::<Result<_, _>>()?;
         let mut code_cells =
             list_version_code_cells(&state.store, &state.append_only_store, &version_hash)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -1201,17 +1086,24 @@ async fn get_script(
             .filter(|(_, _, _, is_live)| *is_live)
             .count() as i64;
         let code_cells_total = code_cells.len() as i64;
-        let hash_type = if available_references.len() == 1 {
-            Some(available_references[0].hash_type.clone())
-        } else {
-            None
-        };
-        let type_hash = first_reference_hash_by_type(&available_references, "type");
-        let data_hash = available_references
-            .iter()
-            .find(|reference| reference.hash_type != "type")
-            .map(|reference| reference.reference_hash.clone())
-            .or_else(|| Some(format!("0x{}", hex::encode(&version_hash))));
+
+        // Derive hash_type, type_hash, data_hash from ScriptInfo if available
+        let script_info = state.store.get_script_info(&version_hash).ok().flatten();
+        let hash_type = script_info
+            .as_ref()
+            .and_then(|info| hash_type_to_string(info.hash_type).map(|s| s.to_string()));
+        let (type_hash, data_hash) = script_info
+            .as_ref()
+            .map(|info| {
+                let (type_ref, data_ref) = deployment_reference_hashes(info);
+                (
+                    type_ref.map(|h| format!("0x{}", hex::encode(h))),
+                    data_ref.map(|h| format!("0x{}", hex::encode(h))),
+                )
+            })
+            .unwrap_or((None, None));
+        // If no data_hash from ScriptInfo, use the version_hash itself
+        let data_hash = data_hash.or_else(|| Some(format!("0x{}", hex::encode(&version_hash))));
 
         if code_cells.is_empty() {
             scripts.push(ScriptResponse {
@@ -1242,7 +1134,6 @@ async fn get_script(
                 live_used_capacity_sum: live_used_sum.to_string(),
                 code_cells_live_count,
                 code_cells_total,
-                available_references: available_references.clone(),
             });
             continue;
         }
@@ -1281,7 +1172,6 @@ async fn get_script(
                 live_used_capacity_sum: live_used_sum.to_string(),
                 code_cells_live_count,
                 code_cells_total,
-                available_references: available_references.clone(),
             });
         }
     }
@@ -1656,22 +1546,25 @@ async fn get_script_capacity_history_chart_by_code_hash(
     let kind_filter = parse_script_kind_filter(params.script_kind.as_deref())?;
     let mut targets = Vec::new();
 
-    match resolve_script_identifier(&state, &code_hash, None)? {
+    match resolve_script_identifier(&state, &code_hash)? {
         ScriptIdentifierResolution::Resolved(resolved) => {
-            let ResolvedScriptIdentifier {
-                version_hash,
-                available_references,
-                ..
-            } = *resolved;
-            if available_references.is_empty() {
-                for is_type in &kind_filter {
-                    targets.push((version_hash.clone(), *is_type));
-                }
+            let ResolvedScriptIdentifier { version_hash, .. } = *resolved;
+            // Use version_hash and look up related code hashes from ScriptInfo
+            let all_script_infos: Vec<ckbadger_store::ScriptInfo> =
+                load_script_infos_cached(&state)?
+                    .into_iter()
+                    .map(|(_, info)| info)
+                    .collect();
+            let related_hashes =
+                related_code_hashes_for_reference(&all_script_infos, &version_hash);
+            let target_hashes = if related_hashes.is_empty() {
+                vec![version_hash]
             } else {
-                for reference in &available_references {
-                    for is_type in &kind_filter {
-                        targets.push((reference.reference_hash.clone(), *is_type));
-                    }
+                related_hashes
+            };
+            for target_hash in target_hashes {
+                for is_type in &kind_filter {
+                    targets.push((target_hash.clone(), *is_type));
                 }
             }
         }
