@@ -337,19 +337,80 @@ pub enum CfWritePolicy {
     SealedAggregate,
     BulkDisabled,
 }
+const CF_WRITE_POLICY_APPEND_ONLY: &[&str] = &[
+    CF_CELLS,
+    CF_BLOCK_HEADERS,
+    CF_BLOCK_HASH_INDEX,
+    CF_TX_INDEX,
+    CF_TX_HASH_MAP,
+    CF_CONSUMED_CELLS,
+    CF_ADDR_TXS,
+    CF_TOKEN_TRANSFERS,
+    CF_ACTIVITIES,
+    CF_OBJECT_COLLECTION_ACTIVITIES,
+    CF_IDENTITY_COLLECTION_ACTIVITIES,
+];
+
+const CF_WRITE_POLICY_SEALED_AGGREGATE: &[&str] = &[
+    CF_STATS_CHAIN,
+    CF_STATS_DAO,
+    CF_STATS_HODL,
+    CF_STATS_SCRIPT,
+    CF_STATS_TOKEN,
+    CF_STATS_SPORE,
+    CF_STATS_OBJECT,
+];
+
+const CF_WRITE_POLICY_BULK_DISABLED: &[&str] = &[CF_REORG_UNDO_LOG_BY_BLOCK, CF_PENDING_PROPOSALS];
+
+const CF_WRITE_POLICY_FINAL_SNAPSHOT: &[&str] = &[
+    CF_LIVE_CELLS,
+    CF_CELL_BY_LOCK,
+    CF_CELL_BY_TYPE,
+    CF_CELL_BY_DATA_HASH,
+    CF_ADDR_BALANCE,
+    CF_DAO_DEPOSITS,
+    CF_DAO_BY_WITHDRAW_TX,
+    CF_DAO_BY_BLOCK,
+    CF_DAO_BY_LOCK_BLOCK,
+    CF_DAO_BY_STATUS_BLOCK,
+    CF_TOKENS,
+    CF_TOKEN_HOLDERS,
+    CF_TOKEN_HOLDERS_BY_BALANCE,
+    CF_ADDR_TOKENS_BY_BALANCE,
+    CF_SPORE_DATA,
+    CF_OBJECT_DATA,
+    CF_OBJECT_BY_COLLECTION,
+    CF_IDENTITY_DATA,
+    CF_IDENTITY_BY_COLLECTION,
+    CF_STATS_IDENTITY,
+    CF_SCRIPT_INFO,
+    CF_SCRIPT_VERSIONS,
+    CF_SCRIPT_VERSIONS_BY_LABEL,
+    CF_SYNC_META,
+    CF_SPORE_BY_CLUSTER,
+    CF_CELL_BY_LOCK_CODE,
+    CF_CELL_BY_TYPE_CODE,
+    CF_CLUSTER_AGG,
+    CF_OBJECT_COLLECTION_AGG,
+    CF_IDENTITY_AGG,
+    CF_FIBER_CHANNELS,
+    CF_FIBER_CHANNEL_BY_COMMITMENT,
+    CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
+    CF_ADDR_FIBER_CHANNELS,
+];
 
 pub fn cf_write_policy(cf_name: &str) -> CfWritePolicy {
-    match cf_name {
-        CF_CELLS => CfWritePolicy::AppendOnly,
-        CF_BLOCK_HEADERS | CF_BLOCK_HASH_INDEX | CF_TX_INDEX | CF_TX_HASH_MAP => {
-            CfWritePolicy::AppendOnly
-        }
-        CF_LIVE_CELLS | CF_ADDR_BALANCE | CF_TOKENS => CfWritePolicy::FinalSnapshot,
-        CF_STATS_CHAIN | CF_STATS_DAO | CF_STATS_HODL => CfWritePolicy::SealedAggregate,
-        CF_CONSUMED_CELLS | CF_REORG_UNDO_LOG_BY_BLOCK | CF_PENDING_PROPOSALS => {
-            CfWritePolicy::BulkDisabled
-        }
-        _ => panic!("unknown column family write policy: {}", cf_name),
+    if CF_WRITE_POLICY_APPEND_ONLY.contains(&cf_name) {
+        CfWritePolicy::AppendOnly
+    } else if CF_WRITE_POLICY_SEALED_AGGREGATE.contains(&cf_name) {
+        CfWritePolicy::SealedAggregate
+    } else if CF_WRITE_POLICY_BULK_DISABLED.contains(&cf_name) {
+        CfWritePolicy::BulkDisabled
+    } else if CF_WRITE_POLICY_FINAL_SNAPSHOT.contains(&cf_name) {
+        CfWritePolicy::FinalSnapshot
+    } else {
+        panic!("unknown column family write policy: {}", cf_name)
     }
 }
 
@@ -2773,6 +2834,13 @@ mod tests {
             cf_write_policy(CF_CONSUMED_CELLS),
             CfWritePolicy::FinalSnapshot
         );
+    }
+
+    #[test]
+    fn test_cf_write_policy_handles_all_known_column_families() {
+        for &cf_name in ALL_CFS {
+            cf_write_policy(cf_name);
+        }
     }
 
     #[test]
