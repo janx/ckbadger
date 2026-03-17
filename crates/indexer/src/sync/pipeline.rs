@@ -74,6 +74,37 @@ struct ParserBatchPerfSample {
     script_version_ms: f64,
 }
 
+type ParserVersionCache = HashMap<(Vec<u8>, i16), (i64, CellScriptVersionInfo)>;
+
+fn parser_cache_committed_tip_from_sync_tip(sync_tip: i64) -> i64 {
+    sync_tip
+        .checked_sub(1)
+        .expect("sync tip underflow while deriving parser cache committed tip")
+}
+
+fn reset_parser_version_cache_epoch(
+    parser_version_cache: &mut ParserVersionCache,
+    parser_cache_epoch: &mut u64,
+    new_epoch: u64,
+) -> usize {
+    if *parser_cache_epoch == new_epoch {
+        return 0;
+    }
+    let cleared = parser_version_cache.len();
+    parser_version_cache.clear();
+    *parser_cache_epoch = new_epoch;
+    cleared
+}
+
+fn prune_parser_version_cache(
+    parser_version_cache: &mut ParserVersionCache,
+    committed_tip: i64,
+) -> usize {
+    let before = parser_version_cache.len();
+    parser_version_cache.retain(|_, (block_number, _)| *block_number > committed_tip);
+    before - parser_version_cache.len()
+}
+
 #[derive(Debug, Default)]
 struct ScannedPreParsedNftTx {
     mnft_issuers: Vec<(usize, ParsedMnftIssuer)>,
@@ -424,8 +455,9 @@ impl Indexer {
         // caches until the writer actually commits them in this run.  For a fresh
         // DB (tip=0) this gives -1, keeping genesis block cells in parser_version_cache
         // instead of immediately pruning them via the `block_number > committed` check.
-        let committed_tip_for_cache =
-            Arc::new(AtomicI64::new(self.repo.get_sync_tip().await?.0 - 1));
+        let committed_tip_for_cache = Arc::new(AtomicI64::new(
+            parser_cache_committed_tip_from_sync_tip(self.repo.get_sync_tip().await?.0),
+        ));
         self.pipeline_perf
             .set_queue_capacities(self.config.pipeline_buffer, self.config.pipeline_buffer);
 
@@ -718,8 +750,8 @@ impl Indexer {
         let parser_exit_reason_for_parser = Arc::clone(&parser_exit_reason);
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
-            let mut parser_version_cache: HashMap<(Vec<u8>, i16), (i64, CellScriptVersionInfo)> =
-                HashMap::new();
+            let mut parser_version_cache: ParserVersionCache = HashMap::new();
+            let mut parser_cache_epoch = pipeline_epoch_for_parser.load(Ordering::SeqCst);
             'parser_batches: while let Some((
                 batch_epoch,
                 start_block,
@@ -728,12 +760,34 @@ impl Indexer {
                 blocks,
             )) = fetch_rx.recv().await
             {
-                if batch_epoch != pipeline_epoch_for_parser.load(Ordering::SeqCst) {
+                let current_epoch = pipeline_epoch_for_parser.load(Ordering::SeqCst);
+                if batch_epoch != current_epoch {
+                    let cleared_version_cache_entries = reset_parser_version_cache_epoch(
+                        &mut parser_version_cache,
+                        &mut parser_cache_epoch,
+                        current_epoch,
+                    );
                     debug!(
                         batch_epoch,
-                        "Skipping stale fetched batch {}-{}", start_block, end_block
+                        current_epoch,
+                        cleared_version_cache_entries,
+                        "Skipping stale fetched batch {}-{}",
+                        start_block,
+                        end_block
                     );
                     continue;
+                }
+                let cleared_version_cache_entries = reset_parser_version_cache_epoch(
+                    &mut parser_version_cache,
+                    &mut parser_cache_epoch,
+                    batch_epoch,
+                );
+                if cleared_version_cache_entries > 0 {
+                    debug!(
+                        batch_epoch,
+                        cleared_version_cache_entries,
+                        "Parser cache epoch advanced; cleared stale version cache entries"
+                    );
                 }
                 let t_parser = Instant::now();
 
@@ -815,12 +869,18 @@ impl Indexer {
                 )> = loop {
                     let current_epoch = pipeline_epoch_for_parser.load(Ordering::SeqCst);
                     if should_abort_unresolved_retry_on_epoch_change(batch_epoch, current_epoch) {
+                        let cleared_version_cache_entries = reset_parser_version_cache_epoch(
+                            &mut parser_version_cache,
+                            &mut parser_cache_epoch,
+                            current_epoch,
+                        );
                         info!(
                             start_block,
                             end_block,
                             batch_epoch,
                             current_epoch,
                             retries = unresolved_retry_count,
+                            cleared_version_cache_entries,
                             "Parser: aborting unresolved input retry because batch became stale after pipeline reset"
                         );
                         break None;
@@ -1922,7 +1982,8 @@ impl Indexer {
 
                 // Prune entries already committed by the writer
                 let committed = committed_tip_for_cache_for_parser.load(Ordering::Relaxed);
-                parser_version_cache.retain(|_, (block_number, _)| *block_number > committed);
+                let version_cache_evicted =
+                    prune_parser_version_cache(&mut parser_version_cache, committed);
 
                 let precompute_parser_ms = t_precompute_parser.elapsed().as_secs_f64() * 1000.0;
                 let total_parser_ms = t_parser.elapsed().as_secs_f64() * 1000.0;
@@ -1970,6 +2031,7 @@ impl Indexer {
                     cache_misses,
                     cache_hit_pct = format!("{:.0}", hit_rate),
                     committed_tip,
+                    version_cache_evicted,
                     cache_evicted,
                     cache_size = cell_cache_for_parser.len(),
                     precompute_phase_total_ms =
@@ -1980,9 +2042,17 @@ impl Indexer {
                     end_block,
                 );
 
-                if batch_epoch != pipeline_epoch_for_parser.load(Ordering::SeqCst) {
+                let current_epoch = pipeline_epoch_for_parser.load(Ordering::SeqCst);
+                if batch_epoch != current_epoch {
+                    let cleared_version_cache_entries = reset_parser_version_cache_epoch(
+                        &mut parser_version_cache,
+                        &mut parser_cache_epoch,
+                        current_epoch,
+                    );
                     debug!(
                         batch_epoch,
+                        current_epoch,
+                        cleared_version_cache_entries,
                         "Dropping parsed stale batch {}-{} before writer handoff",
                         start_block,
                         end_block
@@ -2245,6 +2315,10 @@ impl Indexer {
                                         self.cell_cache.clear();
                                         self.udt_cell_cache.clear();
                                         let (reorg_tip, _) = self.repo.get_sync_tip().await?;
+                                        committed_tip_for_cache_for_writer.store(
+                                            parser_cache_committed_tip_from_sync_tip(reorg_tip),
+                                            Ordering::SeqCst,
+                                        );
                                         self.reconcile_hodl_tracker_with_tip(reorg_tip)?;
                                         self.reconcile_cell_dist_tracker_with_tip(reorg_tip)?;
                                         let current_epoch =
@@ -3568,5 +3642,65 @@ mod tests {
             "mNFT transferred within same batch must NOT be marked as consumed, got {} events",
             output.consumed_mnft.len()
         );
+    }
+
+    fn sample_cell_script_version_info(seed: u8) -> CellScriptVersionInfo {
+        CellScriptVersionInfo {
+            lock_reference_hash: vec![seed; 32],
+            lock_hash_type: 0,
+            lock_version_hash: Some(vec![seed.wrapping_add(1); 32]),
+            type_reference_hash: None,
+            type_hash_type: None,
+            type_version_hash: None,
+            capacity: 100,
+            occupied_capacity: 61,
+        }
+    }
+
+    #[test]
+    fn test_parser_cache_committed_tip_from_sync_tip_retains_genesis_cells() {
+        let committed_tip = parser_cache_committed_tip_from_sync_tip(0);
+        let mut parser_version_cache: ParserVersionCache = HashMap::new();
+        parser_version_cache.insert(
+            (vec![0x11; 32], 0),
+            (0, sample_cell_script_version_info(0x21)),
+        );
+
+        let evicted = prune_parser_version_cache(&mut parser_version_cache, committed_tip);
+
+        assert_eq!(committed_tip, -1);
+        assert_eq!(evicted, 0);
+        assert_eq!(parser_version_cache.len(), 1);
+    }
+
+    #[test]
+    fn test_parser_cache_epoch_reset_clears_old_entries_and_keeps_replayed_blocks() {
+        let mut parser_version_cache: ParserVersionCache = HashMap::new();
+        let stale_key = (vec![0x31; 32], 0);
+        parser_version_cache.insert(
+            stale_key.clone(),
+            (150, sample_cell_script_version_info(0x41)),
+        );
+        let mut parser_cache_epoch = 0;
+
+        let cleared =
+            reset_parser_version_cache_epoch(&mut parser_version_cache, &mut parser_cache_epoch, 1);
+
+        assert_eq!(cleared, 1);
+        assert_eq!(parser_cache_epoch, 1);
+        assert!(parser_version_cache.is_empty());
+
+        let replay_key = (vec![0x51; 32], 0);
+        parser_version_cache.insert(
+            replay_key.clone(),
+            (101, sample_cell_script_version_info(0x61)),
+        );
+
+        let committed_tip = parser_cache_committed_tip_from_sync_tip(100);
+        let evicted = prune_parser_version_cache(&mut parser_version_cache, committed_tip);
+
+        assert_eq!(committed_tip, 99);
+        assert_eq!(evicted, 0);
+        assert!(parser_version_cache.contains_key(&replay_key));
     }
 }

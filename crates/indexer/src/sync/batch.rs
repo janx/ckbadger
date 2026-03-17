@@ -950,6 +950,24 @@ fn load_dep_cell_info(
 
 /// Read a cell output from the CKB node's RocksDB and construct a PositionedCellInfo.
 /// This is a last-resort fallback for dep cells not yet committed to ckbadger stores.
+fn extract_output_data_from_ckb_tx(
+    tx: &ckb_types::core::TransactionView,
+    tx_hash: &[u8; 32],
+    output_index: u32,
+) -> Result<Vec<u8>> {
+    tx.outputs_data()
+        .get(output_index as usize)
+        .map(|data| data.raw_data().to_vec())
+        .ok_or_else(|| {
+            anyhow!(
+                "missing dep cell output data in CKB store transaction: outpoint=0x{}:{}, outputs_data_count={}",
+                hex::encode(tx_hash),
+                output_index,
+                tx.outputs_data().len()
+            )
+        })
+}
+
 fn load_dep_cell_info_from_ckb_store(
     tx_hash: &[u8; 32],
     output_index: i16,
@@ -976,11 +994,7 @@ fn load_dep_cell_info_from_ckb_store(
             tx.outputs().len()
         )
     })?;
-    let data = tx
-        .outputs_data()
-        .get(output_index_u32 as usize)
-        .map(|d| d.raw_data().to_vec())
-        .unwrap_or_default();
+    let data = extract_output_data_from_ckb_tx(&tx, tx_hash, output_index_u32)?;
 
     let capacity: u64 = output.capacity().unpack();
     let lock = output.lock();
@@ -5858,6 +5872,7 @@ impl Indexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckb_types::{bytes::Bytes, core::ScriptHashType, packed, prelude::*};
     use ckbadger_store::LiveCellInfo;
 
     fn dummy_live_cell_info() -> LiveCellInfo {
@@ -6266,6 +6281,28 @@ mod tests {
         assert!(err.to_string().contains(
             "transaction outputs mismatch while parsing UDT outputs with store fallback"
         ));
+    }
+
+    #[test]
+    fn test_extract_output_data_from_ckb_tx_errors_on_missing_output_data() {
+        let lock = packed::Script::new_builder()
+            .code_hash(packed::Byte32::from_slice(&[0u8; 32]).unwrap())
+            .hash_type(ScriptHashType::Type.into())
+            .args(Bytes::new().pack())
+            .build();
+        let output = packed::CellOutput::new_builder()
+            .capacity(100u64.pack())
+            .lock(lock)
+            .build();
+        let tx = ckb_types::core::TransactionView::new_advanced_builder()
+            .outputs(vec![output])
+            .outputs_data(Vec::<packed::Bytes>::new())
+            .build();
+
+        let err = extract_output_data_from_ckb_tx(&tx, &[0xAB; 32], 0).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("missing dep cell output data in CKB store transaction"));
     }
 
     #[test]
