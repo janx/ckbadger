@@ -2135,7 +2135,10 @@ impl Indexer {
                         continue;
                     }
                     let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
-                    committed_tip_for_cache_for_writer.store(db_tip, Ordering::SeqCst);
+                    // NOTE: Do NOT update committed_tip_for_cache here (before writing).
+                    // The authoritative update happens after the batch is committed (below).
+                    // Updating here prematurely advances the cache tip, causing the parser
+                    // to prune version-cache entries for cells not yet written to the DB.
                     let expected_start = next_start_block_from_db_tip(
                         db_tip,
                         &db_tip_hash,
