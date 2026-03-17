@@ -6,8 +6,6 @@ use crate::types::*;
 
 use crate::bytes_to_hex;
 
-type ScriptReferenceEntry = ((Vec<u8>, u8), ScriptReferenceInfo);
-
 impl CkbadgerStore {
     // ---- Daily stats ----
 
@@ -840,95 +838,6 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    pub fn get_script_reference(
-        &self,
-        reference_hash: &[u8],
-        hash_type: u8,
-    ) -> anyhow::Result<Option<ScriptReferenceInfo>> {
-        let key = keys::encode_script_reference_key(reference_hash, hash_type);
-        match self.get_cf(self.cf_script_references(), &key)? {
-            Some(value) => {
-                let info = bincode::deserialize(&value).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to deserialize script reference: reference_hash=0x{}, hash_type={}, error={}",
-                        bytes_to_hex(reference_hash),
-                        hash_type,
-                        e
-                    )
-                })?;
-                Ok(Some(info))
-            }
-            None => Ok(None),
-        }
-    }
-
-    pub fn put_script_reference(
-        &self,
-        reference_hash: &[u8],
-        hash_type: u8,
-        info: &ScriptReferenceInfo,
-    ) -> anyhow::Result<()> {
-        let key = keys::encode_script_reference_key(reference_hash, hash_type);
-        let value = bincode::serialize(info)?;
-        self.put_cf(self.cf_script_references(), &key, &value)
-    }
-
-    pub fn list_script_references_by_hash(
-        &self,
-        reference_hash: &[u8],
-    ) -> anyhow::Result<Vec<(u8, ScriptReferenceInfo)>> {
-        let prefix = keys::encode_script_reference_prefix(reference_hash);
-        let iter = self.prefix_iterator_cf(self.cf_script_references(), &prefix);
-        let mut results = Vec::new();
-
-        for item in iter {
-            let (key, value) = item.map_err(|e| {
-                anyhow::anyhow!("failed to iterate script_references in prefix scan: {}", e)
-            })?;
-            if !key.starts_with(&prefix) {
-                break;
-            }
-            let (_, hash_type) = keys::decode_script_reference_key(&key);
-            let info: ScriptReferenceInfo = bincode::deserialize(&value).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to deserialize script reference in prefix scan: reference_hash=0x{}, hash_type={}, error={}",
-                    bytes_to_hex(reference_hash),
-                    hash_type,
-                    e
-                )
-            })?;
-            results.push((hash_type, info));
-        }
-
-        Ok(results)
-    }
-
-    pub fn list_script_references(&self) -> anyhow::Result<Vec<ScriptReferenceEntry>> {
-        let iter = self.iterator_cf(self.cf_script_references(), rocksdb::IteratorMode::Start);
-        let mut results = Vec::new();
-
-        for item in iter {
-            let (key, value) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate script_references in list_script_references: {}",
-                    e
-                )
-            })?;
-            let (reference_hash, hash_type) = keys::decode_script_reference_key(&key);
-            let info: ScriptReferenceInfo = bincode::deserialize(&value).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to deserialize script reference in list_script_references: reference_hash=0x{}, hash_type={}, error={}",
-                    bytes_to_hex(&reference_hash),
-                    hash_type,
-                    e
-                )
-            })?;
-            results.push(((reference_hash, hash_type), info));
-        }
-
-        Ok(results)
-    }
-
     pub fn get_script_version(
         &self,
         version_hash: &[u8],
@@ -1194,67 +1103,6 @@ mod tests {
     }
 
     #[test]
-    fn test_script_reference_roundtrip_keeps_hash_type_variants_separate() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
-        let reference_hash = vec![0x51; 32];
-
-        let type_ref = ScriptReferenceInfo {
-            reference_hash: reference_hash.clone(),
-            hash_type: 1,
-            type_cells_count: 2,
-            type_live_cells_count: 1,
-            type_capacity_sum: 300,
-            type_live_capacity_sum: 100,
-            type_used_capacity_sum: 200,
-            type_live_used_capacity_sum: 80,
-            ..Default::default()
-        };
-        let data_ref = ScriptReferenceInfo {
-            reference_hash: reference_hash.clone(),
-            hash_type: 0,
-            lock_cells_count: 3,
-            lock_live_cells_count: 2,
-            lock_capacity_sum: 500,
-            lock_live_capacity_sum: 300,
-            lock_used_capacity_sum: 320,
-            lock_live_used_capacity_sum: 180,
-            ..Default::default()
-        };
-
-        store
-            .put_script_reference(&reference_hash, 1, &type_ref)
-            .unwrap();
-        store
-            .put_script_reference(&reference_hash, 0, &data_ref)
-            .unwrap();
-
-        assert_eq!(
-            store
-                .get_script_reference(&reference_hash, 1)
-                .unwrap()
-                .unwrap()
-                .hash_type,
-            1
-        );
-        assert_eq!(
-            store
-                .get_script_reference(&reference_hash, 0)
-                .unwrap()
-                .unwrap()
-                .hash_type,
-            0
-        );
-
-        let rows = store
-            .list_script_references_by_hash(&reference_hash)
-            .unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].0, 0);
-        assert_eq!(rows[1].0, 1);
-    }
-
-    #[test]
     fn test_script_version_and_label_index_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
@@ -1306,60 +1154,6 @@ mod tests {
         assert_eq!(versions.len(), 1);
         assert_eq!(versions[0].0, version_hash_a);
         assert_eq!(versions[0].1.name.as_deref(), Some("Default Lock"));
-    }
-
-    #[test]
-    fn test_list_script_references_returns_all_variants() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
-        let reference_hash_a = vec![0x11; 32];
-        let reference_hash_b = vec![0x22; 32];
-
-        store
-            .put_script_reference(
-                &reference_hash_a,
-                0,
-                &ScriptReferenceInfo {
-                    reference_hash: reference_hash_a.clone(),
-                    hash_type: 0,
-                    lock_cells_count: 1,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        store
-            .put_script_reference(
-                &reference_hash_a,
-                1,
-                &ScriptReferenceInfo {
-                    reference_hash: reference_hash_a.clone(),
-                    hash_type: 1,
-                    type_cells_count: 2,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        store
-            .put_script_reference(
-                &reference_hash_b,
-                4,
-                &ScriptReferenceInfo {
-                    reference_hash: reference_hash_b.clone(),
-                    hash_type: 4,
-                    lock_cells_count: 3,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-
-        let rows = store.list_script_references().unwrap();
-        assert_eq!(rows.len(), 3);
-        assert!(rows.iter().any(|((hash, hash_type), info)| {
-            hash == &reference_hash_a && *hash_type == 1 && info.type_cells_count == 2
-        }));
-        assert!(rows.iter().any(|((hash, hash_type), info)| {
-            hash == &reference_hash_b && *hash_type == 4 && info.lock_cells_count == 3
-        }));
     }
 
     /// Helper: write a DaoDailySnapshot directly to the store.

@@ -1400,35 +1400,6 @@ mod tests {
                 ..Default::default()
             },
         );
-        domain_batch.put_script_reference(
-            &[0x55; 32],
-            1,
-            &ckbadger_store::types::ScriptReferenceInfo {
-                reference_hash: vec![0x55; 32],
-                hash_type: 1,
-                lock_cells_count: 1,
-                lock_live_cells_count: 1,
-                lock_capacity_sum: 100_00000000,
-                lock_live_capacity_sum: 100_00000000,
-                lock_used_capacity_sum: 61_00000000,
-                lock_live_used_capacity_sum: 61_00000000,
-                ..Default::default()
-            },
-        );
-        domain_batch.put_cell_script_version(
-            &reactivate_tx_hash,
-            0,
-            &ckbadger_store::types::CellScriptVersionInfo {
-                lock_reference_hash: vec![0x55; 32],
-                lock_hash_type: 1,
-                lock_version_hash: None,
-                type_reference_hash: None,
-                type_hash_type: None,
-                type_version_hash: None,
-                capacity: 100_00000000,
-                occupied_capacity: 61_00000000,
-            },
-        );
         domain_batch.put_reorg_undo_log_by_block(
             200,
             0,

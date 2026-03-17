@@ -5,8 +5,6 @@
 
 /// Outpoint key: tx_hash(32B) + output_index(2B BE) = 34 bytes
 pub const OUTPOINT_KEY_SIZE: usize = 34;
-pub const SCRIPT_REFERENCE_KEY_SIZE: usize = 33;
-pub const SCRIPT_REFERENCE_PREFIX_SIZE: usize = 32;
 pub const SCRIPT_VERSION_BY_LABEL_LEN_SIZE: usize = 2;
 pub const SCRIPT_VERSION_HASH_SIZE: usize = 32;
 
@@ -33,42 +31,6 @@ pub fn decode_outpoint(key: &[u8]) -> (Vec<u8>, i16) {
     let tx_hash = key[..32].to_vec();
     let output_index = i16::from_be_bytes([key[32], key[33]]);
     (tx_hash, output_index)
-}
-
-pub fn encode_script_reference_key(
-    reference_hash: &[u8],
-    hash_type: u8,
-) -> [u8; SCRIPT_REFERENCE_KEY_SIZE] {
-    assert!(
-        reference_hash.len() >= 32,
-        "encode_script_reference_key: reference_hash must be >= 32 bytes, got {}",
-        reference_hash.len()
-    );
-    let mut key = [0u8; SCRIPT_REFERENCE_KEY_SIZE];
-    key[..32].copy_from_slice(&reference_hash[..32]);
-    key[32] = hash_type;
-    key
-}
-
-pub fn encode_script_reference_prefix(reference_hash: &[u8]) -> [u8; SCRIPT_REFERENCE_PREFIX_SIZE] {
-    assert!(
-        reference_hash.len() >= 32,
-        "encode_script_reference_prefix: reference_hash must be >= 32 bytes, got {}",
-        reference_hash.len()
-    );
-    let mut prefix = [0u8; SCRIPT_REFERENCE_PREFIX_SIZE];
-    prefix.copy_from_slice(&reference_hash[..32]);
-    prefix
-}
-
-pub fn decode_script_reference_key(key: &[u8]) -> (Vec<u8>, u8) {
-    assert!(
-        key.len() == SCRIPT_REFERENCE_KEY_SIZE,
-        "decode_script_reference_key: expected {} bytes, got {}",
-        SCRIPT_REFERENCE_KEY_SIZE,
-        key.len()
-    );
-    (key[..32].to_vec(), key[32])
 }
 
 pub fn encode_script_version_by_label_key(label_key: &str, version_hash: &[u8]) -> Vec<u8> {
@@ -1366,19 +1328,6 @@ mod tests {
     fn test_dao_index_prefix_helpers() {
         assert_eq!(encode_dao_by_status_prefix(1), 1i16.to_be_bytes());
         assert_eq!(encode_dao_by_lock_prefix(&[0x22; 32]), [0x22; 32]);
-    }
-
-    #[test]
-    fn test_script_reference_key_roundtrip() {
-        let reference_hash = [0xAB; 32];
-        let key = encode_script_reference_key(&reference_hash, 4);
-        let prefix = encode_script_reference_prefix(&reference_hash);
-        let (decoded_hash, decoded_hash_type) = decode_script_reference_key(&key);
-
-        assert_eq!(decoded_hash, reference_hash);
-        assert_eq!(decoded_hash_type, 4);
-        assert_eq!(prefix.len(), SCRIPT_REFERENCE_PREFIX_SIZE);
-        assert!(key.starts_with(&prefix));
     }
 
     #[test]
