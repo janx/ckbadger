@@ -14,7 +14,7 @@ impl IdentityInterner {
             return *existing;
         }
 
-        let id = InternId::new(self.values.len()).expect("identity interner exceeded u32 space");
+        let id = InternId::new(self.values.len());
         self.by_value.insert(bytes.clone(), id);
         self.values.push(bytes);
         id
@@ -42,7 +42,14 @@ mod tests {
         let second = interner.intern_bytes(vec![4, 5, 6]);
 
         assert_ne!(first, second);
-        assert_eq!(first, InternId(0));
-        assert_eq!(second, InternId(1));
+        assert_eq!(interner.intern_bytes(vec![1, 2, 3]), first);
+        assert_eq!(interner.intern_bytes(vec![4, 5, 6]), second);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    #[should_panic(expected = "intern id overflow: index")]
+    fn script_identity_intern_id_overflows_u32() {
+        InternId::new(u32::MAX as usize + 1);
     }
 }

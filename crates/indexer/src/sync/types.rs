@@ -13,12 +13,13 @@ pub(crate) const UNDO_SEQ_SCOPE_SHIFT: u32 = 48;
 pub(crate) const UNDO_SEQ_LOCAL_MAX: u64 = (1u64 << UNDO_SEQ_SCOPE_SHIFT) - 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct InternId(pub(crate) u32);
+pub(crate) struct InternId(u32);
 
 impl InternId {
-    pub(crate) fn new(index: usize) -> Option<Self> {
-        let id = u32::try_from(index).ok()?;
-        Some(Self(id))
+    pub(crate) fn new(index: usize) -> Self {
+        Self(u32::try_from(index).unwrap_or_else(|_| {
+            panic!("intern id overflow: index {index} exceeds u32::MAX")
+        }))
     }
 }
 
