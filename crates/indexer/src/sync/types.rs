@@ -124,7 +124,6 @@ pub(crate) struct TxData {
     pub(crate) outputs_count: i16,
     pub(crate) is_cellbase: bool,
     pub(crate) inputs: Vec<crate::parser::transaction::ParsedInput>,
-    pub(crate) cell_deps: Vec<crate::parser::transaction::ParsedCellDep>,
     pub(crate) cells: Vec<crate::parser::cell::ParsedCell>,
     pub(crate) witnesses: Vec<String>,
     pub(crate) outputs_data: Vec<String>,

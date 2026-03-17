@@ -9,9 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
-use ckbadger_store::types::{
-    CellScriptVersionInfo, LiveCellInfo, ObjectTypeIndex, PositionedCellInfo, SporeTypeIndex,
-};
+use ckbadger_store::types::{LiveCellInfo, ObjectTypeIndex, PositionedCellInfo, SporeTypeIndex};
 
 use crate::parser::{
     analyze_spore_media_profile,
@@ -52,7 +50,6 @@ struct ParserPrecomputePhaseMetrics {
     cache_balance_and_script_ms: f64,
     spore_precompute_ms: f64,
     nft_precompute_ms: f64,
-    script_version_ms: f64,
 }
 
 impl ParserPrecomputePhaseMetrics {
@@ -62,7 +59,6 @@ impl ParserPrecomputePhaseMetrics {
             + self.cache_balance_and_script_ms
             + self.spore_precompute_ms
             + self.nft_precompute_ms
-            + self.script_version_ms
     }
 }
 
@@ -71,38 +67,12 @@ struct ParserBatchPerfSample {
     parse_ms: f64,
     precompute_ms: f64,
     nft_precompute_ms: f64,
-    script_version_ms: f64,
 }
-
-type ParserVersionCache = HashMap<(Vec<u8>, i16), (i64, CellScriptVersionInfo)>;
 
 fn parser_cache_committed_tip_from_sync_tip(sync_tip: i64) -> i64 {
     sync_tip
         .checked_sub(1)
         .expect("sync tip underflow while deriving parser cache committed tip")
-}
-
-fn reset_parser_version_cache_epoch(
-    parser_version_cache: &mut ParserVersionCache,
-    parser_cache_epoch: &mut u64,
-    new_epoch: u64,
-) -> usize {
-    if *parser_cache_epoch == new_epoch {
-        return 0;
-    }
-    let cleared = parser_version_cache.len();
-    parser_version_cache.clear();
-    *parser_cache_epoch = new_epoch;
-    cleared
-}
-
-fn prune_parser_version_cache(
-    parser_version_cache: &mut ParserVersionCache,
-    committed_tip: i64,
-) -> usize {
-    let before = parser_version_cache.len();
-    parser_version_cache.retain(|_, (block_number, _)| *block_number > committed_tip);
-    before - parser_version_cache.len()
 }
 
 #[derive(Debug, Default)]
@@ -441,8 +411,6 @@ impl Indexer {
             object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
             pre_parsed_spore_data: PreParsedSporeData,
             pre_parsed_nft_data: PreParsedNftData,
-            script_reference_version_changes: ScriptReferenceVersionChanges,
-            cell_script_version_rows: Vec<(Vec<u8>, i16, CellScriptVersionInfo)>,
             parser_perf_sample: ParserBatchPerfSample,
         }
 
@@ -451,10 +419,8 @@ impl Indexer {
         let parse_tx_pending_txs = Arc::new(AtomicU64::new(0));
         let parser_exit_reason = Arc::new(std::sync::Mutex::new(None::<String>));
         let fetcher_exit_reason = Arc::new(std::sync::Mutex::new(None::<String>));
-        // Subtract 1 so that cells at the sync tip block are retained in parser
-        // caches until the writer actually commits them in this run.  For a fresh
-        // DB (tip=0) this gives -1, keeping genesis block cells in parser_version_cache
-        // instead of immediately pruning them via the `block_number > committed` check.
+        // Initialize committed_tip one below sync_tip so that cells at the
+        // tip block are retained in parser caches until the writer commits them.
         let committed_tip_for_cache = Arc::new(AtomicI64::new(
             parser_cache_committed_tip_from_sync_tip(self.repo.get_sync_tip().await?.0),
         ));
@@ -737,11 +703,6 @@ impl Indexer {
 
         // === Parser task ===
         let writer_for_parser = self.writer.clone();
-        let append_only_store_for_parser = Arc::clone(&self.append_only_store);
-        let ckb_store_for_parser = self
-            .ckb_store
-            .clone()
-            .expect("ckb_store must exist before pipeline starts");
         let rpc_for_parser = self.rpc.clone();
         let cell_cache_for_parser = Arc::clone(&self.cell_cache);
         let committed_tip_for_cache_for_parser = Arc::clone(&committed_tip_for_cache);
@@ -750,8 +711,6 @@ impl Indexer {
         let parser_exit_reason_for_parser = Arc::clone(&parser_exit_reason);
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
-            let mut parser_version_cache: ParserVersionCache = HashMap::new();
-            let mut parser_cache_epoch = pipeline_epoch_for_parser.load(Ordering::SeqCst);
             'parser_batches: while let Some((
                 batch_epoch,
                 start_block,
@@ -762,32 +721,11 @@ impl Indexer {
             {
                 let current_epoch = pipeline_epoch_for_parser.load(Ordering::SeqCst);
                 if batch_epoch != current_epoch {
-                    let cleared_version_cache_entries = reset_parser_version_cache_epoch(
-                        &mut parser_version_cache,
-                        &mut parser_cache_epoch,
-                        current_epoch,
-                    );
                     debug!(
                         batch_epoch,
-                        current_epoch,
-                        cleared_version_cache_entries,
-                        "Skipping stale fetched batch {}-{}",
-                        start_block,
-                        end_block
+                        current_epoch, "Skipping stale fetched batch {}-{}", start_block, end_block
                     );
                     continue;
-                }
-                let cleared_version_cache_entries = reset_parser_version_cache_epoch(
-                    &mut parser_version_cache,
-                    &mut parser_cache_epoch,
-                    batch_epoch,
-                );
-                if cleared_version_cache_entries > 0 {
-                    debug!(
-                        batch_epoch,
-                        cleared_version_cache_entries,
-                        "Parser cache epoch advanced; cleared stale version cache entries"
-                    );
                 }
                 let t_parser = Instant::now();
 
@@ -869,18 +807,12 @@ impl Indexer {
                 )> = loop {
                     let current_epoch = pipeline_epoch_for_parser.load(Ordering::SeqCst);
                     if should_abort_unresolved_retry_on_epoch_change(batch_epoch, current_epoch) {
-                        let cleared_version_cache_entries = reset_parser_version_cache_epoch(
-                            &mut parser_version_cache,
-                            &mut parser_cache_epoch,
-                            current_epoch,
-                        );
                         info!(
                             start_block,
                             end_block,
                             batch_epoch,
                             current_epoch,
                             retries = unresolved_retry_count,
-                            cleared_version_cache_entries,
                             "Parser: aborting unresolved input retry because batch became stale after pipeline reset"
                         );
                         break None;
@@ -1936,55 +1868,6 @@ impl Indexer {
                 precompute_phase_metrics.nft_precompute_ms =
                     nft_precompute_started.elapsed().as_secs_f64() * 1000.0;
 
-                // Script reference version computation: moved from writer to parser
-                // for concurrent execution with previous batch's writer.
-                let t_script_version = Instant::now();
-                let (script_reference_version_changes, cell_script_version_rows) =
-                    match build_script_reference_version_state(
-                        &all_tx_data,
-                        writer_for_parser.store(),
-                        &append_only_store_for_parser,
-                        &batch_cell_infos,
-                        Some(ckb_store_for_parser.as_ref()),
-                        &parser_version_cache,
-                    ) {
-                        Ok(result) => result,
-                        Err(e) => {
-                            error!(
-                                start_block,
-                                end_block, "Parser: script version computation failed: {}", e
-                            );
-                            record_worker_exit_reason(
-                                &parser_exit_reason_for_parser,
-                                format!(
-                                    "script version computation failed for range {}-{}: {}",
-                                    start_block, end_block, e
-                                ),
-                            );
-                            return;
-                        }
-                    };
-                precompute_phase_metrics.script_version_ms =
-                    t_script_version.elapsed().as_secs_f64() * 1000.0;
-
-                // Populate cross-batch version cache
-                let tx_block_numbers: HashMap<&[u8], i64> = all_tx_data
-                    .iter()
-                    .map(|tx| (tx.hash.as_slice(), tx.block_number))
-                    .collect();
-                for (tx_hash, output_index, info) in &cell_script_version_rows {
-                    let block_number = tx_block_numbers[tx_hash.as_slice()];
-                    parser_version_cache.insert(
-                        (tx_hash.clone(), *output_index),
-                        (block_number, info.clone()),
-                    );
-                }
-
-                // Prune entries already committed by the writer
-                let committed = committed_tip_for_cache_for_parser.load(Ordering::Relaxed);
-                let version_cache_evicted =
-                    prune_parser_version_cache(&mut parser_version_cache, committed);
-
                 let precompute_parser_ms = t_precompute_parser.elapsed().as_secs_f64() * 1000.0;
                 let total_parser_ms = t_parser.elapsed().as_secs_f64() * 1000.0;
                 let tx_count: usize = all_tx_data.len();
@@ -2021,8 +1904,6 @@ impl Indexer {
                         format!("{:.1}", precompute_phase_metrics.spore_precompute_ms),
                     nft_precompute_ms =
                         format!("{:.1}", precompute_phase_metrics.nft_precompute_ms),
-                    script_version_ms =
-                        format!("{:.1}", precompute_phase_metrics.script_version_ms),
                     total_ms = format!("{:.1}", total_parser_ms),
                     txs = tx_count,
                     cells = cell_count,
@@ -2031,7 +1912,6 @@ impl Indexer {
                     cache_misses,
                     cache_hit_pct = format!("{:.0}", hit_rate),
                     committed_tip,
-                    version_cache_evicted,
                     cache_evicted,
                     cache_size = cell_cache_for_parser.len(),
                     precompute_phase_total_ms =
@@ -2044,15 +1924,9 @@ impl Indexer {
 
                 let current_epoch = pipeline_epoch_for_parser.load(Ordering::SeqCst);
                 if batch_epoch != current_epoch {
-                    let cleared_version_cache_entries = reset_parser_version_cache_epoch(
-                        &mut parser_version_cache,
-                        &mut parser_cache_epoch,
-                        current_epoch,
-                    );
                     debug!(
                         batch_epoch,
                         current_epoch,
-                        cleared_version_cache_entries,
                         "Dropping parsed stale batch {}-{} before writer handoff",
                         start_block,
                         end_block
@@ -2066,7 +1940,6 @@ impl Indexer {
                     parse_ms: t_parse_ms,
                     precompute_ms: precompute_parser_ms,
                     nft_precompute_ms: precompute_phase_metrics.nft_precompute_ms,
-                    script_version_ms: precompute_phase_metrics.script_version_ms,
                 };
                 if parse_tx
                     .send(ParsedBatch {
@@ -2091,8 +1964,6 @@ impl Indexer {
                         object_daily_changes,
                         pre_parsed_spore_data,
                         pre_parsed_nft_data,
-                        script_reference_version_changes,
-                        cell_script_version_rows,
                         parser_perf_sample,
                     })
                     .await
@@ -2183,8 +2054,6 @@ impl Indexer {
                     object_daily_changes,
                     pre_parsed_spore_data,
                     pre_parsed_nft_data,
-                    script_reference_version_changes,
-                    cell_script_version_rows,
                     parser_perf_sample,
                 })) => {
                     consecutive_idle_timeouts = 0;
@@ -2205,10 +2074,6 @@ impl Indexer {
                         continue;
                     }
                     let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
-                    // NOTE: Do NOT update committed_tip_for_cache here (before writing).
-                    // The authoritative update happens after the batch is committed (below).
-                    // Updating here prematurely advances the cache tip, causing the parser
-                    // to prune version-cache entries for cells not yet written to the DB.
                     let expected_start = next_start_block_from_db_tip(
                         db_tip,
                         &db_tip_hash,
@@ -2402,8 +2267,6 @@ impl Indexer {
                             object_daily_changes,
                             pre_parsed_spore_data,
                             pre_parsed_nft_data,
-                            script_reference_version_changes,
-                            cell_script_version_rows,
                             chain_tip,
                         )
                         .await
@@ -2664,7 +2527,6 @@ impl Indexer {
                             parse_ms: parser_perf_sample.parse_ms,
                             precompute_ms: parser_perf_sample.precompute_ms,
                             nft_precompute_ms: parser_perf_sample.nft_precompute_ms,
-                            script_version_ms: parser_perf_sample.script_version_ms,
                             write_ms: write_metrics.write_ms,
                             prefetch_ms: write_metrics.prefetch_ms,
                             finalize_ms: write_metrics.finalize_ms,
@@ -3079,7 +2941,6 @@ mod tests {
             outputs_count: tx.outputs.len() as i16,
             is_cellbase: parsed_tx.is_cellbase,
             inputs: TransactionParser::parse_inputs(tx).expect("parse inputs"),
-            cell_deps: TransactionParser::parse_cell_deps(tx).expect("parse cell deps"),
             cells: CellParser::parse_outputs(tx).expect("parse outputs"),
             witnesses: tx.witnesses.clone(),
             outputs_data: tx.outputs_data.clone(),
@@ -3197,10 +3058,9 @@ mod tests {
             cache_balance_and_script_ms: 30.0,
             spore_precompute_ms: 40.0,
             nft_precompute_ms: 50.0,
-            script_version_ms: 60.0,
         };
 
-        assert!((metrics.total_ms() - 210.0).abs() < f64::EPSILON);
+        assert!((metrics.total_ms() - 150.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -3351,7 +3211,7 @@ mod tests {
             outputs_count: 1,
             is_cellbase: true,
             inputs: vec![],
-            cell_deps: vec![],
+
             cells: vec![],
             witnesses: vec![],
             outputs_data: vec![],
@@ -3383,7 +3243,7 @@ mod tests {
                 previous_output_index: prev_output_index,
                 since: 0,
             }],
-            cell_deps: vec![],
+
             cells: vec![],
             witnesses: vec![],
             outputs_data: vec![],
@@ -3411,7 +3271,7 @@ mod tests {
             outputs_count: 1,
             is_cellbase: false,
             inputs: vec![],
-            cell_deps: vec![],
+
             cells: vec![ParsedCell {
                 capacity: 100_00000000,
                 lock_code_hash: vec![0xBB; 32],
@@ -3642,65 +3502,5 @@ mod tests {
             "mNFT transferred within same batch must NOT be marked as consumed, got {} events",
             output.consumed_mnft.len()
         );
-    }
-
-    fn sample_cell_script_version_info(seed: u8) -> CellScriptVersionInfo {
-        CellScriptVersionInfo {
-            lock_reference_hash: vec![seed; 32],
-            lock_hash_type: 0,
-            lock_version_hash: Some(vec![seed.wrapping_add(1); 32]),
-            type_reference_hash: None,
-            type_hash_type: None,
-            type_version_hash: None,
-            capacity: 100,
-            occupied_capacity: 61,
-        }
-    }
-
-    #[test]
-    fn test_parser_cache_committed_tip_from_sync_tip_retains_genesis_cells() {
-        let committed_tip = parser_cache_committed_tip_from_sync_tip(0);
-        let mut parser_version_cache: ParserVersionCache = HashMap::new();
-        parser_version_cache.insert(
-            (vec![0x11; 32], 0),
-            (0, sample_cell_script_version_info(0x21)),
-        );
-
-        let evicted = prune_parser_version_cache(&mut parser_version_cache, committed_tip);
-
-        assert_eq!(committed_tip, -1);
-        assert_eq!(evicted, 0);
-        assert_eq!(parser_version_cache.len(), 1);
-    }
-
-    #[test]
-    fn test_parser_cache_epoch_reset_clears_old_entries_and_keeps_replayed_blocks() {
-        let mut parser_version_cache: ParserVersionCache = HashMap::new();
-        let stale_key = (vec![0x31; 32], 0);
-        parser_version_cache.insert(
-            stale_key.clone(),
-            (150, sample_cell_script_version_info(0x41)),
-        );
-        let mut parser_cache_epoch = 0;
-
-        let cleared =
-            reset_parser_version_cache_epoch(&mut parser_version_cache, &mut parser_cache_epoch, 1);
-
-        assert_eq!(cleared, 1);
-        assert_eq!(parser_cache_epoch, 1);
-        assert!(parser_version_cache.is_empty());
-
-        let replay_key = (vec![0x51; 32], 0);
-        parser_version_cache.insert(
-            replay_key.clone(),
-            (101, sample_cell_script_version_info(0x61)),
-        );
-
-        let committed_tip = parser_cache_committed_tip_from_sync_tip(100);
-        let evicted = prune_parser_version_cache(&mut parser_version_cache, committed_tip);
-
-        assert_eq!(committed_tip, 99);
-        assert_eq!(evicted, 0);
-        assert!(parser_version_cache.contains_key(&replay_key));
     }
 }
