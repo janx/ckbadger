@@ -3,9 +3,6 @@ use std::collections::HashMap;
 use crate::sync::types::InternId;
 
 #[derive(Debug, Default)]
-pub(crate) struct Interner;
-
-#[derive(Debug, Default)]
 pub(crate) struct IdentityInterner {
     by_value: HashMap<Vec<u8>, InternId>,
     values: Vec<Vec<u8>>,

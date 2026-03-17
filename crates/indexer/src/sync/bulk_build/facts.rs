@@ -17,16 +17,16 @@ pub(crate) struct TxFacts;
 pub(crate) struct CellFacts {
     pub(crate) lock_script_hash_id: InternId,
     pub(crate) lock_code_hash_id: InternId,
-    pub(crate) type_script_hash_id: InternId,
-    pub(crate) type_code_hash_id: InternId,
+    pub(crate) type_script_hash_id: Option<InternId>,
+    pub(crate) type_code_hash_id: Option<InternId>,
 }
 
 #[derive(Debug)]
 pub(crate) struct ResolvedInputFacts {
     pub(crate) lock_script_hash_id: InternId,
     pub(crate) lock_code_hash_id: InternId,
-    pub(crate) type_script_hash_id: InternId,
-    pub(crate) type_code_hash_id: InternId,
+    pub(crate) type_script_hash_id: Option<InternId>,
+    pub(crate) type_code_hash_id: Option<InternId>,
 }
 
 #[derive(Debug)]
