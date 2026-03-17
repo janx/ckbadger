@@ -391,6 +391,60 @@ enum ScriptIdentifierResolution {
     NotFound,
 }
 
+fn fallback_script_version_info(
+    state: &AppState,
+    reference_hash: &[u8],
+    version_hash: &[u8],
+) -> Result<ckbadger_store::types::ScriptVersionInfo, ApiRouteError> {
+    let direct_info = state
+        .store
+        .get_script_info(reference_hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let version_info = if reference_hash == version_hash {
+        None
+    } else {
+        state
+            .store
+            .get_script_info(version_hash)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+    };
+
+    let fallback = match (direct_info, version_info) {
+        (Some(direct), Some(version)) => {
+            let candidates = vec![direct.clone(), version];
+            merge_script_info_for_reference(&candidates, reference_hash).unwrap_or(direct)
+        }
+        (Some(direct), None) => direct,
+        (None, Some(version)) => version,
+        (None, None) => {
+            return Ok(ckbadger_store::types::ScriptVersionInfo {
+                version_hash: version_hash.to_vec(),
+                ..Default::default()
+            });
+        }
+    };
+
+    Ok(ckbadger_store::types::ScriptVersionInfo {
+        version_hash: version_hash.to_vec(),
+        name: fallback.name,
+        category: fallback.category,
+        website: fallback.website,
+        description: fallback.description,
+        lock_cells_count: fallback.lock_cells_count,
+        lock_live_cells_count: fallback.lock_live_cells_count,
+        lock_capacity_sum: fallback.lock_capacity_sum,
+        lock_live_capacity_sum: fallback.lock_live_capacity_sum,
+        lock_used_capacity_sum: fallback.lock_used_capacity_sum,
+        lock_live_used_capacity_sum: fallback.lock_live_used_capacity_sum,
+        type_cells_count: fallback.type_cells_count,
+        type_live_cells_count: fallback.type_live_cells_count,
+        type_capacity_sum: fallback.type_capacity_sum,
+        type_live_capacity_sum: fallback.type_live_capacity_sum,
+        type_used_capacity_sum: fallback.type_used_capacity_sum,
+        type_live_used_capacity_sum: fallback.type_live_used_capacity_sum,
+    })
+}
+
 fn resolve_script_identifier(
     state: &AppState,
     hash_bytes: &[u8],
@@ -400,12 +454,10 @@ fn resolve_script_identifier(
     {
         CurrentScriptVersionResolution::Resolved(resolved) => {
             let resolved = *resolved;
-            let version_info = resolved.version_info.ok_or_else(|| {
-                ApiError::internal(format!(
-                    "missing script_version for resolved script identifier: version_hash=0x{}",
-                    hex::encode(&resolved.version_hash)
-                ))
-            })?;
+            let version_info = match resolved.version_info {
+                Some(version_info) => version_info,
+                None => fallback_script_version_info(state, hash_bytes, &resolved.version_hash)?,
+            };
             let code_cells = list_version_code_cells(
                 &state.store,
                 &state.append_only_store,

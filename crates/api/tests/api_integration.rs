@@ -3069,6 +3069,119 @@ async fn test_script_code_cells_resolve_unique_type_reference() {
 }
 
 #[tokio::test]
+async fn test_script_lookup_and_code_cells_allow_unlabeled_resolved_type_reference() {
+    let store = test_store();
+
+    let version_hash = vec![0x51; 32];
+    let type_hash = vec![0x61; 32];
+    let code_cell_tx_hash = vec![0x71; 32];
+    let code_cell_output_index = 2i16;
+
+    store
+        .put_script_info_direct(
+            &type_hash,
+            &ScriptInfo {
+                code_hash: type_hash.clone(),
+                hash_type: 1,
+                dep_type_hash: Some(type_hash.clone()),
+                dep_data_hash: Some(version_hash.clone()),
+                lock_cells_count: 4,
+                lock_live_cells_count: 2,
+                lock_capacity_sum: 900,
+                lock_live_capacity_sum: 500,
+                lock_used_capacity_sum: 700,
+                lock_live_used_capacity_sum: 350,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &code_cell_tx_hash,
+        code_cell_output_index,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(vec![0x33; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
+            data_size: 32,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: Some(version_hash.clone()),
+        },
+        234,
+    );
+    batch.put_cell_by_type(&type_hash, 234, &code_cell_tx_hash, code_cell_output_index);
+    batch.put_cell_by_data_hash(
+        &version_hash,
+        234,
+        &code_cell_tx_hash,
+        code_cell_output_index,
+    );
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+    let version_hash_hex = format!("0x{}", hex::encode(&version_hash));
+    let code_cell_tx_hash_hex = format!("0x{}", hex::encode(&code_cell_tx_hash));
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            r#"{{"codeHashes":["{}"]}}"#,
+            type_hash_hex
+        )))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json[&type_hash_hex]["resolutionState"], "resolved");
+    assert_eq!(json[&type_hash_hex]["name"], "Unknown");
+    assert_eq!(json[&type_hash_hex]["codeHash"], version_hash_hex);
+    assert_eq!(json[&type_hash_hex]["hashType"], "type");
+    assert_eq!(json[&type_hash_hex]["deploymentTypeHash"], type_hash_hex);
+    assert_eq!(json[&type_hash_hex]["deploymentDataHash"], version_hash_hex);
+    assert_eq!(json[&type_hash_hex]["scriptKind"], "lock");
+    assert_eq!(json[&type_hash_hex]["liveCellsCount"], 2);
+    assert_eq!(json[&type_hash_hex]["liveCapacitySum"], "500");
+    assert_eq!(json[&type_hash_hex]["liveUsedCapacitySum"], "350");
+    assert_eq!(
+        json[&type_hash_hex]["codeCellTxHash"],
+        code_cell_tx_hash_hex
+    );
+    assert_eq!(json[&type_hash_hex]["codeCellOutputIndex"], 2);
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cells?code_hash={}&hash_type=type",
+            type_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["resolvedVersionHash"], version_hash_hex);
+    assert_eq!(json["liveCount"], 1);
+    assert_eq!(json["totalCount"], 1);
+    assert_eq!(json["codeCells"][0]["txHash"], code_cell_tx_hash_hex);
+    assert_eq!(json["codeCells"][0]["outputIndex"], 2);
+    assert_eq!(json["codeCells"][0]["status"], "live");
+}
+
+#[tokio::test]
 async fn test_scripts_list_merges_unknown_reference_into_known_deployment() {
     let store = test_store();
 
