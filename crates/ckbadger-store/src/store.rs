@@ -349,7 +349,7 @@ pub fn cf_write_policy(cf_name: &str) -> CfWritePolicy {
         CF_CONSUMED_CELLS | CF_REORG_UNDO_LOG_BY_BLOCK | CF_PENDING_PROPOSALS => {
             CfWritePolicy::BulkDisabled
         }
-        _ => CfWritePolicy::FinalSnapshot,
+        _ => panic!("unknown column family write policy: {}", cf_name),
     }
 }
 
@@ -2773,5 +2773,11 @@ mod tests {
             cf_write_policy(CF_CONSUMED_CELLS),
             CfWritePolicy::FinalSnapshot
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown column family write policy")]
+    fn test_cf_write_policy_panics_on_unknown_column_family() {
+        cf_write_policy("missing_cf");
     }
 }
