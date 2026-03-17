@@ -21,6 +21,8 @@ pub struct HodlWaveTracker {
     pub holder_count: i64,
     /// The date of the last snapshot written (to detect day boundaries).
     pub last_snapshot_date: Option<NaiveDate>,
+    /// The last block number processed (updated for every block, not just date transitions).
+    last_processed_block: Option<i64>,
 }
 
 impl HodlWaveTracker {
@@ -30,6 +32,7 @@ impl HodlWaveTracker {
             block_date_transitions: Vec::new(),
             holder_count: 0,
             last_snapshot_date: None,
+            last_processed_block: None,
         }
     }
 
@@ -78,6 +81,7 @@ impl HodlWaveTracker {
             block_date_transitions,
             holder_count: state.holder_count,
             last_snapshot_date,
+            last_processed_block: state.last_processed_block,
         })
     }
 
@@ -101,11 +105,14 @@ impl HodlWaveTracker {
             date_transitions,
             holder_count: self.holder_count,
             last_snapshot_date,
+            last_processed_block: self.last_processed_block,
         }
     }
 
-    /// Record a block→date mapping. Only records transitions (when date changes).
+    /// Record a block→date mapping. Only records transitions (when date changes),
+    /// but always updates `last_processed_block` for consistency tracking.
     pub fn record_block_date(&mut self, block_number: i64, date: NaiveDate) {
+        self.last_processed_block = Some(block_number);
         if let Some((_, last_date)) = self.block_date_transitions.last() {
             if *last_date == date {
                 return; // Same date, no transition needed
@@ -471,6 +478,7 @@ mod tests {
             date_transitions: vec![],
             holder_count: -5,
             last_snapshot_date: None,
+            last_processed_block: None,
         };
         let err = HodlWaveTracker::from_state(state).unwrap_err();
         assert!(err.to_string().contains("negative holder_count"));
@@ -483,6 +491,7 @@ mod tests {
             date_transitions: vec![],
             holder_count: 0,
             last_snapshot_date: None,
+            last_processed_block: None,
         };
         let err = HodlWaveTracker::from_state(state).unwrap_err();
         assert!(err.to_string().contains("corrupt hodl capacity_by_date"));

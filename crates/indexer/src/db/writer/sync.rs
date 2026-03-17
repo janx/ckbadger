@@ -400,15 +400,21 @@ impl BatchWriter {
         // Tracker writes (T_TRACK) use direct put_cf outside the finalize batch,
         // so they can be committed even when block headers haven't been finalized.
         if let Some(hodl_state) = self.store.get_hodl_tracker_state()? {
-            if let Some((last_block, _)) = hodl_state.date_transitions.last() {
-                if *last_block > start_block {
+            let last_block = hodl_state
+                .last_processed_block
+                .or_else(|| hodl_state.date_transitions.last().map(|(b, _)| *b));
+            if let Some(last_block) = last_block {
+                if last_block > start_block {
                     return Ok(true);
                 }
             }
         }
         if let Some(cell_dist_state) = self.store.get_cell_dist_tracker_state()? {
-            if let Some((last_block, _)) = cell_dist_state.date_transitions.last() {
-                if *last_block > start_block {
+            let last_block = cell_dist_state
+                .last_processed_block
+                .or_else(|| cell_dist_state.date_transitions.last().map(|(b, _)| *b));
+            if let Some(last_block) = last_block {
+                if last_block > start_block {
                     return Ok(true);
                 }
             }

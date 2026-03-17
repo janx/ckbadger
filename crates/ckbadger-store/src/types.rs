@@ -804,6 +804,10 @@ pub struct HodlTrackerState {
     pub date_transitions: Vec<(i64, String)>,
     pub holder_count: i64,
     pub last_snapshot_date: Option<String>,
+    /// The last block number processed by this tracker.
+    /// Distinct from `date_transitions.last()` which only records date boundary changes.
+    #[serde(default)]
+    pub last_processed_block: Option<i64>,
 }
 
 // ============================================
@@ -850,6 +854,10 @@ pub struct CellDistributionTrackerState {
     /// Incremental address cohort accumulator: (YYYY-MM, used_capacity, balance).
     #[serde(default)]
     pub cohort_accum: Vec<(String, i128, i128)>,
+    /// The last block number processed by this tracker.
+    /// Distinct from `date_transitions.last()` which only records date boundary changes.
+    #[serde(default)]
+    pub last_processed_block: Option<i64>,
 }
 
 // ============================================

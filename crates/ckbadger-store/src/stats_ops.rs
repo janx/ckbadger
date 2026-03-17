@@ -1126,6 +1126,7 @@ mod tests {
             date_transitions: vec![(0, "20240101".to_string()), (100, "20240102".to_string())],
             holder_count: 500,
             last_snapshot_date: Some("20240102".to_string()),
+            last_processed_block: Some(100),
         };
 
         store.put_hodl_tracker_state(&state).unwrap();
@@ -1974,6 +1975,7 @@ mod cell_distribution_tests {
             date_transitions: vec![(0, "20240101".to_string()), (100, "20240102".to_string())],
             last_snapshot_date: Some("20240102".to_string()),
             cohort_accum: vec![],
+            last_processed_block: Some(100),
         };
 
         store.put_cell_dist_tracker_state(&state).unwrap();

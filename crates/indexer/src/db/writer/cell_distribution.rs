@@ -51,6 +51,8 @@ pub struct CellDistributionTracker {
     last_snapshot_date: Option<NaiveDate>,
     /// Incremental address cohort accumulator: cohort_month → (used_capacity, balance).
     cohort_accum: BTreeMap<String, (i128, i128)>,
+    /// The last block number processed (updated for every block, not just date transitions).
+    last_processed_block: Option<i64>,
 }
 
 impl CellDistributionTracker {
@@ -62,6 +64,7 @@ impl CellDistributionTracker {
             block_date_transitions: Vec::new(),
             last_snapshot_date: None,
             cohort_accum: BTreeMap::new(),
+            last_processed_block: None,
         }
     }
 
@@ -114,6 +117,7 @@ impl CellDistributionTracker {
             block_date_transitions,
             last_snapshot_date,
             cohort_accum,
+            last_processed_block: state.last_processed_block,
         })
     }
 
@@ -144,11 +148,14 @@ impl CellDistributionTracker {
             date_transitions,
             last_snapshot_date,
             cohort_accum,
+            last_processed_block: self.last_processed_block,
         }
     }
 
-    /// Record a block→date mapping. Only records transitions (when date changes).
+    /// Record a block→date mapping. Only records transitions (when date changes),
+    /// but always updates `last_processed_block` for consistency tracking.
     pub fn record_block_date(&mut self, block_number: i64, date: NaiveDate) {
+        self.last_processed_block = Some(block_number);
         if let Some((_, last_date)) = self.block_date_transitions.last() {
             if *last_date == date {
                 return; // Same date, no transition needed
@@ -601,6 +608,7 @@ mod tests {
             date_transitions: vec![],
             last_snapshot_date: None,
             cohort_accum: vec![],
+            last_processed_block: None,
         };
         let err = CellDistributionTracker::from_state(state).unwrap_err();
         assert!(err
@@ -617,6 +625,7 @@ mod tests {
             date_transitions: vec![(100, "bad-date".to_string())],
             last_snapshot_date: None,
             cohort_accum: vec![],
+            last_processed_block: None,
         };
         let err = CellDistributionTracker::from_state(state).unwrap_err();
         assert!(err

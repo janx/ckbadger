@@ -48,26 +48,28 @@ fn ensure_hodl_tracker_state_consistent(
             tip_block
         );
     }
-    if let Some((last_block, _)) = state.date_transitions.last() {
-        if *last_block > tip_block {
-            bail!(
-                "invalid HODL tracker state: last transition block {} ahead of sync tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
-                last_block,
-                tip_block
-            );
-        }
-        // Detect tracker behind tip: if domain data was committed but tracker
-        // state wasn't persisted before a crash, the tracker silently lags.
-        // Fail-fast rather than serving stale derived statistics.
-        if *last_block < tip_block {
-            bail!(
-                "invalid HODL tracker state: last transition block {} behind sync tip {} \
-                 (likely crash between domain commit and tracker persist). \
-                 automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
-                last_block,
-                tip_block
-            );
-        }
+    // Use last_processed_block for consistency checks (tracks every block processed,
+    // not just date boundary transitions). Fall back to date_transitions.last() for
+    // backward compatibility with states persisted before this field was added.
+    let last_block = state
+        .last_processed_block
+        .or_else(|| state.date_transitions.last().map(|(b, _)| *b))
+        .unwrap(); // safe: date_transitions is non-empty
+    if last_block > tip_block {
+        bail!(
+            "invalid HODL tracker state: last processed block {} ahead of sync tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+            last_block,
+            tip_block
+        );
+    }
+    if last_block < tip_block {
+        bail!(
+            "invalid HODL tracker state: last processed block {} behind sync tip {} \
+             (likely crash between domain commit and tracker persist). \
+             automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+            last_block,
+            tip_block
+        );
     }
     Ok(())
 }
@@ -105,23 +107,27 @@ fn ensure_cell_dist_tracker_state_consistent(
             tip_block
         );
     }
-    if let Some((last_block, _)) = state.date_transitions.last() {
-        if *last_block > tip_block {
-            bail!(
-                "invalid cell distribution tracker state: last transition block {} ahead of sync tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
-                last_block,
-                tip_block
-            );
-        }
-        if *last_block < tip_block {
-            bail!(
-                "invalid cell distribution tracker state: last transition block {} behind sync tip {} \
-                 (likely crash between domain commit and tracker persist). \
-                 automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
-                last_block,
-                tip_block
-            );
-        }
+    // Use last_processed_block for consistency checks. Fall back to date_transitions.last()
+    // for backward compatibility with states persisted before this field was added.
+    let last_block = state
+        .last_processed_block
+        .or_else(|| state.date_transitions.last().map(|(b, _)| *b))
+        .unwrap(); // safe: date_transitions is non-empty
+    if last_block > tip_block {
+        bail!(
+            "invalid cell distribution tracker state: last processed block {} ahead of sync tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+            last_block,
+            tip_block
+        );
+    }
+    if last_block < tip_block {
+        bail!(
+            "invalid cell distribution tracker state: last processed block {} behind sync tip {} \
+             (likely crash between domain commit and tracker persist). \
+             automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+            last_block,
+            tip_block
+        );
     }
     Ok(())
 }
@@ -1194,26 +1200,51 @@ mod tests {
             date_transitions: vec![],
             holder_count: 0,
             last_snapshot_date: None,
+            last_processed_block: None,
         };
         let empty_err = ensure_hodl_tracker_state_consistent(Some(&empty), 100).unwrap_err();
         assert!(empty_err.to_string().contains("empty date_transitions"));
 
+        // last_processed_block matches tip — valid even though last date transition < tip
         let aligned = HodlTrackerState {
             capacity_by_date: vec![("20240101".to_string(), 1)],
-            date_transitions: vec![(0, "20240101".to_string()), (100, "20240102".to_string())],
+            date_transitions: vec![(0, "20240101".to_string()), (50, "20240102".to_string())],
             holder_count: 1,
             last_snapshot_date: Some("20240102".to_string()),
+            last_processed_block: Some(100),
         };
         assert!(ensure_hodl_tracker_state_consistent(Some(&aligned), 100).is_ok());
 
         let ahead = HodlTrackerState {
             capacity_by_date: vec![("20240101".to_string(), 1)],
-            date_transitions: vec![(0, "20240101".to_string()), (101, "20240102".to_string())],
+            date_transitions: vec![(0, "20240101".to_string()), (50, "20240102".to_string())],
             holder_count: 1,
             last_snapshot_date: Some("20240102".to_string()),
+            last_processed_block: Some(101),
         };
         let ahead_err = ensure_hodl_tracker_state_consistent(Some(&ahead), 100).unwrap_err();
         assert!(ahead_err.to_string().contains("ahead of sync tip"));
+
+        // Backward compat: no last_processed_block, falls back to date_transitions.last()
+        let fallback_aligned = HodlTrackerState {
+            capacity_by_date: vec![("20240101".to_string(), 1)],
+            date_transitions: vec![(0, "20240101".to_string()), (100, "20240102".to_string())],
+            holder_count: 1,
+            last_snapshot_date: Some("20240102".to_string()),
+            last_processed_block: None,
+        };
+        assert!(ensure_hodl_tracker_state_consistent(Some(&fallback_aligned), 100).is_ok());
+
+        // last_processed_block behind tip — crash detection
+        let behind = HodlTrackerState {
+            capacity_by_date: vec![("20240101".to_string(), 1)],
+            date_transitions: vec![(0, "20240101".to_string()), (50, "20240102".to_string())],
+            holder_count: 1,
+            last_snapshot_date: Some("20240102".to_string()),
+            last_processed_block: Some(90),
+        };
+        let behind_err = ensure_hodl_tracker_state_consistent(Some(&behind), 100).unwrap_err();
+        assert!(behind_err.to_string().contains("behind sync tip"));
     }
 
     #[test]
@@ -1223,6 +1254,7 @@ mod tests {
             date_transitions: vec![(200, "20240101".to_string())],
             holder_count: 7,
             last_snapshot_date: Some("20240101".to_string()),
+            last_processed_block: Some(200),
         };
 
         let tracker = rebuild_hodl_tracker_from_state(Some(stale), 0).unwrap();
@@ -1240,6 +1272,7 @@ mod tests {
             date_transitions: vec![(1, "20240101".to_string())],
             holder_count: 3,
             last_snapshot_date: Some("20240101".to_string()),
+            last_processed_block: Some(1),
         };
 
         let tracker = rebuild_hodl_tracker_from_state(Some(persisted), 1).unwrap();

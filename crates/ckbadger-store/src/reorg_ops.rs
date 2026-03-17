@@ -517,6 +517,12 @@ fn truncate_hodl_tracker_state_for_rollback(
         changed = true;
     }
 
+    // Update last_processed_block to match rollback target.
+    if state.last_processed_block.is_some_and(|b| b > rollback_to) {
+        state.last_processed_block = Some(rollback_to);
+        changed = true;
+    }
+
     Ok(changed)
 }
 
@@ -591,6 +597,12 @@ fn truncate_cell_dist_tracker_state_for_rollback(
     // (address cohort accumulator) cannot be precisely adjusted without per-cell
     // or per-address tracking. For shallow reorgs (1-2 blocks), the drift is
     // negligible. The next forward sync corrects incrementally.
+
+    // Update last_processed_block to match rollback target.
+    if state.last_processed_block.is_some_and(|b| b > rollback_to) {
+        state.last_processed_block = Some(rollback_to);
+        changed = true;
+    }
 
     Ok(changed)
 }
@@ -5194,6 +5206,7 @@ mod tests {
                 date_transitions: vec![(1, "20231114".to_string()), (2, "20231115".to_string())],
                 holder_count: 9,
                 last_snapshot_date: Some("20231115".to_string()),
+                last_processed_block: Some(2),
             })
             .unwrap();
 
@@ -5216,6 +5229,7 @@ mod tests {
             date_transitions: vec![(1, "20231114".to_string()), (2, "20231115".to_string())],
             holder_count: 10,
             last_snapshot_date: Some("20231115".to_string()),
+            last_processed_block: Some(2),
         };
 
         // Simulate: one address lost all live cells during rollback (delta = -1).
@@ -5231,6 +5245,7 @@ mod tests {
             date_transitions: vec![(1, "20231114".to_string())],
             holder_count: 5,
             last_snapshot_date: Some("20231114".to_string()),
+            last_processed_block: Some(1),
         };
         let changed = truncate_hodl_tracker_state_for_rollback(&mut state2, 1, 2).unwrap();
         assert!(changed);
@@ -5242,6 +5257,7 @@ mod tests {
             date_transitions: vec![(1, "20231114".to_string()), (2, "20231115".to_string())],
             holder_count: 10,
             last_snapshot_date: Some("20231115".to_string()),
+            last_processed_block: Some(2),
         };
         let changed = truncate_hodl_tracker_state_for_rollback(&mut state3, 1, 0).unwrap();
         assert!(changed); // dates were truncated
@@ -5255,6 +5271,7 @@ mod tests {
             date_transitions: vec![(1, "20231114".to_string())],
             holder_count: 2,
             last_snapshot_date: Some("20231114".to_string()),
+            last_processed_block: Some(1),
         };
         // Delta of -5 would make holder_count negative → should error.
         let err = truncate_hodl_tracker_state_for_rollback(&mut state, 1, -5).unwrap_err();
@@ -5302,6 +5319,7 @@ mod tests {
                 date_transitions: vec![(1, "20231114".to_string()), (2, "20231115".to_string())],
                 last_snapshot_date: Some("20231115".to_string()),
                 cohort_accum: vec![],
+                last_processed_block: Some(2),
             })
             .unwrap();
 
@@ -5338,6 +5356,7 @@ mod tests {
             ],
             last_snapshot_date: Some("20231116".to_string()),
             cohort_accum: vec![],
+            last_processed_block: Some(200),
         };
 
         let changed = truncate_cell_dist_tracker_state_for_rollback(&mut state, 150).unwrap();
@@ -5359,6 +5378,7 @@ mod tests {
             date_transitions: vec![(100, "20231115".to_string())],
             last_snapshot_date: Some("20231115".to_string()),
             cohort_accum: vec![],
+            last_processed_block: Some(100),
         };
         // Rollback to block 50 — before any transition → should error.
         let err = truncate_cell_dist_tracker_state_for_rollback(&mut state, 50).unwrap_err();
