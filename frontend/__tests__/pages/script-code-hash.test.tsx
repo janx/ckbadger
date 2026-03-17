@@ -66,13 +66,6 @@ describe('ScriptByCodeHashPage', () => {
           liveUsedCapacitySum: '14000000000',
           codeCellsLiveCount: 1,
           codeCellsTotal: 1,
-          availableReferences: [
-            {
-              referenceHash: mockCodeHash,
-              hashType: 'type',
-              scriptKind: 'type',
-            },
-          ],
           resolutionState: 'resolved',
           ambiguity: null,
         };
@@ -95,7 +88,6 @@ describe('ScriptByCodeHashPage', () => {
           liveUsedCapacitySum: '0',
           codeCellsLiveCount: 0,
           codeCellsTotal: 0,
-          availableReferences: [],
           resolutionState: 'resolved',
           ambiguity: null,
         };
@@ -117,13 +109,6 @@ describe('ScriptByCodeHashPage', () => {
       liveCount: 1,
       totalCount: 1,
       resolvedVersionHash: mockCodeHash,
-      availableReferences: [
-        {
-          referenceHash: mockCodeHash,
-          hashType: 'type',
-          scriptKind: 'type',
-        },
-      ],
       ambiguity: null,
     });
     vi.mocked(api.getCell).mockResolvedValue({
@@ -195,13 +180,6 @@ describe('ScriptByCodeHashPage', () => {
         liveUsedCapacitySum: '14000000000',
         codeCellsLiveCount: 0,
         codeCellsTotal: 0,
-        availableReferences: [
-          {
-            referenceHash: mockCodeHash,
-            hashType: 'type',
-            scriptKind: 'lock',
-          },
-        ],
         resolutionState: 'resolved',
         ambiguity: null,
       },

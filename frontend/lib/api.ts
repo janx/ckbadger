@@ -335,12 +335,6 @@ interface CodeCellEntry {
   capacity: string;
 }
 
-interface ScriptReferenceOption {
-  referenceHash: string;
-  hashType: ScriptRefHashType;
-  scriptKind: string | null;
-}
-
 interface ScriptResolutionAmbiguity {
   versionHashes: string[];
 }
@@ -350,7 +344,6 @@ interface CodeCellsResponse {
   liveCount: number;
   totalCount: number;
   resolvedVersionHash?: string | null;
-  availableReferences?: ScriptReferenceOption[];
   ambiguity?: ScriptResolutionAmbiguity | null;
 }
 
@@ -1216,7 +1209,6 @@ interface KnownScript {
   cellsCount?: number;
   codeCellsLiveCount?: number;
   codeCellsTotal?: number;
-  availableReferences?: ScriptReferenceOption[];
 }
 
 interface DeploymentUsage {
@@ -1280,7 +1272,6 @@ interface ScriptLookupInfo {
   liveUsedCapacitySum: string;
   codeCellsLiveCount: number;
   codeCellsTotal: number;
-  availableReferences?: ScriptReferenceOption[];
   resolutionState?: 'resolved' | 'ambiguous';
   ambiguity?: ScriptResolutionAmbiguity | null;
 }

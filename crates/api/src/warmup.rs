@@ -6,14 +6,15 @@ use crate::routes::statistics::{
     build_cell_size_response, StackedAreaChartResponse,
 };
 use crate::utils::{
-    accumulate_live_capacity, resolve_collection_standard, resolve_dob_collection_name,
-    resolve_nft_collection_name, resolve_nft_collection_storage_tier_override,
+    accumulate_live_capacity, hash_type_to_string, resolve_collection_standard,
+    resolve_dob_collection_name, resolve_nft_collection_name,
+    resolve_nft_collection_storage_tier_override,
 };
 use crate::AppState;
 use ckbadger_store::AddressBalance;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
@@ -29,7 +30,6 @@ pub const CACHE_KEY_SPORES_ALL: &str = "spores:all";
 pub const CACHE_KEY_SCRIPTS_ALL: &str = "scripts:all";
 pub const CACHE_KEY_SCRIPTS_NAMED: &str = "scripts:named";
 pub const CACHE_KEY_SCRIPT_VERSIONS_ALL: &str = "scripts:versions:all";
-pub const CACHE_KEY_SCRIPT_REFERENCES_BY_HASH: &str = "scripts:references:by_hash";
 const ADDRESS_CACHE_LIMIT: usize = 500;
 const SPORE_CACHE_LIMIT: usize = 100_000;
 
@@ -77,12 +77,6 @@ pub struct CachedAddressEntry {
 pub struct CachedScriptEntry {
     pub code_hash: String,
     pub name: String,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct CachedScriptReferenceEntry {
-    pub reference_hash: String,
-    pub hash_type: String,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -244,16 +238,6 @@ pub async fn refresh_assets_cache_loop(state: Arc<AppState>) {
         }
 
         tokio::time::sleep(Duration::from_secs(30)).await;
-    }
-}
-
-fn hash_type_to_string(hash_type: u8) -> String {
-    match hash_type {
-        0 => "data".to_string(),
-        1 => "type".to_string(),
-        2 => "data1".to_string(),
-        4 => "data2".to_string(),
-        _ => format!("unknown({})", hash_type),
     }
 }
 
@@ -420,26 +404,6 @@ fn refresh_named_script_cache_sync(state: &AppState) -> anyhow::Result<()> {
         .mem_cache
         .set(CACHE_KEY_SCRIPTS_NAMED, &scripts, CacheTtl::ASSETS);
 
-    let mut references_by_hash: HashMap<String, Vec<CachedScriptReferenceEntry>> = HashMap::new();
-    for ((reference_hash, hash_type), _info) in state.store.list_script_references()? {
-        let hash_type = hash_type_to_string(hash_type);
-        let reference_hash = format!("0x{}", hex::encode(reference_hash));
-        references_by_hash
-            .entry(reference_hash.clone())
-            .or_default()
-            .push(CachedScriptReferenceEntry {
-                reference_hash,
-                hash_type,
-            });
-    }
-    for entries in references_by_hash.values_mut() {
-        entries.sort_by(|left, right| left.hash_type.cmp(&right.hash_type));
-    }
-    state.mem_cache.set(
-        CACHE_KEY_SCRIPT_REFERENCES_BY_HASH,
-        &references_by_hash,
-        CacheTtl::ASSETS,
-    );
     Ok(())
 }
 
@@ -500,7 +464,7 @@ fn build_asset_caches_sync(
             fully_onchain_ratio: None,
             fully_onchain_count: None,
             type_code_hash: Some(format!("0x{}", hex::encode(&info.type_code_hash))),
-            type_hash_type: Some(hash_type_to_string(info.hash_type)),
+            type_hash_type: hash_type_to_string(info.hash_type).map(|s| s.to_string()),
             type_args: Some(format!("0x{}", hex::encode(&info.type_args))),
             description: info.description.clone(),
         });

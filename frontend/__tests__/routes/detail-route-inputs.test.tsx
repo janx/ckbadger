@@ -47,13 +47,6 @@ describe('detail route inputs', () => {
         liveUsedCapacitySum: '14000000000',
         codeCellsLiveCount: 0,
         codeCellsTotal: 0,
-        availableReferences: [
-          {
-            referenceHash: mockCodeHash,
-            hashType: 'type',
-            scriptKind: 'type',
-          },
-        ],
         resolutionState: 'resolved',
         ambiguity: null,
       },
@@ -64,13 +57,6 @@ describe('detail route inputs', () => {
       liveCount: 0,
       totalCount: 0,
       resolvedVersionHash: mockCodeHash,
-      availableReferences: [
-        {
-          referenceHash: mockCodeHash,
-          hashType: 'type',
-          scriptKind: 'type',
-        },
-      ],
       ambiguity: null,
     });
     vi.mocked(api.getScriptCapacityChartByCodeHash).mockResolvedValue({

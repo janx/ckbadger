@@ -9,9 +9,6 @@ use crate::keys;
 use crate::store::*;
 use crate::types::*;
 
-type ScriptReferenceVersionDeltaKey = (Vec<u8>, u8, Option<Vec<u8>>, bool);
-type ScriptReferenceVersionDelta = (i64, i64, i128, i128, i128, i128);
-
 fn parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd: &[u8]) -> anyhow::Result<u32> {
     let cutoff_str = std::str::from_utf8(cutoff_yyyymmdd)
         .map_err(|e| anyhow::anyhow!("invalid cutoff date utf8 {:?}: {}", cutoff_yyyymmdd, e))?;
@@ -180,8 +177,6 @@ fn delete_cell_index_entries(
             keys::encode_cell_index_key(data_hash, created_at_block, tx_hash, output_index);
         batch.delete_cf(store.cf_cell_by_data_hash(), &idx_key);
     }
-    let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
-    batch.delete_cf(store.cf_cell_script_versions(), outpoint_key);
 }
 
 fn put_cell_index_entries(
@@ -276,63 +271,6 @@ fn accumulate_cell_deltas(
                 .entry((type_script_hash.clone(), cell.lock_script_hash.clone()))
                 .or_insert(0) += udt_amount as i128 * sign;
         }
-    }
-}
-
-fn accumulate_script_reference_version_deltas(
-    cell_version: &CellScriptVersionInfo,
-    sign: i128,
-    deltas: &mut HashMap<ScriptReferenceVersionDeltaKey, ScriptReferenceVersionDelta>,
-) {
-    let live_cells_delta = sign as i64;
-    let live_capacity_delta = i128::from(cell_version.capacity) * sign;
-    let live_used_delta = i128::from(cell_version.occupied_capacity) * sign;
-    let total_cells_delta = if sign < 0 { -1 } else { 0 };
-    let total_capacity_delta = if sign < 0 {
-        -i128::from(cell_version.capacity)
-    } else {
-        0
-    };
-    let total_used_delta = if sign < 0 {
-        -i128::from(cell_version.occupied_capacity)
-    } else {
-        0
-    };
-
-    let entry = deltas
-        .entry((
-            cell_version.lock_reference_hash.clone(),
-            cell_version.lock_hash_type,
-            cell_version.lock_version_hash.clone(),
-            false,
-        ))
-        .or_insert((0, 0, 0, 0, 0, 0));
-    entry.0 += total_cells_delta;
-    entry.1 += live_cells_delta;
-    entry.2 += total_capacity_delta;
-    entry.3 += live_capacity_delta;
-    entry.4 += total_used_delta;
-    entry.5 += live_used_delta;
-
-    if let (Some(type_reference_hash), Some(type_hash_type), Some(type_version_hash)) = (
-        cell_version.type_reference_hash.as_ref(),
-        cell_version.type_hash_type,
-        cell_version.type_version_hash.as_ref(),
-    ) {
-        let entry = deltas
-            .entry((
-                type_reference_hash.clone(),
-                type_hash_type,
-                Some(type_version_hash.clone()),
-                true,
-            ))
-            .or_insert((0, 0, 0, 0, 0, 0));
-        entry.0 += total_cells_delta;
-        entry.1 += live_cells_delta;
-        entry.2 += total_capacity_delta;
-        entry.3 += live_capacity_delta;
-        entry.4 += total_used_delta;
-        entry.5 += live_used_delta;
     }
 }
 
@@ -963,10 +901,6 @@ impl CkbadgerStore {
         let mut addr_balance_deltas: HashMap<Vec<u8>, (i128, i128, i32, i64)> = HashMap::new();
         // script_deltas: (code_hash, is_type) -> (live_cells_delta, live_cap_delta, live_occ_delta)
         let mut script_info_deltas: HashMap<(Vec<u8>, bool), (i64, i128, i128)> = HashMap::new();
-        let mut script_reference_version_deltas: HashMap<
-            ScriptReferenceVersionDeltaKey,
-            ScriptReferenceVersionDelta,
-        > = HashMap::new();
         // token_holder_deltas: (type_hash, lock_hash) -> balance_delta
         let mut token_holder_deltas: HashMap<(Vec<u8>, Vec<u8>), i128> = HashMap::new();
 
@@ -1031,20 +965,6 @@ impl CkbadgerStore {
                         &mut addr_balance_deltas,
                         &mut script_info_deltas,
                         &mut token_holder_deltas,
-                    );
-                    let cell_version = self
-                        .get_cell_script_version(&tx_hash, output_index)?
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "missing cell_script_version during rollback removal: outpoint=0x{}:{}",
-                                bytes_to_hex(&tx_hash),
-                                output_index
-                            )
-                        })?;
-                    accumulate_script_reference_version_deltas(
-                        &cell_version,
-                        -1,
-                        &mut script_reference_version_deltas,
                     );
                 }
                 stage.tick(cells_removed);
@@ -1113,20 +1033,6 @@ impl CkbadgerStore {
                         &mut script_info_deltas,
                         &mut token_holder_deltas,
                     );
-                    let cell_version = self
-                        .get_cell_script_version(&tx_hash, output_index)?
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "missing cell_script_version during rollback restore: outpoint=0x{}:{}",
-                                bytes_to_hex(&tx_hash),
-                                output_index
-                            )
-                        })?;
-                    accumulate_script_reference_version_deltas(
-                        &cell_version,
-                        1,
-                        &mut script_reference_version_deltas,
-                    );
                 }
                 stage.tick(cells_restored);
             }
@@ -1183,20 +1089,6 @@ impl CkbadgerStore {
                             &mut addr_balance_deltas,
                             &mut script_info_deltas,
                             &mut token_holder_deltas,
-                        );
-                        let cell_version = self
-                            .get_cell_script_version(&ctx.tx_hash, output_index)?
-                            .ok_or_else(|| {
-                                anyhow::anyhow!(
-                                    "missing cell_script_version during tx-context rollback removal: outpoint=0x{}:{}",
-                                    bytes_to_hex(&ctx.tx_hash),
-                                    output_index
-                                )
-                            })?;
-                        accumulate_script_reference_version_deltas(
-                            &cell_version,
-                            -1,
-                            &mut script_reference_version_deltas,
                         );
                     }
                     // Remove consumed marker for outputs created in rolled-back blocks.
@@ -1275,20 +1167,6 @@ impl CkbadgerStore {
                                     &mut addr_balance_deltas,
                                     &mut script_info_deltas,
                                     &mut token_holder_deltas,
-                                );
-                                let cell_version = self
-                                    .get_cell_script_version(&input.tx_hash, input.output_index)?
-                                    .ok_or_else(|| {
-                                        anyhow::anyhow!(
-                                            "missing cell_script_version during tx-context rollback restore: outpoint=0x{}:{}",
-                                            bytes_to_hex(&input.tx_hash),
-                                            input.output_index
-                                        )
-                                    })?;
-                                accumulate_script_reference_version_deltas(
-                                    &cell_version,
-                                    1,
-                                    &mut script_reference_version_deltas,
                                 );
                             }
                         }
@@ -1759,8 +1637,6 @@ impl CkbadgerStore {
         let stage = RollbackStageProgress::new("apply_derived_cf_deltas");
         let mut addr_balances_updated = 0u64;
         let mut script_infos_updated = 0u64;
-        let mut script_references_updated = 0u64;
-        let mut script_versions_updated = 0u64;
         let mut holders_updated = 0u64;
         let mut holders_removed = 0u64;
         let mut tokens_updated = 0u64;
@@ -1893,170 +1769,6 @@ impl CkbadgerStore {
             script_infos_updated += 1;
         }
 
-        for (
-            (reference_hash, hash_type, version_hash, is_type),
-            (cells_delta, live_delta, cap_delta, live_cap_delta, used_delta, live_used_delta),
-        ) in &script_reference_version_deltas
-        {
-            if *cells_delta == 0
-                && *live_delta == 0
-                && *cap_delta == 0
-                && *live_cap_delta == 0
-                && *used_delta == 0
-                && *live_used_delta == 0
-            {
-                continue;
-            }
-
-            let mut reference = self
-                .get_script_reference(reference_hash, *hash_type)?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "missing script_reference during rollback delta application: reference_hash=0x{}, hash_type={}",
-                        bytes_to_hex(reference_hash),
-                        hash_type
-                    )
-                })?;
-            let mut version = if let Some(version_hash) = version_hash.as_ref() {
-                Some(self.get_script_version(version_hash)?.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "missing script_version during rollback delta application: version_hash=0x{}",
-                        bytes_to_hex(version_hash)
-                    )
-                })?)
-            } else {
-                None
-            };
-
-            if *is_type {
-                reference.type_cells_count += cells_delta;
-                reference.type_live_cells_count += live_delta;
-                reference.type_capacity_sum += cap_delta;
-                reference.type_live_capacity_sum += live_cap_delta;
-                reference.type_used_capacity_sum += used_delta;
-                reference.type_live_used_capacity_sum += live_used_delta;
-                if let Some(version) = version.as_mut() {
-                    version.type_cells_count += cells_delta;
-                    version.type_live_cells_count += live_delta;
-                    version.type_capacity_sum += cap_delta;
-                    version.type_live_capacity_sum += live_cap_delta;
-                    version.type_used_capacity_sum += used_delta;
-                    version.type_live_used_capacity_sum += live_used_delta;
-                }
-
-                if reference.type_cells_count < 0
-                    || reference.type_live_cells_count < 0
-                    || reference.type_capacity_sum < 0
-                    || reference.type_live_capacity_sum < 0
-                    || reference.type_used_capacity_sum < 0
-                    || reference.type_live_used_capacity_sum < 0
-                {
-                    anyhow::bail!(
-                        "script_reference type underflow during rollback: reference_hash=0x{}, hash_type={}, cells={}, live_cells={}, cap={}, live_cap={}, used={}, live_used={}",
-                        bytes_to_hex(reference_hash),
-                        hash_type,
-                        reference.type_cells_count,
-                        reference.type_live_cells_count,
-                        reference.type_capacity_sum,
-                        reference.type_live_capacity_sum,
-                        reference.type_used_capacity_sum,
-                        reference.type_live_used_capacity_sum
-                    );
-                }
-                if let Some(version) = version.as_ref() {
-                    if version.type_cells_count < 0
-                        || version.type_live_cells_count < 0
-                        || version.type_capacity_sum < 0
-                        || version.type_live_capacity_sum < 0
-                        || version.type_used_capacity_sum < 0
-                        || version.type_live_used_capacity_sum < 0
-                    {
-                        anyhow::bail!(
-                            "script_version type underflow during rollback: version_hash=0x{}, cells={}, live_cells={}, cap={}, live_cap={}, used={}, live_used={}",
-                            bytes_to_hex(version_hash.as_ref().expect("checked some")),
-                            version.type_cells_count,
-                            version.type_live_cells_count,
-                            version.type_capacity_sum,
-                            version.type_live_capacity_sum,
-                            version.type_used_capacity_sum,
-                            version.type_live_used_capacity_sum
-                        );
-                    }
-                }
-            } else {
-                reference.lock_cells_count += cells_delta;
-                reference.lock_live_cells_count += live_delta;
-                reference.lock_capacity_sum += cap_delta;
-                reference.lock_live_capacity_sum += live_cap_delta;
-                reference.lock_used_capacity_sum += used_delta;
-                reference.lock_live_used_capacity_sum += live_used_delta;
-                if let Some(version) = version.as_mut() {
-                    version.lock_cells_count += cells_delta;
-                    version.lock_live_cells_count += live_delta;
-                    version.lock_capacity_sum += cap_delta;
-                    version.lock_live_capacity_sum += live_cap_delta;
-                    version.lock_used_capacity_sum += used_delta;
-                    version.lock_live_used_capacity_sum += live_used_delta;
-                }
-
-                if reference.lock_cells_count < 0
-                    || reference.lock_live_cells_count < 0
-                    || reference.lock_capacity_sum < 0
-                    || reference.lock_live_capacity_sum < 0
-                    || reference.lock_used_capacity_sum < 0
-                    || reference.lock_live_used_capacity_sum < 0
-                {
-                    anyhow::bail!(
-                        "script_reference lock underflow during rollback: reference_hash=0x{}, hash_type={}, cells={}, live_cells={}, cap={}, live_cap={}, used={}, live_used={}",
-                        bytes_to_hex(reference_hash),
-                        hash_type,
-                        reference.lock_cells_count,
-                        reference.lock_live_cells_count,
-                        reference.lock_capacity_sum,
-                        reference.lock_live_capacity_sum,
-                        reference.lock_used_capacity_sum,
-                        reference.lock_live_used_capacity_sum
-                    );
-                }
-                if let Some(version) = version.as_ref() {
-                    if version.lock_cells_count < 0
-                        || version.lock_live_cells_count < 0
-                        || version.lock_capacity_sum < 0
-                        || version.lock_live_capacity_sum < 0
-                        || version.lock_used_capacity_sum < 0
-                        || version.lock_live_used_capacity_sum < 0
-                    {
-                        anyhow::bail!(
-                            "script_version lock underflow during rollback: version_hash=0x{}, cells={}, live_cells={}, cap={}, live_cap={}, used={}, live_used={}",
-                            bytes_to_hex(version_hash.as_ref().expect("checked some")),
-                            version.lock_cells_count,
-                            version.lock_live_cells_count,
-                            version.lock_capacity_sum,
-                            version.lock_live_capacity_sum,
-                            version.lock_used_capacity_sum,
-                            version.lock_live_used_capacity_sum
-                        );
-                    }
-                }
-            }
-
-            let reference_key = keys::encode_script_reference_key(reference_hash, *hash_type);
-            batch.put_cf(
-                self.cf_script_references(),
-                reference_key,
-                bincode::serialize(&reference).expect("serialize ScriptReferenceInfo"),
-            );
-            if let (Some(version_hash), Some(version)) = (version_hash.as_ref(), version.as_ref()) {
-                batch.put_cf(
-                    self.cf_script_versions(),
-                    version_hash,
-                    bincode::serialize(version).expect("serialize ScriptVersionInfo"),
-                );
-                script_versions_updated += 1;
-            }
-            script_references_updated += 1;
-        }
-
         // 9c. token_holders — apply balance deltas, track per-type_hash holder count changes
         let mut type_hash_holder_changes: HashMap<Vec<u8>, (i128, i64)> = HashMap::new();
         for ((type_hash, lock_hash), balance_delta) in &token_holder_deltas {
@@ -2158,8 +1870,6 @@ impl CkbadgerStore {
         info!(
             addr_balances_updated,
             script_infos_updated,
-            script_references_updated,
-            script_versions_updated,
             holders_updated,
             holders_removed,
             tokens_updated,
@@ -2168,8 +1878,6 @@ impl CkbadgerStore {
         stage.finish(
             addr_balances_updated
                 + script_infos_updated
-                + script_references_updated
-                + script_versions_updated
                 + holders_updated
                 + holders_removed
                 + tokens_updated,
@@ -2834,11 +2542,10 @@ mod tests {
     use crate::store::CkbadgerStore;
     use crate::types::{
         AddressBalance, AssetAction, CachedBlockHeader, CellDistributionTrackerState,
-        CellScriptVersionInfo, DaoDepositCacheEntry, HodlTrackerState, LiveCellInfo,
-        ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectEntry, ObjectExtra,
-        ObjectStandard, OwnerActivityDelta, ScriptInfo, ScriptReferenceInfo, ScriptVersionInfo,
-        SporeMediaProfile, StorageDependencyTier, SyncStatus, TokenInfo, TxActivityBundle,
-        TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
+        DaoDepositCacheEntry, HodlTrackerState, LiveCellInfo, ObjectCollectionActivityEntry,
+        ObjectCollectionAggregate, ObjectEntry, ObjectExtra, ObjectStandard, OwnerActivityDelta,
+        ScriptInfo, SporeMediaProfile, StorageDependencyTier, SyncStatus, TokenInfo,
+        TxActivityBundle, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
 
     fn put_canonical_tx(batch: &mut StoreBatch<'_>, block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
@@ -4360,331 +4067,6 @@ mod tests {
             .get_consumed_cell(&drop_consumed_tx, 0, &store)
             .unwrap()
             .is_none());
-    }
-
-    #[test]
-    fn test_rollback_updates_script_reference_and_version_rows() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        let header1 = CachedBlockHeader {
-            hash: vec![0x01; 32],
-            timestamp: 1_700_000_000_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-        let header2 = CachedBlockHeader {
-            hash: vec![0x02; 32],
-            timestamp: 1_700_000_010_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-        let script_reference_hash = vec![0x11; 32];
-        let version_hash = vec![0x91; 32];
-        let drop_live_tx = vec![0x20; 32];
-        let drop_consumed_tx = vec![0x30; 32];
-
-        let drop_live_cell = LiveCellInfo {
-            capacity: 200,
-            lock_script_hash: vec![0xBB; 32],
-            lock_code_hash: script_reference_hash.clone(),
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            data_size: 0,
-            occupied_capacity: 200,
-            udt_amount: None,
-            data_hash: None,
-        };
-        let drop_consumed_cell = LiveCellInfo {
-            capacity: 300,
-            lock_script_hash: vec![0xCC; 32],
-            lock_code_hash: script_reference_hash.clone(),
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            data_size: 0,
-            occupied_capacity: 300,
-            udt_amount: None,
-            data_hash: None,
-        };
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(1, &header1);
-        batch.put_block_header(2, &header2);
-        batch.put_cell(&drop_live_tx, 0, &drop_live_cell, 2);
-        batch.put_cell(&drop_consumed_tx, 0, &drop_consumed_cell, 1);
-        batch.put_addr_balance(
-            &[0xBB; 32],
-            &AddressBalance {
-                balance: 200,
-                used_capacity: 200,
-                live_cells_count: 1,
-                ..Default::default()
-            },
-        );
-        batch.put_addr_balance(&[0xCC; 32], &AddressBalance::default());
-        batch.put_script_info(
-            &script_reference_hash,
-            &ScriptInfo {
-                code_hash: script_reference_hash.clone(),
-                lock_cells_count: 2,
-                lock_live_cells_count: 1,
-                lock_capacity_sum: 500,
-                lock_live_capacity_sum: 200,
-                lock_used_capacity_sum: 500,
-                lock_live_used_capacity_sum: 200,
-                ..Default::default()
-            },
-        );
-        batch.put_script_reference(
-            &script_reference_hash,
-            1,
-            &ScriptReferenceInfo {
-                reference_hash: script_reference_hash.clone(),
-                hash_type: 1,
-                lock_cells_count: 2,
-                lock_live_cells_count: 1,
-                lock_capacity_sum: 500,
-                lock_live_capacity_sum: 200,
-                lock_used_capacity_sum: 500,
-                lock_live_used_capacity_sum: 200,
-                ..Default::default()
-            },
-        );
-        batch.put_script_version(
-            &version_hash,
-            &ScriptVersionInfo {
-                version_hash: version_hash.clone(),
-                name: Some("Rollback Script".to_string()),
-                lock_cells_count: 2,
-                lock_live_cells_count: 1,
-                lock_capacity_sum: 500,
-                lock_live_capacity_sum: 200,
-                lock_used_capacity_sum: 500,
-                lock_live_used_capacity_sum: 200,
-                ..Default::default()
-            },
-        );
-        batch.put_cell_script_version(
-            &drop_live_tx,
-            0,
-            &CellScriptVersionInfo {
-                lock_reference_hash: script_reference_hash.clone(),
-                lock_hash_type: 1,
-                lock_version_hash: Some(version_hash.clone()),
-                capacity: 200,
-                occupied_capacity: 200,
-                ..Default::default()
-            },
-        );
-        batch.put_cell_script_version(
-            &drop_consumed_tx,
-            0,
-            &CellScriptVersionInfo {
-                lock_reference_hash: script_reference_hash.clone(),
-                lock_hash_type: 1,
-                lock_version_hash: Some(version_hash.clone()),
-                capacity: 300,
-                occupied_capacity: 300,
-                ..Default::default()
-            },
-        );
-        batch.commit().unwrap();
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_consumed_cell(&drop_consumed_tx, 0, &drop_consumed_cell, 1, 2);
-        batch.delete_cell(&drop_consumed_tx, 0);
-        batch.commit().unwrap();
-
-        store.rollback_to_block(1).unwrap();
-
-        let reference = store
-            .get_script_reference(&script_reference_hash, 1)
-            .unwrap()
-            .unwrap();
-        assert_eq!(reference.lock_cells_count, 1);
-        assert_eq!(reference.lock_live_cells_count, 1);
-        assert_eq!(reference.lock_capacity_sum, 300);
-        assert_eq!(reference.lock_live_capacity_sum, 300);
-        assert_eq!(reference.lock_used_capacity_sum, 300);
-        assert_eq!(reference.lock_live_used_capacity_sum, 300);
-
-        let version = store.get_script_version(&version_hash).unwrap().unwrap();
-        assert_eq!(version.lock_cells_count, 1);
-        assert_eq!(version.lock_live_cells_count, 1);
-        assert_eq!(version.lock_capacity_sum, 300);
-        assert_eq!(version.lock_live_capacity_sum, 300);
-        assert_eq!(version.lock_used_capacity_sum, 300);
-        assert_eq!(version.lock_live_used_capacity_sum, 300);
-
-        assert!(store
-            .get_cell_script_version(&drop_live_tx, 0)
-            .unwrap()
-            .is_none());
-        assert!(store
-            .get_cell_script_version(&drop_consumed_tx, 0)
-            .unwrap()
-            .is_some());
-    }
-
-    #[test]
-    fn test_rollback_updates_reference_rows_without_requiring_version_for_unresolved_lock_ref() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        let header1 = CachedBlockHeader {
-            hash: vec![0x01; 32],
-            timestamp: 1_700_000_000_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-        let header2 = CachedBlockHeader {
-            hash: vec![0x02; 32],
-            timestamp: 1_700_000_010_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-        let script_reference_hash = vec![0x21; 32];
-        let drop_live_tx = vec![0x40; 32];
-        let drop_consumed_tx = vec![0x50; 32];
-
-        let drop_live_cell = LiveCellInfo {
-            capacity: 200,
-            lock_script_hash: vec![0xDB; 32],
-            lock_code_hash: script_reference_hash.clone(),
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            data_size: 0,
-            occupied_capacity: 200,
-            udt_amount: None,
-            data_hash: None,
-        };
-        let drop_consumed_cell = LiveCellInfo {
-            capacity: 300,
-            lock_script_hash: vec![0xDC; 32],
-            lock_code_hash: script_reference_hash.clone(),
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            data_size: 0,
-            occupied_capacity: 300,
-            udt_amount: None,
-            data_hash: None,
-        };
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(1, &header1);
-        batch.put_block_header(2, &header2);
-        batch.put_cell(&drop_live_tx, 0, &drop_live_cell, 2);
-        batch.put_cell(&drop_consumed_tx, 0, &drop_consumed_cell, 1);
-        batch.put_addr_balance(
-            &[0xDB; 32],
-            &AddressBalance {
-                balance: 200,
-                used_capacity: 200,
-                live_cells_count: 1,
-                ..Default::default()
-            },
-        );
-        batch.put_addr_balance(&[0xDC; 32], &AddressBalance::default());
-        batch.put_script_info(
-            &script_reference_hash,
-            &ScriptInfo {
-                code_hash: script_reference_hash.clone(),
-                lock_cells_count: 2,
-                lock_live_cells_count: 1,
-                lock_capacity_sum: 500,
-                lock_live_capacity_sum: 200,
-                lock_used_capacity_sum: 500,
-                lock_live_used_capacity_sum: 200,
-                ..Default::default()
-            },
-        );
-        batch.put_script_reference(
-            &script_reference_hash,
-            1,
-            &ScriptReferenceInfo {
-                reference_hash: script_reference_hash.clone(),
-                hash_type: 1,
-                lock_cells_count: 2,
-                lock_live_cells_count: 1,
-                lock_capacity_sum: 500,
-                lock_live_capacity_sum: 200,
-                lock_used_capacity_sum: 500,
-                lock_live_used_capacity_sum: 200,
-                ..Default::default()
-            },
-        );
-        batch.put_cell_script_version(
-            &drop_live_tx,
-            0,
-            &CellScriptVersionInfo {
-                lock_reference_hash: script_reference_hash.clone(),
-                lock_hash_type: 1,
-                lock_version_hash: None,
-                capacity: 200,
-                occupied_capacity: 200,
-                ..Default::default()
-            },
-        );
-        batch.put_cell_script_version(
-            &drop_consumed_tx,
-            0,
-            &CellScriptVersionInfo {
-                lock_reference_hash: script_reference_hash.clone(),
-                lock_hash_type: 1,
-                lock_version_hash: None,
-                capacity: 300,
-                occupied_capacity: 300,
-                ..Default::default()
-            },
-        );
-        batch.commit().unwrap();
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_consumed_cell(&drop_consumed_tx, 0, &drop_consumed_cell, 1, 2);
-        batch.delete_cell(&drop_consumed_tx, 0);
-        batch.commit().unwrap();
-
-        store.rollback_to_block(1).unwrap();
-
-        let reference = store
-            .get_script_reference(&script_reference_hash, 1)
-            .unwrap()
-            .unwrap();
-        assert_eq!(reference.lock_cells_count, 1);
-        assert_eq!(reference.lock_live_cells_count, 1);
-        assert_eq!(reference.lock_capacity_sum, 300);
-        assert_eq!(reference.lock_live_capacity_sum, 300);
-        assert_eq!(reference.lock_used_capacity_sum, 300);
-        assert_eq!(reference.lock_live_used_capacity_sum, 300);
-        assert!(store.list_script_versions().unwrap().is_empty());
     }
 
     #[test]

@@ -1061,17 +1061,6 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_script_info(), code_hash, &value);
     }
 
-    pub fn put_script_reference(
-        &mut self,
-        reference_hash: &[u8],
-        hash_type: u8,
-        info: &ScriptReferenceInfo,
-    ) {
-        let key = keys::encode_script_reference_key(reference_hash, hash_type);
-        let value = bincode::serialize(info).expect("serialize ScriptReferenceInfo");
-        self.put_cf(self.store.cf_script_references(), key, &value);
-    }
-
     pub fn put_script_version(&mut self, version_hash: &[u8], info: &ScriptVersionInfo) {
         let value = bincode::serialize(info).expect("serialize ScriptVersionInfo");
         self.put_cf(self.store.cf_script_versions(), version_hash, &value);
@@ -1085,22 +1074,6 @@ impl<'a> StoreBatch<'a> {
     pub fn delete_script_version_by_label(&mut self, label_key: &str, version_hash: &[u8]) {
         let key = keys::encode_script_version_by_label_key(label_key, version_hash);
         self.delete_cf(self.store.cf_script_versions_by_label(), key);
-    }
-
-    pub fn put_cell_script_version(
-        &mut self,
-        tx_hash: &[u8],
-        output_index: i16,
-        info: &CellScriptVersionInfo,
-    ) {
-        let key = keys::encode_outpoint(tx_hash, output_index);
-        let value = bincode::serialize(info).expect("serialize CellScriptVersionInfo");
-        self.put_cf(self.store.cf_cell_script_versions(), key, &value);
-    }
-
-    pub fn delete_cell_script_version(&mut self, tx_hash: &[u8], output_index: i16) {
-        let key = keys::encode_outpoint(tx_hash, output_index);
-        self.delete_cf(self.store.cf_cell_script_versions(), key);
     }
 
     // ---- Fiber Channels ----

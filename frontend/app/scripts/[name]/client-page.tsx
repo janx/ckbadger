@@ -245,28 +245,19 @@ function deploymentReferenceHashes(
   dataRef: string | null;
   dataRefType: ScriptRefHashType;
 } {
-  const deploymentTypeReference =
-    deployment.availableReferences?.find((reference) => reference.hashType === 'type') ?? null;
-  const deploymentDataReference =
-    deployment.availableReferences?.find((reference) => reference.hashType !== 'type') ?? null;
   const normalizedHashType = normalizeScriptRefHashType(deployment.hashType);
   const lookupTypeRef = normalizeHash(lookupInfo?.deploymentTypeHash);
   const lookupDataRef = normalizeHash(lookupInfo?.deploymentDataHash);
   const typeRef =
-    deploymentTypeReference?.referenceHash ??
     deployment.typeHash ??
     lookupTypeRef ??
     (normalizedHashType === 'type' ? deployment.codeHash : null);
   const dataRef =
-    deploymentDataReference?.referenceHash ??
     deployment.dataHash ??
     lookupDataRef ??
     (normalizedHashType !== 'type' ? deployment.codeHash : null);
   const dataRefType =
-    deploymentDataReference?.hashType ??
-    (normalizedHashType !== 'type'
-      ? getScriptRefQueryHashType(deployment.hashType, 'data')
-      : 'data');
+    normalizedHashType !== 'type' ? getScriptRefQueryHashType(deployment.hashType, 'data') : 'data';
   return { typeRef, dataRef, dataRefType };
 }
 export interface ScriptDetailPageProps {
@@ -389,7 +380,6 @@ export default function ScriptDetailPage({
       liveCellsCount: codeHashLookup.liveCellsCount,
       codeCellsLiveCount: codeHashLookup.codeCellsLiveCount,
       codeCellsTotal: codeHashLookup.codeCellsTotal,
-      availableReferences: codeHashLookup.availableReferences,
     };
 
     const deploymentEntries = codeHashCodeCells?.codeCells.length
@@ -781,23 +771,6 @@ export default function ScriptDetailPage({
                   ))}
                 </div>
               </div>
-              {codeHashLookup?.availableReferences?.length ? (
-                <div className="space-y-2">
-                  <div className="text-text-dim text-xs uppercase tracking-[0.2em]">
-                    Available References
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {codeHashLookup.availableReferences.map((reference) => (
-                      <Badge
-                        key={`${reference.referenceHash}:${reference.hashType}`}
-                        variant="neutral"
-                      >
-                        {reference.hashType}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
             </TerminalPanelContent>
           </TerminalPanel>
         </main>
