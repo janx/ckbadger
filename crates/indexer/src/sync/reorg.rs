@@ -170,7 +170,7 @@ impl Indexer {
                         cell.type_args.as_ref().map(|args| args.len()),
                         cell.data_size,
                     );
-                    tracker.cell_created(block_date, occ);
+                    tracker.cell_created(occ);
                 }
                 // Cell consumes
                 if !tx_data.is_cellbase {
@@ -186,7 +186,7 @@ impl Indexer {
                             .get(&key)
                             .or_else(|| batch_cell_infos.get(&key));
                         if let Some(info) = info {
-                            tracker.cell_consumed(info.created_at_block, info.occupied_capacity)?;
+                            tracker.cell_consumed(info.occupied_capacity)?;
                         }
                     }
                 }
@@ -251,7 +251,7 @@ impl Indexer {
                         cell.type_args.as_ref().map(|args| args.len()),
                         cell.data_size,
                     );
-                    cell_dist.cell_created(block_date, occ);
+                    cell_dist.cell_created(occ);
                 }
                 // Cell consumes
                 if !tx_data.is_cellbase {
@@ -268,8 +268,7 @@ impl Indexer {
                             .or_else(|| batch_cell_infos.get(&key));
                         if let Some(info) = info {
                             hodl.cell_consumed(info.created_at_block, info.capacity)?;
-                            cell_dist
-                                .cell_consumed(info.created_at_block, info.occupied_capacity)?;
+                            cell_dist.cell_consumed(info.occupied_capacity)?;
                         }
                     }
                 }

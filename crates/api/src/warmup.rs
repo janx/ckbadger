@@ -2,8 +2,7 @@ use crate::cache::CacheTtl;
 use crate::response::ChartResponse;
 use crate::routes::assets::AssetResponse;
 use crate::routes::statistics::{
-    build_address_cohort_response, build_block_time_distribution_response, build_cell_age_response,
-    build_cell_size_response, StackedAreaChartResponse,
+    build_address_cohort_response, build_block_time_distribution_response, build_cell_size_response,
 };
 use crate::utils::{
     accumulate_live_capacity, hash_type_to_string, resolve_collection_standard,
@@ -733,18 +732,12 @@ pub async fn warmup_assets_cache_once(state: Arc<AppState>) -> anyhow::Result<()
 /// Read materialized chart snapshots from store and populate caches.
 /// This replaces the old `compute_live_cell_charts` that performed expensive full CF scans.
 fn warmup_cell_charts_from_store(state: &AppState) -> Result<(), String> {
-    // Cell distribution: age + size charts
-    if let Some((date_key, snapshot)) = state
+    // Cell distribution: size chart
+    if let Some((_, snapshot)) = state
         .store
         .get_latest_cell_distribution()
         .map_err(|e| format!("failed to read cell distribution: {e}"))?
     {
-        let age_response = build_cell_age_response(&snapshot, &date_key);
-        state.mem_cache.set(
-            "chart:cell-age-vs-occupied-capacity:v1",
-            &age_response,
-            CacheTtl::CHART,
-        );
         let size_response = build_cell_size_response(&snapshot);
         state.mem_cache.set(
             "chart:cell-size-distribution:v1",
@@ -779,19 +772,6 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
     {
         Ok(Ok(())) => {
             // Transfer mem_cache entries to the async cache backend
-            if let Some(age) = state
-                .mem_cache
-                .get::<StackedAreaChartResponse>("chart:cell-age-vs-occupied-capacity:v1")
-            {
-                state
-                    .cache
-                    .set(
-                        "chart:cell-age-vs-occupied-capacity:v1",
-                        &age,
-                        CacheTtl::CHART,
-                    )
-                    .await;
-            }
             if let Some(size) = state
                 .mem_cache
                 .get::<ChartResponse>("chart:cell-size-distribution:v1")
@@ -814,7 +794,7 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
                     )
                     .await;
             }
-            info!("Warmed up materialized chart caches (cell-age + cell-size + address-cohort)");
+            info!("Warmed up materialized chart caches (cell-size + address-cohort)");
         }
         Ok(Err(e)) => tracing::warn!("Failed to warmup materialized charts: {}", e),
         Err(e) => tracing::warn!("Materialized chart warmup panicked: {}", e),

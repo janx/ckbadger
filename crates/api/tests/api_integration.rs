@@ -17,12 +17,12 @@ use ckbadger_api::{create_router, AppConfig, AppState, CleanupPathGuard};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ActivityEntry, AssetAction, AssetChange, CachedBlockHeader, ClusterAggregate,
-    ClusterDailyDelta, DailyBlockStats, DailyCellDistribution, DailyStats, DaoDailySnapshot,
-    DaoDepositCacheEntry, DeepForkInfo, EpochStats, HourlyStats, IdentityCollectionAggregate,
-    IdentityEntry, IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats,
-    ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry,
-    ObjectExtra, ObjectStandard, OwnerActivityDelta, ProtocolAction, ReorgEvent, ScriptDailyDelta,
-    ScriptInfo, ScriptVersionInfo, SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo,
+    ClusterDailyDelta, DailyBlockStats, DailyStats, DaoDailySnapshot, DaoDepositCacheEntry,
+    DeepForkInfo, EpochStats, HourlyStats, IdentityCollectionAggregate, IdentityEntry,
+    IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats, ObjectCollectionActivityEntry,
+    ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry, ObjectExtra, ObjectStandard,
+    OwnerActivityDelta, ProtocolAction, ReorgEvent, ScriptDailyDelta, ScriptInfo,
+    ScriptVersionInfo, SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo,
     TxActivityBundle, TxIndexEntry, TypeCallEntry,
 };
 use ckbadger_store::CkbadgerStore;
@@ -2200,66 +2200,12 @@ async fn test_total_deposit_chart_recomputes_after_initial_empty_response() {
 }
 
 #[tokio::test]
-async fn test_cell_age_used_capacity_route_recomputes_after_initial_empty_response() {
-    let store = test_store();
-    let config = test_config(store.clone());
-    let app = create_router(config).await;
-
-    let first_request = Request::builder()
-        .uri("/api/v1/charts/cell-age-vs-used-capacity")
-        .body(Body::empty())
-        .unwrap();
-    let first_response = app.clone().oneshot(first_request).await.unwrap();
-    assert_eq!(first_response.status(), StatusCode::OK);
-    let first_body = first_response
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes();
-    let first_json: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
-    assert_eq!(first_json["data"], serde_json::json!([]));
-
-    store
-        .put_cell_distribution(
-            "20240115",
-            &DailyCellDistribution {
-                age_band_lt1d: 100,
-                age_band_1d_7d: 50,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-    let second_request = Request::builder()
-        .uri("/api/v1/charts/cell-age-vs-used-capacity")
-        .body(Body::empty())
-        .unwrap();
-    let second_response = app.oneshot(second_request).await.unwrap();
-    assert_eq!(second_response.status(), StatusCode::OK);
-    let second_body = second_response
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes();
-    let second_json: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
-    let second_data = second_json["data"].as_array().unwrap();
-    assert_eq!(second_data.len(), 2);
-    assert_eq!(second_data[1]["date"], "2024-01-15");
-    assert_eq!(second_data[1]["values"]["lt1d"], "0.000001");
-    assert_eq!(second_data[1]["values"]["d1to7d"], "0.0000005");
-}
-
-#[tokio::test]
 async fn test_new_capacity_charts_empty_db() {
     let store = test_store();
     let config = test_config(store);
     let app = create_router(config).await;
 
     for uri in [
-        "/api/v1/charts/cell-age-vs-occupied-capacity",
-        "/api/v1/charts/cell-age-vs-used-capacity",
         "/api/v1/charts/capacity-turnover-ratio",
         "/api/v1/charts/cell-size-distribution",
         "/api/v1/charts/address-cohort-retention",
@@ -2269,6 +2215,22 @@ async fn test_new_capacity_charts_empty_db() {
         let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
         let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK, "uri={uri}");
+    }
+}
+
+#[tokio::test]
+async fn test_removed_cell_age_chart_routes_return_not_found() {
+    let store = test_store();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    for uri in [
+        "/api/v1/charts/cell-age-vs-occupied-capacity",
+        "/api/v1/charts/cell-age-vs-used-capacity",
+    ] {
+        let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "uri={uri}");
     }
 }
 

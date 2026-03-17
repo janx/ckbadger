@@ -271,11 +271,6 @@ export default function ChartsPage() {
     queryFn: () => api.getCommonKnowledgeCompositionChart(),
   });
 
-  const { data: cellAgeVsUsedCapacity } = useQuery({
-    queryKey: ['chart-cell-age-vs-used-capacity'],
-    queryFn: () => api.getCellAgeVsUsedCapacityChart(),
-  });
-
   const { data: capacityTurnoverRatio } = useQuery({
     queryKey: ['chart-capacity-turnover-ratio'],
     queryFn: () => api.getCapacityTurnoverRatioChart(),
@@ -456,10 +451,6 @@ export default function ChartsPage() {
           <StackedAreaPreview
             data={commonKnowledgeComposition}
             href="/charts/common-knowledge-composition"
-          />
-          <StackedAreaPreview
-            data={cellAgeVsUsedCapacity}
-            href="/charts/cell-age-vs-used-capacity"
           />
           <LineChartPreview data={capacityTurnoverRatio} href="/charts/capacity-turnover-ratio" />
           <LineChartPreview

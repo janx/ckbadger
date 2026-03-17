@@ -3,7 +3,6 @@ export const CHART_PAGE_SLUGS = [
   'average-block-time',
   'block-time-distribution',
   'capacity-turnover-ratio',
-  'cell-age-vs-used-capacity',
   'cell-count',
   'cell-size-distribution',
   'circulation-ratio',

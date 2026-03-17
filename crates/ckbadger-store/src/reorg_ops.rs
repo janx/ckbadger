@@ -502,28 +502,7 @@ fn truncate_cell_dist_tracker_state_for_rollback(
             )
         })?;
 
-    // 3. Truncate capacity_by_date_and_bucket to dates <= max_date.
-    let original_capacity_dates = state.capacity_by_date_and_bucket.len();
-    state
-        .capacity_by_date_and_bucket
-        .retain(|(date, _)| date.as_str() <= max_date.as_str());
-    if state.capacity_by_date_and_bucket.len() != original_capacity_dates {
-        changed = true;
-    }
-
-    // 4. Recalculate total_capacity_by_bucket from remaining entries.
-    let mut recalculated = [0i128; 6];
-    for (_, buckets) in &state.capacity_by_date_and_bucket {
-        for (i, &cap) in buckets.iter().enumerate() {
-            recalculated[i] += cap;
-        }
-    }
-    if recalculated != state.total_capacity_by_bucket {
-        state.total_capacity_by_bucket = recalculated;
-        changed = true;
-    }
-
-    // 5. Clamp last_snapshot_date.
+    // 3. Clamp last_snapshot_date.
     if let Some(last_snapshot_date) = state.last_snapshot_date.as_ref() {
         if last_snapshot_date.as_str() > max_date.as_str() {
             state.last_snapshot_date = Some(max_date);
@@ -4692,10 +4671,6 @@ mod tests {
 
         store
             .put_cell_dist_tracker_state(&CellDistributionTrackerState {
-                capacity_by_date_and_bucket: vec![
-                    ("20231114".to_string(), [100, 0, 0, 0, 0, 0]),
-                    ("20231115".to_string(), [0, 200, 0, 0, 0, 0]),
-                ],
                 count_by_bucket: [5, 3, 0, 0, 0, 0],
                 total_capacity_by_bucket: [100, 200, 0, 0, 0, 0],
                 date_transitions: vec![(1, "20231114".to_string()), (2, "20231115".to_string())],
@@ -4709,26 +4684,16 @@ mod tests {
 
         let repaired = store.get_cell_dist_tracker_state().unwrap().unwrap();
         assert_eq!(repaired.date_transitions, vec![(1, "20231114".to_string())]);
-        assert_eq!(
-            repaired.capacity_by_date_and_bucket,
-            vec![("20231114".to_string(), [100, 0, 0, 0, 0, 0])]
-        );
-        // total_capacity_by_bucket recalculated from remaining entries only.
-        assert_eq!(repaired.total_capacity_by_bucket, [100, 0, 0, 0, 0, 0]);
-        // count_by_bucket preserved (can't be precisely adjusted without per-cell data).
+        // Size totals are preserved; rollback does not have enough per-cell data to recompute them.
+        assert_eq!(repaired.total_capacity_by_bucket, [100, 200, 0, 0, 0, 0]);
+        // Count totals are preserved for the same reason.
         assert_eq!(repaired.count_by_bucket, [5, 3, 0, 0, 0, 0]);
         assert_eq!(repaired.last_snapshot_date, Some("20231114".to_string()));
     }
 
     #[test]
-    fn test_truncate_cell_dist_tracker_recalculates_total_capacity() {
-        // Direct unit test: capacity totals are recalculated from surviving date entries.
+    fn test_truncate_cell_dist_tracker_preserves_total_capacity() {
         let mut state = CellDistributionTrackerState {
-            capacity_by_date_and_bucket: vec![
-                ("20231114".to_string(), [50, 100, 0, 0, 0, 0]),
-                ("20231115".to_string(), [30, 0, 200, 0, 0, 0]),
-                ("20231116".to_string(), [0, 0, 0, 500, 0, 0]),
-            ],
             count_by_bucket: [10, 5, 3, 2, 0, 0],
             total_capacity_by_bucket: [80, 100, 200, 500, 0, 0],
             date_transitions: vec![
@@ -4743,18 +4708,36 @@ mod tests {
 
         let changed = truncate_cell_dist_tracker_state_for_rollback(&mut state, 150).unwrap();
         assert!(changed);
-        // Only 20231114 and 20231115 survive.
         assert_eq!(state.date_transitions.len(), 2);
-        assert_eq!(state.capacity_by_date_and_bucket.len(), 2);
-        // Totals recalculated: [50+30, 100+0, 0+200, 0, 0, 0]
-        assert_eq!(state.total_capacity_by_bucket, [80, 100, 200, 0, 0, 0]);
+        assert_eq!(state.total_capacity_by_bucket, [80, 100, 200, 500, 0, 0]);
+        assert_eq!(state.last_snapshot_date, Some("20231115".to_string()));
+    }
+
+    #[test]
+    fn test_truncate_cell_dist_tracker_preserves_totals_without_age_entries() {
+        let mut state = CellDistributionTrackerState {
+            count_by_bucket: [10, 5, 3, 2, 0, 0],
+            total_capacity_by_bucket: [80, 100, 200, 500, 0, 0],
+            date_transitions: vec![
+                (1, "20231114".to_string()),
+                (100, "20231115".to_string()),
+                (200, "20231116".to_string()),
+            ],
+            last_snapshot_date: Some("20231116".to_string()),
+            cohort_accum: vec![],
+            last_processed_block: Some(200),
+        };
+
+        let changed = truncate_cell_dist_tracker_state_for_rollback(&mut state, 150).unwrap();
+        assert!(changed);
+        assert_eq!(state.date_transitions.len(), 2);
+        assert_eq!(state.total_capacity_by_bucket, [80, 100, 200, 500, 0, 0]);
         assert_eq!(state.last_snapshot_date, Some("20231115".to_string()));
     }
 
     #[test]
     fn test_truncate_cell_dist_tracker_rejects_empty_transitions() {
         let mut state = CellDistributionTrackerState {
-            capacity_by_date_and_bucket: vec![("20231115".to_string(), [100, 0, 0, 0, 0, 0])],
             count_by_bucket: [1, 0, 0, 0, 0, 0],
             total_capacity_by_bucket: [100, 0, 0, 0, 0, 0],
             date_transitions: vec![(100, "20231115".to_string())],

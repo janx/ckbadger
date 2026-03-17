@@ -2175,10 +2175,6 @@ export const api = {
     return fetchApi('/charts/common-knowledge-composition');
   },
 
-  getCellAgeVsUsedCapacityChart: (): Promise<StackedAreaChartResponse> => {
-    return fetchApi('/charts/cell-age-vs-used-capacity');
-  },
-
   getCapacityTurnoverRatioChart: (): Promise<ChartResponse> => {
     return fetchApi('/charts/capacity-turnover-ratio');
   },

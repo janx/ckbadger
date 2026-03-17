@@ -1,8 +1,8 @@
-//! Cell distribution tracker — tracks live cell capacity by age and size bucket.
+//! Cell distribution tracker — tracks live cell capacity by size bucket.
 //!
-//! Maintains an in-memory `HashMap<NaiveDate, [i128; 6]>` mapping cell creation dates
-//! to their total live capacity per size bucket. At each day boundary, computes age-band
-//! and size-bucket snapshots for the cell distribution chart.
+//! Maintains global live cell counts/capacities per size bucket and materializes a daily
+//! snapshot for the size distribution chart. The same tracker also owns block→date
+//! transitions plus cohort accumulation for address retention snapshots.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -36,11 +36,9 @@ fn size_bucket(occupied_capacity: i64) -> usize {
     }
 }
 
-/// Tracks live cell capacity by creation date and size bucket for cell distribution chart computation.
+/// Tracks live cell capacity by size bucket for cell distribution chart computation.
 #[derive(Debug)]
 pub struct CellDistributionTracker {
-    /// Total live capacity (shannons) per cell creation date per size bucket.
-    capacity_by_date_and_bucket: HashMap<NaiveDate, [i128; NUM_BUCKETS]>,
     /// Cell count per size bucket (global totals).
     count_by_bucket: [i64; NUM_BUCKETS],
     /// Total capacity per size bucket (global totals, shannons).
@@ -58,7 +56,6 @@ pub struct CellDistributionTracker {
 impl CellDistributionTracker {
     pub fn new() -> Self {
         Self {
-            capacity_by_date_and_bucket: HashMap::new(),
             count_by_bucket: [0; NUM_BUCKETS],
             total_capacity_by_bucket: [0; NUM_BUCKETS],
             block_date_transitions: Vec::new(),
@@ -70,18 +67,6 @@ impl CellDistributionTracker {
 
     /// Restore tracker from persisted state.
     pub fn from_state(state: CellDistributionTrackerState) -> Result<Self> {
-        let mut capacity_by_date_and_bucket = HashMap::new();
-        for (date_str, buckets) in state.capacity_by_date_and_bucket {
-            let date = NaiveDate::parse_from_str(&date_str, "%Y%m%d").map_err(|e| {
-                anyhow::anyhow!(
-                    "corrupt cell_dist capacity_by_date_and_bucket entry: date='{}': {}",
-                    date_str,
-                    e
-                )
-            })?;
-            capacity_by_date_and_bucket.insert(date, buckets);
-        }
-
         let mut block_date_transitions = Vec::new();
         for (block, date_str) in state.date_transitions {
             let date = NaiveDate::parse_from_str(&date_str, "%Y%m%d").map_err(|e| {
@@ -111,7 +96,6 @@ impl CellDistributionTracker {
             .collect();
 
         Ok(Self {
-            capacity_by_date_and_bucket,
             count_by_bucket: state.count_by_bucket,
             total_capacity_by_bucket: state.total_capacity_by_bucket,
             block_date_transitions,
@@ -123,11 +107,6 @@ impl CellDistributionTracker {
 
     /// Serialize tracker state for persistence.
     pub fn to_state(&self) -> CellDistributionTrackerState {
-        let capacity_by_date_and_bucket = self
-            .capacity_by_date_and_bucket
-            .iter()
-            .map(|(d, buckets)| (d.format("%Y%m%d").to_string(), *buckets))
-            .collect();
         let date_transitions = self
             .block_date_transitions
             .iter()
@@ -142,7 +121,6 @@ impl CellDistributionTracker {
             .map(|(month, (used, bal))| (month.clone(), *used, *bal))
             .collect();
         CellDistributionTrackerState {
-            capacity_by_date_and_bucket,
             count_by_bucket: self.count_by_bucket,
             total_capacity_by_bucket: self.total_capacity_by_bucket,
             date_transitions,
@@ -164,50 +142,33 @@ impl CellDistributionTracker {
         self.block_date_transitions.push((block_number, date));
     }
 
-    /// A cell was created at the given date with the given occupied capacity.
-    pub fn cell_created(&mut self, block_date: NaiveDate, occupied_capacity: i64) {
+    /// A cell was created with the given occupied capacity.
+    pub fn cell_created(&mut self, occupied_capacity: i64) {
         let bucket = size_bucket(occupied_capacity);
-        let entry = self
-            .capacity_by_date_and_bucket
-            .entry(block_date)
-            .or_insert([0; NUM_BUCKETS]);
-        entry[bucket] += occupied_capacity as i128;
         self.count_by_bucket[bucket] += 1;
         self.total_capacity_by_bucket[bucket] += occupied_capacity as i128;
     }
 
-    /// A cell was consumed. Look up its creation date from block number and subtract capacity.
-    pub fn cell_consumed(&mut self, created_at_block: i64, occupied_capacity: i64) -> Result<()> {
+    /// A cell was consumed; subtract its occupied capacity from the matching size bucket.
+    pub fn cell_consumed(&mut self, occupied_capacity: i64) -> Result<()> {
         if occupied_capacity <= 0 {
             bail!(
-                "invalid consumed cell occupied_capacity: created_at_block={}, occupied_capacity={}",
-                created_at_block,
+                "invalid consumed cell occupied_capacity: {}",
                 occupied_capacity
             );
         }
 
-        let creation_date = self.block_number_to_date(created_at_block).ok_or_else(|| {
-            anyhow::anyhow!(
-                "missing block-date transition for consumed cell: created_at_block={}, transitions={}",
-                created_at_block,
-                self.block_date_transitions.len()
-            )
-        })?;
-
         let bucket = size_bucket(occupied_capacity);
+        if self.count_by_bucket[bucket] <= 0 {
+            bail!(
+                "live cell count underflow on consume: bucket={}, count={}, occupied_capacity={}",
+                bucket,
+                self.count_by_bucket[bucket],
+                occupied_capacity
+            );
+        }
 
-        let buckets = self
-            .capacity_by_date_and_bucket
-            .get_mut(&creation_date)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "missing live capacity bucket for consumed cell: created_at_block={}, creation_date={}",
-                    created_at_block,
-                    creation_date
-                )
-            })?;
-
-        let current = buckets[bucket];
+        let current = self.total_capacity_by_bucket[bucket];
         let next = current
             .checked_sub(occupied_capacity as i128)
             .ok_or_else(|| {
@@ -221,25 +182,16 @@ impl CellDistributionTracker {
 
         if next < 0 {
             bail!(
-                "live capacity underflow on consume: created_at_block={}, creation_date={}, bucket={}, current={}, occupied_capacity={}",
-                created_at_block,
-                creation_date,
+                "live capacity underflow on consume: bucket={}, current={}, occupied_capacity={}",
                 bucket,
                 current,
                 occupied_capacity
             );
         }
 
-        buckets[bucket] = next;
-
         // Update global totals
         self.count_by_bucket[bucket] -= 1;
-        self.total_capacity_by_bucket[bucket] -= occupied_capacity as i128;
-
-        // Clean up zero entries: remove the date entry if all buckets are zero
-        if buckets.iter().all(|&c| c == 0) {
-            self.capacity_by_date_and_bucket.remove(&creation_date);
-        }
+        self.total_capacity_by_bucket[bucket] = next;
 
         Ok(())
     }
@@ -252,7 +204,7 @@ impl CellDistributionTracker {
     ) -> Option<(NaiveDate, DailyCellDistribution)> {
         match self.last_snapshot_date {
             Some(last) if last < current_date => {
-                let snapshot = self.compute_snapshot(last);
+                let snapshot = self.compute_snapshot();
                 self.last_snapshot_date = Some(current_date);
                 Some((last, snapshot))
             }
@@ -265,30 +217,12 @@ impl CellDistributionTracker {
         }
     }
 
-    /// Compute the cell distribution snapshot for the given date.
-    pub fn compute_snapshot(&self, snapshot_date: NaiveDate) -> DailyCellDistribution {
-        let mut dist = DailyCellDistribution {
+    /// Compute the current cell distribution snapshot.
+    pub fn compute_snapshot(&self) -> DailyCellDistribution {
+        DailyCellDistribution {
             size_bucket_counts: self.count_by_bucket,
             size_bucket_capacities: self.total_capacity_by_bucket,
-            ..Default::default()
-        };
-
-        for (&creation_date, buckets) in &self.capacity_by_date_and_bucket {
-            let total_capacity: i128 = buckets.iter().sum();
-            if total_capacity <= 0 {
-                continue;
-            }
-            let age_days = (snapshot_date - creation_date).num_days();
-            match age_days {
-                d if d < 1 => dist.age_band_lt1d += total_capacity,
-                1..=6 => dist.age_band_1d_7d += total_capacity,
-                7..=29 => dist.age_band_7d_30d += total_capacity,
-                30..=179 => dist.age_band_30d_180d += total_capacity,
-                _ => dist.age_band_gt180d += total_capacity,
-            }
         }
-
-        dist
     }
 
     /// Update cohort accumulator from address balance changes in this batch.
@@ -399,69 +333,39 @@ mod tests {
         tracker.record_block_date(100, date);
 
         // Create a cell: 500 CKB → bucket 1
-        tracker.cell_created(date, 500_00000000);
+        tracker.cell_created(500_00000000);
         assert_eq!(tracker.count_by_bucket[1], 1);
         assert_eq!(tracker.total_capacity_by_bucket[1], 500_00000000_i128);
-        assert_eq!(
-            tracker.capacity_by_date_and_bucket[&date][1],
-            500_00000000_i128
-        );
 
         // Create another cell: 50 CKB → bucket 0
-        tracker.cell_created(date, 50_00000000);
+        tracker.cell_created(50_00000000);
         assert_eq!(tracker.count_by_bucket[0], 1);
         assert_eq!(tracker.total_capacity_by_bucket[0], 50_00000000_i128);
 
         // Consume the 500 CKB cell
-        tracker.cell_consumed(100, 500_00000000).unwrap();
+        tracker.cell_consumed(500_00000000).unwrap();
         assert_eq!(tracker.count_by_bucket[1], 0);
         assert_eq!(tracker.total_capacity_by_bucket[1], 0);
 
         // Consume the 50 CKB cell
-        tracker.cell_consumed(100, 50_00000000).unwrap();
+        tracker.cell_consumed(50_00000000).unwrap();
         assert_eq!(tracker.count_by_bucket[0], 0);
         assert_eq!(tracker.total_capacity_by_bucket[0], 0);
-
-        // Date entry should be cleaned up (all buckets zero)
-        assert!(!tracker.capacity_by_date_and_bucket.contains_key(&date));
     }
 
     #[test]
-    fn test_snapshot_age_bands() {
+    fn test_compute_snapshot_returns_size_totals() {
         let mut tracker = CellDistributionTracker::new();
-        let snapshot_date = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
+        tracker.cell_created(61_00000000);
+        tracker.cell_created(200_00000000);
+        tracker.cell_created(5_000_00000000);
 
-        // age_band_lt1d: same day (age_days=0)
-        tracker.cell_created(snapshot_date, 61_00000000);
-        // age_band_1d_7d: 3 days ago (age_days=3)
-        tracker.cell_created(
-            NaiveDate::from_ymd_opt(2024, 6, 12).unwrap(),
-            200_00000000, // bucket 1
+        let dist = tracker.compute_snapshot();
+        assert_eq!(dist.size_bucket_counts, [1, 1, 1, 0, 0, 0]);
+        assert_eq!(
+            dist.size_bucket_capacities,
+            [61_00000000, 200_00000000, 5_000_00000000, 0, 0, 0]
         );
-        // age_band_7d_30d: 14 days ago (age_days=14)
-        tracker.cell_created(
-            NaiveDate::from_ymd_opt(2024, 6, 1).unwrap(),
-            5_000_00000000, // bucket 2
-        );
-        // age_band_30d_180d: 60 days ago (age_days=60)
-        tracker.cell_created(
-            NaiveDate::from_ymd_opt(2024, 4, 16).unwrap(),
-            50_000_00000000, // bucket 3
-        );
-        // age_band_gt180d: 200 days ago (age_days=200)
-        tracker.cell_created(
-            NaiveDate::from_ymd_opt(2023, 11, 28).unwrap(),
-            500_000_00000000, // bucket 4
-        );
-
-        let dist = tracker.compute_snapshot(snapshot_date);
-        assert_eq!(dist.age_band_lt1d, 61_00000000);
-        assert_eq!(dist.age_band_1d_7d, 200_00000000);
-        assert_eq!(dist.age_band_7d_30d, 5_000_00000000);
-        assert_eq!(dist.age_band_30d_180d, 50_000_00000000);
-        assert_eq!(dist.age_band_gt180d, 500_000_00000000);
-        // Size bucket counts and capacities
-        assert_eq!(dist.size_bucket_counts, [1, 1, 1, 1, 1, 0]);
     }
 
     #[test]
@@ -472,10 +376,9 @@ mod tests {
         tracker.record_block_date(100, jan15);
         tracker.record_block_date(200, jan16);
 
-        // Create cells on two dates
-        tracker.cell_created(jan15, 500_00000000); // bucket 1
-        tracker.cell_created(jan15, 61_00000000); // bucket 0
-        tracker.cell_created(jan16, 1_000_00000000); // bucket 2
+        tracker.cell_created(500_00000000); // bucket 1
+        tracker.cell_created(61_00000000); // bucket 0
+        tracker.cell_created(1_000_00000000); // bucket 2
         tracker.last_snapshot_date = Some(jan16);
 
         let state = tracker.to_state();
@@ -486,19 +389,9 @@ mod tests {
         assert_eq!(restored.count_by_bucket[0], 1);
         assert_eq!(restored.count_by_bucket[1], 1);
         assert_eq!(restored.count_by_bucket[2], 1);
+        assert_eq!(restored.total_capacity_by_bucket[0], 61_00000000_i128);
         assert_eq!(restored.total_capacity_by_bucket[1], 500_00000000_i128);
-        assert_eq!(
-            restored.capacity_by_date_and_bucket[&jan15][1],
-            500_00000000_i128
-        );
-        assert_eq!(
-            restored.capacity_by_date_and_bucket[&jan15][0],
-            61_00000000_i128
-        );
-        assert_eq!(
-            restored.capacity_by_date_and_bucket[&jan16][2],
-            1_000_00000000_i128
-        );
+        assert_eq!(restored.total_capacity_by_bucket[2], 1_000_00000000_i128);
     }
 
     #[test]
@@ -506,7 +399,7 @@ mod tests {
         let mut tracker = CellDistributionTracker::new();
         let jan15 = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
         let jan16 = NaiveDate::from_ymd_opt(2024, 1, 16).unwrap();
-        tracker.cell_created(jan15, 100_00000000);
+        tracker.cell_created(100_00000000);
 
         // First call: sets last_snapshot_date, no snapshot produced
         assert!(tracker.maybe_snapshot(jan15).is_none());
@@ -517,30 +410,25 @@ mod tests {
         assert!(result.is_some());
         let (date, dist) = result.unwrap();
         assert_eq!(date, jan15);
-        // Cell created on jan15, snapshot on jan15 → age_days=0 → age_band_lt1d
-        assert_eq!(dist.age_band_lt1d, 100_00000000);
+        assert_eq!(dist.size_bucket_counts, [1, 0, 0, 0, 0, 0]);
+        assert_eq!(dist.size_bucket_capacities, [100_00000000, 0, 0, 0, 0, 0]);
         // Same day again: no snapshot
         assert!(tracker.maybe_snapshot(jan16).is_none());
     }
 
     #[test]
-    fn test_consumed_removes_zero_entries() {
+    fn test_consumed_updates_totals() {
         let mut tracker = CellDistributionTracker::new();
         let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
         tracker.record_block_date(100, date);
 
         // Create two cells on the same date, same bucket
-        tracker.cell_created(date, 61_00000000); // bucket 0
-        tracker.cell_created(date, 80_00000000); // bucket 0
-        assert!(tracker.capacity_by_date_and_bucket.contains_key(&date));
+        tracker.cell_created(61_00000000); // bucket 0
+        tracker.cell_created(80_00000000); // bucket 0
 
         // Consume both
-        tracker.cell_consumed(100, 61_00000000).unwrap();
-        assert!(tracker.capacity_by_date_and_bucket.contains_key(&date)); // still has 80 CKB
-        tracker.cell_consumed(100, 80_00000000).unwrap();
-
-        // Entry should be cleaned up since all buckets are zero
-        assert!(!tracker.capacity_by_date_and_bucket.contains_key(&date));
+        tracker.cell_consumed(61_00000000).unwrap();
+        tracker.cell_consumed(80_00000000).unwrap();
         assert_eq!(tracker.count_by_bucket[0], 0);
         assert_eq!(tracker.total_capacity_by_bucket[0], 0);
     }
@@ -548,22 +436,17 @@ mod tests {
     #[test]
     fn test_cell_consumed_errors_on_underflow() {
         let mut tracker = CellDistributionTracker::new();
-        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
-        tracker.record_block_date(100, date);
-        tracker.cell_created(date, 61_00000000); // bucket 0, 61 CKB
+        tracker.cell_created(61_00000000); // bucket 0, 61 CKB
 
-        let err = tracker.cell_consumed(100, 80_00000000).unwrap_err();
+        let err = tracker.cell_consumed(80_00000000).unwrap_err();
         assert!(err.to_string().contains("underflow"));
     }
 
     #[test]
-    fn test_cell_consumed_errors_when_no_matching_bucket() {
+    fn test_cell_consumed_errors_when_bucket_count_is_zero() {
         let mut tracker = CellDistributionTracker::new();
-        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
-        tracker.record_block_date(100, date);
-
-        let err = tracker.cell_consumed(100, 61_00000000).unwrap_err();
-        assert!(err.to_string().contains("missing live capacity bucket"));
+        let err = tracker.cell_consumed(61_00000000).unwrap_err();
+        assert!(err.to_string().contains("live cell count underflow"));
     }
 
     #[test]
@@ -600,26 +483,8 @@ mod tests {
     }
 
     #[test]
-    fn test_from_state_rejects_corrupt_date() {
-        let state = CellDistributionTrackerState {
-            capacity_by_date_and_bucket: vec![("not-a-date".to_string(), [0; 6])],
-            count_by_bucket: [0; 6],
-            total_capacity_by_bucket: [0; 6],
-            date_transitions: vec![],
-            last_snapshot_date: None,
-            cohort_accum: vec![],
-            last_processed_block: None,
-        };
-        let err = CellDistributionTracker::from_state(state).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("corrupt cell_dist capacity_by_date_and_bucket"));
-    }
-
-    #[test]
     fn test_from_state_rejects_corrupt_transition_date() {
         let state = CellDistributionTrackerState {
-            capacity_by_date_and_bucket: vec![],
             count_by_bucket: [0; 6],
             total_capacity_by_bucket: [0; 6],
             date_transitions: vec![(100, "bad-date".to_string())],
@@ -640,31 +505,21 @@ mod tests {
         tracker.record_block_date(100, date);
 
         // Create cells in different buckets on the same date
-        tracker.cell_created(date, 61_00000000); // bucket 0 (61 CKB)
-        tracker.cell_created(date, 500_00000000); // bucket 1 (500 CKB)
-        tracker.cell_created(date, 5_000_00000000); // bucket 2 (5000 CKB)
+        tracker.cell_created(61_00000000); // bucket 0 (61 CKB)
+        tracker.cell_created(500_00000000); // bucket 1 (500 CKB)
+        tracker.cell_created(5_000_00000000); // bucket 2 (5000 CKB)
 
         assert_eq!(tracker.count_by_bucket[0], 1);
         assert_eq!(tracker.count_by_bucket[1], 1);
         assert_eq!(tracker.count_by_bucket[2], 1);
-        assert_eq!(
-            tracker.capacity_by_date_and_bucket[&date][0],
-            61_00000000_i128
-        );
-        assert_eq!(
-            tracker.capacity_by_date_and_bucket[&date][1],
-            500_00000000_i128
-        );
-        assert_eq!(
-            tracker.capacity_by_date_and_bucket[&date][2],
-            5_000_00000000_i128
-        );
+        assert_eq!(tracker.total_capacity_by_bucket[0], 61_00000000_i128);
+        assert_eq!(tracker.total_capacity_by_bucket[1], 500_00000000_i128);
+        assert_eq!(tracker.total_capacity_by_bucket[2], 5_000_00000000_i128);
 
         // Consume only bucket 1 cell — date entry should remain (other buckets still non-zero)
-        tracker.cell_consumed(100, 500_00000000).unwrap();
-        assert!(tracker.capacity_by_date_and_bucket.contains_key(&date));
-        assert_eq!(tracker.capacity_by_date_and_bucket[&date][1], 0);
+        tracker.cell_consumed(500_00000000).unwrap();
         assert_eq!(tracker.count_by_bucket[1], 0);
+        assert_eq!(tracker.total_capacity_by_bucket[1], 0);
     }
 
     #[test]

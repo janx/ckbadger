@@ -329,8 +329,7 @@ impl Indexer {
         let cell_dist_tracker = match store.get_cell_dist_tracker_state()? {
             Some(state) => {
                 info!(
-                    "Restored cell distribution tracker: {} date entries, {} transitions",
-                    state.capacity_by_date_and_bucket.len(),
+                    "Restored cell distribution tracker: {} transitions",
                     state.date_transitions.len(),
                 );
                 CellDistributionTracker::from_state(state)?

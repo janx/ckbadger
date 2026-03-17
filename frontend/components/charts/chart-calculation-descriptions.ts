@@ -112,14 +112,6 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
         `For each day: sum used capacity of live cells classified into "${label}" category.`
     ),
   }),
-  'chart-cell-age-vs-used-capacity': ({ seriesLabels }) => ({
-    overview: 'Shows how used capacity is distributed across different cell age buckets.',
-    legendItems: bySeriesLabels(
-      seriesLabels,
-      (label) =>
-        `For each day: sum used capacity of live cells whose age falls in "${label}" bucket.`
-    ),
-  }),
   'chart-capacity-turnover-ratio': ({ yAxisLabel }) => ({
     overview: 'Shows how actively live capacity is being consumed and replaced.',
     legendItems: [

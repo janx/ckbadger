@@ -182,6 +182,16 @@ describe('renderMarkdownPage', () => {
     ).rejects.toEqual(expect.objectContaining<Partial<MarkdownRenderError>>({ status: 404 }));
   });
 
+  it('returns 404 for removed cell age chart slug', async () => {
+    await expect(
+      renderMarkdownPage({
+        page: parseMarkdownSourcePath('/charts/cell-age-vs-used-capacity'),
+        searchParams: new URLSearchParams(),
+        origin: 'http://localhost:3000',
+      })
+    ).rejects.toEqual(expect.objectContaining<Partial<MarkdownRenderError>>({ status: 404 }));
+  });
+
   it('renders mnft item detail markdown', async () => {
     vi.mocked(api.getMnftItemDetail).mockResolvedValue({
       nftId: '0xmnft',

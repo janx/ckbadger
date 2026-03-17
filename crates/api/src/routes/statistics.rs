@@ -5,7 +5,7 @@ use axum::{
     routing::get,
     Router,
 };
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_common::dao::GENESIS_BURNT;
 use ckbadger_common::sync::{format_duration_smart, SyncProgressData};
@@ -48,14 +48,6 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/charts/common-knowledge-composition",
             get(get_common_knowledge_composition_chart),
-        )
-        .route(
-            "/charts/cell-age-vs-occupied-capacity",
-            get(get_cell_age_vs_occupied_capacity_chart),
-        )
-        .route(
-            "/charts/cell-age-vs-used-capacity",
-            get(get_cell_age_vs_occupied_capacity_chart),
         )
         .route(
             "/charts/capacity-turnover-ratio",
@@ -1517,94 +1509,6 @@ async fn get_common_knowledge_composition_chart(
     ok(response)
 }
 
-/// Build the cell-age-vs-occupied-capacity chart response from a materialized snapshot.
-pub(crate) fn build_cell_age_response(
-    snapshot: &DailyCellDistribution,
-    snapshot_date_key: &str,
-) -> StackedAreaChartResponse {
-    let snapshot_values = HashMap::from([
-        (
-            "lt1d".to_string(),
-            shannon_to_ckb_string(snapshot.age_band_lt1d),
-        ),
-        (
-            "d1to7d".to_string(),
-            shannon_to_ckb_string(snapshot.age_band_1d_7d),
-        ),
-        (
-            "d7to30d".to_string(),
-            shannon_to_ckb_string(snapshot.age_band_7d_30d),
-        ),
-        (
-            "d30to180d".to_string(),
-            shannon_to_ckb_string(snapshot.age_band_30d_180d),
-        ),
-        (
-            "gt180d".to_string(),
-            shannon_to_ckb_string(snapshot.age_band_gt180d),
-        ),
-    ]);
-
-    let snapshot_label = format_date_key(snapshot_date_key);
-    // Parse the date to compute previous day label
-    let previous_label = NaiveDate::parse_from_str(snapshot_date_key, "%Y%m%d")
-        .map(|d| (d - Duration::days(1)).format("%Y-%m-%d").to_string())
-        .unwrap_or_else(|_| snapshot_label.clone());
-
-    StackedAreaChartResponse {
-        data: vec![
-            StackedAreaDataPoint {
-                date: previous_label,
-                values: snapshot_values.clone(),
-            },
-            StackedAreaDataPoint {
-                date: snapshot_label,
-                values: snapshot_values,
-            },
-        ],
-        series: cell_age_series(),
-        title: "Cell Age vs Used Capacity".to_string(),
-    }
-}
-
-fn cell_age_series() -> Vec<StackedAreaSeries> {
-    vec![
-        StackedAreaSeries {
-            key: "lt1d".to_string(),
-            label: "< 1d".to_string(),
-            color: "#22c55e".to_string(),
-        },
-        StackedAreaSeries {
-            key: "d1to7d".to_string(),
-            label: "1-7d".to_string(),
-            color: "#84cc16".to_string(),
-        },
-        StackedAreaSeries {
-            key: "d7to30d".to_string(),
-            label: "7-30d".to_string(),
-            color: "#f59e0b".to_string(),
-        },
-        StackedAreaSeries {
-            key: "d30to180d".to_string(),
-            label: "30-180d".to_string(),
-            color: "#f97316".to_string(),
-        },
-        StackedAreaSeries {
-            key: "gt180d".to_string(),
-            label: "> 180d".to_string(),
-            color: "#ef4444".to_string(),
-        },
-    ]
-}
-
-pub(crate) fn empty_cell_age_response() -> StackedAreaChartResponse {
-    StackedAreaChartResponse {
-        data: Vec::new(),
-        series: cell_age_series(),
-        title: "Cell Age vs Used Capacity".to_string(),
-    }
-}
-
 /// Build the cell-size-distribution chart response from a materialized snapshot.
 pub(crate) fn build_cell_size_response(snapshot: &DailyCellDistribution) -> ChartResponse {
     let bucket_labels = [
@@ -1679,32 +1583,6 @@ pub(crate) fn empty_address_cohort_response() -> ChartResponse {
         y_axis_label: "Used / Balance (%)".to_string(),
         y2_axis_label: Some("Used Capacity (CKB)".to_string()),
     }
-}
-
-async fn get_cell_age_vs_occupied_capacity_chart(
-    State(state): State<Arc<AppState>>,
-) -> ApiResult<StackedAreaChartResponse> {
-    let cache_key = "chart:cell-age-vs-occupied-capacity:v1";
-    if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
-        if stacked_chart_response_has_data(&cached) {
-            return ok(cached);
-        }
-        state.cache.delete(cache_key).await;
-    }
-
-    let latest_snapshot = state
-        .store
-        .get_latest_cell_distribution()
-        .map_err(|e| ApiError::internal(format!("failed to read cell distribution: {e}")))?;
-    let Some((date_key, snapshot)) = latest_snapshot else {
-        return ok(empty_cell_age_response());
-    };
-
-    let response = build_cell_age_response(&snapshot, &date_key);
-    if stacked_chart_response_has_data(&response) {
-        state.cache.set(cache_key, &response, CacheTtl::CHART).await;
-    }
-    ok(response)
 }
 
 async fn get_capacity_turnover_ratio_chart(
@@ -3821,44 +3699,8 @@ mod tests {
     }
 
     #[test]
-    fn test_build_cell_age_response_from_snapshot() {
-        let snapshot = DailyCellDistribution {
-            age_band_lt1d: 100_00000001, // 100.00000001 CKB (fractional to test formatting)
-            age_band_1d_7d: 200_00000000,
-            age_band_7d_30d: 300_00000000,
-            age_band_30d_180d: 400_00000000,
-            age_band_gt180d: 500_00000000,
-            size_bucket_counts: [0; 6],
-            size_bucket_capacities: [0; 6],
-        };
-        let response = build_cell_age_response(&snapshot, "20240115");
-        assert_eq!(response.title, "Cell Age vs Used Capacity");
-        assert_eq!(response.series.len(), 5);
-        assert_eq!(response.data.len(), 2);
-        assert_eq!(response.data[0].date, "2024-01-14"); // previous day
-        assert_eq!(response.data[1].date, "2024-01-15"); // snapshot day
-                                                         // shannon_to_ckb_string strips trailing zeros: 100.00000001
-        assert_eq!(response.data[1].values.get("lt1d").unwrap(), "100.00000001");
-        // Exact CKB amounts have no decimal: "500"
-        assert_eq!(response.data[1].values.get("gt180d").unwrap(), "500");
-    }
-
-    #[test]
-    fn test_empty_cell_age_response_has_metadata() {
-        let response = empty_cell_age_response();
-        assert_eq!(response.title, "Cell Age vs Used Capacity");
-        assert_eq!(response.series.len(), 5);
-        assert!(response.data.is_empty());
-    }
-
-    #[test]
     fn test_build_cell_size_response_from_snapshot() {
         let snapshot = DailyCellDistribution {
-            age_band_lt1d: 0,
-            age_band_1d_7d: 0,
-            age_band_7d_30d: 0,
-            age_band_30d_180d: 0,
-            age_band_gt180d: 0,
             size_bucket_counts: [10, 20, 30, 40, 50, 60],
             size_bucket_capacities: [
                 100_50000000, // 100.5 CKB

@@ -385,8 +385,6 @@ function selectChartFetcher(slug: string): (() => Promise<MarkdownChartPayload>)
       return () => api.getBlockTimeDistributionChart();
     case 'capacity-turnover-ratio':
       return () => api.getCapacityTurnoverRatioChart();
-    case 'cell-age-vs-used-capacity':
-      return () => api.getCellAgeVsUsedCapacityChart();
     case 'cell-count':
       return () => api.getCellCountChart();
     case 'cell-size-distribution':

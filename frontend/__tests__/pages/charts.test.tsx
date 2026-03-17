@@ -14,7 +14,6 @@ vi.mock('@/lib/api', () => ({
     getCellCountChart: vi.fn(),
     getKnowledgeSizeChart: vi.fn(),
     getCommonKnowledgeCompositionChart: vi.fn(),
-    getCellAgeVsUsedCapacityChart: vi.fn(),
     getCapacityTurnoverRatioChart: vi.fn(),
     getCellSizeDistributionChart: vi.fn(),
     getAddressCohortRetentionChart: vi.fn(),
@@ -217,7 +216,6 @@ describe('ChartsPage', () => {
     vi.mocked(api.getCellCountChart).mockResolvedValue(mockCellCountResponse);
     vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getCommonKnowledgeCompositionChart).mockResolvedValue(mockStackedAreaResponse);
-    vi.mocked(api.getCellAgeVsUsedCapacityChart).mockResolvedValue(mockStackedAreaResponse);
     vi.mocked(api.getCapacityTurnoverRatioChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getCellSizeDistributionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getAddressCohortRetentionChart).mockResolvedValue(mockChartResponse);

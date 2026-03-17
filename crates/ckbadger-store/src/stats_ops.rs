@@ -1632,11 +1632,6 @@ mod cell_distribution_tests {
         let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
 
         let dist = DailyCellDistribution {
-            age_band_lt1d: 100_000_000,
-            age_band_1d_7d: 200_000_000,
-            age_band_7d_30d: 300_000_000,
-            age_band_30d_180d: 400_000_000,
-            age_band_gt180d: 500_000_000,
             size_bucket_counts: [10, 20, 30, 40, 50, 60],
             size_bucket_capacities: [1000, 2000, 3000, 4000, 5000, 6000],
         };
@@ -1644,8 +1639,6 @@ mod cell_distribution_tests {
         store.put_cell_distribution("20240115", &dist).unwrap();
 
         let retrieved = store.get_cell_distribution("20240115").unwrap().unwrap();
-        assert_eq!(retrieved.age_band_lt1d, 100_000_000);
-        assert_eq!(retrieved.age_band_gt180d, 500_000_000);
         assert_eq!(retrieved.size_bucket_counts, [10, 20, 30, 40, 50, 60]);
         assert_eq!(
             retrieved.size_bucket_capacities,
@@ -1665,15 +1658,15 @@ mod cell_distribution_tests {
         assert!(store.get_latest_cell_distribution().unwrap().is_none());
 
         let d1 = DailyCellDistribution {
-            age_band_lt1d: 100,
+            size_bucket_counts: [1, 0, 0, 0, 0, 0],
             ..Default::default()
         };
         let d2 = DailyCellDistribution {
-            age_band_lt1d: 200,
+            size_bucket_counts: [2, 0, 0, 0, 0, 0],
             ..Default::default()
         };
         let d3 = DailyCellDistribution {
-            age_band_lt1d: 300,
+            size_bucket_counts: [3, 0, 0, 0, 0, 0],
             ..Default::default()
         };
 
@@ -1684,7 +1677,7 @@ mod cell_distribution_tests {
 
         let (date, latest) = store.get_latest_cell_distribution().unwrap().unwrap();
         assert_eq!(date, "20240117");
-        assert_eq!(latest.age_band_lt1d, 300); // most recent by key sort
+        assert_eq!(latest.size_bucket_counts, [3, 0, 0, 0, 0, 0]); // most recent by key sort
     }
 
     #[test]
@@ -1760,10 +1753,6 @@ mod cell_distribution_tests {
         assert!(store.get_cell_dist_tracker_state().unwrap().is_none());
 
         let state = CellDistributionTrackerState {
-            capacity_by_date_and_bucket: vec![
-                ("20240101".to_string(), [100, 200, 300, 400, 500, 600]),
-                ("20240102".to_string(), [110, 210, 310, 410, 510, 610]),
-            ],
             count_by_bucket: [10, 20, 30, 40, 50, 60],
             total_capacity_by_bucket: [1000, 2000, 3000, 4000, 5000, 6000],
             date_transitions: vec![(0, "20240101".to_string()), (100, "20240102".to_string())],
@@ -1775,16 +1764,11 @@ mod cell_distribution_tests {
         store.put_cell_dist_tracker_state(&state).unwrap();
 
         let retrieved = store.get_cell_dist_tracker_state().unwrap().unwrap();
-        assert_eq!(retrieved.capacity_by_date_and_bucket.len(), 2);
         assert_eq!(retrieved.count_by_bucket, [10, 20, 30, 40, 50, 60]);
         assert_eq!(
             retrieved.total_capacity_by_bucket,
             [1000, 2000, 3000, 4000, 5000, 6000]
         );
         assert_eq!(retrieved.last_snapshot_date, Some("20240102".to_string()));
-        assert_eq!(
-            retrieved.capacity_by_date_and_bucket[1].1,
-            [110, 210, 310, 410, 510, 610]
-        );
     }
 }
