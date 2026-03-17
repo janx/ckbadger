@@ -1630,6 +1630,8 @@ impl Indexer {
         object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
         pre_parsed_spore_data: Vec<(Vec<(usize, ParsedSporeCell)>, Vec<ParsedClusterCell>)>,
         pre_parsed_nft_data: PreParsedNftData,
+        script_reference_version_changes: ScriptReferenceVersionChanges,
+        cell_script_version_rows: Vec<(Vec<u8>, i16, CellScriptVersionInfo)>,
         chain_tip: u64,
     ) -> Result<BatchWriteMetrics> {
         if all_parsed_blocks.is_empty() {
@@ -1912,18 +1914,6 @@ impl Indexer {
 
         let block_refs: Vec<&crate::parser::block::ParsedBlock> =
             all_parsed_blocks.iter().collect();
-        let empty_parser_version_cache: HashMap<(Vec<u8>, i16), (i64, CellScriptVersionInfo)> =
-            HashMap::new();
-        let (script_reference_version_changes, cell_script_version_rows) =
-            build_script_reference_version_state(
-                &all_tx_data,
-                self.writer.store(),
-                &self.append_only_store,
-                &batch_cell_infos,
-                self.ckb_store.as_deref(),
-                &empty_parser_version_cache,
-            )?;
-
         // Pass 4: Proposals (iterates all_parsed_blocks, spawns background cache task)
         let mut batch_proposals: Vec<(Vec<u8>, i64, i16)> = Vec::new();
         let is_bulk = self.is_bulk_sync_active();

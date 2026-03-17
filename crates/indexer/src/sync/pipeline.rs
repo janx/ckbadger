@@ -2108,8 +2108,8 @@ impl Indexer {
                     object_daily_changes,
                     pre_parsed_spore_data,
                     pre_parsed_nft_data,
-                    script_reference_version_changes: _script_reference_version_changes,
-                    cell_script_version_rows: _cell_script_version_rows,
+                    script_reference_version_changes,
+                    cell_script_version_rows,
                     parser_perf_sample,
                 })) => {
                     consecutive_idle_timeouts = 0;
@@ -2320,6 +2320,8 @@ impl Indexer {
                             object_daily_changes,
                             pre_parsed_spore_data,
                             pre_parsed_nft_data,
+                            script_reference_version_changes,
+                            cell_script_version_rows,
                             chain_tip,
                         )
                         .await
