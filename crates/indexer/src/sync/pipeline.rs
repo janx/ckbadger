@@ -9,7 +9,9 @@ use anyhow::{anyhow, Context, Result};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
-use ckbadger_store::types::{LiveCellInfo, ObjectTypeIndex, PositionedCellInfo, SporeTypeIndex};
+use ckbadger_store::types::{
+    CellScriptVersionInfo, LiveCellInfo, ObjectTypeIndex, PositionedCellInfo, SporeTypeIndex,
+};
 
 use crate::parser::{
     analyze_spore_media_profile,
@@ -408,6 +410,8 @@ impl Indexer {
             object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
             pre_parsed_spore_data: PreParsedSporeData,
             pre_parsed_nft_data: PreParsedNftData,
+            script_reference_version_changes: ScriptReferenceVersionChanges,
+            cell_script_version_rows: Vec<(Vec<u8>, i16, CellScriptVersionInfo)>,
             parser_perf_sample: ParserBatchPerfSample,
         }
 
@@ -696,6 +700,11 @@ impl Indexer {
 
         // === Parser task ===
         let writer_for_parser = self.writer.clone();
+        let append_only_store_for_parser = Arc::clone(&self.append_only_store);
+        let ckb_store_for_parser = self
+            .ckb_store
+            .clone()
+            .expect("ckb_store must exist before pipeline starts");
         let rpc_for_parser = self.rpc.clone();
         let cell_cache_for_parser = Arc::clone(&self.cell_cache);
         let committed_tip_for_cache_for_parser = Arc::clone(&committed_tip_for_cache);
@@ -704,6 +713,8 @@ impl Indexer {
         let parser_exit_reason_for_parser = Arc::clone(&parser_exit_reason);
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
+            let mut parser_version_cache: HashMap<(Vec<u8>, i16), (i64, CellScriptVersionInfo)> =
+                HashMap::new();
             'parser_batches: while let Some((
                 batch_epoch,
                 start_block,
@@ -1860,6 +1871,54 @@ impl Indexer {
                 precompute_phase_metrics.nft_precompute_ms =
                     nft_precompute_started.elapsed().as_secs_f64() * 1000.0;
 
+                // Script reference version computation: moved from writer to parser
+                // for concurrent execution with previous batch's writer.
+                let t_script_version = Instant::now();
+                let (script_reference_version_changes, cell_script_version_rows) =
+                    match build_script_reference_version_state(
+                        &all_tx_data,
+                        writer_for_parser.store(),
+                        &append_only_store_for_parser,
+                        &batch_cell_infos,
+                        Some(ckb_store_for_parser.as_ref()),
+                        &parser_version_cache,
+                    ) {
+                        Ok(result) => result,
+                        Err(e) => {
+                            error!(
+                                start_block,
+                                end_block, "Parser: script version computation failed: {}", e
+                            );
+                            record_worker_exit_reason(
+                                &parser_exit_reason_for_parser,
+                                format!(
+                                    "script version computation failed for range {}-{}: {}",
+                                    start_block, end_block, e
+                                ),
+                            );
+                            return;
+                        }
+                    };
+                precompute_phase_metrics.script_version_ms =
+                    t_script_version.elapsed().as_secs_f64() * 1000.0;
+
+                // Populate cross-batch version cache
+                let tx_block_numbers: HashMap<&[u8], i64> = all_tx_data
+                    .iter()
+                    .map(|tx| (tx.hash.as_slice(), tx.block_number))
+                    .collect();
+                for (tx_hash, output_index, info) in &cell_script_version_rows {
+                    let block_number = tx_block_numbers[tx_hash.as_slice()];
+                    parser_version_cache.insert(
+                        (tx_hash.clone(), *output_index),
+                        (block_number, info.clone()),
+                    );
+                }
+
+                // Prune entries already committed by the writer
+                let committed = committed_tip_for_cache_for_parser.load(Ordering::Relaxed);
+                parser_version_cache.retain(|_, (block_number, _)| *block_number > committed);
+
                 let precompute_parser_ms = t_precompute_parser.elapsed().as_secs_f64() * 1000.0;
                 let total_parser_ms = t_parser.elapsed().as_secs_f64() * 1000.0;
                 let tx_count: usize = all_tx_data.len();
@@ -1957,6 +2016,8 @@ impl Indexer {
                         object_daily_changes,
                         pre_parsed_spore_data,
                         pre_parsed_nft_data,
+                        script_reference_version_changes,
+                        cell_script_version_rows,
                         parser_perf_sample,
                     })
                     .await
@@ -2047,6 +2108,8 @@ impl Indexer {
                     object_daily_changes,
                     pre_parsed_spore_data,
                     pre_parsed_nft_data,
+                    script_reference_version_changes: _script_reference_version_changes,
+                    cell_script_version_rows: _cell_script_version_rows,
                     parser_perf_sample,
                 })) => {
                     consecutive_idle_timeouts = 0;
