@@ -23,6 +23,7 @@ use crate::rpc::CkbRpcClient;
 use crate::runtime_diag::{generate_incident_id, read_cgroup_memory_snapshot, FlightRecorder};
 
 use super::adaptive::*;
+use super::bulk_build::BulkBuildEngine;
 use super::diagnostics::*;
 use super::helpers::*;
 use super::sync_mode::*;
@@ -192,6 +193,30 @@ pub(super) fn should_startup_bulk_sync_mode(
 ) -> bool {
     is_fresh_sync_tip_state(sync_tip_block, sync_tip_hash)
         && is_bulk_sync_active_by_lag(blocks_behind, bulk_sync_threshold)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SyncPath {
+    BulkBuild,
+    Pipeline,
+}
+
+pub(super) fn select_startup_sync_path(
+    blocks_behind: u64,
+    bulk_sync_threshold: u64,
+    sync_tip_block: i64,
+    sync_tip_hash: &Option<Vec<u8>>,
+) -> SyncPath {
+    if should_startup_bulk_sync_mode(
+        blocks_behind,
+        bulk_sync_threshold,
+        sync_tip_block,
+        sync_tip_hash,
+    ) {
+        SyncPath::BulkBuild
+    } else {
+        SyncPath::Pipeline
+    }
 }
 
 pub(crate) fn maybe_start_bulk_sync_perf_run(
@@ -870,12 +895,13 @@ impl Indexer {
         let bulk_sync_allowed = fresh_sync_tip;
         self.bulk_sync_allowed
             .store(bulk_sync_allowed, Ordering::SeqCst);
-        let bulk_sync_mode = should_startup_bulk_sync_mode(
+        let sync_path = select_startup_sync_path(
             blocks_behind,
             self.config.bulk_sync_threshold,
             start_block,
             &start_block_hash,
         );
+        let bulk_sync_mode = matches!(sync_path, SyncPath::BulkBuild);
         info!(
             run_id = %self.run_id,
             "Starting indexer ({} blocks behind, threshold={})",
@@ -1111,7 +1137,10 @@ impl Indexer {
             }
         });
 
-        self.run_pipeline().await
+        match sync_path {
+            SyncPath::BulkBuild => BulkBuildEngine::run(self).await,
+            SyncPath::Pipeline => self.run_pipeline().await,
+        }
     }
 }
 
@@ -1156,6 +1185,18 @@ mod tests {
             10,
             &Some(vec![0x22; 32])
         ));
+    }
+
+    #[test]
+    fn startup_bulk_sync_uses_bulk_build_engine_for_fresh_store() {
+        let route = select_startup_sync_path(10_000, 72, 0, &None);
+        assert_eq!(route, SyncPath::BulkBuild);
+    }
+
+    #[test]
+    fn startup_existing_sync_tip_uses_pipeline_even_when_lagging() {
+        let route = select_startup_sync_path(10_000, 72, 5, &Some(vec![0x11; 32]));
+        assert_eq!(route, SyncPath::Pipeline);
     }
 
     #[test]

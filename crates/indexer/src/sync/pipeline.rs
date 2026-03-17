@@ -556,7 +556,7 @@ fn run_nft_precompute(
 }
 
 impl Indexer {
-    pub(super) async fn run_pipeline(&self) -> Result<()> {
+    pub(crate) async fn run_pipeline(&self) -> Result<()> {
         use tokio::sync::mpsc;
 
         type FetchedBatch = (u64, u64, u64, u64, Arc<Vec<BlockResponseWithCycles>>);
