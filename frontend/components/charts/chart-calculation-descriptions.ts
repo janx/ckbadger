@@ -35,7 +35,7 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
       {
         label: yAxisLabel ?? 'Total Deposit',
         description:
-          'For each day: sum used capacity of all live DAO deposit cells as of end-of-day state.',
+          'For each day: sum common knowledge size of all live DAO deposit cells as of end-of-day state.',
       },
     ],
   }),
@@ -85,16 +85,15 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
   }),
   'chart-knowledge-size': ({ yAxisLabel, y2AxisLabel }) => ({
     overview:
-      'Shows protocol common knowledge size and its utilization trend, plus day-over-day net used capacity flow.',
+      'Shows protocol common knowledge size and its share of total capacity, plus day-over-day net common knowledge flow.',
     legendItems: [
       {
         label: yAxisLabel ?? 'Common Knowledge Size',
-        description:
-          'For each day: total used capacity from indexed chain snapshots (common knowledge size).',
+        description: 'For each day: total common knowledge size from indexed chain snapshots.',
       },
       {
-        label: y2AxisLabel ?? 'Utilization (%)',
-        description: 'For each day: (used capacity / total capacity base) × 100%.',
+        label: y2AxisLabel ?? 'Common Knowledge Share (%)',
+        description: 'For each day: (common knowledge size / total capacity base) × 100%.',
       },
       {
         label: 'Net Flow (CKB/day)',
@@ -109,7 +108,7 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     legendItems: bySeriesLabels(
       seriesLabels,
       (label) =>
-        `For each day: sum used capacity of live cells classified into "${label}" category.`
+        `For each day: sum common knowledge size of live cells classified into "${label}" category.`
     ),
   }),
   'chart-capacity-turnover-ratio': ({ yAxisLabel }) => ({
@@ -117,7 +116,8 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     legendItems: [
       {
         label: yAxisLabel ?? 'Capacity Turnover Ratio',
-        description: 'For each day: daily consumed capacity / daily average live used capacity.',
+        description:
+          'For each day: daily consumed capacity / daily average live common knowledge size.',
       },
     ],
   }),
@@ -133,22 +133,22 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
   }),
   'chart-address-cohort-retention': ({ yAxisLabel }) => ({
     overview:
-      'Groups addresses by first-seen month, then shows how much of each cohort’s balance is currently used (locked) versus total balance.',
+      'Groups addresses by first-seen month, then shows how much of each cohort’s balance is currently recorded as common knowledge versus total balance.',
     legendItems: [
       {
         label: yAxisLabel ?? 'Retention Rate',
         description:
-          'For each cohort month: (sum of used_capacity for addresses first seen in that month / sum of balance for the same addresses) × 100%.',
+          'For each cohort month: (sum of common_knowledge_size for addresses first seen in that month / sum of balance for the same addresses) × 100%.',
       },
     ],
   }),
   'chart-most-utilized-scripts': () => ({
-    overview: 'Ranks scripts by utilization in live state: used capacity and total cells capacity.',
+    overview: 'Ranks scripts by live common knowledge size against total cells capacity.',
     legendItems: [
       {
-        label: 'Used CKB',
+        label: 'Common Knowledge CKB',
         description:
-          'For each script: sum live used capacity across deployments; ranked descending (top 20).',
+          'For each script: sum live common knowledge size across deployments; ranked descending (top 20).',
       },
       {
         label: 'Total Cells Capacity',
@@ -158,12 +158,12 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     ],
   }),
   'chart-most-utilized-assets': () => ({
-    overview: 'Ranks token and Object collection assets by utilization in live state.',
+    overview: 'Ranks token and Object collection assets by live common knowledge size.',
     legendItems: [
       {
-        label: 'Used CKB',
+        label: 'Common Knowledge CKB',
         description:
-          'For each asset: cumulative live used capacity derived from exact daily deltas; ranked descending (top 20).',
+          'For each asset: cumulative live common knowledge size derived from exact daily deltas; ranked descending (top 20).',
       },
       {
         label: 'Total Cells Capacity',

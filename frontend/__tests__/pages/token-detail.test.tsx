@@ -52,7 +52,7 @@ const mockToken = {
   transfers24h: 10,
   cellsCount: 150,
   totalCapacity: '50000000000000',
-  totalUsedCapacity: '15300000000000',
+  totalCommonKnowledgeSize: '15300000000000',
 };
 
 const mockHolders = {
@@ -108,8 +108,8 @@ describe('TokenDetailPage', () => {
     expect(screen.getByText('Unknown')).toBeInTheDocument();
     expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
     expect(screen.getByText('Cells Capacity')).toBeInTheDocument();
-    expect(screen.getByText(/^Used:/)).toBeInTheDocument();
-    expect(screen.getByText(/^Unused:/)).toBeInTheDocument();
+    expect(screen.getByText(/^Common Knowledge:/)).toBeInTheDocument();
+    expect(screen.getByText(/^Free Capacity:/)).toBeInTheDocument();
     expect(screen.getAllByText('Cells').length).toBeGreaterThan(0);
     expect(screen.getByText('150')).toBeInTheDocument();
   });

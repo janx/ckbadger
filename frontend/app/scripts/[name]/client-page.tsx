@@ -52,7 +52,7 @@ interface VersionUsageStats {
   scriptKind: string | null;
   liveCellsCount: number;
   liveCapacitySum: string;
-  liveUsedCapacitySum: string;
+  liveCommonKnowledgeSizeSum: string;
 }
 
 const UNKNOWN_SCRIPT_NAME = 'unknown';
@@ -376,7 +376,7 @@ export default function ScriptDetailPage({
       codeCellOutputIndex: codeHashLookup.codeCellOutputIndex,
       deployedAt: null,
       liveCapacitySum: codeHashLookup.liveCapacitySum,
-      liveUsedCapacitySum: codeHashLookup.liveUsedCapacitySum,
+      liveCommonKnowledgeSizeSum: codeHashLookup.liveCommonKnowledgeSizeSum,
       liveCellsCount: codeHashLookup.liveCellsCount,
       codeCellsLiveCount: codeHashLookup.codeCellsLiveCount,
       codeCellsTotal: codeHashLookup.codeCellsTotal,
@@ -416,7 +416,7 @@ export default function ScriptDetailPage({
           scriptKind: codeHashLookup.scriptKind,
           liveCellsCount: codeHashLookup.liveCellsCount,
           liveCapacitySum: codeHashLookup.liveCapacitySum,
-          liveUsedCapacitySum: codeHashLookup.liveUsedCapacitySum,
+          liveCommonKnowledgeSizeSum: codeHashLookup.liveCommonKnowledgeSizeSum,
         },
       ];
     }
@@ -427,7 +427,7 @@ export default function ScriptDetailPage({
         scriptKind: deployment.scriptKind,
         liveCellsCount: deployment.liveCellsCount,
         liveCapacitySum: deployment.liveCapacitySum,
-        liveUsedCapacitySum: deployment.liveUsedCapacitySum,
+        liveCommonKnowledgeSizeSum: deployment.liveCommonKnowledgeSizeSum,
       })) ?? []
     );
   }, [codeHashLookup, isCodeHashMode, usage?.byDeployment]);
@@ -1132,8 +1132,8 @@ export default function ScriptDetailPage({
           this deployment.
         </div>
         <div>
-          <span className="text-text font-mono">Used Capacity</span>: occupied capacity of the code
-          cell itself.
+          <span className="text-text font-mono">Common Knowledge Size</span>: common knowledge size
+          of the code cell itself.
         </div>
       </div>
     </>
@@ -1541,12 +1541,12 @@ export default function ScriptDetailPage({
                                 </div>
                                 <div className="text-right">
                                   <div className="text-text-dim font-mono text-[10px] uppercase tracking-wide">
-                                    Used capacity
+                                    Common knowledge size
                                   </div>
                                   <div className="pt-1">
-                                    {codeCell?.usedCapacity != null ? (
+                                    {codeCell?.commonKnowledgeSize != null ? (
                                       <Capacity
-                                        value={String(codeCell.usedCapacity)}
+                                        value={String(codeCell.commonKnowledgeSize)}
                                         className="text-sm"
                                       />
                                     ) : (
@@ -1587,7 +1587,7 @@ export default function ScriptDetailPage({
                         </HelpPopover>
                       </div>
                       <div className="text-right">Deployed At</div>
-                      <div className="text-right">Used Capacity</div>
+                      <div className="text-right">Common Knowledge Size</div>
                     </div>
                     {selectedVersionDeploymentRows.length > 0 ? (
                       selectedVersionDeploymentRows.map(
@@ -1626,9 +1626,9 @@ export default function ScriptDetailPage({
                               {renderDeploymentReferences(references)}
                               {renderDeploymentTimestamp(deployment, codeCell)}
                               <div className="text-right">
-                                {codeCell?.usedCapacity != null ? (
+                                {codeCell?.commonKnowledgeSize != null ? (
                                   <Capacity
-                                    value={String(codeCell.usedCapacity)}
+                                    value={String(codeCell.commonKnowledgeSize)}
                                     className="text-sm"
                                   />
                                 ) : (
@@ -1668,7 +1668,7 @@ export default function ScriptDetailPage({
                         </HelpPopover>
                       </div>
                       <div className="text-right">Deployed At</div>
-                      <div className="text-right">Used Capacity</div>
+                      <div className="text-right">Common Knowledge Size</div>
                     </div>
                     {selectedVersionDeploymentRows.length > 0 ? (
                       selectedVersionDeploymentRows.map(
@@ -1707,9 +1707,9 @@ export default function ScriptDetailPage({
                               {renderDeploymentReferences(references)}
                               {renderDeploymentTimestamp(deployment, codeCell)}
                               <div className="text-right">
-                                {codeCell?.usedCapacity != null ? (
+                                {codeCell?.commonKnowledgeSize != null ? (
                                   <Capacity
-                                    value={String(codeCell.usedCapacity)}
+                                    value={String(codeCell.commonKnowledgeSize)}
                                     className="text-sm"
                                   />
                                 ) : (
@@ -1742,13 +1742,13 @@ export default function ScriptDetailPage({
                   <div className="border-base-border border-b px-4 py-4">
                     <HMultiplier
                       totalCapacity={selectedVersionUsage.liveCapacitySum}
-                      usedCapacity={selectedVersionUsage.liveUsedCapacitySum}
+                      commonKnowledgeSize={selectedVersionUsage.liveCommonKnowledgeSizeSum}
                     />
                   </div>
                 )}
                 <div className="border-base-border border-b px-4 py-4">
                   <div className="text-text-dim mb-3 text-xs">
-                    Historical used/unused live capacity for the selected version.
+                    Historical common knowledge and free live capacity for the selected version.
                   </div>
                   <CapacityRangeSelector value={capacityRange} onChange={setCapacityRange} />
                   {isSelectedCapacityChartLoading ? (
@@ -1797,9 +1797,9 @@ export default function ScriptDetailPage({
                             {cell.cellType === 'genesis_special_burn' ? (
                               <span
                                 className="border-base-border cursor-help border-b border-dashed"
-                                title="Virtual used capacity: 5.04B CKB"
+                                title="Virtual common knowledge size: 5.04B CKB"
                               >
-                                <Capacity value={cell.virtualUsedCapacity || '0'} />
+                                <Capacity value={cell.virtualCommonKnowledgeSize || '0'} />
                               </span>
                             ) : (
                               <>{cell.dataSize.toLocaleString()} bytes</>

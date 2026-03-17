@@ -27,7 +27,7 @@ describe('MostUtilizedAssetsPage', () => {
     vi.mocked(api.getMostUtilizedAssetsChart).mockResolvedValue({
       title: 'Assets Used & Total CKBytes',
       usedShare: {
-        title: 'Top Assets Used Share',
+        title: 'Top Assets Common Knowledge Share',
         data: [{ date: '2024-01-01', values: { top0: '100', others: '20' } }],
         series: [
           { key: 'top0', label: 'Token A (token)', color: '#00c389' },

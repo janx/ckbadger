@@ -292,7 +292,7 @@ export default function ScriptsPage() {
                       </div>
                       <div className="text-text w-28 shrink-0 text-right font-mono">
                         {(() => {
-                          const occupied = script.liveUsedCapacitySum;
+                          const occupied = script.liveCommonKnowledgeSizeSum;
                           if (!occupied) {
                             return <span className="text-text-dim">-</span>;
                           }
@@ -343,9 +343,9 @@ export default function ScriptsPage() {
                       )}
                       <div className="text-text flex items-center gap-4 font-mono text-xs">
                         <span>
-                          Used:{' '}
+                          Common Knowledge:{' '}
                           {(() => {
-                            const o = script.liveUsedCapacitySum;
+                            const o = script.liveCommonKnowledgeSizeSum;
                             return o ? formatCkbCompact(o).value : '-';
                           })()}
                         </span>

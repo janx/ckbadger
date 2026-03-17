@@ -32,7 +32,7 @@ const mockAddressWithLockScriptInfo = {
   lockScriptHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
   address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
   balance: '10000000000',
-  usedCapacity: '6100000000',
+  commonKnowledgeSize: '6100000000',
   liveCellsCount: 5,
   transactionsCount: 10,
   lockScript: {
@@ -52,7 +52,7 @@ const mockAddressWithoutLockScriptInfo = {
   lockScriptHash: '0x2222222222222222222222222222222222222222222222222222222222222222',
   address: undefined,
   balance: '5000000000',
-  usedCapacity: '3000000000',
+  commonKnowledgeSize: '3000000000',
   liveCellsCount: 2,
   transactionsCount: 3,
   lockScript: {
@@ -67,7 +67,7 @@ const mockAddressWithDeprecatedScript = {
   lockScriptHash: '0x3333333333333333333333333333333333333333333333333333333333333333',
   address: 'ckb1qtest',
   balance: '1000000000',
-  usedCapacity: '500000000',
+  commonKnowledgeSize: '500000000',
   liveCellsCount: 1,
   transactionsCount: 1,
   lockScript: {
@@ -209,7 +209,7 @@ describe('AddressDetailPage', () => {
     expect(screen.getAllByText('Transactions').length).toBeGreaterThan(0);
     expect(screen.getAllByText('5').length).toBeGreaterThan(0);
     expect(screen.getAllByText('10').length).toBeGreaterThan(0);
-    expect(screen.getByText(/^Unused:/)).toBeInTheDocument();
+    expect(screen.getByText(/^Free Capacity:/)).toBeInTheDocument();
     expect(screen.queryByText(/^Free:/)).not.toBeInTheDocument();
   });
 

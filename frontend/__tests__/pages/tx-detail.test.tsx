@@ -32,8 +32,8 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
     confirmations: 4,
     inputsCapacity: '55500000000',
     outputsCapacity: '55499941197',
-    inputsUsedCapacity: '6100000000',
-    outputsUsedCapacity: '6100000650',
+    inputsCommonKnowledgeSize: '6100000000',
+    outputsCommonKnowledgeSize: '6100000650',
     inputs: [
       {
         previousOutput: {
@@ -57,7 +57,7 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
     outputs: [
       {
         capacity: '55499941197',
-        usedCapacity: 61,
+        commonKnowledgeSize: 61,
         lock: {
           codeHash: LOCK_CODE_HASH,
           hashType: 'type',
@@ -88,8 +88,8 @@ function createPendingTransactionDetail(): Awaited<ReturnType<typeof api.getTran
     confirmations: null,
     inputsCapacity: null,
     outputsCapacity: null,
-    inputsUsedCapacity: null,
-    outputsUsedCapacity: null,
+    inputsCommonKnowledgeSize: null,
+    outputsCommonKnowledgeSize: null,
   } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
 }
 
@@ -147,7 +147,7 @@ describe('TransactionDetailPage', () => {
         codeCellOutputIndex: null,
         liveCellsCount: 10,
         liveCapacitySum: '100000000000',
-        liveUsedCapacitySum: '60000000000',
+        liveCommonKnowledgeSizeSum: '60000000000',
         codeCellsLiveCount: 0,
         codeCellsTotal: 0,
       },
@@ -161,7 +161,7 @@ describe('TransactionDetailPage', () => {
         codeCellOutputIndex: null,
         liveCellsCount: 1,
         liveCapacitySum: '10000000000',
-        liveUsedCapacitySum: '6000000000',
+        liveCommonKnowledgeSizeSum: '6000000000',
         codeCellsLiveCount: 0,
         codeCellsTotal: 0,
       },

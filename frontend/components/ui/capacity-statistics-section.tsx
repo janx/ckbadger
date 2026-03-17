@@ -18,7 +18,7 @@ interface CapacityStatisticsSectionProps {
   capacityChart: StackedAreaChartResponse | undefined;
   isCapacityChartLoading: boolean;
   totalCapacity?: string | null;
-  usedCapacity?: string | null;
+  commonKnowledgeSize?: string | null;
   totalCapacityLabel?: string;
   className?: string;
 }
@@ -30,11 +30,11 @@ export function CapacityStatisticsSection({
   capacityChart,
   isCapacityChartLoading,
   totalCapacity,
-  usedCapacity,
+  commonKnowledgeSize,
   totalCapacityLabel = 'Total Capacity',
   className,
 }: CapacityStatisticsSectionProps) {
-  const hasCapacityData = Boolean(totalCapacity && usedCapacity);
+  const hasCapacityData = Boolean(totalCapacity && commonKnowledgeSize);
 
   return (
     <TerminalPanel className={className}>
@@ -49,7 +49,7 @@ export function CapacityStatisticsSection({
           <div className="border-base-border bg-base-bg/50 mb-3 rounded border p-3">
             <CapacityUtilization
               totalCapacity={totalCapacity!}
-              usedCapacity={usedCapacity!}
+              commonKnowledgeSize={commonKnowledgeSize!}
               totalLabel={totalCapacityLabel}
             />
           </div>

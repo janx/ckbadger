@@ -42,7 +42,7 @@ const mockCluster = {
   activitiesCount: 10,
   createdAtBlock: 1000000,
   liveCapacity: '100000000000',
-  liveUsedCapacity: '61000000000',
+  liveCommonKnowledgeSize: '61000000000',
 };
 
 const mockSpores = {
@@ -99,7 +99,7 @@ describe('ClusterDetailPage', () => {
       lockScriptHash: mockCluster.ownerLockHash,
       address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
       balance: '0',
-      usedCapacity: '0',
+      commonKnowledgeSize: '0',
       liveCellsCount: 0,
       transactionsCount: 0,
     } as any);
@@ -476,7 +476,7 @@ describe('ClusterDetailPage', () => {
           lockScriptHash: addr,
           address: resolvedSporeOwnerAddress,
           balance: '0',
-          usedCapacity: '0',
+          commonKnowledgeSize: '0',
           liveCellsCount: 0,
           transactionsCount: 0,
         } as any;
@@ -485,7 +485,7 @@ describe('ClusterDetailPage', () => {
         lockScriptHash: addr,
         address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
         balance: '0',
-        usedCapacity: '0',
+        commonKnowledgeSize: '0',
         liveCellsCount: 0,
         transactionsCount: 0,
       } as any;

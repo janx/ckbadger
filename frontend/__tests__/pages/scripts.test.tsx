@@ -42,7 +42,7 @@ const mockScriptsResponse = {
       codeCellTxHash: null,
       codeCellOutputIndex: null,
       liveCapacitySum: '2000000000',
-      liveUsedCapacitySum: '1000000000',
+      liveCommonKnowledgeSizeSum: '1000000000',
       liveCellsCount: 4200,
       cellsCount: 8500,
       deployedAt: 0,
@@ -66,7 +66,7 @@ const mockScriptsResponse = {
       codeCellTxHash: null,
       codeCellOutputIndex: null,
       liveCapacitySum: '10000000000',
-      liveUsedCapacitySum: '5000000000',
+      liveCommonKnowledgeSizeSum: '5000000000',
       liveCellsCount: 1500,
       cellsCount: 3200,
       deployedAt: 100,
@@ -112,7 +112,7 @@ describe('ScriptsPage', () => {
     expect(screen.getByRole('button', { name: 'Sort by Used (CKB)' })).toBeInTheDocument();
   });
 
-  it('supports sorting by occupied capacity', async () => {
+  it('supports sorting by common knowledge size', async () => {
     vi.mocked(api.getScripts)
       .mockResolvedValueOnce(mockScriptsResponse)
       .mockResolvedValueOnce({
@@ -165,7 +165,7 @@ describe('ScriptsPage', () => {
           codeCellTxHash: null,
           codeCellOutputIndex: null,
           liveCapacitySum: '2000000000',
-          liveUsedCapacitySum: '1000000000',
+          liveCommonKnowledgeSizeSum: '1000000000',
         } satisfies KnownScript,
       ],
       total: 1,

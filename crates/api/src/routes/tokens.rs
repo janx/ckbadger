@@ -89,6 +89,7 @@ pub struct TokenResponse {
     pub transfers_24h: i64,
     pub cells_count: Option<i64>,
     pub total_capacity: Option<String>,
+    #[serde(rename = "totalCommonKnowledgeSize")]
     pub total_used_capacity: Option<String>,
 }
 

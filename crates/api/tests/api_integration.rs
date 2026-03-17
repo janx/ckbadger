@@ -1200,28 +1200,28 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(
-        json["usedCapacity"],
+        json["commonKnowledgeSize"],
         serde_json::Value::from(138_00000000i64)
     );
     assert_eq!(json["type"]["args"], serde_json::Value::from("0xaabb"));
     assert_eq!(
-        json["usedCapacityBreakdown"]["capacityFieldBytes"],
+        json["commonKnowledgeSizeBreakdown"]["capacityFieldBytes"],
         serde_json::Value::from(8)
     );
     assert_eq!(
-        json["usedCapacityBreakdown"]["lockScriptBytes"],
+        json["commonKnowledgeSizeBreakdown"]["lockScriptBytes"],
         serde_json::Value::from(53)
     );
     assert_eq!(
-        json["usedCapacityBreakdown"]["typeScriptBytes"],
+        json["commonKnowledgeSizeBreakdown"]["typeScriptBytes"],
         serde_json::Value::from(35)
     );
     assert_eq!(
-        json["usedCapacityBreakdown"]["dataBytes"],
+        json["commonKnowledgeSizeBreakdown"]["dataBytes"],
         serde_json::Value::from(42)
     );
     assert_eq!(
-        json["usedCapacityBreakdown"]["totalBytes"],
+        json["commonKnowledgeSizeBreakdown"]["totalBytes"],
         serde_json::Value::from(138)
     );
 }
@@ -1440,6 +1440,11 @@ async fn test_transaction_detail_returns_pending_mempool_transaction() {
     assert_eq!(json["inputsCount"], 1);
     assert_eq!(json["outputsCount"], 1);
     assert_eq!(json["fee"], "372");
+    assert_eq!(json["inputsCommonKnowledgeSize"], serde_json::Value::Null);
+    assert_eq!(
+        json["outputsCommonKnowledgeSize"],
+        serde_json::Value::from("61")
+    );
     assert!(json["txSize"].as_i64().unwrap() > 0);
     assert_eq!(json["cycles"], 21000);
     assert_eq!(json["witnessesAvailable"], true);
@@ -2713,7 +2718,7 @@ async fn test_scripts_list_supports_cursor_pagination() {
     assert_eq!(page1[0]["name"], "A_SCRIPT");
     assert_eq!(page1[1]["name"], "B_SCRIPT");
     assert_eq!(page1[0]["liveCapacitySum"], "0");
-    assert_eq!(page1[0]["liveUsedCapacitySum"], "0");
+    assert_eq!(page1[0]["liveCommonKnowledgeSizeSum"], "0");
     assert_eq!(json["total"], 3);
     assert_eq!(json["limit"], 2);
     assert_eq!(json["hasMore"], true);
@@ -3116,7 +3121,7 @@ async fn test_script_lookup_and_code_cells_allow_unlabeled_resolved_type_referen
     assert_eq!(json[&type_hash_hex]["scriptKind"], "lock");
     assert_eq!(json[&type_hash_hex]["liveCellsCount"], 2);
     assert_eq!(json[&type_hash_hex]["liveCapacitySum"], "500");
-    assert_eq!(json[&type_hash_hex]["liveUsedCapacitySum"], "350");
+    assert_eq!(json[&type_hash_hex]["liveCommonKnowledgeSizeSum"], "350");
     assert_eq!(
         json[&type_hash_hex]["codeCellTxHash"],
         code_cell_tx_hash_hex
@@ -4181,6 +4186,7 @@ async fn test_get_token_includes_maximum_supply() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["totalSupply"], "50000000000");
+    assert_eq!(json["totalCommonKnowledgeSize"], serde_json::Value::Null);
     assert_eq!(json["maximumSupply"], "100000000000");
     assert_eq!(json["maximumSupplyStatus"], "limited");
 }
@@ -4878,7 +4884,7 @@ async fn test_cluster_capacity_chart_and_cluster_capacity_fields() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["liveCapacity"], "80");
-    assert_eq!(json["liveUsedCapacity"], "50");
+    assert_eq!(json["liveCommonKnowledgeSize"], "50");
     assert_eq!(json["storageProfile"]["tier"], "unknown");
 }
 
@@ -5243,7 +5249,7 @@ async fn test_spore_capacity_chart_and_spore_capacity_fields() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["liveCapacity"], "80");
-    assert_eq!(json["liveUsedCapacity"], "50");
+    assert_eq!(json["liveCommonKnowledgeSize"], "50");
 }
 
 #[tokio::test]
@@ -5764,7 +5770,7 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"][0]["id"], format!("0x{}", hex::encode(token_b)));
     assert_eq!(json["data"][0]["liveCapacity"], "300");
-    assert_eq!(json["data"][0]["liveUsedCapacity"], "120");
+    assert_eq!(json["data"][0]["liveCommonKnowledgeSize"], "120");
 
     let next_cursor = json["nextCursor"].as_str().unwrap();
     let request = Request::builder()
@@ -5956,7 +5962,7 @@ async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["standard"], "m-nft");
     assert_eq!(json["liveCapacity"], "80");
-    assert_eq!(json["liveUsedCapacity"], "50");
+    assert_eq!(json["liveCommonKnowledgeSize"], "50");
 }
 
 #[tokio::test]
@@ -6015,7 +6021,7 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
     assert_eq!(json["standard"], "dotbit");
     assert_eq!(json["name"], ".bit");
     assert_eq!(json["liveCapacity"], "100");
-    assert_eq!(json["liveUsedCapacity"], "60");
+    assert_eq!(json["liveCommonKnowledgeSize"], "60");
 
     let request = Request::builder()
         .uri("/api/v1/assets/objects/DOTBIT/charts/capacity-history")

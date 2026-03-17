@@ -27,7 +27,7 @@ describe('MostUtilizedScriptsPage', () => {
     vi.mocked(api.getMostUtilizedScriptsChart).mockResolvedValue({
       title: 'Scripts Used & Total CKBytes',
       usedShare: {
-        title: 'Top Scripts Used Share',
+        title: 'Top Scripts Common Knowledge Share',
         data: [{ date: '2024-01-01', values: { top0: '100', others: '20' } }],
         series: [
           { key: 'top0', label: 'SECP256K1_BLAKE160', color: '#00c389' },

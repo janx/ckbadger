@@ -138,6 +138,7 @@ pub struct ScriptResponse {
     pub live_cells_count: i64,
     pub cells_count: i64,
     pub live_capacity_sum: String,
+    #[serde(rename = "liveCommonKnowledgeSizeSum")]
     pub live_used_capacity_sum: String,
     pub code_cells_live_count: i64,
     pub code_cells_total: i64,
@@ -151,7 +152,9 @@ pub struct ScriptUsageResponse {
     pub live_cells_count: i64,
     pub capacity_sum: String,
     pub live_capacity_sum: String,
+    #[serde(rename = "commonKnowledgeSizeSum")]
     pub used_capacity_sum: String,
+    #[serde(rename = "liveCommonKnowledgeSizeSum")]
     pub live_used_capacity_sum: String,
     pub by_deployment: Vec<DeploymentUsage>,
 }
@@ -165,7 +168,9 @@ pub struct DeploymentUsage {
     pub live_cells_count: i64,
     pub capacity_sum: String,
     pub live_capacity_sum: String,
+    #[serde(rename = "commonKnowledgeSizeSum")]
     pub used_capacity_sum: String,
+    #[serde(rename = "liveCommonKnowledgeSizeSum")]
     pub live_used_capacity_sum: String,
 }
 
@@ -193,6 +198,7 @@ pub struct ScriptLookupInfo {
     pub code_cell_output_index: Option<i32>,
     pub live_cells_count: i64,
     pub live_capacity_sum: String,
+    #[serde(rename = "liveCommonKnowledgeSizeSum")]
     pub live_used_capacity_sum: String,
     pub code_cells_live_count: i64,
     pub code_cells_total: i64,
@@ -516,7 +522,7 @@ fn checked_capacity_totals(
     }
     if used < 0 {
         return Err(ApiError::internal(format!(
-            "negative live used capacity in {}: code_hash=0x{}, used={}",
+            "negative live common knowledge size in {}: code_hash=0x{}, used={}",
             context,
             hex::encode(&info.code_hash),
             used
@@ -524,7 +530,7 @@ fn checked_capacity_totals(
     }
     if used > capacity {
         return Err(ApiError::internal(format!(
-            "live used capacity exceeds total in {}: code_hash=0x{}, used={}, capacity={}",
+            "live common knowledge size exceeds total in {}: code_hash=0x{}, used={}, capacity={}",
             context,
             hex::encode(&info.code_hash),
             used,
@@ -1681,7 +1687,7 @@ mod tests {
             .1
              .0
             .message
-            .contains("live used capacity exceeds live capacity"));
+            .contains("live common knowledge size exceeds live capacity"));
     }
 
     #[test]
@@ -1710,7 +1716,7 @@ mod tests {
             .1
              .0
             .message
-            .contains("live used capacity exceeds total"));
+            .contains("live common knowledge size exceeds total"));
     }
 
     #[test]

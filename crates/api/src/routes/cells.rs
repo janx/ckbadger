@@ -1424,7 +1424,10 @@ pub struct CellResponse {
     pub created_at_block: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cell_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "virtualCommonKnowledgeSize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub virtual_used_capacity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub udt_amount: Option<String>,
@@ -1478,9 +1481,14 @@ pub struct CellDetailResponse {
     pub tx_hash: String,
     pub output_index: i32,
     pub capacity: String,
+    #[serde(rename = "commonKnowledgeSize")]
     pub used_capacity: i64,
+    #[serde(rename = "commonKnowledgeSizeBreakdown")]
     pub used_capacity_breakdown: OccupiedCapacityBreakdown,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "virtualCommonKnowledgeSize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub virtual_used_capacity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cell_type: Option<String>,
@@ -1530,6 +1538,7 @@ pub struct AddressResponse {
     pub lock_script_hash: String,
     pub address: Option<String>,
     pub balance: String,
+    #[serde(rename = "commonKnowledgeSize")]
     pub used_capacity: String,
     pub live_cells_count: i64,
     pub transactions_count: i64,

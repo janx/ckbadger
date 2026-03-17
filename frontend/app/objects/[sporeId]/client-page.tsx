@@ -436,7 +436,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
             totalCount={collection.totalCount}
             liveCount={collection.liveCount}
             liveCapacity={collection.liveCapacity}
-            liveUsedCapacity={collection.liveUsedCapacity}
+            liveCommonKnowledgeSize={collection.liveCommonKnowledgeSize}
             storageTier={collection.storageProfile?.tier}
             storageOnchainRatio={collection.storageProfile?.fullyOnchainRatio}
           />
@@ -454,7 +454,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               capacityChart={collectionCapacityChart}
               isCapacityChartLoading={isCollectionCapacityChartLoading}
               totalCapacity={collection.liveCapacity}
-              usedCapacity={collection.liveUsedCapacity}
+              commonKnowledgeSize={collection.liveCommonKnowledgeSize}
             />
             <TerminalPanel>
               <Tabs value={activeCollectionTab} onValueChange={handleCollectionTabChange}>
@@ -1212,7 +1212,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               capacityChart={capacityChart}
               isCapacityChartLoading={isCapacityChartLoading}
               totalCapacity={spore.liveCapacity}
-              usedCapacity={spore.liveUsedCapacity}
+              commonKnowledgeSize={spore.liveCommonKnowledgeSize}
             />
             {cluster && (
               <TerminalPanel>

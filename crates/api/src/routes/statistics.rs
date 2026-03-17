@@ -755,13 +755,13 @@ async fn get_most_utilized_scripts_chart(
         }
         if final_used_capacity < 0 {
             return Err(ApiError::internal(format!(
-                "negative script used capacity for key {}: {}",
+                "negative script common knowledge size for key {}: {}",
                 key, final_used_capacity
             )));
         }
         if final_used_capacity > final_total_cells_capacity {
             return Err(ApiError::internal(format!(
-                "script used capacity exceeds total for key {}: used={}, total={}",
+                "script common knowledge size exceeds total for key {}: used={}, total={}",
                 key, final_used_capacity, final_total_cells_capacity
             )));
         }
@@ -796,13 +796,13 @@ async fn get_most_utilized_scripts_chart(
                 }
                 if *used < 0 {
                     return Err(ApiError::internal(format!(
-                        "negative aggregated script used capacity for key {}: {}",
+                        "negative aggregated script common knowledge size for key {}: {}",
                         key, used
                     )));
                 }
                 if *used > *capacity {
                     return Err(ApiError::internal(format!(
-                    "aggregated script used capacity exceeds total for key {}: used={}, total={}",
+                    "aggregated script common knowledge size exceeds total for key {}: used={}, total={}",
                     key, used, capacity
                 )));
                 }
@@ -836,7 +836,7 @@ async fn get_most_utilized_scripts_chart(
 
     let dates: Vec<u32> = deltas_by_date.keys().copied().collect();
     let used_share = build_most_utilized_share_chart(
-        "Top Scripts Used Share".to_string(),
+        "Top Scripts Common Knowledge Share".to_string(),
         UtilizationMetric::Used,
         &top_used_keys,
         &labels_by_key,
@@ -917,7 +917,7 @@ async fn get_most_utilized_assets_chart(
         labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "token"));
         if used_cap > total_cells_capacity {
             return Err(ApiError::internal(format!(
-                "token used capacity exceeds total for {}: used={}, total={}",
+                "token common knowledge size exceeds total for {}: used={}, total={}",
                 entity_key, used_cap, total_cells_capacity
             )));
         }
@@ -967,7 +967,7 @@ async fn get_most_utilized_assets_chart(
             labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "nft"));
             if used_cap > total_cells_capacity {
                 return Err(ApiError::internal(format!(
-                    "DOB used capacity exceeds total for {}: used={}, total={}",
+                    "DOB common knowledge size exceeds total for {}: used={}, total={}",
                     entity_key, used_cap, total_cells_capacity
                 )));
             }
@@ -1017,7 +1017,7 @@ async fn get_most_utilized_assets_chart(
         labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "nft"));
         if used_cap > total_cells_capacity {
             return Err(ApiError::internal(format!(
-                "NFT used capacity exceeds total for {}: used={}, total={}",
+                "NFT common knowledge size exceeds total for {}: used={}, total={}",
                 entity_key, used_cap, total_cells_capacity
             )));
         }
@@ -1052,7 +1052,7 @@ async fn get_most_utilized_assets_chart(
 
     let dates: Vec<u32> = deltas_by_date.keys().copied().collect();
     let used_share = build_most_utilized_share_chart(
-        "Top Assets Used Share".to_string(),
+        "Top Assets Common Knowledge Share".to_string(),
         UtilizationMetric::Used,
         &top_used_keys,
         &labels_by_key,
@@ -1534,7 +1534,7 @@ pub(crate) fn build_cell_size_response(snapshot: &DailyCellDistribution) -> Char
         data,
         title: "Cell Size Distribution".to_string(),
         y_axis_label: "Live Cells".to_string(),
-        y2_axis_label: Some("Used Capacity (CKB)".to_string()),
+        y2_axis_label: Some("Common Knowledge Size (CKB)".to_string()),
     }
 }
 
@@ -1543,7 +1543,7 @@ pub(crate) fn empty_cell_size_response() -> ChartResponse {
         data: Vec::new(),
         title: "Cell Size Distribution".to_string(),
         y_axis_label: "Live Cells".to_string(),
-        y2_axis_label: Some("Used Capacity (CKB)".to_string()),
+        y2_axis_label: Some("Common Knowledge Size (CKB)".to_string()),
     }
 }
 
@@ -1571,8 +1571,8 @@ pub(crate) fn build_address_cohort_response(cohort: &DailyAddressCohort) -> Char
     ChartResponse {
         data,
         title: "Address Cohort Retention".to_string(),
-        y_axis_label: "Used / Balance (%)".to_string(),
-        y2_axis_label: Some("Used Capacity (CKB)".to_string()),
+        y_axis_label: "Common Knowledge / Balance (%)".to_string(),
+        y2_axis_label: Some("Common Knowledge Size (CKB)".to_string()),
     }
 }
 
@@ -1580,8 +1580,8 @@ pub(crate) fn empty_address_cohort_response() -> ChartResponse {
     ChartResponse {
         data: Vec::new(),
         title: "Address Cohort Retention".to_string(),
-        y_axis_label: "Used / Balance (%)".to_string(),
-        y2_axis_label: Some("Used Capacity (CKB)".to_string()),
+        y_axis_label: "Common Knowledge / Balance (%)".to_string(),
+        y2_axis_label: Some("Common Knowledge Size (CKB)".to_string()),
     }
 }
 
@@ -3728,7 +3728,7 @@ mod tests {
         assert_eq!(response.y_axis_label, "Live Cells");
         assert_eq!(
             response.y2_axis_label.as_deref(),
-            Some("Used Capacity (CKB)")
+            Some("Common Knowledge Size (CKB)")
         );
         assert!(response.data.is_empty());
     }
@@ -3765,10 +3765,10 @@ mod tests {
     fn test_empty_address_cohort_response_has_metadata() {
         let response = empty_address_cohort_response();
         assert_eq!(response.title, "Address Cohort Retention");
-        assert_eq!(response.y_axis_label, "Used / Balance (%)");
+        assert_eq!(response.y_axis_label, "Common Knowledge / Balance (%)");
         assert_eq!(
             response.y2_axis_label.as_deref(),
-            Some("Used Capacity (CKB)")
+            Some("Common Knowledge Size (CKB)")
         );
         assert!(response.data.is_empty());
     }

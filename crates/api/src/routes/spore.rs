@@ -196,6 +196,7 @@ pub struct ClusterResponse {
     pub activities_count: i64,
     pub created_at_block: i64,
     pub live_capacity: Option<String>,
+    #[serde(rename = "liveCommonKnowledgeSize")]
     pub live_used_capacity: Option<String>,
     pub storage_profile: ClusterStorageProfileResponse,
 }
@@ -233,6 +234,7 @@ pub struct SporeResponse {
     pub is_live: bool,
     pub created_at_block: i64,
     pub live_capacity: Option<String>,
+    #[serde(rename = "liveCommonKnowledgeSize")]
     pub live_used_capacity: Option<String>,
     pub media_profile: Option<SporeMediaProfileResponse>,
 }
@@ -917,13 +919,13 @@ fn build_capacity_history_chart_with_initial(
     }
     if initial_used < 0 {
         anyhow::bail!(
-            "invalid initial used capacity for spore chart: {}",
+            "invalid initial common knowledge size for spore chart: {}",
             initial_used
         );
     }
     if initial_used > initial_capacity {
         anyhow::bail!(
-            "invalid initial used/capacity for spore chart: used={}, capacity={}",
+            "invalid initial common knowledge size/capacity for spore chart: used={}, capacity={}",
             initial_used,
             initial_capacity
         );

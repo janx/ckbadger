@@ -443,7 +443,7 @@ function AssetTable({
               className={`${capacityColumnClass} text-text hidden font-mono tabular-nums xl:block`}
             >
               {(() => {
-                const occupied = asset.liveUsedCapacity;
+                const occupied = asset.liveCommonKnowledgeSize;
                 if (!occupied) {
                   return <span className="text-text-dim">-</span>;
                 }

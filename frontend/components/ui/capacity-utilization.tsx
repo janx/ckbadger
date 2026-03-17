@@ -4,7 +4,7 @@ import { formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 
 interface CapacityUtilizationProps {
   totalCapacity: string;
-  usedCapacity: string;
+  commonKnowledgeSize: string;
   totalLabel?: string;
   className?: string;
 }
@@ -19,7 +19,7 @@ function parseBigInt(value: string): bigint | null {
 
 export function CapacityUtilization({
   totalCapacity,
-  usedCapacity,
+  commonKnowledgeSize,
   totalLabel = 'Total Capacity',
   className,
 }: CapacityUtilizationProps) {
@@ -27,7 +27,7 @@ export function CapacityUtilization({
   const ratioScale = BigInt(10000);
 
   const total = parseBigInt(totalCapacity);
-  const usedRaw = parseBigInt(usedCapacity);
+  const usedRaw = parseBigInt(commonKnowledgeSize);
   if (total == null || usedRaw == null || total <= zero) {
     return null;
   }
@@ -61,14 +61,14 @@ export function CapacityUtilization({
           className="text-warning font-mono text-xs"
           title={formatCkbAmount(used.toString()).full + ' CKB'}
         >
-          Used: {formatCkbCompact(used.toString()).value} CKB
-          <span className="text-text-dim ml-1.5">({ratio.toFixed(1)}% used)</span>
+          Common Knowledge: {formatCkbCompact(used.toString()).value} CKB
+          <span className="text-text-dim ml-1.5">({ratio.toFixed(1)}% share)</span>
         </span>
         <span
           className="text-gold font-mono text-xs"
           title={formatCkbAmount(unused.toString()).full + ' CKB'}
         >
-          Unused: {formatCkbCompact(unused.toString()).value} CKB
+          Free Capacity: {formatCkbCompact(unused.toString()).value} CKB
         </span>
       </div>
     </div>

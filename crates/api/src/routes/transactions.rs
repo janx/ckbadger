@@ -434,8 +434,12 @@ pub struct PreviousOutput {
 #[serde(rename_all = "camelCase")]
 pub struct TransactionOutputResponse {
     pub capacity: String,
+    #[serde(rename = "commonKnowledgeSize")]
     pub used_capacity: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "virtualCommonKnowledgeSize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub virtual_used_capacity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cell_type: Option<String>,
@@ -472,9 +476,15 @@ pub struct TransactionDetailResponse {
     pub inputs_capacity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outputs_capacity: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "inputsCommonKnowledgeSize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub inputs_used_capacity: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "outputsCommonKnowledgeSize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub outputs_used_capacity: Option<String>,
     pub inputs: Vec<TransactionInputResponse>,
     pub outputs: Vec<TransactionOutputResponse>,

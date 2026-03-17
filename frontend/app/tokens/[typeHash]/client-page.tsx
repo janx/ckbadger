@@ -273,7 +273,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
           capacityChart={capacityChart}
           isCapacityChartLoading={isCapacityChartLoading}
           totalCapacity={token.totalCapacity}
-          usedCapacity={token.totalUsedCapacity}
+          commonKnowledgeSize={token.totalCommonKnowledgeSize}
           totalCapacityLabel="Cells Capacity"
         />
         <TerminalPanel>

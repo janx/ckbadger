@@ -45,8 +45,8 @@ describe('renderRawPage', () => {
       timestamp: '2026-02-23T00:00:00Z',
       inputsCapacity: '100',
       outputsCapacity: '99',
-      inputsUsedCapacity: '50',
-      outputsUsedCapacity: '49',
+      inputsCommonKnowledgeSize: '50',
+      outputsCommonKnowledgeSize: '49',
       inputs: [
         {
           lock: {
@@ -102,8 +102,8 @@ describe('renderRawPage', () => {
       timestamp: '2026-02-23T00:00:00Z',
       inputsCapacity: '100',
       outputsCapacity: '99',
-      inputsUsedCapacity: '50',
-      outputsUsedCapacity: '49',
+      inputsCommonKnowledgeSize: '50',
+      outputsCommonKnowledgeSize: '49',
       inputs: [
         {
           lock: {

@@ -439,7 +439,7 @@ function renderAddressSummary(address: Address) {
       ['address', address.address ?? '-'],
       ['lockScriptHash', address.lockScriptHash],
       ['balance', address.balance],
-      ['usedCapacity', address.usedCapacity],
+      ['commonKnowledgeSize', address.commonKnowledgeSize],
       ['liveCellsCount', address.liveCellsCount],
       ['transactionsCount', address.transactionsCount],
     ]
@@ -454,7 +454,7 @@ function renderCellSummary(cell: Cell) {
       ['outputIndex', cell.outputIndex],
       ['status', cell.status ?? '-'],
       ['capacity', cell.capacity],
-      ['usedCapacity', cell.usedCapacity ?? '-'],
+      ['commonKnowledgeSize', cell.commonKnowledgeSize ?? '-'],
       ['lockScriptHash', cell.lockScriptHash],
       ['typeScriptHash', cell.typeScriptHash ?? '-'],
       ['createdAtBlock', cell.createdAtBlock],
@@ -912,11 +912,11 @@ export async function renderMarkdownPage(
         '## Outputs',
         '',
         markdownTable(
-          ['index', 'capacity', 'usedCapacity', 'address', 'cellType'],
+          ['index', 'capacity', 'commonKnowledgeSize', 'address', 'cellType'],
           (tx.outputs ?? []).map((output, index) => [
             index,
             output.capacity,
-            output.usedCapacity,
+            output.commonKnowledgeSize,
             output.address ?? '-',
             output.cellType ?? '-',
           ])
@@ -1135,7 +1135,7 @@ export async function renderMarkdownPage(
             ['isLive', obj.isLive],
             ['createdAtBlock', obj.createdAtBlock],
             ['liveCapacity', obj.liveCapacity ?? '-'],
-            ['liveUsedCapacity', obj.liveUsedCapacity ?? '-'],
+            ['liveCommonKnowledgeSize', obj.liveCommonKnowledgeSize ?? '-'],
           ]
         ),
       ]);
@@ -1354,7 +1354,7 @@ export async function renderMarkdownPage(
             ['sporesCount', cluster.sporesCount],
             ['createdAtBlock', cluster.createdAtBlock],
             ['liveCapacity', cluster.liveCapacity ?? '-'],
-            ['liveUsedCapacity', cluster.liveUsedCapacity ?? '-'],
+            ['liveCommonKnowledgeSize', cluster.liveCommonKnowledgeSize ?? '-'],
           ]
         ),
         '',
@@ -1417,21 +1417,21 @@ export async function renderMarkdownPage(
             ['liveCellsCount', usage.liveCellsCount],
             ['capacitySum', usage.capacitySum],
             ['liveCapacitySum', usage.liveCapacitySum],
-            ['usedCapacitySum', usage.usedCapacitySum],
-            ['liveUsedCapacitySum', usage.liveUsedCapacitySum],
+            ['commonKnowledgeSizeSum', usage.commonKnowledgeSizeSum],
+            ['liveCommonKnowledgeSizeSum', usage.liveCommonKnowledgeSizeSum],
           ]
         ),
         '',
         '## Deployments',
         '',
         markdownTable(
-          ['codeHash', 'scriptKind', 'cellsCount', 'liveCellsCount', 'liveUsedCapacitySum'],
+          ['codeHash', 'scriptKind', 'cellsCount', 'liveCellsCount', 'liveCommonKnowledgeSizeSum'],
           usage.byDeployment.map((deployment) => [
             hashShort(deployment.codeHash),
             deployment.scriptKind ?? '-',
             deployment.cellsCount,
             deployment.liveCellsCount,
-            deployment.liveUsedCapacitySum,
+            deployment.liveCommonKnowledgeSizeSum,
           ])
         ),
         '',
@@ -1471,7 +1471,7 @@ export async function renderMarkdownPage(
             ['knownHashType', matched?.hashType ?? '-'],
             ['knownLiveCellsCount', matched?.liveCellsCount ?? '-'],
             ['knownLiveCapacitySum', matched?.liveCapacitySum ?? '-'],
-            ['knownLiveUsedCapacitySum', matched?.liveUsedCapacitySum ?? '-'],
+            ['knownLiveCommonKnowledgeSizeSum', matched?.liveCommonKnowledgeSizeSum ?? '-'],
             ['codeCellTxHash', codeCell.txHash],
             ['codeCellOutputIndex', codeCell.outputIndex],
           ]

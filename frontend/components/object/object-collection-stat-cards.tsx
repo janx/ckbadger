@@ -9,7 +9,7 @@ interface ObjectCollectionStatCardsProps {
   totalLabel?: string;
   liveCount?: number;
   liveCapacity: string | null | undefined;
-  liveUsedCapacity: string | null | undefined;
+  liveCommonKnowledgeSize: string | null | undefined;
   createdAtBlock?: number;
   storageTier?: string;
   storageOnchainRatio?: string;
@@ -29,13 +29,13 @@ export function ObjectCollectionStatCards({
   totalLabel = 'Total Objects',
   liveCount,
   liveCapacity,
-  liveUsedCapacity,
+  liveCommonKnowledgeSize,
   createdAtBlock,
   storageTier,
   storageOnchainRatio,
 }: ObjectCollectionStatCardsProps) {
   const capacity = parseShannons(liveCapacity);
-  const used = parseShannons(liveUsedCapacity);
+  const used = parseShannons(liveCommonKnowledgeSize);
   const usedPercent =
     capacity && used && capacity > BigInt(0)
       ? (Number((used * BigInt(10000)) / capacity) / 100).toFixed(2)
@@ -103,11 +103,11 @@ export function ObjectCollectionStatCards({
       <TerminalPanel variant="inset">
         <TerminalPanelContent className="space-y-2">
           <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
-            Used Capacity
+            Common Knowledge Size
           </div>
           <div className="text-text-bright font-mono text-lg">{compactUsed}</div>
           <div className="text-text-dim font-mono text-xs">
-            Used Ratio: {usedPercent ? `${usedPercent}%` : '--'}
+            Common Knowledge Share: {usedPercent ? `${usedPercent}%` : '--'}
           </div>
         </TerminalPanelContent>
       </TerminalPanel>

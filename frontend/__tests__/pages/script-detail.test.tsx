@@ -126,8 +126,8 @@ const mockUsage = {
   liveCellsCount: 8,
   capacitySum: '10000000000',
   liveCapacitySum: '10000000000',
-  usedCapacitySum: '6100000000',
-  liveUsedCapacitySum: '6100000000',
+  commonKnowledgeSizeSum: '6100000000',
+  liveCommonKnowledgeSizeSum: '6100000000',
   byDeployment: [
     {
       codeHash: sharedVersionCodeHash,
@@ -136,8 +136,8 @@ const mockUsage = {
       liveCellsCount: 7,
       capacitySum: '8000000000',
       liveCapacitySum: '9000000000',
-      usedCapacitySum: '4900000000',
-      liveUsedCapacitySum: '5490000000',
+      commonKnowledgeSizeSum: '4900000000',
+      liveCommonKnowledgeSizeSum: '5490000000',
     },
     {
       codeHash: legacyVersionCodeHash,
@@ -146,8 +146,8 @@ const mockUsage = {
       liveCellsCount: 1,
       capacitySum: '2000000000',
       liveCapacitySum: '1000000000',
-      usedCapacitySum: '1200000000',
-      liveUsedCapacitySum: '610000000',
+      commonKnowledgeSizeSum: '1200000000',
+      liveCommonKnowledgeSizeSum: '610000000',
     },
   ],
 };
@@ -267,7 +267,7 @@ describe('ScriptDetailPage', () => {
           txHash,
           outputIndex,
           capacity: '16100000000',
-          usedCapacity: 6100000000,
+          commonKnowledgeSize: 6100000000,
           lockScriptHash: '0xlock1',
           dataSize: 0,
           createdAtBlock: firstDeploymentBlock,
@@ -285,7 +285,7 @@ describe('ScriptDetailPage', () => {
           txHash,
           outputIndex,
           capacity: '16200000000',
-          usedCapacity: 6200000000,
+          commonKnowledgeSize: 6200000000,
           lockScriptHash: '0xlock2',
           dataSize: 0,
           createdAtBlock: secondDeploymentBlock,
@@ -303,7 +303,7 @@ describe('ScriptDetailPage', () => {
           txHash,
           outputIndex,
           capacity: '16000000000',
-          usedCapacity: 6000000000,
+          commonKnowledgeSize: 6000000000,
           lockScriptHash: '0xlock3',
           dataSize: 0,
           createdAtBlock: legacyDeploymentBlock,
@@ -347,7 +347,7 @@ describe('ScriptDetailPage', () => {
         codeCellOutputIndex: 0,
         liveCellsCount: 7,
         liveCapacitySum: '9000000000',
-        liveUsedCapacitySum: '5490000000',
+        liveCommonKnowledgeSizeSum: '5490000000',
         codeCellsLiveCount: 2,
         codeCellsTotal: 2,
       },
@@ -363,7 +363,7 @@ describe('ScriptDetailPage', () => {
         codeCellOutputIndex: 0,
         liveCellsCount: 1,
         liveCapacitySum: '1000000000',
-        liveUsedCapacitySum: '610000000',
+        liveCommonKnowledgeSizeSum: '610000000',
         codeCellsLiveCount: 0,
         codeCellsTotal: 1,
       },
@@ -379,7 +379,7 @@ describe('ScriptDetailPage', () => {
         codeCellOutputIndex: null,
         liveCellsCount: 0,
         liveCapacitySum: '0',
-        liveUsedCapacitySum: '0',
+        liveCommonKnowledgeSizeSum: '0',
         codeCellsLiveCount: 0,
         codeCellsTotal: 0,
       },
@@ -434,7 +434,7 @@ describe('ScriptDetailPage', () => {
         queries.queryByText('Outpoint') !== null &&
         queries.queryByText('Governance') !== null &&
         queries.queryByText('References') !== null &&
-        queries.queryByText('Used Capacity') !== null
+        queries.queryByText('Common Knowledge Size') !== null
       );
     });
     expect(within(deploymentsPanel).getByText('Outpoint')).toBeInTheDocument();
@@ -442,7 +442,7 @@ describe('ScriptDetailPage', () => {
     expect(within(deploymentsPanel).getByText('Governance')).toBeInTheDocument();
     expect(within(deploymentsPanel).getByText('References')).toBeInTheDocument();
     expect(within(deploymentsPanel).getByText('Deployed At')).toBeInTheDocument();
-    expect(within(deploymentsPanel).getByText('Used Capacity')).toBeInTheDocument();
+    expect(within(deploymentsPanel).getByText('Common Knowledge Size')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Explain Version Deployments' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Explain Version Deployments' }));
     expect(screen.getAllByText('What this section shows').length).toBeGreaterThan(1);
@@ -543,7 +543,9 @@ describe('ScriptDetailPage', () => {
       expect(within(secondDeploymentRow).getByText(secondGovernanceScriptName)).toBeInTheDocument();
     });
     expect(
-      screen.getByText('Historical used/unused live capacity for the selected version.')
+      screen.getByText(
+        'Historical common knowledge and free live capacity for the selected version.'
+      )
     ).toBeInTheDocument();
     expect(
       screen.getByText('Live cells currently using the selected version.')
@@ -614,7 +616,7 @@ describe('ScriptDetailPage', () => {
     expect(screen.getByText('Governance')).toBeInTheDocument();
     expect(screen.getByText('References')).toBeInTheDocument();
     expect(screen.getByText('Deployed At')).toBeInTheDocument();
-    expect(screen.getByText('Used Capacity')).toBeInTheDocument();
+    expect(screen.getByText('Common Knowledge Size')).toBeInTheDocument();
     expect(screen.queryByText('Status')).toBeNull();
     expect(screen.getByRole('button', { name: 'Explain Version Deployments' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Explain References' })).toBeInTheDocument();
@@ -656,11 +658,13 @@ describe('ScriptDetailPage', () => {
     const compactDeployments = screen.getByTestId('version-deployments-compact');
     expect(within(compactDeployments).getAllByText('Governance').length).toBeGreaterThan(0);
     expect(within(compactDeployments).getByText('Immutable (all-zero lock)')).toBeInTheDocument();
-    expect(within(compactDeployments).getAllByText('Used capacity').length).toBeGreaterThan(0);
+    expect(within(compactDeployments).getAllByText('Common knowledge size').length).toBeGreaterThan(
+      0
+    );
     expect(screen.getByRole('button', { name: 'Explain Version Deployments' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Explain References' })).toBeNull();
     expect(screen.queryByText('Status')).toBeNull();
     expect(screen.queryByText('Deployed At')).toBeNull();
-    expect(screen.queryByText('Used Capacity')).toBeNull();
+    expect(screen.queryByText('Common Knowledge Size')).toBeNull();
   });
 });

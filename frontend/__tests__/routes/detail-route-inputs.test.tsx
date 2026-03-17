@@ -44,7 +44,7 @@ describe('detail route inputs', () => {
         codeCellOutputIndex: null,
         liveCellsCount: 15,
         liveCapacitySum: '25000000000',
-        liveUsedCapacitySum: '14000000000',
+        liveCommonKnowledgeSizeSum: '14000000000',
         codeCellsLiveCount: 0,
         codeCellsTotal: 0,
         resolutionState: 'resolved',
@@ -86,7 +86,9 @@ describe('detail route inputs', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText('Historical used/unused live capacity for the selected version.')
+        screen.getByText(
+          'Historical common knowledge and free live capacity for the selected version.'
+        )
       ).toBeInTheDocument();
     });
   });

@@ -215,7 +215,7 @@ export default function CellDetailPage() {
     }
     const SHANNONS_PER_CKB = BigInt(100000000);
     const totalCapacity = BigInt(cell.capacity);
-    const used = cell.usedCapacity !== undefined ? BigInt(cell.usedCapacity) : null;
+    const used = cell.commonKnowledgeSize !== undefined ? BigInt(cell.commonKnowledgeSize) : null;
     const ZERO = BigInt(0);
     const BASIS_POINTS = BigInt(10000);
     const usedBytes = used !== null && used >= ZERO ? Number(used / SHANNONS_PER_CKB) : null;
@@ -223,7 +223,7 @@ export default function CellDetailPage() {
       used !== null && totalCapacity > ZERO
         ? Number((used * BASIS_POINTS) / totalCapacity) / 100
         : null;
-    const breakdown = cell.usedCapacityBreakdown;
+    const breakdown = cell.commonKnowledgeSizeBreakdown;
     const segments = breakdown && [
       {
         key: 'capacityFieldBytes',
@@ -486,7 +486,7 @@ export default function CellDetailPage() {
                 </div>
                 <div className="border-base-border/70 bg-base-surface/60 rounded border p-3">
                   <div className="text-text-dim mb-1 text-xs uppercase tracking-wide">
-                    Used Capacity
+                    Common Knowledge Size
                   </div>
                   {capacityView.used !== null ? (
                     <Capacity
@@ -500,7 +500,7 @@ export default function CellDetailPage() {
                 </div>
                 <div className="border-base-border/60 bg-base-surface/60 rounded border p-3">
                   <div className="text-text-dim mb-1 text-xs uppercase tracking-wide">
-                    Utilization Ratio
+                    Common Knowledge Share
                   </div>
                   <div className="text-text-bright font-mono text-xl">
                     {capacityView.usedRatioPercent !== null
@@ -588,7 +588,7 @@ export default function CellDetailPage() {
                 </>
               ) : (
                 <div className="text-text-dim mt-4 text-sm">
-                  Used capacity breakdown is unavailable for this cell.
+                  Common knowledge breakdown is unavailable for this cell.
                 </div>
               )}
             </TerminalPanelContent>
@@ -784,11 +784,11 @@ export default function CellDetailPage() {
                     <p>
                       This cell contains 8.4B CKB burnt at genesis (25% of 33.6B initial issuance).
                       For secondary issuance calculation,{' '}
-                      <strong className="text-warning">5.04B CKB (60%)</strong> is treated as
-                      &ldquo;used&rdquo; capacity, ensuring miners receive secondary rewards.
+                      <strong className="text-warning">5.04B CKB (60%)</strong> is treated as common
+                      knowledge size, ensuring miners receive secondary rewards.
                     </p>
                     <p className="mt-2">
-                      <span className="text-text-dim">Virtual Used Capacity: </span>
+                      <span className="text-text-dim">Virtual Common Knowledge Size: </span>
                       <span className="text-warning font-mono">5,040,000,000 CKB</span>
                     </p>
                   </div>

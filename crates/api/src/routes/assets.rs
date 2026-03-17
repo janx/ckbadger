@@ -225,6 +225,7 @@ pub struct AssetResponse {
     pub cluster_id: Option<String>,
     pub cluster_name: Option<String>,
     pub live_capacity: Option<String>,
+    #[serde(rename = "liveCommonKnowledgeSize")]
     pub live_used_capacity: Option<String>,
     pub storage_tier: Option<String>,
     pub fully_onchain_ratio: Option<String>,
@@ -254,6 +255,7 @@ pub struct NftCollectionDetailResponse {
     pub holders_count: i64,
     pub activities_count: i64,
     pub live_capacity: String,
+    #[serde(rename = "liveCommonKnowledgeSize")]
     pub live_used_capacity: String,
     pub storage_profile: CollectionStorageProfileResponse,
 }
@@ -1156,13 +1158,13 @@ fn build_capacity_history_chart_with_initial(
     }
     if initial_used < 0 {
         anyhow::bail!(
-            "invalid initial used capacity for capacity history chart: {}",
+            "invalid initial common knowledge size for capacity history chart: {}",
             initial_used
         );
     }
     if initial_used > initial_capacity {
         anyhow::bail!(
-            "invalid initial used/capacity for capacity history chart: used={}, capacity={}",
+            "invalid initial common knowledge size/capacity for capacity history chart: used={}, capacity={}",
             initial_used,
             initial_capacity
         );

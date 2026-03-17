@@ -423,20 +423,28 @@ export default function TransactionDetailPage() {
         BigInt(requireTransactionField(tx.outputsCapacity, tx.hash, 'outputsCapacity')) +
         BigInt(tx.fee)
       ).toString();
-  const usedCapacityChange = isPendingTransaction
+  const commonKnowledgeSizeChange = isPendingTransaction
     ? null
     : (() => {
         const inputUsed = BigInt(
-          requireTransactionField(tx.inputsUsedCapacity, tx.hash, 'inputsUsedCapacity')
+          requireTransactionField(
+            tx.inputsCommonKnowledgeSize,
+            tx.hash,
+            'inputsCommonKnowledgeSize'
+          )
         );
         const outputUsed = BigInt(
-          requireTransactionField(tx.outputsUsedCapacity, tx.hash, 'outputsUsedCapacity')
+          requireTransactionField(
+            tx.outputsCommonKnowledgeSize,
+            tx.hash,
+            'outputsCommonKnowledgeSize'
+          )
         );
         return outputUsed - inputUsed;
       })();
-  const committedUsedCapacityChange = isPendingTransaction
+  const committedCommonKnowledgeSizeChange = isPendingTransaction
     ? null
-    : requireTransactionField(usedCapacityChange, tx.hash, 'usedCapacityChange');
+    : requireTransactionField(commonKnowledgeSizeChange, tx.hash, 'commonKnowledgeSizeChange');
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -616,15 +624,15 @@ export default function TransactionDetailPage() {
                   />
                 )}
               </DataField>
-              <DataField label="Used Capacity Change">
+              <DataField label="Common Knowledge Change">
                 {isPendingTransaction ? (
                   <PendingValue />
                 ) : (
                   (() => {
                     const change = requireTransactionField(
-                      committedUsedCapacityChange,
+                      committedCommonKnowledgeSizeChange,
                       tx.hash,
-                      'usedCapacityChange'
+                      'commonKnowledgeSizeChange'
                     );
                     const zero = BigInt(0);
                     const isIncrease = change > zero;

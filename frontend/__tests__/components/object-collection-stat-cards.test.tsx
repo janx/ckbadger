@@ -10,15 +10,15 @@ describe('ObjectCollectionStatCards', () => {
       <ObjectCollectionStatCards
         totalCount={500}
         liveCapacity="100000000000"
-        liveUsedCapacity="61000000000"
+        liveCommonKnowledgeSize="61000000000"
       />
     );
 
     expect(screen.getByText('Total Objects')).toBeInTheDocument();
     expect(screen.getByText('500')).toBeInTheDocument();
     expect(screen.getByText('Live Capacity')).toBeInTheDocument();
-    expect(screen.getByText('Used Capacity')).toBeInTheDocument();
-    expect(screen.getByText(/Used Ratio: 61\.00%/)).toBeInTheDocument();
+    expect(screen.getByText('Common Knowledge Size')).toBeInTheDocument();
+    expect(screen.getByText(/Common Knowledge Share: 61\.00%/)).toBeInTheDocument();
   });
 
   it('renders storage tier when provided', () => {
@@ -26,7 +26,7 @@ describe('ObjectCollectionStatCards', () => {
       <ObjectCollectionStatCards
         totalCount={10}
         liveCapacity={null}
-        liveUsedCapacity={null}
+        liveCommonKnowledgeSize={null}
         storageTier="fully_onchain"
         storageOnchainRatio="0.95"
       />
@@ -43,7 +43,7 @@ describe('ObjectCollectionStatCards', () => {
         totalCount={42}
         totalLabel="Total Spores"
         liveCapacity={null}
-        liveUsedCapacity={null}
+        liveCommonKnowledgeSize={null}
         createdAtBlock={1000000}
       />
     );
@@ -56,7 +56,11 @@ describe('ObjectCollectionStatCards', () => {
 
   it('shows fallback values and hides optional cards when optional props are missing', () => {
     render(
-      <ObjectCollectionStatCards totalCount={10} liveCapacity={null} liveUsedCapacity={null} />
+      <ObjectCollectionStatCards
+        totalCount={10}
+        liveCapacity={null}
+        liveCommonKnowledgeSize={null}
+      />
     );
 
     const dashes = screen.getAllByText('--');

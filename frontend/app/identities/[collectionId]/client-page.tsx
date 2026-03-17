@@ -210,7 +210,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
           totalLabel="Total Identities"
           liveCount={collection.liveCount}
           liveCapacity={undefined}
-          liveUsedCapacity={undefined}
+          liveCommonKnowledgeSize={undefined}
         />
         <div className="space-y-6">
           <TerminalPanel>

@@ -50,7 +50,7 @@ const mockSpore = {
   isLive: true,
   createdAtBlock: 123456,
   liveCapacity: '100000000000',
-  liveUsedCapacity: '61000000000',
+  liveCommonKnowledgeSize: '61000000000',
 };
 
 const mockCollection = {
@@ -62,7 +62,7 @@ const mockCollection = {
   holdersCount: 42,
   activitiesCount: 150,
   liveCapacity: '800000000000',
-  liveUsedCapacity: '510000000000',
+  liveCommonKnowledgeSize: '510000000000',
 };
 
 function encodeMoleculeBytes(value: Uint8Array): Uint8Array {
@@ -120,7 +120,7 @@ describe('SporeDetailPage', () => {
       lockScriptHash: mockSpore.ownerLockHash,
       address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
       balance: '0',
-      usedCapacity: '0',
+      commonKnowledgeSize: '0',
       liveCellsCount: 0,
       transactionsCount: 0,
     } as any);
@@ -140,12 +140,12 @@ describe('SporeDetailPage', () => {
       confirmations: 10,
       inputsCapacity: '100000000000',
       outputsCapacity: '99999999000',
-      inputsUsedCapacity: '0',
-      outputsUsedCapacity: '0',
+      inputsCommonKnowledgeSize: '0',
+      outputsCommonKnowledgeSize: '0',
       outputs: [
         {
           capacity: '100000000000',
-          usedCapacity: 61,
+          commonKnowledgeSize: 61,
           type: {
             codeHash: '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
             hashType: 'type',
@@ -343,7 +343,7 @@ describe('SporeDetailPage', () => {
       sporesCount: 42,
       createdAtBlock: 123,
       liveCapacity: '0',
-      liveUsedCapacity: '0',
+      liveCommonKnowledgeSize: '0',
     } as any);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
@@ -396,8 +396,8 @@ describe('SporeDetailPage', () => {
 
     expect(screen.getByText('Test Collection')).toBeInTheDocument();
     expect(screen.getByText('Total Objects')).toBeInTheDocument();
-    expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
-    expect(screen.getByText(/^Used:/)).toBeInTheDocument();
+    expect(screen.getByText(/Common Knowledge Share:/)).toBeInTheDocument();
+    expect(screen.getByText(/^Common Knowledge:/)).toBeInTheDocument();
     expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Activities \(150\)$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Objects \(500\)$/ })).toBeInTheDocument();

@@ -75,7 +75,7 @@ on localhost deployments:
 - **sUDT/xUDT Support** - Token listings, holder rankings, transfer history
 - **Spore NFT Support** - NFT collections, metadata rendering, ownership tracking
 - **.bit / did:ckb NFT Support** - .bit domain NFTs and did:ckb identity NFTs
-- **Script Browser** - Script listings, usage stats, occupation charts
+- **Script Browser** - Script listings, usage stats, common knowledge charts
 
 ### Data & Analytics
 
@@ -264,7 +264,7 @@ GET  /api/v1/tokens/{type_hash}                  # Token details
 GET  /api/v1/tokens/{type_hash}/holders          # Token holder rankings
 GET  /api/v1/tokens/{type_hash}/transfers        # Token transfers
 GET  /api/v1/tokens/{type_hash}/activities       # Token activities
-GET  /api/v1/tokens/{type_hash}/charts/occupation  # Token occupation chart
+GET  /api/v1/tokens/{type_hash}/charts/capacity-history  # Token common knowledge chart
 
 # Spore / NFT
 GET  /api/v1/spore/clusters                      # List Spore clusters
@@ -294,7 +294,7 @@ GET  /api/v1/scripts/{name}                      # Script details
 GET  /api/v1/scripts/{name}/usage                # Script usage stats
 POST /api/v1/scripts/lookup                      # Batch script lookup
 GET  /api/v1/scripts/code-cell                   # Script code cell
-GET  /api/v1/scripts/charts/occupation           # Script occupation chart
+GET  /api/v1/scripts/charts/capacity-history     # Script common knowledge chart
 
 # Network & Statistics
 GET  /api/v1/statistics/network                  # Network + sync status

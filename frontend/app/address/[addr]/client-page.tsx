@@ -302,7 +302,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             </div>
             {(() => {
               const balanceBig = BigInt(address.balance);
-              const usedBig = BigInt(address.usedCapacity);
+              const usedBig = BigInt(address.commonKnowledgeSize);
               if (balanceBig <= BigInt(0) || usedBig <= BigInt(0)) return null;
               const freeBig = balanceBig - usedBig;
               const ratio = Number((usedBig * BigInt(10000)) / balanceBig) / 100;
@@ -310,9 +310,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 <div className="mt-6">
                   <div className="mb-2 flex items-center justify-between">
                     <span className="text-text-dim font-mono text-xs uppercase tracking-wider">
-                      Capacity Utilization
+                      Common Knowledge Share
                     </span>
-                    <span className="text-text font-mono text-xs">{ratio.toFixed(1)}% used</span>
+                    <span className="text-text font-mono text-xs">
+                      {ratio.toFixed(1)}% of balance
+                    </span>
                   </div>
                   <div className="bg-base-elevated flex h-3 w-full overflow-hidden rounded-sm">
                     <div
@@ -324,15 +326,15 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   <div className="mt-1.5 flex items-center justify-between">
                     <span
                       className="text-warning font-mono text-xs"
-                      title={formatCkbAmount(address.usedCapacity).full + ' CKB'}
+                      title={formatCkbAmount(address.commonKnowledgeSize).full + ' CKB'}
                     >
-                      Used: {formatCkbCompact(address.usedCapacity).value} CKB
+                      Common Knowledge: {formatCkbCompact(address.commonKnowledgeSize).value} CKB
                     </span>
                     <span
                       className="text-emphasis font-mono text-xs"
                       title={formatCkbAmount(freeBig.toString()).full + ' CKB'}
                     >
-                      Unused: {formatCkbCompact(freeBig.toString()).value} CKB
+                      Free Capacity: {formatCkbCompact(freeBig.toString()).value} CKB
                     </span>
                   </div>
                 </div>

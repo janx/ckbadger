@@ -405,7 +405,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
           totalCount={cluster.sporesCount}
           totalLabel="Total Spores"
           liveCapacity={cluster.liveCapacity}
-          liveUsedCapacity={cluster.liveUsedCapacity}
+          liveCommonKnowledgeSize={cluster.liveCommonKnowledgeSize}
           createdAtBlock={cluster.createdAtBlock}
           storageTier={cluster.storageProfile?.tier}
           storageOnchainRatio={cluster.storageProfile?.fullyOnchainRatio}
@@ -494,7 +494,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
               capacityChart={capacityChart}
               isCapacityChartLoading={isCapacityChartLoading}
               totalCapacity={cluster.liveCapacity}
-              usedCapacity={cluster.liveUsedCapacity}
+              commonKnowledgeSize={cluster.liveCommonKnowledgeSize}
             />
             <TerminalPanel>
               <Tabs

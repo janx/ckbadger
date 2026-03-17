@@ -100,7 +100,7 @@ export default function MostUtilizedAssetsPage() {
                   description={
                     getChartDescription('chart-most-utilized-assets') ?? {
                       overview:
-                        'Ranks assets by used capacity and total live capacity share over time.',
+                        'Ranks assets by common knowledge size and total live capacity share over time.',
                       legendItems: [],
                     }
                   }

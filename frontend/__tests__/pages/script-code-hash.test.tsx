@@ -63,7 +63,7 @@ describe('ScriptByCodeHashPage', () => {
           codeCellOutputIndex: 0,
           liveCellsCount: 15,
           liveCapacitySum: '25000000000',
-          liveUsedCapacitySum: '14000000000',
+          liveCommonKnowledgeSizeSum: '14000000000',
           codeCellsLiveCount: 1,
           codeCellsTotal: 1,
           resolutionState: 'resolved',
@@ -85,7 +85,7 @@ describe('ScriptByCodeHashPage', () => {
           codeCellOutputIndex: null,
           liveCellsCount: 0,
           liveCapacitySum: '0',
-          liveUsedCapacitySum: '0',
+          liveCommonKnowledgeSizeSum: '0',
           codeCellsLiveCount: 0,
           codeCellsTotal: 0,
           resolutionState: 'resolved',
@@ -115,7 +115,7 @@ describe('ScriptByCodeHashPage', () => {
       txHash: mockDeploymentTxHash,
       outputIndex: 0,
       capacity: '16100000000',
-      usedCapacity: 6100000000,
+      commonKnowledgeSize: 6100000000,
       lockScriptHash: '0xlock1',
       dataSize: 0,
       createdAtBlock: 123456,
@@ -156,7 +156,9 @@ describe('ScriptByCodeHashPage', () => {
     expect(screen.queryByText('Same Deployment References')).toBeNull();
     expect(screen.getByText('Usage')).toBeInTheDocument();
     expect(
-      screen.getByText('Historical used/unused live capacity for the selected version.')
+      screen.getByText(
+        'Historical common knowledge and free live capacity for the selected version.'
+      )
     ).toBeInTheDocument();
     expect(screen.getAllByTitle(`Click to copy: ${mockCodeHash}`).length).toBeGreaterThan(0);
     expect(screen.getByTitle(`Click to copy: ${mockDeploymentTxHash}:0`)).toBeInTheDocument();
@@ -177,7 +179,7 @@ describe('ScriptByCodeHashPage', () => {
         codeCellOutputIndex: null,
         liveCellsCount: 15,
         liveCapacitySum: '25000000000',
-        liveUsedCapacitySum: '14000000000',
+        liveCommonKnowledgeSizeSum: '14000000000',
         codeCellsLiveCount: 0,
         codeCellsTotal: 0,
         resolutionState: 'resolved',

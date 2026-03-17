@@ -100,7 +100,7 @@ pub fn resolve_nft_collection_storage_tier_override(standard: &str) -> Option<&'
         .map(String::as_str)
 }
 
-/// Apply one daily delta to live/used capacity with strict invariant checks.
+/// Apply one daily delta to live capacity/common knowledge size with strict invariant checks.
 pub fn apply_live_capacity_delta(
     live_capacity: i128,
     live_used: i128,
@@ -122,7 +122,7 @@ pub fn apply_live_capacity_delta(
     let next_used = live_used + used_delta;
     if next_used < 0 {
         bail!(
-            "live used capacity underflow while {}: prev={}, delta={}, next={}",
+            "live common knowledge size underflow while {}: prev={}, delta={}, next={}",
             context,
             live_used,
             used_delta,
@@ -132,7 +132,7 @@ pub fn apply_live_capacity_delta(
 
     if next_used > next_capacity {
         bail!(
-            "live used capacity exceeds live capacity while {}: used={}, capacity={}",
+            "live common knowledge size exceeds live capacity while {}: used={}, capacity={}",
             context,
             next_used,
             next_capacity
@@ -142,7 +142,7 @@ pub fn apply_live_capacity_delta(
     Ok((next_capacity, next_used))
 }
 
-/// Accumulate live capacity/used capacity from ordered daily deltas.
+/// Accumulate live capacity/common knowledge size from ordered daily deltas.
 pub fn accumulate_live_capacity<I>(deltas: I) -> Result<(i128, i128)>
 where
     I: IntoIterator<Item = (i128, i128)>,
@@ -366,7 +366,9 @@ mod tests {
     fn accumulate_live_capacity_errors_on_negative_used() {
         let deltas = vec![(100, 60), (0, -80)];
         let err = accumulate_live_capacity(deltas).unwrap_err();
-        assert!(err.to_string().contains("live used capacity underflow"));
+        assert!(err
+            .to_string()
+            .contains("live common knowledge size underflow"));
     }
 
     #[test]
@@ -375,7 +377,7 @@ mod tests {
         let err = accumulate_live_capacity(deltas).unwrap_err();
         assert!(err
             .to_string()
-            .contains("live used capacity exceeds live capacity"));
+            .contains("live common knowledge size exceeds live capacity"));
     }
 
     #[test]

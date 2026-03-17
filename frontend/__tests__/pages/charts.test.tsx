@@ -137,7 +137,7 @@ const mockCellCountResponse = {
 const mockMostUtilizedScriptsResponse: MostUtilizedScriptsChartResponse = {
   title: 'Scripts Used & Total CKBytes',
   usedShare: {
-    title: 'Top Scripts Used Share',
+    title: 'Top Scripts Common Knowledge Share',
     data: [{ date: '2024-01-01', values: { top0: '100', others: '20' } }],
     series: [
       { key: 'top0', label: 'SECP256K1_BLAKE160', color: '#00c389' },
@@ -157,7 +157,7 @@ const mockMostUtilizedScriptsResponse: MostUtilizedScriptsChartResponse = {
 const mockMostUtilizedAssetsResponse: MostUtilizedAssetsChartResponse = {
   title: 'Assets Used & Total CKBytes',
   usedShare: {
-    title: 'Top Assets Used Share',
+    title: 'Top Assets Common Knowledge Share',
     data: [{ date: '2024-01-01', values: { top0: '120', others: '40' } }],
     series: [
       { key: 'top0', label: 'CKBTEST (token)', color: '#00c389' },

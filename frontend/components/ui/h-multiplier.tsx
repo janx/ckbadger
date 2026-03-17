@@ -4,7 +4,7 @@ import { formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 
 interface HMultiplierProps {
   totalCapacity: string; // total capacity in shannons (BigInt string)
-  usedCapacity: string; // used capacity in shannons (BigInt string)
+  commonKnowledgeSize: string; // common knowledge size in shannons (BigInt string)
   totalLabel?: string; // defaults to 'Cells Capacity'
   className?: string;
 }
@@ -19,14 +19,14 @@ function parseBigInt(value: string): bigint | null {
 
 export function HMultiplier({
   totalCapacity,
-  usedCapacity,
+  commonKnowledgeSize,
   totalLabel = 'Cells Capacity',
   className,
 }: HMultiplierProps) {
   const zero = BigInt(0);
 
   const total = parseBigInt(totalCapacity);
-  const used = parseBigInt(usedCapacity);
+  const used = parseBigInt(commonKnowledgeSize);
   if (total == null || used == null || total <= zero || used <= zero) {
     return null;
   }
@@ -60,7 +60,7 @@ export function HMultiplier({
           className="text-warning font-mono text-xs"
           title={formatCkbAmount(used.toString()).full + ' CKB'}
         >
-          Used: {formatCkbCompact(used.toString()).value} CKB
+          Common Knowledge: {formatCkbCompact(used.toString()).value} CKB
         </span>
         <span className="text-gold font-mono text-xs tabular-nums">HMul: {hmul.toFixed(2)}x</span>
       </div>

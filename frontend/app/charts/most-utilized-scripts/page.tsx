@@ -100,7 +100,7 @@ export default function MostUtilizedScriptsPage() {
                   description={
                     getChartDescription('chart-most-utilized-scripts') ?? {
                       overview:
-                        'Ranks scripts by used capacity and total live capacity share over time.',
+                        'Ranks scripts by common knowledge size and total live capacity share over time.',
                       legendItems: [],
                     }
                   }
