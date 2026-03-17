@@ -9,13 +9,13 @@ pub(crate) struct FactsArena {
     pub(crate) cells: Vec<CellFacts>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct BlockFacts {
     pub(crate) number: i64,
     pub(crate) tx_range: Range<usize>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct TxFacts {
     pub(crate) hash: [u8; 32],
     pub(crate) block_number: i64,
@@ -50,7 +50,7 @@ pub enum CellSemanticTag {
     Cluster,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct CellFacts {
     pub(crate) outpoint: OutPointKey,
     pub(crate) created_at_block: i64,
@@ -65,7 +65,7 @@ pub(crate) struct CellFacts {
     pub(crate) semantic_tag: CellSemanticTag,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ResolvedInputFacts {
     pub(crate) outpoint: OutPointKey,
     pub(crate) created_at_block: i64,
@@ -80,7 +80,7 @@ pub(crate) struct ResolvedInputFacts {
     pub(crate) semantic_tag: CellSemanticTag,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ResolvedTxFacts {
     pub(crate) tx_hash: [u8; 32],
     pub(crate) block_number: i64,

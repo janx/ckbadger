@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use super::facts::{
     CellFacts, CellSemanticTag, FactsArena, OutPointKey, ResolvedInputFacts,
 };
+use super::sequencer::BulkSequencer;
 use crate::sync::types::InternId;
 
 #[derive(Debug, Default)]
@@ -129,54 +130,26 @@ pub struct ResolvedInputSnapshot {
 pub(crate) fn resolve_live_cell_snapshot_for_test(
     arena: &FactsArena,
 ) -> Result<LiveCellResolutionSnapshot> {
-    let mut owner = LiveCellOwner::default();
-    let mut txs = Vec::with_capacity(arena.txs.len());
-
-    for tx in &arena.txs {
-        let mut resolved_inputs = Vec::with_capacity(tx.input_outpoints.len());
-
-        if !tx.is_cellbase {
-            for (input_index, outpoint) in tx.input_outpoints.iter().enumerate() {
-                let input_index = i32::try_from(input_index).map_err(|_| {
-                    anyhow!(
-                        "input index exceeds i32: tx=0x{} tx_index={} input_index={}",
-                        hex::encode(tx.hash),
-                        tx.tx_index,
-                        input_index
-                    )
-                })?;
-                resolved_inputs.push(owner.consume(
-                    outpoint,
-                    &ConsumeContext {
-                        block_number: tx.block_number,
-                        tx_hash: tx.hash,
-                        tx_index: tx.tx_index,
-                        input_index,
-                    },
-                )?);
-            }
-        }
-
-        for cell in &arena.cells[tx.output_range.clone()] {
-            owner.insert_created(LiveCellSlot::from_cell_facts(cell))?;
-        }
-
-        txs.push(ResolvedTxSnapshot {
-            tx_index: tx.tx_index,
-            resolved_inputs: resolved_inputs
-                .into_iter()
-                .map(|input| ResolvedInputSnapshot {
-                    capacity: input.capacity,
-                    occupied_capacity: input.occupied_capacity,
-                    semantic_tag: input.semantic_tag,
-                })
-                .collect(),
-        });
-    }
+    let mut sequencer = BulkSequencer::default();
+    let resolved_txs = sequencer.resolve(arena)?;
 
     Ok(LiveCellResolutionSnapshot {
-        txs,
-        remaining_live_cells: owner.live_count(),
+        txs: resolved_txs
+            .into_iter()
+            .map(|tx| ResolvedTxSnapshot {
+                tx_index: tx.tx_index,
+                resolved_inputs: tx
+                    .resolved_inputs
+                    .into_iter()
+                    .map(|input| ResolvedInputSnapshot {
+                        capacity: input.capacity,
+                        occupied_capacity: input.occupied_capacity,
+                        semantic_tag: input.semantic_tag,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        remaining_live_cells: sequencer.live_count(),
     })
 }
 

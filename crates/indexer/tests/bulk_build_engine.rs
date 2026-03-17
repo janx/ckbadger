@@ -90,6 +90,8 @@ fn bulk_build_live_resolution_handles_same_block_create_then_consume() {
         .expect("same-block live-cell resolution");
 
     assert_eq!(snapshot.txs.len(), 2);
+    assert_eq!(snapshot.txs[0].tx_index, 0);
+    assert_eq!(snapshot.txs[1].tx_index, 1);
     assert!(snapshot.txs[0].resolved_inputs.is_empty());
     assert_eq!(snapshot.txs[1].resolved_inputs.len(), 1);
     assert_eq!(snapshot.txs[1].resolved_inputs[0].capacity, 100_00000000);
