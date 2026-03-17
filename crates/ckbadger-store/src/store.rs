@@ -331,6 +331,29 @@ pub const CF_FIBER_CHANNEL_BY_FUNDING_ARGS: &str = "fiber_channel_by_funding_arg
 pub const CF_ADDR_FIBER_CHANNELS: &str = "addr_fiber_channels";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CfWritePolicy {
+    AppendOnly,
+    FinalSnapshot,
+    SealedAggregate,
+    BulkDisabled,
+}
+
+pub fn cf_write_policy(cf_name: &str) -> CfWritePolicy {
+    match cf_name {
+        CF_CELLS => CfWritePolicy::AppendOnly,
+        CF_BLOCK_HEADERS | CF_BLOCK_HASH_INDEX | CF_TX_INDEX | CF_TX_HASH_MAP => {
+            CfWritePolicy::AppendOnly
+        }
+        CF_LIVE_CELLS | CF_ADDR_BALANCE | CF_TOKENS => CfWritePolicy::FinalSnapshot,
+        CF_STATS_CHAIN | CF_STATS_DAO | CF_STATS_HODL => CfWritePolicy::SealedAggregate,
+        CF_CONSUMED_CELLS | CF_REORG_UNDO_LOG_BY_BLOCK | CF_PENDING_PROPOSALS => {
+            CfWritePolicy::BulkDisabled
+        }
+        _ => CfWritePolicy::FinalSnapshot,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreClass {
     Domain,
     AppendOnly,
@@ -2723,5 +2746,32 @@ mod tests {
         // Data written during bulk sync must survive the transition
         let val = store.get_cf(cf, b"bulk-key").unwrap();
         assert_eq!(val.as_deref(), Some(b"bulk-value".as_slice()));
+    }
+
+    #[test]
+    fn test_cf_write_policy_marks_cells_as_append_only() {
+        assert_eq!(cf_write_policy(CF_CELLS), CfWritePolicy::AppendOnly);
+    }
+
+    #[test]
+    fn test_cf_write_policy_marks_live_cells_as_final_snapshot() {
+        assert_eq!(cf_write_policy(CF_LIVE_CELLS), CfWritePolicy::FinalSnapshot);
+    }
+
+    #[test]
+    fn test_cf_write_policy_marks_stats_chain_as_sealed_aggregate() {
+        assert_eq!(
+            cf_write_policy(CF_STATS_CHAIN),
+            CfWritePolicy::SealedAggregate
+        );
+    }
+
+    #[test]
+    fn test_cf_write_policy_never_marks_domain_cell_markers_as_append_only() {
+        assert_ne!(cf_write_policy(CF_LIVE_CELLS), CfWritePolicy::AppendOnly);
+        assert_ne!(
+            cf_write_policy(CF_CONSUMED_CELLS),
+            CfWritePolicy::FinalSnapshot
+        );
     }
 }
