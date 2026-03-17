@@ -814,7 +814,7 @@ fn truncate_to_hour(dt: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 pub(super) type ScriptUsageChanges = HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
-type ScriptReferenceVersionChanges =
+pub(super) type ScriptReferenceVersionChanges =
     HashMap<(Vec<u8>, u8, Option<Vec<u8>>, bool), (i64, i64, i128, i128, i128, i128)>;
 
 fn checked_hash_type_u8(hash_type: i16, context: &str) -> Result<u8> {
@@ -1112,13 +1112,13 @@ fn resolve_version_hash_for_reference(
     })
 }
 
-fn build_script_reference_version_state(
+pub(super) fn build_script_reference_version_state(
     txs: &[TxData],
     domain_store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
-    _input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     ckb_store: Option<&ckb_store_reader::CkbChainReader>,
+    parser_version_cache: &HashMap<(Vec<u8>, i16), (i64, CellScriptVersionInfo)>,
 ) -> Result<(
     ScriptReferenceVersionChanges,
     Vec<(Vec<u8>, i16, CellScriptVersionInfo)>,
@@ -1182,6 +1182,7 @@ fn build_script_reference_version_state(
                 let version_info = created_map
                     .get(&key)
                     .cloned()
+                    .or_else(|| parser_version_cache.get(&key).map(|(_, info)| info.clone()))
                     .or(prefetched_version_info)
                     .ok_or_else(|| {
                         anyhow!(
@@ -1911,14 +1912,16 @@ impl Indexer {
 
         let block_refs: Vec<&crate::parser::block::ParsedBlock> =
             all_parsed_blocks.iter().collect();
+        let empty_parser_version_cache: HashMap<(Vec<u8>, i16), (i64, CellScriptVersionInfo)> =
+            HashMap::new();
         let (script_reference_version_changes, cell_script_version_rows) =
             build_script_reference_version_state(
                 &all_tx_data,
                 self.writer.store(),
                 &self.append_only_store,
-                &input_cell_info,
                 &batch_cell_infos,
                 self.ckb_store.as_deref(),
+                &empty_parser_version_cache,
             )?;
 
         // Pass 4: Proposals (iterates all_parsed_blocks, spawns background cache task)
@@ -6578,13 +6581,14 @@ mod tests {
             dep_type: 0,
         }];
 
+        let empty_cache: HashMap<(Vec<u8>, i16), (i64, CellScriptVersionInfo)> = HashMap::new();
         let (changes, rows) = build_script_reference_version_state(
             &[tx],
             &store,
             &store,
             &HashMap::new(),
-            &HashMap::new(),
             None,
+            &empty_cache,
         )
         .unwrap();
 
@@ -6645,13 +6649,14 @@ mod tests {
             vec!["0x".to_string(), "0x".to_string()],
         );
 
+        let empty_cache: HashMap<(Vec<u8>, i16), (i64, CellScriptVersionInfo)> = HashMap::new();
         let (changes, rows) = build_script_reference_version_state(
             &[tx],
             &store,
             &store,
             &HashMap::new(),
-            &HashMap::new(),
             None,
+            &empty_cache,
         )
         .unwrap();
 
@@ -6713,21 +6718,14 @@ mod tests {
             vec![],
         );
 
-        let mut input_cell = dummy_live_cell_info();
-        input_cell.data_hash = Some(vec![0x45; 32]);
-        let mut input_cell_info = HashMap::new();
-        input_cell_info.insert(
-            (previous_tx_hash.to_vec(), 0),
-            PositionedCellInfo::new(input_cell, 1),
-        );
-
+        let empty_cache: HashMap<(Vec<u8>, i16), (i64, CellScriptVersionInfo)> = HashMap::new();
         let (changes, rows) = build_script_reference_version_state(
             &[tx],
             &store,
             &store,
-            &input_cell_info,
             &HashMap::new(),
             None,
+            &empty_cache,
         )
         .unwrap();
 
