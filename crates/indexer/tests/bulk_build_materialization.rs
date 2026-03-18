@@ -1262,3 +1262,15 @@ fn startup_existing_tip_routes_to_pipeline_without_running_bulk_build_test_seam(
         "non-fresh startup should not run the bulk-build handoff completion seam"
     );
 }
+
+#[test]
+fn startup_fresh_tip_at_bulk_threshold_routes_to_pipeline_without_running_bulk_build_test_seam() {
+    let snapshot = simulate_startup_sync_path_for_test(&bulk_stage_handoff_fixture(), 3, 3, 0, None)
+        .expect("startup threshold-edge route snapshot");
+
+    assert_eq!(snapshot.path, "pipeline");
+    assert!(
+        snapshot.sync_status.is_none(),
+        "fresh startup at the exact bulk threshold must stay on pipeline path"
+    );
+}
