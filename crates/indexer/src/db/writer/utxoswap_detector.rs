@@ -7,14 +7,11 @@ use crate::parser::utxoswap::{is_intent_lock, parse_intent_args};
 
 use super::activities::{OwnerAccum, ProtocolDetector, TxView};
 
-pub(crate) struct UtxoSwapDetector {
-    #[allow(dead_code)]
-    is_mainnet: bool,
-}
+pub(crate) struct UtxoSwapDetector;
 
 impl UtxoSwapDetector {
-    pub fn new(is_mainnet: bool) -> Self {
-        Self { is_mainnet }
+    pub fn new(_is_mainnet: bool) -> Self {
+        Self
     }
 
     /// Format a byte slice as "0x..." hex string for JSON metadata.

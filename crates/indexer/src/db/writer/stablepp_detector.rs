@@ -9,14 +9,11 @@ use crate::parser::stablepp::{
 
 use super::activities::{OwnerAccum, ProtocolDetector, TxView};
 
-pub(crate) struct StableppDetector {
-    #[allow(dead_code)]
-    is_mainnet: bool,
-}
+pub(crate) struct StableppDetector;
 
 impl StableppDetector {
-    pub fn new(is_mainnet: bool) -> Self {
-        Self { is_mainnet }
+    pub fn new(_is_mainnet: bool) -> Self {
+        Self
     }
 
     /// Check if any part of the transaction involves a Stable++ script.

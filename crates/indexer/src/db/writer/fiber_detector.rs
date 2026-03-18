@@ -67,14 +67,11 @@ fn classify_lock(code_hash: &[u8]) -> FiberLockType {
     }
 }
 
-pub(crate) struct FiberDetector {
-    #[allow(dead_code)]
-    is_mainnet: bool,
-}
+pub(crate) struct FiberDetector;
 
 impl FiberDetector {
-    pub fn new(is_mainnet: bool) -> Self {
-        Self { is_mainnet }
+    pub fn new(_is_mainnet: bool) -> Self {
+        Self
     }
 
     /// Scan transaction cells and build a summary of Fiber-related cells.
