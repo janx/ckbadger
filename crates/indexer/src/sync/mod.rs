@@ -20,6 +20,8 @@ pub use bulk_build::facts::{CellFactsSnapshot, CellSemanticTag, FactsArenaSnapsh
 pub use bulk_build::live_cells::{
     LiveCellResolutionSnapshot, ResolvedInputSnapshot, ResolvedTxSnapshot,
 };
+#[doc(hidden)]
+pub use bulk_build::materialize::MaterializationReport;
 pub use indexer::Indexer;
 pub use progress::SyncProgress;
 
@@ -39,6 +41,11 @@ pub fn resolve_live_cell_snapshot_for_test(
     let mut interner = bulk_build::interner::IdentityInterner::default();
     let arena = pipeline::build_bulk_facts_arena_from_blocks(blocks, &mut interner)?;
     bulk_build::live_cells::resolve_live_cell_snapshot_for_test(&arena)
+}
+
+#[doc(hidden)]
+pub fn run_sample_bulk_materialization_for_test() -> anyhow::Result<MaterializationReport> {
+    bulk_build::materialize::run_sample_bulk_materialization_for_test()
 }
 
 /// Convert transactions_count (i32) to usize, failing if negative.

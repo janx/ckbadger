@@ -414,6 +414,10 @@ pub fn cf_write_policy(cf_name: &str) -> CfWritePolicy {
     }
 }
 
+pub fn is_append_only_cf_name(cf_name: &str) -> bool {
+    APPEND_CFS.contains(&cf_name)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreClass {
     Domain,
@@ -2186,6 +2190,12 @@ mod tests {
         store.put_cf(cf, b"k1", b"v1").unwrap();
         let err = store.delete_cf(cf, b"k1").unwrap_err();
         assert!(err.to_string().contains("append-only delete blocked"));
+    }
+
+    #[test]
+    fn test_is_append_only_cf_name_matches_cells_only_store() {
+        assert!(is_append_only_cf_name(CF_CELLS));
+        assert!(!is_append_only_cf_name(CF_LIVE_CELLS));
     }
 
     #[test]

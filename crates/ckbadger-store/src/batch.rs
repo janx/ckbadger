@@ -205,6 +205,25 @@ impl<'a> StoreBatch<'a> {
         }
     }
 
+    /// Write a raw value into a named column family. Intended for bulk-build
+    /// materialization paths that already know the encoded key/value bytes.
+    pub fn put_raw_cf_by_name(
+        &mut self,
+        cf_name: &str,
+        key: &[u8],
+        value: &[u8],
+    ) -> anyhow::Result<()> {
+        if !self.store.has_cf(cf_name) {
+            anyhow::bail!(
+                "CF '{}' is not available in this store batch",
+                cf_name
+            );
+        }
+        let cf = self.store.cf(cf_name);
+        self.put_cf(cf, key, value);
+        Ok(())
+    }
+
     fn delete_cf<K: AsRef<[u8]>>(&mut self, cf: &ColumnFamily, key: K) {
         let key_ref = key.as_ref();
         if self.store.is_append_only_store() {
@@ -1180,6 +1199,7 @@ impl<'a> StoreBatch<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CF_CELLS;
     use tempfile::TempDir;
 
     #[test]
@@ -2258,5 +2278,24 @@ mod tests {
 
         batch.put_cell_payload_by_outpoint(&[0xA3; 32], 0, &info);
         assert_eq!(batch.len(), 3);
+    }
+
+    #[test]
+    fn test_append_only_raw_cf_name_put_rejects_overwrite() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+
+        let mut first_batch = StoreBatch::new(&store);
+        first_batch
+            .put_raw_cf_by_name(CF_CELLS, b"k1", b"v1")
+            .expect("first append-only put");
+        first_batch.commit().unwrap();
+
+        let mut overwrite_batch = StoreBatch::new(&store);
+        overwrite_batch
+            .put_raw_cf_by_name(CF_CELLS, b"k1", b"v2")
+            .expect("overwrite append-only put");
+        let err = overwrite_batch.commit().unwrap_err();
+        assert!(err.to_string().contains("append-only overwrite blocked"));
     }
 }
