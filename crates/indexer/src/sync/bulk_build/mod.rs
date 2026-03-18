@@ -90,6 +90,160 @@ impl CoreOwners {
     }
 }
 
+#[derive(Default)]
+struct ActivityStatsAccumulator {
+    daily_stats: HashMap<String, DailyActivityStats>,
+    daily_addrs: HashMap<String, HashSet<[u8; 32]>>,
+    hourly_stats: HashMap<String, DailyActivityStats>,
+    hourly_addrs: HashMap<String, HashSet<[u8; 32]>>,
+}
+
+impl ActivityStatsAccumulator {
+    fn apply_history_rows(&mut self, history_rows: &[materialize::MaterializedRow]) -> Result<()> {
+        for row in history_rows
+            .iter()
+            .filter(|row| row.cf_name == CF_ACTIVITIES)
+        {
+            let bundle: TxActivityBundle = bincode::deserialize(&row.value).map_err(|e| {
+                anyhow!(
+                    "failed to deserialize TxActivityBundle while building sealed bulk activity stats: key=0x{} error={}",
+                    hex::encode(&row.key),
+                    e
+                )
+            })?;
+            let date = ckbadger_common::block_date_from_ms(bundle.timestamp)
+                .format("%Y%m%d")
+                .to_string();
+            let hour = ckbadger_common::block_datetime_from_ms(bundle.timestamp)
+                .format("%Y%m%d%H")
+                .to_string();
+
+            for owner in &bundle.owners {
+                crate::db::BatchWriter::accumulate_owner_activity_stats(
+                    bundle.is_cellbase,
+                    owner,
+                    self.daily_stats.entry(date.clone()).or_default(),
+                );
+                crate::db::BatchWriter::accumulate_owner_activity_stats(
+                    bundle.is_cellbase,
+                    owner,
+                    self.hourly_stats.entry(hour.clone()).or_default(),
+                );
+
+                if !bundle.is_cellbase && owner.lock_hash.len() == 32 {
+                    let mut lock_hash = [0u8; 32];
+                    lock_hash.copy_from_slice(&owner.lock_hash);
+                    self.daily_addrs
+                        .entry(date.clone())
+                        .or_default()
+                        .insert(lock_hash);
+                    self.hourly_addrs
+                        .entry(hour.clone())
+                        .or_default()
+                        .insert(lock_hash);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn build_rows(&self) -> Result<Vec<materialize::MaterializedRow>> {
+        let mut rows = Vec::with_capacity(self.daily_stats.len() + self.hourly_stats.len());
+
+        let mut daily_entries = self
+            .daily_stats
+            .iter()
+            .map(|(date, stats)| (date.clone(), stats.clone()))
+            .collect::<Vec<_>>();
+        daily_entries.sort_by(|a, b| a.0.cmp(&b.0));
+        for (date, mut stats) in daily_entries {
+            stats.unique_address_count = self
+                .daily_addrs
+                .get(&date)
+                .map_or(0, |set| set.len() as u32);
+            rows.push(materialize::MaterializedRow::new(
+                CF_STATS_CHAIN,
+                keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes()),
+                bincode::serialize(&stats)?,
+            ));
+        }
+
+        let mut hourly_entries = self
+            .hourly_stats
+            .iter()
+            .map(|(hour, stats)| (hour.clone(), stats.clone()))
+            .collect::<Vec<_>>();
+        hourly_entries.sort_by(|a, b| a.0.cmp(&b.0));
+        for (hour, mut stats) in hourly_entries {
+            stats.unique_address_count = self
+                .hourly_addrs
+                .get(&hour)
+                .map_or(0, |set| set.len() as u32);
+            rows.push(materialize::MaterializedRow::new(
+                CF_STATS_CHAIN,
+                keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour.as_bytes()),
+                bincode::serialize(&stats)?,
+            ));
+        }
+
+        Ok(rows)
+    }
+}
+
+#[derive(Default)]
+struct BulkBuildRuntimeState {
+    interner: interner::IdentityInterner,
+    sequencer: sequencer::BulkSequencer,
+    owners: CoreOwners,
+    activity_stats: ActivityStatsAccumulator,
+}
+
+impl BulkBuildRuntimeState {
+    fn apply_blocks(
+        &mut self,
+        blocks: &[BlockResponseWithCycles],
+        domain_store: &CkbadgerStore,
+        materializer: &mut materialize::Materializer<'_>,
+        is_mainnet: bool,
+    ) -> Result<()> {
+        if blocks.is_empty() {
+            return Ok(());
+        }
+
+        let arena =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(blocks, &mut self.interner)?;
+        let resolved = self.sequencer.resolve(&arena)?;
+        let history = build_history_rows(&arena, &resolved, &self.interner, is_mainnet)?;
+        let ctx = owners::ReducerContext::new(&self.interner);
+
+        for tx in &resolved {
+            self.owners.apply_tx(tx, &ctx)?;
+        }
+        self.owners
+            .object
+            .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
+
+        self.activity_stats.apply_history_rows(&history.rows)?;
+        materializer.stream_history_rows(&history.rows)?;
+        materialize_activity_secondary_state(domain_store, &history.rows)?;
+
+        Ok(())
+    }
+
+    fn finalize(self, materializer: &mut materialize::Materializer<'_>) -> Result<()> {
+        let sealed_rows = self.activity_stats.build_rows()?;
+        materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
+
+        let final_snapshot_rows = build_final_snapshot_rows(&self.sequencer, &self.interner)?;
+        materializer.materialize_final_snapshot(&final_snapshot_rows)?;
+
+        let mut owners = self.owners;
+        owners.materialize_all(materializer)?;
+        Ok(())
+    }
+}
+
 struct HistoryBuildResult {
     rows: Vec<materialize::MaterializedRow>,
     identity_activity_count_deltas: HashMap<Vec<u8>, i64>,
@@ -137,22 +291,21 @@ pub(crate) fn materialize_core_owner_state_for_test(
 pub(crate) fn materialize_bulk_artifacts_for_test(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<BulkArtifactSnapshot> {
-    let mut interner = interner::IdentityInterner::default();
-    let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(blocks, &mut interner)?;
-    let mut sequencer = sequencer::BulkSequencer::default();
-    let resolved = sequencer.resolve(&arena)?;
-    let ctx = owners::ReducerContext::new(&interner);
-    let mut owners = CoreOwners::default();
-    let history = build_history_rows(&arena, &resolved, &interner, true)?;
-    let sealed_rows = build_sealed_aggregate_rows(&history.rows)?;
-    let final_snapshot_rows = build_final_snapshot_rows(&sequencer, &interner)?;
+    materialize_bulk_artifacts_from_block_batches_for_test_impl(&[blocks])
+}
 
-    for tx in &resolved {
-        owners.apply_tx(tx, &ctx)?;
-    }
-    owners
-        .object
-        .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
+#[doc(hidden)]
+pub(crate) fn materialize_bulk_artifacts_from_batches_for_test(
+    batches: &[Vec<BlockResponseWithCycles>],
+) -> Result<BulkArtifactSnapshot> {
+    let batch_slices = batches.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    materialize_bulk_artifacts_from_block_batches_for_test_impl(&batch_slices)
+}
+
+fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
+    block_batches: &[&[BlockResponseWithCycles]],
+) -> Result<BulkArtifactSnapshot> {
+    let mut runtime = BulkBuildRuntimeState::default();
 
     let root = unique_temp_test_dir("bulk-build-core-owners");
     std::fs::create_dir_all(&root)?;
@@ -165,11 +318,10 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
         let domain_store = CkbadgerStore::open_domain(&domain_path)?;
         let append_store = CkbadgerStore::open_append_only(&append_path)?;
         let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
-        materializer.stream_history_rows(&history.rows)?;
-        materialize_activity_secondary_state(&domain_store, &history.rows)?;
-        materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
-        materializer.materialize_final_snapshot(&final_snapshot_rows)?;
-        owners.materialize_all(&mut materializer)?;
+        for batch in block_batches {
+            runtime.apply_blocks(batch, &domain_store, &mut materializer, true)?;
+        }
+        runtime.finalize(&mut materializer)?;
         let report = materializer.finish();
 
         let core = collect_core_owner_state_snapshot(&domain_store)?;
@@ -519,81 +671,9 @@ fn build_object_collection_activity_rows(
 fn build_sealed_aggregate_rows(
     history_rows: &[materialize::MaterializedRow],
 ) -> Result<Vec<materialize::MaterializedRow>> {
-    let mut daily_stats = HashMap::<String, DailyActivityStats>::new();
-    let mut daily_addrs = HashMap::<String, HashSet<[u8; 32]>>::new();
-    let mut hourly_stats = HashMap::<String, DailyActivityStats>::new();
-    let mut hourly_addrs = HashMap::<String, HashSet<[u8; 32]>>::new();
-
-    for row in history_rows
-        .iter()
-        .filter(|row| row.cf_name == CF_ACTIVITIES)
-    {
-        let bundle: TxActivityBundle = bincode::deserialize(&row.value).map_err(|e| {
-            anyhow!(
-                "failed to deserialize TxActivityBundle while building sealed bulk activity stats: key=0x{} error={}",
-                hex::encode(&row.key),
-                e
-            )
-        })?;
-        let date = ckbadger_common::block_date_from_ms(bundle.timestamp)
-            .format("%Y%m%d")
-            .to_string();
-        let hour = ckbadger_common::block_datetime_from_ms(bundle.timestamp)
-            .format("%Y%m%d%H")
-            .to_string();
-
-        for owner in &bundle.owners {
-            crate::db::BatchWriter::accumulate_owner_activity_stats(
-                bundle.is_cellbase,
-                owner,
-                daily_stats.entry(date.clone()).or_default(),
-            );
-            crate::db::BatchWriter::accumulate_owner_activity_stats(
-                bundle.is_cellbase,
-                owner,
-                hourly_stats.entry(hour.clone()).or_default(),
-            );
-
-            if !bundle.is_cellbase && owner.lock_hash.len() == 32 {
-                let mut lock_hash = [0u8; 32];
-                lock_hash.copy_from_slice(&owner.lock_hash);
-                daily_addrs
-                    .entry(date.clone())
-                    .or_default()
-                    .insert(lock_hash);
-                hourly_addrs
-                    .entry(hour.clone())
-                    .or_default()
-                    .insert(lock_hash);
-            }
-        }
-    }
-
-    let mut rows = Vec::with_capacity(daily_stats.len() + hourly_stats.len());
-
-    let mut daily_entries = daily_stats.into_iter().collect::<Vec<_>>();
-    daily_entries.sort_by(|a, b| a.0.cmp(&b.0));
-    for (date, mut stats) in daily_entries {
-        stats.unique_address_count = daily_addrs.get(&date).map_or(0, |set| set.len() as u32);
-        rows.push(materialize::MaterializedRow::new(
-            CF_STATS_CHAIN,
-            keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes()),
-            bincode::serialize(&stats)?,
-        ));
-    }
-
-    let mut hourly_entries = hourly_stats.into_iter().collect::<Vec<_>>();
-    hourly_entries.sort_by(|a, b| a.0.cmp(&b.0));
-    for (hour, mut stats) in hourly_entries {
-        stats.unique_address_count = hourly_addrs.get(&hour).map_or(0, |set| set.len() as u32);
-        rows.push(materialize::MaterializedRow::new(
-            CF_STATS_CHAIN,
-            keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour.as_bytes()),
-            bincode::serialize(&stats)?,
-        ));
-    }
-
-    Ok(rows)
+    let mut accumulator = ActivityStatsAccumulator::default();
+    accumulator.apply_history_rows(history_rows)?;
+    accumulator.build_rows()
 }
 
 fn materialize_activity_secondary_state(

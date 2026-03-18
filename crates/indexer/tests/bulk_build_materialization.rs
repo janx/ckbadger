@@ -1,22 +1,22 @@
-use ckbadger_indexer::rpc::{
-    BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
-    TransactionView,
-};
 use ckbadger_indexer::parser::spore::{
     CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2,
 };
 use ckbadger_indexer::parser::ScriptParser;
-use ckbadger_store::types::ConsumedCellMeta;
+use ckbadger_indexer::rpc::{
+    BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
+    TransactionView,
+};
 use ckbadger_indexer::sync::{
-    materialize_bulk_artifacts_for_test, run_sample_bulk_materialization_for_test,
+    materialize_bulk_artifacts_for_test, materialize_bulk_artifacts_from_batches_for_test,
+    run_sample_bulk_materialization_for_test,
 };
 use ckbadger_store::keys;
+use ckbadger_store::types::ConsumedCellMeta;
 use ckbadger_store::types::DID_CKB_SENTINEL_COLLECTION;
 
 fn fixture_lock_script() -> Script {
     Script {
-        code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
-            .to_string(),
+        code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8".to_string(),
         hash_type: "type".to_string(),
         args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
     }
@@ -132,11 +132,7 @@ fn create_cluster_type_script(cluster_id: &[u8; 32]) -> Script {
     }
 }
 
-fn create_spore_data(
-    content_type: &str,
-    content: &[u8],
-    cluster_id: Option<&[u8; 32]>,
-) -> Vec<u8> {
+fn create_spore_data(content_type: &str, content: &[u8], cluster_id: Option<&[u8; 32]>) -> Vec<u8> {
     let content_type_bytes = encode_molecule_bytes(content_type.as_bytes());
     let content_bytes = encode_molecule_bytes(content);
     let cluster_id_bytes = cluster_id.map(|id| encode_molecule_bytes(id));
@@ -221,7 +217,10 @@ fn object_activity_fixture() -> Vec<BlockResponseWithCycles> {
         outputs_data: vec![
             format!(
                 "0x{}",
-                hex::encode(create_cluster_data("Genesis Cluster", "{\"dob\":{\"ver\":1}}"))
+                hex::encode(create_cluster_data(
+                    "Genesis Cluster",
+                    "{\"dob\":{\"ver\":1}}"
+                ))
             ),
             format!(
                 "0x{}",
@@ -391,7 +390,8 @@ fn bulk_build_materializes_history_rows_and_core_snapshots_from_single_pass() {
     let block = same_block_create_then_consume_fixture();
     let lock_hash = ScriptParser::compute_script_hash(&fixture_lock_script());
     let block_hash = hex::decode(&block.block.header.hash[2..]).expect("block hash");
-    let create_tx_hash = hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
+    let create_tx_hash =
+        hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
     let consume_tx_hash =
         hex::decode(&block.block.transactions[1].hash[2..]).expect("consume tx hash");
 
@@ -411,7 +411,10 @@ fn bulk_build_materializes_history_rows_and_core_snapshots_from_single_pass() {
         Some(&14_000_321)
     );
 
-    let create_tx = snapshot.txs_by_hash.get(&create_tx_hash).expect("create tx");
+    let create_tx = snapshot
+        .txs_by_hash
+        .get(&create_tx_hash)
+        .expect("create tx");
     assert_eq!(create_tx.0, 14_000_321);
     assert_eq!(create_tx.1, 0);
     assert!(create_tx.2.is_cellbase);
@@ -430,13 +433,17 @@ fn bulk_build_materializes_history_rows_and_core_snapshots_from_single_pass() {
     assert_eq!(consume_tx.2.outputs_count, 1);
     assert_eq!(consume_tx.2.fee, 0);
 
-    assert!(snapshot.core.address_balances.contains_key(lock_hash.as_slice()));
+    assert!(snapshot
+        .core
+        .address_balances
+        .contains_key(lock_hash.as_slice()));
 }
 
 #[test]
 fn bulk_build_materializes_append_only_cells_and_final_live_markers_from_single_pass() {
     let block = same_block_create_then_consume_fixture();
-    let create_tx_hash = hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
+    let create_tx_hash =
+        hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
     let consume_tx_hash =
         hex::decode(&block.block.transactions[1].hash[2..]).expect("consume tx hash");
     let create_outpoint = keys::encode_outpoint(&create_tx_hash, 0).to_vec();
@@ -449,25 +456,37 @@ fn bulk_build_materializes_append_only_cells_and_final_live_markers_from_single_
     assert_eq!(snapshot.cell_payloads.len(), 2);
     assert!(snapshot.cell_payloads.contains_key(&create_outpoint));
     assert!(snapshot.cell_payloads.contains_key(&consume_outpoint));
-    assert_eq!(snapshot.cell_payloads[&create_outpoint].capacity, 100_00000000);
-    assert_eq!(snapshot.cell_payloads[&consume_outpoint].capacity, 100_00000000);
+    assert_eq!(
+        snapshot.cell_payloads[&create_outpoint].capacity,
+        100_00000000
+    );
+    assert_eq!(
+        snapshot.cell_payloads[&consume_outpoint].capacity,
+        100_00000000
+    );
 
     assert_eq!(snapshot.live_cells.len(), 1);
     assert!(!snapshot.live_cells.contains_key(&create_outpoint));
-    assert_eq!(snapshot.live_cells.get(&consume_outpoint), Some(&14_000_321));
+    assert_eq!(
+        snapshot.live_cells.get(&consume_outpoint),
+        Some(&14_000_321)
+    );
 }
 
 #[test]
 fn bulk_build_materializes_consumed_cells_and_live_cell_indexes_from_single_pass() {
     let block = same_block_typed_data_create_then_consume_fixture();
-    let create_tx_hash = hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
+    let create_tx_hash =
+        hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
     let consume_tx_hash =
         hex::decode(&block.block.transactions[1].hash[2..]).expect("consume tx hash");
     let create_outpoint = keys::encode_outpoint(&create_tx_hash, 0).to_vec();
     let lock_hash = ScriptParser::compute_script_hash(&fixture_lock_script());
-    let lock_code_hash = hex::decode(&fixture_lock_script().code_hash[2..]).expect("lock code hash");
+    let lock_code_hash =
+        hex::decode(&fixture_lock_script().code_hash[2..]).expect("lock code hash");
     let type_hash = ScriptParser::compute_script_hash(&fixture_type_script());
-    let type_code_hash = hex::decode(&fixture_type_script().code_hash[2..]).expect("type code hash");
+    let type_code_hash =
+        hex::decode(&fixture_type_script().code_hash[2..]).expect("type code hash");
     let data_hash = ScriptParser::compute_data_hash(&hex::decode("deadbeef").expect("output data"));
 
     let snapshot =
@@ -486,10 +505,12 @@ fn bulk_build_materializes_consumed_cells_and_live_cell_indexes_from_single_pass
         }
     );
 
-    let expected_live_lock = keys::encode_cell_index_key(&lock_hash, 14_000_777, &consume_tx_hash, 0);
+    let expected_live_lock =
+        keys::encode_cell_index_key(&lock_hash, 14_000_777, &consume_tx_hash, 0);
     let expected_live_lock_code =
         keys::encode_cell_index_key(&lock_code_hash, 14_000_777, &consume_tx_hash, 0);
-    let expected_live_type = keys::encode_cell_index_key(&type_hash, 14_000_777, &consume_tx_hash, 0);
+    let expected_live_type =
+        keys::encode_cell_index_key(&type_hash, 14_000_777, &consume_tx_hash, 0);
     let expected_live_type_code =
         keys::encode_cell_index_key(&type_code_hash, 14_000_777, &consume_tx_hash, 0);
     let old_lock_key = keys::encode_cell_index_key(&lock_hash, 14_000_777, &create_tx_hash, 0);
@@ -498,25 +519,34 @@ fn bulk_build_materializes_consumed_cells_and_live_cell_indexes_from_single_pass
     assert!(snapshot.cell_by_lock.contains(&expected_live_lock));
     assert!(!snapshot.cell_by_lock.contains(&old_lock_key));
     assert_eq!(snapshot.cell_by_lock_code.len(), 1);
-    assert!(snapshot.cell_by_lock_code.contains(&expected_live_lock_code));
+    assert!(snapshot
+        .cell_by_lock_code
+        .contains(&expected_live_lock_code));
     assert_eq!(snapshot.cell_by_type.len(), 1);
     assert!(snapshot.cell_by_type.contains(&expected_live_type));
     assert_eq!(snapshot.cell_by_type_code.len(), 1);
-    assert!(snapshot.cell_by_type_code.contains(&expected_live_type_code));
+    assert!(snapshot
+        .cell_by_type_code
+        .contains(&expected_live_type_code));
 
     let expected_data_hash_create =
         keys::encode_cell_index_key(&data_hash, 14_000_777, &create_tx_hash, 0);
     let expected_data_hash_consume =
         keys::encode_cell_index_key(&data_hash, 14_000_777, &consume_tx_hash, 0);
     assert_eq!(snapshot.cell_by_data_hash.len(), 2);
-    assert!(snapshot.cell_by_data_hash.contains(&expected_data_hash_create));
-    assert!(snapshot.cell_by_data_hash.contains(&expected_data_hash_consume));
+    assert!(snapshot
+        .cell_by_data_hash
+        .contains(&expected_data_hash_create));
+    assert!(snapshot
+        .cell_by_data_hash
+        .contains(&expected_data_hash_consume));
 }
 
 #[test]
 fn bulk_build_materializes_activity_bundles_from_single_pass() {
     let block = same_block_create_then_consume_fixture();
-    let create_tx_hash = hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
+    let create_tx_hash =
+        hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
     let consume_tx_hash =
         hex::decode(&block.block.transactions[1].hash[2..]).expect("consume tx hash");
     let lock_hash = ScriptParser::compute_script_hash(&fixture_lock_script());
@@ -607,5 +637,86 @@ fn bulk_build_materializes_did_activity_count_from_collection_activity_history()
             .expect("did collection identities")
             .len(),
         1
+    );
+}
+
+#[test]
+fn bulk_build_multi_batch_materialization_matches_single_pass_for_cross_batch_state() {
+    let blocks = object_activity_fixture();
+    let split_batches = vec![vec![blocks[0].clone()], vec![blocks[1].clone()]];
+
+    let single =
+        materialize_bulk_artifacts_for_test(&blocks).expect("single-pass bulk build artifact");
+    let split = materialize_bulk_artifacts_from_batches_for_test(&split_batches)
+        .expect("multi-batch bulk build artifact");
+
+    assert_eq!(
+        split.report.streamed_history_rows,
+        single.report.streamed_history_rows
+    );
+    assert_eq!(
+        split.report.sealed_aggregate_rows,
+        single.report.sealed_aggregate_rows
+    );
+    assert_eq!(
+        split.report.final_snapshot_rows,
+        single.report.final_snapshot_rows
+    );
+    assert_eq!(split.activity_bundles.len(), single.activity_bundles.len());
+    assert_eq!(split.live_cells.len(), single.live_cells.len());
+    assert_eq!(split.consumed_cells.len(), single.consumed_cells.len());
+    assert_eq!(
+        split.core.object_state.spores.len(),
+        single.core.object_state.spores.len()
+    );
+    assert_eq!(
+        split
+            .core
+            .object_state
+            .did_agg
+            .as_ref()
+            .expect("split did agg")
+            .activities_count,
+        single
+            .core
+            .object_state
+            .did_agg
+            .as_ref()
+            .expect("single did agg")
+            .activities_count
+    );
+
+    let split_daily = split
+        .daily_activity_stats
+        .values()
+        .next()
+        .expect("split daily activity stats");
+    let single_daily = single
+        .daily_activity_stats
+        .values()
+        .next()
+        .expect("single daily activity stats");
+    assert_eq!(split_daily.coinbase_count, single_daily.coinbase_count);
+    assert_eq!(split_daily.transfer_count, single_daily.transfer_count);
+    assert_eq!(
+        split_daily.unique_address_count,
+        single_daily.unique_address_count
+    );
+
+    let split_hourly = split
+        .hourly_activity_stats
+        .values()
+        .next()
+        .expect("split hourly activity stats");
+    let single_hourly = single
+        .hourly_activity_stats
+        .values()
+        .next()
+        .expect("single hourly activity stats");
+    assert_eq!(split_hourly.coinbase_count, single_hourly.coinbase_count);
+    assert_eq!(split_hourly.transfer_count, single_hourly.transfer_count);
+    assert_eq!(
+        split_hourly.unique_address_count,
+        single_hourly.unique_address_count
     );
 }

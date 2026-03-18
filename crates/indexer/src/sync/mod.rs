@@ -107,6 +107,13 @@ pub fn materialize_bulk_artifacts_for_test(
     bulk_build::materialize_bulk_artifacts_for_test(blocks)
 }
 
+#[doc(hidden)]
+pub fn materialize_bulk_artifacts_from_batches_for_test(
+    batches: &[Vec<crate::rpc::BlockResponseWithCycles>],
+) -> anyhow::Result<BulkArtifactSnapshot> {
+    bulk_build::materialize_bulk_artifacts_from_batches_for_test(batches)
+}
+
 /// Convert transactions_count (i32) to usize, failing if negative.
 pub(crate) fn checked_tx_count(count: i32, block_number: i64) -> anyhow::Result<usize> {
     usize::try_from(count).map_err(|_| {
