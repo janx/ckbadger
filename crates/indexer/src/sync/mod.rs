@@ -63,6 +63,8 @@ pub fn materialize_script_infos_for_test(
 }
 
 #[doc(hidden)]
+pub use bulk_build::owners::dao::DaoStateSnapshot;
+#[doc(hidden)]
 pub use bulk_build::owners::token::TokenStateSnapshot;
 
 #[doc(hidden)]
@@ -70,6 +72,13 @@ pub fn materialize_token_state_for_test(
     blocks: &[crate::rpc::BlockResponseWithCycles],
 ) -> anyhow::Result<TokenStateSnapshot> {
     bulk_build::owners::token::materialize_token_state_for_test(blocks)
+}
+
+#[doc(hidden)]
+pub fn materialize_dao_state_for_test(
+    blocks: &[crate::rpc::BlockResponseWithCycles],
+) -> anyhow::Result<DaoStateSnapshot> {
+    bulk_build::owners::dao::materialize_dao_state_for_test(blocks)
 }
 
 /// Convert transactions_count (i32) to usize, failing if negative.

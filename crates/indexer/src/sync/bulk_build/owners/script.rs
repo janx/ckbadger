@@ -555,6 +555,7 @@ mod tests {
         let tx0 = ResolvedTxFacts {
             tx_hash: [0x31; 32],
             block_number: 100,
+            block_dao_ar: 1,
             tx_index: 0,
             resolved_inputs: Vec::new(),
             cells: vec![
@@ -574,6 +575,7 @@ mod tests {
                     data_size: 0,
                     udt_amount: None,
                     semantic_tag: crate::sync::CellSemanticTag::Plain,
+                    dao_state: None,
                 },
                 CellFacts {
                     outpoint: OutPointKey::new([0x31; 32], 1),
@@ -591,12 +593,14 @@ mod tests {
                     data_size: 16,
                     udt_amount: Some(42),
                     semantic_tag: crate::sync::CellSemanticTag::Sudt,
+                    dao_state: None,
                 },
             ],
         };
         let tx1 = ResolvedTxFacts {
             tx_hash: [0x32; 32],
             block_number: 100,
+            block_dao_ar: 1,
             tx_index: 1,
             resolved_inputs: vec![ResolvedInputFacts {
                 outpoint: OutPointKey::new([0x31; 32], 1),
@@ -614,6 +618,7 @@ mod tests {
                 type_hash_type: Some(1),
                 type_args_id: Some(InternId::new(7)),
                 semantic_tag: crate::sync::CellSemanticTag::Sudt,
+                dao_state: None,
             }],
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x32; 32], 0),
@@ -631,6 +636,7 @@ mod tests {
                 data_size: 0,
                 udt_amount: None,
                 semantic_tag: crate::sync::CellSemanticTag::Plain,
+                dao_state: None,
             }],
         };
 

@@ -1,3 +1,8 @@
+use ckbadger_indexer::rpc::{
+    BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
+    TransactionView,
+};
+use ckbadger_indexer::sync::materialize_dao_state_for_test;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::DaoDepositCacheEntry;
 use ckbadger_store::CkbadgerStore;
@@ -8,6 +13,135 @@ fn setup_store() -> Arc<CkbadgerStore> {
     let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
     std::mem::forget(dir);
     store
+}
+
+fn fixture_lock_script(args_hex: &str) -> Script {
+    Script {
+        code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8".to_string(),
+        hash_type: "type".to_string(),
+        args: args_hex.to_string(),
+    }
+}
+
+fn fixture_header(number: u64, ar: u64) -> HeaderView {
+    let mut dao = [0u8; 32];
+    dao[8..16].copy_from_slice(&ar.to_le_bytes());
+
+    HeaderView {
+        version: "0x0".to_string(),
+        compact_target: "0x1a08a97e".to_string(),
+        timestamp: "0x18c7b3b2b00".to_string(),
+        number: format!("0x{number:x}"),
+        epoch: "0x7080006000028".to_string(),
+        parent_hash: format!("0x{}", "11".repeat(32)),
+        transactions_root: format!("0x{}", "22".repeat(32)),
+        proposals_hash: format!("0x{}", "33".repeat(32)),
+        extra_hash: format!("0x{}", "44".repeat(32)),
+        dao: format!("0x{}", hex::encode(dao)),
+        nonce: "0x1".to_string(),
+        hash: format!("0x{}", "55".repeat(32)),
+    }
+}
+
+fn bulk_build_dao_fixture() -> Vec<BlockResponseWithCycles> {
+    let dao_type = Script {
+        code_hash: "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e".to_string(),
+        hash_type: "type".to_string(),
+        args: "0x".to_string(),
+    };
+
+    let deposit_tx = TransactionView {
+        hash: format!("0x{}", "a1".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: format!("0x{:x}", 200_00000000u64),
+            lock: fixture_lock_script(&format!("0x{}", "01".repeat(20))),
+            type_: Some(dao_type.clone()),
+        }],
+        outputs_data: vec![format!("0x{}", "00".repeat(8))],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let request_tx = TransactionView {
+        hash: format!("0x{}", "a2".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: deposit_tx.hash.clone(),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: format!("0x{:x}", 200_00000000u64),
+            lock: fixture_lock_script(&format!("0x{}", "01".repeat(20))),
+            type_: Some(dao_type),
+        }],
+        outputs_data: vec![format!("0x{}", hex::encode(100u64.to_le_bytes()))],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let completion_tx = TransactionView {
+        hash: format!("0x{}", "a3".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: request_tx.hash.clone(),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: format!("0x{:x}", 219_60000000u64),
+            lock: fixture_lock_script(&format!("0x{}", "01".repeat(20))),
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    vec![
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header(100, 10_000),
+                uncles: vec![],
+                transactions: vec![deposit_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header(101, 12_000),
+                uncles: vec![],
+                transactions: vec![request_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header(102, 13_000),
+                uncles: vec![],
+                transactions: vec![completion_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+    ]
 }
 
 /// Phase 1: deposit with status=0.
@@ -337,4 +471,48 @@ fn test_list_active_dao_deposits() {
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].1.capacity, 500_000_000_000);
     assert_eq!(active[0].1.status, 0);
+}
+
+#[test]
+fn bulk_build_dao_owner_materializes_final_deposit_status_and_indexes_without_db_reads() {
+    let snapshot = materialize_dao_state_for_test(&bulk_build_dao_fixture()).expect("dao snapshot");
+
+    assert_eq!(snapshot.deposits.len(), 1);
+    let (outpoint_key, entry) = snapshot.deposits.iter().next().expect("dao entry");
+    assert_eq!(entry.capacity, 200_00000000);
+    assert_eq!(entry.deposit_block_number, 100);
+    assert_eq!(entry.deposit_ar, 10_000);
+    assert_eq!(entry.status, 2);
+    assert_eq!(entry.withdraw_request_tx, Some(vec![0xa2; 32]));
+    assert_eq!(entry.withdraw_request_output_index, Some(0));
+    assert_eq!(entry.withdraw_request_block, Some(101));
+    assert_eq!(entry.withdraw_request_ar, None);
+    assert_eq!(entry.withdraw_block, Some(102));
+    assert_eq!(entry.withdraw_tx, Some(vec![0xa3; 32]));
+    assert_eq!(entry.withdraw_to_output_index, Some(0));
+    assert_eq!(entry.compensation, Some(19_60000000));
+
+    assert_eq!(
+        snapshot
+            .withdraw_lookup
+            .get(&vec![0xa2; 32])
+            .and_then(|rows| rows.get(&0)),
+        Some(outpoint_key)
+    );
+    assert!(snapshot
+        .by_status
+        .get(&0)
+        .is_some_and(|rows| rows.is_empty()));
+    assert!(snapshot
+        .by_status
+        .get(&1)
+        .is_some_and(|rows| rows.is_empty()));
+    assert_eq!(
+        snapshot.by_status.get(&2),
+        Some(&vec![outpoint_key.clone()])
+    );
+    assert_eq!(snapshot.by_lock.len(), 1);
+    let (lock_hash, rows) = snapshot.by_lock.iter().next().expect("dao lock index");
+    assert_eq!(lock_hash, &entry.lock_script_hash);
+    assert_eq!(rows, &vec![outpoint_key.clone()]);
 }

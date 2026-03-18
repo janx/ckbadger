@@ -13,7 +13,7 @@ use ckbadger_store::types::{LiveCellInfo, ObjectTypeIndex, PositionedCellInfo, S
 
 use crate::parser::block::BlockParser;
 use crate::parser::cell::{CellParser, ParsedCell};
-use crate::parser::dao::DaoParser;
+use crate::parser::dao::{DaoParser, DaoState};
 use crate::parser::transaction::TransactionParser;
 use crate::parser::udt::UdtStandard;
 use crate::parser::{
@@ -32,7 +32,7 @@ use rayon::prelude::*;
 use super::adaptive::*;
 use super::batch::*;
 use super::bulk_build::facts::{
-    BlockFacts, CellFacts, CellSemanticTag, FactsArena, OutPointKey, TxFacts,
+    BlockFacts, CellFacts, CellSemanticTag, DaoCellState, FactsArena, OutPointKey, TxFacts,
 };
 use super::bulk_build::interner::IdentityInterner;
 use super::checked_tx_count;
@@ -126,6 +126,51 @@ fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemanticTag {
     CellSemanticTag::Plain
 }
 
+fn parse_bulk_dao_cell_state(
+    cell: &ParsedCell,
+    semantic_tag: CellSemanticTag,
+    tx_hash: &[u8; 32],
+    output_index: i16,
+) -> Result<Option<DaoCellState>> {
+    if !matches!(semantic_tag, CellSemanticTag::Dao) {
+        return Ok(None);
+    }
+
+    let state = DaoParser::parse_dao_state(&cell.data).ok_or_else(|| {
+        anyhow!(
+            "invalid DAO cell data in bulk facts: tx=0x{}, output_index={}, data_len={}",
+            hex::encode(tx_hash),
+            output_index,
+            cell.data.len()
+        )
+    })?;
+
+    Ok(Some(match state {
+        DaoState::Deposit => DaoCellState::Deposit,
+        DaoState::WithdrawRequest => {
+            let deposit_block_number =
+                DaoParser::parse_deposit_block_number(&cell.data).ok_or_else(|| {
+                    anyhow!(
+                        "missing DAO deposit block number in withdraw request: tx=0x{}, output_index={}, data_len={}",
+                        hex::encode(tx_hash),
+                        output_index,
+                        cell.data.len()
+                    )
+                })?;
+            DaoCellState::WithdrawRequest {
+                deposit_block_number: i64::try_from(deposit_block_number).map_err(|_| {
+                    anyhow!(
+                        "DAO deposit block number exceeds i64 range in bulk facts: tx=0x{}, output_index={}, deposit_block_number={}",
+                        hex::encode(tx_hash),
+                        output_index,
+                        deposit_block_number
+                    )
+                })?,
+            }
+        }
+    }))
+}
+
 pub(crate) fn build_bulk_facts_arena_from_blocks(
     blocks: &[BlockResponseWithCycles],
     interner: &mut IdentityInterner,
@@ -134,6 +179,14 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
 
     for block in blocks {
         let parsed_block = BlockParser::parse(&block.block)?;
+        let block_dao_ar =
+            DaoParser::extract_ar_from_dao_field(&parsed_block.dao).ok_or_else(|| {
+                anyhow!(
+                    "failed to extract block DAO AR in bulk facts: block={}, dao_len={}",
+                    parsed_block.number,
+                    parsed_block.dao.len()
+                )
+            })?;
         let block_tx_start = arena.txs.len();
 
         for (tx_position, tx) in block.block.transactions.iter().enumerate() {
@@ -175,6 +228,7 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
             for (output_index, cell) in parsed_cells.iter().enumerate() {
                 let output_index_i16 =
                     checked_usize_to_i16(output_index, "bulk facts arena output index")?;
+                let semantic_tag = classify_bulk_cell_semantic_tag(cell);
                 arena.cells.push(CellFacts {
                     outpoint: OutPointKey::new(
                         parsed_tx.hash,
@@ -216,13 +270,20 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
                         output_index_i16,
                         None,
                     )?,
-                    semantic_tag: classify_bulk_cell_semantic_tag(cell),
+                    semantic_tag,
+                    dao_state: parse_bulk_dao_cell_state(
+                        cell,
+                        semantic_tag,
+                        &parsed_tx.hash,
+                        output_index_i16,
+                    )?,
                 });
             }
 
             arena.txs.push(TxFacts {
                 hash: parsed_tx.hash,
                 block_number: parsed_block.number,
+                block_dao_ar,
                 tx_index,
                 is_cellbase: parsed_tx.is_cellbase,
                 input_outpoints,
@@ -3377,6 +3438,58 @@ mod tests {
             }),
             "all cells must have semantic tags"
         );
+    }
+
+    fn make_dao_parsed_cell(data: Vec<u8>) -> ParsedCell {
+        ParsedCell {
+            capacity: 200_00000000,
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x22; 20],
+            lock_script_hash: vec![0x33; 32],
+            type_code_hash: Some(crate::rpc::parse_hex_to_bytes(
+                crate::parser::dao::DAO_CODE_HASH,
+            )),
+            type_hash_type: Some(1),
+            type_args: Some(vec![]),
+            type_script_hash: Some(vec![0x44; 32]),
+            data_hash: vec![0x55; 32],
+            data_size: i32::try_from(data.len()).expect("data size"),
+            data,
+        }
+    }
+
+    #[test]
+    fn parse_bulk_dao_cell_state_recognizes_withdraw_request_block_number() {
+        let state = parse_bulk_dao_cell_state(
+            &make_dao_parsed_cell(123u64.to_le_bytes().to_vec()),
+            CellSemanticTag::Dao,
+            &[0xaa; 32],
+            0,
+        )
+        .expect("dao state");
+
+        assert_eq!(
+            state,
+            Some(DaoCellState::WithdrawRequest {
+                deposit_block_number: 123,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_bulk_dao_cell_state_rejects_invalid_dao_data_length() {
+        let err = parse_bulk_dao_cell_state(
+            &make_dao_parsed_cell(vec![0x11; 7]),
+            CellSemanticTag::Dao,
+            &[0xbb; 32],
+            1,
+        )
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("invalid DAO cell data in bulk facts"));
     }
 
     #[test]

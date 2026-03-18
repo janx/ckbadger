@@ -57,6 +57,7 @@ impl BulkSequencer {
             resolved_txs.push(ResolvedTxFacts {
                 tx_hash: tx.hash,
                 block_number: tx.block_number,
+                block_dao_ar: tx.block_dao_ar,
                 tx_index: tx.tx_index,
                 resolved_inputs,
                 cells: outputs.to_vec(),
@@ -89,6 +90,7 @@ mod tests {
                 TxFacts {
                     hash: [0xaa; 32],
                     block_number: 14_000_321,
+                    block_dao_ar: 10_000_000_000,
                     tx_index: 0,
                     is_cellbase: true,
                     input_outpoints: Vec::new(),
@@ -97,6 +99,7 @@ mod tests {
                 TxFacts {
                     hash: [0xbb; 32],
                     block_number: 14_000_321,
+                    block_dao_ar: 10_000_000_000,
                     tx_index: 1,
                     is_cellbase: false,
                     input_outpoints: vec![OutPointKey::new([0xaa; 32], 0)],
@@ -120,6 +123,7 @@ mod tests {
                     data_size: 0,
                     udt_amount: None,
                     semantic_tag: CellSemanticTag::Plain,
+                    dao_state: None,
                 },
                 CellFacts {
                     outpoint: OutPointKey::new([0xbb; 32], 0),
@@ -137,6 +141,7 @@ mod tests {
                     data_size: 0,
                     udt_amount: None,
                     semantic_tag: CellSemanticTag::Plain,
+                    dao_state: None,
                 },
             ],
         }
@@ -149,6 +154,7 @@ mod tests {
 
         assert_eq!(resolved[0].tx_index, 0);
         assert_eq!(resolved[1].tx_index, 1);
+        assert_eq!(resolved[0].block_dao_ar, 10_000_000_000);
     }
 
     #[test]

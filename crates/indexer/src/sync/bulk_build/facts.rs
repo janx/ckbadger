@@ -19,6 +19,7 @@ pub(crate) struct BlockFacts {
 pub(crate) struct TxFacts {
     pub(crate) hash: [u8; 32],
     pub(crate) block_number: i64,
+    pub(crate) block_dao_ar: u64,
     pub(crate) tx_index: i32,
     pub(crate) is_cellbase: bool,
     pub(crate) input_outpoints: Vec<OutPointKey>,
@@ -50,6 +51,12 @@ pub enum CellSemanticTag {
     Cluster,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DaoCellState {
+    Deposit,
+    WithdrawRequest { deposit_block_number: i64 },
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct CellFacts {
     pub(crate) outpoint: OutPointKey,
@@ -67,6 +74,7 @@ pub(crate) struct CellFacts {
     pub(crate) data_size: i32,
     pub(crate) udt_amount: Option<u128>,
     pub(crate) semantic_tag: CellSemanticTag,
+    pub(crate) dao_state: Option<DaoCellState>,
 }
 
 #[derive(Debug, Clone)]
@@ -86,12 +94,14 @@ pub(crate) struct ResolvedInputFacts {
     pub(crate) type_hash_type: Option<i16>,
     pub(crate) type_args_id: Option<InternId>,
     pub(crate) semantic_tag: CellSemanticTag,
+    pub(crate) dao_state: Option<DaoCellState>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedTxFacts {
     pub(crate) tx_hash: [u8; 32],
     pub(crate) block_number: i64,
+    pub(crate) block_dao_ar: u64,
     pub(crate) tx_index: i32,
     pub(crate) resolved_inputs: Vec<ResolvedInputFacts>,
     pub(crate) cells: Vec<CellFacts>,
