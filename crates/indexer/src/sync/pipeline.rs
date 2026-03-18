@@ -2446,7 +2446,6 @@ impl Indexer {
                                     parse_queue_fill_pct: queue_pressure.parse_queue_fill_pct,
                                     writer_queue_fill_pct: queue_pressure.writer_queue_fill_pct,
                                     memory_ratio_pct,
-                                    l0_files_total: Some(compaction_pressure.l0_files_total),
                                     l0_files_max: Some(compaction_pressure.l0_files_max),
                                     compaction_pending_bytes: Some(
                                         compaction_pressure.compaction_pending_bytes,

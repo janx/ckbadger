@@ -31,10 +31,6 @@ pub(crate) const ADAPTIVE_BATCH_PARSE_MODERATE_MS: f64 = 2_000.0;
 pub(crate) const ADAPTIVE_BATCH_PARSE_SEVERE_MS: f64 = 4_000.0;
 pub(crate) const ADAPTIVE_BATCH_PRECOMPUTE_MODERATE_MS: f64 = 5_000.0;
 pub(crate) const ADAPTIVE_BATCH_PRECOMPUTE_SEVERE_MS: f64 = 12_000.0;
-#[allow(dead_code)] // Kept for future use; removed from decision paths.
-pub(crate) const ADAPTIVE_BATCH_MODERATE_L0_TOTAL_FILES: u64 = 48;
-#[allow(dead_code)] // Kept for future use; removed from decision paths.
-pub(crate) const ADAPTIVE_BATCH_SEVERE_L0_TOTAL_FILES: u64 = 80;
 pub(crate) const ADAPTIVE_BATCH_SEVERE_CONSECUTIVE_REQUIRED: u64 = 2;
 pub(crate) const ADAPTIVE_BATCH_SEVERE_COOLDOWN_STEPS: u64 = 2;
 pub(crate) const ADAPTIVE_BATCH_TXPS_EMA_ALPHA_PCT: u64 = 20; // 0.20
@@ -108,9 +104,6 @@ pub(crate) struct AdaptiveBatchInput {
     pub(crate) parse_queue_fill_pct: Option<f64>,
     pub(crate) writer_queue_fill_pct: Option<f64>,
     pub(crate) memory_ratio_pct: Option<f64>,
-    /// Total L0 file count across all CFs (diagnostics only; not used in decisions)
-    #[allow(dead_code)]
-    pub(crate) l0_files_total: Option<u64>,
     /// Max L0 file count across all CFs (from memory_stats)
     pub(crate) l0_files_max: Option<u64>,
     /// Pending compaction bytes (from memory_stats)
@@ -699,7 +692,6 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -746,7 +738,6 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -775,7 +766,6 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -805,7 +795,6 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -844,7 +833,6 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -894,7 +882,6 @@ mod tests {
                 parse_queue_fill_pct: Some(98.0),
                 writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(85.0),
-                l0_files_total: None,
                 l0_files_max: Some(120),
                 compaction_pending_bytes: Some(6 * 1024 * 1024 * 1024),
                 immutable_memtables: Some(40),
@@ -923,7 +910,6 @@ mod tests {
                 parse_queue_fill_pct: Some(98.0),
                 writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(85.0),
-                l0_files_total: None,
                 l0_files_max: Some(130),
                 compaction_pending_bytes: Some(7 * 1024 * 1024 * 1024),
                 immutable_memtables: Some(45),
@@ -966,7 +952,6 @@ mod tests {
             parse_queue_fill_pct: Some(97.0),
             writer_queue_fill_pct: Some(95.0),
             memory_ratio_pct: Some(85.0),
-            l0_files_total: None,
             l0_files_max: None,
             compaction_pending_bytes: None,
             immutable_memtables: None,
@@ -992,7 +977,6 @@ mod tests {
                 parse_queue_fill_pct: Some(97.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
-                l0_files_total: None,
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -1032,7 +1016,6 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -1066,7 +1049,6 @@ mod tests {
                 parse_queue_fill_pct: Some(98.0),
                 writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -1090,7 +1072,6 @@ mod tests {
                 parse_queue_fill_pct: Some(98.0),
                 writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -1121,7 +1102,6 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -1144,7 +1124,6 @@ mod tests {
             parse_queue_fill_pct: Some(99.0),
             writer_queue_fill_pct: Some(99.0),
             memory_ratio_pct: Some(10.0),
-            l0_files_total: None,
             l0_files_max: None,
             compaction_pending_bytes: None,
             immutable_memtables: None,
@@ -1177,7 +1156,6 @@ mod tests {
             parse_queue_fill_pct: Some(97.0),
             writer_queue_fill_pct: Some(95.0),
             memory_ratio_pct: Some(10.0),
-            l0_files_total: None,
             l0_files_max: None,
             compaction_pending_bytes: None,
             immutable_memtables: None,
@@ -1220,7 +1198,6 @@ mod tests {
                 parse_queue_fill_pct: Some(95.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -1254,7 +1231,6 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -1277,7 +1253,6 @@ mod tests {
             parse_queue_fill_pct: Some(10.0),
             writer_queue_fill_pct: Some(10.0),
             memory_ratio_pct: Some(10.0),
-            l0_files_total: None,
             l0_files_max: None,
             compaction_pending_bytes: None,
             immutable_memtables: None,
@@ -1307,7 +1282,6 @@ mod tests {
                 parse_queue_fill_pct: Some(95.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
-                l0_files_total: None,
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -1329,7 +1303,6 @@ mod tests {
                 parse_queue_fill_pct: Some(95.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
-                l0_files_total: None,
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -1352,7 +1325,6 @@ mod tests {
             parse_queue_fill_pct: Some(10.0),
             writer_queue_fill_pct: Some(10.0),
             memory_ratio_pct: Some(10.0),
-            l0_files_total: None,
             l0_files_max: None,
             compaction_pending_bytes: None,
             immutable_memtables: None,
@@ -1515,9 +1487,8 @@ mod tests {
     }
 
     #[test]
-    fn test_l0_total_does_not_trigger_backoff_when_l0_max_healthy() {
-        // l0_files_total is kept for diagnostics but removed from pressure
-        // decisions. High l0_total with healthy l0_max should not back off.
+    fn test_healthy_l0_max_allows_step_up() {
+        // Healthy L0 max should allow a step-up when the rest of the batch is healthy.
         let controller = AdaptiveBatchController::new(8);
         controller
             .target_batch_txs
@@ -1541,7 +1512,6 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: Some(200),
                 l0_files_max: Some(5),
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -1555,11 +1525,11 @@ mod tests {
 
         assert_eq!(
             adjustment.reason, "healthy_step_up",
-            "l0_files_total=200 with healthy l0_files_max=5 should not trigger backoff"
+            "healthy l0_files_max=5 should not trigger backoff"
         );
         assert!(
             adjustment.new_target_batch_txs >= adjustment.previous_target_batch_txs,
-            "target should not decrease when l0_files_total is high but l0_files_max is healthy"
+            "target should not decrease when l0_files_max is healthy"
         );
     }
 
@@ -1591,7 +1561,6 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: Some(25),
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -1640,7 +1609,6 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: Some(30),
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -1683,7 +1651,6 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: Some(65),
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
@@ -1724,7 +1691,6 @@ mod tests {
                 parse_queue_fill_pct: Some(0.0),
                 writer_queue_fill_pct: Some(0.0),
                 memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
                 l0_files_max: Some(3),
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
