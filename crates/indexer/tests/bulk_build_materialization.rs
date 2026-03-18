@@ -852,3 +852,27 @@ fn bulk_build_materializes_hodl_tracker_state_without_db_reads() {
     assert_eq!(state.date_transitions.len(), 1);
     assert_eq!(state.date_transitions[0], (14_002_000, "20240115".to_string()));
 }
+
+#[test]
+fn bulk_build_materializes_cell_distribution_tracker_state_without_db_reads() {
+    let snapshot =
+        materialize_bulk_artifacts_for_test(&hodl_tracker_fixture()).expect("cell dist snapshot");
+
+    let state = snapshot
+        .cell_dist_tracker_state
+        .as_ref()
+        .expect("persisted cell distribution tracker state");
+    assert_eq!(state.count_by_bucket, [2, 0, 0, 0, 0, 0]);
+    assert_eq!(
+        state.total_capacity_by_bucket,
+        [122_00000000, 0, 0, 0, 0, 0]
+    );
+    assert_eq!(state.last_processed_block, Some(14_002_001));
+    assert_eq!(state.date_transitions.len(), 1);
+    assert_eq!(state.date_transitions[0], (14_002_000, "20240115".to_string()));
+    assert_eq!(state.cohort_accum.len(), 1);
+    assert_eq!(
+        state.cohort_accum[0],
+        ("2024-01".to_string(), 122_00000000, 140_00000000)
+    );
+}

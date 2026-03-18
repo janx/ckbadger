@@ -9,10 +9,11 @@ use anyhow::{anyhow, bail};
 use ckbadger_store::keys;
 use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use ckbadger_store::types::{
-    decode_live_cell_marker, BulkBuildSessionMarker, CachedBlockHeader, ConsumedCellMeta,
-    DailyActivityStats, HodlTrackerState, LiveCellInfo, ObjectStandard, SporeTypeIndex, SyncStatus,
-    TokenTransferRecord, TxActivityBundle, TxIndexEntry, DID_CKB_SENTINEL_COLLECTION,
-    DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    decode_live_cell_marker, BulkBuildSessionMarker, CachedBlockHeader,
+    CellDistributionTrackerState, ConsumedCellMeta, DailyActivityStats, HodlTrackerState,
+    LiveCellInfo, ObjectStandard, SporeTypeIndex, SyncStatus, TokenTransferRecord,
+    TxActivityBundle, TxIndexEntry, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ACTIVITIES, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX,
@@ -208,12 +209,20 @@ impl CoreOwners {
         tx: &facts::ResolvedTxFacts,
         ctx: &owners::ReducerContext<'_>,
     ) -> Result<()> {
-        self.address.apply_tx(tx, ctx)?;
+        self.apply_tx_and_return_address_deltas(tx, ctx).map(|_| ())
+    }
+
+    fn apply_tx_and_return_address_deltas(
+        &mut self,
+        tx: &facts::ResolvedTxFacts,
+        ctx: &owners::ReducerContext<'_>,
+    ) -> Result<HashMap<Vec<u8>, owners::address::AddressTxDelta>> {
+        let address_deltas = self.address.apply_tx_with_deltas(tx, ctx)?;
         self.script.apply_tx(tx, ctx)?;
         self.token.apply_tx(tx, ctx)?;
         self.dao.apply_tx(tx, ctx)?;
         self.object.apply_tx(tx, ctx)?;
-        Ok(())
+        Ok(address_deltas)
     }
 
     fn materialize_all(&mut self, materializer: &mut materialize::Materializer<'_>) -> Result<()> {
@@ -339,6 +348,7 @@ struct BulkBuildRuntimeState {
     owners: CoreOwners,
     activity_stats: ActivityStatsAccumulator,
     hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker,
+    cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker,
     hodl_live_cells_by_lock: HashMap<crate::sync::types::InternId, i32>,
 }
 
@@ -350,6 +360,7 @@ impl Default for BulkBuildRuntimeState {
             owners: CoreOwners::default(),
             activity_stats: ActivityStatsAccumulator::default(),
             hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker::new(),
+            cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker::new(),
             hodl_live_cells_by_lock: HashMap::new(),
         }
     }
@@ -400,11 +411,35 @@ impl BulkBuildRuntimeState {
         let history = build_history_rows(&arena, &resolved, &self.interner, is_mainnet)?;
         self.apply_hodl_tracker_batch(&arena, &resolved)?;
 
-        let ctx = owners::ReducerContext::new(&self.interner);
-        for tx in &resolved {
-            self.owners.apply_tx(tx, &ctx)?;
+        let BulkBuildRuntimeState {
+            interner,
+            owners,
+            cell_dist_tracker,
+            ..
+        } = self;
+        let ctx = owners::ReducerContext::new(interner);
+        for block in &arena.blocks {
+            let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
+            cell_dist_tracker.record_block_date(block.number, block_date);
+
+            for tx in &resolved[block.tx_range.clone()] {
+                for input in &tx.resolved_inputs {
+                    cell_dist_tracker.cell_consumed(input.occupied_capacity)?;
+                }
+                for cell in &tx.cells {
+                    cell_dist_tracker.cell_created(cell.occupied_capacity);
+                }
+
+                let address_deltas = owners.apply_tx_and_return_address_deltas(tx, &ctx)?;
+                apply_cell_dist_cohort_deltas(
+                    cell_dist_tracker,
+                    owners.address.balances(),
+                    &address_deltas,
+                    tx,
+                )?;
+            }
         }
-        self.owners
+        owners
             .object
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
 
@@ -438,6 +473,7 @@ impl BulkBuildRuntimeState {
             owners,
             activity_stats,
             hodl_tracker,
+            cell_dist_tracker,
             ..
         } = self;
 
@@ -452,6 +488,7 @@ impl BulkBuildRuntimeState {
 
         let mut meta_batch = ckbadger_store::batch::StoreBatch::new(domain_store);
         meta_batch.put_hodl_tracker_state(&hodl_tracker.to_state());
+        meta_batch.put_cell_dist_tracker_state(&cell_dist_tracker.to_state());
         if !meta_batch.is_empty() {
             meta_batch.commit()?;
         }
@@ -535,6 +572,44 @@ impl BulkBuildRuntimeState {
     }
 }
 
+fn apply_cell_dist_cohort_deltas(
+    tracker: &mut crate::db::writer::cell_distribution::CellDistributionTracker,
+    balances: &HashMap<Vec<u8>, AddressBalance>,
+    deltas: &HashMap<Vec<u8>, owners::address::AddressTxDelta>,
+    tx: &facts::ResolvedTxFacts,
+) -> Result<()> {
+    for (lock_hash, delta) in deltas {
+        let balance = balances.get(lock_hash).ok_or_else(|| {
+            anyhow!(
+                "missing address balance after applying tx deltas for cell distribution tracker: lock_hash=0x{}, block={}, tx=0x{}, tx_index={}",
+                hex::encode(lock_hash),
+                tx.block_number,
+                hex::encode(tx.tx_hash),
+                tx.tx_index
+            )
+        })?;
+        tracker
+            .apply_cohort_delta(
+                balance.first_seen_block,
+                delta.used_capacity_delta,
+                delta.balance_delta,
+            )
+            .map_err(|e| {
+                anyhow!(
+                    "failed to apply cell distribution cohort delta: lock_hash=0x{}, first_seen_block={}, block={}, tx=0x{}, tx_index={}, error={}",
+                    hex::encode(lock_hash),
+                    balance.first_seen_block,
+                    tx.block_number,
+                    hex::encode(tx.tx_hash),
+                    tx.tx_index,
+                    e
+                )
+            })?;
+    }
+
+    Ok(())
+}
+
 struct HistoryBuildResult {
     rows: Vec<materialize::MaterializedRow>,
     identity_activity_count_deltas: HashMap<Vec<u8>, i64>,
@@ -557,6 +632,7 @@ pub struct BulkArtifactSnapshot {
     pub sync_status: SyncStatus,
     pub bulk_build_session_marker: Option<BulkBuildSessionMarker>,
     pub hodl_tracker_state: Option<HodlTrackerState>,
+    pub cell_dist_tracker_state: Option<CellDistributionTrackerState>,
     pub block_headers: HashMap<i64, CachedBlockHeader>,
     pub block_numbers_by_hash: HashMap<Vec<u8>, i64>,
     pub txs_by_hash: HashMap<Vec<u8>, (i64, i32, TxIndexEntry)>,
@@ -641,12 +717,14 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         ) = collect_cell_snapshot(&domain_store, &append_store)?;
         let bulk_build_session_marker = domain_store.get_bulk_build_session_marker()?;
         let hodl_tracker_state = domain_store.get_hodl_tracker_state()?;
+        let cell_dist_tracker_state = domain_store.get_cell_dist_tracker_state()?;
 
         BulkArtifactSnapshot {
             report,
             sync_status,
             bulk_build_session_marker,
             hodl_tracker_state,
+            cell_dist_tracker_state,
             block_headers,
             block_numbers_by_hash,
             txs_by_hash,

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -13,108 +13,90 @@ use crate::sync::bulk_build::materialize::{MaterializedRow, Materializer};
 use crate::sync::bulk_build::sequencer::BulkSequencer;
 use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct AddressTxDelta {
+    pub(crate) balance_delta: i128,
+    pub(crate) cells_created: i32,
+    pub(crate) cells_consumed: i32,
+    pub(crate) used_capacity_delta: i128,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct AddressOwner {
     balances: HashMap<Vec<u8>, AddressBalance>,
 }
 
 impl AddressOwner {
-    #[cfg(test)]
     pub(crate) fn balances(&self) -> &HashMap<Vec<u8>, AddressBalance> {
         &self.balances
     }
-}
 
-impl BulkReducer for AddressOwner {
-    fn apply_tx(&mut self, tx: &ResolvedTxFacts, ctx: &ReducerContext<'_>) -> Result<()> {
-        let mut tx_balance_changes: HashMap<Vec<u8>, i128> = HashMap::new();
-        let mut tx_cells_created: HashMap<Vec<u8>, i32> = HashMap::new();
-        let mut tx_cells_consumed: HashMap<Vec<u8>, i32> = HashMap::new();
-        let mut tx_used_capacity_changes: HashMap<Vec<u8>, i128> = HashMap::new();
+    pub(crate) fn apply_tx_with_deltas(
+        &mut self,
+        tx: &ResolvedTxFacts,
+        ctx: &ReducerContext<'_>,
+    ) -> Result<HashMap<Vec<u8>, AddressTxDelta>> {
+        let deltas = collect_tx_deltas(tx, ctx)?;
+        self.apply_tx_deltas(tx, &deltas)?;
+        Ok(deltas)
+    }
 
-        for input in &tx.resolved_inputs {
-            apply_input_deltas(
-                input,
-                ctx,
-                &mut tx_balance_changes,
-                &mut tx_cells_consumed,
-                &mut tx_used_capacity_changes,
-            )?;
-        }
-
-        for cell in &tx.cells {
-            apply_output_deltas(
-                cell,
-                ctx,
-                &mut tx_balance_changes,
-                &mut tx_cells_created,
-                &mut tx_used_capacity_changes,
-            )?;
-        }
-
-        let all_addresses: HashSet<Vec<u8>> = tx_balance_changes
-            .keys()
-            .chain(tx_cells_created.keys())
-            .chain(tx_cells_consumed.keys())
-            .chain(tx_used_capacity_changes.keys())
-            .cloned()
-            .collect();
-
-        for lock_hash in all_addresses {
-            let balance_delta = tx_balance_changes.get(&lock_hash).copied().unwrap_or(0);
-            let cells_created = tx_cells_created.get(&lock_hash).copied().unwrap_or(0);
-            let cells_consumed = tx_cells_consumed.get(&lock_hash).copied().unwrap_or(0);
-            let used_delta = tx_used_capacity_changes
-                .get(&lock_hash)
-                .copied()
-                .unwrap_or(0);
-            let existing = self.balances.get(&lock_hash).cloned();
+    fn apply_tx_deltas(
+        &mut self,
+        tx: &ResolvedTxFacts,
+        deltas: &HashMap<Vec<u8>, AddressTxDelta>,
+    ) -> Result<()> {
+        for (lock_hash, delta) in deltas {
+            let existing = self.balances.get(lock_hash).cloned();
 
             let updated = match existing {
                 Some(mut balance) => {
                     balance.balance = checked_add_i128(
                         balance.balance,
-                        balance_delta,
+                        delta.balance_delta,
                         "address balance",
-                        &lock_hash,
+                        lock_hash,
                         tx,
                     )?;
                     balance.used_capacity = checked_add_i128(
                         balance.used_capacity,
-                        used_delta,
+                        delta.used_capacity_delta,
                         "address used capacity",
-                        &lock_hash,
+                        lock_hash,
                         tx,
                     )?;
                     balance.live_cells_count = checked_add_i32(
                         balance.live_cells_count,
-                        cells_created - cells_consumed,
+                        delta.cells_created - delta.cells_consumed,
                         "address live_cells_count",
-                        &lock_hash,
+                        lock_hash,
                         tx,
                     )?;
                     balance.total_cells_count = checked_add_i64(
                         balance.total_cells_count,
-                        i64::from(cells_created),
+                        i64::from(delta.cells_created),
                         "address total_cells_count",
-                        &lock_hash,
+                        lock_hash,
                         tx,
                     )?;
                     balance.txs_count =
-                        checked_add_i64(balance.txs_count, 1, "address txs_count", &lock_hash, tx)?;
+                        checked_add_i64(balance.txs_count, 1, "address txs_count", lock_hash, tx)?;
                     balance.last_activity_block = tx.block_number;
                     balance.last_activity_tx = tx.tx_hash.to_vec();
                     balance
                 }
                 None => {
-                    if balance_delta < 0 || used_delta < 0 || cells_consumed > 0 {
+                    if delta.balance_delta < 0
+                        || delta.used_capacity_delta < 0
+                        || delta.cells_consumed > 0
+                    {
                         bail!(
                             "address reducer underflow for unseen address: lock_hash=0x{}, balance_delta={}, used_delta={}, cells_created={}, cells_consumed={}, block={}, tx=0x{}, tx_index={}",
-                            hex::encode(&lock_hash),
-                            balance_delta,
-                            used_delta,
-                            cells_created,
-                            cells_consumed,
+                            hex::encode(lock_hash),
+                            delta.balance_delta,
+                            delta.used_capacity_delta,
+                            delta.cells_created,
+                            delta.cells_consumed,
                             tx.block_number,
                             hex::encode(tx.tx_hash),
                             tx.tx_index
@@ -122,10 +104,10 @@ impl BulkReducer for AddressOwner {
                     }
 
                     AddressBalance {
-                        balance: balance_delta,
-                        used_capacity: used_delta,
-                        live_cells_count: cells_created,
-                        total_cells_count: i64::from(cells_created),
+                        balance: delta.balance_delta,
+                        used_capacity: delta.used_capacity_delta,
+                        live_cells_count: delta.cells_created,
+                        total_cells_count: i64::from(delta.cells_created),
                         txs_count: 1,
                         first_seen_block: tx.block_number,
                         first_seen_tx: tx.tx_hash.to_vec(),
@@ -135,10 +117,16 @@ impl BulkReducer for AddressOwner {
                 }
             };
 
-            self.balances.insert(lock_hash, updated);
+            self.balances.insert(lock_hash.clone(), updated);
         }
 
         Ok(())
+    }
+}
+
+impl BulkReducer for AddressOwner {
+    fn apply_tx(&mut self, tx: &ResolvedTxFacts, ctx: &ReducerContext<'_>) -> Result<()> {
+        self.apply_tx_with_deltas(tx, ctx).map(|_| ())
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
@@ -167,29 +155,44 @@ impl BulkReducer for AddressOwner {
 fn apply_input_deltas(
     input: &ResolvedInputFacts,
     ctx: &ReducerContext<'_>,
-    tx_balance_changes: &mut HashMap<Vec<u8>, i128>,
-    tx_cells_consumed: &mut HashMap<Vec<u8>, i32>,
-    tx_used_capacity_changes: &mut HashMap<Vec<u8>, i128>,
+    deltas: &mut HashMap<Vec<u8>, AddressTxDelta>,
 ) -> Result<()> {
     let lock_hash = ctx.resolve_identity(input.lock_script_hash_id).to_vec();
-    *tx_balance_changes.entry(lock_hash.clone()).or_default() -= i128::from(input.capacity);
-    *tx_cells_consumed.entry(lock_hash.clone()).or_default() += 1;
-    *tx_used_capacity_changes.entry(lock_hash).or_default() -= i128::from(input.occupied_capacity);
+    let delta = deltas.entry(lock_hash).or_default();
+    delta.balance_delta -= i128::from(input.capacity);
+    delta.cells_consumed += 1;
+    delta.used_capacity_delta -= i128::from(input.occupied_capacity);
     Ok(())
 }
 
 fn apply_output_deltas(
     cell: &CellFacts,
     ctx: &ReducerContext<'_>,
-    tx_balance_changes: &mut HashMap<Vec<u8>, i128>,
-    tx_cells_created: &mut HashMap<Vec<u8>, i32>,
-    tx_used_capacity_changes: &mut HashMap<Vec<u8>, i128>,
+    deltas: &mut HashMap<Vec<u8>, AddressTxDelta>,
 ) -> Result<()> {
     let lock_hash = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
-    *tx_balance_changes.entry(lock_hash.clone()).or_default() += i128::from(cell.capacity);
-    *tx_cells_created.entry(lock_hash.clone()).or_default() += 1;
-    *tx_used_capacity_changes.entry(lock_hash).or_default() += i128::from(cell.occupied_capacity);
+    let delta = deltas.entry(lock_hash).or_default();
+    delta.balance_delta += i128::from(cell.capacity);
+    delta.cells_created += 1;
+    delta.used_capacity_delta += i128::from(cell.occupied_capacity);
     Ok(())
+}
+
+fn collect_tx_deltas(
+    tx: &ResolvedTxFacts,
+    ctx: &ReducerContext<'_>,
+) -> Result<HashMap<Vec<u8>, AddressTxDelta>> {
+    let mut deltas = HashMap::new();
+
+    for input in &tx.resolved_inputs {
+        apply_input_deltas(input, ctx, &mut deltas)?;
+    }
+
+    for cell in &tx.cells {
+        apply_output_deltas(cell, ctx, &mut deltas)?;
+    }
+
+    Ok(deltas)
 }
 
 fn checked_add_i128(

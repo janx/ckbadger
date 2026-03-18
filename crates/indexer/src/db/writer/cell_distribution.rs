@@ -258,6 +258,44 @@ impl CellDistributionTracker {
         }
     }
 
+    /// Apply a single cohort delta using a known first-seen block.
+    ///
+    /// Bulk-build uses this to update cohort state from the same address delta path
+    /// that materializes `AddressBalance`, without re-reading RocksDB.
+    pub fn apply_cohort_delta(
+        &mut self,
+        first_seen_block: i64,
+        used_capacity_delta: i128,
+        balance_delta: i128,
+    ) -> Result<()> {
+        let cohort_date = self.block_number_to_date(first_seen_block).ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing block-date transition for address cohort delta: first_seen_block={}, transitions={}",
+                first_seen_block,
+                self.block_date_transitions.len()
+            )
+        })?;
+        let cohort_month = cohort_date.format("%Y-%m").to_string();
+        let entry = self.cohort_accum.entry(cohort_month.clone()).or_insert((0, 0));
+        entry.0 = entry.0.checked_add(used_capacity_delta).ok_or_else(|| {
+            anyhow::anyhow!(
+                "address cohort used_capacity overflow: cohort_month={}, current={}, delta={}",
+                cohort_month,
+                entry.0,
+                used_capacity_delta
+            )
+        })?;
+        entry.1 = entry.1.checked_add(balance_delta).ok_or_else(|| {
+            anyhow::anyhow!(
+                "address cohort balance overflow: cohort_month={}, current={}, delta={}",
+                cohort_month,
+                entry.1,
+                balance_delta
+            )
+        })?;
+        Ok(())
+    }
+
     /// Produce address cohort snapshot from incremental accumulator.
     pub fn cohort_snapshot(&self) -> ckbadger_store::DailyAddressCohort {
         use ckbadger_store::types::AddressCohortEntry;
@@ -589,6 +627,23 @@ mod tests {
         let snapshot = tracker.cohort_snapshot();
         assert_eq!(snapshot.cohorts.len(), 1);
         assert_eq!(snapshot.cohorts[0].cohort_month, "2023-12");
+    }
+
+    #[test]
+    fn test_apply_cohort_delta_uses_first_seen_block_date() {
+        let mut tracker = CellDistributionTracker::new();
+        let jan15 = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        tracker.record_block_date(100, jan15);
+
+        tracker
+            .apply_cohort_delta(100, 61_00000000, 140_00000000)
+            .unwrap();
+
+        let snapshot = tracker.cohort_snapshot();
+        assert_eq!(snapshot.cohorts.len(), 1);
+        assert_eq!(snapshot.cohorts[0].cohort_month, "2024-01");
+        assert_eq!(snapshot.cohorts[0].used_capacity, 61_00000000);
+        assert_eq!(snapshot.cohorts[0].total_balance, 140_00000000);
     }
 
     #[test]
