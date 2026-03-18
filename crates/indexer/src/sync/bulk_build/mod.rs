@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use anyhow::{anyhow, bail};
@@ -26,6 +26,7 @@ use rocksdb::IteratorMode;
 use tracing::info;
 
 use super::indexer::Indexer;
+use crate::bulk_sync_perf::BatchSample;
 use crate::parser::cell::ParsedCell;
 use crate::parser::{ParsedUdtCell, ScriptParser, UdtParser, UdtStandard};
 use crate::rpc::BlockResponseWithCycles;
@@ -55,18 +56,165 @@ impl BulkBuildEngine {
             start_block,
         )?;
 
-        // Temporary routing seam: startup bulk sync now has an explicit build-engine
-        // entrypoint, while the underlying execution still delegates to the existing
-        // pipeline until reducers/materialization land in later tasks.
         info!(
             run_id = %indexer.run_id,
-            "Bulk build engine route selected; delegating to pipeline until build engine materialization is implemented"
+            start_block,
+            threshold = indexer.config.bulk_sync_threshold,
+            "Bulk build engine route selected; materializing bulk stage before pipeline handoff"
         );
-        let result = indexer.run_pipeline().await;
-        if result.is_ok() {
-            indexer.writer.store().clear_bulk_build_session_marker()?;
+        Self::run_bulk_stage_until_pipeline_handoff(indexer).await?;
+        info!(
+            run_id = %indexer.run_id,
+            current_block = indexer.progress.current(),
+            target_block = indexer.progress.target(),
+            threshold = indexer.config.bulk_sync_threshold,
+            "Bulk build stage finalized; handing off to pipeline for near-tip/live sync"
+        );
+        indexer.run_pipeline().await
+    }
+
+    async fn run_bulk_stage_until_pipeline_handoff(indexer: &Indexer) -> Result<()> {
+        let ckb_store = indexer
+            .ckb_store()
+            .ok_or_else(|| anyhow!("bulk build requires direct CKB RocksDB reader"))?;
+        let mut runtime = BulkBuildRuntimeState::default();
+        let mut sync_totals = BulkBuildSyncTotals::default();
+        let mut materializer = materialize::Materializer::new(
+            indexer.writer.store().as_ref(),
+            indexer.append_only_store.as_ref(),
+        );
+        let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(String::new());
+        let batch_block_span = u64::try_from(indexer.config.batch_size).map_err(|_| {
+            anyhow!(
+                "bulk build batch_size exceeds u64 range: batch_size={}",
+                indexer.config.batch_size
+            )
+        })?;
+
+        loop {
+            ckb_store.refresh()?;
+            let chain_tip = ckb_store
+                .tip_number()
+                .ok_or_else(|| anyhow!("failed to get chain tip from CKB RocksDB during bulk build"))?;
+            indexer.progress.update_target(chain_tip);
+
+            let current_block = indexer.progress.current();
+            let blocks_remaining = chain_tip.saturating_sub(current_block);
+            if blocks_remaining <= indexer.config.bulk_sync_threshold {
+                break;
+            }
+
+            let start_block = current_block.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "bulk build start block overflow: current_block={}",
+                    current_block
+                )
+            })?;
+            let handoff_target = chain_tip.saturating_sub(indexer.config.bulk_sync_threshold);
+            if start_block > handoff_target {
+                break;
+            }
+
+            let end_block = std::cmp::min(
+                start_block
+                    .checked_add(batch_block_span.saturating_sub(1))
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "bulk build end block overflow: start_block={} batch_block_span={}",
+                            start_block,
+                            batch_block_span
+                        )
+                    })?,
+                handoff_target,
+            );
+
+            let fetch_started = Instant::now();
+            let store = ckb_store.clone();
+            let blocks = tokio::task::spawn_blocking(move || {
+                Indexer::fetch_blocks_direct(&store, start_block, end_block)
+            })
+            .await
+            .map_err(|e| anyhow!("bulk build fetch task panicked: {}", e))??;
+            let fetch_elapsed = fetch_started.elapsed();
+
+            let build_started = Instant::now();
+            let batch_stats = runtime.apply_blocks(
+                &blocks,
+                indexer.writer.store().as_ref(),
+                &mut materializer,
+                indexer.config.is_mainnet(),
+            )?;
+            let build_elapsed = build_started.elapsed();
+            sync_totals.record_batch(&batch_stats)?;
+
+            let last_block_number = batch_stats.last_block_number.ok_or_else(|| {
+                anyhow!(
+                    "bulk build batch missing last block number: start_block={} end_block={}",
+                    start_block,
+                    end_block
+                )
+            })?;
+            let last_block_u64 = u64::try_from(last_block_number).map_err(|_| {
+                anyhow!(
+                    "bulk build last block number is negative: last_block_number={}",
+                    last_block_number
+                )
+            })?;
+            indexer
+                .progress
+                .record_batch(last_block_u64, batch_stats.block_count, batch_stats.tx_count);
+
+            let perf_stats = indexer.writer.store().memory_stats();
+            let batch_env = crate::sys_info::read_batch_environment(&mut disk_tracker);
+            let mut sample = BatchSample::new(
+                batch_stats.block_count,
+                fetch_elapsed.as_secs_f64() + build_elapsed.as_secs_f64(),
+                0.0,
+                perf_stats.compaction_pending_bytes / (1024 * 1024),
+                perf_stats.l0_files_count,
+                perf_stats.immutable_memtables,
+                chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+                batch_env.load_avg_1m,
+                batch_env.mem_available_mb,
+                batch_env.disk_read_mb,
+                batch_env.disk_write_mb,
+            );
+            sample.txs = batch_stats.tx_count;
+            sample.cells = u64::try_from(batch_stats.cells_created).map_err(|_| {
+                anyhow!(
+                    "bulk build created cell count is negative while recording perf sample: cells_created={}",
+                    batch_stats.cells_created
+                )
+            })?;
+            sample.inputs = u64::try_from(batch_stats.cells_consumed).map_err(|_| {
+                anyhow!(
+                    "bulk build consumed cell count is negative while recording perf sample: cells_consumed={}",
+                    batch_stats.cells_consumed
+                )
+            })?;
+            sample.write_ms = build_elapsed.as_secs_f64() * 1000.0;
+            indexer.record_bulk_sync_perf_batch_sample(sample);
+
+            info!(
+                run_id = %indexer.run_id,
+                start_block,
+                end_block,
+                blocks = batch_stats.block_count,
+                txs = batch_stats.tx_count,
+                current_block = last_block_u64,
+                target_block = chain_tip,
+                remaining_blocks = indexer.progress.blocks_remaining(),
+                fetch_ms = format!("{:.1}", fetch_elapsed.as_secs_f64() * 1000.0),
+                write_ms = format!("{:.1}", build_elapsed.as_secs_f64() * 1000.0),
+                "Bulk build materialized batch"
+            );
         }
-        result
+
+        runtime.finalize(indexer.writer.store().as_ref(), &mut materializer)?;
+        sync_totals.finalize_success(indexer.writer.store().as_ref(), false)?;
+        indexer.writer.store().clear_bulk_build_session_marker()?;
+        let _ = materializer.finish();
+        Ok(())
     }
 }
 
@@ -129,7 +277,11 @@ impl BulkBuildSyncTotals {
         Ok(())
     }
 
-    fn finalize_success(self, store: &CkbadgerStore) -> Result<SyncStatus> {
+    fn finalize_success(
+        self,
+        store: &CkbadgerStore,
+        mark_bulk_sync_completed: bool,
+    ) -> Result<SyncStatus> {
         let mut status = store.get_sync_status()?;
 
         if let Some(last_block_number) = self.last_block_number {
@@ -158,7 +310,9 @@ impl BulkBuildSyncTotals {
             status.tip_block_number,
         )?;
         status.last_synced_at = chrono::Utc::now().timestamp();
-        status.mark_bulk_sync_completed(status.tip_block_number);
+        if mark_bulk_sync_completed {
+            status.mark_bulk_sync_completed(status.tip_block_number);
+        }
         store.set_sync_status(&status)?;
         Ok(status)
     }
@@ -710,6 +864,66 @@ pub(crate) fn materialize_bulk_artifacts_from_batches_for_test(
     materialize_bulk_artifacts_from_block_batches_for_test_impl(&batch_slices)
 }
 
+#[doc(hidden)]
+pub(crate) fn materialize_bulk_stage_for_test(
+    blocks: &[BlockResponseWithCycles],
+    chain_tip: u64,
+    bulk_sync_threshold: u64,
+) -> Result<BulkArtifactSnapshot> {
+    let mut runtime = BulkBuildRuntimeState::default();
+    let mut sync_totals = BulkBuildSyncTotals::default();
+
+    let root = unique_temp_test_dir("bulk-build-stage-handoff");
+    std::fs::create_dir_all(&root)?;
+    let domain_path = root.join("domain");
+    let append_path = root.join("append-only");
+    std::fs::create_dir_all(&domain_path)?;
+    std::fs::create_dir_all(&append_path)?;
+
+    let snapshot = {
+        let domain_store = CkbadgerStore::open_domain(&domain_path)?;
+        let append_store = CkbadgerStore::open_append_only(&append_path)?;
+        domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
+        start_bulk_build_session_marker(&domain_store, "bulk-build-test-session", 0)?;
+        let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
+        let mut current_block = 0u64;
+
+        for block in blocks {
+            if chain_tip.saturating_sub(current_block) <= bulk_sync_threshold {
+                break;
+            }
+
+            let batch_stats =
+                runtime.apply_blocks(std::slice::from_ref(block), &domain_store, &mut materializer, true)?;
+            sync_totals.record_batch(&batch_stats)?;
+            let last_block_number = batch_stats.last_block_number.ok_or_else(|| {
+                anyhow!("bulk stage test batch missing last block number")
+            })?;
+            current_block = u64::try_from(last_block_number).map_err(|_| {
+                anyhow!(
+                    "bulk stage test batch returned negative last block number: last_block_number={}",
+                    last_block_number
+                )
+            })?;
+        }
+
+        runtime.finalize(&domain_store, &mut materializer)?;
+        let sync_status = sync_totals.finalize_success(&domain_store, false)?;
+        domain_store.clear_bulk_build_session_marker()?;
+        let report = materializer.finish();
+
+        collect_bulk_artifact_snapshot(
+            &domain_store,
+            &append_store,
+            report,
+            sync_status,
+        )?
+    };
+
+    let _ = std::fs::remove_dir_all(&root);
+    Ok(snapshot)
+}
+
 fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
     block_batches: &[&[BlockResponseWithCycles]],
 ) -> Result<BulkArtifactSnapshot> {
@@ -734,60 +948,67 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             sync_totals.record_batch(&batch_stats)?;
         }
         runtime.finalize(&domain_store, &mut materializer)?;
-        let sync_status = sync_totals.finalize_success(&domain_store)?;
+        let sync_status = sync_totals.finalize_success(&domain_store, true)?;
         domain_store.clear_bulk_build_session_marker()?;
         let report = materializer.finish();
-
-        let core = collect_core_owner_state_snapshot(&domain_store)?;
-        let (block_headers, block_numbers_by_hash, txs_by_hash, activity_bundles) =
-            collect_history_snapshot(&domain_store)?;
-        let (daily_activity_stats, hourly_activity_stats) =
-            collect_activity_stats_snapshot(&domain_store)?;
-        let (hodl_waves, cell_distribution_snapshots, address_cohort_snapshots) =
-            collect_hodl_stats_snapshot(&domain_store)?;
-        let (
-            cell_payloads,
-            live_cells,
-            consumed_cells,
-            cell_by_lock,
-            cell_by_type,
-            cell_by_lock_code,
-            cell_by_type_code,
-            cell_by_data_hash,
-        ) = collect_cell_snapshot(&domain_store, &append_store)?;
-        let bulk_build_session_marker = domain_store.get_bulk_build_session_marker()?;
-        let hodl_tracker_state = domain_store.get_hodl_tracker_state()?;
-        let cell_dist_tracker_state = domain_store.get_cell_dist_tracker_state()?;
-
-        BulkArtifactSnapshot {
-            report,
-            sync_status,
-            bulk_build_session_marker,
-            hodl_tracker_state,
-            cell_dist_tracker_state,
-            hodl_waves,
-            cell_distribution_snapshots,
-            address_cohort_snapshots,
-            block_headers,
-            block_numbers_by_hash,
-            txs_by_hash,
-            activity_bundles,
-            daily_activity_stats,
-            hourly_activity_stats,
-            cell_payloads,
-            live_cells,
-            consumed_cells,
-            cell_by_lock,
-            cell_by_type,
-            cell_by_lock_code,
-            cell_by_type_code,
-            cell_by_data_hash,
-            core,
-        }
+        collect_bulk_artifact_snapshot(&domain_store, &append_store, report, sync_status)?
     };
 
     let _ = std::fs::remove_dir_all(&root);
     Ok(snapshot)
+}
+
+fn collect_bulk_artifact_snapshot(
+    domain_store: &CkbadgerStore,
+    append_store: &CkbadgerStore,
+    report: materialize::MaterializationReport,
+    sync_status: SyncStatus,
+) -> Result<BulkArtifactSnapshot> {
+    let core = collect_core_owner_state_snapshot(domain_store)?;
+    let (block_headers, block_numbers_by_hash, txs_by_hash, activity_bundles) =
+        collect_history_snapshot(domain_store)?;
+    let (daily_activity_stats, hourly_activity_stats) = collect_activity_stats_snapshot(domain_store)?;
+    let (hodl_waves, cell_distribution_snapshots, address_cohort_snapshots) =
+        collect_hodl_stats_snapshot(domain_store)?;
+    let (
+        cell_payloads,
+        live_cells,
+        consumed_cells,
+        cell_by_lock,
+        cell_by_type,
+        cell_by_lock_code,
+        cell_by_type_code,
+        cell_by_data_hash,
+    ) = collect_cell_snapshot(domain_store, append_store)?;
+    let bulk_build_session_marker = domain_store.get_bulk_build_session_marker()?;
+    let hodl_tracker_state = domain_store.get_hodl_tracker_state()?;
+    let cell_dist_tracker_state = domain_store.get_cell_dist_tracker_state()?;
+
+    Ok(BulkArtifactSnapshot {
+        report,
+        sync_status,
+        bulk_build_session_marker,
+        hodl_tracker_state,
+        cell_dist_tracker_state,
+        hodl_waves,
+        cell_distribution_snapshots,
+        address_cohort_snapshots,
+        block_headers,
+        block_numbers_by_hash,
+        txs_by_hash,
+        activity_bundles,
+        daily_activity_stats,
+        hourly_activity_stats,
+        cell_payloads,
+        live_cells,
+        consumed_cells,
+        cell_by_lock,
+        cell_by_type,
+        cell_by_lock_code,
+        cell_by_type_code,
+        cell_by_data_hash,
+        core,
+    })
 }
 
 fn build_history_rows(

@@ -8,7 +8,7 @@ use ckbadger_indexer::rpc::{
 };
 use ckbadger_indexer::sync::{
     materialize_bulk_artifacts_for_test, materialize_bulk_artifacts_from_batches_for_test,
-    run_sample_bulk_materialization_for_test,
+    materialize_bulk_stage_for_test, run_sample_bulk_materialization_for_test,
 };
 use ckbadger_store::keys;
 use ckbadger_store::SyncStatus;
@@ -586,6 +586,108 @@ fn hodl_wave_snapshot_fixture() -> Vec<BlockResponseWithCycles> {
     blocks
 }
 
+fn bulk_stage_handoff_fixture() -> Vec<BlockResponseWithCycles> {
+    let create_tx = TransactionView {
+        hash: format!("0x{}", "d1".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: "0x342770c00".to_string(),
+            lock: fixture_lock_script(),
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let split_tx = TransactionView {
+        hash: format!("0x{}", "d2".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: create_tx.hash.clone(),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![
+            CellOutput {
+                capacity: "0x1dcd65000".to_string(),
+                lock: fixture_lock_script(),
+                type_: None,
+            },
+            CellOutput {
+                capacity: "0x165a0bc00".to_string(),
+                lock: fixture_lock_script_b(),
+                type_: None,
+            },
+        ],
+        outputs_data: vec!["0x".to_string(), "0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let merge_tx = TransactionView {
+        hash: format!("0x{}", "d3".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: split_tx.hash.clone(),
+                index: "0x1".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: "0x165a0bc00".to_string(),
+            lock: fixture_lock_script(),
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    vec![
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header_with_timestamp(1, 0xb1, 1_705_276_800_000),
+                uncles: vec![],
+                transactions: vec![create_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header_with_timestamp(2, 0xb2, 1_705_280_400_000),
+                uncles: vec![],
+                transactions: vec![split_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header_with_timestamp(3, 0xb3, 1_705_284_000_000),
+                uncles: vec![],
+                transactions: vec![merge_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+    ]
+}
+
 #[test]
 fn materializer_streams_append_only_rows_before_final_snapshot() {
     let report = run_sample_bulk_materialization_for_test().expect("sample bulk materialization");
@@ -1058,4 +1160,48 @@ fn bulk_build_materializes_sealed_hodl_wave_on_day_boundary() {
         !snapshot.hodl_waves.contains_key("20240116"),
         "current in-progress day must not be materialized"
     );
+}
+
+#[test]
+fn bulk_build_stage_handoff_materializes_consistent_partial_state_without_completion_marker() {
+    let snapshot = materialize_bulk_stage_for_test(&bulk_stage_handoff_fixture(), 3, 1)
+        .expect("bulk stage handoff snapshot");
+
+    assert_eq!(snapshot.sync_status.tip_block_number, 2);
+    assert_eq!(snapshot.sync_status.total_transactions, 2);
+    assert_eq!(snapshot.sync_status.total_cells_created, 3);
+    assert_eq!(snapshot.sync_status.total_cells_consumed, 1);
+    assert!(snapshot.sync_status.sync_started_at.is_some());
+    assert!(
+        snapshot.sync_status.bulk_sync_completed_at.is_none(),
+        "handoff into live pipeline must not mark bulk sync complete early"
+    );
+    assert_eq!(snapshot.sync_status.bulk_sync_completed_block, None);
+    assert!(
+        snapshot.bulk_build_session_marker.is_none(),
+        "handoff-ready bulk stage must clear the in-progress marker"
+    );
+
+    assert_eq!(snapshot.block_headers.len(), 2);
+    assert!(snapshot.block_headers.contains_key(&1));
+    assert!(snapshot.block_headers.contains_key(&2));
+    assert!(
+        !snapshot.block_headers.contains_key(&3),
+        "blocks reserved for pipeline handoff must remain unmaterialized"
+    );
+
+    let lock_a = ScriptParser::compute_script_hash(&fixture_lock_script());
+    let lock_b = ScriptParser::compute_script_hash(&fixture_lock_script_b());
+    let balance_a = snapshot
+        .core
+        .address_balances
+        .get(&lock_a)
+        .expect("address A balance after stage handoff");
+    let balance_b = snapshot
+        .core
+        .address_balances
+        .get(&lock_b)
+        .expect("address B balance after stage handoff");
+    assert_eq!(balance_a.balance, 80_00000000);
+    assert_eq!(balance_b.balance, 60_00000000);
 }

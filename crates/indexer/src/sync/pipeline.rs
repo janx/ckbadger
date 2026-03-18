@@ -3308,7 +3308,7 @@ impl Indexer {
         }
     }
 
-    fn fetch_blocks_direct(
+    pub(crate) fn fetch_blocks_direct(
         store: &CkbChainReader,
         start: u64,
         end: u64,

@@ -108,6 +108,15 @@ pub fn materialize_bulk_artifacts_for_test(
 }
 
 #[doc(hidden)]
+pub fn materialize_bulk_stage_for_test(
+    blocks: &[crate::rpc::BlockResponseWithCycles],
+    chain_tip: u64,
+    bulk_sync_threshold: u64,
+) -> anyhow::Result<BulkArtifactSnapshot> {
+    bulk_build::materialize_bulk_stage_for_test(blocks, chain_tip, bulk_sync_threshold)
+}
+
+#[doc(hidden)]
 pub fn materialize_bulk_artifacts_from_batches_for_test(
     batches: &[Vec<crate::rpc::BlockResponseWithCycles>],
 ) -> anyhow::Result<BulkArtifactSnapshot> {
