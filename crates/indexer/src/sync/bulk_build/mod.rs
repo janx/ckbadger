@@ -11,8 +11,8 @@ use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use ckbadger_store::types::{
     decode_live_cell_marker, BulkBuildSessionMarker, CachedBlockHeader,
     CellDistributionTrackerState, ConsumedCellMeta, DailyActivityStats, DailyAddressCohort,
-    DailyCellDistribution, HodlTrackerState, LiveCellInfo, ObjectStandard, SporeTypeIndex,
-    SyncStatus, TokenTransferRecord, TxActivityBundle, TxIndexEntry,
+    DailyCellDistribution, DailyHodlWave, HodlTrackerState, LiveCellInfo, ObjectStandard,
+    SporeTypeIndex, SyncStatus, TokenTransferRecord, TxActivityBundle, TxIndexEntry,
     DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
@@ -410,7 +410,7 @@ impl BulkBuildRuntimeState {
             .last()
             .ok_or_else(|| anyhow!("bulk build arena missing blocks for non-empty batch"))?;
         let history = build_history_rows(&arena, &resolved, &self.interner, is_mainnet)?;
-        self.apply_hodl_tracker_batch(&arena, &resolved)?;
+        let hodl_sealed_rows = self.apply_hodl_tracker_batch(&arena, &resolved)?;
 
         let BulkBuildRuntimeState {
             interner,
@@ -466,6 +466,7 @@ impl BulkBuildRuntimeState {
             .object
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
 
+        materializer.stream_sealed_aggregate_rows(&hodl_sealed_rows)?;
         materializer.stream_sealed_aggregate_rows(&cell_dist_sealed_rows)?;
         self.activity_stats.apply_history_rows(&history.rows)?;
         materializer.stream_history_rows(&history.rows)?;
@@ -523,7 +524,7 @@ impl BulkBuildRuntimeState {
         &mut self,
         arena: &facts::FactsArena,
         resolved: &[facts::ResolvedTxFacts],
-    ) -> Result<()> {
+    ) -> Result<Vec<materialize::MaterializedRow>> {
         if arena.txs.len() != resolved.len() {
             bail!(
                 "bulk build hodl tracker tx count mismatch: facts_txs={} resolved_txs={}",
@@ -532,6 +533,7 @@ impl BulkBuildRuntimeState {
             );
         }
 
+        let mut sealed_rows = Vec::new();
         for block in &arena.blocks {
             let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
             self.hodl_tracker.record_block_date(block.number, block_date);
@@ -547,9 +549,18 @@ impl BulkBuildRuntimeState {
                     self.hodl_tracker.cell_created(block_date, cell.capacity);
                 }
             }
+
+            if let Some((snapshot_date, snapshot)) = self.hodl_tracker.maybe_snapshot(block_date) {
+                let date_str = snapshot_date.format("%Y%m%d").to_string();
+                sealed_rows.push(materialize::MaterializedRow::new(
+                    CF_STATS_HODL,
+                    keys::encode_stats_key(keys::stats_prefix::HODL_WAVE, date_str.as_bytes()),
+                    bincode::serialize(&snapshot)?,
+                ));
+            }
         }
 
-        Ok(())
+        Ok(sealed_rows)
     }
 
     fn update_hodl_holder_count(
@@ -657,6 +668,7 @@ pub struct BulkArtifactSnapshot {
     pub bulk_build_session_marker: Option<BulkBuildSessionMarker>,
     pub hodl_tracker_state: Option<HodlTrackerState>,
     pub cell_dist_tracker_state: Option<CellDistributionTrackerState>,
+    pub hodl_waves: HashMap<String, DailyHodlWave>,
     pub cell_distribution_snapshots: HashMap<String, DailyCellDistribution>,
     pub address_cohort_snapshots: HashMap<String, DailyAddressCohort>,
     pub block_headers: HashMap<i64, CachedBlockHeader>,
@@ -731,7 +743,7 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             collect_history_snapshot(&domain_store)?;
         let (daily_activity_stats, hourly_activity_stats) =
             collect_activity_stats_snapshot(&domain_store)?;
-        let (cell_distribution_snapshots, address_cohort_snapshots) =
+        let (hodl_waves, cell_distribution_snapshots, address_cohort_snapshots) =
             collect_hodl_stats_snapshot(&domain_store)?;
         let (
             cell_payloads,
@@ -753,6 +765,7 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             bulk_build_session_marker,
             hodl_tracker_state,
             cell_dist_tracker_state,
+            hodl_waves,
             cell_distribution_snapshots,
             address_cohort_snapshots,
             block_headers,
@@ -1841,9 +1854,29 @@ fn collect_activity_stats_snapshot(
 fn collect_hodl_stats_snapshot(
     domain_store: &CkbadgerStore,
 ) -> Result<(
+    HashMap<String, DailyHodlWave>,
     HashMap<String, DailyCellDistribution>,
     HashMap<String, DailyAddressCohort>,
 )> {
+    let mut hodl_waves = HashMap::new();
+    let hodl_iter =
+        domain_store.prefix_iterator_cf(domain_store.cf_stats_hodl(), &[keys::stats_prefix::HODL_WAVE]);
+    for item in hodl_iter {
+        let (key, value) = item?;
+        if !key.starts_with(&[keys::stats_prefix::HODL_WAVE]) {
+            break;
+        }
+        let date = String::from_utf8_lossy(&key[1..]).to_string();
+        let wave: DailyHodlWave = bincode::deserialize(&value).map_err(|e| {
+            anyhow!(
+                "failed to deserialize DailyHodlWave in bulk artifact snapshot helper: key=0x{} error={}",
+                hex::encode(&key),
+                e
+            )
+        })?;
+        hodl_waves.insert(date, wave);
+    }
+
     let mut cell_distribution_snapshots = HashMap::new();
     let cell_dist_iter = domain_store.prefix_iterator_cf(
         domain_store.cf_stats_hodl(),
@@ -1886,7 +1919,7 @@ fn collect_hodl_stats_snapshot(
         address_cohort_snapshots.insert(date, snapshot);
     }
 
-    Ok((cell_distribution_snapshots, address_cohort_snapshots))
+    Ok((hodl_waves, cell_distribution_snapshots, address_cohort_snapshots))
 }
 
 fn collect_cell_snapshot(

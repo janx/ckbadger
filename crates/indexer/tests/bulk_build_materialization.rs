@@ -572,6 +572,20 @@ fn cell_distribution_snapshot_fixture() -> Vec<BlockResponseWithCycles> {
     ]
 }
 
+fn hodl_wave_snapshot_fixture() -> Vec<BlockResponseWithCycles> {
+    let mut blocks = hodl_tracker_fixture();
+    blocks.push(BlockResponseWithCycles {
+        block: BlockView {
+            header: fixture_header_with_timestamp(14_002_002, 0x93, 1_705_363_200_000),
+            uncles: vec![],
+            transactions: vec![],
+            proposals: vec![],
+        },
+        cycles: None,
+    });
+    blocks
+}
+
 #[test]
 fn materializer_streams_append_only_rows_before_final_snapshot() {
     let report = run_sample_bulk_materialization_for_test().expect("sample bulk materialization");
@@ -1012,6 +1026,36 @@ fn bulk_build_materializes_sealed_cell_distribution_and_address_cohort_on_day_bo
     assert_eq!(cohort.cohorts[0].total_balance, 140_00000000);
     assert!(
         !snapshot.address_cohort_snapshots.contains_key("20240116"),
+        "current in-progress day must not be materialized"
+    );
+}
+
+#[test]
+fn bulk_build_materializes_sealed_hodl_wave_on_day_boundary() {
+    let snapshot = materialize_bulk_artifacts_for_test(&hodl_wave_snapshot_fixture())
+        .expect("hodl wave day-boundary snapshot");
+
+    assert!(
+        snapshot.report.sealed_aggregate_rows > 0,
+        "bulk build should materialize sealed hodl-wave rows"
+    );
+    assert_eq!(snapshot.hodl_waves.len(), 1);
+
+    let wave = snapshot
+        .hodl_waves
+        .get("20240115")
+        .expect("sealed hodl wave snapshot");
+    assert_eq!(wave.band_24h, 140_00000000);
+    assert_eq!(wave.band_1d_1w, 0);
+    assert_eq!(wave.band_1w_1m, 0);
+    assert_eq!(wave.band_1m_3m, 0);
+    assert_eq!(wave.band_3m_6m, 0);
+    assert_eq!(wave.band_6m_1y, 0);
+    assert_eq!(wave.band_1y_3y, 0);
+    assert_eq!(wave.band_gt_3y, 0);
+    assert_eq!(wave.holder_count, 2);
+    assert!(
+        !snapshot.hodl_waves.contains_key("20240116"),
         "current in-progress day must not be materialized"
     );
 }
