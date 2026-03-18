@@ -23,7 +23,10 @@ use ckbadger_store::{
 use rocksdb::IteratorMode;
 use tracing::info;
 
-use super::indexer::{finalize_bulk_stage_handoff_state, Indexer};
+use super::indexer::{
+    finalize_bulk_stage_handoff_state, persist_bulk_sync_completion_status,
+    take_bulk_sync_completion_transition, Indexer,
+};
 use crate::bulk_sync_perf::BatchSample;
 use crate::parser::cell::ParsedCell;
 use crate::parser::{ParsedUdtCell, ScriptParser, UdtParser, UdtStandard};
@@ -878,10 +881,68 @@ pub(crate) fn materialize_bulk_stage_for_test(
     chain_tip: u64,
     bulk_sync_threshold: u64,
 ) -> Result<BulkArtifactSnapshot> {
+    run_bulk_stage_test_session(
+        blocks,
+        chain_tip,
+        bulk_sync_threshold,
+        "bulk-build-stage-handoff",
+        |domain_store, append_store, state| {
+            collect_bulk_artifact_snapshot(
+                domain_store,
+                append_store,
+                state.report,
+                state.sync_status,
+            )
+        },
+    )
+}
+
+#[doc(hidden)]
+pub(crate) fn materialize_bulk_stage_then_complete_sync_status_for_test(
+    blocks: &[BlockResponseWithCycles],
+    chain_tip: u64,
+    bulk_sync_threshold: u64,
+) -> Result<SyncStatus> {
+    run_bulk_stage_test_session(
+        blocks,
+        chain_tip,
+        bulk_sync_threshold,
+        "bulk-build-stage-completion",
+        |domain_store, _append_store, state| {
+            apply_pipeline_sync_status_for_test(domain_store, &blocks[state.processed_blocks..])?;
+
+            let bulk_sync_allowed = std::sync::atomic::AtomicBool::new(true);
+            let was_bulk_sync_active = std::sync::atomic::AtomicBool::new(false);
+            finalize_bulk_stage_handoff_state(&bulk_sync_allowed, &was_bulk_sync_active);
+            if take_bulk_sync_completion_transition(&was_bulk_sync_active, false) {
+                persist_bulk_sync_completion_status(domain_store, chain_tip)?;
+            }
+
+            domain_store.get_sync_status()
+        },
+    )
+}
+
+struct BulkStageTestState {
+    processed_blocks: usize,
+    report: materialize::MaterializationReport,
+    sync_status: SyncStatus,
+}
+
+fn run_bulk_stage_test_session<T, F>(
+    blocks: &[BlockResponseWithCycles],
+    chain_tip: u64,
+    bulk_sync_threshold: u64,
+    temp_root_label: &str,
+    finish: F,
+) -> Result<T>
+where
+    F: FnOnce(&CkbadgerStore, &CkbadgerStore, BulkStageTestState) -> Result<T>,
+{
     let mut runtime = BulkBuildRuntimeState::default();
     let mut sync_totals = BulkBuildSyncTotals::default();
 
-    let root = unique_temp_test_dir("bulk-build-stage-handoff");
+    let root = unique_temp_test_dir(temp_root_label);
     std::fs::create_dir_all(&root)?;
     let domain_path = root.join("domain");
     let append_path = root.join("append-only");
@@ -895,8 +956,9 @@ pub(crate) fn materialize_bulk_stage_for_test(
         start_bulk_build_session_marker(&domain_store, "bulk-build-test-session", 0)?;
         let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
         let mut current_block = 0u64;
+        let mut processed_blocks = 0usize;
 
-        for block in blocks {
+        for (block_idx, block) in blocks.iter().enumerate() {
             if chain_tip.saturating_sub(current_block) <= bulk_sync_threshold {
                 break;
             }
@@ -913,6 +975,7 @@ pub(crate) fn materialize_bulk_stage_for_test(
                     last_block_number
                 )
             })?;
+            processed_blocks = block_idx + 1;
         }
 
         runtime.finalize(&domain_store, &mut materializer)?;
@@ -920,16 +983,78 @@ pub(crate) fn materialize_bulk_stage_for_test(
         domain_store.clear_bulk_build_session_marker()?;
         let report = materializer.finish();
 
-        collect_bulk_artifact_snapshot(
+        finish(
             &domain_store,
             &append_store,
-            report,
-            sync_status,
+            BulkStageTestState {
+                processed_blocks,
+                report,
+                sync_status,
+            },
         )?
     };
 
     let _ = std::fs::remove_dir_all(&root);
     Ok(snapshot)
+}
+
+fn apply_pipeline_sync_status_for_test(
+    store: &CkbadgerStore,
+    blocks: &[BlockResponseWithCycles],
+) -> Result<()> {
+    if blocks.is_empty() {
+        return Ok(());
+    }
+
+    let (parsed_blocks, all_tx_data, _) = super::batch::parse_blocks_parallel(blocks)?;
+    let last_block = parsed_blocks.last().ok_or_else(|| {
+        anyhow!("pipeline completion test helper received non-empty blocks without parsed blocks")
+    })?;
+    let tx_count = i64::try_from(all_tx_data.len()).map_err(|_| {
+        anyhow!(
+            "pipeline completion test helper tx count exceeds i64 range: txs={}",
+            all_tx_data.len()
+        )
+    })?;
+    let cells_created = i64::try_from(
+        all_tx_data
+            .iter()
+            .map(|tx| tx.cells.len())
+            .sum::<usize>(),
+    )
+    .map_err(|_| anyhow!("pipeline completion test helper created cell count exceeds i64 range"))?;
+    let cells_consumed = i64::try_from(
+        all_tx_data
+            .iter()
+            .filter(|tx| !tx.is_cellbase)
+            .map(|tx| tx.inputs.len())
+            .sum::<usize>(),
+    )
+    .map_err(|_| anyhow!("pipeline completion test helper consumed cell count exceeds i64 range"))?;
+
+    let mut status = store.get_sync_status()?;
+    status.tip_block_number = last_block.number;
+    status.tip_block_hash = last_block.hash.clone();
+    status.total_transactions = checked_add_sync_total(
+        "total_transactions",
+        status.total_transactions,
+        tx_count,
+        last_block.number,
+    )?;
+    status.total_cells_created = checked_add_sync_total(
+        "total_cells_created",
+        status.total_cells_created,
+        cells_created,
+        last_block.number,
+    )?;
+    status.total_cells_consumed = checked_add_sync_total(
+        "total_cells_consumed",
+        status.total_cells_consumed,
+        cells_consumed,
+        last_block.number,
+    )?;
+    status.last_synced_at = chrono::Utc::now().timestamp();
+    store.set_sync_status(&status)
 }
 
 fn materialize_bulk_artifacts_from_block_batches_for_test_impl(

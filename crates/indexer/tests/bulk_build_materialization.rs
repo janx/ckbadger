@@ -8,7 +8,8 @@ use ckbadger_indexer::rpc::{
 };
 use ckbadger_indexer::sync::{
     materialize_bulk_artifacts_for_test, materialize_bulk_artifacts_from_batches_for_test,
-    materialize_bulk_stage_for_test, run_sample_bulk_materialization_for_test,
+    materialize_bulk_stage_for_test, materialize_bulk_stage_then_complete_sync_status_for_test,
+    run_sample_bulk_materialization_for_test,
 };
 use ckbadger_store::keys;
 use ckbadger_store::SyncStatus;
@@ -1204,4 +1205,25 @@ fn bulk_build_stage_handoff_materializes_consistent_partial_state_without_comple
         .expect("address B balance after stage handoff");
     assert_eq!(balance_a.balance, 80_00000000);
     assert_eq!(balance_b.balance, 60_00000000);
+}
+
+#[test]
+fn bulk_build_stage_handoff_pipeline_completion_marks_final_sync_status_at_chain_tip() {
+    let status = materialize_bulk_stage_then_complete_sync_status_for_test(
+        &bulk_stage_handoff_fixture(),
+        3,
+        1,
+    )
+    .expect("bulk stage handoff pipeline completion status");
+
+    assert_eq!(status.tip_block_number, 3);
+    assert_eq!(status.total_transactions, 3);
+    assert_eq!(status.total_cells_created, 4);
+    assert_eq!(status.total_cells_consumed, 2);
+    assert!(status.sync_started_at.is_some());
+    assert!(
+        status.bulk_sync_completed_at.is_some(),
+        "pipeline completion after handoff must persist the bulk completion marker"
+    );
+    assert_eq!(status.bulk_sync_completed_block, Some(3));
 }
