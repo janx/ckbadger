@@ -35,7 +35,7 @@ use super::checked_tx_count;
 use super::dao_helpers::*;
 use super::diagnostics::*;
 use super::helpers::*;
-use super::indexer::{Indexer, CACHE_INVALIDATION_INTERVAL};
+use super::indexer::{take_bulk_sync_completion_transition, Indexer, CACHE_INVALIDATION_INTERVAL};
 use super::nft_helpers::*;
 use super::sync_mode::*;
 use super::token_helpers::*;
@@ -989,9 +989,8 @@ impl Indexer {
 
     pub(crate) async fn check_bulk_sync_completion(&self) {
         let currently_bulk = self.is_bulk_sync_active();
-        let was_bulk = self.was_bulk_sync_active.load(Ordering::SeqCst);
 
-        if was_bulk && !currently_bulk {
+        if take_bulk_sync_completion_transition(&self.was_bulk_sync_active, currently_bulk) {
             let stats = self.writer.store().memory_stats();
             let current = self.progress.current();
             let chain_tip = self.progress.target();
@@ -1037,9 +1036,6 @@ impl Indexer {
             // Compaction mode transition is now handled by ensure_compaction_mode()
             // which runs after every batch and includes a drain guard.
         }
-
-        self.was_bulk_sync_active
-            .store(currently_bulk, Ordering::SeqCst);
     }
 
     pub(crate) fn maybe_start_label_import(&self) {

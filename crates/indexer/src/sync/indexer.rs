@@ -277,6 +277,15 @@ pub(crate) fn finalize_bulk_stage_handoff_state(
     bulk_sync_allowed.swap(false, Ordering::SeqCst)
 }
 
+pub(crate) fn take_bulk_sync_completion_transition(
+    was_bulk_sync_active: &AtomicBool,
+    currently_bulk_sync_active: bool,
+) -> bool {
+    let previously_bulk_sync_active =
+        was_bulk_sync_active.swap(currently_bulk_sync_active, Ordering::SeqCst);
+    previously_bulk_sync_active && !currently_bulk_sync_active
+}
+
 pub(super) fn mempool_short_tx_id(tx_hash: &str) -> &str {
     // Node-provided tx hashes are always "0x" + 64 hex chars; skip prefix, take first 20.
     &tx_hash[2..22]
@@ -1279,6 +1288,40 @@ mod tests {
                 bulk_sync_allowed.load(Ordering::SeqCst)
             ),
             "handoff must prevent old pipeline bulk-only batches from re-entering after the build stage"
+        );
+    }
+
+    #[test]
+    fn bulk_sync_completion_transition_marks_pipeline_handoff_once() {
+        let bulk_sync_allowed = AtomicBool::new(true);
+        let was_bulk_sync_active = AtomicBool::new(false);
+        finalize_bulk_stage_handoff_state(&bulk_sync_allowed, &was_bulk_sync_active);
+
+        assert!(
+            take_bulk_sync_completion_transition(&was_bulk_sync_active, false),
+            "the first non-bulk pipeline batch after handoff must mark bulk completion exactly once"
+        );
+        assert!(
+            !was_bulk_sync_active.load(Ordering::SeqCst),
+            "after completion is marked, the one-shot bulk transition flag must be cleared"
+        );
+        assert!(
+            !take_bulk_sync_completion_transition(&was_bulk_sync_active, false),
+            "subsequent non-bulk batches must not rewrite the completion marker"
+        );
+    }
+
+    #[test]
+    fn bulk_sync_completion_transition_preserves_active_bulk_state() {
+        let was_bulk_sync_active = AtomicBool::new(false);
+
+        assert!(
+            !take_bulk_sync_completion_transition(&was_bulk_sync_active, true),
+            "entering or remaining in bulk mode must not mark completion"
+        );
+        assert!(
+            was_bulk_sync_active.load(Ordering::SeqCst),
+            "the transition helper must remember that bulk sync has become active"
         );
     }
 
