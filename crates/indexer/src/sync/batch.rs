@@ -72,6 +72,24 @@ fn wait_for_bulk_cells_commit_signal(cells_ready_rx: std::sync::mpsc::Receiver<(
     })
 }
 
+fn ensure_pipeline_bulk_path_disabled(
+    bulk_sync_mode: bool,
+    first_block: i64,
+    last_block: i64,
+    chain_tip: u64,
+) -> Result<()> {
+    if bulk_sync_mode {
+        bail!(
+            "pipeline bulk path is disabled after bulk-build cutover: range {}-{} chain_tip={} \
+             bulk-only writer/prefetch logic must not run; startup bulk sync must run through bulk build engine first",
+            first_block,
+            last_block,
+            chain_tip
+        );
+    }
+    Ok(())
+}
+
 fn resolve_live_dotbit_account_id_for_consume(
     key: &(Vec<u8>, i16),
     input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
@@ -1158,6 +1176,7 @@ impl Indexer {
             self.config.bulk_sync_threshold,
             self.bulk_sync_allowed.load(Ordering::SeqCst),
         );
+        ensure_pipeline_bulk_path_disabled(bulk_sync_mode, first_block, last_block, chain_tip)?;
 
         let all_input_outpoints: Vec<(Vec<u8>, i16)> = all_tx_data
             .iter()
@@ -6012,5 +6031,16 @@ mod tests {
         // Once the last batch output for the token is behind us, a later consume is real burn.
         assert!(should_consume_grouped_mnft_token(Some(5), 6));
         assert!(should_consume_grouped_mnft_token(None, 6));
+    }
+
+    #[test]
+    fn test_pipeline_bulk_path_is_disabled_after_build_engine_cutover() {
+        let err = ensure_pipeline_bulk_path_disabled(true, 100, 120, 1_500).unwrap_err();
+        let msg = err.to_string();
+
+        assert!(msg.contains("pipeline bulk path is disabled"));
+        assert!(msg.contains("100-120"));
+        assert!(msg.contains("chain_tip=1500"));
+        assert!(msg.contains("run through bulk build engine first"));
     }
 }
