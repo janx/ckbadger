@@ -269,6 +269,14 @@ fn fail_fast_if_bulk_build_session_incomplete(store: &CkbadgerStore) -> Result<(
     Ok(())
 }
 
+pub(crate) fn finalize_bulk_stage_handoff_state(
+    bulk_sync_allowed: &AtomicBool,
+    was_bulk_sync_active: &AtomicBool,
+) -> bool {
+    was_bulk_sync_active.store(true, Ordering::SeqCst);
+    bulk_sync_allowed.swap(false, Ordering::SeqCst)
+}
+
 pub(super) fn mempool_short_tx_id(tx_hash: &str) -> &str {
     // Node-provided tx hashes are always "0x" + 64 hex chars; skip prefix, take first 20.
     &tx_hash[2..22]
@@ -1244,6 +1252,34 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         fail_fast_if_bulk_build_session_incomplete(&store).unwrap();
+    }
+
+    #[test]
+    fn bulk_stage_handoff_disables_bulk_reentry_and_preserves_bulk_completion_transition() {
+        let bulk_sync_allowed = AtomicBool::new(true);
+        let was_bulk_sync_active = AtomicBool::new(false);
+
+        let previously_allowed =
+            finalize_bulk_stage_handoff_state(&bulk_sync_allowed, &was_bulk_sync_active);
+
+        assert!(previously_allowed, "handoff should observe prior bulk allowance");
+        assert!(
+            !bulk_sync_allowed.load(Ordering::SeqCst),
+            "handoff must permanently disable bulk re-entry before pipeline takes over"
+        );
+        assert!(
+            was_bulk_sync_active.load(Ordering::SeqCst),
+            "pipeline should still observe that a bulk stage ran, so completion can be marked once"
+        );
+        assert!(
+            !is_effective_bulk_sync_batch(
+                10_001,
+                9_000,
+                1_000,
+                bulk_sync_allowed.load(Ordering::SeqCst)
+            ),
+            "handoff must prevent old pipeline bulk-only batches from re-entering after the build stage"
+        );
     }
 
     #[test]

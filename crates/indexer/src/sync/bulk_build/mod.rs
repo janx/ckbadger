@@ -25,7 +25,7 @@ use ckbadger_store::{
 use rocksdb::IteratorMode;
 use tracing::info;
 
-use super::indexer::Indexer;
+use super::indexer::{finalize_bulk_stage_handoff_state, Indexer};
 use crate::bulk_sync_perf::BatchSample;
 use crate::parser::cell::ParsedCell;
 use crate::parser::{ParsedUdtCell, ScriptParser, UdtParser, UdtStandard};
@@ -213,6 +213,15 @@ impl BulkBuildEngine {
         runtime.finalize(indexer.writer.store().as_ref(), &mut materializer)?;
         sync_totals.finalize_success(indexer.writer.store().as_ref(), false)?;
         indexer.writer.store().clear_bulk_build_session_marker()?;
+        let previous_bulk_sync_allowed = finalize_bulk_stage_handoff_state(
+            &indexer.bulk_sync_allowed,
+            &indexer.was_bulk_sync_active,
+        );
+        info!(
+            run_id = %indexer.run_id,
+            previous_bulk_sync_allowed,
+            "Bulk build stage handoff disabled bulk re-entry before pipeline takeover"
+        );
         let _ = materializer.finish();
         Ok(())
     }
