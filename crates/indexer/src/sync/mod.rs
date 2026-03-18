@@ -55,6 +55,13 @@ pub fn materialize_address_balances_for_test(
     bulk_build::owners::address::materialize_address_balances_for_test(blocks)
 }
 
+#[doc(hidden)]
+pub fn materialize_script_infos_for_test(
+    blocks: &[crate::rpc::BlockResponseWithCycles],
+) -> anyhow::Result<std::collections::HashMap<Vec<u8>, ckbadger_store::ScriptInfo>> {
+    bulk_build::owners::script::materialize_script_infos_for_test(blocks)
+}
+
 /// Convert transactions_count (i32) to usize, failing if negative.
 pub(crate) fn checked_tx_count(count: i32, block_number: i64) -> anyhow::Result<usize> {
     usize::try_from(count).map_err(|_| {

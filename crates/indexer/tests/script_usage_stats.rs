@@ -3,6 +3,11 @@
 //! Tests ScriptInfo insertion for lock and type scripts, stat adjustments
 //! on cell consumption, and listing of all script infos.
 
+use ckbadger_indexer::rpc::{
+    BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
+    TransactionView,
+};
+use ckbadger_indexer::sync::materialize_script_infos_for_test;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::ScriptInfo;
@@ -13,6 +18,97 @@ fn setup_store() -> Arc<CkbadgerStore> {
     let store = Arc::new(CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap());
     std::mem::forget(dir);
     store
+}
+
+fn fixture_lock_script(args_hex: &str) -> Script {
+    Script {
+        code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8".to_string(),
+        hash_type: "type".to_string(),
+        args: args_hex.to_string(),
+    }
+}
+
+fn fixture_header(number: u64) -> HeaderView {
+    HeaderView {
+        version: "0x0".to_string(),
+        compact_target: "0x1a08a97e".to_string(),
+        timestamp: "0x18c7b3b2b00".to_string(),
+        number: format!("0x{number:x}"),
+        epoch: "0x7080006000028".to_string(),
+        parent_hash: format!("0x{}", "11".repeat(32)),
+        transactions_root: format!("0x{}", "22".repeat(32)),
+        proposals_hash: format!("0x{}", "33".repeat(32)),
+        extra_hash: format!("0x{}", "44".repeat(32)),
+        dao: format!("0x{}", "00".repeat(32)),
+        nonce: "0x1".to_string(),
+        hash: format!("0x{}", "55".repeat(32)),
+    }
+}
+
+fn bulk_build_script_fixture() -> BlockResponseWithCycles {
+    let create_tx = TransactionView {
+        hash: format!("0x{}", "ca".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![
+            CellOutput {
+                capacity: format!("0x{:x}", 100_00000000u64),
+                lock: fixture_lock_script(&format!("0x{}", "01".repeat(20))),
+                type_: None,
+            },
+            CellOutput {
+                capacity: format!("0x{:x}", 200_00000000u64),
+                lock: fixture_lock_script(&format!("0x{}", "02".repeat(20))),
+                type_: Some(Script {
+                    code_hash: "0xc5e5dcf215d99af62867164d6fb9d17ce68a45b9e2aecd49c19634426f2056a3"
+                        .to_string(),
+                    hash_type: "type".to_string(),
+                    args: format!("0x{}", "12".repeat(32)),
+                }),
+            },
+        ],
+        outputs_data: vec!["0x".to_string(), format!("0x{}", "2a".repeat(16))],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let consume_tx = TransactionView {
+        hash: format!("0x{}", "cb".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: create_tx.hash.clone(),
+                index: "0x1".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: format!("0x{:x}", 80_00000000u64),
+            lock: fixture_lock_script(&format!("0x{}", "03".repeat(20))),
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    BlockResponseWithCycles {
+        block: BlockView {
+            header: fixture_header(14_000_700),
+            uncles: vec![],
+            transactions: vec![create_tx, consume_tx],
+            proposals: vec![],
+        },
+        cycles: None,
+    }
 }
 
 fn make_script_info_lock(
@@ -314,4 +410,39 @@ fn test_list_script_infos() {
     // Verify non-existent code hash returns None
     let missing = store.get_script_info(&[0xFFu8; 32]).unwrap();
     assert!(missing.is_none());
+}
+
+#[test]
+fn bulk_build_script_owner_materializes_lock_and_type_usage_without_db_reads() {
+    let infos =
+        materialize_script_infos_for_test(&[bulk_build_script_fixture()]).expect("script infos");
+
+    let lock_code_hash = vec![
+        0x9b, 0xd7, 0xe0, 0x6f, 0x3e, 0xcf, 0x4b, 0xe0, 0xf2, 0xfc, 0xd2, 0x18, 0x8b, 0x23, 0xf1,
+        0xb9, 0xfc, 0xc8, 0x8e, 0x5d, 0x4b, 0x65, 0xa8, 0x63, 0x7b, 0x17, 0x72, 0x3b, 0xbd, 0xa3,
+        0xcc, 0xe8,
+    ];
+    let type_code_hash = vec![
+        0xc5, 0xe5, 0xdc, 0xf2, 0x15, 0xd9, 0x9a, 0xf6, 0x28, 0x67, 0x16, 0x4d, 0x6f, 0xb9, 0xd1,
+        0x7c, 0xe6, 0x8a, 0x45, 0xb9, 0xe2, 0xae, 0xcd, 0x49, 0xc1, 0x96, 0x34, 0x42, 0x6f, 0x20,
+        0x56, 0xa3,
+    ];
+
+    let lock_info = infos.get(&lock_code_hash).expect("lock script info");
+    assert_eq!(lock_info.hash_type, 1);
+    assert_eq!(lock_info.lock_cells_count, 3);
+    assert_eq!(lock_info.lock_live_cells_count, 2);
+    assert_eq!(lock_info.lock_capacity_sum, 380_00000000);
+    assert_eq!(lock_info.lock_live_capacity_sum, 180_00000000);
+    assert_eq!(lock_info.lock_used_capacity_sum, 264_00000000);
+    assert_eq!(lock_info.lock_live_used_capacity_sum, 122_00000000);
+
+    let type_info = infos.get(&type_code_hash).expect("type script info");
+    assert_eq!(type_info.hash_type, 1);
+    assert_eq!(type_info.type_cells_count, 1);
+    assert_eq!(type_info.type_live_cells_count, 0);
+    assert_eq!(type_info.type_capacity_sum, 200_00000000);
+    assert_eq!(type_info.type_live_capacity_sum, 0);
+    assert_eq!(type_info.type_used_capacity_sum, 142_00000000);
+    assert_eq!(type_info.type_live_used_capacity_sum, 0);
 }

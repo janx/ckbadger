@@ -6,6 +6,7 @@ use super::materialize::Materializer;
 use crate::sync::types::InternId;
 
 pub(crate) mod address;
+pub(crate) mod script;
 
 pub(crate) trait BulkReducer {
     fn apply_tx(&mut self, tx: &ResolvedTxFacts, ctx: &ReducerContext<'_>) -> Result<()>;
