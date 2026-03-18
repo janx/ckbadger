@@ -1,58 +1,5 @@
 use anyhow::{bail, Result};
 
-/// Classifies the current sync phase based on how far behind the chain tip the
-/// indexer is.  Later tasks will thread `SyncMode` through the batch pipeline,
-/// replacing the ~52 scattered `bulk_sync_mode` booleans.
-#[allow(dead_code)] // Call-site conversion happens in later refactoring tasks
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SyncMode {
-    Bulk,
-    Live,
-}
-
-#[allow(dead_code)] // Call-site conversion happens in later refactoring tasks
-impl SyncMode {
-    pub fn from_lag(blocks_behind: u64, threshold: u64) -> Self {
-        if blocks_behind > threshold {
-            SyncMode::Bulk
-        } else {
-            SyncMode::Live
-        }
-    }
-
-    pub fn is_bulk(&self) -> bool {
-        matches!(self, SyncMode::Bulk)
-    }
-
-    pub fn should_handle_reorg(&self) -> bool {
-        matches!(self, SyncMode::Live)
-    }
-
-    pub fn should_cache_proposals(&self) -> bool {
-        matches!(self, SyncMode::Live)
-    }
-
-    pub fn should_invalidate_caches(&self) -> bool {
-        matches!(self, SyncMode::Live)
-    }
-
-    pub fn should_accumulate_blocks(&self) -> bool {
-        matches!(self, SyncMode::Live)
-    }
-
-    pub fn commit_with_wal(&self) -> bool {
-        matches!(self, SyncMode::Live)
-    }
-
-    pub fn should_use_parallel_writes(&self) -> bool {
-        matches!(self, SyncMode::Bulk)
-    }
-
-    pub fn fail_fast_on_error(&self) -> bool {
-        matches!(self, SyncMode::Bulk)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Free functions — moved from indexer.rs (call sites unchanged for now)
 // ---------------------------------------------------------------------------
@@ -118,57 +65,6 @@ pub(crate) fn ensure_bulk_sync_fresh_start(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // --- SyncMode enum tests (NEW) ---
-
-    #[test]
-    fn test_sync_mode_from_lag() {
-        // Above threshold => Bulk
-        assert_eq!(SyncMode::from_lag(1001, 1000), SyncMode::Bulk);
-        // At threshold => Live
-        assert_eq!(SyncMode::from_lag(1000, 1000), SyncMode::Live);
-        // Below threshold => Live
-        assert_eq!(SyncMode::from_lag(0, 1000), SyncMode::Live);
-        assert_eq!(SyncMode::from_lag(999, 1000), SyncMode::Live);
-    }
-
-    #[test]
-    fn test_sync_mode_behavioral_methods() {
-        let bulk = SyncMode::Bulk;
-        let live = SyncMode::Live;
-
-        // is_bulk
-        assert!(bulk.is_bulk());
-        assert!(!live.is_bulk());
-
-        // should_handle_reorg — only Live
-        assert!(!bulk.should_handle_reorg());
-        assert!(live.should_handle_reorg());
-
-        // should_cache_proposals — only Live
-        assert!(!bulk.should_cache_proposals());
-        assert!(live.should_cache_proposals());
-
-        // should_invalidate_caches — only Live
-        assert!(!bulk.should_invalidate_caches());
-        assert!(live.should_invalidate_caches());
-
-        // should_accumulate_blocks — only Live
-        assert!(!bulk.should_accumulate_blocks());
-        assert!(live.should_accumulate_blocks());
-
-        // commit_with_wal — only Live
-        assert!(!bulk.commit_with_wal());
-        assert!(live.commit_with_wal());
-
-        // should_use_parallel_writes — only Bulk
-        assert!(bulk.should_use_parallel_writes());
-        assert!(!live.should_use_parallel_writes());
-
-        // fail_fast_on_error — only Bulk
-        assert!(bulk.fail_fast_on_error());
-        assert!(!live.fail_fast_on_error());
-    }
 
     // --- Moved free-function tests ---
 
