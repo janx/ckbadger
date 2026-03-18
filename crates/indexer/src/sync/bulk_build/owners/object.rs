@@ -10,8 +10,8 @@ use ckbadger_store::store::{
 use ckbadger_store::types::{
     ClusterAggregate, IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
     ObjectCollectionAggregate, ObjectEntry, ObjectExtra, ObjectStandard, ObjectTypeIndex,
-    SporeTypeIndex, StorageDependencyTier, DID_CKB_SENTINEL_COLLECTION,
-    DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    SporeTypeIndex, StorageDependencyTier, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     CkbadgerStore, CF_CLUSTER_AGG, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_OBJECT_COLLECTION_AGG,
@@ -127,9 +127,9 @@ impl BulkReducer for ObjectOwner {
             }),
         );
         sealed_rows.extend(
-            self.dotbit_outpoints_by_account.iter().map(|key| {
-                MaterializedRow::new(CF_STATS_OBJECT, key.clone(), Vec::new())
-            }),
+            self.dotbit_outpoints_by_account
+                .iter()
+                .map(|key| MaterializedRow::new(CF_STATS_OBJECT, key.clone(), Vec::new())),
         );
         sealed_rows.extend(self.dotbit_hourly_transfers.iter().map(|(key, count)| {
             MaterializedRow::new(CF_STATS_OBJECT, key.clone(), count.to_le_bytes().to_vec())
@@ -294,11 +294,7 @@ impl ObjectOwner {
             CellProtocolFacts::MnftIssuer(issuer) => self.consume_mnft_issuer(&issuer.issuer_id),
             CellProtocolFacts::MnftClass(class) => self.consume_mnft_class(&class.class_id),
             CellProtocolFacts::MnftToken(token) => self.consume_mnft_token(&token.token_id),
-            CellProtocolFacts::Cluster(_) => bail!(
-                "object owner does not support consumed cluster cells yet: outpoint=0x{}:{}",
-                hex::encode(input.outpoint.tx_hash),
-                input.outpoint.index
-            ),
+            CellProtocolFacts::Cluster(cluster) => self.consume_cluster(&cluster.cluster_id),
             CellProtocolFacts::Dotbit(dotbit) => self.consume_dotbit(&dotbit.account_id),
         }
     }
@@ -1191,6 +1187,35 @@ impl ObjectOwner {
         )
     }
 
+    fn consume_cluster(&mut self, cluster_id: &[u8; 32]) -> Result<()> {
+        let entry = self
+            .spore_entries
+            .get_mut(cluster_id.as_slice())
+            .ok_or_else(|| {
+                anyhow!(
+                    "missing cluster during consume: cluster_id=0x{}",
+                    hex::encode(cluster_id)
+                )
+            })?;
+        if entry.standard != ObjectStandard::SporeCluster {
+            bail!(
+                "consume_cluster expected cluster entry, found {:?}: cluster_id=0x{}",
+                entry.standard,
+                hex::encode(cluster_id)
+            );
+        }
+        if !entry.is_live {
+            bail!(
+                "cluster already consumed: cluster_id=0x{}",
+                hex::encode(cluster_id)
+            );
+        }
+
+        entry.is_live = false;
+        entry.owner_lock_hash = None;
+        Ok(())
+    }
+
     fn consume_mnft_issuer(&mut self, issuer_id: &[u8; 20]) -> Result<()> {
         let entry = self
             .mnft_entries
@@ -1345,14 +1370,14 @@ impl ObjectOwner {
                 standard: IdentityStandard::DotBit,
                 ..IdentityCollectionAggregate::default()
             });
-        agg.live_count = checked_next_i64(
-            agg.live_count,
-            -1,
-            ".bit live_count consume",
-            account_id,
-            0,
-        )?;
-        Self::apply_dotbit_owner_transition(dotbit_owner_counts, Some(old_owner.as_slice()), None, agg)
+        agg.live_count =
+            checked_next_i64(agg.live_count, -1, ".bit live_count consume", account_id, 0)?;
+        Self::apply_dotbit_owner_transition(
+            dotbit_owner_counts,
+            Some(old_owner.as_slice()),
+            None,
+            agg,
+        )
     }
 
     fn apply_did_owner_transition(
@@ -1441,13 +1466,8 @@ impl ObjectOwner {
         if let Some(new_owner) = new_owner {
             let current = *dotbit_owner_counts.get(new_owner).unwrap_or(&0);
             if current == 0 {
-                agg.holders_count = checked_next_i64(
-                    agg.holders_count,
-                    1,
-                    ".bit holders_count add",
-                    new_owner,
-                    0,
-                )?;
+                agg.holders_count =
+                    checked_next_i64(agg.holders_count, 1, ".bit holders_count add", new_owner, 0)?;
             }
             dotbit_owner_counts.insert(new_owner.to_vec(), current + 1);
         }
@@ -1619,14 +1639,11 @@ impl ObjectOwner {
     ) -> Result<()> {
         let hour_bucket = timestamp_ms / 3_600_000;
         let key = keys::encode_nft_hourly_key(&DOTBIT_SENTINEL_COLLECTION, hour_bucket).to_vec();
-        let current = *self.dotbit_hourly_transfers.get(key.as_slice()).unwrap_or(&0);
-        let next = checked_next_i64(
-            current,
-            1,
-            ".bit hourly transfer",
-            account_id,
-            block_number,
-        )?;
+        let current = *self
+            .dotbit_hourly_transfers
+            .get(key.as_slice())
+            .unwrap_or(&0);
+        let next = checked_next_i64(current, 1, ".bit hourly transfer", account_id, block_number)?;
         self.dotbit_hourly_transfers.insert(key, next);
         Ok(())
     }
@@ -2062,10 +2079,9 @@ fn unique_temp_test_dir(prefix: &str) -> PathBuf {
 mod tests {
     use super::*;
     use crate::sync::bulk_build::facts::{
-        CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts,
-        DotbitProtocolFacts, MnftClassProtocolFacts, MnftIssuerProtocolFacts,
-        MnftTokenProtocolFacts, OutPointKey, ResolvedInputFacts, ResolvedTxFacts,
-        SporeProtocolFacts,
+        CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts, DotbitProtocolFacts,
+        MnftClassProtocolFacts, MnftIssuerProtocolFacts, MnftTokenProtocolFacts, OutPointKey,
+        ResolvedInputFacts, ResolvedTxFacts, SporeProtocolFacts,
     };
     use crate::sync::types::InternId;
 

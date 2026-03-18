@@ -17,8 +17,8 @@ use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ACTIVITIES, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX,
     CF_BLOCK_HEADERS, CF_CELLS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE,
     CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE, CF_CONSUMED_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES,
-    CF_LIVE_CELLS, CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL,
-    CF_TX_HASH_MAP, CF_TX_INDEX,
+    CF_LIVE_CELLS, CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_HASH_MAP,
+    CF_TX_INDEX,
 };
 use rocksdb::IteratorMode;
 use tracing::info;
@@ -94,9 +94,9 @@ impl BulkBuildEngine {
 
         loop {
             ckb_store.refresh()?;
-            let chain_tip = ckb_store
-                .tip_number()
-                .ok_or_else(|| anyhow!("failed to get chain tip from CKB RocksDB during bulk build"))?;
+            let chain_tip = ckb_store.tip_number().ok_or_else(|| {
+                anyhow!("failed to get chain tip from CKB RocksDB during bulk build")
+            })?;
             indexer.progress.update_target(chain_tip);
 
             let current_block = indexer.progress.current();
@@ -139,12 +139,8 @@ impl BulkBuildEngine {
             let fetch_elapsed = fetch_started.elapsed();
 
             let build_started = Instant::now();
-            let batch_stats = runtime.apply_blocks(
-                &blocks,
-                indexer.writer.store().as_ref(),
-                &mut materializer,
-                indexer.config.is_mainnet(),
-            )?;
+            let batch_stats =
+                runtime.apply_blocks(&blocks, &mut materializer, indexer.config.is_mainnet())?;
             let build_elapsed = build_started.elapsed();
             sync_totals.record_batch(&batch_stats)?;
 
@@ -161,9 +157,11 @@ impl BulkBuildEngine {
                     last_block_number
                 )
             })?;
-            indexer
-                .progress
-                .record_batch(last_block_u64, batch_stats.block_count, batch_stats.tx_count);
+            indexer.progress.record_batch(
+                last_block_u64,
+                batch_stats.block_count,
+                batch_stats.tx_count,
+            );
 
             let perf_stats = indexer.writer.store().memory_stats();
             let batch_env = crate::sys_info::read_batch_environment(&mut disk_tracker);
@@ -174,7 +172,9 @@ impl BulkBuildEngine {
                 perf_stats.compaction_pending_bytes / (1024 * 1024),
                 perf_stats.l0_files_count,
                 perf_stats.immutable_memtables,
-                chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+                chrono::Utc::now()
+                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                    .to_string(),
                 batch_env.load_avg_1m,
                 batch_env.mem_available_mb,
                 batch_env.disk_read_mb,
@@ -328,12 +328,7 @@ impl BulkBuildSyncTotals {
     }
 }
 
-fn checked_add_sync_total(
-    label: &str,
-    current: i64,
-    delta: i64,
-    block_number: i64,
-) -> Result<i64> {
+fn checked_add_sync_total(label: &str, current: i64, delta: i64, block_number: i64) -> Result<i64> {
     current.checked_add(delta).ok_or_else(|| {
         anyhow!(
             "bulk build sync total overflow: field={} current={} delta={} block={}",
@@ -365,6 +360,7 @@ struct CoreOwners {
     script: owners::script::ScriptOwner,
     token: owners::token::TokenOwner,
     dao: owners::dao::DaoOwner,
+    fiber: owners::fiber::FiberOwner,
     object: owners::object::ObjectOwner,
 }
 
@@ -387,6 +383,7 @@ impl CoreOwners {
         self.script.apply_tx(tx, ctx)?;
         self.token.apply_tx(tx, ctx)?;
         self.dao.apply_tx(tx, ctx)?;
+        self.fiber.apply_tx(tx, ctx)?;
         self.object.apply_tx(tx, ctx)?;
         Ok(address_deltas)
     }
@@ -396,12 +393,14 @@ impl CoreOwners {
         self.script.flush_sealed(materializer)?;
         self.token.flush_sealed(materializer)?;
         self.dao.flush_sealed(materializer)?;
+        self.fiber.flush_sealed(materializer)?;
         self.object.flush_sealed(materializer)?;
 
         self.address.materialize_final(materializer)?;
         self.script.materialize_final(materializer)?;
         self.token.materialize_final(materializer)?;
         self.dao.materialize_final(materializer)?;
+        self.fiber.materialize_final(materializer)?;
         self.object.materialize_final(materializer)?;
         Ok(())
     }
@@ -512,6 +511,7 @@ struct BulkBuildRuntimeState {
     interner: interner::IdentityInterner,
     sequencer: sequencer::BulkSequencer,
     owners: CoreOwners,
+    dao_block_ar_by_number: HashMap<i64, u64>,
     activity_stats: ActivityStatsAccumulator,
     hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker,
     cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker,
@@ -524,6 +524,7 @@ impl Default for BulkBuildRuntimeState {
             interner: interner::IdentityInterner::default(),
             sequencer: sequencer::BulkSequencer::default(),
             owners: CoreOwners::default(),
+            dao_block_ar_by_number: HashMap::new(),
             activity_stats: ActivityStatsAccumulator::default(),
             hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker::new(),
             cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker::new(),
@@ -536,7 +537,6 @@ impl BulkBuildRuntimeState {
     fn apply_blocks(
         &mut self,
         blocks: &[BlockResponseWithCycles],
-        domain_store: &CkbadgerStore,
         materializer: &mut materialize::Materializer<'_>,
         is_mainnet: bool,
     ) -> Result<BatchExecutionStats> {
@@ -566,15 +566,24 @@ impl BulkBuildRuntimeState {
                 .sum::<usize>(),
         )
         .map_err(|_| {
-            anyhow!(
-                "bulk build consumed cell count exceeds i64 range while applying block batch"
-            )
+            anyhow!("bulk build consumed cell count exceeds i64 range while applying block batch")
         })?;
         let last_block = arena
             .blocks
             .last()
             .ok_or_else(|| anyhow!("bulk build arena missing blocks for non-empty batch"))?;
-        let history = build_history_rows(&arena, &resolved, &self.interner, is_mainnet)?;
+        extend_block_ar_lookup(
+            &mut self.dao_block_ar_by_number,
+            &arena.blocks,
+            "applying bulk build batch",
+        )?;
+        let history = build_history_rows(
+            &arena,
+            &resolved,
+            &self.interner,
+            &self.dao_block_ar_by_number,
+            is_mainnet,
+        )?;
         let hodl_sealed_rows = self.apply_hodl_tracker_batch(&arena, &resolved)?;
 
         let BulkBuildRuntimeState {
@@ -619,10 +628,7 @@ impl BulkBuildRuntimeState {
                 ));
                 cell_dist_sealed_rows.push(materialize::MaterializedRow::new(
                     CF_STATS_HODL,
-                    keys::encode_stats_key(
-                        keys::stats_prefix::ADDR_COHORT,
-                        date_str.as_bytes(),
-                    ),
+                    keys::encode_stats_key(keys::stats_prefix::ADDR_COHORT, date_str.as_bytes()),
                     bincode::serialize(&cohort)?,
                 ));
             }
@@ -635,7 +641,6 @@ impl BulkBuildRuntimeState {
         materializer.stream_sealed_aggregate_rows(&cell_dist_sealed_rows)?;
         self.activity_stats.apply_history_rows(&history.rows)?;
         materializer.stream_history_rows(&history.rows)?;
-        materialize_activity_secondary_state(domain_store, &history.rows)?;
 
         Ok(BatchExecutionStats {
             last_block_number: Some(last_block.number),
@@ -701,7 +706,8 @@ impl BulkBuildRuntimeState {
         let mut sealed_rows = Vec::new();
         for block in &arena.blocks {
             let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
-            self.hodl_tracker.record_block_date(block.number, block_date);
+            self.hodl_tracker
+                .record_block_date(block.number, block_date);
 
             for tx in &resolved[block.tx_range.clone()] {
                 for input in &tx.resolved_inputs {
@@ -964,11 +970,11 @@ where
             }
 
             let batch_stats =
-                runtime.apply_blocks(std::slice::from_ref(block), &domain_store, &mut materializer, true)?;
+                runtime.apply_blocks(std::slice::from_ref(block), &mut materializer, true)?;
             sync_totals.record_batch(&batch_stats)?;
-            let last_block_number = batch_stats.last_block_number.ok_or_else(|| {
-                anyhow!("bulk stage test batch missing last block number")
-            })?;
+            let last_block_number = batch_stats
+                .last_block_number
+                .ok_or_else(|| anyhow!("bulk stage test batch missing last block number"))?;
             current_block = u64::try_from(last_block_number).map_err(|_| {
                 anyhow!(
                     "bulk stage test batch returned negative last block number: last_block_number={}",
@@ -1016,13 +1022,10 @@ fn apply_pipeline_sync_status_for_test(
             all_tx_data.len()
         )
     })?;
-    let cells_created = i64::try_from(
-        all_tx_data
-            .iter()
-            .map(|tx| tx.cells.len())
-            .sum::<usize>(),
-    )
-    .map_err(|_| anyhow!("pipeline completion test helper created cell count exceeds i64 range"))?;
+    let cells_created = i64::try_from(all_tx_data.iter().map(|tx| tx.cells.len()).sum::<usize>())
+        .map_err(|_| {
+        anyhow!("pipeline completion test helper created cell count exceeds i64 range")
+    })?;
     let cells_consumed = i64::try_from(
         all_tx_data
             .iter()
@@ -1030,7 +1033,9 @@ fn apply_pipeline_sync_status_for_test(
             .map(|tx| tx.inputs.len())
             .sum::<usize>(),
     )
-    .map_err(|_| anyhow!("pipeline completion test helper consumed cell count exceeds i64 range"))?;
+    .map_err(|_| {
+        anyhow!("pipeline completion test helper consumed cell count exceeds i64 range")
+    })?;
 
     let mut status = store.get_sync_status()?;
     status.tip_block_number = last_block.number;
@@ -1077,7 +1082,7 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         start_bulk_build_session_marker(&domain_store, "bulk-build-test-session", 0)?;
         let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
         for batch in block_batches {
-            let batch_stats = runtime.apply_blocks(batch, &domain_store, &mut materializer, true)?;
+            let batch_stats = runtime.apply_blocks(batch, &mut materializer, true)?;
             sync_totals.record_batch(&batch_stats)?;
         }
         runtime.finalize(&domain_store, &mut materializer)?;
@@ -1100,7 +1105,8 @@ fn collect_bulk_artifact_snapshot(
     let core = collect_core_owner_state_snapshot(domain_store)?;
     let (block_headers, block_numbers_by_hash, txs_by_hash, activity_bundles) =
         collect_history_snapshot(domain_store)?;
-    let (daily_activity_stats, hourly_activity_stats) = collect_activity_stats_snapshot(domain_store)?;
+    let (daily_activity_stats, hourly_activity_stats) =
+        collect_activity_stats_snapshot(domain_store)?;
     let (hodl_waves, cell_distribution_snapshots, address_cohort_snapshots) =
         collect_hodl_stats_snapshot(domain_store)?;
     let (
@@ -1148,6 +1154,7 @@ fn build_history_rows(
     arena: &facts::FactsArena,
     resolved: &[facts::ResolvedTxFacts],
     interner: &interner::IdentityInterner,
+    block_ar_by_number: &HashMap<i64, u64>,
     is_mainnet: bool,
 ) -> Result<HistoryBuildResult> {
     let mut rows = Vec::with_capacity(
@@ -1267,7 +1274,13 @@ fn build_history_rows(
     }
 
     rows.extend(build_token_transfer_rows(resolved, interner)?);
-    rows.extend(build_activity_rows(arena, resolved, interner, is_mainnet)?);
+    rows.extend(build_activity_rows(
+        arena,
+        resolved,
+        interner,
+        block_ar_by_number,
+        is_mainnet,
+    )?);
     let object_activity_rows =
         build_object_collection_activity_rows(resolved, &mut identity_activity_count_deltas)?;
     rows.extend(object_activity_rows);
@@ -1457,50 +1470,13 @@ fn build_sealed_aggregate_rows(
     accumulator.build_rows()
 }
 
-fn materialize_activity_secondary_state(
-    domain_store: &CkbadgerStore,
-    history_rows: &[materialize::MaterializedRow],
-) -> Result<()> {
-    for row in history_rows
-        .iter()
-        .filter(|row| row.cf_name == CF_ACTIVITIES)
-    {
-        let bundle: TxActivityBundle = bincode::deserialize(&row.value).map_err(|e| {
-            anyhow!(
-                "failed to deserialize TxActivityBundle while materializing bulk activity secondary state: key=0x{} error={}",
-                hex::encode(&row.key),
-                e
-            )
-        })?;
-        let mut batch = ckbadger_store::batch::StoreBatch::new(domain_store);
-        crate::db::writer::fiber::process_fiber_channel_events(&mut batch, domain_store, &bundle)?;
-        if !batch.is_empty() {
-            batch.commit()?;
-        }
-    }
-
-    Ok(())
-}
-
 fn build_activity_rows(
     arena: &facts::FactsArena,
     resolved: &[facts::ResolvedTxFacts],
     interner: &interner::IdentityInterner,
+    block_ar_by_number: &HashMap<i64, u64>,
     is_mainnet: bool,
 ) -> Result<Vec<materialize::MaterializedRow>> {
-    let block_ar_by_number: HashMap<i64, u64> = arena
-        .blocks
-        .iter()
-        .map(|block| {
-            let ar = crate::db::writer::dao::extract_ar_from_dao(&block.dao).ok_or_else(|| {
-                anyhow!(
-                    "missing AR in block DAO field while building bulk activities: block={}",
-                    block.number
-                )
-            })?;
-            Ok((block.number, ar))
-        })
-        .collect::<Result<_>>()?;
     let detectors = build_activity_protocol_detectors(resolved, interner, is_mainnet)?;
     let token_info_cache = HashMap::new();
     let mut rows = Vec::new();
@@ -1595,6 +1571,35 @@ fn build_activity_rows(
     }
 
     Ok(rows)
+}
+
+fn extend_block_ar_lookup(
+    block_ar_by_number: &mut HashMap<i64, u64>,
+    blocks: &[facts::BlockFacts],
+    context: &str,
+) -> Result<()> {
+    for block in blocks {
+        let ar = crate::db::writer::dao::extract_ar_from_dao(&block.dao).ok_or_else(|| {
+            anyhow!(
+                "missing AR in block DAO field while {}: block={}",
+                context,
+                block.number
+            )
+        })?;
+        if let Some(existing) = block_ar_by_number.insert(block.number, ar) {
+            if existing != ar {
+                bail!(
+                    "conflicting DAO AR while {}: block={} existing_ar={} new_ar={}",
+                    context,
+                    block.number,
+                    existing,
+                    ar
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn build_token_transfer_rows(
@@ -2213,8 +2218,10 @@ fn collect_hodl_stats_snapshot(
     HashMap<String, DailyAddressCohort>,
 )> {
     let mut hodl_waves = HashMap::new();
-    let hodl_iter =
-        domain_store.prefix_iterator_cf(domain_store.cf_stats_hodl(), &[keys::stats_prefix::HODL_WAVE]);
+    let hodl_iter = domain_store.prefix_iterator_cf(
+        domain_store.cf_stats_hodl(),
+        &[keys::stats_prefix::HODL_WAVE],
+    );
     for item in hodl_iter {
         let (key, value) = item?;
         if !key.starts_with(&[keys::stats_prefix::HODL_WAVE]) {
@@ -2273,7 +2280,11 @@ fn collect_hodl_stats_snapshot(
         address_cohort_snapshots.insert(date, snapshot);
     }
 
-    Ok((hodl_waves, cell_distribution_snapshots, address_cohort_snapshots))
+    Ok((
+        hodl_waves,
+        cell_distribution_snapshots,
+        address_cohort_snapshots,
+    ))
 }
 
 fn collect_cell_snapshot(
@@ -3129,12 +3140,20 @@ mod tests {
             .resolve(&arena)
             .expect("resolved txs");
 
-        let addr_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
-            .expect("history rows")
-            .rows
-            .into_iter()
-            .filter(|row| row.cf_name == CF_ADDR_TXS)
-            .collect();
+        let mut block_ar_by_number = HashMap::new();
+        extend_block_ar_lookup(
+            &mut block_ar_by_number,
+            &arena.blocks,
+            "building address history rows in test",
+        )
+        .expect("block AR lookup");
+        let addr_rows: Vec<_> =
+            build_history_rows(&arena, &resolved, &interner, &block_ar_by_number, true)
+                .expect("history rows")
+                .rows
+                .into_iter()
+                .filter(|row| row.cf_name == CF_ADDR_TXS)
+                .collect();
 
         let expected = [
             keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 0, &create_tx_hash),
@@ -3175,12 +3194,20 @@ mod tests {
             .resolve(&arena)
             .expect("resolved txs");
 
-        let token_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
-            .expect("history rows")
-            .rows
-            .into_iter()
-            .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
-            .collect();
+        let mut block_ar_by_number = HashMap::new();
+        extend_block_ar_lookup(
+            &mut block_ar_by_number,
+            &arena.blocks,
+            "building token history rows in test",
+        )
+        .expect("block AR lookup");
+        let token_rows: Vec<_> =
+            build_history_rows(&arena, &resolved, &interner, &block_ar_by_number, true)
+                .expect("history rows")
+                .rows
+                .into_iter()
+                .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
+                .collect();
 
         assert_eq!(token_rows.len(), 2);
         let token_records: HashMap<Vec<u8>, TokenTransferRecord> = token_rows
@@ -3238,12 +3265,20 @@ mod tests {
             .resolve(&arena)
             .expect("resolved txs");
 
-        let activity_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
-            .expect("history rows")
-            .rows
-            .into_iter()
-            .filter(|row| row.cf_name == CF_ACTIVITIES)
-            .collect();
+        let mut block_ar_by_number = HashMap::new();
+        extend_block_ar_lookup(
+            &mut block_ar_by_number,
+            &arena.blocks,
+            "building activity history rows in test",
+        )
+        .expect("block AR lookup");
+        let activity_rows: Vec<_> =
+            build_history_rows(&arena, &resolved, &interner, &block_ar_by_number, true)
+                .expect("history rows")
+                .rows
+                .into_iter()
+                .filter(|row| row.cf_name == CF_ACTIVITIES)
+                .collect();
 
         assert_eq!(activity_rows.len(), 2);
         let activity_bundles: HashMap<Vec<u8>, TxActivityBundle> = activity_rows
@@ -3288,7 +3323,7 @@ mod tests {
     }
 
     #[test]
-    fn bulk_build_materialization_processes_fiber_channel_events_from_activity_bundles() {
+    fn bulk_build_materializes_fiber_channels_via_core_owner_final_state() {
         let block = bulk_build_fiber_open_fixture();
         let open_tx_hash =
             hex::decode(&block.block.transactions[1].hash[2..]).expect("open tx hash");
@@ -3303,7 +3338,15 @@ mod tests {
         let resolved = sequencer.resolve(&arena).expect("resolved txs");
         let mut owners = CoreOwners::default();
         let ctx = owners::ReducerContext::new(&interner);
-        let history = build_history_rows(&arena, &resolved, &interner, true).expect("history rows");
+        let mut block_ar_by_number = HashMap::new();
+        extend_block_ar_lookup(
+            &mut block_ar_by_number,
+            &arena.blocks,
+            "building fiber history rows in test",
+        )
+        .expect("block AR lookup");
+        let history = build_history_rows(&arena, &resolved, &interner, &block_ar_by_number, true)
+            .expect("history rows");
         let sealed_rows = build_sealed_aggregate_rows(&history.rows).expect("sealed rows");
         let final_snapshot_rows =
             build_final_snapshot_rows(&sequencer, &interner).expect("final snapshot rows");
@@ -3345,8 +3388,6 @@ mod tests {
         materializer
             .stream_history_rows(&history.rows)
             .expect("stream history rows");
-        materialize_activity_secondary_state(&domain_store, &history.rows)
-            .expect("materialize activity secondary state");
         materializer
             .stream_sealed_aggregate_rows(&sealed_rows)
             .expect("stream sealed rows");
@@ -3387,15 +3428,23 @@ mod tests {
             .resolve(&arena)
             .expect("resolved txs");
 
-        let history_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
-            .expect("history rows")
-            .rows
-            .into_iter()
-            .filter(|row| {
-                row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES
-                    || row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES
-            })
-            .collect();
+        let mut block_ar_by_number = HashMap::new();
+        extend_block_ar_lookup(
+            &mut block_ar_by_number,
+            &arena.blocks,
+            "building object activity history rows in test",
+        )
+        .expect("block AR lookup");
+        let history_rows: Vec<_> =
+            build_history_rows(&arena, &resolved, &interner, &block_ar_by_number, true)
+                .expect("history rows")
+                .rows
+                .into_iter()
+                .filter(|row| {
+                    row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES
+                        || row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES
+                })
+                .collect();
 
         let object_rows: std::collections::HashMap<Vec<u8>, ObjectCollectionActivityEntry> =
             history_rows

@@ -194,20 +194,23 @@ impl BulkReducer for DaoOwner {
                             format_outpoint(&origin_outpoint)
                         )
                     })?;
-                    let request_output_index =
-                        entry.withdraw_request_output_index.unwrap_or_else(|| {
-                            infer_request_output_index_from_inputs(&tx.resolved_inputs, request_tx_hash)
-                                .unwrap_or_else(|| {
-                                    panic!(
-                                        "DAO withdraw request output index missing/ambiguous in bulk reducer: block={}, tx=0x{}, tx_index={}, origin_outpoint={}, request_tx=0x{}",
-                                        tx.block_number,
-                                        hex::encode(tx.tx_hash),
-                                        tx.tx_index,
-                                        format_outpoint(&origin_outpoint),
-                                        hex::encode(request_tx_hash)
-                                    )
-                                })
-                        });
+                    let request_output_index = if let Some(output_index) =
+                        entry.withdraw_request_output_index
+                    {
+                        output_index
+                    } else {
+                        infer_request_output_index_from_inputs(&tx.resolved_inputs, request_tx_hash)
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "DAO withdraw request output index missing/ambiguous in bulk reducer: block={}, tx=0x{}, tx_index={}, origin_outpoint={}, request_tx=0x{}",
+                                    tx.block_number,
+                                    hex::encode(tx.tx_hash),
+                                    tx.tx_index,
+                                    format_outpoint(&origin_outpoint),
+                                    hex::encode(request_tx_hash)
+                                )
+                            })?
+                    };
 
                     let deposit_ar =
                         self.block_ar_by_number
@@ -875,5 +878,130 @@ mod tests {
         assert_eq!(entry.withdraw_tx, Some(vec![0x33; 32]));
         assert_eq!(entry.withdraw_to_output_index, Some(0));
         assert_eq!(entry.compensation, Some(19_60000000));
+    }
+
+    #[test]
+    fn dao_owner_returns_error_instead_of_panicking_when_request_output_index_is_ambiguous() {
+        let mut interner = IdentityInterner::default();
+        let lock_hash = interner.intern_bytes(vec![0xaa; 32]);
+        let plain_lock_hash = interner.intern_bytes(vec![0xbb; 32]);
+        let dao_code_hash_id =
+            interner.intern_bytes(hex::decode(&DAO_CODE_HASH[2..]).expect("dao code hash"));
+        let ctx = ReducerContext::new(&interner);
+        let mut owner = DaoOwner::default();
+
+        let origin_outpoint = OutPointKey::new([0x31; 32], 0);
+        let request_outpoint = OutPointKey::new([0x32; 32], 0);
+        owner.deposits.insert(
+            origin_outpoint,
+            DaoDepositCacheEntry {
+                capacity: 200_00000000,
+                deposit_block_number: 100,
+                lock_script_hash: vec![0xaa; 32],
+                deposit_ar: 10_000,
+                status: 1,
+                withdraw_request_tx: Some(vec![0x32; 32]),
+                withdraw_request_output_index: None,
+                withdraw_request_block: Some(101),
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        owner
+            .request_outpoints
+            .insert(request_outpoint, origin_outpoint);
+        owner.block_ar_by_number.insert(100, 10_000);
+        owner.block_ar_by_number.insert(101, 12_000);
+        owner.block_ar_by_number.insert(102, 13_000);
+
+        let tx = ResolvedTxFacts {
+            tx_hash: [0x33; 32],
+            block_number: 102,
+            block_hash: [0x44; 32],
+            timestamp_ms: 1_700_000_000_002,
+            block_dao_ar: 13_000,
+            tx_index: 0,
+            dotbit_action: None,
+            resolved_inputs: vec![
+                ResolvedInputFacts {
+                    outpoint: request_outpoint,
+                    created_at_block: 101,
+                    capacity: 200_00000000,
+                    occupied_capacity: 142_00000000,
+                    udt_amount: None,
+                    lock_script_hash_id: lock_hash,
+                    lock_code_hash_id: InternId::new(1),
+                    lock_hash_type: 1,
+                    lock_args_id: InternId::new(2),
+                    type_script_hash_id: Some(InternId::new(3)),
+                    type_code_hash_id: Some(dao_code_hash_id),
+                    type_hash_type: Some(1),
+                    type_args_id: Some(InternId::new(4)),
+                    semantic_tag: CellSemanticTag::Dao,
+                    dao_state: Some(DaoCellState::WithdrawRequest {
+                        deposit_block_number: 100,
+                    }),
+                    protocol_facts: None,
+                },
+                ResolvedInputFacts {
+                    outpoint: OutPointKey::new([0x32; 32], 1),
+                    created_at_block: 101,
+                    capacity: 61_00000000,
+                    occupied_capacity: 61_00000000,
+                    udt_amount: None,
+                    lock_script_hash_id: plain_lock_hash,
+                    lock_code_hash_id: InternId::new(5),
+                    lock_hash_type: 1,
+                    lock_args_id: InternId::new(6),
+                    type_script_hash_id: None,
+                    type_code_hash_id: None,
+                    type_hash_type: None,
+                    type_args_id: None,
+                    semantic_tag: CellSemanticTag::Plain,
+                    dao_state: None,
+                    protocol_facts: None,
+                },
+            ],
+            cells: vec![CellFacts {
+                outpoint: OutPointKey::new([0x33; 32], 0),
+                created_at_block: 102,
+                capacity: 219_60000000,
+                lock_script_hash_id: lock_hash,
+                lock_code_hash_id: InternId::new(7),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(8),
+                type_script_hash_id: None,
+                type_code_hash_id: None,
+                type_hash_type: None,
+                type_args_id: None,
+                occupied_capacity: 61_00000000,
+                data_size: 0,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: CellSemanticTag::Plain,
+                dao_state: None,
+                protocol_facts: None,
+            }],
+        };
+
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.apply_tx(&tx, &ctx)));
+        assert!(
+            result.is_ok(),
+            "DAO reducer should return an error instead of panicking"
+        );
+
+        let err = result
+            .expect("no panic")
+            .expect_err("ambiguous request output index should error");
+        assert!(
+            err.to_string()
+                .contains("DAO withdraw request output index missing/ambiguous"),
+            "unexpected error: {err}"
+        );
     }
 }

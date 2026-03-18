@@ -7,6 +7,7 @@ use crate::sync::types::InternId;
 
 pub(crate) mod address;
 pub(crate) mod dao;
+pub(crate) mod fiber;
 pub(crate) mod object;
 pub(crate) mod script;
 pub(crate) mod token;

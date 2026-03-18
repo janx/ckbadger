@@ -12,9 +12,8 @@ use ckbadger_indexer::sync::{
     run_sample_bulk_materialization_for_test, simulate_startup_sync_path_for_test,
 };
 use ckbadger_store::keys;
+use ckbadger_store::types::{AssetChange, ConsumedCellMeta, DID_CKB_SENTINEL_COLLECTION};
 use ckbadger_store::SyncStatus;
-use ckbadger_store::types::ConsumedCellMeta;
-use ckbadger_store::types::DID_CKB_SENTINEL_COLLECTION;
 
 fn fixture_lock_script() -> Script {
     Script {
@@ -51,6 +50,128 @@ fn fixture_lock_script_b() -> Script {
         hash_type: fixture_lock_script().hash_type,
         args: format!("0x{}", "02".repeat(20)),
     }
+}
+
+fn fixture_lock_script_with_args(args_hex: &str) -> Script {
+    Script {
+        code_hash: fixture_lock_script().code_hash,
+        hash_type: fixture_lock_script().hash_type,
+        args: args_hex.to_string(),
+    }
+}
+
+fn fixture_header_with_ar(number: u64, hash_byte: u8, ar: u64, timestamp_ms: i64) -> HeaderView {
+    let mut header = fixture_header_with_timestamp(number, hash_byte, timestamp_ms);
+    let mut dao = [0u8; 32];
+    dao[8..16].copy_from_slice(&ar.to_le_bytes());
+    header.dao = format!("0x{}", hex::encode(dao));
+    header
+}
+
+fn fixture_dao_type_script() -> Script {
+    Script {
+        code_hash: "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e".to_string(),
+        hash_type: "type".to_string(),
+        args: "0x".to_string(),
+    }
+}
+
+fn bulk_build_dao_activity_fixture() -> Vec<BlockResponseWithCycles> {
+    let dao_type = fixture_dao_type_script();
+    let deposit_lock = fixture_lock_script_with_args(&format!("0x{}", "11".repeat(20)));
+
+    let deposit_tx = TransactionView {
+        hash: format!("0x{}", "a1".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: format!("0x{:x}", 200_00000000u64),
+            lock: deposit_lock.clone(),
+            type_: Some(dao_type.clone()),
+        }],
+        outputs_data: vec![format!("0x{}", "00".repeat(8))],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let request_tx = TransactionView {
+        hash: format!("0x{}", "a2".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: deposit_tx.hash.clone(),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: format!("0x{:x}", 200_00000000u64),
+            lock: deposit_lock.clone(),
+            type_: Some(dao_type),
+        }],
+        outputs_data: vec![format!("0x{}", hex::encode(100u64.to_le_bytes()))],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let completion_tx = TransactionView {
+        hash: format!("0x{}", "a3".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: request_tx.hash.clone(),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: format!("0x{:x}", 219_60000000u64),
+            lock: deposit_lock,
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    vec![
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header_with_ar(100, 0xa1, 10_000, 1_700_300_000_000),
+                uncles: vec![],
+                transactions: vec![deposit_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header_with_ar(101, 0xa2, 12_000, 1_700_300_010_000),
+                uncles: vec![],
+                transactions: vec![request_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header_with_ar(102, 0xa3, 13_000, 1_700_300_020_000),
+                uncles: vec![],
+                transactions: vec![completion_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+    ]
 }
 
 fn same_block_create_then_consume_fixture() -> BlockResponseWithCycles {
@@ -444,11 +565,7 @@ fn hodl_tracker_fixture() -> Vec<BlockResponseWithCycles> {
     vec![
         BlockResponseWithCycles {
             block: BlockView {
-                header: fixture_header_with_timestamp(
-                    14_002_000,
-                    0x91,
-                    1_705_276_800_000,
-                ),
+                header: fixture_header_with_timestamp(14_002_000, 0x91, 1_705_276_800_000),
                 uncles: vec![],
                 transactions: vec![create_tx],
                 proposals: vec![],
@@ -457,11 +574,7 @@ fn hodl_tracker_fixture() -> Vec<BlockResponseWithCycles> {
         },
         BlockResponseWithCycles {
             block: BlockView {
-                header: fixture_header_with_timestamp(
-                    14_002_001,
-                    0x92,
-                    1_705_280_400_000,
-                ),
+                header: fixture_header_with_timestamp(14_002_001, 0x92, 1_705_280_400_000),
                 uncles: vec![],
                 transactions: vec![transfer_tx],
                 proposals: vec![],
@@ -1034,6 +1147,48 @@ fn bulk_build_multi_batch_materialization_matches_single_pass_for_cross_batch_st
 }
 
 #[test]
+fn bulk_build_multi_batch_materialization_matches_single_pass_for_dao_activity_ar_lookups() {
+    let blocks = bulk_build_dao_activity_fixture();
+    let split_batches = vec![
+        vec![blocks[0].clone()],
+        vec![blocks[1].clone(), blocks[2].clone()],
+    ];
+    let completion_tx_hash = vec![0xa3; 32];
+
+    let single =
+        materialize_bulk_artifacts_for_test(&blocks).expect("single-pass dao bulk build artifact");
+    let split = materialize_bulk_artifacts_from_batches_for_test(&split_batches)
+        .expect("multi-batch dao bulk build artifact");
+
+    let dao_withdraw_complete = |snapshot: &ckbadger_indexer::sync::BulkArtifactSnapshot| {
+        snapshot
+            .activity_bundles
+            .values()
+            .find(|bundle| bundle.tx_hash == completion_tx_hash)
+            .and_then(|bundle| {
+                bundle.owners.iter().find_map(|owner| {
+                    owner.asset_changes.iter().find_map(|change| match change {
+                        AssetChange::DaoWithdrawComplete {
+                            capacity,
+                            compensation,
+                        } => Some((*capacity, *compensation)),
+                        _ => None,
+                    })
+                })
+            })
+    };
+
+    assert_eq!(
+        dao_withdraw_complete(&single),
+        Some((200_00000000, 19_60000000))
+    );
+    assert_eq!(
+        dao_withdraw_complete(&split),
+        dao_withdraw_complete(&single)
+    );
+}
+
+#[test]
 fn bulk_build_session_materialization_sets_final_sync_status_and_clears_marker() {
     let blocks = object_activity_fixture();
     let split_batches = vec![vec![blocks[0].clone()], vec![blocks[1].clone()]];
@@ -1057,8 +1212,8 @@ fn bulk_build_session_materialization_sets_final_sync_status_and_clears_marker()
 
 #[test]
 fn bulk_build_materializes_hodl_tracker_state_without_db_reads() {
-    let snapshot =
-        materialize_bulk_artifacts_for_test(&hodl_tracker_fixture()).expect("hodl tracker snapshot");
+    let snapshot = materialize_bulk_artifacts_for_test(&hodl_tracker_fixture())
+        .expect("hodl tracker snapshot");
 
     let state = snapshot
         .hodl_tracker_state
@@ -1067,9 +1222,15 @@ fn bulk_build_materializes_hodl_tracker_state_without_db_reads() {
     assert_eq!(state.holder_count, 2);
     assert_eq!(state.last_processed_block, Some(14_002_001));
     assert_eq!(state.capacity_by_date.len(), 1);
-    assert_eq!(state.capacity_by_date[0], ("20240115".to_string(), 140_00000000));
+    assert_eq!(
+        state.capacity_by_date[0],
+        ("20240115".to_string(), 140_00000000)
+    );
     assert_eq!(state.date_transitions.len(), 1);
-    assert_eq!(state.date_transitions[0], (14_002_000, "20240115".to_string()));
+    assert_eq!(
+        state.date_transitions[0],
+        (14_002_000, "20240115".to_string())
+    );
 }
 
 #[test]
@@ -1088,7 +1249,10 @@ fn bulk_build_materializes_cell_distribution_tracker_state_without_db_reads() {
     );
     assert_eq!(state.last_processed_block, Some(14_002_001));
     assert_eq!(state.date_transitions.len(), 1);
-    assert_eq!(state.date_transitions[0], (14_002_000, "20240115".to_string()));
+    assert_eq!(
+        state.date_transitions[0],
+        (14_002_000, "20240115".to_string())
+    );
     assert_eq!(state.cohort_accum.len(), 1);
     assert_eq!(
         state.cohort_accum[0],
@@ -1115,7 +1279,9 @@ fn bulk_build_materializes_sealed_cell_distribution_and_address_cohort_on_day_bo
     assert_eq!(dist.size_bucket_counts, [2, 0, 0, 0, 0, 0]);
     assert_eq!(dist.size_bucket_capacities, [122_00000000, 0, 0, 0, 0, 0]);
     assert!(
-        !snapshot.cell_distribution_snapshots.contains_key("20240116"),
+        !snapshot
+            .cell_distribution_snapshots
+            .contains_key("20240116"),
         "current in-progress day must not be materialized"
     );
 
@@ -1230,8 +1396,9 @@ fn bulk_build_stage_handoff_pipeline_completion_marks_final_sync_status_at_chain
 
 #[test]
 fn startup_bulk_build_route_runs_handoff_and_pipeline_completion_for_fresh_store() {
-    let snapshot = simulate_startup_sync_path_for_test(&bulk_stage_handoff_fixture(), 3, 1, 0, None)
-        .expect("startup bulk-build route snapshot");
+    let snapshot =
+        simulate_startup_sync_path_for_test(&bulk_stage_handoff_fixture(), 3, 1, 0, None)
+            .expect("startup bulk-build route snapshot");
 
     assert_eq!(snapshot.path, "bulk_build");
     let status = snapshot
@@ -1265,8 +1432,9 @@ fn startup_existing_tip_routes_to_pipeline_without_running_bulk_build_test_seam(
 
 #[test]
 fn startup_fresh_tip_at_bulk_threshold_routes_to_pipeline_without_running_bulk_build_test_seam() {
-    let snapshot = simulate_startup_sync_path_for_test(&bulk_stage_handoff_fixture(), 3, 3, 0, None)
-        .expect("startup threshold-edge route snapshot");
+    let snapshot =
+        simulate_startup_sync_path_for_test(&bulk_stage_handoff_fixture(), 3, 3, 0, None)
+            .expect("startup threshold-edge route snapshot");
 
     assert_eq!(snapshot.path, "pipeline");
     assert!(

@@ -313,6 +313,86 @@ fn bulk_build_object_fixture() -> Vec<BlockResponseWithCycles> {
     ]
 }
 
+fn bulk_build_cluster_update_fixture() -> Vec<BlockResponseWithCycles> {
+    let cluster_id = [0x44; 32];
+    let owner_lock = fixture_lock_script(&format!("0x{}", "0c".repeat(20)));
+
+    let create_tx = TransactionView {
+        hash: format!("0x{}", "f1".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: format!("0x{:x}", 200_00000000u64),
+            lock: owner_lock.clone(),
+            type_: Some(create_cluster_type_script(&cluster_id)),
+        }],
+        outputs_data: vec![format!(
+            "0x{}",
+            hex::encode(create_cluster_data(
+                "Genesis Cluster",
+                "{\"dob\":{\"ver\":1}}"
+            ))
+        )],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let update_tx = TransactionView {
+        hash: format!("0x{}", "f2".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: create_tx.hash.clone(),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: format!("0x{:x}", 200_00000000u64),
+            lock: owner_lock,
+            type_: Some(create_cluster_type_script(&cluster_id)),
+        }],
+        outputs_data: vec![format!(
+            "0x{}",
+            hex::encode(create_cluster_data(
+                "Upgraded Cluster",
+                "{\"dob\":{\"ver\":2}}"
+            ))
+        )],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    vec![
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header(14_001_100, 0xa1, 1_700_001_000_000),
+                uncles: vec![],
+                transactions: vec![create_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header(14_001_101, 0xa2, 1_700_001_010_000),
+                uncles: vec![],
+                transactions: vec![update_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+    ]
+}
+
 fn bulk_build_mnft_object_fixture() -> Vec<BlockResponseWithCycles> {
     let issuer_id = [0x44; 20];
     let mut class_id = issuer_id.to_vec();
@@ -542,6 +622,38 @@ fn bulk_build_object_owner_materializes_spore_cluster_and_did_state_without_db_r
         .expect("spore type index exists");
     assert_eq!(type_index.spore_id, spore_id.to_vec());
     assert_eq!(type_index.cluster_id, Some(cluster_id.to_vec()));
+}
+
+#[test]
+fn bulk_build_object_owner_updates_cluster_cells_without_crashing() {
+    let cluster_id = [0x44; 32];
+
+    let snapshot =
+        materialize_object_state_for_test(&bulk_build_cluster_update_fixture()).expect("snapshot");
+
+    let stored_cluster = snapshot
+        .spores
+        .get(cluster_id.as_slice())
+        .expect("cluster entry exists");
+    assert_eq!(stored_cluster.standard, ObjectStandard::SporeCluster);
+    assert!(stored_cluster.is_live);
+    assert_eq!(stored_cluster.name.as_deref(), Some("Upgraded Cluster"));
+    assert_eq!(
+        stored_cluster.description.as_deref(),
+        Some("{\"dob\":{\"ver\":2}}")
+    );
+
+    let cluster_agg = snapshot
+        .cluster_aggs
+        .get(cluster_id.as_slice())
+        .expect("cluster aggregate exists");
+    assert_eq!(cluster_agg.name.as_deref(), Some("Upgraded Cluster"));
+    assert_eq!(
+        cluster_agg.description.as_deref(),
+        Some("{\"dob\":{\"ver\":2}}")
+    );
+    assert_eq!(cluster_agg.total_count, 0);
+    assert_eq!(cluster_agg.live_count, 0);
 }
 
 #[test]
