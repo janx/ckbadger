@@ -9,7 +9,7 @@ use ckbadger_indexer::rpc::{
 use ckbadger_indexer::sync::{
     materialize_bulk_artifacts_for_test, materialize_bulk_artifacts_from_batches_for_test,
     materialize_bulk_stage_for_test, materialize_bulk_stage_then_complete_sync_status_for_test,
-    run_sample_bulk_materialization_for_test,
+    run_sample_bulk_materialization_for_test, simulate_startup_sync_path_for_test,
 };
 use ckbadger_store::keys;
 use ckbadger_store::SyncStatus;
@@ -1226,4 +1226,39 @@ fn bulk_build_stage_handoff_pipeline_completion_marks_final_sync_status_at_chain
         "pipeline completion after handoff must persist the bulk completion marker"
     );
     assert_eq!(status.bulk_sync_completed_block, Some(3));
+}
+
+#[test]
+fn startup_bulk_build_route_runs_handoff_and_pipeline_completion_for_fresh_store() {
+    let snapshot = simulate_startup_sync_path_for_test(&bulk_stage_handoff_fixture(), 3, 1, 0, None)
+        .expect("startup bulk-build route snapshot");
+
+    assert_eq!(snapshot.path, "bulk_build");
+    let status = snapshot
+        .sync_status
+        .expect("fresh-store bulk route must produce a completed sync status");
+    assert_eq!(status.tip_block_number, 3);
+    assert_eq!(status.total_transactions, 3);
+    assert_eq!(status.total_cells_created, 4);
+    assert_eq!(status.total_cells_consumed, 2);
+    assert!(status.bulk_sync_completed_at.is_some());
+    assert_eq!(status.bulk_sync_completed_block, Some(3));
+}
+
+#[test]
+fn startup_existing_tip_routes_to_pipeline_without_running_bulk_build_test_seam() {
+    let snapshot = simulate_startup_sync_path_for_test(
+        &bulk_stage_handoff_fixture(),
+        3,
+        1,
+        1,
+        Some(vec![0x11; 32]),
+    )
+    .expect("startup existing-tip route snapshot");
+
+    assert_eq!(snapshot.path, "pipeline");
+    assert!(
+        snapshot.sync_status.is_none(),
+        "non-fresh startup should not run the bulk-build handoff completion seam"
+    );
 }

@@ -23,6 +23,8 @@ pub use bulk_build::live_cells::{
 #[doc(hidden)]
 pub use bulk_build::materialize::MaterializationReport;
 pub use indexer::Indexer;
+#[doc(hidden)]
+pub use indexer::StartupSyncPathSnapshot;
 pub use progress::SyncProgress;
 
 #[doc(hidden)]
@@ -126,6 +128,23 @@ pub fn materialize_bulk_stage_then_complete_sync_status_for_test(
         blocks,
         chain_tip,
         bulk_sync_threshold,
+    )
+}
+
+#[doc(hidden)]
+pub fn simulate_startup_sync_path_for_test(
+    blocks: &[crate::rpc::BlockResponseWithCycles],
+    chain_tip: u64,
+    bulk_sync_threshold: u64,
+    sync_tip_block: i64,
+    sync_tip_hash: Option<Vec<u8>>,
+) -> anyhow::Result<StartupSyncPathSnapshot> {
+    indexer::simulate_startup_sync_path_for_test(
+        blocks,
+        chain_tip,
+        bulk_sync_threshold,
+        sync_tip_block,
+        sync_tip_hash,
     )
 }
 

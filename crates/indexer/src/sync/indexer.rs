@@ -9,7 +9,7 @@ use dashmap::DashMap;
 use tracing::{debug, info, warn};
 
 use ckbadger_store::types::{CellDistributionTrackerState, HodlTrackerState};
-use ckbadger_store::CkbadgerStore;
+use ckbadger_store::{CkbadgerStore, SyncStatus};
 
 use crate::bulk_sync_perf::{BatchSample, BulkSyncPerfRun, HeartbeatSample, RocksDbConfig};
 use crate::cache::CacheInvalidator;
@@ -201,6 +201,13 @@ pub(crate) enum SyncPath {
     Pipeline,
 }
 
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct StartupSyncPathSnapshot {
+    pub path: &'static str,
+    pub sync_status: Option<SyncStatus>,
+}
+
 pub(super) fn select_startup_sync_path(
     blocks_behind: u64,
     bulk_sync_threshold: u64,
@@ -216,6 +223,40 @@ pub(super) fn select_startup_sync_path(
         SyncPath::BulkBuild
     } else {
         SyncPath::Pipeline
+    }
+}
+
+#[doc(hidden)]
+pub(crate) fn simulate_startup_sync_path_for_test(
+    blocks: &[crate::rpc::BlockResponseWithCycles],
+    chain_tip: u64,
+    bulk_sync_threshold: u64,
+    sync_tip_block: i64,
+    sync_tip_hash: Option<Vec<u8>>,
+) -> Result<StartupSyncPathSnapshot> {
+    let blocks_behind = blocks_behind_tip(chain_tip, sync_tip_block, "startup sync path test")?;
+    let sync_path = select_startup_sync_path(
+        blocks_behind,
+        bulk_sync_threshold,
+        sync_tip_block,
+        &sync_tip_hash,
+    );
+
+    match sync_path {
+        SyncPath::BulkBuild => Ok(StartupSyncPathSnapshot {
+            path: "bulk_build",
+            sync_status: Some(
+                super::bulk_build::materialize_bulk_stage_then_complete_sync_status_for_test(
+                    blocks,
+                    chain_tip,
+                    bulk_sync_threshold,
+                )?,
+            ),
+        }),
+        SyncPath::Pipeline => Ok(StartupSyncPathSnapshot {
+            path: "pipeline",
+            sync_status: None,
+        }),
     }
 }
 
