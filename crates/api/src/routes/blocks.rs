@@ -756,10 +756,10 @@ async fn get_block_proposals(
                             BlockProposal {
                                 proposal_index: i as i16,
                                 proposal_id: format!("0x{}", hex::encode(&proposal_bytes)),
-                                // TODO: CKB proposal IDs are 10-byte tx hash prefixes.
-                                // Resolving committed_tx requires a prefix scan of the
-                                // tx_hash_map which is expensive; omitted until a
-                                // dedicated proposal→tx reverse index exists.
+                                // CKB proposal IDs are 10-byte tx hash prefixes.
+                                // Resolving committed_tx would require a prefix scan of
+                                // tx_hash_map, so it remains omitted until a dedicated
+                                // proposal->tx reverse index exists.
                                 committed_tx_hash: None,
                                 committed_block_number: None,
                             }
