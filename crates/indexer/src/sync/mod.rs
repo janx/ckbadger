@@ -81,6 +81,16 @@ pub fn materialize_dao_state_for_test(
     bulk_build::owners::dao::materialize_dao_state_for_test(blocks)
 }
 
+#[doc(hidden)]
+pub use bulk_build::owners::object::ObjectStateSnapshot;
+
+#[doc(hidden)]
+pub fn materialize_object_state_for_test(
+    blocks: &[crate::rpc::BlockResponseWithCycles],
+) -> anyhow::Result<ObjectStateSnapshot> {
+    bulk_build::owners::object::materialize_object_state_for_test(blocks)
+}
+
 /// Convert transactions_count (i32) to usize, failing if negative.
 pub(crate) fn checked_tx_count(count: i32, block_number: i64) -> anyhow::Result<usize> {
     usize::try_from(count).map_err(|_| {
