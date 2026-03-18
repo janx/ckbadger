@@ -64,6 +64,67 @@ pub(crate) fn das_action_to_asset_action(action: &str) -> Option<AssetAction> {
 /// neighbor suppression: for `confirm_proposal`, only new accounts (in
 /// outputs but NOT inputs) get Mint; for `recycle_expired_account`, only
 /// removed accounts (in inputs but NOT outputs) get Recycle.
+pub(crate) fn build_dotbit_tx_activity_entry(
+    das_action: Option<&str>,
+    created_account_ids: &HashSet<Vec<u8>>,
+    consumed_account_ids: &HashSet<Vec<u8>>,
+    tx_hash: &[u8],
+    block_hash: &[u8],
+    timestamp_ms: i64,
+) -> Option<ObjectCollectionActivityEntry> {
+    let actions = match das_action.and_then(das_action_to_asset_action) {
+        Some(asset_action) => match asset_action {
+            AssetAction::Mint => {
+                let new_only: Vec<_> = created_account_ids
+                    .iter()
+                    .filter(|id| !consumed_account_ids.contains(*id))
+                    .collect();
+                if new_only.is_empty() {
+                    return None;
+                }
+                vec![AssetAction::Mint]
+            }
+            AssetAction::Recycle => {
+                let removed_only: Vec<_> = consumed_account_ids
+                    .iter()
+                    .filter(|id| !created_account_ids.contains(*id))
+                    .collect();
+                if removed_only.is_empty() {
+                    return None;
+                }
+                vec![AssetAction::Recycle]
+            }
+            action => vec![action],
+        },
+        None if das_action.is_some() => {
+            let action_str = das_action.unwrap_or("");
+            if das_action_to_asset_action(action_str).is_none()
+                && !action_str.contains("sub_account")
+                && !action_str.is_empty()
+            {
+                warn!(
+                    action = action_str,
+                    tx_hash = %format!("0x{}", hex::encode(tx_hash)),
+                    "unknown DAS action, falling back to generic activity detection"
+                );
+            }
+            resolve_generic_dotbit_actions(created_account_ids, consumed_account_ids)
+        }
+        None => resolve_generic_dotbit_actions(created_account_ids, consumed_account_ids),
+    };
+
+    if actions.is_empty() {
+        return None;
+    }
+
+    Some(ObjectCollectionActivityEntry {
+        tx_hash: tx_hash.to_vec(),
+        block_hash: block_hash.to_vec(),
+        timestamp_ms,
+        actions,
+    })
+}
+
 pub(crate) fn resolve_dotbit_tx_activity(
     das_action: Option<&str>,
     created_account_ids: &HashSet<Vec<u8>>,
@@ -75,66 +136,15 @@ pub(crate) fn resolve_dotbit_tx_activity(
     timestamp_ms: i64,
     batch: &mut StoreBatch,
 ) -> bool {
-    let actions = match das_action.and_then(das_action_to_asset_action) {
-        Some(asset_action) => {
-            match asset_action {
-                AssetAction::Mint => {
-                    // confirm_proposal: only truly new accounts (output-only)
-                    let new_only: Vec<_> = created_account_ids
-                        .iter()
-                        .filter(|id| !consumed_account_ids.contains(*id))
-                        .collect();
-                    if new_only.is_empty() {
-                        return false;
-                    }
-                    vec![AssetAction::Mint]
-                }
-                AssetAction::Recycle => {
-                    // recycle_expired_account: only removed accounts (input-only)
-                    let removed_only: Vec<_> = consumed_account_ids
-                        .iter()
-                        .filter(|id| !created_account_ids.contains(*id))
-                        .collect();
-                    if removed_only.is_empty() {
-                        return false;
-                    }
-                    vec![AssetAction::Recycle]
-                }
-                action => vec![action],
-            }
-        }
-        None if das_action.is_some() => {
-            // Known DAS action that was suppressed (sub-account ops) or unknown
-            let action_str = das_action.unwrap_or("");
-            // Sub-account ops are intentionally suppressed — no warning needed
-            if das_action_to_asset_action(action_str).is_none()
-                && !action_str.contains("sub_account")
-                && !action_str.is_empty()
-            {
-                warn!(
-                    action = action_str,
-                    tx_hash = %format!("0x{}", hex::encode(tx_hash)),
-                    "unknown DAS action, falling back to generic activity detection"
-                );
-            }
-            // Fall back to generic Create/Consume detection
-            resolve_generic_dotbit_actions(created_account_ids, consumed_account_ids)
-        }
-        None => {
-            // No DAS action parsed — fall back to generic detection
-            resolve_generic_dotbit_actions(created_account_ids, consumed_account_ids)
-        }
-    };
-
-    if actions.is_empty() {
-        return false;
-    }
-
-    let entry = ObjectCollectionActivityEntry {
-        tx_hash: tx_hash.to_vec(),
-        block_hash: block_hash.to_vec(),
+    let Some(entry) = build_dotbit_tx_activity_entry(
+        das_action,
+        created_account_ids,
+        consumed_account_ids,
+        tx_hash,
+        block_hash,
         timestamp_ms,
-        actions,
+    ) else {
+        return false;
     };
 
     batch.put_identity_collection_activity(

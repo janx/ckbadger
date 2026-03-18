@@ -7,19 +7,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use anyhow::{anyhow, bail};
 use ckbadger_store::keys;
+use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use ckbadger_store::types::{
-    decode_live_cell_marker, CachedBlockHeader, ConsumedCellMeta, DID_CKB_SENTINEL_COLLECTION,
-    DailyActivityStats, LiveCellInfo, ObjectStandard, SOLE_SPORES_SENTINEL_COLLECTION,
-    SporeTypeIndex, TokenTransferRecord, TxActivityBundle, TxIndexEntry,
+    decode_live_cell_marker, CachedBlockHeader, ConsumedCellMeta, DailyActivityStats, LiveCellInfo,
+    ObjectStandard, SporeTypeIndex, TokenTransferRecord, TxActivityBundle, TxIndexEntry,
+    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
-    AddressBalance, CkbadgerStore, ScriptInfo, CF_ACTIVITIES, CF_ADDR_TXS,
-    CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK,
-    CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE, CF_CELLS,
-    CF_CONSUMED_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_LIVE_CELLS,
-    CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_TX_HASH_MAP, CF_TX_INDEX,
+    AddressBalance, CkbadgerStore, ScriptInfo, CF_ACTIVITIES, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX,
+    CF_BLOCK_HEADERS, CF_CELLS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE,
+    CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE, CF_CONSUMED_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES,
+    CF_LIVE_CELLS, CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_TX_HASH_MAP, CF_TX_INDEX,
 };
-use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use rocksdb::IteratorMode;
 use tracing::info;
 
@@ -219,10 +218,9 @@ fn build_history_rows(
     interner: &interner::IdentityInterner,
     is_mainnet: bool,
 ) -> Result<HistoryBuildResult> {
-    let mut rows =
-        Vec::with_capacity(
-            arena.blocks.len() * 2 + arena.txs.len() * 2 + arena.cells.len() * 2 + arena.txs.len(),
-        );
+    let mut rows = Vec::with_capacity(
+        arena.blocks.len() * 2 + arena.txs.len() * 2 + arena.cells.len() * 2 + arena.txs.len(),
+    );
     let mut identity_activity_count_deltas = HashMap::new();
 
     for block in &arena.blocks {
@@ -322,8 +320,11 @@ fn build_history_rows(
         for input in &resolved_tx.resolved_inputs {
             rows.push(materialize::MaterializedRow::new(
                 CF_CONSUMED_CELLS,
-                keys::encode_outpoint(&input.outpoint.tx_hash, resolved_input_outpoint_index_i16(input)?)
-                    .to_vec(),
+                keys::encode_outpoint(
+                    &input.outpoint.tx_hash,
+                    resolved_input_outpoint_index_i16(input)?,
+                )
+                .to_vec(),
                 bincode::serialize(&ConsumedCellMeta {
                     created_at_block: input.created_at_block,
                     consumed_at_block: tx.block_number,
@@ -335,10 +336,8 @@ fn build_history_rows(
 
     rows.extend(build_token_transfer_rows(resolved, interner)?);
     rows.extend(build_activity_rows(arena, resolved, interner, is_mainnet)?);
-    let object_activity_rows = build_object_collection_activity_rows(
-        resolved,
-        &mut identity_activity_count_deltas,
-    )?;
+    let object_activity_rows =
+        build_object_collection_activity_rows(resolved, &mut identity_activity_count_deltas)?;
     rows.extend(object_activity_rows);
 
     for cell in &arena.cells {
@@ -374,10 +373,16 @@ fn build_object_collection_activity_rows(
     resolved: &[facts::ResolvedTxFacts],
     identity_activity_count_deltas: &mut HashMap<Vec<u8>, i64>,
 ) -> Result<Vec<materialize::MaterializedRow>> {
-    let mut object_activity_acc = crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator::new();
-    let mut identity_activity_acc = crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator::new();
+    let mut object_activity_acc =
+        crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator::new();
+    let mut identity_activity_acc =
+        crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator::new();
+    let mut rows = Vec::new();
 
     for tx in resolved {
+        let mut dotbit_created_account_ids = HashSet::new();
+        let mut dotbit_consumed_account_ids = HashSet::new();
+
         for input in &tx.resolved_inputs {
             let Some(protocol) = input.protocol_facts.as_ref() else {
                 continue;
@@ -398,6 +403,9 @@ fn build_object_collection_activity_rows(
                         tx.timestamp_ms,
                         false,
                     );
+                }
+                facts::CellProtocolFacts::Dotbit(dotbit) => {
+                    dotbit_consumed_account_ids.insert(dotbit.account_id.to_vec());
                 }
                 _ => {}
             }
@@ -436,12 +444,36 @@ fn build_object_collection_activity_rows(
                         true,
                     );
                 }
+                facts::CellProtocolFacts::Dotbit(dotbit) => {
+                    dotbit_created_account_ids.insert(dotbit.account_id.to_vec());
+                }
                 _ => {}
             }
         }
+
+        if let Some(entry) = crate::db::writer::dotbit::build_dotbit_tx_activity_entry(
+            tx.dotbit_action.as_deref(),
+            &dotbit_created_account_ids,
+            &dotbit_consumed_account_ids,
+            &tx.tx_hash,
+            &tx.block_hash,
+            tx.timestamp_ms,
+        ) {
+            rows.push(materialize::MaterializedRow::new(
+                CF_IDENTITY_COLLECTION_ACTIVITIES,
+                keys::encode_nft_collection_activity_key(
+                    &DOTBIT_SENTINEL_COLLECTION,
+                    tx.block_number,
+                    tx.tx_index,
+                    &tx.block_hash,
+                    &tx.tx_hash,
+                )
+                .to_vec(),
+                bincode::serialize(&entry)?,
+            ));
+        }
     }
 
-    let mut rows = Vec::new();
     for resolved_entry in object_activity_acc.into_resolved_entries() {
         rows.push(materialize::MaterializedRow::new(
             CF_OBJECT_COLLECTION_ACTIVITIES,
@@ -492,7 +524,10 @@ fn build_sealed_aggregate_rows(
     let mut hourly_stats = HashMap::<String, DailyActivityStats>::new();
     let mut hourly_addrs = HashMap::<String, HashSet<[u8; 32]>>::new();
 
-    for row in history_rows.iter().filter(|row| row.cf_name == CF_ACTIVITIES) {
+    for row in history_rows
+        .iter()
+        .filter(|row| row.cf_name == CF_ACTIVITIES)
+    {
         let bundle: TxActivityBundle = bincode::deserialize(&row.value).map_err(|e| {
             anyhow!(
                 "failed to deserialize TxActivityBundle while building sealed bulk activity stats: key=0x{} error={}",
@@ -522,8 +557,14 @@ fn build_sealed_aggregate_rows(
             if !bundle.is_cellbase && owner.lock_hash.len() == 32 {
                 let mut lock_hash = [0u8; 32];
                 lock_hash.copy_from_slice(&owner.lock_hash);
-                daily_addrs.entry(date.clone()).or_default().insert(lock_hash);
-                hourly_addrs.entry(hour.clone()).or_default().insert(lock_hash);
+                daily_addrs
+                    .entry(date.clone())
+                    .or_default()
+                    .insert(lock_hash);
+                hourly_addrs
+                    .entry(hour.clone())
+                    .or_default()
+                    .insert(lock_hash);
             }
         }
     }
@@ -559,7 +600,10 @@ fn materialize_activity_secondary_state(
     domain_store: &CkbadgerStore,
     history_rows: &[materialize::MaterializedRow],
 ) -> Result<()> {
-    for row in history_rows.iter().filter(|row| row.cf_name == CF_ACTIVITIES) {
+    for row in history_rows
+        .iter()
+        .filter(|row| row.cf_name == CF_ACTIVITIES)
+    {
         let bundle: TxActivityBundle = bincode::deserialize(&row.value).map_err(|e| {
             anyhow!(
                 "failed to deserialize TxActivityBundle while materializing bulk activity secondary state: key=0x{} error={}",
@@ -639,10 +683,16 @@ fn build_activity_rows(
             );
             block_inputs.push(
                 resolved_tx
-                .resolved_inputs
-                .iter()
-                .map(|input| activity_input_view_from_resolved_input(input, interner, &block_ar_by_number))
-                .collect::<Result<Vec<_>>>()?,
+                    .resolved_inputs
+                    .iter()
+                    .map(|input| {
+                        activity_input_view_from_resolved_input(
+                            input,
+                            interner,
+                            &block_ar_by_number,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?,
             );
         }
 
@@ -650,24 +700,27 @@ fn build_activity_rows(
             .iter()
             .zip(block_inputs.into_iter())
             .zip(block_outputs.iter())
-            .map(|((tx, inputs), outputs)| crate::db::writer::activities::TxView {
-                tx_hash: &tx.hash,
-                block_hash: &tx.block_hash,
-                tx_index: tx.tx_index,
-                block_number: tx.block_number,
-                timestamp: tx.timestamp_ms,
-                is_cellbase: tx.is_cellbase,
-                inputs,
-                outputs,
-                witnesses: &[],
-            })
+            .map(
+                |((tx, inputs), outputs)| crate::db::writer::activities::TxView {
+                    tx_hash: &tx.hash,
+                    block_hash: &tx.block_hash,
+                    tx_index: tx.tx_index,
+                    block_number: tx.block_number,
+                    timestamp: tx.timestamp_ms,
+                    is_cellbase: tx.is_cellbase,
+                    inputs,
+                    outputs,
+                    witnesses: &[],
+                },
+            )
             .collect::<Vec<_>>();
 
-        let bundles = crate::db::writer::activities::build_activity_bundles_for_block_with_detectors(
-            &tx_views,
-            &token_info_cache,
-            &detectors,
-        )?;
+        let bundles =
+            crate::db::writer::activities::build_activity_bundles_for_block_with_detectors(
+                &tx_views,
+                &token_info_cache,
+                &detectors,
+            )?;
         for bundle in bundles {
             rows.push(materialize::MaterializedRow::new(
                 CF_ACTIVITIES,
@@ -822,7 +875,9 @@ fn activity_input_view_from_resolved_input(
     block_ar_by_number: &HashMap<i64, u64>,
 ) -> Result<crate::db::writer::activities::InputCellView> {
     let (is_dao_withdraw_request, dao_compensation) = match input.dao_state {
-        Some(facts::DaoCellState::WithdrawRequest { deposit_block_number }) => {
+        Some(facts::DaoCellState::WithdrawRequest {
+            deposit_block_number,
+        }) => {
             let deposit_ar = *block_ar_by_number.get(&deposit_block_number).ok_or_else(|| {
                 anyhow!(
                     "missing deposit block AR while building bulk DAO activity input: deposit_block={} outpoint=0x{}:{}",
@@ -863,7 +918,9 @@ fn activity_input_view_from_resolved_input(
         type_script_hash: input
             .type_script_hash_id
             .map(|id| interner.resolve_bytes(id).to_vec()),
-        type_args: input.type_args_id.map(|id| interner.resolve_bytes(id).to_vec()),
+        type_args: input
+            .type_args_id
+            .map(|id| interner.resolve_bytes(id).to_vec()),
         udt_amount: input.udt_amount,
         data: Vec::new(),
         is_dao_withdraw_request,
@@ -895,7 +952,9 @@ fn parsed_cell_from_facts(
             .type_code_hash_id
             .map(|id| interner.resolve_bytes(id).to_vec()),
         type_hash_type: cell.type_hash_type,
-        type_args: cell.type_args_id.map(|id| interner.resolve_bytes(id).to_vec()),
+        type_args: cell
+            .type_args_id
+            .map(|id| interner.resolve_bytes(id).to_vec()),
         type_script_hash: cell
             .type_script_hash_id
             .map(|id| interner.resolve_bytes(id).to_vec()),
@@ -1146,7 +1205,9 @@ fn cell_facts_to_live_cell_info(
             .type_code_hash_id
             .map(|id| interner.resolve_bytes(id).to_vec()),
         type_hash_type: cell.type_hash_type,
-        type_args: cell.type_args_id.map(|id| interner.resolve_bytes(id).to_vec()),
+        type_args: cell
+            .type_args_id
+            .map(|id| interner.resolve_bytes(id).to_vec()),
         data_size: cell.data_size,
         occupied_capacity: cell.occupied_capacity,
         udt_amount: cell.udt_amount,
@@ -1236,14 +1297,12 @@ fn collect_history_snapshot(
     let tx_iter = domain_store.iterator_cf(domain_store.cf_tx_hash_map(), IteratorMode::Start);
     for item in tx_iter {
         let (tx_hash, _value) = item?;
-        let tx_entry = domain_store
-            .get_tx_by_hash(&tx_hash)?
-            .ok_or_else(|| {
-                anyhow!(
-                    "tx index missing in bulk artifact snapshot helper: tx_hash=0x{}",
-                    hex::encode(&tx_hash)
-                )
-            })?;
+        let tx_entry = domain_store.get_tx_by_hash(&tx_hash)?.ok_or_else(|| {
+            anyhow!(
+                "tx index missing in bulk artifact snapshot helper: tx_hash=0x{}",
+                hex::encode(&tx_hash)
+            )
+        })?;
         txs_by_hash.insert(tx_hash.to_vec(), tx_entry);
     }
 
@@ -1261,7 +1320,12 @@ fn collect_history_snapshot(
         activity_bundles.insert(key.to_vec(), bundle);
     }
 
-    Ok((block_headers, block_numbers_by_hash, txs_by_hash, activity_bundles))
+    Ok((
+        block_headers,
+        block_numbers_by_hash,
+        txs_by_hash,
+        activity_bundles,
+    ))
 }
 
 fn collect_activity_stats_snapshot(
@@ -1323,7 +1387,8 @@ fn collect_cell_snapshot(
     }
 
     let mut consumed_cells = HashMap::new();
-    let consumed_iter = domain_store.iterator_cf(domain_store.cf_consumed_cells(), IteratorMode::Start);
+    let consumed_iter =
+        domain_store.iterator_cf(domain_store.cf_consumed_cells(), IteratorMode::Start);
     for item in consumed_iter {
         let (key, value) = item?;
         let consumed: ConsumedCellMeta = bincode::deserialize(&value).map_err(|e| {
@@ -1336,26 +1401,21 @@ fn collect_cell_snapshot(
         consumed_cells.insert(key.to_vec(), consumed);
     }
 
-    let cell_by_lock = collect_index_keys(domain_store.iterator_cf(
-        domain_store.cf_cell_by_lock(),
-        IteratorMode::Start,
-    ))?;
-    let cell_by_type = collect_index_keys(domain_store.iterator_cf(
-        domain_store.cf_cell_by_type(),
-        IteratorMode::Start,
-    ))?;
-    let cell_by_lock_code = collect_index_keys(domain_store.iterator_cf(
-        domain_store.cf_cell_by_lock_code(),
-        IteratorMode::Start,
-    ))?;
-    let cell_by_type_code = collect_index_keys(domain_store.iterator_cf(
-        domain_store.cf_cell_by_type_code(),
-        IteratorMode::Start,
-    ))?;
-    let cell_by_data_hash = collect_index_keys(domain_store.iterator_cf(
-        domain_store.cf_cell_by_data_hash(),
-        IteratorMode::Start,
-    ))?;
+    let cell_by_lock = collect_index_keys(
+        domain_store.iterator_cf(domain_store.cf_cell_by_lock(), IteratorMode::Start),
+    )?;
+    let cell_by_type = collect_index_keys(
+        domain_store.iterator_cf(domain_store.cf_cell_by_type(), IteratorMode::Start),
+    )?;
+    let cell_by_lock_code = collect_index_keys(
+        domain_store.iterator_cf(domain_store.cf_cell_by_lock_code(), IteratorMode::Start),
+    )?;
+    let cell_by_type_code = collect_index_keys(
+        domain_store.iterator_cf(domain_store.cf_cell_by_type_code(), IteratorMode::Start),
+    )?;
+    let cell_by_data_hash = collect_index_keys(
+        domain_store.iterator_cf(domain_store.cf_cell_by_data_hash(), IteratorMode::Start),
+    )?;
 
     Ok((
         cell_payloads,
@@ -1388,7 +1448,9 @@ where
     Ok(keys)
 }
 
-fn collect_core_owner_state_snapshot(domain_store: &CkbadgerStore) -> Result<CoreOwnerStateSnapshot> {
+fn collect_core_owner_state_snapshot(
+    domain_store: &CkbadgerStore,
+) -> Result<CoreOwnerStateSnapshot> {
     let mut address_balances = HashMap::new();
     let addr_iter = domain_store.iterator_cf(domain_store.cf_addr_balance(), IteratorMode::Start);
     for item in addr_iter {
@@ -1523,8 +1585,11 @@ fn collect_core_owner_state_snapshot(domain_store: &CkbadgerStore) -> Result<Cor
         .collect::<HashMap<_, _>>();
     let did_agg = domain_store.get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)?;
     let mut identities_by_collection = HashMap::new();
-    let mut did_ids =
-        domain_store.list_identity_ids_by_collection(&DID_CKB_SENTINEL_COLLECTION, None, usize::MAX)?;
+    let mut did_ids = domain_store.list_identity_ids_by_collection(
+        &DID_CKB_SENTINEL_COLLECTION,
+        None,
+        usize::MAX,
+    )?;
     did_ids.sort();
     if !did_ids.is_empty() {
         identities_by_collection.insert(DID_CKB_SENTINEL_COLLECTION.to_vec(), did_ids);
@@ -1559,10 +1624,12 @@ fn collect_core_owner_state_snapshot(domain_store: &CkbadgerStore) -> Result<Cor
         spore_outpoints.insert(spore_id.clone(), outpoints);
     }
     let mut spore_type_indexes = HashMap::new();
-    let stats_spore_iter = domain_store.iterator_cf(domain_store.cf_stats_spore(), IteratorMode::Start);
+    let stats_spore_iter =
+        domain_store.iterator_cf(domain_store.cf_stats_spore(), IteratorMode::Start);
     for item in stats_spore_iter {
         let (key, value) = item?;
-        if key.len() != keys::SPORE_TYPE_INDEX_KEY_SIZE || key[0] != keys::STATS_PREFIX_SPORE_TYPE_INDEX
+        if key.len() != keys::SPORE_TYPE_INDEX_KEY_SIZE
+            || key[0] != keys::STATS_PREFIX_SPORE_TYPE_INDEX
         {
             continue;
         }
@@ -1615,20 +1682,25 @@ fn unique_temp_test_dir(prefix: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET;
     use crate::parser::spore::{
         CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2,
     };
-    use crate::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET;
     use crate::parser::udt::SUDT_CODE_HASH;
     use crate::parser::ScriptParser;
     use crate::rpc::{
         BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
         TransactionView,
     };
+    use crate::sync::bulk_build::facts::{
+        CellFacts, CellProtocolFacts, CellSemanticTag, DotbitProtocolFacts, OutPointKey,
+        ResolvedInputFacts, ResolvedTxFacts,
+    };
+    use crate::sync::types::InternId;
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
     use ckbadger_store::types::{
         AssetAction, FiberChannelState, ObjectCollectionActivityEntry, TokenTransferRecord,
-        TxActivityBundle, DID_CKB_SENTINEL_COLLECTION,
+        TxActivityBundle, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
     };
     use ckbadger_store::{
         keys, CF_ACTIVITIES, CF_ADDR_TXS, CF_IDENTITY_COLLECTION_ACTIVITIES,
@@ -2004,7 +2076,10 @@ mod tests {
             outputs_data: vec![
                 format!(
                     "0x{}",
-                    hex::encode(create_cluster_data("Genesis Cluster", "{\"dob\":{\"ver\":1}}"))
+                    hex::encode(create_cluster_data(
+                        "Genesis Cluster",
+                        "{\"dob\":{\"ver\":1}}"
+                    ))
                 ),
                 format!(
                     "0x{}",
@@ -2374,8 +2449,9 @@ mod tests {
         let transfer_tx_hash = vec![0xb1; 32];
 
         let mut interner = interner::IdentityInterner::default();
-        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&blocks, &mut interner)
-            .expect("facts arena");
+        let arena =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&blocks, &mut interner)
+                .expect("facts arena");
         let resolved = sequencer::BulkSequencer::default()
             .resolve(&arena)
             .expect("resolved txs");
@@ -2463,5 +2539,193 @@ mod tests {
         assert_eq!(did_mint.block_hash, create_block_hash);
         assert_eq!(did_mint.actions.len(), 1);
         assert!(matches!(did_mint.actions[0], AssetAction::Mint));
+    }
+
+    #[test]
+    fn build_object_collection_activity_rows_materializes_dotbit_identity_activities() {
+        fn dotbit_output(
+            tx_hash_byte: u8,
+            lock_hash_id: InternId,
+            account_id: [u8; 20],
+            account: &str,
+        ) -> CellFacts {
+            CellFacts {
+                outpoint: OutPointKey::new([tx_hash_byte; 32], 0),
+                created_at_block: 0,
+                capacity: 200_00000000,
+                lock_script_hash_id: lock_hash_id,
+                lock_code_hash_id: InternId::new(401),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(402),
+                type_script_hash_id: Some(InternId::new(403)),
+                type_code_hash_id: Some(InternId::new(404)),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(405)),
+                occupied_capacity: 61_00000000,
+                data_size: 0,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: CellSemanticTag::Dotbit,
+                dao_state: None,
+                protocol_facts: Some(CellProtocolFacts::Dotbit(DotbitProtocolFacts {
+                    account_id,
+                    account: Some(account.to_string()),
+                    next_account_id: None,
+                    expired_at: Some(1_800_000_000),
+                    registered_at: Some(1_700_000_000),
+                    status: Some(0),
+                })),
+            }
+        }
+
+        fn dotbit_input(
+            tx_hash_byte: u8,
+            lock_hash_id: InternId,
+            account_id: [u8; 20],
+            account: &str,
+        ) -> ResolvedInputFacts {
+            ResolvedInputFacts {
+                outpoint: OutPointKey::new([tx_hash_byte; 32], 0),
+                created_at_block: 0,
+                capacity: 200_00000000,
+                occupied_capacity: 61_00000000,
+                data_size: 0,
+                data_hash: None,
+                udt_amount: None,
+                lock_script_hash_id: lock_hash_id,
+                lock_code_hash_id: InternId::new(401),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(402),
+                type_script_hash_id: Some(InternId::new(403)),
+                type_code_hash_id: Some(InternId::new(404)),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(405)),
+                semantic_tag: CellSemanticTag::Dotbit,
+                dao_state: None,
+                protocol_facts: Some(CellProtocolFacts::Dotbit(DotbitProtocolFacts {
+                    account_id,
+                    account: Some(account.to_string()),
+                    next_account_id: None,
+                    expired_at: Some(1_800_000_000),
+                    registered_at: Some(1_700_000_000),
+                    status: Some(0),
+                })),
+            }
+        }
+
+        let account_a = [0x51; 20];
+        let account_b = [0x61; 20];
+        let owner_a = InternId::new(501);
+        let owner_b = InternId::new(502);
+
+        let resolved = vec![
+            ResolvedTxFacts {
+                tx_hash: [0x31; 32],
+                block_number: 300,
+                block_hash: [0xa0; 32],
+                timestamp_ms: 1_700_100_000_000,
+                block_dao_ar: 0,
+                tx_index: 0,
+                is_cellbase: false,
+                dotbit_action: Some("confirm_proposal".to_string()),
+                resolved_inputs: Vec::new(),
+                cells: vec![dotbit_output(0x31, owner_a, account_a, "alice.bit")],
+            },
+            ResolvedTxFacts {
+                tx_hash: [0x32; 32],
+                block_number: 301,
+                block_hash: [0xa1; 32],
+                timestamp_ms: 1_700_100_360_000,
+                block_dao_ar: 0,
+                tx_index: 0,
+                is_cellbase: false,
+                dotbit_action: Some("transfer_account".to_string()),
+                resolved_inputs: vec![dotbit_input(0x31, owner_a, account_a, "alice.bit")],
+                cells: vec![dotbit_output(0x32, owner_b, account_a, "alice.bit")],
+            },
+            ResolvedTxFacts {
+                tx_hash: [0x33; 32],
+                block_number: 302,
+                block_hash: [0xa2; 32],
+                timestamp_ms: 1_700_100_720_000,
+                block_dao_ar: 0,
+                tx_index: 0,
+                is_cellbase: false,
+                dotbit_action: Some("recycle_expired_account".to_string()),
+                resolved_inputs: vec![dotbit_input(0x32, owner_b, account_a, "alice.bit")],
+                cells: Vec::new(),
+            },
+            ResolvedTxFacts {
+                tx_hash: [0x34; 32],
+                block_number: 303,
+                block_hash: [0xa3; 32],
+                timestamp_ms: 1_700_101_080_000,
+                block_dao_ar: 0,
+                tx_index: 0,
+                is_cellbase: false,
+                dotbit_action: Some("confirm_proposal".to_string()),
+                resolved_inputs: vec![dotbit_input(0x40, owner_a, account_b, "bob.bit")],
+                cells: vec![dotbit_output(0x34, owner_a, account_b, "bob.bit")],
+            },
+        ];
+
+        let mut identity_activity_count_deltas = HashMap::new();
+        let rows =
+            build_object_collection_activity_rows(&resolved, &mut identity_activity_count_deltas)
+                .expect("dotbit collection activity rows");
+
+        let identity_rows: HashMap<Vec<u8>, ObjectCollectionActivityEntry> = rows
+            .iter()
+            .filter(|row| row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES)
+            .map(|row| {
+                (
+                    row.key.clone(),
+                    bincode::deserialize(&row.value)
+                        .expect("deserialize identity collection activity"),
+                )
+            })
+            .collect();
+
+        let mint_key = keys::encode_nft_collection_activity_key(
+            &DOTBIT_SENTINEL_COLLECTION,
+            300,
+            0,
+            &[0xa0; 32],
+            &[0x31; 32],
+        );
+        let transfer_key = keys::encode_nft_collection_activity_key(
+            &DOTBIT_SENTINEL_COLLECTION,
+            301,
+            0,
+            &[0xa1; 32],
+            &[0x32; 32],
+        );
+        let recycle_key = keys::encode_nft_collection_activity_key(
+            &DOTBIT_SENTINEL_COLLECTION,
+            302,
+            0,
+            &[0xa2; 32],
+            &[0x33; 32],
+        );
+
+        assert_eq!(identity_rows.len(), 3);
+        assert!(identity_activity_count_deltas.is_empty());
+
+        let mint = identity_rows.get(mint_key.as_slice()).expect("dotbit mint");
+        assert_eq!(mint.actions.len(), 1);
+        assert!(matches!(mint.actions[0], AssetAction::Mint));
+
+        let transfer = identity_rows
+            .get(transfer_key.as_slice())
+            .expect("dotbit transfer");
+        assert_eq!(transfer.actions.len(), 1);
+        assert!(matches!(transfer.actions[0], AssetAction::Transfer));
+
+        let recycle = identity_rows
+            .get(recycle_key.as_slice())
+            .expect("dotbit recycle");
+        assert_eq!(recycle.actions.len(), 1);
+        assert!(matches!(recycle.actions[0], AssetAction::Recycle));
     }
 }
