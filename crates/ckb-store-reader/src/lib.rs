@@ -31,8 +31,6 @@ const COLUMN_META: &str = "4";
 const COLUMN_TRANSACTION_INFO: &str = "5";
 const COLUMN_BLOCK_EXT: &str = "6";
 const COLUMN_BLOCK_PROPOSAL_IDS: &str = "7";
-#[allow(dead_code)]
-const COLUMN_CELL: &str = "10";
 const COLUMN_CELL_DATA: &str = "12";
 
 /// All 19 column families used by CKB's RocksDB.

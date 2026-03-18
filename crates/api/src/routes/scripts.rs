@@ -68,11 +68,10 @@ pub fn routes() -> Router<Arc<AppState>> {
 pub struct ListParams {
     #[serde(default = "default_limit")]
     limit: i64,
-    #[allow(dead_code)]
     cursor: Option<String>,
     network: Option<String>,
-    #[allow(dead_code)]
-    decoder_type: Option<String>,
+    #[serde(rename = "decoder_type")]
+    _decoder_type: Option<String>,
     search: Option<String>,
     #[serde(default = "default_script_sort_key")]
     sort_key: ScriptSortKey,
@@ -850,8 +849,8 @@ async fn lookup_scripts(
 #[derive(Debug, Deserialize)]
 pub struct CodeCellQuery {
     code_hash: String,
-    #[allow(dead_code)]
-    hash_type: Option<String>,
+    #[serde(rename = "hash_type")]
+    _hash_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1663,11 +1662,12 @@ async fn get_script_capacity_history_chart_by_code_hash(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_script_chart_delta, checked_capacity_totals,
-        latest_complete_script_chart_date_from_tip, resolve_code_cell,
-        resolve_script_capacity_chart_bounds,
+        apply_script_chart_delta, checked_capacity_totals, latest_complete_script_chart_date_from_tip,
+        resolve_code_cell, resolve_script_capacity_chart_bounds, CodeCellQuery, ListParams,
     };
+    use axum::extract::Query;
     use axum::http::StatusCode;
+    use axum::http::Uri;
     use ckbadger_store::ScriptInfo;
     use std::collections::BTreeMap;
 
@@ -1751,6 +1751,26 @@ mod tests {
             ),
             Some((20240116, 20240117))
         );
+    }
+
+    #[test]
+    fn list_params_deserializes_unused_query_schema_fields() {
+        let uri: Uri =
+            "/scripts?decoder_type=typeid&cursor=cursor-token&limit=25".parse().unwrap();
+        let Query(params) = Query::<ListParams>::try_from_uri(&uri).unwrap();
+
+        assert_eq!(params.cursor.as_deref(), Some("cursor-token"));
+        assert_eq!(params.limit, 25);
+    }
+
+    #[test]
+    fn code_cell_query_deserializes_legacy_hash_type_field() {
+        let uri: Uri = "/scripts/code-cell?code_hash=0x1234&hash_type=data"
+            .parse()
+            .unwrap();
+        let Query(params) = Query::<CodeCellQuery>::try_from_uri(&uri).unwrap();
+
+        assert_eq!(params.code_hash, "0x1234");
     }
 
     /// When type-ref lookup fails (dep_type_hash set but no matching live cell),
