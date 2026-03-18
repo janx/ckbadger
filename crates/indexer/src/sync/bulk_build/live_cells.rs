@@ -18,6 +18,10 @@ impl LiveCellOwner {
         self.live.len()
     }
 
+    pub(crate) fn live_slots(&self) -> impl Iterator<Item = &LiveCellSlot> {
+        self.live.values()
+    }
+
     pub(crate) fn insert_created(&mut self, slot: LiveCellSlot) -> Result<()> {
         let outpoint = slot.outpoint;
         if self.live.insert(outpoint, slot).is_some() {
@@ -120,6 +124,31 @@ impl LiveCellSlot {
             semantic_tag: self.semantic_tag,
             dao_state: self.dao_state,
             protocol_facts: self.protocol_facts,
+        }
+    }
+
+    pub(crate) fn to_live_cell_info(
+        &self,
+        interner: &super::interner::IdentityInterner,
+    ) -> ckbadger_store::types::LiveCellInfo {
+        ckbadger_store::types::LiveCellInfo {
+            capacity: self.capacity,
+            lock_script_hash: interner.resolve_bytes(self.lock_script_hash_id).to_vec(),
+            lock_code_hash: interner.resolve_bytes(self.lock_code_hash_id).to_vec(),
+            lock_hash_type: self.lock_hash_type,
+            lock_args: interner.resolve_bytes(self.lock_args_id).to_vec(),
+            type_script_hash: self
+                .type_script_hash_id
+                .map(|id| interner.resolve_bytes(id).to_vec()),
+            type_code_hash: self
+                .type_code_hash_id
+                .map(|id| interner.resolve_bytes(id).to_vec()),
+            type_hash_type: self.type_hash_type,
+            type_args: self.type_args_id.map(|id| interner.resolve_bytes(id).to_vec()),
+            data_size: self.data_size,
+            occupied_capacity: self.occupied_capacity,
+            udt_amount: self.udt_amount,
+            data_hash: None,
         }
     }
 }

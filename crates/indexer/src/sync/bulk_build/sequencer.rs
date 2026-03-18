@@ -74,6 +74,12 @@ impl BulkSequencer {
     pub(crate) fn live_count(&self) -> usize {
         self.live_cells.live_count()
     }
+
+    pub(crate) fn live_slots(
+        &self,
+    ) -> impl Iterator<Item = &super::live_cells::LiveCellSlot> {
+        self.live_cells.live_slots()
+    }
 }
 
 #[cfg(test)]

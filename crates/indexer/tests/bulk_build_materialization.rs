@@ -6,6 +6,7 @@ use ckbadger_indexer::parser::ScriptParser;
 use ckbadger_indexer::sync::{
     materialize_bulk_artifacts_for_test, run_sample_bulk_materialization_for_test,
 };
+use ckbadger_store::keys;
 
 fn fixture_lock_script() -> Script {
     Script {
@@ -107,7 +108,7 @@ fn bulk_build_materializes_history_rows_and_core_snapshots_from_single_pass() {
     let snapshot =
         materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
 
-    assert_eq!(snapshot.report.streamed_history_rows, 6);
+    assert_eq!(snapshot.report.streamed_history_rows, 8);
     assert!(snapshot.report.final_snapshot_rows > 0);
 
     let header = snapshot
@@ -140,4 +141,28 @@ fn bulk_build_materializes_history_rows_and_core_snapshots_from_single_pass() {
     assert_eq!(consume_tx.2.fee, 0);
 
     assert!(snapshot.core.address_balances.contains_key(lock_hash.as_slice()));
+}
+
+#[test]
+fn bulk_build_materializes_append_only_cells_and_final_live_markers_from_single_pass() {
+    let block = same_block_create_then_consume_fixture();
+    let create_tx_hash = hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
+    let consume_tx_hash =
+        hex::decode(&block.block.transactions[1].hash[2..]).expect("consume tx hash");
+    let create_outpoint = keys::encode_outpoint(&create_tx_hash, 0).to_vec();
+    let consume_outpoint = keys::encode_outpoint(&consume_tx_hash, 0).to_vec();
+
+    let snapshot =
+        materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
+
+    assert_eq!(snapshot.report.streamed_history_rows, 8);
+    assert_eq!(snapshot.cell_payloads.len(), 2);
+    assert!(snapshot.cell_payloads.contains_key(&create_outpoint));
+    assert!(snapshot.cell_payloads.contains_key(&consume_outpoint));
+    assert_eq!(snapshot.cell_payloads[&create_outpoint].capacity, 100_00000000);
+    assert_eq!(snapshot.cell_payloads[&consume_outpoint].capacity, 100_00000000);
+
+    assert_eq!(snapshot.live_cells.len(), 1);
+    assert!(!snapshot.live_cells.contains_key(&create_outpoint));
+    assert_eq!(snapshot.live_cells.get(&consume_outpoint), Some(&14_000_321));
 }

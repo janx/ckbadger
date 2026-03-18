@@ -8,11 +8,12 @@ use anyhow::Result;
 use anyhow::{anyhow, bail};
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    CachedBlockHeader, DID_CKB_SENTINEL_COLLECTION, ObjectStandard, SporeTypeIndex, TxIndexEntry,
+    decode_live_cell_marker, CachedBlockHeader, DID_CKB_SENTINEL_COLLECTION, LiveCellInfo,
+    ObjectStandard, SporeTypeIndex, TxIndexEntry,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS,
-    CF_TX_HASH_MAP, CF_TX_INDEX,
+    CF_CELLS, CF_LIVE_CELLS, CF_TX_HASH_MAP, CF_TX_INDEX,
 };
 use rocksdb::IteratorMode;
 use tracing::info;
@@ -100,6 +101,8 @@ pub struct BulkArtifactSnapshot {
     pub block_headers: HashMap<i64, CachedBlockHeader>,
     pub block_numbers_by_hash: HashMap<Vec<u8>, i64>,
     pub txs_by_hash: HashMap<Vec<u8>, (i64, i32, TxIndexEntry)>,
+    pub cell_payloads: HashMap<Vec<u8>, LiveCellInfo>,
+    pub live_cells: HashMap<Vec<u8>, i64>,
     pub core: CoreOwnerStateSnapshot,
 }
 
@@ -120,7 +123,8 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
     let resolved = sequencer.resolve(&arena)?;
     let ctx = owners::ReducerContext::new(&interner);
     let mut owners = CoreOwners::default();
-    let history_rows = build_history_rows(&arena, &resolved)?;
+    let history_rows = build_history_rows(&arena, &resolved, &interner)?;
+    let live_cell_rows = build_live_cell_rows(&sequencer)?;
 
     for tx in &resolved {
         owners.apply_tx(tx, &ctx)?;
@@ -138,18 +142,22 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
         let append_store = CkbadgerStore::open_append_only(&append_path)?;
         let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
         materializer.stream_history_rows(&history_rows)?;
+        materializer.materialize_final_snapshot(&live_cell_rows)?;
         owners.materialize_all(&mut materializer)?;
         let report = materializer.finish();
 
         let core = collect_core_owner_state_snapshot(&domain_store)?;
         let (block_headers, block_numbers_by_hash, txs_by_hash) =
             collect_history_snapshot(&domain_store)?;
+        let (cell_payloads, live_cells) = collect_cell_snapshot(&domain_store, &append_store)?;
 
         BulkArtifactSnapshot {
             report,
             block_headers,
             block_numbers_by_hash,
             txs_by_hash,
+            cell_payloads,
+            live_cells,
             core,
         }
     };
@@ -161,8 +169,10 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
 fn build_history_rows(
     arena: &facts::FactsArena,
     resolved: &[facts::ResolvedTxFacts],
+    interner: &interner::IdentityInterner,
 ) -> Result<Vec<materialize::MaterializedRow>> {
-    let mut rows = Vec::with_capacity(arena.blocks.len() * 2 + arena.txs.len() * 2);
+    let mut rows =
+        Vec::with_capacity(arena.blocks.len() * 2 + arena.txs.len() * 2 + arena.cells.len());
 
     for block in &arena.blocks {
         let header = CachedBlockHeader {
@@ -235,6 +245,31 @@ fn build_history_rows(
         ));
     }
 
+    for cell in &arena.cells {
+        rows.push(materialize::MaterializedRow::new(
+            CF_CELLS,
+            keys::encode_outpoint(&cell.outpoint.tx_hash, cell_outpoint_index_i16(cell)?).to_vec(),
+            bincode::serialize(&cell_facts_to_live_cell_info(cell, interner))?,
+        ));
+    }
+
+    Ok(rows)
+}
+
+fn build_live_cell_rows(
+    sequencer: &sequencer::BulkSequencer,
+) -> Result<Vec<materialize::MaterializedRow>> {
+    let mut rows = Vec::with_capacity(sequencer.live_count());
+
+    for slot in sequencer.live_slots() {
+        rows.push(materialize::MaterializedRow::new(
+            CF_LIVE_CELLS,
+            keys::encode_outpoint(&slot.outpoint.tx_hash, live_slot_outpoint_index_i16(slot)?)
+                .to_vec(),
+            slot.created_at_block.to_le_bytes().to_vec(),
+        ));
+    }
+
     Ok(rows)
 }
 
@@ -280,6 +315,51 @@ fn resolved_tx_fee(tx: &facts::TxFacts, resolved_tx: &facts::ResolvedTxFacts) ->
                 total_output_capacity
             )
         })
+}
+
+fn cell_facts_to_live_cell_info(
+    cell: &facts::CellFacts,
+    interner: &interner::IdentityInterner,
+) -> LiveCellInfo {
+    LiveCellInfo {
+        capacity: cell.capacity,
+        lock_script_hash: interner.resolve_bytes(cell.lock_script_hash_id).to_vec(),
+        lock_code_hash: interner.resolve_bytes(cell.lock_code_hash_id).to_vec(),
+        lock_hash_type: cell.lock_hash_type,
+        lock_args: interner.resolve_bytes(cell.lock_args_id).to_vec(),
+        type_script_hash: cell
+            .type_script_hash_id
+            .map(|id| interner.resolve_bytes(id).to_vec()),
+        type_code_hash: cell
+            .type_code_hash_id
+            .map(|id| interner.resolve_bytes(id).to_vec()),
+        type_hash_type: cell.type_hash_type,
+        type_args: cell.type_args_id.map(|id| interner.resolve_bytes(id).to_vec()),
+        data_size: cell.data_size,
+        occupied_capacity: cell.occupied_capacity,
+        udt_amount: cell.udt_amount,
+        data_hash: None,
+    }
+}
+
+fn cell_outpoint_index_i16(cell: &facts::CellFacts) -> Result<i16> {
+    i16::try_from(cell.outpoint.index).map_err(|_| {
+        anyhow!(
+            "bulk build cell outpoint index exceeds i16 while materializing cells: tx=0x{} output_index={}",
+            hex::encode(cell.outpoint.tx_hash),
+            cell.outpoint.index
+        )
+    })
+}
+
+fn live_slot_outpoint_index_i16(slot: &live_cells::LiveCellSlot) -> Result<i16> {
+    i16::try_from(slot.outpoint.index).map_err(|_| {
+        anyhow!(
+            "bulk build live outpoint index exceeds i16 while materializing live cells: tx=0x{} output_index={}",
+            hex::encode(slot.outpoint.tx_hash),
+            slot.outpoint.index
+        )
+    })
 }
 
 fn collect_history_snapshot(
@@ -345,6 +425,41 @@ fn collect_history_snapshot(
     }
 
     Ok((block_headers, block_numbers_by_hash, txs_by_hash))
+}
+
+fn collect_cell_snapshot(
+    domain_store: &CkbadgerStore,
+    append_store: &CkbadgerStore,
+) -> Result<(HashMap<Vec<u8>, LiveCellInfo>, HashMap<Vec<u8>, i64>)> {
+    let mut cell_payloads = HashMap::new();
+    let cell_iter = append_store.iterator_cf(append_store.cf_cells(), IteratorMode::Start);
+    for item in cell_iter {
+        let (key, value) = item?;
+        let cell: LiveCellInfo = bincode::deserialize(&value).map_err(|e| {
+            anyhow!(
+                "failed to deserialize LiveCellInfo in bulk artifact snapshot helper: outpoint=0x{} error={}",
+                hex::encode(&key),
+                e
+            )
+        })?;
+        cell_payloads.insert(key.to_vec(), cell);
+    }
+
+    let mut live_cells = HashMap::new();
+    let live_iter = domain_store.iterator_cf(domain_store.cf_live_cells(), IteratorMode::Start);
+    for item in live_iter {
+        let (key, value) = item?;
+        let created_at_block = decode_live_cell_marker(&value).ok_or_else(|| {
+            anyhow!(
+                "invalid live cell marker value in bulk artifact snapshot helper: outpoint=0x{} value_len={}",
+                hex::encode(&key),
+                value.len()
+            )
+        })?;
+        live_cells.insert(key.to_vec(), created_at_block);
+    }
+
+    Ok((cell_payloads, live_cells))
 }
 
 fn collect_core_owner_state_snapshot(domain_store: &CkbadgerStore) -> Result<CoreOwnerStateSnapshot> {
