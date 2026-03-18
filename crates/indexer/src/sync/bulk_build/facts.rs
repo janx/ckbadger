@@ -12,6 +12,13 @@ pub(crate) struct FactsArena {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BlockFacts {
     pub(crate) number: i64,
+    pub(crate) hash: [u8; 32],
+    pub(crate) timestamp_ms: i64,
+    pub(crate) epoch_number: i64,
+    pub(crate) epoch_index: i32,
+    pub(crate) epoch_length: i32,
+    pub(crate) dao: Vec<u8>,
+    pub(crate) transactions_count: i32,
     pub(crate) tx_range: Range<usize>,
 }
 
@@ -91,6 +98,10 @@ pub(crate) struct TxFacts {
     pub(crate) block_dao_ar: u64,
     pub(crate) tx_index: i32,
     pub(crate) is_cellbase: bool,
+    pub(crate) inputs_count: i16,
+    pub(crate) outputs_count: i16,
+    pub(crate) tx_size: i32,
+    pub(crate) cycles: Option<i64>,
     pub(crate) dotbit_action: Option<String>,
     pub(crate) input_outpoints: Vec<OutPointKey>,
     pub(crate) output_range: Range<usize>,

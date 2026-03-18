@@ -403,6 +403,25 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
                     tx_position
                 )
             })?;
+            let inputs_count = i16::try_from(parsed_tx.inputs_count).map_err(|_| {
+                anyhow!(
+                    "bulk facts inputs_count exceeds i16 range: block={} tx=0x{} tx_index={} inputs_count={}",
+                    parsed_block.number,
+                    hex::encode(parsed_tx.hash),
+                    tx_index,
+                    parsed_tx.inputs_count
+                )
+            })?;
+            let outputs_count = i16::try_from(parsed_tx.outputs_count).map_err(|_| {
+                anyhow!(
+                    "bulk facts outputs_count exceeds i16 range: block={} tx=0x{} tx_index={} outputs_count={}",
+                    parsed_block.number,
+                    hex::encode(parsed_tx.hash),
+                    tx_index,
+                    parsed_tx.outputs_count
+                )
+            })?;
+            let cycles = parse_bulk_tx_cycles(block, tx_position, parsed_block.number, &parsed_tx.hash)?;
             let output_start = arena.cells.len();
             let input_outpoints = if parsed_tx.is_cellbase {
                 Vec::new()
@@ -497,6 +516,10 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
                 block_dao_ar,
                 tx_index,
                 is_cellbase: parsed_tx.is_cellbase,
+                inputs_count,
+                outputs_count,
+                tx_size: parsed_tx.tx_size,
+                cycles,
                 dotbit_action: witness_bundle.action.clone(),
                 input_outpoints,
                 output_range: output_start..arena.cells.len(),
@@ -505,11 +528,59 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
 
         arena.blocks.push(BlockFacts {
             number: parsed_block.number,
+            hash: block_hash,
+            timestamp_ms,
+            epoch_number: parsed_block.epoch_number,
+            epoch_index: parsed_block.epoch_index,
+            epoch_length: parsed_block.epoch_length,
+            dao: parsed_block.dao.clone(),
+            transactions_count: parsed_block.transactions_count,
             tx_range: block_tx_start..arena.txs.len(),
         });
     }
 
     Ok(arena)
+}
+
+fn parse_bulk_tx_cycles(
+    block: &BlockResponseWithCycles,
+    tx_position: usize,
+    block_number: i64,
+    tx_hash: &[u8; 32],
+) -> Result<Option<i64>> {
+    let Some(cycles) = block.cycles.as_ref() else {
+        return Ok(None);
+    };
+
+    if cycles.len() != block.block.transactions.len() {
+        return Err(anyhow!(
+            "bulk facts cycles length mismatch: block={} tx_count={} cycles_count={}",
+            block_number,
+            block.block.transactions.len(),
+            cycles.len()
+        ));
+    }
+
+    let raw_cycles = cycles.get(tx_position).ok_or_else(|| {
+        anyhow!(
+            "bulk facts cycles missing tx position: block={} tx=0x{} tx_position={} cycles_count={}",
+            block_number,
+            hex::encode(tx_hash),
+            tx_position,
+            cycles.len()
+        )
+    })?;
+    let parsed_cycles = parse_prefixed_hex_u64(raw_cycles);
+    let cycles_i64 = i64::try_from(parsed_cycles).map_err(|_| {
+        anyhow!(
+            "bulk facts cycles exceed i64 range: block={} tx=0x{} tx_position={} cycles={}",
+            block_number,
+            hex::encode(tx_hash),
+            tx_position,
+            parsed_cycles
+        )
+    })?;
+    Ok(Some(cycles_i64))
 }
 
 fn parser_cache_committed_tip_from_sync_tip(sync_tip: i64) -> i64 {
