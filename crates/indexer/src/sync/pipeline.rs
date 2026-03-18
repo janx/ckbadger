@@ -527,21 +527,33 @@ fn parse_bulk_tx_cycles(
         return Ok(None);
     };
 
-    if cycles.len() != block.block.transactions.len() {
+    // Cellbase (tx_position 0) has no cycles — CKB never runs VM on cellbase
+    if tx_position == 0 {
+        return Ok(None);
+    }
+
+    // CKB returns cycles for non-cellbase transactions only, so
+    // cycles.len() == block.block.transactions.len() - 1
+    let expected_len = block.block.transactions.len().saturating_sub(1);
+    if cycles.len() != expected_len {
         return Err(anyhow!(
-            "bulk facts cycles length mismatch: block={} tx_count={} cycles_count={}",
+            "bulk facts cycles length mismatch: block={} tx_count={} expected_cycles={} actual_cycles={}",
             block_number,
             block.block.transactions.len(),
+            expected_len,
             cycles.len()
         ));
     }
 
-    let raw_cycles = cycles.get(tx_position).ok_or_else(|| {
+    // cycles[0] corresponds to tx_position 1 (first non-cellbase tx)
+    let cycles_index = tx_position - 1;
+    let raw_cycles = cycles.get(cycles_index).ok_or_else(|| {
         anyhow!(
-            "bulk facts cycles missing tx position: block={} tx=0x{} tx_position={} cycles_count={}",
+            "bulk facts cycles missing tx position: block={} tx=0x{} tx_position={} cycles_index={} cycles_count={}",
             block_number,
             hex::encode(tx_hash),
             tx_position,
+            cycles_index,
             cycles.len()
         )
     })?;
@@ -3276,5 +3288,108 @@ mod tests {
         };
 
         assert!((metrics.total_ms() - 60.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_bulk_tx_cycles_excludes_cellbase_and_offsets_correctly() {
+        use crate::rpc::*;
+
+        let block = BlockResponseWithCycles {
+            block: BlockView {
+                header: create_facts_fixture_header(100),
+                uncles: vec![],
+                transactions: vec![
+                    // tx0: cellbase
+                    TransactionView {
+                        hash: format!("0x{}", "aa".repeat(32)),
+                        version: "0x0".to_string(),
+                        cell_deps: vec![],
+                        header_deps: vec![],
+                        inputs: vec![CellInput {
+                            since: "0x0".to_string(),
+                            previous_output: OutPoint {
+                                tx_hash: format!("0x{}", "00".repeat(32)),
+                                index: "0xffffffff".to_string(),
+                            },
+                        }],
+                        outputs: vec![],
+                        outputs_data: vec![],
+                        witnesses: vec![],
+                    },
+                    // tx1: regular tx
+                    TransactionView {
+                        hash: format!("0x{}", "bb".repeat(32)),
+                        version: "0x0".to_string(),
+                        cell_deps: vec![],
+                        header_deps: vec![],
+                        inputs: vec![CellInput {
+                            since: "0x0".to_string(),
+                            previous_output: OutPoint {
+                                tx_hash: format!("0x{}", "cc".repeat(32)),
+                                index: "0x0".to_string(),
+                            },
+                        }],
+                        outputs: vec![],
+                        outputs_data: vec![],
+                        witnesses: vec![],
+                    },
+                ],
+                proposals: vec![],
+            },
+            // CKB returns cycles for non-cellbase txs only (1 entry for 2 txs)
+            cycles: Some(vec!["0x1f4".to_string()]),
+        };
+
+        let cellbase_hash = [0xaa; 32];
+        let tx1_hash = [0xbb; 32];
+
+        // Cellbase (tx_position=0) => None
+        let result = super::parse_bulk_tx_cycles(&block, 0, 100, &cellbase_hash).unwrap();
+        assert_eq!(result, None);
+
+        // Non-cellbase tx (tx_position=1) => Some(500) (0x1f4)
+        let result = super::parse_bulk_tx_cycles(&block, 1, 100, &tx1_hash).unwrap();
+        assert_eq!(result, Some(500));
+    }
+
+    #[test]
+    fn parse_bulk_tx_cycles_detects_length_mismatch() {
+        use crate::rpc::*;
+
+        let block = BlockResponseWithCycles {
+            block: BlockView {
+                header: create_facts_fixture_header(100),
+                uncles: vec![],
+                transactions: vec![
+                    TransactionView {
+                        hash: format!("0x{}", "aa".repeat(32)),
+                        version: "0x0".to_string(),
+                        cell_deps: vec![],
+                        header_deps: vec![],
+                        inputs: vec![],
+                        outputs: vec![],
+                        outputs_data: vec![],
+                        witnesses: vec![],
+                    },
+                    TransactionView {
+                        hash: format!("0x{}", "bb".repeat(32)),
+                        version: "0x0".to_string(),
+                        cell_deps: vec![],
+                        header_deps: vec![],
+                        inputs: vec![],
+                        outputs: vec![],
+                        outputs_data: vec![],
+                        witnesses: vec![],
+                    },
+                ],
+                proposals: vec![],
+            },
+            // Wrong: 2 cycles for 2 txs (should be 1 for non-cellbase only)
+            cycles: Some(vec!["0x0".to_string(), "0x1f4".to_string()]),
+        };
+
+        let tx1_hash = [0xbb; 32];
+        let err = super::parse_bulk_tx_cycles(&block, 1, 100, &tx1_hash).unwrap_err();
+        assert!(err.to_string().contains("cycles length mismatch"));
     }
 }
