@@ -11,7 +11,7 @@ use ckbadger_store::types::{
     ClusterAggregate, IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
     ObjectCollectionAggregate, ObjectEntry, ObjectExtra, ObjectStandard, ObjectTypeIndex,
     SporeTypeIndex, StorageDependencyTier, DID_CKB_SENTINEL_COLLECTION,
-    SOLE_SPORES_SENTINEL_COLLECTION,
+    DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     CkbadgerStore, CF_CLUSTER_AGG, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_OBJECT_COLLECTION_AGG,
@@ -38,6 +38,7 @@ pub(crate) struct ObjectOwner {
     cluster_aggs: BTreeMap<Vec<u8>, ClusterAggregate>,
     object_collection_aggs: BTreeMap<Vec<u8>, ObjectCollectionAggregate>,
     did_agg: Option<IdentityCollectionAggregate>,
+    dotbit_agg: Option<IdentityCollectionAggregate>,
     identity_by_collection: BTreeSet<Vec<u8>>,
     spore_by_cluster: BTreeSet<Vec<u8>>,
     stats_spore_rows: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -48,6 +49,10 @@ pub(crate) struct ObjectOwner {
     mnft_type_indexes: BTreeMap<Vec<u8>, ObjectTypeIndex>,
     mnft_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     did_owner_counts: BTreeMap<Vec<u8>, i64>,
+    dotbit_owner_counts: BTreeMap<Vec<u8>, i64>,
+    dotbit_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
+    dotbit_outpoints_by_account: BTreeSet<Vec<u8>>,
+    dotbit_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     cluster_owner_counts: BTreeMap<(Vec<u8>, Vec<u8>), i64>,
 }
 
@@ -61,13 +66,30 @@ impl BulkReducer for ObjectOwner {
                 _ => None,
             })
             .collect::<BTreeSet<_>>();
+        let dotbit_accounts_consumed_in_tx = tx
+            .resolved_inputs
+            .iter()
+            .filter_map(|input| match input.protocol_facts.as_ref() {
+                Some(CellProtocolFacts::Dotbit(dotbit)) => Some((
+                    dotbit.account_id.to_vec(),
+                    ctx.resolve_identity(input.lock_script_hash_id).to_vec(),
+                )),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
 
         for input in &tx.resolved_inputs {
             self.apply_input(input)?;
         }
 
         for cell in &tx.cells {
-            self.apply_output(cell, ctx, tx, &mnft_tokens_consumed_in_tx)?;
+            self.apply_output(
+                cell,
+                ctx,
+                tx,
+                &mnft_tokens_consumed_in_tx,
+                &dotbit_accounts_consumed_in_tx,
+            )?;
         }
 
         Ok(())
@@ -97,6 +119,19 @@ impl BulkReducer for ObjectOwner {
             )
         }));
         sealed_rows.extend(self.mnft_hourly_transfers.iter().map(|(key, count)| {
+            MaterializedRow::new(CF_STATS_OBJECT, key.clone(), count.to_le_bytes().to_vec())
+        }));
+        sealed_rows.extend(
+            self.dotbit_outpoints.iter().map(|(key, value)| {
+                MaterializedRow::new(CF_STATS_OBJECT, key.clone(), value.clone())
+            }),
+        );
+        sealed_rows.extend(
+            self.dotbit_outpoints_by_account.iter().map(|key| {
+                MaterializedRow::new(CF_STATS_OBJECT, key.clone(), Vec::new())
+            }),
+        );
+        sealed_rows.extend(self.dotbit_hourly_transfers.iter().map(|(key, count)| {
             MaterializedRow::new(CF_STATS_OBJECT, key.clone(), count.to_le_bytes().to_vec())
         }));
         sealed_rows.extend(self.mnft_owner_counts.iter().filter_map(
@@ -164,6 +199,13 @@ impl BulkReducer for ObjectOwner {
                 bincode::serialize(agg)?,
             ));
         }
+        if let Some(agg) = &self.dotbit_agg {
+            final_rows.push(MaterializedRow::new(
+                CF_IDENTITY_AGG,
+                DOTBIT_SENTINEL_COLLECTION.to_vec(),
+                bincode::serialize(agg)?,
+            ));
+        }
         for (cluster_id, agg) in &self.cluster_aggs {
             final_rows.push(MaterializedRow::new(
                 CF_CLUSTER_AGG,
@@ -185,6 +227,16 @@ impl BulkReducer for ObjectOwner {
             final_rows.push(MaterializedRow::new(
                 CF_STATS_IDENTITY,
                 keys::encode_identity_owner_key(&DID_CKB_SENTINEL_COLLECTION, lock_hash).to_vec(),
+                count.to_le_bytes().to_vec(),
+            ));
+        }
+        for (lock_hash, count) in &self.dotbit_owner_counts {
+            if *count <= 0 {
+                continue;
+            }
+            final_rows.push(MaterializedRow::new(
+                CF_STATS_IDENTITY,
+                keys::encode_identity_owner_key(&DOTBIT_SENTINEL_COLLECTION, lock_hash).to_vec(),
                 count.to_le_bytes().to_vec(),
             ));
         }
@@ -247,12 +299,7 @@ impl ObjectOwner {
                 hex::encode(input.outpoint.tx_hash),
                 input.outpoint.index
             ),
-            CellProtocolFacts::Dotbit(_) => bail!(
-                "object owner received unsupported protocol facts on input: outpoint=0x{}:{} protocol={:?}",
-                hex::encode(input.outpoint.tx_hash),
-                input.outpoint.index,
-                protocol
-            ),
+            CellProtocolFacts::Dotbit(dotbit) => self.consume_dotbit(&dotbit.account_id),
         }
     }
 
@@ -262,6 +309,7 @@ impl ObjectOwner {
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts,
         mnft_tokens_consumed_in_tx: &BTreeSet<Vec<u8>>,
+        dotbit_accounts_consumed_in_tx: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) -> Result<()> {
         let Some(protocol) = cell.protocol_facts.as_ref() else {
             return Ok(());
@@ -282,11 +330,14 @@ impl ObjectOwner {
                 tx,
                 mnft_tokens_consumed_in_tx.contains(token.token_id.as_slice()),
             ),
-            CellProtocolFacts::Dotbit(_) => bail!(
-                "object owner received unsupported protocol facts on output: outpoint=0x{}:{} protocol={:?}",
-                hex::encode(cell.outpoint.tx_hash),
-                cell.outpoint.index,
-                protocol
+            CellProtocolFacts::Dotbit(dotbit) => self.insert_dotbit(
+                dotbit,
+                cell,
+                ctx,
+                tx,
+                dotbit_accounts_consumed_in_tx
+                    .get(dotbit.account_id.as_slice())
+                    .map(Vec::as_slice),
             ),
         }
     }
@@ -926,6 +977,130 @@ impl ObjectOwner {
         Ok(())
     }
 
+    fn insert_dotbit(
+        &mut self,
+        dotbit: &crate::sync::bulk_build::facts::DotbitProtocolFacts,
+        cell: &CellFacts,
+        ctx: &ReducerContext<'_>,
+        tx: &ResolvedTxFacts,
+        consumed_in_same_tx_owner: Option<&[u8]>,
+    ) -> Result<()> {
+        let account_id = dotbit.account_id.to_vec();
+        let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
+        let existing = self.identities.get(&account_id).cloned();
+        if existing
+            .as_ref()
+            .is_some_and(|entry| entry.standard != IdentityStandard::DotBit)
+        {
+            bail!(
+                ".bit account id collides with non-dotbit identity entry: account_id=0x{} block={}",
+                hex::encode(&account_id),
+                tx.block_number
+            );
+        }
+
+        let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
+        let old_owner = if was_live {
+            existing
+                .as_ref()
+                .and_then(|entry| entry.owner_lock_hash.clone())
+        } else {
+            None
+        };
+        if was_live && old_owner.is_none() {
+            bail!(
+                ".bit live identity missing owner_lock_hash during transfer: account_id=0x{} block={}",
+                hex::encode(&account_id),
+                tx.block_number
+            );
+        }
+
+        let account_name = dotbit
+            .account
+            .clone()
+            .unwrap_or_else(|| format!("0x{}", hex::encode(&account_id)));
+
+        self.identities.insert(
+            account_id.clone(),
+            IdentityEntry {
+                standard: IdentityStandard::DotBit,
+                owner_lock_hash: Some(owner_lock.clone()),
+                name: Some(account_name),
+                is_live: true,
+                created_at_block: existing
+                    .as_ref()
+                    .map(|entry| entry.created_at_block)
+                    .unwrap_or(tx.block_number),
+                created_at_tx: existing
+                    .as_ref()
+                    .map(|entry| entry.created_at_tx.clone())
+                    .unwrap_or_else(|| tx.tx_hash.to_vec()),
+                extra: IdentityExtra::DotBit {
+                    expired_at: dotbit.expired_at,
+                    registered_at: dotbit.registered_at,
+                    status: dotbit.status,
+                },
+            },
+        );
+
+        if existing.is_none() {
+            self.identity_by_collection.insert(
+                keys::encode_identity_by_collection_key(&DOTBIT_SENTINEL_COLLECTION, &account_id)
+                    .to_vec(),
+            );
+        }
+
+        let dotbit_owner_counts = &mut self.dotbit_owner_counts;
+        let agg = self
+            .dotbit_agg
+            .get_or_insert_with(|| IdentityCollectionAggregate {
+                name: Some(".bit".to_string()),
+                standard: IdentityStandard::DotBit,
+                ..IdentityCollectionAggregate::default()
+            });
+        if existing.is_none() {
+            agg.total_count = checked_next_i64(
+                agg.total_count,
+                1,
+                ".bit total_count",
+                &account_id,
+                tx.block_number,
+            )?;
+            agg.live_count = checked_next_i64(
+                agg.live_count,
+                1,
+                ".bit live_count",
+                &account_id,
+                tx.block_number,
+            )?;
+        } else if !was_live {
+            agg.live_count = checked_next_i64(
+                agg.live_count,
+                1,
+                ".bit live_count reactivate",
+                &account_id,
+                tx.block_number,
+            )?;
+        }
+
+        Self::apply_dotbit_owner_transition(
+            dotbit_owner_counts,
+            old_owner.as_deref(),
+            Some(owner_lock.as_slice()),
+            agg,
+        )?;
+        let transfer_from_owner = if was_live {
+            old_owner.as_deref()
+        } else {
+            consumed_in_same_tx_owner
+        };
+        if transfer_from_owner.is_some() && transfer_from_owner != Some(owner_lock.as_slice()) {
+            self.increment_dotbit_hourly_transfer(&account_id, tx.timestamp_ms, tx.block_number)?;
+        }
+        self.insert_dotbit_outpoint_rows(&account_id, cell)?;
+        Ok(())
+    }
+
     fn consume_did(&mut self, did_id: &[u8]) -> Result<()> {
         let entry = self.identities.get_mut(did_id).ok_or_else(|| {
             anyhow!(
@@ -1130,6 +1305,56 @@ impl ObjectOwner {
         )
     }
 
+    fn consume_dotbit(&mut self, account_id: &[u8; 20]) -> Result<()> {
+        let entry = self
+            .identities
+            .get_mut(account_id.as_slice())
+            .ok_or_else(|| {
+                anyhow!(
+                    "missing .bit account during consume: account_id=0x{}",
+                    hex::encode(account_id)
+                )
+            })?;
+        if entry.standard != IdentityStandard::DotBit {
+            bail!(
+                "consume_dotbit expected dotbit identity entry, found {:?}: account_id=0x{}",
+                entry.standard,
+                hex::encode(account_id)
+            );
+        }
+        if !entry.is_live {
+            bail!(
+                ".bit account already consumed: account_id=0x{}",
+                hex::encode(account_id)
+            );
+        }
+        let old_owner = entry.owner_lock_hash.clone().ok_or_else(|| {
+            anyhow!(
+                ".bit live account missing owner_lock_hash during consume: account_id=0x{}",
+                hex::encode(account_id)
+            )
+        })?;
+        entry.is_live = false;
+        entry.owner_lock_hash = None;
+
+        let dotbit_owner_counts = &mut self.dotbit_owner_counts;
+        let agg = self
+            .dotbit_agg
+            .get_or_insert_with(|| IdentityCollectionAggregate {
+                name: Some(".bit".to_string()),
+                standard: IdentityStandard::DotBit,
+                ..IdentityCollectionAggregate::default()
+            });
+        agg.live_count = checked_next_i64(
+            agg.live_count,
+            -1,
+            ".bit live_count consume",
+            account_id,
+            0,
+        )?;
+        Self::apply_dotbit_owner_transition(dotbit_owner_counts, Some(old_owner.as_slice()), None, agg)
+    }
+
     fn apply_did_owner_transition(
         did_owner_counts: &mut BTreeMap<Vec<u8>, i64>,
         old_owner: Option<&[u8]>,
@@ -1175,6 +1400,56 @@ impl ObjectOwner {
                 )?;
             }
             did_owner_counts.insert(new_owner.to_vec(), current + 1);
+        }
+
+        Ok(())
+    }
+
+    fn apply_dotbit_owner_transition(
+        dotbit_owner_counts: &mut BTreeMap<Vec<u8>, i64>,
+        old_owner: Option<&[u8]>,
+        new_owner: Option<&[u8]>,
+        agg: &mut IdentityCollectionAggregate,
+    ) -> Result<()> {
+        if old_owner == new_owner {
+            return Ok(());
+        }
+
+        if let Some(old_owner) = old_owner {
+            let current = *dotbit_owner_counts.get(old_owner).unwrap_or(&0);
+            if current <= 0 {
+                bail!(
+                    ".bit owner count underflow: lock_hash=0x{}, current={}",
+                    hex::encode(old_owner),
+                    current
+                );
+            }
+            if current == 1 {
+                dotbit_owner_counts.remove(old_owner);
+                agg.holders_count = checked_next_i64(
+                    agg.holders_count,
+                    -1,
+                    ".bit holders_count remove",
+                    old_owner,
+                    0,
+                )?;
+            } else {
+                dotbit_owner_counts.insert(old_owner.to_vec(), current - 1);
+            }
+        }
+
+        if let Some(new_owner) = new_owner {
+            let current = *dotbit_owner_counts.get(new_owner).unwrap_or(&0);
+            if current == 0 {
+                agg.holders_count = checked_next_i64(
+                    agg.holders_count,
+                    1,
+                    ".bit holders_count add",
+                    new_owner,
+                    0,
+                )?;
+            }
+            dotbit_owner_counts.insert(new_owner.to_vec(), current + 1);
         }
 
         Ok(())
@@ -1336,6 +1611,26 @@ impl ObjectOwner {
         Ok(())
     }
 
+    fn increment_dotbit_hourly_transfer(
+        &mut self,
+        account_id: &[u8],
+        timestamp_ms: i64,
+        block_number: i64,
+    ) -> Result<()> {
+        let hour_bucket = timestamp_ms / 3_600_000;
+        let key = keys::encode_nft_hourly_key(&DOTBIT_SENTINEL_COLLECTION, hour_bucket).to_vec();
+        let current = *self.dotbit_hourly_transfers.get(key.as_slice()).unwrap_or(&0);
+        let next = checked_next_i64(
+            current,
+            1,
+            ".bit hourly transfer",
+            account_id,
+            block_number,
+        )?;
+        self.dotbit_hourly_transfers.insert(key, next);
+        Ok(())
+    }
+
     fn as_i16_outpoint_index(
         outpoint: &crate::sync::bulk_build::facts::OutPointKey,
         label: &str,
@@ -1366,6 +1661,23 @@ impl ObjectOwner {
             keys::encode_spore_outpoint_by_id_key(spore_id, &cell.outpoint.tx_hash, output_index)
                 .to_vec(),
             Vec::new(),
+        );
+        Ok(())
+    }
+
+    fn insert_dotbit_outpoint_rows(&mut self, account_id: &[u8], cell: &CellFacts) -> Result<()> {
+        let output_index = Self::as_i16_outpoint_index(&cell.outpoint, ".bit")?;
+        self.dotbit_outpoints.insert(
+            keys::encode_dotbit_account_outpoint_key(&cell.outpoint.tx_hash, output_index).to_vec(),
+            account_id.to_vec(),
+        );
+        self.dotbit_outpoints_by_account.insert(
+            keys::encode_dotbit_outpoint_by_account_id_key(
+                account_id,
+                &cell.outpoint.tx_hash,
+                output_index,
+            )
+            .to_vec(),
         );
         Ok(())
     }
@@ -1751,8 +2063,9 @@ mod tests {
     use super::*;
     use crate::sync::bulk_build::facts::{
         CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts,
-        MnftClassProtocolFacts, MnftIssuerProtocolFacts, MnftTokenProtocolFacts, OutPointKey,
-        ResolvedInputFacts, ResolvedTxFacts, SporeProtocolFacts,
+        DotbitProtocolFacts, MnftClassProtocolFacts, MnftIssuerProtocolFacts,
+        MnftTokenProtocolFacts, OutPointKey, ResolvedInputFacts, ResolvedTxFacts,
+        SporeProtocolFacts,
     };
     use crate::sync::types::InternId;
 
@@ -2417,6 +2730,275 @@ mod tests {
 
         let hour_bucket = tx1.timestamp_ms / 3_600_000;
         let hourly_key = keys::encode_nft_hourly_key(&class_id, hour_bucket);
+        let hourly_value = domain_store
+            .get_stats_key(&hourly_key)
+            .expect("stats lookup")
+            .expect("hourly stats");
+        assert_eq!(
+            i64::from_le_bytes(hourly_value[..8].try_into().expect("hourly bytes")),
+            1
+        );
+
+        drop(materializer);
+        drop(append_store);
+        drop(domain_store);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn object_owner_materializes_dotbit_transfer_and_consume_without_db_reads() {
+        let mut interner = crate::sync::bulk_build::interner::IdentityInterner::default();
+        let owner_a = interner.intern_bytes(vec![0xa1; 32]);
+        let owner_b = interner.intern_bytes(vec![0xb2; 32]);
+        let ctx = ReducerContext::new(&interner);
+
+        let account_id = [0x51; 20];
+
+        let tx0 = ResolvedTxFacts {
+            tx_hash: [0x31; 32],
+            block_number: 300,
+            block_hash: [0xa0; 32],
+            timestamp_ms: 1_700_100_000_000,
+            block_dao_ar: 0,
+            tx_index: 0,
+            is_cellbase: false,
+            dotbit_action: Some("confirm_proposal".to_string()),
+            resolved_inputs: Vec::new(),
+            cells: vec![CellFacts {
+                outpoint: OutPointKey::new([0x31; 32], 0),
+                created_at_block: 300,
+                capacity: 200_00000000,
+                lock_script_hash_id: owner_a,
+                lock_code_hash_id: InternId::new(201),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(202),
+                type_script_hash_id: Some(InternId::new(203)),
+                type_code_hash_id: Some(InternId::new(204)),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(205)),
+                occupied_capacity: 61_00000000,
+                data_size: 0,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: CellSemanticTag::Dotbit,
+                dao_state: None,
+                protocol_facts: Some(CellProtocolFacts::Dotbit(DotbitProtocolFacts {
+                    account_id,
+                    account: Some("alice.bit".to_string()),
+                    next_account_id: None,
+                    expired_at: Some(1_800_000_000),
+                    registered_at: Some(1_700_000_000),
+                    status: Some(0),
+                })),
+            }],
+        };
+
+        let tx1 = ResolvedTxFacts {
+            tx_hash: [0x32; 32],
+            block_number: 301,
+            block_hash: [0xa1; 32],
+            timestamp_ms: 1_700_100_360_000,
+            block_dao_ar: 0,
+            tx_index: 0,
+            is_cellbase: false,
+            dotbit_action: Some("transfer_account".to_string()),
+            resolved_inputs: vec![ResolvedInputFacts {
+                outpoint: OutPointKey::new([0x31; 32], 0),
+                created_at_block: 300,
+                capacity: 200_00000000,
+                occupied_capacity: 61_00000000,
+                data_size: 0,
+                data_hash: None,
+                udt_amount: None,
+                lock_script_hash_id: owner_a,
+                lock_code_hash_id: InternId::new(201),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(202),
+                type_script_hash_id: Some(InternId::new(203)),
+                type_code_hash_id: Some(InternId::new(204)),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(205)),
+                semantic_tag: CellSemanticTag::Dotbit,
+                dao_state: None,
+                protocol_facts: Some(CellProtocolFacts::Dotbit(DotbitProtocolFacts {
+                    account_id,
+                    account: Some("alice.bit".to_string()),
+                    next_account_id: None,
+                    expired_at: Some(1_800_000_000),
+                    registered_at: Some(1_700_000_000),
+                    status: Some(0),
+                })),
+            }],
+            cells: vec![CellFacts {
+                outpoint: OutPointKey::new([0x32; 32], 0),
+                created_at_block: 301,
+                capacity: 200_00000000,
+                lock_script_hash_id: owner_b,
+                lock_code_hash_id: InternId::new(206),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(207),
+                type_script_hash_id: Some(InternId::new(208)),
+                type_code_hash_id: Some(InternId::new(209)),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(210)),
+                occupied_capacity: 61_00000000,
+                data_size: 0,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: CellSemanticTag::Dotbit,
+                dao_state: None,
+                protocol_facts: Some(CellProtocolFacts::Dotbit(DotbitProtocolFacts {
+                    account_id,
+                    account: Some("alice.bit".to_string()),
+                    next_account_id: None,
+                    expired_at: Some(1_800_000_000),
+                    registered_at: Some(1_700_000_000),
+                    status: Some(0),
+                })),
+            }],
+        };
+
+        let tx2 = ResolvedTxFacts {
+            tx_hash: [0x33; 32],
+            block_number: 302,
+            block_hash: [0xa2; 32],
+            timestamp_ms: 1_700_100_720_000,
+            block_dao_ar: 0,
+            tx_index: 0,
+            is_cellbase: false,
+            dotbit_action: Some("recycle_expired_account".to_string()),
+            resolved_inputs: vec![ResolvedInputFacts {
+                outpoint: OutPointKey::new([0x32; 32], 0),
+                created_at_block: 301,
+                capacity: 200_00000000,
+                occupied_capacity: 61_00000000,
+                data_size: 0,
+                data_hash: None,
+                udt_amount: None,
+                lock_script_hash_id: owner_b,
+                lock_code_hash_id: InternId::new(206),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(207),
+                type_script_hash_id: Some(InternId::new(208)),
+                type_code_hash_id: Some(InternId::new(209)),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(210)),
+                semantic_tag: CellSemanticTag::Dotbit,
+                dao_state: None,
+                protocol_facts: Some(CellProtocolFacts::Dotbit(DotbitProtocolFacts {
+                    account_id,
+                    account: Some("alice.bit".to_string()),
+                    next_account_id: None,
+                    expired_at: Some(1_800_000_000),
+                    registered_at: Some(1_700_000_000),
+                    status: Some(0),
+                })),
+            }],
+            cells: vec![],
+        };
+
+        let mut owner = ObjectOwner::default();
+        owner.apply_tx(&tx0, &ctx).expect("apply create");
+        owner.apply_tx(&tx1, &ctx).expect("apply transfer");
+        owner.apply_tx(&tx2, &ctx).expect("apply consume");
+
+        let root = unique_temp_test_dir("bulk-build-object-owner-dotbit");
+        std::fs::create_dir_all(&root).expect("root");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("domain");
+        std::fs::create_dir_all(&append_path).expect("append");
+
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("domain store");
+        let append_store = CkbadgerStore::open_append_only(&append_path).expect("append store");
+        let mut materializer = Materializer::new(&domain_store, &append_store);
+        owner
+            .materialize_final(&mut materializer)
+            .expect("materialize object owner");
+
+        let entry = domain_store
+            .get_identity(&account_id)
+            .expect("get identity")
+            .expect("identity exists");
+        assert_eq!(entry.standard, IdentityStandard::DotBit);
+        assert_eq!(entry.name.as_deref(), Some("alice.bit"));
+        assert!(!entry.is_live);
+        assert!(entry.owner_lock_hash.is_none());
+        assert_eq!(entry.created_at_block, 300);
+        assert_eq!(entry.created_at_tx, vec![0x31; 32]);
+        assert!(matches!(
+            entry.extra,
+            IdentityExtra::DotBit {
+                expired_at: Some(1_800_000_000),
+                registered_at: Some(1_700_000_000),
+                status: Some(0),
+            }
+        ));
+
+        let agg = domain_store
+            .get_identity_collection_aggregate(&ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION)
+            .expect("dotbit agg")
+            .expect("dotbit agg exists");
+        assert_eq!(agg.standard, IdentityStandard::DotBit);
+        assert_eq!(agg.name.as_deref(), Some(".bit"));
+        assert_eq!(agg.total_count, 1);
+        assert_eq!(agg.live_count, 0);
+        assert_eq!(agg.holders_count, 0);
+
+        let account_ids = domain_store
+            .list_identity_ids_by_collection(
+                &ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION,
+                None,
+                10,
+            )
+            .expect("identity ids");
+        assert_eq!(account_ids, vec![account_id.to_vec()]);
+
+        assert_eq!(
+            domain_store
+                .get_identity_owner_count(
+                    &ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION,
+                    &[0xa1; 32],
+                )
+                .expect("owner count a"),
+            0
+        );
+        assert_eq!(
+            domain_store
+                .get_identity_owner_count(
+                    &ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION,
+                    &[0xb2; 32],
+                )
+                .expect("owner count b"),
+            0
+        );
+
+        let first_outpoint = domain_store
+            .get_dotbit_account_id_by_outpoint(&[0x31; 32], 0)
+            .expect("first outpoint")
+            .expect("first outpoint exists");
+        assert_eq!(first_outpoint, account_id.to_vec());
+        let second_outpoint = domain_store
+            .get_dotbit_account_id_by_outpoint(&[0x32; 32], 0)
+            .expect("second outpoint")
+            .expect("second outpoint exists");
+        assert_eq!(second_outpoint, account_id.to_vec());
+
+        let outpoints = domain_store
+            .list_dotbit_account_outpoints_by_account_id(&account_id)
+            .expect("dotbit outpoints");
+        assert_eq!(
+            outpoints,
+            vec![(vec![0x31; 32], 0_i16), (vec![0x32; 32], 0_i16)]
+        );
+
+        let hour_bucket = tx1.timestamp_ms / 3_600_000;
+        let hourly_key = keys::encode_nft_hourly_key(
+            &ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION,
+            hour_bucket,
+        );
         let hourly_value = domain_store
             .get_stats_key(&hourly_key)
             .expect("stats lookup")
