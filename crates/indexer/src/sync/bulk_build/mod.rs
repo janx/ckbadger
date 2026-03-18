@@ -10,16 +10,17 @@ use ckbadger_store::keys;
 use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use ckbadger_store::types::{
     decode_live_cell_marker, BulkBuildSessionMarker, CachedBlockHeader,
-    CellDistributionTrackerState, ConsumedCellMeta, DailyActivityStats, HodlTrackerState,
-    LiveCellInfo, ObjectStandard, SporeTypeIndex, SyncStatus, TokenTransferRecord,
-    TxActivityBundle, TxIndexEntry, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
-    SOLE_SPORES_SENTINEL_COLLECTION,
+    CellDistributionTrackerState, ConsumedCellMeta, DailyActivityStats, DailyAddressCohort,
+    DailyCellDistribution, HodlTrackerState, LiveCellInfo, ObjectStandard, SporeTypeIndex,
+    SyncStatus, TokenTransferRecord, TxActivityBundle, TxIndexEntry,
+    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ACTIVITIES, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX,
     CF_BLOCK_HEADERS, CF_CELLS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE,
     CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE, CF_CONSUMED_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES,
-    CF_LIVE_CELLS, CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_TX_HASH_MAP, CF_TX_INDEX,
+    CF_LIVE_CELLS, CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL,
+    CF_TX_HASH_MAP, CF_TX_INDEX,
 };
 use rocksdb::IteratorMode;
 use tracing::info;
@@ -418,6 +419,7 @@ impl BulkBuildRuntimeState {
             ..
         } = self;
         let ctx = owners::ReducerContext::new(interner);
+        let mut cell_dist_sealed_rows = Vec::new();
         for block in &arena.blocks {
             let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
             cell_dist_tracker.record_block_date(block.number, block_date);
@@ -438,11 +440,33 @@ impl BulkBuildRuntimeState {
                     tx,
                 )?;
             }
+
+            if let Some((snapshot_date, snapshot)) = cell_dist_tracker.maybe_snapshot(block_date) {
+                let date_str = snapshot_date.format("%Y%m%d").to_string();
+                let cohort = cell_dist_tracker.cohort_snapshot();
+                cell_dist_sealed_rows.push(materialize::MaterializedRow::new(
+                    CF_STATS_HODL,
+                    keys::encode_stats_key(
+                        keys::stats_prefix::CELL_DISTRIBUTION,
+                        date_str.as_bytes(),
+                    ),
+                    bincode::serialize(&snapshot)?,
+                ));
+                cell_dist_sealed_rows.push(materialize::MaterializedRow::new(
+                    CF_STATS_HODL,
+                    keys::encode_stats_key(
+                        keys::stats_prefix::ADDR_COHORT,
+                        date_str.as_bytes(),
+                    ),
+                    bincode::serialize(&cohort)?,
+                ));
+            }
         }
         owners
             .object
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
 
+        materializer.stream_sealed_aggregate_rows(&cell_dist_sealed_rows)?;
         self.activity_stats.apply_history_rows(&history.rows)?;
         materializer.stream_history_rows(&history.rows)?;
         materialize_activity_secondary_state(domain_store, &history.rows)?;
@@ -633,6 +657,8 @@ pub struct BulkArtifactSnapshot {
     pub bulk_build_session_marker: Option<BulkBuildSessionMarker>,
     pub hodl_tracker_state: Option<HodlTrackerState>,
     pub cell_dist_tracker_state: Option<CellDistributionTrackerState>,
+    pub cell_distribution_snapshots: HashMap<String, DailyCellDistribution>,
+    pub address_cohort_snapshots: HashMap<String, DailyAddressCohort>,
     pub block_headers: HashMap<i64, CachedBlockHeader>,
     pub block_numbers_by_hash: HashMap<Vec<u8>, i64>,
     pub txs_by_hash: HashMap<Vec<u8>, (i64, i32, TxIndexEntry)>,
@@ -705,6 +731,8 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             collect_history_snapshot(&domain_store)?;
         let (daily_activity_stats, hourly_activity_stats) =
             collect_activity_stats_snapshot(&domain_store)?;
+        let (cell_distribution_snapshots, address_cohort_snapshots) =
+            collect_hodl_stats_snapshot(&domain_store)?;
         let (
             cell_payloads,
             live_cells,
@@ -725,6 +753,8 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             bulk_build_session_marker,
             hodl_tracker_state,
             cell_dist_tracker_state,
+            cell_distribution_snapshots,
+            address_cohort_snapshots,
             block_headers,
             block_numbers_by_hash,
             txs_by_hash,
@@ -1806,6 +1836,57 @@ fn collect_activity_stats_snapshot(
         .into_iter()
         .collect::<HashMap<_, _>>();
     Ok((daily_activity_stats, hourly_activity_stats))
+}
+
+fn collect_hodl_stats_snapshot(
+    domain_store: &CkbadgerStore,
+) -> Result<(
+    HashMap<String, DailyCellDistribution>,
+    HashMap<String, DailyAddressCohort>,
+)> {
+    let mut cell_distribution_snapshots = HashMap::new();
+    let cell_dist_iter = domain_store.prefix_iterator_cf(
+        domain_store.cf_stats_hodl(),
+        &[keys::stats_prefix::CELL_DISTRIBUTION],
+    );
+    for item in cell_dist_iter {
+        let (key, value) = item?;
+        if !key.starts_with(&[keys::stats_prefix::CELL_DISTRIBUTION]) {
+            break;
+        }
+        let date = String::from_utf8_lossy(&key[1..]).to_string();
+        let snapshot: DailyCellDistribution = bincode::deserialize(&value).map_err(|e| {
+            anyhow!(
+                "failed to deserialize DailyCellDistribution in bulk artifact snapshot helper: key=0x{} error={}",
+                hex::encode(&key),
+                e
+            )
+        })?;
+        cell_distribution_snapshots.insert(date, snapshot);
+    }
+
+    let mut address_cohort_snapshots = HashMap::new();
+    let cohort_iter = domain_store.prefix_iterator_cf(
+        domain_store.cf_stats_hodl(),
+        &[keys::stats_prefix::ADDR_COHORT],
+    );
+    for item in cohort_iter {
+        let (key, value) = item?;
+        if !key.starts_with(&[keys::stats_prefix::ADDR_COHORT]) {
+            break;
+        }
+        let date = String::from_utf8_lossy(&key[1..]).to_string();
+        let snapshot: DailyAddressCohort = bincode::deserialize(&value).map_err(|e| {
+            anyhow!(
+                "failed to deserialize DailyAddressCohort in bulk artifact snapshot helper: key=0x{} error={}",
+                hex::encode(&key),
+                e
+            )
+        })?;
+        address_cohort_snapshots.insert(date, snapshot);
+    }
+
+    Ok((cell_distribution_snapshots, address_cohort_snapshots))
 }
 
 fn collect_cell_snapshot(

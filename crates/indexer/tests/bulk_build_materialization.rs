@@ -470,6 +470,108 @@ fn hodl_tracker_fixture() -> Vec<BlockResponseWithCycles> {
     ]
 }
 
+fn cell_distribution_snapshot_fixture() -> Vec<BlockResponseWithCycles> {
+    let create_tx = TransactionView {
+        hash: format!("0x{}", "f1".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: "0x342770c00".to_string(),
+            lock: fixture_lock_script(),
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let split_tx = TransactionView {
+        hash: format!("0x{}", "f2".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: create_tx.hash.clone(),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![
+            CellOutput {
+                capacity: "0x1dcd65000".to_string(),
+                lock: fixture_lock_script(),
+                type_: None,
+            },
+            CellOutput {
+                capacity: "0x165a0bc00".to_string(),
+                lock: fixture_lock_script_b(),
+                type_: None,
+            },
+        ],
+        outputs_data: vec!["0x".to_string(), "0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let next_day_noop_tx = TransactionView {
+        hash: format!("0x{}", "f3".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: split_tx.hash.clone(),
+                index: "0x1".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: "0x165a0bc00".to_string(),
+            lock: fixture_lock_script_b(),
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    vec![
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header_with_timestamp(14_003_000, 0xa1, 1_705_276_800_000),
+                uncles: vec![],
+                transactions: vec![create_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header_with_timestamp(14_003_001, 0xa2, 1_705_280_400_000),
+                uncles: vec![],
+                transactions: vec![split_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header_with_timestamp(14_003_002, 0xa3, 1_705_363_200_000),
+                uncles: vec![],
+                transactions: vec![next_day_noop_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+    ]
+}
+
 #[test]
 fn materializer_streams_append_only_rows_before_final_snapshot() {
     let report = run_sample_bulk_materialization_for_test().expect("sample bulk materialization");
@@ -874,5 +976,42 @@ fn bulk_build_materializes_cell_distribution_tracker_state_without_db_reads() {
     assert_eq!(
         state.cohort_accum[0],
         ("2024-01".to_string(), 122_00000000, 140_00000000)
+    );
+}
+
+#[test]
+fn bulk_build_materializes_sealed_cell_distribution_and_address_cohort_on_day_boundary() {
+    let snapshot = materialize_bulk_artifacts_for_test(&cell_distribution_snapshot_fixture())
+        .expect("cell distribution day-boundary snapshot");
+
+    assert!(
+        snapshot.report.sealed_aggregate_rows > 0,
+        "bulk build should materialize sealed cell-distribution rows"
+    );
+    assert_eq!(snapshot.cell_distribution_snapshots.len(), 1);
+    assert_eq!(snapshot.address_cohort_snapshots.len(), 1);
+
+    let dist = snapshot
+        .cell_distribution_snapshots
+        .get("20240115")
+        .expect("sealed cell distribution snapshot");
+    assert_eq!(dist.size_bucket_counts, [2, 0, 0, 0, 0, 0]);
+    assert_eq!(dist.size_bucket_capacities, [122_00000000, 0, 0, 0, 0, 0]);
+    assert!(
+        !snapshot.cell_distribution_snapshots.contains_key("20240116"),
+        "current in-progress day must not be materialized"
+    );
+
+    let cohort = snapshot
+        .address_cohort_snapshots
+        .get("20240115")
+        .expect("sealed address cohort snapshot");
+    assert_eq!(cohort.cohorts.len(), 1);
+    assert_eq!(cohort.cohorts[0].cohort_month, "2024-01");
+    assert_eq!(cohort.cohorts[0].used_capacity, 122_00000000);
+    assert_eq!(cohort.cohorts[0].total_balance, 140_00000000);
+    assert!(
+        !snapshot.address_cohort_snapshots.contains_key("20240116"),
+        "current in-progress day must not be materialized"
     );
 }
