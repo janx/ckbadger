@@ -57,11 +57,6 @@ impl SyncMode {
 // Free functions — moved from indexer.rs (call sites unchanged for now)
 // ---------------------------------------------------------------------------
 
-pub(crate) fn should_skip_address_balances(_bulk_sync_mode: bool) -> bool {
-    // Address balances must always be updated inline to keep bulk sync exact.
-    false
-}
-
 pub(crate) fn is_bulk_sync_active_by_lag(blocks_behind: u64, bulk_sync_threshold: u64) -> bool {
     blocks_behind > bulk_sync_threshold
 }
@@ -269,11 +264,5 @@ mod tests {
 
         let err = ensure_bulk_sync_fresh_start(true, 0, &None, &append_store).unwrap_err();
         assert!(err.to_string().contains("append-only store contains"));
-    }
-
-    #[test]
-    fn test_address_balances_are_never_skipped_in_bulk_mode() {
-        assert!(!should_skip_address_balances(true));
-        assert!(!should_skip_address_balances(false));
     }
 }
