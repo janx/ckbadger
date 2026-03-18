@@ -10,7 +10,7 @@ use ckbadger_store::keys;
 use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use ckbadger_store::types::{
     decode_live_cell_marker, BulkBuildSessionMarker, CachedBlockHeader, ConsumedCellMeta,
-    DailyActivityStats, LiveCellInfo, ObjectStandard, SporeTypeIndex, SyncStatus,
+    DailyActivityStats, HodlTrackerState, LiveCellInfo, ObjectStandard, SporeTypeIndex, SyncStatus,
     TokenTransferRecord, TxActivityBundle, TxIndexEntry, DID_CKB_SENTINEL_COLLECTION,
     DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
@@ -333,12 +333,26 @@ impl ActivityStatsAccumulator {
     }
 }
 
-#[derive(Default)]
 struct BulkBuildRuntimeState {
     interner: interner::IdentityInterner,
     sequencer: sequencer::BulkSequencer,
     owners: CoreOwners,
     activity_stats: ActivityStatsAccumulator,
+    hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker,
+    hodl_live_cells_by_lock: HashMap<crate::sync::types::InternId, i32>,
+}
+
+impl Default for BulkBuildRuntimeState {
+    fn default() -> Self {
+        Self {
+            interner: interner::IdentityInterner::default(),
+            sequencer: sequencer::BulkSequencer::default(),
+            owners: CoreOwners::default(),
+            activity_stats: ActivityStatsAccumulator::default(),
+            hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker::new(),
+            hodl_live_cells_by_lock: HashMap::new(),
+        }
+    }
 }
 
 impl BulkBuildRuntimeState {
@@ -384,8 +398,9 @@ impl BulkBuildRuntimeState {
             .last()
             .ok_or_else(|| anyhow!("bulk build arena missing blocks for non-empty batch"))?;
         let history = build_history_rows(&arena, &resolved, &self.interner, is_mainnet)?;
-        let ctx = owners::ReducerContext::new(&self.interner);
+        self.apply_hodl_tracker_batch(&arena, &resolved)?;
 
+        let ctx = owners::ReducerContext::new(&self.interner);
         for tx in &resolved {
             self.owners.apply_tx(tx, &ctx)?;
         }
@@ -412,15 +427,110 @@ impl BulkBuildRuntimeState {
         })
     }
 
-    fn finalize(self, materializer: &mut materialize::Materializer<'_>) -> Result<()> {
-        let sealed_rows = self.activity_stats.build_rows()?;
+    fn finalize(
+        self,
+        domain_store: &CkbadgerStore,
+        materializer: &mut materialize::Materializer<'_>,
+    ) -> Result<()> {
+        let BulkBuildRuntimeState {
+            interner,
+            sequencer,
+            owners,
+            activity_stats,
+            hodl_tracker,
+            ..
+        } = self;
+
+        let sealed_rows = activity_stats.build_rows()?;
         materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
 
-        let final_snapshot_rows = build_final_snapshot_rows(&self.sequencer, &self.interner)?;
+        let final_snapshot_rows = build_final_snapshot_rows(&sequencer, &interner)?;
         materializer.materialize_final_snapshot(&final_snapshot_rows)?;
 
-        let mut owners = self.owners;
+        let mut owners = owners;
         owners.materialize_all(materializer)?;
+
+        let mut meta_batch = ckbadger_store::batch::StoreBatch::new(domain_store);
+        meta_batch.put_hodl_tracker_state(&hodl_tracker.to_state());
+        if !meta_batch.is_empty() {
+            meta_batch.commit()?;
+        }
+        Ok(())
+    }
+
+    fn apply_hodl_tracker_batch(
+        &mut self,
+        arena: &facts::FactsArena,
+        resolved: &[facts::ResolvedTxFacts],
+    ) -> Result<()> {
+        if arena.txs.len() != resolved.len() {
+            bail!(
+                "bulk build hodl tracker tx count mismatch: facts_txs={} resolved_txs={}",
+                arena.txs.len(),
+                resolved.len()
+            );
+        }
+
+        for block in &arena.blocks {
+            let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
+            self.hodl_tracker.record_block_date(block.number, block_date);
+
+            for tx in &resolved[block.tx_range.clone()] {
+                for input in &tx.resolved_inputs {
+                    self.update_hodl_holder_count(input.lock_script_hash_id, -1, tx)?;
+                    self.hodl_tracker
+                        .cell_consumed(input.created_at_block, input.capacity)?;
+                }
+                for cell in &tx.cells {
+                    self.update_hodl_holder_count(cell.lock_script_hash_id, 1, tx)?;
+                    self.hodl_tracker.cell_created(block_date, cell.capacity);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn update_hodl_holder_count(
+        &mut self,
+        lock_hash_id: crate::sync::types::InternId,
+        delta: i32,
+        tx: &facts::ResolvedTxFacts,
+    ) -> Result<()> {
+        let old_live = self
+            .hodl_live_cells_by_lock
+            .get(&lock_hash_id)
+            .copied()
+            .unwrap_or(0);
+        let new_live = old_live.checked_add(delta).ok_or_else(|| {
+            anyhow!(
+                "hodl live cell count overflow: tx=0x{} block={} tx_index={} lock_hash_id={:?} old_live={} delta={}",
+                hex::encode(tx.tx_hash),
+                tx.block_number,
+                tx.tx_index,
+                lock_hash_id,
+                old_live,
+                delta
+            )
+        })?;
+        if new_live < 0 {
+            bail!(
+                "hodl live cell count underflow: tx=0x{} block={} tx_index={} lock_hash_id={:?} old_live={} delta={}",
+                hex::encode(tx.tx_hash),
+                tx.block_number,
+                tx.tx_index,
+                lock_hash_id,
+                old_live,
+                delta
+            );
+        }
+
+        self.hodl_tracker.update_holder_count(old_live, new_live)?;
+        if new_live == 0 {
+            self.hodl_live_cells_by_lock.remove(&lock_hash_id);
+        } else {
+            self.hodl_live_cells_by_lock.insert(lock_hash_id, new_live);
+        }
         Ok(())
     }
 }
@@ -446,6 +556,7 @@ pub struct BulkArtifactSnapshot {
     pub report: materialize::MaterializationReport,
     pub sync_status: SyncStatus,
     pub bulk_build_session_marker: Option<BulkBuildSessionMarker>,
+    pub hodl_tracker_state: Option<HodlTrackerState>,
     pub block_headers: HashMap<i64, CachedBlockHeader>,
     pub block_numbers_by_hash: HashMap<Vec<u8>, i64>,
     pub txs_by_hash: HashMap<Vec<u8>, (i64, i32, TxIndexEntry)>,
@@ -508,7 +619,7 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             let batch_stats = runtime.apply_blocks(batch, &domain_store, &mut materializer, true)?;
             sync_totals.record_batch(&batch_stats)?;
         }
-        runtime.finalize(&mut materializer)?;
+        runtime.finalize(&domain_store, &mut materializer)?;
         let sync_status = sync_totals.finalize_success(&domain_store)?;
         domain_store.clear_bulk_build_session_marker()?;
         let report = materializer.finish();
@@ -529,11 +640,13 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             cell_by_data_hash,
         ) = collect_cell_snapshot(&domain_store, &append_store)?;
         let bulk_build_session_marker = domain_store.get_bulk_build_session_marker()?;
+        let hodl_tracker_state = domain_store.get_hodl_tracker_state()?;
 
         BulkArtifactSnapshot {
             report,
             sync_status,
             bulk_build_session_marker,
+            hodl_tracker_state,
             block_headers,
             block_numbers_by_hash,
             txs_by_hash,

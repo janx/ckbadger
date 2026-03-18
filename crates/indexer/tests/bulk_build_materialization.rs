@@ -24,10 +24,14 @@ fn fixture_lock_script() -> Script {
 }
 
 fn fixture_header(number: u64, hash_byte: u8) -> HeaderView {
+    fixture_header_with_timestamp(number, hash_byte, 1_710_000_000_000)
+}
+
+fn fixture_header_with_timestamp(number: u64, hash_byte: u8, timestamp_ms: i64) -> HeaderView {
     HeaderView {
         version: "0x0".to_string(),
         compact_target: "0x1a08a97e".to_string(),
-        timestamp: "0x18c7b3b2b00".to_string(),
+        timestamp: format!("0x{timestamp_ms:x}"),
         number: format!("0x{number:x}"),
         epoch: "0x7080006000028".to_string(),
         parent_hash: format!("0x{}", "11".repeat(32)),
@@ -37,6 +41,14 @@ fn fixture_header(number: u64, hash_byte: u8) -> HeaderView {
         dao: format!("0x{}", "00".repeat(32)),
         nonce: "0x1".to_string(),
         hash: format!("0x{}", format!("{hash_byte:02x}").repeat(32)),
+    }
+}
+
+fn fixture_lock_script_b() -> Script {
+    Script {
+        code_hash: fixture_lock_script().code_hash,
+        hash_type: fixture_lock_script().hash_type,
+        args: format!("0x{}", "02".repeat(20)),
     }
 }
 
@@ -376,6 +388,86 @@ fn same_block_typed_data_create_then_consume_fixture() -> BlockResponseWithCycle
         },
         cycles: None,
     }
+}
+
+fn hodl_tracker_fixture() -> Vec<BlockResponseWithCycles> {
+    let create_tx = TransactionView {
+        hash: format!("0x{}", "e1".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: "0x342770c00".to_string(),
+            lock: fixture_lock_script(),
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let transfer_tx = TransactionView {
+        hash: format!("0x{}", "e2".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: create_tx.hash.clone(),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![
+            CellOutput {
+                capacity: "0x1dcd65000".to_string(),
+                lock: fixture_lock_script(),
+                type_: None,
+            },
+            CellOutput {
+                capacity: "0x165a0bc00".to_string(),
+                lock: fixture_lock_script_b(),
+                type_: None,
+            },
+        ],
+        outputs_data: vec!["0x".to_string(), "0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    vec![
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header_with_timestamp(
+                    14_002_000,
+                    0x91,
+                    1_705_276_800_000,
+                ),
+                uncles: vec![],
+                transactions: vec![create_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header_with_timestamp(
+                    14_002_001,
+                    0x92,
+                    1_705_280_400_000,
+                ),
+                uncles: vec![],
+                transactions: vec![transfer_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+    ]
 }
 
 #[test]
@@ -742,4 +834,21 @@ fn bulk_build_session_materialization_sets_final_sync_status_and_clears_marker()
         snapshot.bulk_build_session_marker.is_none(),
         "successful bulk-build session must clear the in-progress marker"
     );
+}
+
+#[test]
+fn bulk_build_materializes_hodl_tracker_state_without_db_reads() {
+    let snapshot =
+        materialize_bulk_artifacts_for_test(&hodl_tracker_fixture()).expect("hodl tracker snapshot");
+
+    let state = snapshot
+        .hodl_tracker_state
+        .as_ref()
+        .expect("persisted hodl tracker state");
+    assert_eq!(state.holder_count, 2);
+    assert_eq!(state.last_processed_block, Some(14_002_001));
+    assert_eq!(state.capacity_by_date.len(), 1);
+    assert_eq!(state.capacity_by_date[0], ("20240115".to_string(), 140_00000000));
+    assert_eq!(state.date_transitions.len(), 1);
+    assert_eq!(state.date_transitions[0], (14_002_000, "20240115".to_string()));
 }
