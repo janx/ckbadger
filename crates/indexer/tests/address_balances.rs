@@ -2,6 +2,11 @@
 //!
 //! Tests balance insertion, updates, and cumulative modifications.
 
+use ckbadger_indexer::rpc::{
+    BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
+    TransactionView,
+};
+use ckbadger_indexer::sync::materialize_address_balances_for_test;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::AddressBalance;
 use ckbadger_store::CkbadgerStore;
@@ -12,6 +17,94 @@ fn setup_store() -> Arc<CkbadgerStore> {
     let store = Arc::new(CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap());
     std::mem::forget(dir);
     store
+}
+
+fn fixture_lock_script(args_hex: &str) -> Script {
+    Script {
+        code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8".to_string(),
+        hash_type: "type".to_string(),
+        args: args_hex.to_string(),
+    }
+}
+
+fn fixture_header(number: u64) -> HeaderView {
+    HeaderView {
+        version: "0x0".to_string(),
+        compact_target: "0x1a08a97e".to_string(),
+        timestamp: "0x18c7b3b2b00".to_string(),
+        number: format!("0x{number:x}"),
+        epoch: "0x7080006000028".to_string(),
+        parent_hash: format!("0x{}", "11".repeat(32)),
+        transactions_root: format!("0x{}", "22".repeat(32)),
+        proposals_hash: format!("0x{}", "33".repeat(32)),
+        extra_hash: format!("0x{}", "44".repeat(32)),
+        dao: format!("0x{}", "00".repeat(32)),
+        nonce: "0x1".to_string(),
+        hash: format!("0x{}", "55".repeat(32)),
+    }
+}
+
+fn bulk_build_address_fixture() -> BlockResponseWithCycles {
+    let lock_a_args = format!("0x{}", "01".repeat(20));
+    let lock_b_args = format!("0x{}", "02".repeat(20));
+    let create_tx = TransactionView {
+        hash: format!("0x{}", "aa".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: format!("0x{:x}", 200_00000000u64),
+            lock: fixture_lock_script(&lock_a_args),
+            type_: None,
+        }],
+        outputs_data: vec!["0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let split_tx = TransactionView {
+        hash: format!("0x{}", "bb".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: create_tx.hash.clone(),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![
+            CellOutput {
+                capacity: format!("0x{:x}", 100_00000000u64),
+                lock: fixture_lock_script(&lock_a_args),
+                type_: None,
+            },
+            CellOutput {
+                capacity: format!("0x{:x}", 100_00000000u64),
+                lock: fixture_lock_script(&lock_b_args),
+                type_: None,
+            },
+        ],
+        outputs_data: vec!["0x".to_string(), "0x".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    BlockResponseWithCycles {
+        block: BlockView {
+            header: fixture_header(14_000_500),
+            uncles: vec![],
+            transactions: vec![create_tx, split_tx],
+            proposals: vec![],
+        },
+        cycles: None,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -172,4 +265,39 @@ fn test_used_capacity_zero_by_default() {
         retrieved.used_capacity, 0,
         "used_capacity should default to 0"
     );
+}
+
+#[test]
+fn bulk_build_address_owner_materializes_final_balances_without_db_reads() {
+    let balances =
+        materialize_address_balances_for_test(&[bulk_build_address_fixture()]).expect("balances");
+    assert_eq!(balances.len(), 2);
+
+    let balance_a = balances
+        .values()
+        .find(|balance| balance.first_seen_tx == vec![0xaa; 32])
+        .expect("address A balance");
+    assert_eq!(balance_a.balance, 100_00000000);
+    assert_eq!(balance_a.used_capacity, 61_00000000);
+    assert_eq!(balance_a.live_cells_count, 1);
+    assert_eq!(balance_a.total_cells_count, 2);
+    assert_eq!(balance_a.txs_count, 2);
+    assert_eq!(balance_a.first_seen_block, 14_000_500);
+    assert_eq!(balance_a.first_seen_tx, vec![0xaa; 32]);
+    assert_eq!(balance_a.last_activity_block, 14_000_500);
+    assert_eq!(balance_a.last_activity_tx, vec![0xbb; 32]);
+
+    let balance_b = balances
+        .values()
+        .find(|balance| balance.first_seen_tx == vec![0xbb; 32])
+        .expect("address B balance");
+    assert_eq!(balance_b.balance, 100_00000000);
+    assert_eq!(balance_b.used_capacity, 61_00000000);
+    assert_eq!(balance_b.live_cells_count, 1);
+    assert_eq!(balance_b.total_cells_count, 1);
+    assert_eq!(balance_b.txs_count, 1);
+    assert_eq!(balance_b.first_seen_block, 14_000_500);
+    assert_eq!(balance_b.first_seen_tx, vec![0xbb; 32]);
+    assert_eq!(balance_b.last_activity_block, 14_000_500);
+    assert_eq!(balance_b.last_activity_tx, vec![0xbb; 32]);
 }

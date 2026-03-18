@@ -189,12 +189,19 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
                     capacity: cell.capacity,
                     lock_script_hash_id: interner.intern_bytes(cell.lock_script_hash.clone()),
                     lock_code_hash_id: interner.intern_bytes(cell.lock_code_hash.clone()),
+                    lock_hash_type: cell.lock_hash_type,
+                    lock_args_id: interner.intern_bytes(cell.lock_args.clone()),
                     type_script_hash_id: cell
                         .type_script_hash
                         .clone()
                         .map(|value| interner.intern_bytes(value)),
                     type_code_hash_id: cell
                         .type_code_hash
+                        .clone()
+                        .map(|value| interner.intern_bytes(value)),
+                    type_hash_type: cell.type_hash_type,
+                    type_args_id: cell
+                        .type_args
                         .clone()
                         .map(|value| interner.intern_bytes(value)),
                     occupied_capacity: occupied_capacity_shannons_i64(
@@ -2994,8 +3001,8 @@ mod tests {
     use crate::parser::cell::CellParser;
     use crate::parser::dotbit::{parse_dotbit_witness_bundle, DOTBIT_ACCOUNT_CELL_TYPE_ID};
     use crate::parser::mnft::MNFT_TOKEN_CODE_HASH;
-    use crate::parser::udt::SUDT_CODE_HASH;
     use crate::parser::transaction::TransactionParser;
+    use crate::parser::udt::SUDT_CODE_HASH;
     use crate::rpc::{
         BlockResponseWithCycles, BlockView, CellDep, CellInput, CellOutput, HeaderView, OutPoint,
         Script, TransactionView,
@@ -3339,9 +3346,21 @@ mod tests {
         let blocks = vec![create_facts_fixture_block_with_two_txs()];
         let mut interner = IdentityInterner::default();
         let arena = build_bulk_facts_arena_from_blocks(&blocks, &mut interner).expect("facts");
+        let sudt_cell = arena
+            .cells
+            .iter()
+            .find(|cell| matches!(cell.semantic_tag, CellSemanticTag::Sudt))
+            .expect("sudt cell");
 
         assert_eq!(arena.txs.len(), 2);
         assert!(arena.cells.iter().any(|cell| cell.occupied_capacity > 0));
+        assert_eq!(sudt_cell.lock_hash_type, 1);
+        assert_eq!(interner.resolve_bytes(sudt_cell.lock_args_id).len(), 20);
+        assert_eq!(sudt_cell.type_hash_type, Some(1));
+        assert_eq!(
+            interner.resolve_bytes(sudt_cell.type_args_id.expect("type args")),
+            &[0x12; 32]
+        );
         assert!(
             arena.cells.iter().all(|cell| {
                 matches!(

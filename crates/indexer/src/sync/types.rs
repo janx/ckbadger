@@ -17,9 +17,14 @@ pub(crate) struct InternId(u32);
 
 impl InternId {
     pub(crate) fn new(index: usize) -> Self {
-        Self(u32::try_from(index).unwrap_or_else(|_| {
-            panic!("intern id overflow: index {index} exceeds u32::MAX")
-        }))
+        Self(
+            u32::try_from(index)
+                .unwrap_or_else(|_| panic!("intern id overflow: index {index} exceeds u32::MAX")),
+        )
+    }
+
+    pub(crate) const fn as_usize(self) -> usize {
+        self.0 as usize
     }
 }
 

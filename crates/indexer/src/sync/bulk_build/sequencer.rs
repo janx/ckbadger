@@ -110,8 +110,12 @@ mod tests {
                     capacity: 100_00000000,
                     lock_script_hash_id: InternId::new(0),
                     lock_code_hash_id: InternId::new(1),
+                    lock_hash_type: 1,
+                    lock_args_id: InternId::new(2),
                     type_script_hash_id: None,
                     type_code_hash_id: None,
+                    type_hash_type: None,
+                    type_args_id: None,
                     occupied_capacity: 61_00000000,
                     data_size: 0,
                     udt_amount: None,
@@ -123,8 +127,12 @@ mod tests {
                     capacity: 99_00000000,
                     lock_script_hash_id: InternId::new(2),
                     lock_code_hash_id: InternId::new(3),
+                    lock_hash_type: 1,
+                    lock_args_id: InternId::new(4),
                     type_script_hash_id: None,
                     type_code_hash_id: None,
+                    type_hash_type: None,
+                    type_args_id: None,
                     occupied_capacity: 61_00000000,
                     data_size: 0,
                     udt_amount: None,
@@ -150,6 +158,9 @@ mod tests {
 
         assert_eq!(resolved[1].resolved_inputs.len(), 1);
         assert_eq!(resolved[1].resolved_inputs[0].capacity, 100_00000000);
-        assert_eq!(resolved[1].resolved_inputs[0].occupied_capacity, 61_00000000);
+        assert_eq!(
+            resolved[1].resolved_inputs[0].occupied_capacity,
+            61_00000000
+        );
     }
 }

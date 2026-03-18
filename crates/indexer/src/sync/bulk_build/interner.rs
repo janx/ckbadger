@@ -19,6 +19,16 @@ impl IdentityInterner {
         self.values.push(bytes);
         id
     }
+
+    pub(crate) fn resolve_bytes(&self, id: InternId) -> &[u8] {
+        self.values.get(id.as_usize()).unwrap_or_else(|| {
+            panic!(
+                "missing interned identity bytes for id={} values_len={}",
+                id.as_usize(),
+                self.values.len()
+            )
+        })
+    }
 }
 
 #[cfg(test)]
@@ -44,6 +54,14 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(interner.intern_bytes(vec![1, 2, 3]), first);
         assert_eq!(interner.intern_bytes(vec![4, 5, 6]), second);
+    }
+
+    #[test]
+    fn script_identity_interner_resolves_interned_bytes_by_id() {
+        let mut interner = IdentityInterner::default();
+        let id = interner.intern_bytes(vec![0x11, 0x22, 0x33]);
+
+        assert_eq!(interner.resolve_bytes(id), &[0x11, 0x22, 0x33]);
     }
 
     #[cfg(target_pointer_width = "64")]

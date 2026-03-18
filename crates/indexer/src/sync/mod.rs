@@ -1,10 +1,10 @@
 mod adaptive;
 mod batch;
+pub(crate) mod bulk_build;
 pub(crate) mod dao_helpers;
 mod diagnostics;
 mod helpers;
 mod indexer;
-pub(crate) mod bulk_build;
 mod nft_helpers;
 mod pipeline;
 mod progress;
@@ -46,6 +46,13 @@ pub fn resolve_live_cell_snapshot_for_test(
 #[doc(hidden)]
 pub fn run_sample_bulk_materialization_for_test() -> anyhow::Result<MaterializationReport> {
     bulk_build::materialize::run_sample_bulk_materialization_for_test()
+}
+
+#[doc(hidden)]
+pub fn materialize_address_balances_for_test(
+    blocks: &[crate::rpc::BlockResponseWithCycles],
+) -> anyhow::Result<std::collections::HashMap<Vec<u8>, ckbadger_store::AddressBalance>> {
+    bulk_build::owners::address::materialize_address_balances_for_test(blocks)
 }
 
 /// Convert transactions_count (i32) to usize, failing if negative.

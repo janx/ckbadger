@@ -1,9 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 
-use super::facts::{
-    CellFacts, CellSemanticTag, FactsArena, OutPointKey, ResolvedInputFacts,
-};
+use super::facts::{CellFacts, CellSemanticTag, FactsArena, OutPointKey, ResolvedInputFacts};
 use super::sequencer::BulkSequencer;
 use crate::sync::types::InternId;
 
@@ -66,8 +64,12 @@ pub(crate) struct LiveCellSlot {
     pub(crate) udt_amount: Option<u128>,
     pub(crate) lock_script_hash_id: InternId,
     pub(crate) lock_code_hash_id: InternId,
+    pub(crate) lock_hash_type: i16,
+    pub(crate) lock_args_id: InternId,
     pub(crate) type_script_hash_id: Option<InternId>,
     pub(crate) type_code_hash_id: Option<InternId>,
+    pub(crate) type_hash_type: Option<i16>,
+    pub(crate) type_args_id: Option<InternId>,
     pub(crate) semantic_tag: CellSemanticTag,
 }
 
@@ -82,8 +84,12 @@ impl LiveCellSlot {
             udt_amount: cell.udt_amount,
             lock_script_hash_id: cell.lock_script_hash_id,
             lock_code_hash_id: cell.lock_code_hash_id,
+            lock_hash_type: cell.lock_hash_type,
+            lock_args_id: cell.lock_args_id,
             type_script_hash_id: cell.type_script_hash_id,
             type_code_hash_id: cell.type_code_hash_id,
+            type_hash_type: cell.type_hash_type,
+            type_args_id: cell.type_args_id,
             semantic_tag: cell.semantic_tag,
         }
     }
@@ -98,8 +104,12 @@ impl LiveCellSlot {
             udt_amount: self.udt_amount,
             lock_script_hash_id: self.lock_script_hash_id,
             lock_code_hash_id: self.lock_code_hash_id,
+            lock_hash_type: self.lock_hash_type,
+            lock_args_id: self.lock_args_id,
             type_script_hash_id: self.type_script_hash_id,
             type_code_hash_id: self.type_code_hash_id,
+            type_hash_type: self.type_hash_type,
+            type_args_id: self.type_args_id,
             semantic_tag: self.semantic_tag,
         }
     }
@@ -177,8 +187,12 @@ mod tests {
             udt_amount: None,
             lock_script_hash_id: InternId::new(0),
             lock_code_hash_id: InternId::new(1),
+            lock_hash_type: 1,
+            lock_args_id: InternId::new(2),
             type_script_hash_id: None,
             type_code_hash_id: None,
+            type_hash_type: None,
+            type_args_id: None,
             semantic_tag: CellSemanticTag::Plain,
         }
     }
@@ -235,15 +249,17 @@ mod tests {
     #[test]
     fn live_cell_owner_errors_on_duplicate_created_outpoint() {
         let mut owner = LiveCellOwner::default();
-        owner.insert_created(sample_created_slot()).expect("first insert");
+        owner
+            .insert_created(sample_created_slot())
+            .expect("first insert");
 
         let err = owner
             .insert_created(sample_created_slot())
             .expect_err("duplicate outpoint must fail");
 
-        assert!(
-            err.to_string()
-                .contains(&format!("outpoint=0x{}:0", hex::encode(sample_outpoint().tx_hash)))
-        );
+        assert!(err.to_string().contains(&format!(
+            "outpoint=0x{}:0",
+            hex::encode(sample_outpoint().tx_hash)
+        )));
     }
 }
