@@ -158,6 +158,7 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
         let append_store = CkbadgerStore::open_append_only(&append_path)?;
         let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
         materializer.stream_history_rows(&history_rows)?;
+        materialize_activity_secondary_state(&domain_store, &history_rows)?;
         materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
         materializer.materialize_final_snapshot(&final_snapshot_rows)?;
         owners.materialize_all(&mut materializer)?;
@@ -420,6 +421,28 @@ fn build_sealed_aggregate_rows(
     }
 
     Ok(rows)
+}
+
+fn materialize_activity_secondary_state(
+    domain_store: &CkbadgerStore,
+    history_rows: &[materialize::MaterializedRow],
+) -> Result<()> {
+    for row in history_rows.iter().filter(|row| row.cf_name == CF_ACTIVITIES) {
+        let bundle: TxActivityBundle = bincode::deserialize(&row.value).map_err(|e| {
+            anyhow!(
+                "failed to deserialize TxActivityBundle while materializing bulk activity secondary state: key=0x{} error={}",
+                hex::encode(&row.key),
+                e
+            )
+        })?;
+        let mut batch = ckbadger_store::batch::StoreBatch::new(domain_store);
+        crate::db::writer::fiber::process_fiber_channel_events(&mut batch, domain_store, &bundle)?;
+        if !batch.is_empty() {
+            batch.commit()?;
+        }
+    }
+
+    Ok(())
 }
 
 fn build_activity_rows(
@@ -1459,6 +1482,7 @@ fn unique_temp_test_dir(prefix: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET;
     use crate::parser::udt::SUDT_CODE_HASH;
     use crate::parser::ScriptParser;
     use crate::rpc::{
@@ -1466,7 +1490,7 @@ mod tests {
         TransactionView,
     };
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
-    use ckbadger_store::types::{TokenTransferRecord, TxActivityBundle};
+    use ckbadger_store::types::{FiberChannelState, TokenTransferRecord, TxActivityBundle};
     use ckbadger_store::{keys, CF_ACTIVITIES, CF_ADDR_TXS};
 
     fn fixture_lock_script(args_hex: &str) -> Script {
@@ -1566,6 +1590,14 @@ mod tests {
         }
     }
 
+    fn fixture_fiber_funding_lock_script(args_hex: &str) -> Script {
+        Script {
+            code_hash: FUNDING_LOCK_CODE_HASH_MAINNET.to_string(),
+            hash_type: "type".to_string(),
+            args: args_hex.to_string(),
+        }
+    }
+
     fn u128_data_hex(amount: u128) -> String {
         format!("0x{}", hex::encode(amount.to_le_bytes()))
     }
@@ -1628,6 +1660,69 @@ mod tests {
                 header: fixture_header(14_000_889, 0x9a),
                 uncles: vec![],
                 transactions: vec![create_tx, split_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        }
+    }
+
+    fn bulk_build_fiber_open_fixture() -> BlockResponseWithCycles {
+        let participant_args = format!("0x{}", "03".repeat(20));
+        let funding_args = format!("0x{}", "bb".repeat(20));
+        let create_tx = TransactionView {
+            hash: format!("0x{}", "f1".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", "00".repeat(32)),
+                    index: "0xffffffff".to_string(),
+                },
+            }],
+            outputs: vec![CellOutput {
+                capacity: format!("0x{:x}", 200_00000000u64),
+                lock: fixture_lock_script(&participant_args),
+                type_: None,
+            }],
+            outputs_data: vec!["0x".to_string()],
+            witnesses: vec!["0x".to_string()],
+        };
+
+        let open_tx = TransactionView {
+            hash: format!("0x{}", "f2".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: create_tx.hash.clone(),
+                    index: "0x0".to_string(),
+                },
+            }],
+            outputs: vec![
+                CellOutput {
+                    capacity: format!("0x{:x}", 130_00000000u64),
+                    lock: fixture_fiber_funding_lock_script(&funding_args),
+                    type_: None,
+                },
+                CellOutput {
+                    capacity: format!("0x{:x}", 70_00000000u64),
+                    lock: fixture_lock_script(&participant_args),
+                    type_: None,
+                },
+            ],
+            outputs_data: vec!["0x".to_string(), "0x".to_string()],
+            witnesses: vec!["0x".to_string()],
+        };
+
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header(14_000_990, 0xa7),
+                uncles: vec![],
+                transactions: vec![create_tx, open_tx],
                 proposals: vec![],
             },
             cycles: None,
@@ -1811,5 +1906,88 @@ mod tests {
         assert_eq!(owner_b.ckb_delta, 100_00000000);
         assert!(owner_b.asset_changes.is_empty());
         assert_eq!(owner_b.peers, vec![lock_a_hash]);
+    }
+
+    #[test]
+    fn bulk_build_materialization_processes_fiber_channel_events_from_activity_bundles() {
+        let block = bulk_build_fiber_open_fixture();
+        let open_tx_hash =
+            hex::decode(&block.block.transactions[1].hash[2..]).expect("open tx hash");
+        let funding_args = hex::decode("bb".repeat(20)).expect("funding args");
+        let expected_channel_id = keys::encode_fiber_channel_id(&open_tx_hash, 0);
+
+        let mut interner = interner::IdentityInterner::default();
+        let arena =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &mut interner)
+                .expect("facts arena");
+        let mut sequencer = sequencer::BulkSequencer::default();
+        let resolved = sequencer.resolve(&arena).expect("resolved txs");
+        let mut owners = CoreOwners::default();
+        let ctx = owners::ReducerContext::new(&interner);
+        let history_rows =
+            build_history_rows(&arena, &resolved, &interner, true).expect("history rows");
+        let sealed_rows = build_sealed_aggregate_rows(&history_rows).expect("sealed rows");
+        let final_snapshot_rows =
+            build_final_snapshot_rows(&sequencer, &interner).expect("final snapshot rows");
+
+        let open_bundle = history_rows
+            .iter()
+            .filter(|row| row.cf_name == CF_ACTIVITIES)
+            .map(|row| {
+                bincode::deserialize::<TxActivityBundle>(&row.value)
+                    .expect("deserialize tx activity bundle")
+            })
+            .find(|bundle| !bundle.is_cellbase)
+            .expect("non-cellbase activity bundle");
+        let participant_owner = open_bundle
+            .owners
+            .iter()
+            .find(|owner| !owner.protocol_actions.is_empty())
+            .expect("fiber participant owner");
+        assert_eq!(participant_owner.protocol_actions.len(), 1);
+        assert_eq!(participant_owner.protocol_actions[0].protocol, "fiber");
+        assert_eq!(participant_owner.protocol_actions[0].action, "channel_open");
+
+        for tx in &resolved {
+            owners.apply_tx(tx, &ctx).expect("apply core owners");
+        }
+
+        let root = unique_temp_test_dir("bulk-build-fiber-activity");
+        std::fs::create_dir_all(&root).expect("create root dir");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("create domain dir");
+        std::fs::create_dir_all(&append_path).expect("create append-only dir");
+
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
+        let append_store =
+            CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
+        let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
+        materializer
+            .stream_history_rows(&history_rows)
+            .expect("stream history rows");
+        materialize_activity_secondary_state(&domain_store, &history_rows)
+            .expect("materialize activity secondary state");
+        materializer
+            .stream_sealed_aggregate_rows(&sealed_rows)
+            .expect("stream sealed rows");
+        materializer
+            .materialize_final_snapshot(&final_snapshot_rows)
+            .expect("materialize final snapshot rows");
+        owners
+            .materialize_all(&mut materializer)
+            .expect("materialize core owners");
+        let _ = materializer.finish();
+
+        let channels = domain_store
+            .list_fiber_channels(10, None, None)
+            .expect("list fiber channels");
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].0, expected_channel_id);
+        assert_eq!(channels[0].1.state, FiberChannelState::Open);
+        assert_eq!(channels[0].1.capacity, 130_00000000);
+        assert_eq!(channels[0].1.funding_lock_args, funding_args);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
