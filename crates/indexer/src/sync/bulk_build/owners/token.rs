@@ -506,8 +506,12 @@ mod tests {
         let tx0 = ResolvedTxFacts {
             tx_hash: [0x41; 32],
             block_number: 100,
+            block_hash: [0x03; 32],
+            timestamp_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 0,
+            is_cellbase: false,
+            dotbit_action: None,
             resolved_inputs: Vec::new(),
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x41; 32], 0),
@@ -526,13 +530,18 @@ mod tests {
                 udt_amount: Some(1000),
                 semantic_tag: CellSemanticTag::Sudt,
                 dao_state: None,
+                protocol_facts: None,
             }],
         };
         let tx1 = ResolvedTxFacts {
             tx_hash: [0x42; 32],
             block_number: 100,
+            block_hash: [0x03; 32],
+            timestamp_ms: 1_700_000_000_001,
             block_dao_ar: 1,
             tx_index: 1,
+            is_cellbase: false,
+            dotbit_action: None,
             resolved_inputs: vec![ResolvedInputFacts {
                 outpoint: OutPointKey::new([0x41; 32], 0),
                 created_at_block: 100,
@@ -550,6 +559,7 @@ mod tests {
                 type_args_id: Some(type_args_id),
                 semantic_tag: CellSemanticTag::Sudt,
                 dao_state: None,
+                protocol_facts: None,
             }],
             cells: vec![
                 CellFacts {
@@ -569,6 +579,7 @@ mod tests {
                     udt_amount: Some(600),
                     semantic_tag: CellSemanticTag::Sudt,
                     dao_state: None,
+                    protocol_facts: None,
                 },
                 CellFacts {
                     outpoint: OutPointKey::new([0x42; 32], 1),
@@ -587,14 +598,19 @@ mod tests {
                     udt_amount: Some(400),
                     semantic_tag: CellSemanticTag::Sudt,
                     dao_state: None,
+                    protocol_facts: None,
                 },
             ],
         };
         let tx2 = ResolvedTxFacts {
             tx_hash: [0x43; 32],
             block_number: 100,
+            block_hash: [0x03; 32],
+            timestamp_ms: 1_700_000_000_002,
             block_dao_ar: 1,
             tx_index: 2,
+            is_cellbase: false,
+            dotbit_action: None,
             resolved_inputs: vec![ResolvedInputFacts {
                 outpoint: OutPointKey::new([0x42; 32], 1),
                 created_at_block: 100,
@@ -612,6 +628,7 @@ mod tests {
                 type_args_id: Some(type_args_id),
                 semantic_tag: CellSemanticTag::Sudt,
                 dao_state: None,
+                protocol_facts: None,
             }],
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x43; 32], 0),
@@ -630,6 +647,7 @@ mod tests {
                 udt_amount: Some(400),
                 semantic_tag: CellSemanticTag::Sudt,
                 dao_state: None,
+                protocol_facts: None,
             }],
         };
 

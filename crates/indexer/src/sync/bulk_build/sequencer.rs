@@ -57,8 +57,12 @@ impl BulkSequencer {
             resolved_txs.push(ResolvedTxFacts {
                 tx_hash: tx.hash,
                 block_number: tx.block_number,
+                block_hash: tx.block_hash,
+                timestamp_ms: tx.timestamp_ms,
                 block_dao_ar: tx.block_dao_ar,
                 tx_index: tx.tx_index,
+                is_cellbase: tx.is_cellbase,
+                dotbit_action: tx.dotbit_action.clone(),
                 resolved_inputs,
                 cells: outputs.to_vec(),
             });
@@ -90,18 +94,24 @@ mod tests {
                 TxFacts {
                     hash: [0xaa; 32],
                     block_number: 14_000_321,
+                    block_hash: [0x10; 32],
+                    timestamp_ms: 1_704_067_200_000,
                     block_dao_ar: 10_000_000_000,
                     tx_index: 0,
                     is_cellbase: true,
+                    dotbit_action: None,
                     input_outpoints: Vec::new(),
                     output_range: 0..1,
                 },
                 TxFacts {
                     hash: [0xbb; 32],
                     block_number: 14_000_321,
+                    block_hash: [0x10; 32],
+                    timestamp_ms: 1_704_067_200_000,
                     block_dao_ar: 10_000_000_000,
                     tx_index: 1,
                     is_cellbase: false,
+                    dotbit_action: None,
                     input_outpoints: vec![OutPointKey::new([0xaa; 32], 0)],
                     output_range: 1..2,
                 },
@@ -124,6 +134,7 @@ mod tests {
                     udt_amount: None,
                     semantic_tag: CellSemanticTag::Plain,
                     dao_state: None,
+                    protocol_facts: None,
                 },
                 CellFacts {
                     outpoint: OutPointKey::new([0xbb; 32], 0),
@@ -142,6 +153,7 @@ mod tests {
                     udt_amount: None,
                     semantic_tag: CellSemanticTag::Plain,
                     dao_state: None,
+                    protocol_facts: None,
                 },
             ],
         }
@@ -155,6 +167,8 @@ mod tests {
         assert_eq!(resolved[0].tx_index, 0);
         assert_eq!(resolved[1].tx_index, 1);
         assert_eq!(resolved[0].block_dao_ar, 10_000_000_000);
+        assert_eq!(resolved[0].block_hash, [0x10; 32]);
+        assert_eq!(resolved[0].timestamp_ms, 1_704_067_200_000);
     }
 
     #[test]
@@ -168,5 +182,35 @@ mod tests {
             resolved[1].resolved_inputs[0].occupied_capacity,
             61_00000000
         );
+    }
+
+    #[test]
+    fn sequencer_preserves_protocol_facts_on_resolved_inputs() {
+        let mut arena = build_sample_facts_arena();
+        arena.cells[0].protocol_facts = Some(super::super::facts::CellProtocolFacts::Spore(
+            super::super::facts::SporeProtocolFacts {
+                spore_id: [0x44; 32],
+                is_did: false,
+                content_type: "image/png".to_string(),
+                content: b"payload".to_vec(),
+                cluster_id: Some([0x55; 32]),
+            },
+        ));
+
+        let resolved = BulkSequencer::default().resolve(&arena).expect("resolve");
+
+        match resolved[1].resolved_inputs[0]
+            .protocol_facts
+            .as_ref()
+            .expect("protocol facts")
+        {
+            super::super::facts::CellProtocolFacts::Spore(spore) => {
+                assert_eq!(spore.spore_id, [0x44; 32]);
+                assert_eq!(spore.cluster_id, Some([0x55; 32]));
+                assert_eq!(spore.content_type, "image/png");
+                assert_eq!(spore.content, b"payload");
+            }
+            other => panic!("expected spore protocol facts, got {other:?}"),
+        }
     }
 }

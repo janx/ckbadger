@@ -5,6 +5,7 @@ use ckbadger_store::types::SporeMediaProfile;
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::bytes_to_safe_string;
+use super::cell::ParsedCell;
 use super::script::ScriptParser;
 
 // Mainnet Spore v2 (latest)
@@ -130,6 +131,46 @@ impl SporeParser {
         })
     }
 
+    pub fn parse_spore_parsed_cell(cell: &ParsedCell) -> Option<ParsedSporeCell> {
+        let type_code_hash = cell.type_code_hash.as_ref()?;
+        let type_args = cell.type_args.as_ref()?;
+        let type_script_hash = cell.type_script_hash.as_ref()?;
+        let is_did = Self::is_did_type_script(type_code_hash);
+
+        if !is_did && !Self::is_spore_nft_type_script(type_code_hash) {
+            return None;
+        }
+
+        if type_args.len() != 32 {
+            return None;
+        }
+
+        if is_did {
+            return Some(ParsedSporeCell {
+                spore_id: type_args.clone(),
+                type_script_hash: type_script_hash.clone(),
+                is_did: true,
+                content_type: String::new(),
+                content: Vec::new(),
+                cluster_id: None,
+                owner_lock_hash: cell.lock_script_hash.clone(),
+                media_profile: None,
+            });
+        }
+
+        let spore_data = Self::parse_spore_data(&cell.data)?;
+        Some(ParsedSporeCell {
+            spore_id: type_args.clone(),
+            type_script_hash: type_script_hash.clone(),
+            is_did: false,
+            content_type: spore_data.content_type,
+            content: spore_data.content,
+            cluster_id: spore_data.cluster_id,
+            owner_lock_hash: cell.lock_script_hash.clone(),
+            media_profile: None,
+        })
+    }
+
     pub fn parse_cluster_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedClusterCell> {
         let type_script = output.type_.as_ref()?;
         let type_code_hash = parse_hex_to_bytes(&type_script.code_hash);
@@ -151,6 +192,24 @@ impl SporeParser {
             name: cluster_data.name,
             description: cluster_data.description,
             owner_lock_hash,
+        })
+    }
+
+    pub fn parse_cluster_parsed_cell(cell: &ParsedCell) -> Option<ParsedClusterCell> {
+        let type_code_hash = cell.type_code_hash.as_ref()?;
+        let type_args = cell.type_args.as_ref()?;
+        let type_script_hash = cell.type_script_hash.as_ref()?;
+        if !Self::is_cluster_type_script(type_code_hash) || type_args.len() != 32 {
+            return None;
+        }
+
+        let cluster_data = Self::parse_cluster_data(&cell.data)?;
+        Some(ParsedClusterCell {
+            cluster_id: type_args.clone(),
+            type_script_hash: type_script_hash.clone(),
+            name: cluster_data.name,
+            description: cluster_data.description,
+            owner_lock_hash: cell.lock_script_hash.clone(),
         })
     }
 
@@ -314,6 +373,7 @@ struct ClusterData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::cell::CellParser;
     use crate::parser::test_helpers::create_lock_script;
     use crate::rpc::{CellOutput, Script, TransactionView};
 
@@ -545,6 +605,67 @@ mod tests {
         assert_eq!(parsed.description, Some("A collection of art".to_string()));
         assert_eq!(parsed.cluster_id.len(), 32);
         assert_eq!(parsed.owner_lock_hash.len(), 32);
+    }
+
+    #[test]
+    fn test_parse_spore_parsed_cell_basic() {
+        let spore_id = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_spore_type_script(spore_id)),
+        };
+        let data = create_spore_data("image/png", b"fake png data", None);
+        let data_hex = format!("0x{}", hex::encode(&data));
+        let parsed_cell = CellParser::parse_output(&output, &data_hex).expect("parsed cell");
+
+        let parsed = SporeParser::parse_spore_parsed_cell(&parsed_cell).expect("spore facts");
+
+        assert!(!parsed.is_did);
+        assert_eq!(parsed.spore_id.len(), 32);
+        assert_eq!(parsed.content_type, "image/png");
+        assert_eq!(parsed.content, b"fake png data");
+        assert!(parsed.cluster_id.is_none());
+        assert_eq!(parsed.type_script_hash, parsed_cell.type_script_hash.unwrap());
+    }
+
+    #[test]
+    fn test_parse_spore_parsed_cell_uses_did_path_without_molecule_decode() {
+        let did_id = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_did_type_script(did_id)),
+        };
+        let parsed_cell = CellParser::parse_output(&output, "0x0102030405").expect("parsed cell");
+
+        let parsed = SporeParser::parse_spore_parsed_cell(&parsed_cell).expect("did facts");
+
+        assert!(parsed.is_did);
+        assert!(parsed.cluster_id.is_none());
+        assert!(parsed.content_type.is_empty());
+        assert!(parsed.content.is_empty());
+        assert_eq!(parsed.spore_id.len(), 32);
+    }
+
+    #[test]
+    fn test_parse_cluster_parsed_cell_basic() {
+        let cluster_id = "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_cluster_type_script(cluster_id)),
+        };
+        let data = create_cluster_data("My Collection", "A collection of art");
+        let data_hex = format!("0x{}", hex::encode(&data));
+        let parsed_cell = CellParser::parse_output(&output, &data_hex).expect("parsed cell");
+
+        let parsed = SporeParser::parse_cluster_parsed_cell(&parsed_cell).expect("cluster facts");
+
+        assert_eq!(parsed.cluster_id.len(), 32);
+        assert_eq!(parsed.name, Some("My Collection".to_string()));
+        assert_eq!(parsed.description, Some("A collection of art".to_string()));
+        assert_eq!(parsed.type_script_hash, parsed_cell.type_script_hash.unwrap());
     }
 
     #[test]

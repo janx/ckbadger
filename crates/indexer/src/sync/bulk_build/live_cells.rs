@@ -2,7 +2,8 @@ use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 
 use super::facts::{
-    CellFacts, CellSemanticTag, DaoCellState, FactsArena, OutPointKey, ResolvedInputFacts,
+    CellFacts, CellProtocolFacts, CellSemanticTag, DaoCellState, FactsArena, OutPointKey,
+    ResolvedInputFacts,
 };
 use super::sequencer::BulkSequencer;
 use crate::sync::types::InternId;
@@ -74,6 +75,7 @@ pub(crate) struct LiveCellSlot {
     pub(crate) type_args_id: Option<InternId>,
     pub(crate) semantic_tag: CellSemanticTag,
     pub(crate) dao_state: Option<DaoCellState>,
+    pub(crate) protocol_facts: Option<CellProtocolFacts>,
 }
 
 impl LiveCellSlot {
@@ -95,6 +97,7 @@ impl LiveCellSlot {
             type_args_id: cell.type_args_id,
             semantic_tag: cell.semantic_tag,
             dao_state: cell.dao_state,
+            protocol_facts: cell.protocol_facts.clone(),
         }
     }
 
@@ -116,6 +119,7 @@ impl LiveCellSlot {
             type_args_id: self.type_args_id,
             semantic_tag: self.semantic_tag,
             dao_state: self.dao_state,
+            protocol_facts: self.protocol_facts,
         }
     }
 }
@@ -200,6 +204,7 @@ mod tests {
             type_args_id: None,
             semantic_tag: CellSemanticTag::Plain,
             dao_state: None,
+            protocol_facts: None,
         }
     }
 

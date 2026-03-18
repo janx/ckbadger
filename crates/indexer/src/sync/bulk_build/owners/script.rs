@@ -555,8 +555,12 @@ mod tests {
         let tx0 = ResolvedTxFacts {
             tx_hash: [0x31; 32],
             block_number: 100,
+            block_hash: [0x02; 32],
+            timestamp_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 0,
+            is_cellbase: false,
+            dotbit_action: None,
             resolved_inputs: Vec::new(),
             cells: vec![
                 CellFacts {
@@ -576,6 +580,7 @@ mod tests {
                     udt_amount: None,
                     semantic_tag: crate::sync::CellSemanticTag::Plain,
                     dao_state: None,
+                    protocol_facts: None,
                 },
                 CellFacts {
                     outpoint: OutPointKey::new([0x31; 32], 1),
@@ -594,14 +599,19 @@ mod tests {
                     udt_amount: Some(42),
                     semantic_tag: crate::sync::CellSemanticTag::Sudt,
                     dao_state: None,
+                    protocol_facts: None,
                 },
             ],
         };
         let tx1 = ResolvedTxFacts {
             tx_hash: [0x32; 32],
             block_number: 100,
+            block_hash: [0x02; 32],
+            timestamp_ms: 1_700_000_000_001,
             block_dao_ar: 1,
             tx_index: 1,
+            is_cellbase: false,
+            dotbit_action: None,
             resolved_inputs: vec![ResolvedInputFacts {
                 outpoint: OutPointKey::new([0x31; 32], 1),
                 created_at_block: 100,
@@ -619,6 +629,7 @@ mod tests {
                 type_args_id: Some(InternId::new(7)),
                 semantic_tag: crate::sync::CellSemanticTag::Sudt,
                 dao_state: None,
+                protocol_facts: None,
             }],
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x32; 32], 0),
@@ -637,6 +648,7 @@ mod tests {
                 udt_amount: None,
                 semantic_tag: crate::sync::CellSemanticTag::Plain,
                 dao_state: None,
+                protocol_facts: None,
             }],
         };
 

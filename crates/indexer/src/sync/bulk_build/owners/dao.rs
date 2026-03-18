@@ -729,8 +729,12 @@ mod tests {
         let tx0 = ResolvedTxFacts {
             tx_hash: [0x31; 32],
             block_number: 100,
+            block_hash: [0x04; 32],
+            timestamp_ms: 1_700_000_000_000,
             block_dao_ar: 10_000,
             tx_index: 0,
+            is_cellbase: false,
+            dotbit_action: None,
             resolved_inputs: Vec::new(),
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x31; 32], 0),
@@ -749,6 +753,7 @@ mod tests {
                 udt_amount: None,
                 semantic_tag: CellSemanticTag::Dao,
                 dao_state: Some(DaoCellState::Deposit),
+                protocol_facts: None,
             }],
         };
         owner.apply_tx(&tx0, &ctx).expect("apply deposit");
@@ -756,8 +761,12 @@ mod tests {
         let tx1 = ResolvedTxFacts {
             tx_hash: [0x32; 32],
             block_number: 101,
+            block_hash: [0x04; 32],
+            timestamp_ms: 1_700_000_000_001,
             block_dao_ar: 12_000,
             tx_index: 0,
+            is_cellbase: false,
+            dotbit_action: None,
             resolved_inputs: vec![ResolvedInputFacts {
                 outpoint: OutPointKey::new([0x31; 32], 0),
                 created_at_block: 100,
@@ -775,6 +784,7 @@ mod tests {
                 type_args_id: Some(InternId::new(4)),
                 semantic_tag: CellSemanticTag::Dao,
                 dao_state: Some(DaoCellState::Deposit),
+                protocol_facts: None,
             }],
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x32; 32], 0),
@@ -795,6 +805,7 @@ mod tests {
                 dao_state: Some(DaoCellState::WithdrawRequest {
                     deposit_block_number: 100,
                 }),
+                protocol_facts: None,
             }],
         };
         owner.apply_tx(&tx1, &ctx).expect("apply request");
@@ -802,8 +813,12 @@ mod tests {
         let tx2 = ResolvedTxFacts {
             tx_hash: [0x33; 32],
             block_number: 102,
+            block_hash: [0x04; 32],
+            timestamp_ms: 1_700_000_000_002,
             block_dao_ar: 13_000,
             tx_index: 0,
+            is_cellbase: false,
+            dotbit_action: None,
             resolved_inputs: vec![ResolvedInputFacts {
                 outpoint: OutPointKey::new([0x32; 32], 0),
                 created_at_block: 101,
@@ -823,6 +838,7 @@ mod tests {
                 dao_state: Some(DaoCellState::WithdrawRequest {
                     deposit_block_number: 100,
                 }),
+                protocol_facts: None,
             }],
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x33; 32], 0),
@@ -841,6 +857,7 @@ mod tests {
                 udt_amount: None,
                 semantic_tag: CellSemanticTag::Plain,
                 dao_state: None,
+                protocol_facts: None,
             }],
         };
         owner.apply_tx(&tx2, &ctx).expect("apply completion");

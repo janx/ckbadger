@@ -32,7 +32,9 @@ use rayon::prelude::*;
 use super::adaptive::*;
 use super::batch::*;
 use super::bulk_build::facts::{
-    BlockFacts, CellFacts, CellSemanticTag, DaoCellState, FactsArena, OutPointKey, TxFacts,
+    BlockFacts, CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts,
+    DaoCellState, DotbitProtocolFacts, FactsArena, MnftClassProtocolFacts,
+    MnftIssuerProtocolFacts, MnftTokenProtocolFacts, OutPointKey, SporeProtocolFacts, TxFacts,
 };
 use super::bulk_build::interner::IdentityInterner;
 use super::checked_tx_count;
@@ -171,6 +173,194 @@ fn parse_bulk_dao_cell_state(
     }))
 }
 
+fn parse_fixed_protocol_id<const N: usize>(
+    bytes: &[u8],
+    label: &str,
+    tx_hash: &[u8; 32],
+    output_index: i16,
+) -> Result<[u8; N]> {
+    bytes.try_into().map_err(|_| {
+        anyhow!(
+            "invalid {} length in bulk facts: tx=0x{}, output_index={}, expected={}, actual={}",
+            label,
+            hex::encode(tx_hash),
+            output_index,
+            N,
+            bytes.len()
+        )
+    })
+}
+
+fn parse_optional_fixed_protocol_id<const N: usize>(
+    bytes: Option<&Vec<u8>>,
+    label: &str,
+    tx_hash: &[u8; 32],
+    output_index: i16,
+) -> Result<Option<[u8; N]>> {
+    bytes
+        .map(|value| parse_fixed_protocol_id::<N>(value, label, tx_hash, output_index))
+        .transpose()
+}
+
+fn parse_bulk_protocol_facts(
+    cell: &ParsedCell,
+    semantic_tag: CellSemanticTag,
+    witness_bundle: &DotbitWitnessBundle,
+    tx_hash: &[u8; 32],
+    output_index: i16,
+) -> Result<Option<CellProtocolFacts>> {
+    match semantic_tag {
+        CellSemanticTag::Plain | CellSemanticTag::Dao | CellSemanticTag::Sudt | CellSemanticTag::Xudt => {
+            Ok(None)
+        }
+        CellSemanticTag::Spore => {
+            let spore = SporeParser::parse_spore_parsed_cell(cell).ok_or_else(|| {
+                anyhow!(
+                    "failed to parse Spore cell semantics in bulk facts: tx=0x{}, output_index={}",
+                    hex::encode(tx_hash),
+                    output_index
+                )
+            })?;
+            Ok(Some(CellProtocolFacts::Spore(SporeProtocolFacts {
+                spore_id: parse_fixed_protocol_id::<32>(
+                    &spore.spore_id,
+                    "spore_id",
+                    tx_hash,
+                    output_index,
+                )?,
+                is_did: spore.is_did,
+                content_type: spore.content_type,
+                content: spore.content,
+                cluster_id: parse_optional_fixed_protocol_id::<32>(
+                    spore.cluster_id.as_ref(),
+                    "spore cluster_id",
+                    tx_hash,
+                    output_index,
+                )?,
+            })))
+        }
+        CellSemanticTag::Cluster => {
+            let cluster = SporeParser::parse_cluster_parsed_cell(cell).ok_or_else(|| {
+                anyhow!(
+                    "failed to parse Cluster cell semantics in bulk facts: tx=0x{}, output_index={}",
+                    hex::encode(tx_hash),
+                    output_index
+                )
+            })?;
+            Ok(Some(CellProtocolFacts::Cluster(ClusterProtocolFacts {
+                cluster_id: parse_fixed_protocol_id::<32>(
+                    &cluster.cluster_id,
+                    "cluster_id",
+                    tx_hash,
+                    output_index,
+                )?,
+                name: cluster.name,
+                description: cluster.description,
+            })))
+        }
+        CellSemanticTag::Mnft => {
+            if let Some(issuer) = MnftParser::parse_issuer_parsed_cell(cell) {
+                return Ok(Some(CellProtocolFacts::MnftIssuer(
+                    MnftIssuerProtocolFacts {
+                        issuer_id: parse_fixed_protocol_id::<20>(
+                            &issuer.issuer_id,
+                            "mnft issuer_id",
+                            tx_hash,
+                            output_index,
+                        )?,
+                        name: issuer.name,
+                        info: issuer.info,
+                        class_count: issuer.class_count,
+                        set_count: issuer.set_count,
+                    },
+                )));
+            }
+
+            if let Some(class) = MnftParser::parse_class_parsed_cell(cell) {
+                return Ok(Some(CellProtocolFacts::MnftClass(
+                    MnftClassProtocolFacts {
+                        class_id: class.class_id,
+                        issuer_id: parse_fixed_protocol_id::<20>(
+                            &class.issuer_id,
+                            "mnft class issuer_id",
+                            tx_hash,
+                            output_index,
+                        )?,
+                        name: class.name,
+                        description: class.description,
+                        renderer: class.renderer,
+                        total: class.total,
+                        issued: class.issued,
+                        configure: class.configure,
+                    },
+                )));
+            }
+
+            if let Some(token) = MnftParser::parse_token_parsed_cell(cell) {
+                return Ok(Some(CellProtocolFacts::MnftToken(
+                    MnftTokenProtocolFacts {
+                        token_id: token.token_id,
+                        class_id: token.class_id,
+                        token_index: token.token_index,
+                        characteristic: token.characteristic,
+                        configure: token.configure,
+                        state: token.state,
+                    },
+                )));
+            }
+
+            Err(anyhow!(
+                "failed to parse mNFT cell semantics in bulk facts: tx=0x{}, output_index={}",
+                hex::encode(tx_hash),
+                output_index
+            ))
+        }
+        CellSemanticTag::Dotbit => {
+            let mut account = DotbitParser::parse_account_parsed_cell(cell).ok_or_else(|| {
+                anyhow!(
+                    "failed to parse DotBit cell semantics in bulk facts: tx=0x{}, output_index={}",
+                    hex::encode(tx_hash),
+                    output_index
+                )
+            })?;
+
+            if let Some(data) = witness_bundle.accounts.get(account.account_id.as_slice()) {
+                account.account = data.name.clone();
+                account.registered_at = data.registered_at;
+                account.status = data.status;
+            }
+
+            if account.account.is_none() {
+                return Err(anyhow!(
+                    "dotbit account name missing in DAS witness for bulk facts: tx=0x{}, output_index={}, account_id=0x{}",
+                    hex::encode(tx_hash),
+                    output_index,
+                    hex::encode(&account.account_id)
+                ));
+            }
+
+            Ok(Some(CellProtocolFacts::Dotbit(DotbitProtocolFacts {
+                account_id: parse_fixed_protocol_id::<20>(
+                    &account.account_id,
+                    "dotbit account_id",
+                    tx_hash,
+                    output_index,
+                )?,
+                account: account.account,
+                next_account_id: parse_optional_fixed_protocol_id::<20>(
+                    account.next_account_id.as_ref(),
+                    "dotbit next_account_id",
+                    tx_hash,
+                    output_index,
+                )?,
+                expired_at: account.expired_at,
+                registered_at: account.registered_at,
+                status: account.status,
+            })))
+        }
+    }
+}
+
 pub(crate) fn build_bulk_facts_arena_from_blocks(
     blocks: &[BlockResponseWithCycles],
     interner: &mut IdentityInterner,
@@ -179,6 +369,13 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
 
     for block in blocks {
         let parsed_block = BlockParser::parse(&block.block)?;
+        let block_hash = parse_fixed_protocol_id::<32>(
+            &parsed_block.hash,
+            "block_hash",
+            &[0u8; 32],
+            -1,
+        )?;
+        let timestamp_ms = parsed_block.timestamp.timestamp_millis();
         let block_dao_ar =
             DaoParser::extract_ar_from_dao_field(&parsed_block.dao).ok_or_else(|| {
                 anyhow!(
@@ -194,6 +391,11 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
             let parsed_tx = TransactionParser::parse(tx)?;
             let parsed_inputs = TransactionParser::parse_inputs(tx)?;
             let parsed_cells = CellParser::parse_outputs(tx)?;
+            let witness_bundle = if may_contain_das_witness(&tx.witnesses) {
+                parse_dotbit_witness_bundle(&tx.witnesses)
+            } else {
+                DotbitWitnessBundle::default()
+            };
             let tx_index = i32::try_from(tx_position).map_err(|_| {
                 anyhow!(
                     "bulk facts tx index exceeds i32 range: block={} tx_position={}",
@@ -277,15 +479,25 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
                         &parsed_tx.hash,
                         output_index_i16,
                     )?,
+                    protocol_facts: parse_bulk_protocol_facts(
+                        cell,
+                        semantic_tag,
+                        &witness_bundle,
+                        &parsed_tx.hash,
+                        output_index_i16,
+                    )?,
                 });
             }
 
             arena.txs.push(TxFacts {
                 hash: parsed_tx.hash,
                 block_number: parsed_block.number,
+                block_hash,
+                timestamp_ms,
                 block_dao_ar,
                 tx_index,
                 is_cellbase: parsed_tx.is_cellbase,
+                dotbit_action: witness_bundle.action.clone(),
                 input_outpoints,
                 output_range: output_start..arena.cells.len(),
             });
@@ -3054,7 +3266,7 @@ impl Indexer {
 mod tests {
     use chrono::{TimeZone, Utc};
 
-    use super::super::bulk_build::facts::CellSemanticTag;
+    use super::super::bulk_build::facts::{CellProtocolFacts, CellSemanticTag};
     use super::super::bulk_build::interner::IdentityInterner;
     use super::super::types::TxData;
     use super::*;
@@ -3109,6 +3321,67 @@ mod tests {
         data.extend_from_slice(characteristic);
         data.push(configure);
         data.push(state);
+        data
+    }
+
+    fn create_spore_type_script(spore_id: &[u8; 32]) -> Script {
+        Script {
+            code_hash: crate::parser::spore::SPORE_CODE_HASH_MAINNET_V2.to_string(),
+            hash_type: "data1".to_string(),
+            args: format!("0x{}", hex::encode(spore_id)),
+        }
+    }
+
+    fn create_cluster_type_script(cluster_id: &[u8; 32]) -> Script {
+        Script {
+            code_hash: crate::parser::spore::CLUSTER_CODE_HASH_MAINNET_V2.to_string(),
+            hash_type: "data1".to_string(),
+            args: format!("0x{}", hex::encode(cluster_id)),
+        }
+    }
+
+    fn create_spore_data(
+        content_type: &str,
+        content: &[u8],
+        cluster_id: Option<&[u8; 32]>,
+    ) -> Vec<u8> {
+        let content_type_bytes = encode_molecule_bytes(content_type.as_bytes());
+        let content_bytes = encode_molecule_bytes(content);
+        let cluster_id_bytes = cluster_id.map(|id| encode_molecule_bytes(id));
+
+        let offset_content_type = 16u32;
+        let offset_content = offset_content_type + content_type_bytes.len() as u32;
+        let offset_cluster_id = offset_content + content_bytes.len() as u32;
+        let total_size =
+            offset_cluster_id + cluster_id_bytes.as_ref().map(|b| b.len()).unwrap_or(0) as u32;
+
+        let mut data = Vec::new();
+        data.extend_from_slice(&total_size.to_le_bytes());
+        data.extend_from_slice(&offset_content_type.to_le_bytes());
+        data.extend_from_slice(&offset_content.to_le_bytes());
+        data.extend_from_slice(&offset_cluster_id.to_le_bytes());
+        data.extend_from_slice(&content_type_bytes);
+        data.extend_from_slice(&content_bytes);
+        if let Some(cluster_id_bytes) = cluster_id_bytes {
+            data.extend_from_slice(&cluster_id_bytes);
+        }
+        data
+    }
+
+    fn create_cluster_data(name: &str, description: &str) -> Vec<u8> {
+        let name_bytes = encode_molecule_bytes(name.as_bytes());
+        let description_bytes = encode_molecule_bytes(description.as_bytes());
+        let offset_name = 16u32;
+        let offset_description = offset_name + name_bytes.len() as u32;
+        let offset_end = offset_description + description_bytes.len() as u32;
+
+        let mut data = Vec::new();
+        data.extend_from_slice(&offset_end.to_le_bytes());
+        data.extend_from_slice(&offset_name.to_le_bytes());
+        data.extend_from_slice(&offset_description.to_le_bytes());
+        data.extend_from_slice(&offset_end.to_le_bytes());
+        data.extend_from_slice(&name_bytes);
+        data.extend_from_slice(&description_bytes);
         data
     }
 
@@ -3437,6 +3710,168 @@ mod tests {
                 )
             }),
             "all cells must have semantic tags"
+        );
+    }
+
+    #[test]
+    fn build_facts_arena_captures_protocol_facts_and_tx_metadata_for_bulk_build() {
+        let cluster_id = [0x31; 32];
+        let spore_id = [0x41; 32];
+        let dotbit_account_id = [0x51; 20];
+        let block = BlockResponseWithCycles {
+            block: BlockView {
+                header: HeaderView {
+                    version: "0x0".to_string(),
+                    compact_target: "0x1a08a97e".to_string(),
+                    timestamp: "0x18c7b3b2b88".to_string(),
+                    number: "0xd59f87".to_string(),
+                    epoch: "0x7080006000028".to_string(),
+                    parent_hash: format!("0x{}", "11".repeat(32)),
+                    transactions_root: format!("0x{}", "22".repeat(32)),
+                    proposals_hash: format!("0x{}", "33".repeat(32)),
+                    extra_hash: format!("0x{}", "44".repeat(32)),
+                    dao: format!("0x{}", "00".repeat(32)),
+                    nonce: "0x1".to_string(),
+                    hash: format!("0x{}", "66".repeat(32)),
+                },
+                uncles: vec![],
+                transactions: vec![
+                    TransactionView {
+                        hash: format!("0x{}", "a1".repeat(32)),
+                        version: "0x0".to_string(),
+                        cell_deps: vec![],
+                        header_deps: vec![],
+                        inputs: vec![CellInput {
+                            since: "0x0".to_string(),
+                            previous_output: OutPoint {
+                                tx_hash: format!("0x{}", "00".repeat(32)),
+                                index: "0xffffffff".to_string(),
+                            },
+                        }],
+                        outputs: vec![CellOutput {
+                            capacity: "0x174876e800".to_string(),
+                            lock: create_lock_script(),
+                            type_: Some(create_cluster_type_script(&cluster_id)),
+                        }],
+                        outputs_data: vec![format!(
+                            "0x{}",
+                            hex::encode(create_cluster_data(
+                                "Genesis Cluster",
+                                "cluster description"
+                            ))
+                        )],
+                        witnesses: vec!["0x".to_string()],
+                    },
+                    TransactionView {
+                        hash: format!("0x{}", "a2".repeat(32)),
+                        version: "0x0".to_string(),
+                        cell_deps: vec![],
+                        header_deps: vec![],
+                        inputs: vec![CellInput {
+                            since: "0x0".to_string(),
+                            previous_output: OutPoint {
+                                tx_hash: format!("0x{}", "10".repeat(32)),
+                                index: "0x0".to_string(),
+                            },
+                        }],
+                        outputs: vec![
+                            CellOutput {
+                                capacity: "0x174876e800".to_string(),
+                                lock: create_lock_script(),
+                                type_: Some(create_spore_type_script(&spore_id)),
+                            },
+                            CellOutput {
+                                capacity: "0x174876e800".to_string(),
+                                lock: create_lock_script(),
+                                type_: Some(create_dotbit_account_cell_type_script(
+                                    &dotbit_account_id,
+                                )),
+                            },
+                        ],
+                        outputs_data: vec![
+                            format!(
+                                "0x{}",
+                                hex::encode(create_spore_data(
+                                    "image/png",
+                                    b"spore-content",
+                                    Some(&cluster_id)
+                                ))
+                            ),
+                            format!(
+                                "0x{}",
+                                hex::encode(create_dotbit_account_cell_data(&dotbit_account_id))
+                            ),
+                        ],
+                        witnesses: vec![
+                            encode_dotbit_account_cell_witness(
+                                &dotbit_account_id,
+                                "alice.bit",
+                            ),
+                            encode_das_action_witness("transfer_account"),
+                        ],
+                    },
+                ],
+                proposals: vec![],
+            },
+            cycles: None,
+        };
+
+        let mut interner = IdentityInterner::default();
+        let arena = build_bulk_facts_arena_from_blocks(&[block], &mut interner).expect("facts");
+        let cluster_cell = arena
+            .cells
+            .iter()
+            .find(|cell| matches!(cell.semantic_tag, CellSemanticTag::Cluster))
+            .expect("cluster cell");
+        let spore_cell = arena
+            .cells
+            .iter()
+            .find(|cell| matches!(cell.semantic_tag, CellSemanticTag::Spore))
+            .expect("spore cell");
+        let dotbit_cell = arena
+            .cells
+            .iter()
+            .find(|cell| matches!(cell.semantic_tag, CellSemanticTag::Dotbit))
+            .expect("dotbit cell");
+        let dotbit_tx = arena
+            .txs
+            .iter()
+            .find(|tx| tx.hash == [0xa2; 32])
+            .expect("dotbit tx");
+
+        match cluster_cell.protocol_facts.as_ref().expect("cluster protocol facts") {
+            CellProtocolFacts::Cluster(cluster) => {
+                assert_eq!(cluster.cluster_id, cluster_id);
+                assert_eq!(cluster.name.as_deref(), Some("Genesis Cluster"));
+                assert_eq!(cluster.description.as_deref(), Some("cluster description"));
+            }
+            other => panic!("expected cluster facts, got {other:?}"),
+        }
+
+        match spore_cell.protocol_facts.as_ref().expect("spore protocol facts") {
+            CellProtocolFacts::Spore(spore) => {
+                assert_eq!(spore.spore_id, spore_id);
+                assert_eq!(spore.cluster_id, Some(cluster_id));
+                assert_eq!(spore.content_type, "image/png");
+                assert_eq!(spore.content, b"spore-content");
+                assert!(!spore.is_did);
+            }
+            other => panic!("expected spore facts, got {other:?}"),
+        }
+
+        match dotbit_cell.protocol_facts.as_ref().expect("dotbit protocol facts") {
+            CellProtocolFacts::Dotbit(dotbit) => {
+                assert_eq!(dotbit.account_id, dotbit_account_id);
+                assert_eq!(dotbit.account.as_deref(), Some("alice.bit"));
+            }
+            other => panic!("expected dotbit facts, got {other:?}"),
+        }
+
+        assert_eq!(dotbit_tx.block_hash, [0x66; 32]);
+        assert_eq!(dotbit_tx.timestamp_ms, 1_702_874_524_552);
+        assert_eq!(
+            dotbit_tx.dotbit_action.as_deref(),
+            Some("transfer_account")
         );
     }
 
