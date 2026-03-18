@@ -137,10 +137,6 @@ impl RgbppDetector {
 }
 
 impl ProtocolDetector for RgbppDetector {
-    fn protocol_name(&self) -> &str {
-        "rgbpp"
-    }
-
     fn might_apply_batch(
         &self,
         lock_code_hashes: &std::collections::HashSet<[u8; 32]>,
@@ -218,16 +214,5 @@ impl ProtocolDetector for RgbppDetector {
         }
 
         actions
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_rgbpp_detector_protocol_name() {
-        let detector = RgbppDetector::new(true);
-        assert_eq!(detector.protocol_name(), "rgbpp");
     }
 }

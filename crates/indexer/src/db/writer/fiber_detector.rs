@@ -279,10 +279,6 @@ impl FiberDetector {
 }
 
 impl ProtocolDetector for FiberDetector {
-    fn protocol_name(&self) -> &str {
-        "fiber"
-    }
-
     fn might_apply_batch(
         &self,
         lock_code_hashes: &std::collections::HashSet<[u8; 32]>,
@@ -407,12 +403,6 @@ mod tests {
             data_size: 0,
             data: vec![],
         }
-    }
-
-    #[test]
-    fn test_fiber_detector_protocol_name() {
-        let detector = FiberDetector::new(true);
-        assert_eq!(detector.protocol_name(), "fiber");
     }
 
     #[test]

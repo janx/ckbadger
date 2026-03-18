@@ -21,10 +21,6 @@ impl UtxoSwapDetector {
 }
 
 impl ProtocolDetector for UtxoSwapDetector {
-    fn protocol_name(&self) -> &str {
-        "utxoswap"
-    }
-
     fn might_apply_batch(
         &self,
         lock_code_hashes: &std::collections::HashSet<[u8; 32]>,
@@ -214,12 +210,6 @@ mod tests {
         buf[58..74].copy_from_slice(&amount_in.to_le_bytes());
         buf[74..90].copy_from_slice(&amount_out_min.to_le_bytes());
         buf
-    }
-
-    #[test]
-    fn test_utxoswap_detector_protocol_name() {
-        let detector = UtxoSwapDetector::new(true);
-        assert_eq!(detector.protocol_name(), "utxoswap");
     }
 
     #[test]

@@ -178,9 +178,6 @@ pub struct TxView<'a> {
 
 /// Detects protocol-level actions by analyzing cross-layer signals.
 pub(crate) trait ProtocolDetector: Send + Sync {
-    #[allow(dead_code)] // Part of trait interface; used by future detector management/logging
-    fn protocol_name(&self) -> &str;
-
     /// Batch-level pre-filter: returns false if no code_hash in the entire batch
     /// matches this detector. Called once per batch (not per TX).
     /// Default implementation returns true (opt-in optimization).
