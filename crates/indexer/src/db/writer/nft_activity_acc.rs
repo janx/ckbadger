@@ -101,7 +101,6 @@ impl ObjectCollectionActivityAccumulator {
     ///
     /// Returns inserted `(collection_id, block_number, tx_idx, block_hash, tx_hash)` rows so callers
     /// can update block-scoped reorg indexes in the domain store.
-    #[allow(dead_code)] // Will be used when DotBit writes are redirected to Identity CF
     pub fn flush_identity(
         self,
         batch: &mut StoreBatch,
