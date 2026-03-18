@@ -32,6 +32,14 @@ struct AccEntry {
     object_actions: Vec<(Vec<u8>, RawAction)>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedCollectionActivityEntry {
+    pub collection_id: Vec<u8>,
+    pub block_number: i64,
+    pub tx_idx: i32,
+    pub entry: ObjectCollectionActivityEntry,
+}
+
 pub(crate) struct ObjectCollectionActivityAccumulator {
     entries: HashMap<(Vec<u8>, Vec<u8>), AccEntry>,
 }
@@ -83,7 +91,7 @@ impl ObjectCollectionActivityAccumulator {
     /// Returns inserted `(collection_id, block_number, tx_idx, block_hash, tx_hash)` rows so callers
     /// can update block-scoped reorg indexes in the domain store.
     pub fn flush(self, batch: &mut StoreBatch) -> Vec<(Vec<u8>, i64, i32, Vec<u8>, Vec<u8>)> {
-        Self::flush_inner(self.entries, batch, |b, cid, block_num, tx_idx, entry| {
+        Self::flush_inner(self.into_resolved_entries(), batch, |b, cid, block_num, tx_idx, entry| {
             b.put_object_collection_activity(cid, block_num, tx_idx, entry);
         })
     }
@@ -98,21 +106,18 @@ impl ObjectCollectionActivityAccumulator {
         self,
         batch: &mut StoreBatch,
     ) -> Vec<(Vec<u8>, i64, i32, Vec<u8>, Vec<u8>)> {
-        Self::flush_inner(self.entries, batch, |b, cid, block_num, tx_idx, entry| {
+        Self::flush_inner(self.into_resolved_entries(), batch, |b, cid, block_num, tx_idx, entry| {
             b.put_identity_collection_activity(cid, block_num, tx_idx, entry);
         })
     }
 
-    /// Shared flush logic: resolves per-object raw actions and writes via the
-    /// provided `write_fn`.
-    fn flush_inner<F>(
+    pub fn into_resolved_entries(self) -> Vec<ResolvedCollectionActivityEntry> {
+        Self::resolve_entries(self.entries)
+    }
+
+    fn resolve_entries(
         entries: HashMap<(Vec<u8>, Vec<u8>), AccEntry>,
-        batch: &mut StoreBatch,
-        write_fn: F,
-    ) -> Vec<(Vec<u8>, i64, i32, Vec<u8>, Vec<u8>)>
-    where
-        F: Fn(&mut StoreBatch, &[u8], i64, i32, &ObjectCollectionActivityEntry),
-    {
+    ) -> Vec<ResolvedCollectionActivityEntry> {
         let mut inserted = Vec::new();
         for ((collection_id, tx_hash), entry) in entries {
             // Group by object_id to detect transfers (create + consume of same object)
@@ -136,11 +141,10 @@ impl ObjectCollectionActivityAccumulator {
                     (true, true) => has_transfer = true,
                     (true, false) => has_mint = true,
                     (false, true) => has_burn = true,
-                    (false, false) => {} // unreachable
+                    (false, false) => {}
                 }
             }
 
-            // Deterministic order: Mint, Transfer, Burn
             if has_mint {
                 actions.push(AssetAction::Mint);
             }
@@ -155,26 +159,45 @@ impl ObjectCollectionActivityAccumulator {
                 continue;
             }
 
-            let activity_entry = ObjectCollectionActivityEntry {
-                tx_hash: tx_hash.clone(),
-                block_hash: entry.block_hash.clone(),
-                timestamp_ms: entry.timestamp_ms,
-                actions,
-            };
+            inserted.push(ResolvedCollectionActivityEntry {
+                collection_id,
+                block_number: entry.block_number,
+                tx_idx: entry.tx_idx,
+                entry: ObjectCollectionActivityEntry {
+                    tx_hash,
+                    block_hash: entry.block_hash,
+                    timestamp_ms: entry.timestamp_ms,
+                    actions,
+                },
+            });
+        }
+        inserted
+    }
 
+    /// Shared flush logic: writes pre-resolved entries via the provided `write_fn`.
+    fn flush_inner<F>(
+        entries: Vec<ResolvedCollectionActivityEntry>,
+        batch: &mut StoreBatch,
+        write_fn: F,
+    ) -> Vec<(Vec<u8>, i64, i32, Vec<u8>, Vec<u8>)>
+    where
+        F: Fn(&mut StoreBatch, &[u8], i64, i32, &ObjectCollectionActivityEntry),
+    {
+        let mut inserted = Vec::new();
+        for resolved in entries {
             write_fn(
                 batch,
-                &collection_id,
-                entry.block_number,
-                entry.tx_idx,
-                &activity_entry,
+                &resolved.collection_id,
+                resolved.block_number,
+                resolved.tx_idx,
+                &resolved.entry,
             );
             inserted.push((
-                collection_id,
-                entry.block_number,
-                entry.tx_idx,
-                entry.block_hash,
-                tx_hash,
+                resolved.collection_id,
+                resolved.block_number,
+                resolved.tx_idx,
+                resolved.entry.block_hash.clone(),
+                resolved.entry.tx_hash.clone(),
             ));
         }
         inserted

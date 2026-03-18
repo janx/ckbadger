@@ -9,14 +9,15 @@ use anyhow::{anyhow, bail};
 use ckbadger_store::keys;
 use ckbadger_store::types::{
     decode_live_cell_marker, CachedBlockHeader, ConsumedCellMeta, DID_CKB_SENTINEL_COLLECTION,
-    DailyActivityStats, LiveCellInfo, ObjectStandard, SporeTypeIndex, TokenTransferRecord,
-    TxActivityBundle, TxIndexEntry,
+    DailyActivityStats, LiveCellInfo, ObjectStandard, SOLE_SPORES_SENTINEL_COLLECTION,
+    SporeTypeIndex, TokenTransferRecord, TxActivityBundle, TxIndexEntry,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ACTIVITIES, CF_ADDR_TXS,
     CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK,
     CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE, CF_CELLS,
-    CF_CONSUMED_CELLS, CF_LIVE_CELLS, CF_STATS_CHAIN, CF_TX_HASH_MAP, CF_TX_INDEX,
+    CF_CONSUMED_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_LIVE_CELLS,
+    CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_TX_HASH_MAP, CF_TX_INDEX,
 };
 use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use rocksdb::IteratorMode;
@@ -90,6 +91,11 @@ impl CoreOwners {
     }
 }
 
+struct HistoryBuildResult {
+    rows: Vec<materialize::MaterializedRow>,
+    identity_activity_count_deltas: HashMap<Vec<u8>, i64>,
+}
+
 #[doc(hidden)]
 #[derive(Debug, Default, Clone)]
 pub struct CoreOwnerStateSnapshot {
@@ -138,13 +144,16 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
     let resolved = sequencer.resolve(&arena)?;
     let ctx = owners::ReducerContext::new(&interner);
     let mut owners = CoreOwners::default();
-    let history_rows = build_history_rows(&arena, &resolved, &interner, true)?;
-    let sealed_rows = build_sealed_aggregate_rows(&history_rows)?;
+    let history = build_history_rows(&arena, &resolved, &interner, true)?;
+    let sealed_rows = build_sealed_aggregate_rows(&history.rows)?;
     let final_snapshot_rows = build_final_snapshot_rows(&sequencer, &interner)?;
 
     for tx in &resolved {
         owners.apply_tx(tx, &ctx)?;
     }
+    owners
+        .object
+        .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
 
     let root = unique_temp_test_dir("bulk-build-core-owners");
     std::fs::create_dir_all(&root)?;
@@ -157,8 +166,8 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
         let domain_store = CkbadgerStore::open_domain(&domain_path)?;
         let append_store = CkbadgerStore::open_append_only(&append_path)?;
         let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
-        materializer.stream_history_rows(&history_rows)?;
-        materialize_activity_secondary_state(&domain_store, &history_rows)?;
+        materializer.stream_history_rows(&history.rows)?;
+        materialize_activity_secondary_state(&domain_store, &history.rows)?;
         materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
         materializer.materialize_final_snapshot(&final_snapshot_rows)?;
         owners.materialize_all(&mut materializer)?;
@@ -209,11 +218,12 @@ fn build_history_rows(
     resolved: &[facts::ResolvedTxFacts],
     interner: &interner::IdentityInterner,
     is_mainnet: bool,
-) -> Result<Vec<materialize::MaterializedRow>> {
+) -> Result<HistoryBuildResult> {
     let mut rows =
         Vec::with_capacity(
             arena.blocks.len() * 2 + arena.txs.len() * 2 + arena.cells.len() * 2 + arena.txs.len(),
         );
+    let mut identity_activity_count_deltas = HashMap::new();
 
     for block in &arena.blocks {
         let header = CachedBlockHeader {
@@ -325,6 +335,11 @@ fn build_history_rows(
 
     rows.extend(build_token_transfer_rows(resolved, interner)?);
     rows.extend(build_activity_rows(arena, resolved, interner, is_mainnet)?);
+    let object_activity_rows = build_object_collection_activity_rows(
+        resolved,
+        &mut identity_activity_count_deltas,
+    )?;
+    rows.extend(object_activity_rows);
 
     for cell in &arena.cells {
         let outpoint_key =
@@ -347,6 +362,123 @@ fn build_history_rows(
                 Vec::new(),
             ));
         }
+    }
+
+    Ok(HistoryBuildResult {
+        rows,
+        identity_activity_count_deltas,
+    })
+}
+
+fn build_object_collection_activity_rows(
+    resolved: &[facts::ResolvedTxFacts],
+    identity_activity_count_deltas: &mut HashMap<Vec<u8>, i64>,
+) -> Result<Vec<materialize::MaterializedRow>> {
+    let mut object_activity_acc = crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator::new();
+    let mut identity_activity_acc = crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator::new();
+
+    for tx in resolved {
+        for input in &tx.resolved_inputs {
+            let Some(protocol) = input.protocol_facts.as_ref() else {
+                continue;
+            };
+            match protocol {
+                facts::CellProtocolFacts::Spore(spore) if !spore.is_did => {
+                    let collection_id = spore
+                        .cluster_id
+                        .map(|id| id.to_vec())
+                        .unwrap_or_else(|| SOLE_SPORES_SENTINEL_COLLECTION.to_vec());
+                    object_activity_acc.record(
+                        &collection_id,
+                        &tx.tx_hash,
+                        &spore.spore_id,
+                        &tx.block_hash,
+                        tx.block_number,
+                        tx.tx_index,
+                        tx.timestamp_ms,
+                        false,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        for cell in &tx.cells {
+            let Some(protocol) = cell.protocol_facts.as_ref() else {
+                continue;
+            };
+            match protocol {
+                facts::CellProtocolFacts::Spore(spore) if spore.is_did => {
+                    identity_activity_acc.record(
+                        &DID_CKB_SENTINEL_COLLECTION,
+                        &tx.tx_hash,
+                        &spore.spore_id,
+                        &tx.block_hash,
+                        tx.block_number,
+                        tx.tx_index,
+                        tx.timestamp_ms,
+                        true,
+                    );
+                }
+                facts::CellProtocolFacts::Spore(spore) => {
+                    let collection_id = spore
+                        .cluster_id
+                        .map(|id| id.to_vec())
+                        .unwrap_or_else(|| SOLE_SPORES_SENTINEL_COLLECTION.to_vec());
+                    object_activity_acc.record(
+                        &collection_id,
+                        &tx.tx_hash,
+                        &spore.spore_id,
+                        &tx.block_hash,
+                        tx.block_number,
+                        tx.tx_index,
+                        tx.timestamp_ms,
+                        true,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut rows = Vec::new();
+    for resolved_entry in object_activity_acc.into_resolved_entries() {
+        rows.push(materialize::MaterializedRow::new(
+            CF_OBJECT_COLLECTION_ACTIVITIES,
+            keys::encode_nft_collection_activity_key(
+                &resolved_entry.collection_id,
+                resolved_entry.block_number,
+                resolved_entry.tx_idx,
+                &resolved_entry.entry.block_hash,
+                &resolved_entry.entry.tx_hash,
+            )
+            .to_vec(),
+            bincode::serialize(&resolved_entry.entry)?,
+        ));
+    }
+
+    for resolved_entry in identity_activity_acc.into_resolved_entries() {
+        let delta = identity_activity_count_deltas
+            .entry(resolved_entry.collection_id.clone())
+            .or_insert(0);
+        *delta = delta.checked_add(1).ok_or_else(|| {
+            anyhow!(
+                "identity collection activity delta overflow in bulk build history rows: collection_id=0x{}",
+                hex::encode(&resolved_entry.collection_id)
+            )
+        })?;
+        rows.push(materialize::MaterializedRow::new(
+            CF_IDENTITY_COLLECTION_ACTIVITIES,
+            keys::encode_nft_collection_activity_key(
+                &resolved_entry.collection_id,
+                resolved_entry.block_number,
+                resolved_entry.tx_idx,
+                &resolved_entry.entry.block_hash,
+                &resolved_entry.entry.tx_hash,
+            )
+            .to_vec(),
+            bincode::serialize(&resolved_entry.entry)?,
+        ));
     }
 
     Ok(rows)
@@ -1482,6 +1614,9 @@ fn unique_temp_test_dir(prefix: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::spore::{
+        CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2,
+    };
     use crate::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET;
     use crate::parser::udt::SUDT_CODE_HASH;
     use crate::parser::ScriptParser;
@@ -1490,8 +1625,14 @@ mod tests {
         TransactionView,
     };
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
-    use ckbadger_store::types::{FiberChannelState, TokenTransferRecord, TxActivityBundle};
-    use ckbadger_store::{keys, CF_ACTIVITIES, CF_ADDR_TXS};
+    use ckbadger_store::types::{
+        AssetAction, FiberChannelState, ObjectCollectionActivityEntry, TokenTransferRecord,
+        TxActivityBundle, DID_CKB_SENTINEL_COLLECTION,
+    };
+    use ckbadger_store::{
+        keys, CF_ACTIVITIES, CF_ADDR_TXS, CF_IDENTITY_COLLECTION_ACTIVITIES,
+        CF_OBJECT_COLLECTION_ACTIVITIES,
+    };
 
     fn fixture_lock_script(args_hex: &str) -> Script {
         Script {
@@ -1507,6 +1648,23 @@ mod tests {
             version: "0x0".to_string(),
             compact_target: "0x1a08a97e".to_string(),
             timestamp: "0x18c7b3b2b00".to_string(),
+            number: format!("0x{number:x}"),
+            epoch: "0x7080006000028".to_string(),
+            parent_hash: format!("0x{}", "11".repeat(32)),
+            transactions_root: format!("0x{}", "22".repeat(32)),
+            proposals_hash: format!("0x{}", "33".repeat(32)),
+            extra_hash: format!("0x{}", "44".repeat(32)),
+            dao: format!("0x{}", "00".repeat(32)),
+            nonce: "0x1".to_string(),
+            hash: format!("0x{}", format!("{hash_byte:02x}").repeat(32)),
+        }
+    }
+
+    fn fixture_header_with_timestamp(number: u64, hash_byte: u8, timestamp_ms: u64) -> HeaderView {
+        HeaderView {
+            version: "0x0".to_string(),
+            compact_target: "0x1a08a97e".to_string(),
+            timestamp: format!("0x{timestamp_ms:x}"),
             number: format!("0x{number:x}"),
             epoch: "0x7080006000028".to_string(),
             parent_hash: format!("0x{}", "11".repeat(32)),
@@ -1588,6 +1746,85 @@ mod tests {
             hash_type: "type".to_string(),
             args: format!("0x{}", "11".repeat(20)),
         }
+    }
+
+    fn encode_molecule_bytes(data: &[u8]) -> Vec<u8> {
+        let len = data.len() as u32;
+        let mut result = len.to_le_bytes().to_vec();
+        result.extend_from_slice(data);
+        result
+    }
+
+    fn create_cluster_type_script(cluster_id: &[u8; 32]) -> Script {
+        Script {
+            code_hash: CLUSTER_CODE_HASH_MAINNET_V2.to_string(),
+            hash_type: "data1".to_string(),
+            args: format!("0x{}", hex::encode(cluster_id)),
+        }
+    }
+
+    fn create_spore_type_script(spore_id: &[u8; 32]) -> Script {
+        Script {
+            code_hash: SPORE_CODE_HASH_MAINNET_V2.to_string(),
+            hash_type: "data1".to_string(),
+            args: format!("0x{}", hex::encode(spore_id)),
+        }
+    }
+
+    fn create_did_type_script(did_id: &[u8; 32]) -> Script {
+        Script {
+            code_hash: SPORE_CODE_HASH_MAINNET_DID.to_string(),
+            hash_type: "type".to_string(),
+            args: format!("0x{}", hex::encode(did_id)),
+        }
+    }
+
+    fn create_cluster_data(name: &str, description: &str) -> Vec<u8> {
+        let name_bytes = encode_molecule_bytes(name.as_bytes());
+        let description_bytes = encode_molecule_bytes(description.as_bytes());
+        let offset_name = 16u32;
+        let offset_description = offset_name + name_bytes.len() as u32;
+        let offset_end = offset_description + description_bytes.len() as u32;
+
+        let mut data = Vec::new();
+        data.extend_from_slice(&offset_end.to_le_bytes());
+        data.extend_from_slice(&offset_name.to_le_bytes());
+        data.extend_from_slice(&offset_description.to_le_bytes());
+        data.extend_from_slice(&offset_end.to_le_bytes());
+        data.extend_from_slice(&name_bytes);
+        data.extend_from_slice(&description_bytes);
+        data
+    }
+
+    fn create_spore_data(
+        content_type: &str,
+        content: &[u8],
+        cluster_id: Option<&[u8; 32]>,
+    ) -> Vec<u8> {
+        let content_type_bytes = encode_molecule_bytes(content_type.as_bytes());
+        let content_bytes = encode_molecule_bytes(content);
+        let cluster_id_bytes = cluster_id.map(|id| encode_molecule_bytes(id));
+
+        let offset_content_type = 16u32;
+        let offset_content = offset_content_type + content_type_bytes.len() as u32;
+        let offset_cluster_id = offset_content + content_bytes.len() as u32;
+        let total_size = offset_cluster_id
+            + cluster_id_bytes
+                .as_ref()
+                .map(|bytes| bytes.len())
+                .unwrap_or(0) as u32;
+
+        let mut data = Vec::new();
+        data.extend_from_slice(&total_size.to_le_bytes());
+        data.extend_from_slice(&offset_content_type.to_le_bytes());
+        data.extend_from_slice(&offset_content.to_le_bytes());
+        data.extend_from_slice(&offset_cluster_id.to_le_bytes());
+        data.extend_from_slice(&content_type_bytes);
+        data.extend_from_slice(&content_bytes);
+        if let Some(cluster_id_bytes) = cluster_id_bytes {
+            data.extend_from_slice(&cluster_id_bytes);
+        }
+        data
     }
 
     fn fixture_fiber_funding_lock_script(args_hex: &str) -> Script {
@@ -1729,6 +1966,138 @@ mod tests {
         }
     }
 
+    fn bulk_build_object_activity_fixture() -> Vec<BlockResponseWithCycles> {
+        let cluster_id = [0x11; 32];
+        let spore_id = [0x22; 32];
+        let did_id = [0x33; 32];
+
+        let create_tx = TransactionView {
+            hash: format!("0x{}", "a1".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", "00".repeat(32)),
+                    index: "0xffffffff".to_string(),
+                },
+            }],
+            outputs: vec![
+                CellOutput {
+                    capacity: format!("0x{:x}", 200_00000000u64),
+                    lock: fixture_lock_script(&format!("0x{}", "01".repeat(20))),
+                    type_: Some(create_cluster_type_script(&cluster_id)),
+                },
+                CellOutput {
+                    capacity: format!("0x{:x}", 200_00000000u64),
+                    lock: fixture_lock_script(&format!("0x{}", "01".repeat(20))),
+                    type_: Some(create_spore_type_script(&spore_id)),
+                },
+                CellOutput {
+                    capacity: format!("0x{:x}", 150_00000000u64),
+                    lock: fixture_lock_script(&format!("0x{}", "03".repeat(20))),
+                    type_: Some(create_did_type_script(&did_id)),
+                },
+            ],
+            outputs_data: vec![
+                format!(
+                    "0x{}",
+                    hex::encode(create_cluster_data("Genesis Cluster", "{\"dob\":{\"ver\":1}}"))
+                ),
+                format!(
+                    "0x{}",
+                    hex::encode(create_spore_data(
+                        "image/png",
+                        b"spore-content",
+                        Some(&cluster_id)
+                    ))
+                ),
+                "0x".to_string(),
+            ],
+            witnesses: vec!["0x".to_string()],
+        };
+
+        let dummy_cellbase = TransactionView {
+            hash: format!("0x{}", "b0".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", "00".repeat(32)),
+                    index: "0xffffffff".to_string(),
+                },
+            }],
+            outputs: vec![CellOutput {
+                capacity: format!("0x{:x}", 500_00000000u64),
+                lock: fixture_lock_script(&format!("0x{}", "09".repeat(20))),
+                type_: None,
+            }],
+            outputs_data: vec!["0x".to_string()],
+            witnesses: vec!["0x".to_string()],
+        };
+
+        let transfer_and_burn_tx = TransactionView {
+            hash: format!("0x{}", "b1".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![
+                CellInput {
+                    since: "0x0".to_string(),
+                    previous_output: OutPoint {
+                        tx_hash: create_tx.hash.clone(),
+                        index: "0x1".to_string(),
+                    },
+                },
+                CellInput {
+                    since: "0x0".to_string(),
+                    previous_output: OutPoint {
+                        tx_hash: create_tx.hash.clone(),
+                        index: "0x2".to_string(),
+                    },
+                },
+            ],
+            outputs: vec![CellOutput {
+                capacity: format!("0x{:x}", 200_00000000u64),
+                lock: fixture_lock_script(&format!("0x{}", "02".repeat(20))),
+                type_: Some(create_spore_type_script(&spore_id)),
+            }],
+            outputs_data: vec![format!(
+                "0x{}",
+                hex::encode(create_spore_data(
+                    "image/png",
+                    b"spore-content",
+                    Some(&cluster_id)
+                ))
+            )],
+            witnesses: vec!["0x".to_string()],
+        };
+
+        vec![
+            BlockResponseWithCycles {
+                block: BlockView {
+                    header: fixture_header_with_timestamp(14_001_000, 0x81, 1_700_000_000_000),
+                    uncles: vec![],
+                    transactions: vec![create_tx],
+                    proposals: vec![],
+                },
+                cycles: None,
+            },
+            BlockResponseWithCycles {
+                block: BlockView {
+                    header: fixture_header_with_timestamp(14_001_001, 0x82, 1_700_000_010_000),
+                    uncles: vec![],
+                    transactions: vec![dummy_cellbase, transfer_and_burn_tx],
+                    proposals: vec![],
+                },
+                cycles: None,
+            },
+        ]
+    }
+
     #[test]
     fn build_history_rows_materializes_addr_txs_for_unique_touched_locks() {
         let block = bulk_build_addr_tx_fixture();
@@ -1755,6 +2124,7 @@ mod tests {
 
         let addr_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
             .expect("history rows")
+            .rows
             .into_iter()
             .filter(|row| row.cf_name == CF_ADDR_TXS)
             .collect();
@@ -1800,6 +2170,7 @@ mod tests {
 
         let token_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
             .expect("history rows")
+            .rows
             .into_iter()
             .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
             .collect();
@@ -1862,6 +2233,7 @@ mod tests {
 
         let activity_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
             .expect("history rows")
+            .rows
             .into_iter()
             .filter(|row| row.cf_name == CF_ACTIVITIES)
             .collect();
@@ -1924,13 +2296,13 @@ mod tests {
         let resolved = sequencer.resolve(&arena).expect("resolved txs");
         let mut owners = CoreOwners::default();
         let ctx = owners::ReducerContext::new(&interner);
-        let history_rows =
-            build_history_rows(&arena, &resolved, &interner, true).expect("history rows");
-        let sealed_rows = build_sealed_aggregate_rows(&history_rows).expect("sealed rows");
+        let history = build_history_rows(&arena, &resolved, &interner, true).expect("history rows");
+        let sealed_rows = build_sealed_aggregate_rows(&history.rows).expect("sealed rows");
         let final_snapshot_rows =
             build_final_snapshot_rows(&sequencer, &interner).expect("final snapshot rows");
 
-        let open_bundle = history_rows
+        let open_bundle = history
+            .rows
             .iter()
             .filter(|row| row.cf_name == CF_ACTIVITIES)
             .map(|row| {
@@ -1964,9 +2336,9 @@ mod tests {
             CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
         let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
         materializer
-            .stream_history_rows(&history_rows)
+            .stream_history_rows(&history.rows)
             .expect("stream history rows");
-        materialize_activity_secondary_state(&domain_store, &history_rows)
+        materialize_activity_secondary_state(&domain_store, &history.rows)
             .expect("materialize activity secondary state");
         materializer
             .stream_sealed_aggregate_rows(&sealed_rows)
@@ -1989,5 +2361,106 @@ mod tests {
         assert_eq!(channels[0].1.funding_lock_args, funding_args);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn build_history_rows_materializes_spore_and_did_collection_activities() {
+        let blocks = bulk_build_object_activity_fixture();
+        let cluster_id = [0x11; 32];
+        let create_block_hash = vec![0x81; 32];
+        let transfer_block_hash = vec![0x82; 32];
+        let create_tx_hash = vec![0xa1; 32];
+        let transfer_tx_hash = vec![0xb1; 32];
+
+        let mut interner = interner::IdentityInterner::default();
+        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&blocks, &mut interner)
+            .expect("facts arena");
+        let resolved = sequencer::BulkSequencer::default()
+            .resolve(&arena)
+            .expect("resolved txs");
+
+        let history_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
+            .expect("history rows")
+            .rows
+            .into_iter()
+            .filter(|row| {
+                row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES
+                    || row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES
+            })
+            .collect();
+
+        let object_rows: std::collections::HashMap<Vec<u8>, ObjectCollectionActivityEntry> =
+            history_rows
+                .iter()
+                .filter(|row| row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES)
+                .map(|row| {
+                    (
+                        row.key.clone(),
+                        bincode::deserialize(&row.value)
+                            .expect("deserialize object collection activity"),
+                    )
+                })
+                .collect();
+        let identity_rows: std::collections::HashMap<Vec<u8>, ObjectCollectionActivityEntry> =
+            history_rows
+                .iter()
+                .filter(|row| row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES)
+                .map(|row| {
+                    (
+                        row.key.clone(),
+                        bincode::deserialize(&row.value)
+                            .expect("deserialize identity collection activity"),
+                    )
+                })
+                .collect();
+
+        let cluster_mint_key = keys::encode_nft_collection_activity_key(
+            &cluster_id,
+            14_001_000,
+            0,
+            &create_block_hash,
+            &create_tx_hash,
+        );
+        let cluster_transfer_key = keys::encode_nft_collection_activity_key(
+            &cluster_id,
+            14_001_001,
+            1,
+            &transfer_block_hash,
+            &transfer_tx_hash,
+        );
+        let did_mint_key = keys::encode_nft_collection_activity_key(
+            &DID_CKB_SENTINEL_COLLECTION,
+            14_001_000,
+            0,
+            &create_block_hash,
+            &create_tx_hash,
+        );
+
+        assert_eq!(object_rows.len(), 2);
+        assert_eq!(identity_rows.len(), 1);
+
+        let cluster_mint = object_rows
+            .get(cluster_mint_key.as_slice())
+            .expect("cluster mint activity");
+        assert_eq!(cluster_mint.tx_hash, create_tx_hash);
+        assert_eq!(cluster_mint.block_hash, create_block_hash);
+        assert_eq!(cluster_mint.actions.len(), 1);
+        assert!(matches!(cluster_mint.actions[0], AssetAction::Mint));
+
+        let cluster_transfer = object_rows
+            .get(cluster_transfer_key.as_slice())
+            .expect("cluster transfer activity");
+        assert_eq!(cluster_transfer.tx_hash, transfer_tx_hash);
+        assert_eq!(cluster_transfer.block_hash, transfer_block_hash);
+        assert_eq!(cluster_transfer.actions.len(), 1);
+        assert!(matches!(cluster_transfer.actions[0], AssetAction::Transfer));
+
+        let did_mint = identity_rows
+            .get(did_mint_key.as_slice())
+            .expect("did mint activity");
+        assert_eq!(did_mint.tx_hash, create_tx_hash);
+        assert_eq!(did_mint.block_hash, create_block_hash);
+        assert_eq!(did_mint.actions.len(), 1);
+        assert!(matches!(did_mint.actions[0], AssetAction::Mint));
     }
 }

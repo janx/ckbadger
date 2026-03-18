@@ -122,6 +122,39 @@ impl BulkReducer for ObjectOwner {
 }
 
 impl ObjectOwner {
+    pub(crate) fn apply_identity_activity_count_deltas(
+        &mut self,
+        deltas: &HashMap<Vec<u8>, i64>,
+    ) -> Result<()> {
+        for (collection_id, delta) in deltas {
+            if *delta == 0 {
+                continue;
+            }
+            if collection_id.as_slice() != DID_CKB_SENTINEL_COLLECTION {
+                bail!(
+                    "object owner only supports did:ckb identity activity deltas for now: collection_id=0x{} delta={}",
+                    hex::encode(collection_id),
+                    delta
+                );
+            }
+
+            let agg = self.did_agg.get_or_insert_with(|| IdentityCollectionAggregate {
+                name: Some("did:ckb".to_string()),
+                standard: IdentityStandard::DidCkb,
+                ..IdentityCollectionAggregate::default()
+            });
+            agg.activities_count = checked_next_i64(
+                agg.activities_count,
+                *delta,
+                "did:ckb activities_count",
+                collection_id,
+                0,
+            )?;
+        }
+
+        Ok(())
+    }
+
     fn apply_input(&mut self, input: &ResolvedInputFacts) -> Result<()> {
         let Some(protocol) = input.protocol_facts.as_ref() else {
             return Ok(());
