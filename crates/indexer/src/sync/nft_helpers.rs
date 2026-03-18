@@ -47,7 +47,7 @@ pub(crate) fn should_consume_dotbit_account(
 /// Look up the DotBit account-id for a given outpoint.  Prefers an already-
 /// persisted store mapping (`db_account_id`) and falls back to the in-flight
 /// batch mapping when the outpoint was created within the same batch.
-#[allow(dead_code)] // currently only used in tests
+#[cfg(test)]
 pub(crate) fn resolve_dotbit_account_id_for_outpoint(
     db_account_id: Option<Vec<u8>>,
     prev_tx_hash: &[u8],
