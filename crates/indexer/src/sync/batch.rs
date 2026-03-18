@@ -1779,8 +1779,6 @@ impl Indexer {
             struct UdtTxContext {
                 tx_hash: Vec<u8>,
                 block_number: i64,
-                #[allow(dead_code)]
-                timestamp: chrono::DateTime<Utc>,
                 output_udts: Vec<crate::parser::ParsedUdtCell>,
                 input_outpoints: Vec<(Vec<u8>, i16)>,
             }
@@ -1791,7 +1789,6 @@ impl Indexer {
             struct TxInfoForUdt {
                 tx_hash: Vec<u8>,
                 block_number: i64,
-                timestamp: chrono::DateTime<Utc>,
                 output_udts: Vec<crate::parser::ParsedUdtCell>,
                 input_outpoints: Vec<(Vec<u8>, i16)>,
             }
@@ -1849,7 +1846,6 @@ impl Indexer {
                     all_tx_infos_for_udt.push(TxInfoForUdt {
                         tx_hash: tx_data.hash.to_vec(),
                         block_number: parsed.number,
-                        timestamp: parsed.timestamp,
                         output_udts,
                         input_outpoints,
                     });
@@ -1878,7 +1874,6 @@ impl Indexer {
                     udt_tx_contexts.push(UdtTxContext {
                         tx_hash: tx_info.tx_hash,
                         block_number: tx_info.block_number,
-                        timestamp: tx_info.timestamp,
                         output_udts: tx_info.output_udts,
                         input_outpoints: tx_info.input_outpoints,
                     });

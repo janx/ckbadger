@@ -2155,7 +2155,7 @@ impl Indexer {
                                     "pipeline writer reorg tip",
                                 )?;
                                 match self.check_and_handle_reorg(db_tip_u64, stored_hash).await? {
-                                    Some(ReorgAction::Handled(_)) => {
+                                    Some(ReorgAction::Handled) => {
                                         self.cell_cache.clear();
                                         self.udt_cell_cache.clear();
                                         let (reorg_tip, _) = self.repo.get_sync_tip().await?;

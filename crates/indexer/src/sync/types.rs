@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
-
-use crate::db::ReorgResult;
 // ── UndoSeqScope constants & enum ──────────────────────────────────────
 
 pub(crate) const UNDO_SEQ_SCOPE_SHIFT: u32 = 48;
@@ -33,9 +31,8 @@ pub(crate) enum UndoSeqScope {
 
 // ── Sync / Reorg action enums ──────────────────────────────────────────
 
-#[allow(dead_code)] // ReorgResult fields are informational; matched as _ in pipeline
 pub(crate) enum ReorgAction {
-    Handled(ReorgResult),
+    Handled,
     DeepForkPaused,
 }
 

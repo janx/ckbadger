@@ -385,7 +385,7 @@ impl Indexer {
             "Processing automatic reorg"
         );
 
-        let result = self
+        self
             .writer
             .execute_reorg(
                 self.append_only_store.as_ref(),
@@ -401,7 +401,7 @@ impl Indexer {
             )
             .await?;
 
-        Ok(Some(ReorgAction::Handled(result)))
+        Ok(Some(ReorgAction::Handled))
     }
 
     pub(crate) async fn find_fork_point(
