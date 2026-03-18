@@ -1,6 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::keys;
@@ -57,6 +55,63 @@ pub(crate) struct ObjectOwner {
 }
 
 impl BulkReducer for ObjectOwner {
+    fn flush_sealed(&mut self, materializer: &mut Materializer<'_>) -> Result<()> {
+        let mut sealed_rows: Vec<MaterializedRow> = self
+            .stats_spore_rows
+            .iter()
+            .map(|(key, value)| MaterializedRow::new(CF_STATS_SPORE, key.clone(), value.clone()))
+            .collect();
+        sealed_rows.extend(
+            self.mnft_class_outpoints.iter().map(|(key, value)| {
+                MaterializedRow::new(CF_STATS_OBJECT, key.clone(), value.clone())
+            }),
+        );
+        sealed_rows.extend(
+            self.mnft_token_outpoints.iter().map(|(key, value)| {
+                MaterializedRow::new(CF_STATS_OBJECT, key.clone(), value.clone())
+            }),
+        );
+        sealed_rows.extend(self.mnft_type_indexes.iter().map(|(type_hash, index)| {
+            MaterializedRow::new(
+                CF_STATS_OBJECT,
+                keys::encode_nft_type_index_key(type_hash).to_vec(),
+                bincode::serialize(index).expect("object type index serialization must succeed"),
+            )
+        }));
+        sealed_rows.extend(self.mnft_hourly_transfers.iter().map(|(key, count)| {
+            MaterializedRow::new(CF_STATS_OBJECT, key.clone(), count.to_le_bytes().to_vec())
+        }));
+        sealed_rows.extend(
+            self.dotbit_outpoints.iter().map(|(key, value)| {
+                MaterializedRow::new(CF_STATS_OBJECT, key.clone(), value.clone())
+            }),
+        );
+        sealed_rows.extend(
+            self.dotbit_outpoints_by_account
+                .iter()
+                .map(|key| MaterializedRow::new(CF_STATS_OBJECT, key.clone(), Vec::new())),
+        );
+        sealed_rows.extend(self.dotbit_hourly_transfers.iter().map(|(key, count)| {
+            MaterializedRow::new(CF_STATS_OBJECT, key.clone(), count.to_le_bytes().to_vec())
+        }));
+        sealed_rows.extend(
+            self.mnft_owner_counts
+                .iter()
+                .filter(|(_, count)| **count > 0)
+                .map(|((class_id, lock_hash), count)| {
+                    MaterializedRow::new(
+                        CF_STATS_OBJECT,
+                        keys::encode_nft_collection_owner_key(class_id, lock_hash).to_vec(),
+                        count.to_le_bytes().to_vec(),
+                    )
+                }),
+        );
+        if !sealed_rows.is_empty() {
+            materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
+        }
+        Ok(())
+    }
+
     fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
         let mnft_tokens_consumed_in_tx = tx
             .resolved_inputs
@@ -96,59 +151,6 @@ impl BulkReducer for ObjectOwner {
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let mut sealed_rows: Vec<MaterializedRow> = self
-            .stats_spore_rows
-            .iter()
-            .map(|(key, value)| MaterializedRow::new(CF_STATS_SPORE, key.clone(), value.clone()))
-            .collect();
-        sealed_rows.extend(
-            self.mnft_class_outpoints.iter().map(|(key, value)| {
-                MaterializedRow::new(CF_STATS_OBJECT, key.clone(), value.clone())
-            }),
-        );
-        sealed_rows.extend(
-            self.mnft_token_outpoints.iter().map(|(key, value)| {
-                MaterializedRow::new(CF_STATS_OBJECT, key.clone(), value.clone())
-            }),
-        );
-        sealed_rows.extend(self.mnft_type_indexes.iter().map(|(type_hash, index)| {
-            MaterializedRow::new(
-                CF_STATS_OBJECT,
-                keys::encode_nft_type_index_key(type_hash).to_vec(),
-                bincode::serialize(index).expect("object type index serialization must succeed"),
-            )
-        }));
-        sealed_rows.extend(self.mnft_hourly_transfers.iter().map(|(key, count)| {
-            MaterializedRow::new(CF_STATS_OBJECT, key.clone(), count.to_le_bytes().to_vec())
-        }));
-        sealed_rows.extend(
-            self.dotbit_outpoints.iter().map(|(key, value)| {
-                MaterializedRow::new(CF_STATS_OBJECT, key.clone(), value.clone())
-            }),
-        );
-        sealed_rows.extend(
-            self.dotbit_outpoints_by_account
-                .iter()
-                .map(|key| MaterializedRow::new(CF_STATS_OBJECT, key.clone(), Vec::new())),
-        );
-        sealed_rows.extend(self.dotbit_hourly_transfers.iter().map(|(key, count)| {
-            MaterializedRow::new(CF_STATS_OBJECT, key.clone(), count.to_le_bytes().to_vec())
-        }));
-        sealed_rows.extend(self.mnft_owner_counts.iter().filter_map(
-            |((class_id, lock_hash), count)| {
-                (*count > 0).then(|| {
-                    MaterializedRow::new(
-                        CF_STATS_OBJECT,
-                        keys::encode_nft_collection_owner_key(class_id, lock_hash).to_vec(),
-                        count.to_le_bytes().to_vec(),
-                    )
-                })
-            },
-        ));
-        if !sealed_rows.is_empty() {
-            materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
-        }
-
         let mut final_rows = Vec::new();
         for (id, entry) in &self.spore_entries {
             final_rows.push(MaterializedRow::new(
@@ -1887,7 +1889,7 @@ pub(crate) fn materialize_object_state_for_test(
         owner.apply_tx(tx, &ctx)?;
     }
 
-    let root = unique_temp_test_dir("bulk-build-object-owner");
+    let root = super::super::unique_temp_test_dir("bulk-build-object-owner");
     std::fs::create_dir_all(&root)?;
     let domain_path = root.join("domain");
     let append_path = root.join("append-only");
@@ -1898,6 +1900,7 @@ pub(crate) fn materialize_object_state_for_test(
         let domain_store = CkbadgerStore::open_domain(&domain_path)?;
         let append_store = CkbadgerStore::open_append_only(&append_path)?;
         let mut materializer = Materializer::new(&domain_store, &append_store);
+        owner.flush_sealed(&mut materializer)?;
         owner.materialize_final(&mut materializer)?;
         let _ = materializer.finish();
 
@@ -2138,18 +2141,6 @@ pub(crate) fn materialize_object_state_for_test(
     Ok(snapshot)
 }
 
-fn unique_temp_test_dir(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "ckbadger-{}-{}-{}",
-        prefix,
-        std::process::id(),
-        nanos
-    ))
-}
 
 #[cfg(test)]
 mod tests {
@@ -2159,6 +2150,7 @@ mod tests {
         MnftClassProtocolFacts, MnftIssuerProtocolFacts, MnftTokenProtocolFacts, OutPointKey,
         ResolvedInputFacts, ResolvedTxFacts, SporeProtocolFacts,
     };
+    use crate::sync::bulk_build::unique_temp_test_dir;
     use crate::sync::types::InternId;
 
     macro_rules! cell_facts {
@@ -2413,6 +2405,9 @@ mod tests {
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("append store");
         let mut materializer = Materializer::new(&domain_store, &append_store);
         owner
+            .flush_sealed(&mut materializer)
+            .expect("flush sealed object owner");
+        owner
             .materialize_final(&mut materializer)
             .expect("materialize object owner");
 
@@ -2508,9 +2503,6 @@ mod tests {
             0
         );
 
-        drop(materializer);
-        drop(append_store);
-        drop(domain_store);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -2745,6 +2737,9 @@ mod tests {
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("append store");
         let mut materializer = Materializer::new(&domain_store, &append_store);
         owner
+            .flush_sealed(&mut materializer)
+            .expect("flush sealed object owner");
+        owner
             .materialize_final(&mut materializer)
             .expect("materialize object owner");
 
@@ -2840,9 +2835,6 @@ mod tests {
             1
         );
 
-        drop(materializer);
-        drop(append_store);
-        drop(domain_store);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -3017,6 +3009,9 @@ mod tests {
         let append_store = CkbadgerStore::open_append_only(&append_path).expect("append store");
         let mut materializer = Materializer::new(&domain_store, &append_store);
         owner
+            .flush_sealed(&mut materializer)
+            .expect("flush sealed object owner");
+        owner
             .materialize_final(&mut materializer)
             .expect("materialize object owner");
 
@@ -3111,9 +3106,6 @@ mod tests {
             1
         );
 
-        drop(materializer);
-        drop(append_store);
-        drop(domain_store);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -720,10 +720,9 @@ fn bulk_build_object_owner_materializes_mnft_state_without_db_reads() {
             .expect("class members"),
         &vec![token_id.clone()]
     );
-    assert!(snapshot
+    assert!(!snapshot
         .object_owner_counts
-        .get(class_id.as_slice())
-        .is_none());
+        .contains_key(class_id.as_slice()));
 
     let class_outpoints = snapshot
         .mnft_class_outpoints

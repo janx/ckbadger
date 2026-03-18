@@ -3273,7 +3273,6 @@ mod tests {
             build_batch_cell_infos_ms: 10.0,
             compute_fee_ms: 20.0,
             cache_balance_and_script_ms: 30.0,
-            ..Default::default()
         };
 
         assert!((metrics.total_ms() - 60.0).abs() < f64::EPSILON);

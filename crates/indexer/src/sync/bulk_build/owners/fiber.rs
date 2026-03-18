@@ -549,3 +549,128 @@ fn blake2b_hash(data: &[u8]) -> Vec<u8> {
     hasher.finalize(&mut hash);
     hash
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_event_channel_open() {
+        let summary = FiberTxSummary {
+            has_funding_output: true,
+            ..Default::default()
+        };
+        assert_eq!(summary.classify_event(), Some(FiberEvent::ChannelOpen));
+    }
+
+    #[test]
+    fn classify_event_channel_close() {
+        let summary = FiberTxSummary {
+            has_funding_input: true,
+            ..Default::default()
+        };
+        assert_eq!(summary.classify_event(), Some(FiberEvent::ChannelClose));
+    }
+
+    #[test]
+    fn classify_event_force_close() {
+        let summary = FiberTxSummary {
+            has_funding_input: true,
+            has_commitment_output: true,
+            ..Default::default()
+        };
+        assert_eq!(summary.classify_event(), Some(FiberEvent::ForceClose));
+    }
+
+    #[test]
+    fn classify_event_settlement() {
+        let summary = FiberTxSummary {
+            has_commitment_input: true,
+            ..Default::default()
+        };
+        assert_eq!(summary.classify_event(), Some(FiberEvent::Settlement));
+    }
+
+    #[test]
+    fn classify_event_none_when_no_fiber_cells() {
+        let summary = FiberTxSummary::default();
+        assert_eq!(summary.classify_event(), None);
+    }
+
+    #[test]
+    fn channel_open_stores_state_and_indexes() {
+        let mut owner = FiberOwner::default();
+        let funding_args = vec![0xbb; 20];
+        let tx_hash = [0xaa; 32];
+        let channel_id = keys::encode_fiber_channel_id(&tx_hash, 0);
+
+        let channel = FiberChannel {
+            funding_tx_hash: tx_hash.to_vec(),
+            funding_output_index: 0,
+            state: FiberChannelState::Open,
+            capacity: 100_00000000,
+            udt_type_hash: None,
+            udt_amount: None,
+            open_block: 100,
+            open_timestamp: 1000,
+            close_tx_hash: None,
+            close_block: None,
+            close_timestamp: None,
+            commitment_tx_hash: None,
+            commitment_output_index: None,
+            delay_epoch: None,
+            settlement_tx_hash: None,
+            settlement_block: None,
+            settlement_timestamp: None,
+            participants: vec![vec![0x11; 32]],
+            funding_lock_args: funding_args.clone(),
+        };
+
+        owner.channels.insert(channel_id.clone(), channel);
+        owner
+            .channel_by_funding_args
+            .insert(funding_args.clone(), channel_id.clone());
+
+        assert_eq!(owner.channels.len(), 1);
+        assert_eq!(
+            owner.channels[channel_id.as_slice()].state,
+            FiberChannelState::Open
+        );
+        assert_eq!(
+            owner.channel_by_funding_args[funding_args.as_slice()],
+            channel_id
+        );
+    }
+
+    #[test]
+    fn estimated_bytes_increases_with_channels() {
+        let mut owner = FiberOwner::default();
+        let empty_bytes = owner.estimated_bytes();
+
+        let channel_id = vec![0xaa; 36];
+        let channel = FiberChannel {
+            funding_tx_hash: vec![0xaa; 32],
+            funding_output_index: 0,
+            state: FiberChannelState::Open,
+            capacity: 100_00000000,
+            udt_type_hash: None,
+            udt_amount: None,
+            open_block: 100,
+            open_timestamp: 1000,
+            close_tx_hash: None,
+            close_block: None,
+            close_timestamp: None,
+            commitment_tx_hash: None,
+            commitment_output_index: None,
+            delay_epoch: None,
+            settlement_tx_hash: None,
+            settlement_block: None,
+            settlement_timestamp: None,
+            participants: vec![vec![0x11; 32]],
+            funding_lock_args: vec![0xbb; 20],
+        };
+        owner.channels.insert(channel_id, channel);
+
+        assert!(owner.estimated_bytes() > empty_bytes);
+    }
+}

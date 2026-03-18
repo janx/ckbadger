@@ -1,6 +1,3 @@
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use anyhow::{anyhow, Result};
 use ckbadger_store::keys;
 use ckbadger_store::types::{encode_live_cell_marker, CachedBlockHeader, LiveCellInfo};
@@ -157,7 +154,7 @@ enum CounterKind {
 }
 
 pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<MaterializationReport> {
-    let root = unique_temp_test_dir("bulk-build-materialize");
+    let root = super::unique_temp_test_dir("bulk-build-materialize");
     std::fs::create_dir_all(&root)?;
     let domain_path = root.join("domain");
     let append_path = root.join("append-only");
@@ -230,26 +227,13 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
     Ok(report)
 }
 
-fn unique_temp_test_dir(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "ckbadger-{}-{}-{}",
-        prefix,
-        std::process::id(),
-        nanos
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn materializer_rejects_append_only_rows_in_final_snapshot() {
-        let root = unique_temp_test_dir("bulk-build-materialize-reject");
+        let root = super::super::unique_temp_test_dir("bulk-build-materialize-reject");
         std::fs::create_dir_all(&root).unwrap();
         let domain_path = root.join("domain");
         let append_path = root.join("append-only");
@@ -272,9 +256,6 @@ mod tests {
             .to_string()
             .contains("final snapshot cannot target append-only"));
 
-        drop(materializer);
-        drop(append_store);
-        drop(domain_store);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -959,13 +959,15 @@ mod tests {
         let mut stats = BatchStats::default();
         let mut prev = Some((30_000_000_000_000_i128, 10_000_i128));
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let block = dummy_parsed_block([0u8; 32], 0, 1000);
+        // ParsedBlock.dao is now [u8; 32], so extract_dao_csu always succeeds on it.
+        // Test the underlying helper directly with a short slice to cover the error path.
+        assert!(extract_dao_csu(&[0u8; 8]).is_none());
 
-        let err =
-            accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("invalid DAO field bytes while accumulating secondary issuance"));
+        // Verify the happy path doesn't error with a valid all-zero 32-byte DAO field.
+        let block = dummy_parsed_block([0u8; 32], 0, 1000);
+        let result =
+            accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev);
+        assert!(result.is_ok());
     }
 
     // -- accumulate_dao_snapshot_deltas_for_txs -----------------------------

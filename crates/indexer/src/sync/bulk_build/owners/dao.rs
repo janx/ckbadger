@@ -1,6 +1,4 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Result};
 use chrono::NaiveDate;
@@ -936,7 +934,7 @@ pub(crate) fn materialize_dao_state_for_test(
         owner.apply_tx(tx, &ctx)?;
     }
 
-    let root = unique_temp_test_dir("bulk-build-dao-owner");
+    let root = super::super::unique_temp_test_dir("bulk-build-dao-owner");
     std::fs::create_dir_all(&root)?;
     let domain_path = root.join("domain");
     let append_path = root.join("append-only");
@@ -1027,19 +1025,6 @@ pub(crate) fn materialize_dao_state_for_test(
 
     let _ = std::fs::remove_dir_all(&root);
     Ok(snapshot)
-}
-
-fn unique_temp_test_dir(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "ckbadger-{}-{}-{}",
-        prefix,
-        std::process::id(),
-        nanos
-    ))
 }
 
 #[cfg(test)]

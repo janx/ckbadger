@@ -238,7 +238,7 @@ impl BulkBuildEngine {
             );
 
             // Periodic memory summary every 10 batches
-            if batch_count % 10 == 0 {
+            if batch_count.is_multiple_of(10) {
                 let mem = runtime.memory_breakdown_bytes();
                 let total_mb: u64 = mem.values().sum::<u64>() / (1024 * 1024);
                 let live_cells = runtime.sequencer.live_count();
@@ -2814,7 +2814,7 @@ fn collect_core_owner_state_snapshot(
     })
 }
 
-fn unique_temp_test_dir(prefix: &str) -> PathBuf {
+pub(crate) fn unique_temp_test_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::keys;
@@ -674,7 +672,7 @@ pub(crate) fn materialize_token_state_for_test(
         owner.apply_tx(tx, &ctx)?;
     }
 
-    let root = unique_temp_test_dir("bulk-build-token-owner");
+    let root = super::super::unique_temp_test_dir("bulk-build-token-owner");
     std::fs::create_dir_all(&root)?;
     let domain_path = root.join("domain");
     let append_path = root.join("append-only");
@@ -698,7 +696,7 @@ pub(crate) fn materialize_token_state_for_test(
         let mut token_transfer_counts = HashMap::new();
         let mut token_hourly_transfers = HashMap::new();
         let mut token_daily_deltas = HashMap::new();
-        for (type_hash, _info) in &tokens {
+        for type_hash in tokens.keys() {
             let holders = domain_store
                 .list_token_holders(type_hash, usize::MAX)?
                 .into_iter()
@@ -797,18 +795,6 @@ pub(crate) fn materialize_token_state_for_test(
     Ok(snapshot)
 }
 
-fn unique_temp_test_dir(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "ckbadger-{}-{}-{}",
-        prefix,
-        std::process::id(),
-        nanos
-    ))
-}
 
 #[cfg(test)]
 mod tests {

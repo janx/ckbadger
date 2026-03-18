@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::{AddressBalance, CkbadgerStore, CF_ADDR_BALANCE};
@@ -321,7 +319,7 @@ pub(crate) fn materialize_address_balances_for_test(
         owner.apply_tx(tx, &ctx)?;
     }
 
-    let root = unique_temp_test_dir("bulk-build-address-owner");
+    let root = super::super::unique_temp_test_dir("bulk-build-address-owner");
     std::fs::create_dir_all(&root)?;
     let domain_path = root.join("domain");
     let append_path = root.join("append-only");
@@ -350,18 +348,6 @@ pub(crate) fn materialize_address_balances_for_test(
     Ok(balances)
 }
 
-fn unique_temp_test_dir(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "ckbadger-{}-{}-{}",
-        prefix,
-        std::process::id(),
-        nanos
-    ))
-}
 
 #[cfg(test)]
 mod tests {
