@@ -721,6 +721,14 @@ impl Indexer {
         }
     }
 
+    pub fn record_bulk_sync_perf_finalize_seconds(&self, seconds: f64) {
+        let mut guard = self.bulk_sync_perf_run.lock().unwrap();
+        let Some(run) = guard.as_mut() else {
+            return;
+        };
+        run.set_finalize_seconds(seconds);
+    }
+
     pub fn finalize_bulk_sync_perf_completed(&self) {
         self.finalize_bulk_sync_perf_run(true);
     }

@@ -75,6 +75,10 @@ impl<'a> Materializer<'a> {
         )
     }
 
+    pub(crate) fn current_totals(&self) -> &MaterializationReport {
+        &self.report
+    }
+
     pub(crate) fn finish(self) -> MaterializationReport {
         self.report
     }

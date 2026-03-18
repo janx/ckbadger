@@ -30,6 +30,10 @@ impl IdentityInterner {
         })
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.values.len()
+    }
+
     pub(crate) fn estimated_bytes(&self) -> u64 {
         let by_value_bytes = self.by_value.capacity() as u64
             * std::mem::size_of::<(Vec<u8>, InternId)>() as u64

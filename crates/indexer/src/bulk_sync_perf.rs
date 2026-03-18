@@ -26,6 +26,7 @@ pub struct RocksDbConfig {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BatchSample {
+    pub engine: String,
     pub blocks: u64,
     pub batch_seconds: f64,
     pub commit_ms: f64,
@@ -47,6 +48,12 @@ pub struct BatchSample {
     pub t7_ms: f64,
     pub t_act_ms: f64,
     pub t_track_ms: f64,
+    // Bulk build sub-step timings (zero when engine=pipeline)
+    pub fetch_ms: f64,
+    pub facts_ms: f64,
+    pub resolve_ms: f64,
+    pub reduce_ms: f64,
+    pub flush_ms: f64,
     pub compaction_pending_mb: u64,
     pub l0_files: u64,
     pub imm_memtables: u64,
@@ -56,6 +63,10 @@ pub struct BatchSample {
     pub disk_read_mb: f64,
     pub disk_write_mb: f64,
     pub owner_memory_bytes: HashMap<String, u64>,
+    pub live_cell_count: u64,
+    pub cumulative_history_rows: u64,
+    pub cumulative_sealed_rows: u64,
+    pub cumulative_snapshot_rows: u64,
 }
 
 impl BatchSample {
@@ -74,6 +85,7 @@ impl BatchSample {
         disk_write_mb: f64,
     ) -> Self {
         Self {
+            engine: "pipeline".to_string(),
             blocks,
             batch_seconds,
             commit_ms,
@@ -95,6 +107,11 @@ impl BatchSample {
             t7_ms: 0.0,
             t_act_ms: 0.0,
             t_track_ms: 0.0,
+            fetch_ms: 0.0,
+            facts_ms: 0.0,
+            resolve_ms: 0.0,
+            reduce_ms: 0.0,
+            flush_ms: 0.0,
             compaction_pending_mb,
             l0_files,
             imm_memtables,
@@ -104,6 +121,10 @@ impl BatchSample {
             disk_read_mb,
             disk_write_mb,
             owner_memory_bytes: HashMap::new(),
+            live_cell_count: 0,
+            cumulative_history_rows: 0,
+            cumulative_sealed_rows: 0,
+            cumulative_snapshot_rows: 0,
         }
     }
 }
@@ -144,7 +165,9 @@ pub struct BulkSyncPerfMetrics {
     pub wall_clock_seconds: f64,
     pub batches: u64,
     pub blocks: u64,
+    pub total_txs: u64,
     pub blocks_per_sec_wall: f64,
+    pub txs_per_sec_wall: f64,
     pub blocks_per_batch: f64,
     pub avg_batch_seconds: f64,
     pub p95_batch_seconds: f64,
@@ -153,6 +176,7 @@ pub struct BulkSyncPerfMetrics {
     pub avg_commit_ms: f64,
     pub p95_commit_ms: f64,
     pub p99_commit_ms: f64,
+    pub finalize_seconds: f64,
     pub max_compaction_pending_mb: u64,
     pub max_l0_files: u64,
     pub max_imm_memtables: u64,
@@ -161,6 +185,7 @@ pub struct BulkSyncPerfMetrics {
     pub min_mem_available_mb: u64,
     pub avg_disk_write_mb_per_batch: f64,
     pub peak_owner_memory_bytes: HashMap<String, u64>,
+    pub peak_live_cell_count: u64,
     pub streamed_history_rows: u64,
     pub sealed_aggregate_rows: u64,
     pub final_snapshot_rows: u64,
@@ -181,6 +206,7 @@ pub struct BulkSyncPerfRun {
     environment: Option<crate::sys_info::EnvironmentSnapshot>,
     rocksdb_config: Option<RocksDbConfig>,
     materialization_report: Option<crate::sync::MaterializationReport>,
+    finalize_seconds: f64,
 }
 
 impl BulkSyncPerfRun {
@@ -209,6 +235,7 @@ impl BulkSyncPerfRun {
             environment: None,
             rocksdb_config: None,
             materialization_report: None,
+            finalize_seconds: 0.0,
         };
         run.write_metadata()?;
         run.write_status(None)?;
@@ -259,6 +286,10 @@ impl BulkSyncPerfRun {
         Ok(())
     }
 
+    pub fn set_finalize_seconds(&mut self, seconds: f64) {
+        self.finalize_seconds = seconds;
+    }
+
     #[cfg(test)]
     pub fn build_metrics_for_test(&self, status: &str) -> BulkSyncPerfMetrics {
         self.build_metrics(status, None)
@@ -306,7 +337,8 @@ impl BulkSyncPerfRun {
 
     fn build_metrics(&self, status: &str, finished_at_utc: Option<String>) -> BulkSyncPerfMetrics {
         let batches = self.batch_samples.len() as u64;
-        let blocks = self.batch_samples.iter().map(|sample| sample.blocks).sum();
+        let blocks: u64 = self.batch_samples.iter().map(|sample| sample.blocks).sum();
+        let total_txs: u64 = self.batch_samples.iter().map(|sample| sample.txs).sum();
 
         let batch_seconds = self
             .batch_samples
@@ -323,6 +355,11 @@ impl BulkSyncPerfRun {
             elapsed_wall_clock_seconds(&self.started_at_utc, finished_at_utc.as_deref());
         let blocks_per_sec_wall = if wall_clock_seconds > 0.0 {
             blocks as f64 / wall_clock_seconds
+        } else {
+            0.0
+        };
+        let txs_per_sec_wall = if wall_clock_seconds > 0.0 {
+            total_txs as f64 / wall_clock_seconds
         } else {
             0.0
         };
@@ -385,6 +422,12 @@ impl BulkSyncPerfRun {
                 *current_peak = (*current_peak).max(*bytes);
             }
         }
+        let peak_live_cell_count = self
+            .batch_samples
+            .iter()
+            .map(|s| s.live_cell_count)
+            .max()
+            .unwrap_or(0);
         let materialization_report = self.materialization_report.clone().unwrap_or_default();
 
         BulkSyncPerfMetrics {
@@ -395,7 +438,9 @@ impl BulkSyncPerfRun {
             wall_clock_seconds,
             batches,
             blocks,
+            total_txs,
             blocks_per_sec_wall,
+            txs_per_sec_wall,
             blocks_per_batch,
             avg_batch_seconds: average(&batch_seconds),
             p95_batch_seconds: percentile(batch_seconds.clone(), 95),
@@ -404,6 +449,7 @@ impl BulkSyncPerfRun {
             avg_commit_ms: average(&commit_ms),
             p95_commit_ms: percentile(commit_ms.clone(), 95),
             p99_commit_ms: percentile(commit_ms, 99),
+            finalize_seconds: self.finalize_seconds,
             max_compaction_pending_mb,
             max_l0_files,
             max_imm_memtables,
@@ -412,6 +458,7 @@ impl BulkSyncPerfRun {
             min_mem_available_mb,
             avg_disk_write_mb_per_batch,
             peak_owner_memory_bytes,
+            peak_live_cell_count,
             streamed_history_rows: materialization_report.streamed_history_rows as u64,
             sealed_aggregate_rows: materialization_report.sealed_aggregate_rows as u64,
             final_snapshot_rows: materialization_report.final_snapshot_rows as u64,
@@ -468,11 +515,13 @@ impl BulkSyncPerfRun {
             content.push_str(&format!("finished_at_utc={}\n", finished_at_utc));
         }
         content.push_str(&format!(
-            "wall_clock_seconds={}\nbatches={}\nblocks={}\nblocks_per_sec_wall={}\nblocks_per_batch={}\navg_batch_seconds={}\np95_batch_seconds={}\np99_batch_seconds={}\ntotal_commit_seconds={}\navg_commit_ms={}\np95_commit_ms={}\np99_commit_ms={}\nmax_compaction_pending_mb={}\nmax_l0_files={}\nmax_imm_memtables={}\navg_load_avg_1m={}\nmax_load_avg_1m={}\nmin_mem_available_mb={}\navg_disk_write_mb_per_batch={}\nstreamed_history_rows={}\nsealed_aggregate_rows={}\nfinal_snapshot_rows={}\nhistory_flushes={}\nsealed_aggregate_flushes={}\nfinal_snapshot_flushes={}\n",
+            "wall_clock_seconds={}\nbatches={}\nblocks={}\ntotal_txs={}\nblocks_per_sec_wall={}\ntxs_per_sec_wall={}\nblocks_per_batch={}\navg_batch_seconds={}\np95_batch_seconds={}\np99_batch_seconds={}\ntotal_commit_seconds={}\navg_commit_ms={}\np95_commit_ms={}\np99_commit_ms={}\nfinalize_seconds={}\nmax_compaction_pending_mb={}\nmax_l0_files={}\nmax_imm_memtables={}\navg_load_avg_1m={}\nmax_load_avg_1m={}\nmin_mem_available_mb={}\navg_disk_write_mb_per_batch={}\npeak_live_cell_count={}\nstreamed_history_rows={}\nsealed_aggregate_rows={}\nfinal_snapshot_rows={}\nhistory_flushes={}\nsealed_aggregate_flushes={}\nfinal_snapshot_flushes={}\n",
             format_float(metrics.wall_clock_seconds),
             metrics.batches,
             metrics.blocks,
+            metrics.total_txs,
             format_float(metrics.blocks_per_sec_wall),
+            format_float(metrics.txs_per_sec_wall),
             format_float(metrics.blocks_per_batch),
             format_float(metrics.avg_batch_seconds),
             format_float(metrics.p95_batch_seconds),
@@ -481,6 +530,7 @@ impl BulkSyncPerfRun {
             format_float(metrics.avg_commit_ms),
             format_float(metrics.p95_commit_ms),
             format_float(metrics.p99_commit_ms),
+            format_float(metrics.finalize_seconds),
             metrics.max_compaction_pending_mb,
             metrics.max_l0_files,
             metrics.max_imm_memtables,
@@ -488,6 +538,7 @@ impl BulkSyncPerfRun {
             format_float(metrics.max_load_avg_1m),
             metrics.min_mem_available_mb,
             format_float(metrics.avg_disk_write_mb_per_batch),
+            metrics.peak_live_cell_count,
             metrics.streamed_history_rows,
             metrics.sealed_aggregate_rows,
             metrics.final_snapshot_rows,
@@ -518,7 +569,7 @@ impl BulkSyncPerfRun {
         // Environment section
         self.write_report_environment_section(&mut content)?;
 
-        content.push_str("\n## Current Metrics\n\n");
+        content.push_str("\n## Throughput\n\n");
         content.push_str("| Metric | Value |\n");
         content.push_str("| --- | ---: |\n");
         content.push_str(&format!(
@@ -527,14 +578,24 @@ impl BulkSyncPerfRun {
         ));
         content.push_str(&format!("| batches | {} |\n", metrics.batches));
         content.push_str(&format!("| blocks | {} |\n", metrics.blocks));
+        content.push_str(&format!("| total_txs | {} |\n", metrics.total_txs));
         content.push_str(&format!(
             "| blocks_per_sec_wall | {} |\n",
             format_float(metrics.blocks_per_sec_wall)
         ));
         content.push_str(&format!(
+            "| txs_per_sec_wall | {} |\n",
+            format_float(metrics.txs_per_sec_wall)
+        ));
+        content.push_str(&format!(
             "| blocks_per_batch | {} |\n",
             format_float(metrics.blocks_per_batch)
         ));
+        content.push('\n');
+
+        content.push_str("## Batch Timing\n\n");
+        content.push_str("| Metric | Value |\n");
+        content.push_str("| --- | ---: |\n");
         content.push_str(&format!(
             "| avg_batch_seconds | {} |\n",
             format_float(metrics.avg_batch_seconds)
@@ -564,6 +625,15 @@ impl BulkSyncPerfRun {
             format_float(metrics.p99_commit_ms)
         ));
         content.push_str(&format!(
+            "| finalize_seconds | {} |\n",
+            format_float(metrics.finalize_seconds)
+        ));
+        content.push('\n');
+
+        content.push_str("## System Pressure\n\n");
+        content.push_str("| Metric | Value |\n");
+        content.push_str("| --- | ---: |\n");
+        content.push_str(&format!(
             "| max_compaction_pending_mb | {} |\n",
             metrics.max_compaction_pending_mb
         ));
@@ -588,6 +658,15 @@ impl BulkSyncPerfRun {
             "| avg_disk_write_mb_per_batch | {} |\n",
             format_float(metrics.avg_disk_write_mb_per_batch)
         ));
+        content.push_str(&format!(
+            "| peak_live_cell_count | {} |\n",
+            metrics.peak_live_cell_count
+        ));
+        content.push('\n');
+
+        content.push_str("## Materialization\n\n");
+        content.push_str("| Metric | Value |\n");
+        content.push_str("| --- | ---: |\n");
         content.push_str(&format!(
             "| streamed_history_rows | {} |\n",
             metrics.streamed_history_rows
@@ -641,6 +720,11 @@ impl BulkSyncPerfRun {
                     baseline.blocks_per_sec_wall,
                 ),
                 (
+                    "txs_per_sec_wall",
+                    metrics.txs_per_sec_wall,
+                    baseline.txs_per_sec_wall,
+                ),
+                (
                     "blocks_per_batch",
                     metrics.blocks_per_batch,
                     baseline.blocks_per_batch,
@@ -679,6 +763,11 @@ impl BulkSyncPerfRun {
                     "p99_commit_ms",
                     metrics.p99_commit_ms,
                     baseline.p99_commit_ms,
+                ),
+                (
+                    "finalize_seconds",
+                    metrics.finalize_seconds,
+                    baseline.finalize_seconds,
                 ),
                 (
                     "avg_load_avg_1m",
@@ -925,7 +1014,9 @@ fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
         wall_clock_seconds: read_f64(&map, "wall_clock_seconds"),
         batches: read_u64(&map, "batches"),
         blocks: read_u64(&map, "blocks"),
+        total_txs: read_u64(&map, "total_txs"),
         blocks_per_sec_wall: read_f64(&map, "blocks_per_sec_wall"),
+        txs_per_sec_wall: read_f64(&map, "txs_per_sec_wall"),
         blocks_per_batch: read_f64(&map, "blocks_per_batch"),
         avg_batch_seconds: read_f64(&map, "avg_batch_seconds"),
         p95_batch_seconds: read_f64(&map, "p95_batch_seconds"),
@@ -934,6 +1025,7 @@ fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
         avg_commit_ms: read_f64(&map, "avg_commit_ms"),
         p95_commit_ms: read_f64(&map, "p95_commit_ms"),
         p99_commit_ms: read_f64(&map, "p99_commit_ms"),
+        finalize_seconds: read_f64(&map, "finalize_seconds"),
         max_compaction_pending_mb: read_u64(&map, "max_compaction_pending_mb"),
         max_l0_files: read_u64(&map, "max_l0_files"),
         max_imm_memtables: read_u64(&map, "max_imm_memtables"),
@@ -942,6 +1034,7 @@ fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
         min_mem_available_mb: read_u64(&map, "min_mem_available_mb"),
         avg_disk_write_mb_per_batch: read_f64(&map, "avg_disk_write_mb_per_batch"),
         peak_owner_memory_bytes,
+        peak_live_cell_count: read_u64(&map, "peak_live_cell_count"),
         streamed_history_rows: read_u64(&map, "streamed_history_rows"),
         sealed_aggregate_rows: read_u64(&map, "sealed_aggregate_rows"),
         final_snapshot_rows: read_u64(&map, "final_snapshot_rows"),
@@ -1451,5 +1544,78 @@ mod tests {
         assert!(samples.contains("\"mem_available_mb\""));
         assert!(samples.contains("\"disk_read_mb\""));
         assert!(samples.contains("\"disk_write_mb\""));
+    }
+
+    #[test]
+    fn test_batch_sample_includes_engine_and_bulk_build_sub_step_fields() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        let mut sample = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        sample.engine = "bulk_build".to_string();
+        sample.fetch_ms = 50.0;
+        sample.facts_ms = 120.0;
+        sample.resolve_ms = 30.0;
+        sample.reduce_ms = 200.0;
+        sample.flush_ms = 80.0;
+        sample.live_cell_count = 5000;
+        sample.cumulative_history_rows = 100;
+        sample.cumulative_sealed_rows = 42;
+        sample.cumulative_snapshot_rows = 0;
+        run.record_batch_sample(sample).unwrap();
+
+        let samples = std::fs::read_to_string(dir.path().join("run-1/samples.jsonl")).unwrap();
+        assert!(samples.contains("\"engine\":\"bulk_build\""));
+        assert!(samples.contains("\"fetch_ms\":50.0"));
+        assert!(samples.contains("\"facts_ms\":120.0"));
+        assert!(samples.contains("\"resolve_ms\":30.0"));
+        assert!(samples.contains("\"reduce_ms\":200.0"));
+        assert!(samples.contains("\"flush_ms\":80.0"));
+        assert!(samples.contains("\"live_cell_count\":5000"));
+        assert!(samples.contains("\"cumulative_history_rows\":100"));
+        assert!(samples.contains("\"cumulative_sealed_rows\":42"));
+        assert!(samples.contains("\"cumulative_snapshot_rows\":0"));
+    }
+
+    #[test]
+    fn test_metrics_include_throughput_and_finalize_fields() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        let mut sample = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        sample.txs = 500;
+        sample.live_cell_count = 3000;
+        run.record_batch_sample(sample).unwrap();
+        run.set_finalize_seconds(12.5);
+        run.finish_completed().unwrap();
+
+        let metrics = std::fs::read_to_string(dir.path().join("run-1/metrics.env")).unwrap();
+        assert!(metrics.contains("total_txs=500"));
+        assert!(metrics.contains("txs_per_sec_wall="));
+        assert!(metrics.contains("finalize_seconds=12.500"));
+        assert!(metrics.contains("peak_live_cell_count=3000"));
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        assert!(report.contains("## Throughput"));
+        assert!(report.contains("## Batch Timing"));
+        assert!(report.contains("## System Pressure"));
+        assert!(report.contains("## Materialization"));
+        assert!(report.contains("txs_per_sec_wall"));
+        assert!(report.contains("finalize_seconds"));
+        assert!(report.contains("peak_live_cell_count"));
+    }
+
+    #[test]
+    fn test_pipeline_batch_sample_defaults_to_pipeline_engine() {
+        let sample = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        assert_eq!(sample.engine, "pipeline");
+        assert_eq!(sample.fetch_ms, 0.0);
+        assert_eq!(sample.facts_ms, 0.0);
+        assert_eq!(sample.resolve_ms, 0.0);
+        assert_eq!(sample.reduce_ms, 0.0);
+        assert_eq!(sample.flush_ms, 0.0);
+        assert_eq!(sample.live_cell_count, 0);
+        assert_eq!(sample.cumulative_history_rows, 0);
     }
 }

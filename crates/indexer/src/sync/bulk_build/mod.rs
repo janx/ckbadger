@@ -94,6 +94,7 @@ impl BulkBuildEngine {
                 indexer.config.batch_size
             )
         })?;
+        let mut batch_count: u64 = 0;
 
         loop {
             ckb_store.refresh()?;
@@ -142,7 +143,7 @@ impl BulkBuildEngine {
             let fetch_elapsed = fetch_started.elapsed();
 
             let build_started = Instant::now();
-            let batch_stats =
+            let (batch_stats, build_timings) =
                 runtime.apply_blocks(&blocks, &mut materializer, indexer.config.is_mainnet())?;
             let build_elapsed = build_started.elapsed();
             sync_totals.record_batch(&batch_stats)?;
@@ -168,6 +169,7 @@ impl BulkBuildEngine {
 
             let perf_stats = indexer.writer.store().memory_stats();
             let batch_env = crate::sys_info::read_batch_environment(&mut disk_tracker);
+            let mat_totals = materializer.current_totals();
             let mut sample = BatchSample::new(
                 batch_stats.block_count,
                 fetch_elapsed.as_secs_f64() + build_elapsed.as_secs_f64(),
@@ -183,6 +185,7 @@ impl BulkBuildEngine {
                 batch_env.disk_read_mb,
                 batch_env.disk_write_mb,
             );
+            sample.engine = "bulk_build".to_string();
             sample.txs = batch_stats.tx_count;
             sample.cells = u64::try_from(batch_stats.cells_created).map_err(|_| {
                 anyhow!(
@@ -197,9 +200,24 @@ impl BulkBuildEngine {
                 )
             })?;
             sample.write_ms = build_elapsed.as_secs_f64() * 1000.0;
+            sample.fetch_ms = fetch_elapsed.as_secs_f64() * 1000.0;
+            sample.facts_ms = build_timings.facts_ms;
+            sample.resolve_ms = build_timings.resolve_ms;
+            sample.reduce_ms = build_timings.reduce_ms;
+            sample.flush_ms = build_timings.flush_ms;
             sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
+            sample.live_cell_count = runtime.sequencer.live_count() as u64;
+            sample.cumulative_history_rows = mat_totals.streamed_history_rows as u64;
+            sample.cumulative_sealed_rows = mat_totals.sealed_aggregate_rows as u64;
+            sample.cumulative_snapshot_rows = mat_totals.final_snapshot_rows as u64;
             indexer.record_bulk_sync_perf_batch_sample(sample);
 
+            batch_count += 1;
+            let progress_pct = if chain_tip > 0 {
+                last_block_u64 as f64 / chain_tip as f64 * 100.0
+            } else {
+                0.0
+            };
             info!(
                 run_id = %indexer.run_id,
                 start_block,
@@ -209,16 +227,47 @@ impl BulkBuildEngine {
                 current_block = last_block_u64,
                 target_block = chain_tip,
                 remaining_blocks = indexer.progress.blocks_remaining(),
+                progress_pct = format!("{:.1}%", progress_pct),
                 fetch_ms = format!("{:.1}", fetch_elapsed.as_secs_f64() * 1000.0),
-                write_ms = format!("{:.1}", build_elapsed.as_secs_f64() * 1000.0),
+                build_ms = format!("{:.1}", build_elapsed.as_secs_f64() * 1000.0),
+                facts_ms = format!("{:.1}", build_timings.facts_ms),
+                resolve_ms = format!("{:.1}", build_timings.resolve_ms),
+                reduce_ms = format!("{:.1}", build_timings.reduce_ms),
+                flush_ms = format!("{:.1}", build_timings.flush_ms),
                 "Bulk build materialized batch"
             );
+
+            // Periodic memory summary every 10 batches
+            if batch_count % 10 == 0 {
+                let mem = runtime.memory_breakdown_bytes();
+                let total_mb: u64 = mem.values().sum::<u64>() / (1024 * 1024);
+                let live_cells = runtime.sequencer.live_count();
+                let interner_entries = runtime.interner.len();
+                info!(
+                    total_memory_mb = total_mb,
+                    live_cells,
+                    interner_entries,
+                    batch_count,
+                    "Bulk build memory snapshot"
+                );
+            }
         }
 
+        let finalize_started = Instant::now();
         runtime.finalize(indexer.writer.store().as_ref(), &mut materializer)?;
         sync_totals.finalize_success(indexer.writer.store().as_ref(), false)?;
         indexer.writer.refresh_latest_dao_statistics()?;
         indexer.writer.store().clear_bulk_build_session_marker()?;
+        let finalize_elapsed = finalize_started.elapsed();
+        info!(
+            run_id = %indexer.run_id,
+            finalize_ms = format!("{:.1}", finalize_elapsed.as_secs_f64() * 1000.0),
+            batch_count,
+            "Bulk build finalize completed"
+        );
+
+        indexer.record_bulk_sync_perf_finalize_seconds(finalize_elapsed.as_secs_f64());
+
         let previous_bulk_sync_allowed = finalize_bulk_stage_handoff_state(
             &indexer.bulk_sync_allowed,
             &indexer.was_bulk_sync_active,
@@ -248,6 +297,14 @@ impl BatchExecutionStats {
     fn is_empty(&self) -> bool {
         self.block_count == 0
     }
+}
+
+#[derive(Debug, Default, Clone)]
+struct BatchBuildTimings {
+    facts_ms: f64,
+    resolve_ms: f64,
+    reduce_ms: f64,
+    flush_ms: f64,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -588,14 +645,20 @@ impl BulkBuildRuntimeState {
         blocks: &[BlockResponseWithCycles],
         materializer: &mut materialize::Materializer<'_>,
         is_mainnet: bool,
-    ) -> Result<BatchExecutionStats> {
+    ) -> Result<(BatchExecutionStats, BatchBuildTimings)> {
         if blocks.is_empty() {
-            return Ok(BatchExecutionStats::default());
+            return Ok((BatchExecutionStats::default(), BatchBuildTimings::default()));
         }
 
+        let facts_started = Instant::now();
         let arena =
             crate::sync::pipeline::build_bulk_facts_arena_from_blocks(blocks, &mut self.interner)?;
+        let facts_elapsed = facts_started.elapsed();
+
+        let resolve_started = Instant::now();
         let resolved = self.sequencer.resolve(&arena)?;
+        let resolve_elapsed = resolve_started.elapsed();
+
         let tx_count = u64::try_from(arena.txs.len()).map_err(|_| {
             anyhow!(
                 "bulk build tx count exceeds u64 range while applying block batch: txs={}",
@@ -617,6 +680,7 @@ impl BulkBuildRuntimeState {
         .map_err(|_| {
             anyhow!("bulk build consumed cell count exceeds i64 range while applying block batch")
         })?;
+        let reduce_started = Instant::now();
         let last_block = arena
             .blocks
             .last()
@@ -675,13 +739,23 @@ impl BulkBuildRuntimeState {
         owners
             .object
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
+        let reduce_elapsed = reduce_started.elapsed();
 
+        let flush_started = Instant::now();
         materializer.stream_sealed_aggregate_rows(&hodl_sealed_rows)?;
         materializer.stream_sealed_aggregate_rows(&cell_dist_sealed_rows)?;
         self.activity_stats.apply_history_rows(&history.rows)?;
         materializer.stream_history_rows(&history.rows)?;
+        let flush_elapsed = flush_started.elapsed();
 
-        Ok(BatchExecutionStats {
+        let timings = BatchBuildTimings {
+            facts_ms: facts_elapsed.as_secs_f64() * 1000.0,
+            resolve_ms: resolve_elapsed.as_secs_f64() * 1000.0,
+            reduce_ms: reduce_elapsed.as_secs_f64() * 1000.0,
+            flush_ms: flush_elapsed.as_secs_f64() * 1000.0,
+        };
+
+        Ok((BatchExecutionStats {
             last_block_number: Some(last_block.number),
             last_block_hash: Some(last_block.hash.to_vec()),
             block_count: u64::try_from(arena.blocks.len()).map_err(|_| {
@@ -693,7 +767,7 @@ impl BulkBuildRuntimeState {
             tx_count,
             cells_created,
             cells_consumed: consumed_cells,
-        })
+        }, timings))
     }
 
     fn finalize(
@@ -1013,7 +1087,7 @@ where
                 break;
             }
 
-            let batch_stats =
+            let (batch_stats, _timings) =
                 runtime.apply_blocks(std::slice::from_ref(block), &mut materializer, true)?;
             sync_totals.record_batch(&batch_stats)?;
             let last_block_number = batch_stats
@@ -1129,7 +1203,7 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         let mut materializer =
             materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
         for batch in block_batches {
-            let batch_stats = runtime.apply_blocks(batch, &mut materializer, true)?;
+            let (batch_stats, _timings) = runtime.apply_blocks(batch, &mut materializer, true)?;
             sync_totals.record_batch(&batch_stats)?;
         }
         runtime.finalize(domain_store.as_ref(), &mut materializer)?;
