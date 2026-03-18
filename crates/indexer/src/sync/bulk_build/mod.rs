@@ -12,10 +12,10 @@ use ckbadger_store::types::{
     LiveCellInfo, ObjectStandard, SporeTypeIndex, TxIndexEntry,
 };
 use ckbadger_store::{
-    AddressBalance, CkbadgerStore, ScriptInfo, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS,
-    CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE,
-    CF_CELL_BY_TYPE_CODE, CF_CELLS, CF_CONSUMED_CELLS, CF_LIVE_CELLS, CF_TX_HASH_MAP,
-    CF_TX_INDEX,
+    AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX,
+    CF_BLOCK_HEADERS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE,
+    CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE, CF_CELLS, CF_CONSUMED_CELLS, CF_LIVE_CELLS,
+    CF_TX_HASH_MAP, CF_TX_INDEX,
 };
 use rocksdb::IteratorMode;
 use tracing::info;
@@ -268,6 +268,26 @@ fn build_history_rows(
             tx.hash.to_vec(),
             tx_location.to_vec(),
         ));
+
+        let mut touched_lock_hash_ids = HashSet::new();
+        for output in &resolved_tx.cells {
+            touched_lock_hash_ids.insert(output.lock_script_hash_id);
+        }
+        for input in &resolved_tx.resolved_inputs {
+            touched_lock_hash_ids.insert(input.lock_script_hash_id);
+        }
+        for lock_hash_id in touched_lock_hash_ids {
+            rows.push(materialize::MaterializedRow::new(
+                CF_ADDR_TXS,
+                keys::encode_addr_tx_key(
+                    interner.resolve_bytes(lock_hash_id),
+                    tx.block_number,
+                    tx.tx_index,
+                    &tx.hash,
+                ),
+                Vec::new(),
+            ));
+        }
 
         if tx.is_cellbase {
             continue;
@@ -867,4 +887,148 @@ fn unique_temp_test_dir(prefix: &str) -> PathBuf {
         std::process::id(),
         nanos
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ScriptParser;
+    use crate::rpc::{
+        BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
+        TransactionView,
+    };
+    use ckbadger_store::{keys, CF_ADDR_TXS};
+
+    fn fixture_lock_script(args_hex: &str) -> Script {
+        Script {
+            code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                .to_string(),
+            hash_type: "type".to_string(),
+            args: args_hex.to_string(),
+        }
+    }
+
+    fn fixture_header(number: u64, hash_byte: u8) -> HeaderView {
+        HeaderView {
+            version: "0x0".to_string(),
+            compact_target: "0x1a08a97e".to_string(),
+            timestamp: "0x18c7b3b2b00".to_string(),
+            number: format!("0x{number:x}"),
+            epoch: "0x7080006000028".to_string(),
+            parent_hash: format!("0x{}", "11".repeat(32)),
+            transactions_root: format!("0x{}", "22".repeat(32)),
+            proposals_hash: format!("0x{}", "33".repeat(32)),
+            extra_hash: format!("0x{}", "44".repeat(32)),
+            dao: format!("0x{}", "00".repeat(32)),
+            nonce: "0x1".to_string(),
+            hash: format!("0x{}", format!("{hash_byte:02x}").repeat(32)),
+        }
+    }
+
+    fn bulk_build_addr_tx_fixture() -> BlockResponseWithCycles {
+        let lock_a_args = format!("0x{}", "01".repeat(20));
+        let lock_b_args = format!("0x{}", "02".repeat(20));
+        let create_tx = TransactionView {
+            hash: format!("0x{}", "aa".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", "00".repeat(32)),
+                    index: "0xffffffff".to_string(),
+                },
+            }],
+            outputs: vec![CellOutput {
+                capacity: format!("0x{:x}", 200_00000000u64),
+                lock: fixture_lock_script(&lock_a_args),
+                type_: None,
+            }],
+            outputs_data: vec!["0x".to_string()],
+            witnesses: vec!["0x".to_string()],
+        };
+
+        let split_tx = TransactionView {
+            hash: format!("0x{}", "bb".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: create_tx.hash.clone(),
+                    index: "0x0".to_string(),
+                },
+            }],
+            outputs: vec![
+                CellOutput {
+                    capacity: format!("0x{:x}", 100_00000000u64),
+                    lock: fixture_lock_script(&lock_a_args),
+                    type_: None,
+                },
+                CellOutput {
+                    capacity: format!("0x{:x}", 100_00000000u64),
+                    lock: fixture_lock_script(&lock_b_args),
+                    type_: None,
+                },
+            ],
+            outputs_data: vec!["0x".to_string(), "0x".to_string()],
+            witnesses: vec!["0x".to_string()],
+        };
+
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header(14_000_888, 0x99),
+                uncles: vec![],
+                transactions: vec![create_tx, split_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        }
+    }
+
+    #[test]
+    fn build_history_rows_materializes_addr_txs_for_unique_touched_locks() {
+        let block = bulk_build_addr_tx_fixture();
+        let lock_a_hash = ScriptParser::compute_script_hash(&fixture_lock_script(&format!(
+            "0x{}",
+            "01".repeat(20)
+        )));
+        let lock_b_hash = ScriptParser::compute_script_hash(&fixture_lock_script(&format!(
+            "0x{}",
+            "02".repeat(20)
+        )));
+        let create_tx_hash =
+            hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
+        let split_tx_hash =
+            hex::decode(&block.block.transactions[1].hash[2..]).expect("split tx hash");
+
+        let mut interner = interner::IdentityInterner::default();
+        let arena =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &mut interner)
+                .expect("facts arena");
+        let resolved = sequencer::BulkSequencer::default()
+            .resolve(&arena)
+            .expect("resolved txs");
+
+        let addr_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner)
+            .expect("history rows")
+            .into_iter()
+            .filter(|row| row.cf_name == CF_ADDR_TXS)
+            .collect();
+
+        let expected = [
+            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 0, &create_tx_hash),
+            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 1, &split_tx_hash),
+            keys::encode_addr_tx_key(&lock_b_hash, 14_000_888, 1, &split_tx_hash),
+        ];
+
+        assert_eq!(addr_rows.len(), expected.len());
+        let actual_keys: HashSet<Vec<u8>> = addr_rows.iter().map(|row| row.key.clone()).collect();
+        assert_eq!(actual_keys.len(), expected.len());
+        for key in expected {
+            assert!(actual_keys.contains(&key));
+        }
+    }
 }

@@ -171,7 +171,7 @@ fn bulk_build_materializes_history_rows_and_core_snapshots_from_single_pass() {
     let snapshot =
         materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
 
-    assert_eq!(snapshot.report.streamed_history_rows, 11);
+    assert_eq!(snapshot.report.streamed_history_rows, 13);
     assert!(snapshot.report.final_snapshot_rows > 0);
 
     let header = snapshot
@@ -218,7 +218,7 @@ fn bulk_build_materializes_append_only_cells_and_final_live_markers_from_single_
     let snapshot =
         materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
 
-    assert_eq!(snapshot.report.streamed_history_rows, 11);
+    assert_eq!(snapshot.report.streamed_history_rows, 13);
     assert_eq!(snapshot.cell_payloads.len(), 2);
     assert!(snapshot.cell_payloads.contains_key(&create_outpoint));
     assert!(snapshot.cell_payloads.contains_key(&consume_outpoint));
