@@ -320,3 +320,38 @@ fn bulk_build_materializes_activity_bundles_from_single_pass() {
     assert_eq!(consume_bundle.owners[0].ckb_delta, 0);
     assert!(consume_bundle.owners[0].asset_changes.is_empty());
 }
+
+#[test]
+fn bulk_build_materializes_sealed_activity_stats_from_single_pass() {
+    let block = same_block_create_then_consume_fixture();
+
+    let snapshot =
+        materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
+
+    assert!(
+        snapshot.report.sealed_aggregate_rows > 0,
+        "bulk build should materialize sealed activity stats rows"
+    );
+    assert_eq!(snapshot.daily_activity_stats.len(), 1);
+    assert_eq!(snapshot.hourly_activity_stats.len(), 1);
+
+    let daily = snapshot
+        .daily_activity_stats
+        .values()
+        .next()
+        .expect("daily activity stats");
+    assert_eq!(daily.coinbase_count, 1);
+    assert_eq!(daily.transfer_count, 1);
+    assert_eq!(daily.unique_address_count, 1);
+    assert_eq!(daily.total_ckb_moved, 0);
+
+    let hourly = snapshot
+        .hourly_activity_stats
+        .values()
+        .next()
+        .expect("hourly activity stats");
+    assert_eq!(hourly.coinbase_count, 1);
+    assert_eq!(hourly.transfer_count, 1);
+    assert_eq!(hourly.unique_address_count, 1);
+    assert_eq!(hourly.total_ckb_moved, 0);
+}

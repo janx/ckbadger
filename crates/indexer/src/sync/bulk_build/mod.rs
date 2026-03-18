@@ -9,14 +9,14 @@ use anyhow::{anyhow, bail};
 use ckbadger_store::keys;
 use ckbadger_store::types::{
     decode_live_cell_marker, CachedBlockHeader, ConsumedCellMeta, DID_CKB_SENTINEL_COLLECTION,
-    LiveCellInfo, ObjectStandard, SporeTypeIndex, TokenTransferRecord, TxActivityBundle,
-    TxIndexEntry,
+    DailyActivityStats, LiveCellInfo, ObjectStandard, SporeTypeIndex, TokenTransferRecord,
+    TxActivityBundle, TxIndexEntry,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ACTIVITIES, CF_ADDR_TXS,
     CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK,
     CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE, CF_CELLS,
-    CF_CONSUMED_CELLS, CF_LIVE_CELLS, CF_TX_HASH_MAP, CF_TX_INDEX,
+    CF_CONSUMED_CELLS, CF_LIVE_CELLS, CF_STATS_CHAIN, CF_TX_HASH_MAP, CF_TX_INDEX,
 };
 use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use rocksdb::IteratorMode;
@@ -108,6 +108,8 @@ pub struct BulkArtifactSnapshot {
     pub block_numbers_by_hash: HashMap<Vec<u8>, i64>,
     pub txs_by_hash: HashMap<Vec<u8>, (i64, i32, TxIndexEntry)>,
     pub activity_bundles: HashMap<Vec<u8>, TxActivityBundle>,
+    pub daily_activity_stats: HashMap<String, DailyActivityStats>,
+    pub hourly_activity_stats: HashMap<String, DailyActivityStats>,
     pub cell_payloads: HashMap<Vec<u8>, LiveCellInfo>,
     pub live_cells: HashMap<Vec<u8>, i64>,
     pub consumed_cells: HashMap<Vec<u8>, ConsumedCellMeta>,
@@ -137,6 +139,7 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
     let ctx = owners::ReducerContext::new(&interner);
     let mut owners = CoreOwners::default();
     let history_rows = build_history_rows(&arena, &resolved, &interner, true)?;
+    let sealed_rows = build_sealed_aggregate_rows(&history_rows)?;
     let final_snapshot_rows = build_final_snapshot_rows(&sequencer, &interner)?;
 
     for tx in &resolved {
@@ -155,6 +158,7 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
         let append_store = CkbadgerStore::open_append_only(&append_path)?;
         let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
         materializer.stream_history_rows(&history_rows)?;
+        materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
         materializer.materialize_final_snapshot(&final_snapshot_rows)?;
         owners.materialize_all(&mut materializer)?;
         let report = materializer.finish();
@@ -162,6 +166,8 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
         let core = collect_core_owner_state_snapshot(&domain_store)?;
         let (block_headers, block_numbers_by_hash, txs_by_hash, activity_bundles) =
             collect_history_snapshot(&domain_store)?;
+        let (daily_activity_stats, hourly_activity_stats) =
+            collect_activity_stats_snapshot(&domain_store)?;
         let (
             cell_payloads,
             live_cells,
@@ -179,6 +185,8 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
             block_numbers_by_hash,
             txs_by_hash,
             activity_bundles,
+            daily_activity_stats,
+            hourly_activity_stats,
             cell_payloads,
             live_cells,
             consumed_cells,
@@ -338,6 +346,77 @@ fn build_history_rows(
                 Vec::new(),
             ));
         }
+    }
+
+    Ok(rows)
+}
+
+fn build_sealed_aggregate_rows(
+    history_rows: &[materialize::MaterializedRow],
+) -> Result<Vec<materialize::MaterializedRow>> {
+    let mut daily_stats = HashMap::<String, DailyActivityStats>::new();
+    let mut daily_addrs = HashMap::<String, HashSet<[u8; 32]>>::new();
+    let mut hourly_stats = HashMap::<String, DailyActivityStats>::new();
+    let mut hourly_addrs = HashMap::<String, HashSet<[u8; 32]>>::new();
+
+    for row in history_rows.iter().filter(|row| row.cf_name == CF_ACTIVITIES) {
+        let bundle: TxActivityBundle = bincode::deserialize(&row.value).map_err(|e| {
+            anyhow!(
+                "failed to deserialize TxActivityBundle while building sealed bulk activity stats: key=0x{} error={}",
+                hex::encode(&row.key),
+                e
+            )
+        })?;
+        let date = ckbadger_common::block_date_from_ms(bundle.timestamp)
+            .format("%Y%m%d")
+            .to_string();
+        let hour = ckbadger_common::block_datetime_from_ms(bundle.timestamp)
+            .format("%Y%m%d%H")
+            .to_string();
+
+        for owner in &bundle.owners {
+            crate::db::BatchWriter::accumulate_owner_activity_stats(
+                bundle.is_cellbase,
+                owner,
+                daily_stats.entry(date.clone()).or_default(),
+            );
+            crate::db::BatchWriter::accumulate_owner_activity_stats(
+                bundle.is_cellbase,
+                owner,
+                hourly_stats.entry(hour.clone()).or_default(),
+            );
+
+            if !bundle.is_cellbase && owner.lock_hash.len() == 32 {
+                let mut lock_hash = [0u8; 32];
+                lock_hash.copy_from_slice(&owner.lock_hash);
+                daily_addrs.entry(date.clone()).or_default().insert(lock_hash);
+                hourly_addrs.entry(hour.clone()).or_default().insert(lock_hash);
+            }
+        }
+    }
+
+    let mut rows = Vec::with_capacity(daily_stats.len() + hourly_stats.len());
+
+    let mut daily_entries = daily_stats.into_iter().collect::<Vec<_>>();
+    daily_entries.sort_by(|a, b| a.0.cmp(&b.0));
+    for (date, mut stats) in daily_entries {
+        stats.unique_address_count = daily_addrs.get(&date).map_or(0, |set| set.len() as u32);
+        rows.push(materialize::MaterializedRow::new(
+            CF_STATS_CHAIN,
+            keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes()),
+            bincode::serialize(&stats)?,
+        ));
+    }
+
+    let mut hourly_entries = hourly_stats.into_iter().collect::<Vec<_>>();
+    hourly_entries.sort_by(|a, b| a.0.cmp(&b.0));
+    for (hour, mut stats) in hourly_entries {
+        stats.unique_address_count = hourly_addrs.get(&hour).map_or(0, |set| set.len() as u32);
+        rows.push(materialize::MaterializedRow::new(
+            CF_STATS_CHAIN,
+            keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour.as_bytes()),
+            bincode::serialize(&stats)?,
+        ));
     }
 
     Ok(rows)
@@ -1028,6 +1107,23 @@ fn collect_history_snapshot(
     }
 
     Ok((block_headers, block_numbers_by_hash, txs_by_hash, activity_bundles))
+}
+
+fn collect_activity_stats_snapshot(
+    domain_store: &CkbadgerStore,
+) -> Result<(
+    HashMap<String, DailyActivityStats>,
+    HashMap<String, DailyActivityStats>,
+)> {
+    let daily_activity_stats = domain_store
+        .list_daily_activity_stats()?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+    let hourly_activity_stats = domain_store
+        .list_hourly_activity_stats_since("0000000000")?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+    Ok((daily_activity_stats, hourly_activity_stats))
 }
 
 fn collect_cell_snapshot(
