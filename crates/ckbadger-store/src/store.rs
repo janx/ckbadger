@@ -344,6 +344,7 @@ const CF_WRITE_POLICY_APPEND_ONLY: &[&str] = &[
     CF_TX_INDEX,
     CF_TX_HASH_MAP,
     CF_CONSUMED_CELLS,
+    CF_CELL_BY_DATA_HASH,
     CF_ADDR_TXS,
     CF_TOKEN_TRANSFERS,
     CF_ACTIVITIES,
@@ -367,7 +368,6 @@ const CF_WRITE_POLICY_FINAL_SNAPSHOT: &[&str] = &[
     CF_LIVE_CELLS,
     CF_CELL_BY_LOCK,
     CF_CELL_BY_TYPE,
-    CF_CELL_BY_DATA_HASH,
     CF_ADDR_BALANCE,
     CF_DAO_DEPOSITS,
     CF_DAO_BY_WITHDRAW_TX,
@@ -2835,6 +2835,11 @@ mod tests {
             cf_write_policy(CF_STATS_CHAIN),
             CfWritePolicy::SealedAggregate
         );
+    }
+
+    #[test]
+    fn test_cf_write_policy_marks_cell_by_data_hash_as_append_only_history() {
+        assert_eq!(cf_write_policy(CF_CELL_BY_DATA_HASH), CfWritePolicy::AppendOnly);
     }
 
     #[test]

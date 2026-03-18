@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -8,12 +8,14 @@ use anyhow::Result;
 use anyhow::{anyhow, bail};
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    decode_live_cell_marker, CachedBlockHeader, DID_CKB_SENTINEL_COLLECTION, LiveCellInfo,
-    ObjectStandard, SporeTypeIndex, TxIndexEntry,
+    decode_live_cell_marker, CachedBlockHeader, ConsumedCellMeta, DID_CKB_SENTINEL_COLLECTION,
+    LiveCellInfo, ObjectStandard, SporeTypeIndex, TxIndexEntry,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS,
-    CF_CELLS, CF_LIVE_CELLS, CF_TX_HASH_MAP, CF_TX_INDEX,
+    CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE,
+    CF_CELL_BY_TYPE_CODE, CF_CELLS, CF_CONSUMED_CELLS, CF_LIVE_CELLS, CF_TX_HASH_MAP,
+    CF_TX_INDEX,
 };
 use rocksdb::IteratorMode;
 use tracing::info;
@@ -103,6 +105,12 @@ pub struct BulkArtifactSnapshot {
     pub txs_by_hash: HashMap<Vec<u8>, (i64, i32, TxIndexEntry)>,
     pub cell_payloads: HashMap<Vec<u8>, LiveCellInfo>,
     pub live_cells: HashMap<Vec<u8>, i64>,
+    pub consumed_cells: HashMap<Vec<u8>, ConsumedCellMeta>,
+    pub cell_by_lock: HashSet<Vec<u8>>,
+    pub cell_by_type: HashSet<Vec<u8>>,
+    pub cell_by_lock_code: HashSet<Vec<u8>>,
+    pub cell_by_type_code: HashSet<Vec<u8>>,
+    pub cell_by_data_hash: HashSet<Vec<u8>>,
     pub core: CoreOwnerStateSnapshot,
 }
 
@@ -124,7 +132,7 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
     let ctx = owners::ReducerContext::new(&interner);
     let mut owners = CoreOwners::default();
     let history_rows = build_history_rows(&arena, &resolved, &interner)?;
-    let live_cell_rows = build_live_cell_rows(&sequencer)?;
+    let final_snapshot_rows = build_final_snapshot_rows(&sequencer, &interner)?;
 
     for tx in &resolved {
         owners.apply_tx(tx, &ctx)?;
@@ -142,14 +150,23 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
         let append_store = CkbadgerStore::open_append_only(&append_path)?;
         let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
         materializer.stream_history_rows(&history_rows)?;
-        materializer.materialize_final_snapshot(&live_cell_rows)?;
+        materializer.materialize_final_snapshot(&final_snapshot_rows)?;
         owners.materialize_all(&mut materializer)?;
         let report = materializer.finish();
 
         let core = collect_core_owner_state_snapshot(&domain_store)?;
         let (block_headers, block_numbers_by_hash, txs_by_hash) =
             collect_history_snapshot(&domain_store)?;
-        let (cell_payloads, live_cells) = collect_cell_snapshot(&domain_store, &append_store)?;
+        let (
+            cell_payloads,
+            live_cells,
+            consumed_cells,
+            cell_by_lock,
+            cell_by_type,
+            cell_by_lock_code,
+            cell_by_type_code,
+            cell_by_data_hash,
+        ) = collect_cell_snapshot(&domain_store, &append_store)?;
 
         BulkArtifactSnapshot {
             report,
@@ -158,6 +175,12 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
             txs_by_hash,
             cell_payloads,
             live_cells,
+            consumed_cells,
+            cell_by_lock,
+            cell_by_type,
+            cell_by_lock_code,
+            cell_by_type_code,
+            cell_by_data_hash,
             core,
         }
     };
@@ -172,7 +195,9 @@ fn build_history_rows(
     interner: &interner::IdentityInterner,
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let mut rows =
-        Vec::with_capacity(arena.blocks.len() * 2 + arena.txs.len() * 2 + arena.cells.len());
+        Vec::with_capacity(
+            arena.blocks.len() * 2 + arena.txs.len() * 2 + arena.cells.len() * 2 + arena.txs.len(),
+        );
 
     for block in &arena.blocks {
         let header = CachedBlockHeader {
@@ -243,31 +268,108 @@ fn build_history_rows(
             tx.hash.to_vec(),
             tx_location.to_vec(),
         ));
+
+        if tx.is_cellbase {
+            continue;
+        }
+
+        for input in &resolved_tx.resolved_inputs {
+            rows.push(materialize::MaterializedRow::new(
+                CF_CONSUMED_CELLS,
+                keys::encode_outpoint(&input.outpoint.tx_hash, resolved_input_outpoint_index_i16(input)?)
+                    .to_vec(),
+                bincode::serialize(&ConsumedCellMeta {
+                    created_at_block: input.created_at_block,
+                    consumed_at_block: tx.block_number,
+                    consumed_by_tx: Some(tx.hash.to_vec()),
+                })?,
+            ));
+        }
     }
 
     for cell in &arena.cells {
+        let outpoint_key =
+            keys::encode_outpoint(&cell.outpoint.tx_hash, cell_outpoint_index_i16(cell)?).to_vec();
         rows.push(materialize::MaterializedRow::new(
             CF_CELLS,
-            keys::encode_outpoint(&cell.outpoint.tx_hash, cell_outpoint_index_i16(cell)?).to_vec(),
+            outpoint_key,
             bincode::serialize(&cell_facts_to_live_cell_info(cell, interner))?,
         ));
+
+        if let Some(data_hash) = &cell.data_hash {
+            rows.push(materialize::MaterializedRow::new(
+                CF_CELL_BY_DATA_HASH,
+                keys::encode_cell_index_key(
+                    data_hash,
+                    cell.created_at_block,
+                    &cell.outpoint.tx_hash,
+                    cell_outpoint_index_i16(cell)?,
+                ),
+                Vec::new(),
+            ));
+        }
     }
 
     Ok(rows)
 }
 
-fn build_live_cell_rows(
+fn build_final_snapshot_rows(
     sequencer: &sequencer::BulkSequencer,
+    interner: &interner::IdentityInterner,
 ) -> Result<Vec<materialize::MaterializedRow>> {
-    let mut rows = Vec::with_capacity(sequencer.live_count());
+    let mut rows = Vec::with_capacity(sequencer.live_count() * 5);
 
     for slot in sequencer.live_slots() {
+        let outpoint_index = live_slot_outpoint_index_i16(slot)?;
         rows.push(materialize::MaterializedRow::new(
             CF_LIVE_CELLS,
-            keys::encode_outpoint(&slot.outpoint.tx_hash, live_slot_outpoint_index_i16(slot)?)
-                .to_vec(),
+            keys::encode_outpoint(&slot.outpoint.tx_hash, outpoint_index).to_vec(),
             slot.created_at_block.to_le_bytes().to_vec(),
         ));
+        rows.push(materialize::MaterializedRow::new(
+            CF_CELL_BY_LOCK,
+            keys::encode_cell_index_key(
+                interner.resolve_bytes(slot.lock_script_hash_id),
+                slot.created_at_block,
+                &slot.outpoint.tx_hash,
+                outpoint_index,
+            ),
+            Vec::new(),
+        ));
+        rows.push(materialize::MaterializedRow::new(
+            CF_CELL_BY_LOCK_CODE,
+            keys::encode_cell_index_key(
+                interner.resolve_bytes(slot.lock_code_hash_id),
+                slot.created_at_block,
+                &slot.outpoint.tx_hash,
+                outpoint_index,
+            ),
+            Vec::new(),
+        ));
+        if let Some(type_script_hash_id) = slot.type_script_hash_id {
+            rows.push(materialize::MaterializedRow::new(
+                CF_CELL_BY_TYPE,
+                keys::encode_cell_index_key(
+                    interner.resolve_bytes(type_script_hash_id),
+                    slot.created_at_block,
+                    &slot.outpoint.tx_hash,
+                    outpoint_index,
+                ),
+                Vec::new(),
+            ));
+        }
+        if let Some(type_code_hash_id) = slot.type_code_hash_id {
+            rows.push(materialize::MaterializedRow::new(
+                CF_CELL_BY_TYPE_CODE,
+                keys::encode_cell_index_key(
+                    interner.resolve_bytes(type_code_hash_id),
+                    slot.created_at_block,
+                    &slot.outpoint.tx_hash,
+                    outpoint_index,
+                ),
+                Vec::new(),
+            ));
+        }
     }
 
     Ok(rows)
@@ -338,7 +440,7 @@ fn cell_facts_to_live_cell_info(
         data_size: cell.data_size,
         occupied_capacity: cell.occupied_capacity,
         udt_amount: cell.udt_amount,
-        data_hash: None,
+        data_hash: cell.data_hash.clone(),
     }
 }
 
@@ -358,6 +460,16 @@ fn live_slot_outpoint_index_i16(slot: &live_cells::LiveCellSlot) -> Result<i16> 
             "bulk build live outpoint index exceeds i16 while materializing live cells: tx=0x{} output_index={}",
             hex::encode(slot.outpoint.tx_hash),
             slot.outpoint.index
+        )
+    })
+}
+
+fn resolved_input_outpoint_index_i16(input: &facts::ResolvedInputFacts) -> Result<i16> {
+    i16::try_from(input.outpoint.index).map_err(|_| {
+        anyhow!(
+            "bulk build consumed outpoint index exceeds i16 while materializing consumed cells: tx=0x{} output_index={}",
+            hex::encode(input.outpoint.tx_hash),
+            input.outpoint.index
         )
     })
 }
@@ -430,7 +542,16 @@ fn collect_history_snapshot(
 fn collect_cell_snapshot(
     domain_store: &CkbadgerStore,
     append_store: &CkbadgerStore,
-) -> Result<(HashMap<Vec<u8>, LiveCellInfo>, HashMap<Vec<u8>, i64>)> {
+) -> Result<(
+    HashMap<Vec<u8>, LiveCellInfo>,
+    HashMap<Vec<u8>, i64>,
+    HashMap<Vec<u8>, ConsumedCellMeta>,
+    HashSet<Vec<u8>>,
+    HashSet<Vec<u8>>,
+    HashSet<Vec<u8>>,
+    HashSet<Vec<u8>>,
+    HashSet<Vec<u8>>,
+)> {
     let mut cell_payloads = HashMap::new();
     let cell_iter = append_store.iterator_cf(append_store.cf_cells(), IteratorMode::Start);
     for item in cell_iter {
@@ -459,7 +580,70 @@ fn collect_cell_snapshot(
         live_cells.insert(key.to_vec(), created_at_block);
     }
 
-    Ok((cell_payloads, live_cells))
+    let mut consumed_cells = HashMap::new();
+    let consumed_iter = domain_store.iterator_cf(domain_store.cf_consumed_cells(), IteratorMode::Start);
+    for item in consumed_iter {
+        let (key, value) = item?;
+        let consumed: ConsumedCellMeta = bincode::deserialize(&value).map_err(|e| {
+            anyhow!(
+                "failed to deserialize ConsumedCellMeta in bulk artifact snapshot helper: outpoint=0x{} error={}",
+                hex::encode(&key),
+                e
+            )
+        })?;
+        consumed_cells.insert(key.to_vec(), consumed);
+    }
+
+    let cell_by_lock = collect_index_keys(domain_store.iterator_cf(
+        domain_store.cf_cell_by_lock(),
+        IteratorMode::Start,
+    ))?;
+    let cell_by_type = collect_index_keys(domain_store.iterator_cf(
+        domain_store.cf_cell_by_type(),
+        IteratorMode::Start,
+    ))?;
+    let cell_by_lock_code = collect_index_keys(domain_store.iterator_cf(
+        domain_store.cf_cell_by_lock_code(),
+        IteratorMode::Start,
+    ))?;
+    let cell_by_type_code = collect_index_keys(domain_store.iterator_cf(
+        domain_store.cf_cell_by_type_code(),
+        IteratorMode::Start,
+    ))?;
+    let cell_by_data_hash = collect_index_keys(domain_store.iterator_cf(
+        domain_store.cf_cell_by_data_hash(),
+        IteratorMode::Start,
+    ))?;
+
+    Ok((
+        cell_payloads,
+        live_cells,
+        consumed_cells,
+        cell_by_lock,
+        cell_by_type,
+        cell_by_lock_code,
+        cell_by_type_code,
+        cell_by_data_hash,
+    ))
+}
+
+fn collect_index_keys<I>(iter: I) -> Result<HashSet<Vec<u8>>>
+where
+    I: IntoIterator<Item = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>>,
+{
+    let mut keys = HashSet::new();
+    for item in iter {
+        let (key, value) = item?;
+        if !value.is_empty() {
+            bail!(
+                "cell index value must be empty in bulk artifact snapshot helper: key=0x{} value_len={}",
+                hex::encode(&key),
+                value.len()
+            );
+        }
+        keys.insert(key.to_vec());
+    }
+    Ok(keys)
 }
 
 fn collect_core_owner_state_snapshot(domain_store: &CkbadgerStore) -> Result<CoreOwnerStateSnapshot> {

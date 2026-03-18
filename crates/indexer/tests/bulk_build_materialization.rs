@@ -3,6 +3,7 @@ use ckbadger_indexer::rpc::{
     TransactionView,
 };
 use ckbadger_indexer::parser::ScriptParser;
+use ckbadger_store::types::ConsumedCellMeta;
 use ckbadger_indexer::sync::{
     materialize_bulk_artifacts_for_test, run_sample_bulk_materialization_for_test,
 };
@@ -88,6 +89,68 @@ fn same_block_create_then_consume_fixture() -> BlockResponseWithCycles {
     }
 }
 
+fn fixture_type_script() -> Script {
+    Script {
+        code_hash: format!("0x{}", "66".repeat(32)),
+        hash_type: "type".to_string(),
+        args: format!("0x{}", "77".repeat(20)),
+    }
+}
+
+fn same_block_typed_data_create_then_consume_fixture() -> BlockResponseWithCycles {
+    let create_tx = TransactionView {
+        hash: format!("0x{}", "c1".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: "0x4a817c800".to_string(),
+            lock: fixture_lock_script(),
+            type_: Some(fixture_type_script()),
+        }],
+        outputs_data: vec!["0xdeadbeef".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let consume_tx = TransactionView {
+        hash: format!("0x{}", "d2".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: create_tx.hash.clone(),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: "0x4a817c800".to_string(),
+            lock: fixture_lock_script(),
+            type_: Some(fixture_type_script()),
+        }],
+        outputs_data: vec!["0xdeadbeef".to_string()],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    BlockResponseWithCycles {
+        block: BlockView {
+            header: fixture_header(14_000_777, 0x88),
+            uncles: vec![],
+            transactions: vec![create_tx, consume_tx],
+            proposals: vec![],
+        },
+        cycles: None,
+    }
+}
+
 #[test]
 fn materializer_streams_append_only_rows_before_final_snapshot() {
     let report = run_sample_bulk_materialization_for_test().expect("sample bulk materialization");
@@ -108,7 +171,7 @@ fn bulk_build_materializes_history_rows_and_core_snapshots_from_single_pass() {
     let snapshot =
         materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
 
-    assert_eq!(snapshot.report.streamed_history_rows, 8);
+    assert_eq!(snapshot.report.streamed_history_rows, 11);
     assert!(snapshot.report.final_snapshot_rows > 0);
 
     let header = snapshot
@@ -155,7 +218,7 @@ fn bulk_build_materializes_append_only_cells_and_final_live_markers_from_single_
     let snapshot =
         materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
 
-    assert_eq!(snapshot.report.streamed_history_rows, 8);
+    assert_eq!(snapshot.report.streamed_history_rows, 11);
     assert_eq!(snapshot.cell_payloads.len(), 2);
     assert!(snapshot.cell_payloads.contains_key(&create_outpoint));
     assert!(snapshot.cell_payloads.contains_key(&consume_outpoint));
@@ -165,4 +228,60 @@ fn bulk_build_materializes_append_only_cells_and_final_live_markers_from_single_
     assert_eq!(snapshot.live_cells.len(), 1);
     assert!(!snapshot.live_cells.contains_key(&create_outpoint));
     assert_eq!(snapshot.live_cells.get(&consume_outpoint), Some(&14_000_321));
+}
+
+#[test]
+fn bulk_build_materializes_consumed_cells_and_live_cell_indexes_from_single_pass() {
+    let block = same_block_typed_data_create_then_consume_fixture();
+    let create_tx_hash = hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
+    let consume_tx_hash =
+        hex::decode(&block.block.transactions[1].hash[2..]).expect("consume tx hash");
+    let create_outpoint = keys::encode_outpoint(&create_tx_hash, 0).to_vec();
+    let lock_hash = ScriptParser::compute_script_hash(&fixture_lock_script());
+    let lock_code_hash = hex::decode(&fixture_lock_script().code_hash[2..]).expect("lock code hash");
+    let type_hash = ScriptParser::compute_script_hash(&fixture_type_script());
+    let type_code_hash = hex::decode(&fixture_type_script().code_hash[2..]).expect("type code hash");
+    let data_hash = ScriptParser::compute_data_hash(&hex::decode("deadbeef").expect("output data"));
+
+    let snapshot =
+        materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
+
+    let consumed = snapshot
+        .consumed_cells
+        .get(&create_outpoint)
+        .expect("consumed cell meta");
+    assert_eq!(
+        consumed,
+        &ConsumedCellMeta {
+            created_at_block: 14_000_777,
+            consumed_at_block: 14_000_777,
+            consumed_by_tx: Some(consume_tx_hash.clone()),
+        }
+    );
+
+    let expected_live_lock = keys::encode_cell_index_key(&lock_hash, 14_000_777, &consume_tx_hash, 0);
+    let expected_live_lock_code =
+        keys::encode_cell_index_key(&lock_code_hash, 14_000_777, &consume_tx_hash, 0);
+    let expected_live_type = keys::encode_cell_index_key(&type_hash, 14_000_777, &consume_tx_hash, 0);
+    let expected_live_type_code =
+        keys::encode_cell_index_key(&type_code_hash, 14_000_777, &consume_tx_hash, 0);
+    let old_lock_key = keys::encode_cell_index_key(&lock_hash, 14_000_777, &create_tx_hash, 0);
+
+    assert_eq!(snapshot.cell_by_lock.len(), 1);
+    assert!(snapshot.cell_by_lock.contains(&expected_live_lock));
+    assert!(!snapshot.cell_by_lock.contains(&old_lock_key));
+    assert_eq!(snapshot.cell_by_lock_code.len(), 1);
+    assert!(snapshot.cell_by_lock_code.contains(&expected_live_lock_code));
+    assert_eq!(snapshot.cell_by_type.len(), 1);
+    assert!(snapshot.cell_by_type.contains(&expected_live_type));
+    assert_eq!(snapshot.cell_by_type_code.len(), 1);
+    assert!(snapshot.cell_by_type_code.contains(&expected_live_type_code));
+
+    let expected_data_hash_create =
+        keys::encode_cell_index_key(&data_hash, 14_000_777, &create_tx_hash, 0);
+    let expected_data_hash_consume =
+        keys::encode_cell_index_key(&data_hash, 14_000_777, &consume_tx_hash, 0);
+    assert_eq!(snapshot.cell_by_data_hash.len(), 2);
+    assert!(snapshot.cell_by_data_hash.contains(&expected_data_hash_create));
+    assert!(snapshot.cell_by_data_hash.contains(&expected_data_hash_consume));
 }

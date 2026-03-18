@@ -485,6 +485,11 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
                         cell.data_size,
                     ),
                     data_size: cell.data_size,
+                    data_hash: if cell.data_hash.is_empty() {
+                        None
+                    } else {
+                        Some(cell.data_hash.clone())
+                    },
                     udt_amount: parse_parsed_cell_udt_amount(
                         cell,
                         &parsed_tx.hash,

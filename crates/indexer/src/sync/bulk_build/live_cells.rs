@@ -68,6 +68,7 @@ pub(crate) struct LiveCellSlot {
     pub(crate) capacity: i64,
     pub(crate) occupied_capacity: i64,
     pub(crate) data_size: i32,
+    pub(crate) data_hash: Option<Vec<u8>>,
     pub(crate) udt_amount: Option<u128>,
     pub(crate) lock_script_hash_id: InternId,
     pub(crate) lock_code_hash_id: InternId,
@@ -90,6 +91,7 @@ impl LiveCellSlot {
             capacity: cell.capacity,
             occupied_capacity: cell.occupied_capacity,
             data_size: cell.data_size,
+            data_hash: cell.data_hash.clone(),
             udt_amount: cell.udt_amount,
             lock_script_hash_id: cell.lock_script_hash_id,
             lock_code_hash_id: cell.lock_code_hash_id,
@@ -112,6 +114,7 @@ impl LiveCellSlot {
             capacity: self.capacity,
             occupied_capacity: self.occupied_capacity,
             data_size: self.data_size,
+            data_hash: self.data_hash,
             udt_amount: self.udt_amount,
             lock_script_hash_id: self.lock_script_hash_id,
             lock_code_hash_id: self.lock_code_hash_id,
@@ -148,7 +151,7 @@ impl LiveCellSlot {
             data_size: self.data_size,
             occupied_capacity: self.occupied_capacity,
             udt_amount: self.udt_amount,
-            data_hash: None,
+            data_hash: self.data_hash.clone(),
         }
     }
 }
@@ -222,6 +225,7 @@ mod tests {
             capacity: 100_00000000,
             occupied_capacity: 61_00000000,
             data_size: 0,
+            data_hash: None,
             udt_amount: None,
             lock_script_hash_id: InternId::new(0),
             lock_code_hash_id: InternId::new(1),
