@@ -182,20 +182,39 @@ impl BulkReducer for ScriptOwner {
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
+        let store = materializer.domain_store();
         let mut code_hashes: Vec<&Vec<u8>> = self.infos.keys().collect();
         code_hashes.sort();
 
         let rows = code_hashes
             .into_iter()
             .map(|code_hash| {
-                let info = self
+                let mut info = self
                     .infos
                     .get(code_hash)
-                    .expect("sorted code hash must exist in script owner");
+                    .expect("sorted code hash must exist in script owner")
+                    .clone();
+
+                // Preserve label fields from existing store data (written by label import)
+                if let Ok(Some(existing)) = store.get_script_info(code_hash) {
+                    if info.name.is_none() {
+                        info.name = existing.name;
+                    }
+                    if info.category.is_none() {
+                        info.category = existing.category;
+                    }
+                    if info.website.is_none() {
+                        info.website = existing.website;
+                    }
+                    if info.description.is_none() {
+                        info.description = existing.description;
+                    }
+                }
+
                 Ok(MaterializedRow::new(
                     CF_SCRIPT_INFO,
                     code_hash.clone(),
-                    bincode::serialize(info)?,
+                    bincode::serialize(&info)?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;

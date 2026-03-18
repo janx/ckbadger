@@ -23,6 +23,8 @@ use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 #[derive(Debug, Default)]
 pub(crate) struct TokenOwner {
     tokens: HashMap<Vec<u8>, TokenAccum>,
+    /// On-chain max_supply observations collected from omnilock supply info cells.
+    max_supply_observations: HashMap<Vec<u8>, i128>,
 }
 
 impl TokenOwner {
@@ -30,7 +32,41 @@ impl TokenOwner {
         crate::sync::bulk_build::accounting::hash_map_bytes(&self.tokens, |type_hash, token| {
             crate::sync::bulk_build::accounting::bytes_vec_bytes(type_hash)
                 + token.estimated_bytes()
-        })
+        }) + crate::sync::bulk_build::accounting::hash_map_bytes(
+            &self.max_supply_observations,
+            |k, _| crate::sync::bulk_build::accounting::bytes_vec_bytes(k) + 16,
+        )
+    }
+
+    fn observe_max_supply_from_output(
+        &mut self,
+        cell: &CellFacts,
+        ctx: &ReducerContext<'_>,
+    ) {
+        let lock_code_hash = ctx.resolve_identity(cell.lock_code_hash_id);
+        if !crate::sync::token_helpers::is_omnilock_code_hash(lock_code_hash) {
+            return;
+        }
+        let lock_args = ctx.resolve_identity(cell.lock_args_id);
+        let Some(supply_info_type_hash) =
+            crate::sync::token_helpers::extract_omnilock_supply_info_type_hash(lock_args)
+        else {
+            return;
+        };
+        let Some(type_hash_id) = cell.type_script_hash_id else {
+            return;
+        };
+        let type_hash = ctx.resolve_identity(type_hash_id);
+        if type_hash != supply_info_type_hash {
+            return;
+        }
+        let Some((max_supply, token_type_hash)) =
+            crate::sync::token_helpers::parse_omnilock_supply_info_cell_data(&cell.data)
+        else {
+            return;
+        };
+        self.max_supply_observations
+            .insert(token_type_hash.to_vec(), max_supply);
     }
 }
 
@@ -72,6 +108,11 @@ impl BulkReducer for TokenOwner {
             .map(TokenCellView::to_parsed_udt_cell)
             .collect::<Vec<_>>();
         let hour_bucket = tx.timestamp_ms / 3_600_000;
+
+        // Collect max_supply observations from omnilock supply info output cells
+        for cell in tx.cells.iter() {
+            self.observe_max_supply_from_output(cell, ctx);
+        }
 
         for transfer in UdtParser::build_transfers_from_cells(&parsed_inputs, &parsed_outputs) {
             let token = self
@@ -140,6 +181,14 @@ impl BulkReducer for TokenOwner {
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
+        let store = materializer.domain_store();
+        let all_type_hashes: Vec<Vec<u8>> = self.tokens.keys().cloned().collect();
+        let existing_tokens: HashMap<Vec<u8>, TokenInfo> = store
+            .get_tokens_batch(&all_type_hashes)?
+            .into_iter()
+            .filter_map(|(k, v)| v.map(|info| (k, info)))
+            .collect();
+
         let mut rows = Vec::new();
         let mut type_hashes: Vec<&Vec<u8>> = self.tokens.keys().collect();
         type_hashes.sort();
@@ -149,10 +198,39 @@ impl BulkReducer for TokenOwner {
                 .tokens
                 .get(type_hash)
                 .expect("sorted token type hash must exist");
+            let mut info = token.to_info(type_hash.clone());
+
+            // Apply on-chain max_supply observations (omnilock supply info cells)
+            if let Some(&observed) = self.max_supply_observations.get(type_hash) {
+                info.max_supply = Some(observed);
+            }
+
+            // Preserve label fields from existing store data (written by label import)
+            if let Some(existing) = existing_tokens.get(type_hash) {
+                if info.name.is_none() {
+                    info.name = existing.name.clone();
+                }
+                if info.symbol.is_none() {
+                    info.symbol = existing.symbol.clone();
+                }
+                if info.decimals.is_none() {
+                    info.decimals = existing.decimals;
+                }
+                if info.icon_url.is_none() {
+                    info.icon_url = existing.icon_url.clone();
+                }
+                if info.description.is_none() {
+                    info.description = existing.description.clone();
+                }
+                if info.max_supply.is_none() {
+                    info.max_supply = existing.max_supply;
+                }
+            }
+
             rows.push(MaterializedRow::new(
                 CF_TOKENS,
                 type_hash.clone(),
-                bincode::serialize(&token.to_info(type_hash.clone()))?,
+                bincode::serialize(&info)?,
             ));
 
             let mut holders: Vec<(&Vec<u8>, &i128)> = token
@@ -811,6 +889,10 @@ mod tests {
         let type_code_hash_id =
             interner.intern_bytes(hex::decode(&crate::parser::udt::SUDT_CODE_HASH[2..]).unwrap());
         let type_args_id = interner.intern_bytes(vec![0x12; 32]);
+        // Pad interner to cover all InternIds used in test fixtures (up to 99)
+        for i in interner.len()..=100 {
+            interner.intern_bytes(vec![0xf0, (i >> 8) as u8, i as u8]);
+        }
         let ctx = ReducerContext::new(&interner);
 
         let tx0 = ResolvedTxFacts {

@@ -72,6 +72,10 @@ impl<'a> Materializer<'a> {
         )
     }
 
+    pub(crate) fn domain_store(&self) -> &'a CkbadgerStore {
+        self.domain_store
+    }
+
     pub(crate) fn current_totals(&self) -> &MaterializationReport {
         &self.report
     }

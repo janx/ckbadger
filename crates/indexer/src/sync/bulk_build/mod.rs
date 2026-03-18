@@ -685,7 +685,8 @@ impl BulkBuildRuntimeState {
             .blocks
             .last()
             .ok_or_else(|| anyhow!("bulk build arena missing blocks for non-empty batch"))?;
-        let history = build_history_rows(&arena, &resolved, &self.interner, is_mainnet)?;
+        let domain_store = materializer.domain_store();
+        let history = build_history_rows(&arena, &resolved, &self.interner, is_mainnet, domain_store)?;
         let hodl_sealed_rows = self.apply_hodl_tracker_batch(&arena, &resolved)?;
 
         let BulkBuildRuntimeState {
@@ -1345,6 +1346,7 @@ fn build_history_rows(
     resolved: &[facts::ResolvedTxFacts<'_>],
     interner: &interner::IdentityInterner,
     is_mainnet: bool,
+    store: &CkbadgerStore,
 ) -> Result<HistoryBuildResult> {
     let mut rows = Vec::with_capacity(
         arena.blocks.len() * 2 + arena.txs.len() * 2 + arena.cells.len() * 2 + arena.txs.len(),
@@ -1463,7 +1465,7 @@ fn build_history_rows(
     }
 
     rows.extend(build_token_transfer_rows(resolved, interner)?);
-    rows.extend(build_activity_rows(arena, resolved, interner, is_mainnet)?);
+    rows.extend(build_activity_rows(arena, resolved, interner, is_mainnet, store)?);
     let object_activity_rows =
         build_object_collection_activity_rows(resolved, &mut identity_activity_count_deltas)?;
     rows.extend(object_activity_rows);
@@ -1599,6 +1601,16 @@ fn build_object_collection_activity_rows(
                 .to_vec(),
                 bincode::serialize(&entry)?,
             ));
+            let delta = identity_activity_count_deltas
+                .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
+                .or_insert(0);
+            *delta = delta.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "dotbit identity activity delta overflow in bulk build: block={} tx=0x{}",
+                    tx.block_number,
+                    hex::encode(tx.tx_hash)
+                )
+            })?;
         }
     }
 
@@ -1644,6 +1656,42 @@ fn build_object_collection_activity_rows(
     Ok(rows)
 }
 
+fn build_token_info_cache_from_facts(
+    resolved: &[facts::ResolvedTxFacts<'_>],
+    interner: &interner::IdentityInterner,
+    store: &CkbadgerStore,
+) -> Result<HashMap<Vec<u8>, (Option<String>, Option<u8>)>> {
+    let mut type_hash_set: HashSet<Vec<u8>> = HashSet::new();
+    for tx in resolved {
+        for cell in tx.cells.iter() {
+            if let Some(id) = cell.type_script_hash_id {
+                type_hash_set.insert(interner.resolve_bytes(id).to_vec());
+            }
+        }
+        for input in &tx.resolved_inputs {
+            if let Some(id) = input.type_script_hash_id {
+                type_hash_set.insert(interner.resolve_bytes(id).to_vec());
+            }
+        }
+    }
+
+    if type_hash_set.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let type_hashes: Vec<Vec<u8>> = type_hash_set.into_iter().collect();
+    let mut cache = HashMap::new();
+    for (type_hash, maybe_info) in store.get_tokens_batch(&type_hashes)? {
+        if let Some(info) = maybe_info {
+            let display_name = info.symbol.or(info.name);
+            let decimals = info.decimals.and_then(|d| u8::try_from(d).ok());
+            cache.insert(type_hash, (display_name, decimals));
+        }
+    }
+
+    Ok(cache)
+}
+
 #[cfg(test)]
 fn build_sealed_aggregate_rows(
     history_rows: &[materialize::MaterializedRow],
@@ -1658,9 +1706,10 @@ fn build_activity_rows(
     resolved: &[facts::ResolvedTxFacts<'_>],
     interner: &interner::IdentityInterner,
     is_mainnet: bool,
+    store: &CkbadgerStore,
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let detectors = build_activity_protocol_detectors(resolved, interner, is_mainnet)?;
-    let token_info_cache = HashMap::new();
+    let token_info_cache = build_token_info_cache_from_facts(resolved, interner, store)?;
     let mut rows = Vec::new();
 
     for block in &arena.blocks {
@@ -2855,6 +2904,13 @@ mod tests {
         CF_OBJECT_COLLECTION_ACTIVITIES,
     };
 
+    fn open_empty_domain_store(name: &str) -> (CkbadgerStore, std::path::PathBuf) {
+        let root = unique_temp_test_dir(name);
+        std::fs::create_dir_all(&root).expect("create test dir");
+        let store = CkbadgerStore::open_domain(&root).expect("open test domain store");
+        (store, root)
+    }
+
     fn fixture_lock_script(args_hex: &str) -> Script {
         Script {
             code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
@@ -3346,7 +3402,8 @@ mod tests {
             .resolve(&arena)
             .expect("resolved txs");
 
-        let addr_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
+        let (test_store, test_root) = open_empty_domain_store("bulk-build-addr-tx-test");
+        let addr_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true, &test_store)
             .expect("history rows")
             .rows
             .into_iter()
@@ -3365,6 +3422,7 @@ mod tests {
         for key in expected {
             assert!(actual_keys.contains(&key));
         }
+        let _ = std::fs::remove_dir_all(&test_root);
     }
 
     #[test]
@@ -3392,12 +3450,14 @@ mod tests {
             .resolve(&arena)
             .expect("resolved txs");
 
-        let token_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
+        let (test_store, test_root) = open_empty_domain_store("bulk-build-token-transfer-test");
+        let token_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true, &test_store)
             .expect("history rows")
             .rows
             .into_iter()
             .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
             .collect();
+        let _ = std::fs::remove_dir_all(&test_root);
 
         assert_eq!(token_rows.len(), 2);
         let token_records: HashMap<Vec<u8>, TokenTransferRecord> = token_rows
@@ -3455,12 +3515,14 @@ mod tests {
             .resolve(&arena)
             .expect("resolved txs");
 
-        let activity_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
+        let (test_store, test_root) = open_empty_domain_store("bulk-build-activity-test");
+        let activity_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true, &test_store)
             .expect("history rows")
             .rows
             .into_iter()
             .filter(|row| row.cf_name == CF_ACTIVITIES)
             .collect();
+        let _ = std::fs::remove_dir_all(&test_root);
 
         assert_eq!(activity_rows.len(), 2);
         let activity_bundles: HashMap<Vec<u8>, TxActivityBundle> = activity_rows
@@ -3520,7 +3582,16 @@ mod tests {
         let resolved = sequencer.resolve(&arena).expect("resolved txs");
         let mut owners = CoreOwners::default();
         let ctx = owners::ReducerContext::new(&interner);
-        let history = build_history_rows(&arena, &resolved, &interner, true).expect("history rows");
+
+        let root = unique_temp_test_dir("bulk-build-fiber-activity");
+        std::fs::create_dir_all(&root).expect("create root dir");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("create domain dir");
+        std::fs::create_dir_all(&append_path).expect("create append-only dir");
+
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
+        let history = build_history_rows(&arena, &resolved, &interner, true, &domain_store).expect("history rows");
         let sealed_rows = build_sealed_aggregate_rows(&history.rows).expect("sealed rows");
         let final_snapshot_rows =
             build_final_snapshot_rows(&sequencer, &interner).expect("final snapshot rows");
@@ -3547,15 +3618,6 @@ mod tests {
         for tx in &resolved {
             owners.apply_tx(tx, &ctx).expect("apply core owners");
         }
-
-        let root = unique_temp_test_dir("bulk-build-fiber-activity");
-        std::fs::create_dir_all(&root).expect("create root dir");
-        let domain_path = root.join("domain");
-        let append_path = root.join("append-only");
-        std::fs::create_dir_all(&domain_path).expect("create domain dir");
-        std::fs::create_dir_all(&append_path).expect("create append-only dir");
-
-        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
         let append_store =
             CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
         let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
@@ -3602,7 +3664,8 @@ mod tests {
             .resolve(&arena)
             .expect("resolved txs");
 
-        let history_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
+        let (test_store, test_root) = open_empty_domain_store("bulk-build-spore-did-activity-test");
+        let history_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true, &test_store)
             .expect("history rows")
             .rows
             .into_iter()
@@ -3611,6 +3674,7 @@ mod tests {
                     || row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES
             })
             .collect();
+        let _ = std::fs::remove_dir_all(&test_root);
 
         let object_rows: std::collections::HashMap<Vec<u8>, ObjectCollectionActivityEntry> =
             history_rows
@@ -3853,7 +3917,10 @@ mod tests {
         );
 
         assert_eq!(identity_rows.len(), 3);
-        assert!(identity_activity_count_deltas.is_empty());
+        assert_eq!(
+            identity_activity_count_deltas.get(&DOTBIT_SENTINEL_COLLECTION.to_vec()),
+            Some(&3_i64)
+        );
 
         let mint = identity_rows.get(mint_key.as_slice()).expect("dotbit mint");
         assert_eq!(mint.actions.len(), 1);
