@@ -1,12 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 
 use crate::db::ReorgResult;
-use crate::parser::{
-    ParsedDotbitAccountOutput, ParsedMnftClass, ParsedMnftIssuer, ParsedMnftToken,
-};
-
 // ── UndoSeqScope constants & enum ──────────────────────────────────────
 
 pub(crate) const UNDO_SEQ_SCOPE_SHIFT: u32 = 48;
@@ -41,44 +37,6 @@ pub(crate) enum UndoSeqScope {
 pub(crate) enum ReorgAction {
     Handled(ReorgResult),
     DeepForkPaused,
-}
-
-// ── Pre-parsed NFT / DotBit bridge types ───────────────────────────────
-
-/// Pre-parsed mNFT/DotBit data computed in the parser stage.
-/// Moves all CPU-intensive parsing out of the t6b writer thread.
-pub(crate) struct PreParsedNftData {
-    pub(crate) mnft_issuers: Vec<(usize, usize, ParsedMnftIssuer)>,
-    pub(crate) mnft_classes: Vec<(usize, usize, ParsedMnftClass)>,
-    pub(crate) mnft_tokens: Vec<(usize, usize, ParsedMnftToken)>,
-    pub(crate) dotbit_accounts: Vec<(usize, ParsedDotbitAccountOutput)>,
-    pub(crate) consumed_dotbit: Vec<DotbitConsumptionEvent>,
-    pub(crate) consumed_spore: Vec<SporeConsumptionEvent>,
-    pub(crate) consumed_mnft: Vec<MnftConsumptionEvent>,
-    /// DAS action string per transaction (tx_global_index -> action).
-    pub(crate) dotbit_tx_actions: HashMap<usize, String>,
-}
-
-pub(crate) struct DotbitConsumptionEvent {
-    pub(crate) account_id: Vec<u8>,
-    pub(crate) block_number: i64,
-    pub(crate) consuming_tx_hash: [u8; 32],
-    /// Pre-computed index into the flat tx array, avoids O(n) search in writer.
-    pub(crate) tx_global_index: usize,
-}
-
-pub(crate) struct SporeConsumptionEvent {
-    pub(crate) spore_id: Vec<u8>,
-    pub(crate) block_number: i64,
-    pub(crate) consuming_tx_hash: [u8; 32],
-    pub(crate) tx_global_index: usize,
-}
-
-pub(crate) struct MnftConsumptionEvent {
-    pub(crate) token_id: Vec<u8>,
-    pub(crate) block_number: i64,
-    pub(crate) consuming_tx_hash: [u8; 32],
-    pub(crate) tx_global_index: usize,
 }
 
 /// Per-tx .bit activity data for direct collection activity writes.

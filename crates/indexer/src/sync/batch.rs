@@ -24,8 +24,8 @@ use crate::db::writer::dotbit::resolve_dotbit_tx_activity;
 use crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator;
 use crate::db::{BatchWriter, DaoWithdrawalContext};
 use crate::parser::{
-    BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, ParsedClusterCell,
-    ParsedSporeCell, ScriptParser, SporeParser, TransactionParser, UdtParser,
+    BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, ScriptParser, SporeParser,
+    TransactionParser, UdtParser,
 };
 
 use crate::rpc::{BlockResponseWithCycles, CkbRpcClient};
@@ -40,8 +40,8 @@ use super::nft_helpers::*;
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
-    BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData, PreParsedNftData, TxData,
-    UnresolvedLocalProbeSummary, UnresolvedRpcProbeSummary,
+    BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData, TxData, UnresolvedLocalProbeSummary,
+    UnresolvedRpcProbeSummary,
 };
 use super::undo::*;
 
@@ -1118,8 +1118,6 @@ impl Indexer {
         cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
         object_type_index_changes: HashMap<Vec<u8>, ObjectTypeIndex>,
         object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
-        _pre_parsed_spore_data: Vec<(Vec<(usize, ParsedSporeCell)>, Vec<ParsedClusterCell>)>,
-        _pre_parsed_nft_data: PreParsedNftData,
         chain_tip: u64,
     ) -> Result<BatchWriteMetrics> {
         if all_parsed_blocks.is_empty() {
