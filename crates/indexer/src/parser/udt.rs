@@ -222,7 +222,11 @@ impl UdtParser {
                 .iter()
                 .filter_map(|(lock, in_amt)| {
                     let out_amt = flow.outputs_by_lock.get(lock).copied().unwrap_or(0);
-                    (in_amt > &out_amt).then_some((lock.clone(), in_amt - out_amt))
+                    if in_amt > &out_amt {
+                        Some((lock.clone(), in_amt - out_amt))
+                    } else {
+                        None
+                    }
                 })
                 .collect();
 
@@ -231,7 +235,11 @@ impl UdtParser {
                 .iter()
                 .filter_map(|(lock, out_amt)| {
                     let in_amt = flow.inputs_by_lock.get(lock).copied().unwrap_or(0);
-                    (out_amt > &in_amt).then_some((lock.clone(), out_amt - in_amt))
+                    if out_amt > &in_amt {
+                        Some((lock.clone(), out_amt - in_amt))
+                    } else {
+                        None
+                    }
                 })
                 .collect();
 
@@ -775,5 +783,37 @@ mod tests {
         assert_eq!(balance_delta.get(&lock_b), Some(&-50));
         assert_eq!(balance_delta.get(&lock_c), Some(&120));
         assert_eq!(supply_delta, -30);
+    }
+
+    #[test]
+    fn test_build_transfers_from_cells_partial_retention_does_not_underflow() {
+        let type_script_hash = vec![0x44; 32];
+        let type_code_hash = vec![0x55; 32];
+        let type_args = vec![0x66; 20];
+        let lock_a = vec![0xA1; 32];
+        let lock_b = vec![0xB2; 32];
+
+        let mk_cell = |lock: &[u8], amount: u128| ParsedUdtCell {
+            type_script_hash: type_script_hash.clone(),
+            type_code_hash: type_code_hash.clone(),
+            type_hash_type: 1,
+            type_args: type_args.clone(),
+            lock_script_hash: lock.to_vec(),
+            amount,
+            standard: UdtStandard::Sudt,
+        };
+
+        let inputs = vec![mk_cell(&lock_a, 200)];
+        let outputs = vec![mk_cell(&lock_a, 100), mk_cell(&lock_b, 100)];
+
+        let transfers = UdtParser::build_transfers_from_cells(&inputs, &outputs);
+
+        assert_eq!(transfers.len(), 1);
+        let transfer = &transfers[0];
+        assert_eq!(transfer.from_lock_hash, Some(lock_a));
+        assert_eq!(transfer.to_lock_hash, lock_b);
+        assert_eq!(transfer.amount, 100);
+        assert!(!transfer.is_mint);
+        assert!(!transfer.is_burn);
     }
 }

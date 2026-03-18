@@ -9,7 +9,7 @@ use anyhow::{anyhow, bail};
 use ckbadger_store::keys;
 use ckbadger_store::types::{
     decode_live_cell_marker, CachedBlockHeader, ConsumedCellMeta, DID_CKB_SENTINEL_COLLECTION,
-    LiveCellInfo, ObjectStandard, SporeTypeIndex, TxIndexEntry,
+    LiveCellInfo, ObjectStandard, SporeTypeIndex, TokenTransferRecord, TxIndexEntry,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX,
@@ -17,10 +17,12 @@ use ckbadger_store::{
     CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE, CF_CELLS, CF_CONSUMED_CELLS, CF_LIVE_CELLS,
     CF_TX_HASH_MAP, CF_TX_INDEX,
 };
+use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use rocksdb::IteratorMode;
 use tracing::info;
 
 use super::indexer::Indexer;
+use crate::parser::{ParsedUdtCell, UdtParser, UdtStandard};
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::owners::BulkReducer;
 
@@ -307,6 +309,8 @@ fn build_history_rows(
         }
     }
 
+    rows.extend(build_token_transfer_rows(resolved, interner)?);
+
     for cell in &arena.cells {
         let outpoint_key =
             keys::encode_outpoint(&cell.outpoint.tx_hash, cell_outpoint_index_i16(cell)?).to_vec();
@@ -331,6 +335,172 @@ fn build_history_rows(
     }
 
     Ok(rows)
+}
+
+fn build_token_transfer_rows(
+    resolved: &[facts::ResolvedTxFacts],
+    interner: &interner::IdentityInterner,
+) -> Result<Vec<materialize::MaterializedRow>> {
+    let mut rows = Vec::new();
+    let mut transfer_idx: HashMap<(Vec<u8>, i64), i32> = HashMap::new();
+
+    for tx in resolved {
+        let input_udts = tx
+            .resolved_inputs
+            .iter()
+            .filter_map(|input| parsed_udt_cell_from_input(input, interner, tx).transpose())
+            .collect::<Result<Vec<_>>>()?;
+        let output_udts = tx
+            .cells
+            .iter()
+            .filter_map(|cell| parsed_udt_cell_from_output(cell, interner, tx).transpose())
+            .collect::<Result<Vec<_>>>()?;
+
+        for transfer in UdtParser::build_transfers_from_cells(&input_udts, &output_udts) {
+            let idx = transfer_idx
+                .entry((transfer.type_script_hash.clone(), tx.block_number))
+                .or_insert(0);
+            let record = TokenTransferRecord {
+                tx_hash: tx.tx_hash.to_vec(),
+                block_number: tx.block_number,
+                from_lock_hash: transfer.from_lock_hash.clone(),
+                to_lock_hash: transfer.to_lock_hash.clone(),
+                amount: transfer.amount,
+                is_mint: transfer.is_mint,
+                is_burn: transfer.is_burn,
+                timestamp: tx.timestamp_ms,
+            };
+            rows.push(materialize::MaterializedRow::new(
+                CF_TOKEN_TRANSFERS,
+                keys::encode_token_transfer_key(&transfer.type_script_hash, tx.block_number, *idx),
+                bincode::serialize(&record)?,
+            ));
+            *idx = idx.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "token transfer index overflow in bulk build history rows: type_hash=0x{} block={}",
+                    hex::encode(&transfer.type_script_hash),
+                    tx.block_number
+                )
+            })?;
+        }
+    }
+
+    Ok(rows)
+}
+
+fn parsed_udt_cell_from_output(
+    cell: &facts::CellFacts,
+    interner: &interner::IdentityInterner,
+    tx: &facts::ResolvedTxFacts,
+) -> Result<Option<ParsedUdtCell>> {
+    parsed_udt_cell_from_parts(
+        cell.semantic_tag,
+        cell.type_script_hash_id,
+        cell.type_code_hash_id,
+        cell.type_hash_type,
+        cell.type_args_id,
+        cell.lock_script_hash_id,
+        cell.udt_amount,
+        interner,
+        &format!(
+            "output outpoint=0x{}:{} block={} tx=0x{} tx_index={}",
+            hex::encode(cell.outpoint.tx_hash),
+            cell.outpoint.index,
+            tx.block_number,
+            hex::encode(tx.tx_hash),
+            tx.tx_index
+        ),
+    )
+}
+
+fn parsed_udt_cell_from_input(
+    input: &facts::ResolvedInputFacts,
+    interner: &interner::IdentityInterner,
+    tx: &facts::ResolvedTxFacts,
+) -> Result<Option<ParsedUdtCell>> {
+    parsed_udt_cell_from_parts(
+        input.semantic_tag,
+        input.type_script_hash_id,
+        input.type_code_hash_id,
+        input.type_hash_type,
+        input.type_args_id,
+        input.lock_script_hash_id,
+        input.udt_amount,
+        interner,
+        &format!(
+            "input outpoint=0x{}:{} block={} tx=0x{} tx_index={}",
+            hex::encode(input.outpoint.tx_hash),
+            input.outpoint.index,
+            tx.block_number,
+            hex::encode(tx.tx_hash),
+            tx.tx_index
+        ),
+    )
+}
+
+fn parsed_udt_cell_from_parts(
+    semantic_tag: facts::CellSemanticTag,
+    type_script_hash_id: Option<crate::sync::types::InternId>,
+    type_code_hash_id: Option<crate::sync::types::InternId>,
+    type_hash_type: Option<i16>,
+    type_args_id: Option<crate::sync::types::InternId>,
+    lock_script_hash_id: crate::sync::types::InternId,
+    udt_amount: Option<u128>,
+    interner: &interner::IdentityInterner,
+    context: &str,
+) -> Result<Option<ParsedUdtCell>> {
+    let Some(standard) = udt_standard_for_semantic_tag(semantic_tag) else {
+        return Ok(None);
+    };
+
+    let type_script_hash_id = type_script_hash_id.ok_or_else(|| {
+        anyhow!(
+            "missing type_script_hash_id for bulk build token transfer cell: {}",
+            context
+        )
+    })?;
+    let type_code_hash_id = type_code_hash_id.ok_or_else(|| {
+        anyhow!(
+            "missing type_code_hash_id for bulk build token transfer cell: {}",
+            context
+        )
+    })?;
+    let type_hash_type = type_hash_type.ok_or_else(|| {
+        anyhow!(
+            "missing type_hash_type for bulk build token transfer cell: {}",
+            context
+        )
+    })?;
+    let type_args_id = type_args_id.ok_or_else(|| {
+        anyhow!(
+            "missing type_args_id for bulk build token transfer cell: {}",
+            context
+        )
+    })?;
+    let amount = udt_amount.ok_or_else(|| {
+        anyhow!(
+            "missing udt_amount for bulk build token transfer cell: {}",
+            context
+        )
+    })?;
+
+    Ok(Some(ParsedUdtCell {
+        type_script_hash: interner.resolve_bytes(type_script_hash_id).to_vec(),
+        type_code_hash: interner.resolve_bytes(type_code_hash_id).to_vec(),
+        type_hash_type,
+        type_args: interner.resolve_bytes(type_args_id).to_vec(),
+        lock_script_hash: interner.resolve_bytes(lock_script_hash_id).to_vec(),
+        amount,
+        standard,
+    }))
+}
+
+fn udt_standard_for_semantic_tag(semantic_tag: facts::CellSemanticTag) -> Option<UdtStandard> {
+    match semantic_tag {
+        facts::CellSemanticTag::Sudt => Some(UdtStandard::Sudt),
+        facts::CellSemanticTag::Xudt => Some(UdtStandard::Xudt),
+        _ => None,
+    }
 }
 
 fn build_final_snapshot_rows(
@@ -892,11 +1062,14 @@ fn unique_temp_test_dir(prefix: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::udt::SUDT_CODE_HASH;
     use crate::parser::ScriptParser;
     use crate::rpc::{
         BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
         TransactionView,
     };
+    use ckbadger_store::store::CF_TOKEN_TRANSFERS;
+    use ckbadger_store::types::TokenTransferRecord;
     use ckbadger_store::{keys, CF_ADDR_TXS};
 
     fn fixture_lock_script(args_hex: &str) -> Script {
@@ -988,6 +1161,82 @@ mod tests {
         }
     }
 
+    fn fixture_sudt_type_script() -> Script {
+        Script {
+            code_hash: SUDT_CODE_HASH.to_string(),
+            hash_type: "type".to_string(),
+            args: format!("0x{}", "11".repeat(20)),
+        }
+    }
+
+    fn u128_data_hex(amount: u128) -> String {
+        format!("0x{}", hex::encode(amount.to_le_bytes()))
+    }
+
+    fn bulk_build_token_transfer_fixture() -> BlockResponseWithCycles {
+        let lock_a_args = format!("0x{}", "01".repeat(20));
+        let lock_b_args = format!("0x{}", "02".repeat(20));
+        let sudt_type = fixture_sudt_type_script();
+        let create_tx = TransactionView {
+            hash: format!("0x{}", "c1".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", "00".repeat(32)),
+                    index: "0xffffffff".to_string(),
+                },
+            }],
+            outputs: vec![CellOutput {
+                capacity: format!("0x{:x}", 200_00000000u64),
+                lock: fixture_lock_script(&lock_a_args),
+                type_: Some(sudt_type.clone()),
+            }],
+            outputs_data: vec![u128_data_hex(200)],
+            witnesses: vec!["0x".to_string()],
+        };
+
+        let split_tx = TransactionView {
+            hash: format!("0x{}", "d2".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: create_tx.hash.clone(),
+                    index: "0x0".to_string(),
+                },
+            }],
+            outputs: vec![
+                CellOutput {
+                    capacity: format!("0x{:x}", 100_00000000u64),
+                    lock: fixture_lock_script(&lock_a_args),
+                    type_: Some(sudt_type.clone()),
+                },
+                CellOutput {
+                    capacity: format!("0x{:x}", 100_00000000u64),
+                    lock: fixture_lock_script(&lock_b_args),
+                    type_: Some(sudt_type),
+                },
+            ],
+            outputs_data: vec![u128_data_hex(100), u128_data_hex(100)],
+            witnesses: vec!["0x".to_string()],
+        };
+
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header(14_000_889, 0x9a),
+                uncles: vec![],
+                transactions: vec![create_tx, split_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        }
+    }
+
     #[test]
     fn build_history_rows_materializes_addr_txs_for_unique_touched_locks() {
         let block = bulk_build_addr_tx_fixture();
@@ -1030,5 +1279,68 @@ mod tests {
         for key in expected {
             assert!(actual_keys.contains(&key));
         }
+    }
+
+    #[test]
+    fn build_history_rows_materializes_token_transfer_records_in_tx_order() {
+        let block = bulk_build_token_transfer_fixture();
+        let lock_a_hash = ScriptParser::compute_script_hash(&fixture_lock_script(&format!(
+            "0x{}",
+            "01".repeat(20)
+        )));
+        let lock_b_hash = ScriptParser::compute_script_hash(&fixture_lock_script(&format!(
+            "0x{}",
+            "02".repeat(20)
+        )));
+        let type_hash = ScriptParser::compute_script_hash(&fixture_sudt_type_script());
+        let create_tx_hash =
+            hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
+        let split_tx_hash =
+            hex::decode(&block.block.transactions[1].hash[2..]).expect("split tx hash");
+
+        let mut interner = interner::IdentityInterner::default();
+        let arena =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &mut interner)
+                .expect("facts arena");
+        let resolved = sequencer::BulkSequencer::default()
+            .resolve(&arena)
+            .expect("resolved txs");
+
+        let token_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner)
+            .expect("history rows")
+            .into_iter()
+            .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
+            .collect();
+
+        assert_eq!(token_rows.len(), 2);
+        let token_records: HashMap<Vec<u8>, TokenTransferRecord> = token_rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.key,
+                    bincode::deserialize(&row.value).expect("deserialize token transfer"),
+                )
+            })
+            .collect();
+
+        let mint_key = keys::encode_token_transfer_key(&type_hash, 14_000_889, 0);
+        let transfer_key = keys::encode_token_transfer_key(&type_hash, 14_000_889, 1);
+        let mint = token_records.get(&mint_key).expect("mint transfer");
+        assert_eq!(mint.tx_hash, create_tx_hash);
+        assert_eq!(mint.block_number, 14_000_889);
+        assert_eq!(mint.from_lock_hash, None);
+        assert_eq!(mint.to_lock_hash, lock_a_hash);
+        assert_eq!(mint.amount, 200);
+        assert!(mint.is_mint);
+        assert!(!mint.is_burn);
+
+        let transfer = token_records.get(&transfer_key).expect("split transfer");
+        assert_eq!(transfer.tx_hash, split_tx_hash);
+        assert_eq!(transfer.block_number, 14_000_889);
+        assert_eq!(transfer.from_lock_hash, Some(lock_a_hash));
+        assert_eq!(transfer.to_lock_hash, lock_b_hash);
+        assert_eq!(transfer.amount, 100);
+        assert!(!transfer.is_mint);
+        assert!(!transfer.is_burn);
     }
 }
