@@ -236,7 +236,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
@@ -285,7 +284,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
@@ -355,7 +353,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![intent_input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
@@ -414,7 +411,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
@@ -479,7 +475,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![intent_input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
@@ -538,7 +533,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];

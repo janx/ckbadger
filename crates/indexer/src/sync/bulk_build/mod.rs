@@ -1446,7 +1446,6 @@ fn build_activity_rows(
                     is_cellbase: tx.is_cellbase,
                     inputs,
                     outputs,
-                    witnesses: &[],
                 },
             )
             .collect::<Vec<_>>();

@@ -172,8 +172,6 @@ pub struct TxView<'a> {
     pub is_cellbase: bool,
     pub inputs: Vec<InputCellView>,
     pub outputs: &'a [ParsedCell],
-    #[allow(dead_code)] // Used by ProtocolDetector implementations (Task 3+)
-    pub witnesses: &'a [String],
 }
 
 /// Detects protocol-level actions by analyzing cross-layer signals.
@@ -971,7 +969,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(owner, 100_00000000, 61_00000000)],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1003,7 +1000,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(bob, 200_00000000, 61_00000000)],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1036,7 +1032,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1077,7 +1072,6 @@ mod tests {
             is_cellbase: true,
             inputs: vec![],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1111,7 +1105,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 100_00000000, 61_00000000)],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1144,7 +1137,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1172,7 +1164,6 @@ mod tests {
             is_cellbase: true,
             inputs: vec![],
             outputs: &outputs1,
-            witnesses: &[],
         };
 
         let outputs2 = vec![make_output(bob, 200_00000000, None, None, None, vec![])];
@@ -1186,7 +1177,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 200_00000000, 61_00000000)],
             outputs: &outputs2,
-            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx1, tx2], &HashMap::new()).unwrap();
@@ -1239,7 +1229,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![alice_input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let mut token_cache = HashMap::new();
@@ -1335,7 +1324,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![alice_input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let mut token_cache = HashMap::new();
@@ -1395,7 +1383,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1446,7 +1433,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1493,7 +1479,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![dao_input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1528,7 +1513,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1579,7 +1563,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![alice_input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1636,7 +1619,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1688,7 +1670,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![udt_input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1781,7 +1762,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![alice_input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1829,7 +1809,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 100_00000000, 61_00000000)],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1872,7 +1851,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 100_00000000, 61_00000000)],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1993,7 +1971,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
@@ -2072,7 +2049,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
@@ -2145,7 +2121,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
@@ -2214,7 +2189,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let rgbpp = RgbppDetector::new(true);

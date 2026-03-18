@@ -2526,7 +2526,6 @@ impl Indexer {
                             is_cellbase: td.is_cellbase,
                             inputs,
                             outputs: &td.cells,
-                            witnesses: &td.witnesses,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;

@@ -315,7 +315,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
@@ -381,7 +380,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
@@ -456,7 +454,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![vault_input, participant_input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
@@ -535,7 +532,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![vault_input, participant_input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
@@ -621,7 +617,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![intent_input, participant_input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
@@ -683,7 +678,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
@@ -785,7 +779,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![input],
             outputs: &outputs,
-            witnesses: &[],
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
