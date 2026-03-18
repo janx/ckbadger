@@ -9,20 +9,22 @@ use anyhow::{anyhow, bail};
 use ckbadger_store::keys;
 use ckbadger_store::types::{
     decode_live_cell_marker, CachedBlockHeader, ConsumedCellMeta, DID_CKB_SENTINEL_COLLECTION,
-    LiveCellInfo, ObjectStandard, SporeTypeIndex, TokenTransferRecord, TxIndexEntry,
+    LiveCellInfo, ObjectStandard, SporeTypeIndex, TokenTransferRecord, TxActivityBundle,
+    TxIndexEntry,
 };
 use ckbadger_store::{
-    AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX,
-    CF_BLOCK_HEADERS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE,
-    CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE, CF_CELLS, CF_CONSUMED_CELLS, CF_LIVE_CELLS,
-    CF_TX_HASH_MAP, CF_TX_INDEX,
+    AddressBalance, CkbadgerStore, ScriptInfo, CF_ACTIVITIES, CF_ADDR_TXS,
+    CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK,
+    CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE, CF_CELLS,
+    CF_CONSUMED_CELLS, CF_LIVE_CELLS, CF_TX_HASH_MAP, CF_TX_INDEX,
 };
 use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use rocksdb::IteratorMode;
 use tracing::info;
 
 use super::indexer::Indexer;
-use crate::parser::{ParsedUdtCell, UdtParser, UdtStandard};
+use crate::parser::cell::ParsedCell;
+use crate::parser::{ParsedUdtCell, ScriptParser, UdtParser, UdtStandard};
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::owners::BulkReducer;
 
@@ -105,6 +107,7 @@ pub struct BulkArtifactSnapshot {
     pub block_headers: HashMap<i64, CachedBlockHeader>,
     pub block_numbers_by_hash: HashMap<Vec<u8>, i64>,
     pub txs_by_hash: HashMap<Vec<u8>, (i64, i32, TxIndexEntry)>,
+    pub activity_bundles: HashMap<Vec<u8>, TxActivityBundle>,
     pub cell_payloads: HashMap<Vec<u8>, LiveCellInfo>,
     pub live_cells: HashMap<Vec<u8>, i64>,
     pub consumed_cells: HashMap<Vec<u8>, ConsumedCellMeta>,
@@ -133,7 +136,7 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
     let resolved = sequencer.resolve(&arena)?;
     let ctx = owners::ReducerContext::new(&interner);
     let mut owners = CoreOwners::default();
-    let history_rows = build_history_rows(&arena, &resolved, &interner)?;
+    let history_rows = build_history_rows(&arena, &resolved, &interner, true)?;
     let final_snapshot_rows = build_final_snapshot_rows(&sequencer, &interner)?;
 
     for tx in &resolved {
@@ -157,7 +160,7 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
         let report = materializer.finish();
 
         let core = collect_core_owner_state_snapshot(&domain_store)?;
-        let (block_headers, block_numbers_by_hash, txs_by_hash) =
+        let (block_headers, block_numbers_by_hash, txs_by_hash, activity_bundles) =
             collect_history_snapshot(&domain_store)?;
         let (
             cell_payloads,
@@ -175,6 +178,7 @@ pub(crate) fn materialize_bulk_artifacts_for_test(
             block_headers,
             block_numbers_by_hash,
             txs_by_hash,
+            activity_bundles,
             cell_payloads,
             live_cells,
             consumed_cells,
@@ -195,6 +199,7 @@ fn build_history_rows(
     arena: &facts::FactsArena,
     resolved: &[facts::ResolvedTxFacts],
     interner: &interner::IdentityInterner,
+    is_mainnet: bool,
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let mut rows =
         Vec::with_capacity(
@@ -310,6 +315,7 @@ fn build_history_rows(
     }
 
     rows.extend(build_token_transfer_rows(resolved, interner)?);
+    rows.extend(build_activity_rows(arena, resolved, interner, is_mainnet)?);
 
     for cell in &arena.cells {
         let outpoint_key =
@@ -330,6 +336,113 @@ fn build_history_rows(
                     cell_outpoint_index_i16(cell)?,
                 ),
                 Vec::new(),
+            ));
+        }
+    }
+
+    Ok(rows)
+}
+
+fn build_activity_rows(
+    arena: &facts::FactsArena,
+    resolved: &[facts::ResolvedTxFacts],
+    interner: &interner::IdentityInterner,
+    is_mainnet: bool,
+) -> Result<Vec<materialize::MaterializedRow>> {
+    let block_ar_by_number: HashMap<i64, u64> = arena
+        .blocks
+        .iter()
+        .map(|block| {
+            let ar = crate::db::writer::dao::extract_ar_from_dao(&block.dao).ok_or_else(|| {
+                anyhow!(
+                    "missing AR in block DAO field while building bulk activities: block={}",
+                    block.number
+                )
+            })?;
+            Ok((block.number, ar))
+        })
+        .collect::<Result<_>>()?;
+    let detectors = build_activity_protocol_detectors(resolved, interner, is_mainnet)?;
+    let token_info_cache = HashMap::new();
+    let mut rows = Vec::new();
+
+    for block in &arena.blocks {
+        let txs = &arena.txs[block.tx_range.clone()];
+        let resolved_txs = &resolved[block.tx_range.clone()];
+        if txs.len() != resolved_txs.len() {
+            bail!(
+                "bulk build activity tx count mismatch within block: block={} facts_txs={} resolved_txs={}",
+                block.number,
+                txs.len(),
+                resolved_txs.len()
+            );
+        }
+
+        let mut block_inputs = Vec::with_capacity(txs.len());
+        let mut block_outputs = Vec::with_capacity(txs.len());
+        for (tx, resolved_tx) in txs.iter().zip(resolved_txs) {
+            if tx.hash != resolved_tx.tx_hash
+                || tx.block_number != resolved_tx.block_number
+                || tx.tx_index != resolved_tx.tx_index
+            {
+                bail!(
+                    "bulk build activity tx alignment mismatch: facts_tx=0x{} facts_block={} facts_tx_index={} resolved_tx=0x{} resolved_block={} resolved_tx_index={}",
+                    hex::encode(tx.hash),
+                    tx.block_number,
+                    tx.tx_index,
+                    hex::encode(resolved_tx.tx_hash),
+                    resolved_tx.block_number,
+                    resolved_tx.tx_index
+                );
+            }
+
+            block_outputs.push(
+                resolved_tx
+                    .cells
+                    .iter()
+                    .map(|cell| parsed_cell_from_facts(cell, interner))
+                    .collect::<Result<Vec<_>>>()?,
+            );
+            block_inputs.push(
+                resolved_tx
+                .resolved_inputs
+                .iter()
+                .map(|input| activity_input_view_from_resolved_input(input, interner, &block_ar_by_number))
+                .collect::<Result<Vec<_>>>()?,
+            );
+        }
+
+        let tx_views = txs
+            .iter()
+            .zip(block_inputs.into_iter())
+            .zip(block_outputs.iter())
+            .map(|((tx, inputs), outputs)| crate::db::writer::activities::TxView {
+                tx_hash: &tx.hash,
+                block_hash: &tx.block_hash,
+                tx_index: tx.tx_index,
+                block_number: tx.block_number,
+                timestamp: tx.timestamp_ms,
+                is_cellbase: tx.is_cellbase,
+                inputs,
+                outputs,
+                witnesses: &[],
+            })
+            .collect::<Vec<_>>();
+
+        let bundles = crate::db::writer::activities::build_activity_bundles_for_block_with_detectors(
+            &tx_views,
+            &token_info_cache,
+            &detectors,
+        )?;
+        for bundle in bundles {
+            rows.push(materialize::MaterializedRow::new(
+                CF_ACTIVITIES,
+                keys::encode_tx_activity_bundle_key(
+                    bundle.block_number,
+                    bundle.tx_index,
+                    &bundle.tx_hash,
+                ),
+                bincode::serialize(&bundle)?,
             ));
         }
     }
@@ -386,6 +499,179 @@ fn build_token_transfer_rows(
     }
 
     Ok(rows)
+}
+
+fn build_activity_protocol_detectors(
+    resolved: &[facts::ResolvedTxFacts],
+    interner: &interner::IdentityInterner,
+    is_mainnet: bool,
+) -> Result<Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>>> {
+    let mut lock_code_hashes = HashSet::new();
+    let mut type_code_hashes = HashSet::new();
+
+    for tx in resolved {
+        for input in &tx.resolved_inputs {
+            lock_code_hashes.insert(activity_code_hash(
+                interner,
+                input.lock_code_hash_id,
+                "input lock_code_hash",
+                tx,
+            )?);
+            if let Some(type_code_hash_id) = input.type_code_hash_id {
+                type_code_hashes.insert(activity_code_hash(
+                    interner,
+                    type_code_hash_id,
+                    "input type_code_hash",
+                    tx,
+                )?);
+            }
+        }
+
+        for cell in &tx.cells {
+            lock_code_hashes.insert(activity_code_hash(
+                interner,
+                cell.lock_code_hash_id,
+                "output lock_code_hash",
+                tx,
+            )?);
+            if let Some(type_code_hash_id) = cell.type_code_hash_id {
+                type_code_hashes.insert(activity_code_hash(
+                    interner,
+                    type_code_hash_id,
+                    "output type_code_hash",
+                    tx,
+                )?);
+            }
+        }
+    }
+
+    Ok(vec![
+        Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new(
+            is_mainnet,
+        )) as Box<dyn crate::db::writer::activities::ProtocolDetector>,
+        Box::new(crate::db::writer::fiber_detector::FiberDetector::new(
+            is_mainnet,
+        )),
+        Box::new(crate::db::writer::stablepp_detector::StableppDetector::new(
+            is_mainnet,
+        )),
+        Box::new(crate::db::writer::utxoswap_detector::UtxoSwapDetector::new(
+            is_mainnet,
+        )),
+    ]
+    .into_iter()
+    .filter(|detector| detector.might_apply_batch(&lock_code_hashes, &type_code_hashes))
+    .collect())
+}
+
+fn activity_code_hash(
+    interner: &interner::IdentityInterner,
+    id: crate::sync::types::InternId,
+    label: &str,
+    tx: &facts::ResolvedTxFacts,
+) -> Result<[u8; 32]> {
+    interner.resolve_bytes(id).try_into().map_err(|_| {
+        anyhow!(
+            "invalid {} length while building bulk activities: tx=0x{} block={} tx_index={} len={}",
+            label,
+            hex::encode(tx.tx_hash),
+            tx.block_number,
+            tx.tx_index,
+            interner.resolve_bytes(id).len()
+        )
+    })
+}
+
+fn activity_input_view_from_resolved_input(
+    input: &facts::ResolvedInputFacts,
+    interner: &interner::IdentityInterner,
+    block_ar_by_number: &HashMap<i64, u64>,
+) -> Result<crate::db::writer::activities::InputCellView> {
+    let (is_dao_withdraw_request, dao_compensation) = match input.dao_state {
+        Some(facts::DaoCellState::WithdrawRequest { deposit_block_number }) => {
+            let deposit_ar = *block_ar_by_number.get(&deposit_block_number).ok_or_else(|| {
+                anyhow!(
+                    "missing deposit block AR while building bulk DAO activity input: deposit_block={} outpoint=0x{}:{}",
+                    deposit_block_number,
+                    hex::encode(input.outpoint.tx_hash),
+                    input.outpoint.index
+                )
+            })?;
+            let request_ar = *block_ar_by_number.get(&input.created_at_block).ok_or_else(|| {
+                anyhow!(
+                    "missing withdraw-request block AR while building bulk DAO activity input: request_block={} outpoint=0x{}:{}",
+                    input.created_at_block,
+                    hex::encode(input.outpoint.tx_hash),
+                    input.outpoint.index
+                )
+            })?;
+            let compensation = crate::db::writer::dao::calculate_dao_compensation_from_ar(
+                input.capacity,
+                deposit_ar,
+                request_ar,
+            )?;
+            (true, Some(compensation))
+        }
+        _ => (false, None),
+    };
+
+    Ok(crate::db::writer::activities::InputCellView {
+        lock_script_hash: interner.resolve_bytes(input.lock_script_hash_id).to_vec(),
+        lock_code_hash: interner.resolve_bytes(input.lock_code_hash_id).to_vec(),
+        lock_hash_type: input.lock_hash_type,
+        lock_args: interner.resolve_bytes(input.lock_args_id).to_vec(),
+        capacity: input.capacity,
+        occupied_capacity: input.occupied_capacity,
+        type_code_hash: input
+            .type_code_hash_id
+            .map(|id| interner.resolve_bytes(id).to_vec()),
+        type_hash_type: input.type_hash_type,
+        type_script_hash: input
+            .type_script_hash_id
+            .map(|id| interner.resolve_bytes(id).to_vec()),
+        type_args: input.type_args_id.map(|id| interner.resolve_bytes(id).to_vec()),
+        udt_amount: input.udt_amount,
+        data: Vec::new(),
+        is_dao_withdraw_request,
+        dao_compensation,
+    })
+}
+
+fn parsed_cell_from_facts(
+    cell: &facts::CellFacts,
+    interner: &interner::IdentityInterner,
+) -> Result<ParsedCell> {
+    if usize::try_from(cell.data_size).ok() != Some(cell.data.len()) {
+        bail!(
+            "bulk build cell data size mismatch while building activities: outpoint=0x{}:{} data_size={} actual_len={}",
+            hex::encode(cell.outpoint.tx_hash),
+            cell.outpoint.index,
+            cell.data_size,
+            cell.data.len()
+        );
+    }
+
+    Ok(ParsedCell {
+        capacity: cell.capacity,
+        lock_code_hash: interner.resolve_bytes(cell.lock_code_hash_id).to_vec(),
+        lock_hash_type: cell.lock_hash_type,
+        lock_args: interner.resolve_bytes(cell.lock_args_id).to_vec(),
+        lock_script_hash: interner.resolve_bytes(cell.lock_script_hash_id).to_vec(),
+        type_code_hash: cell
+            .type_code_hash_id
+            .map(|id| interner.resolve_bytes(id).to_vec()),
+        type_hash_type: cell.type_hash_type,
+        type_args: cell.type_args_id.map(|id| interner.resolve_bytes(id).to_vec()),
+        type_script_hash: cell
+            .type_script_hash_id
+            .map(|id| interner.resolve_bytes(id).to_vec()),
+        data_hash: cell
+            .data_hash
+            .clone()
+            .unwrap_or_else(|| ScriptParser::compute_data_hash(&cell.data)),
+        data_size: cell.data_size,
+        data: cell.data.clone(),
+    })
 }
 
 fn parsed_udt_cell_from_output(
@@ -670,6 +956,7 @@ fn collect_history_snapshot(
     HashMap<i64, CachedBlockHeader>,
     HashMap<Vec<u8>, i64>,
     HashMap<Vec<u8>, (i64, i32, TxIndexEntry)>,
+    HashMap<Vec<u8>, TxActivityBundle>,
 )> {
     let mut block_headers = HashMap::new();
     let mut block_numbers_by_hash = HashMap::new();
@@ -726,7 +1013,21 @@ fn collect_history_snapshot(
         txs_by_hash.insert(tx_hash.to_vec(), tx_entry);
     }
 
-    Ok((block_headers, block_numbers_by_hash, txs_by_hash))
+    let mut activity_bundles = HashMap::new();
+    let activity_iter = domain_store.iterator_cf(domain_store.cf_activities(), IteratorMode::Start);
+    for item in activity_iter {
+        let (key, value) = item?;
+        let bundle: TxActivityBundle = bincode::deserialize(&value).map_err(|e| {
+            anyhow!(
+                "failed to deserialize TxActivityBundle in bulk artifact snapshot helper: key=0x{} error={}",
+                hex::encode(&key),
+                e
+            )
+        })?;
+        activity_bundles.insert(key.to_vec(), bundle);
+    }
+
+    Ok((block_headers, block_numbers_by_hash, txs_by_hash, activity_bundles))
 }
 
 fn collect_cell_snapshot(
@@ -1069,8 +1370,8 @@ mod tests {
         TransactionView,
     };
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
-    use ckbadger_store::types::TokenTransferRecord;
-    use ckbadger_store::{keys, CF_ADDR_TXS};
+    use ckbadger_store::types::{TokenTransferRecord, TxActivityBundle};
+    use ckbadger_store::{keys, CF_ACTIVITIES, CF_ADDR_TXS};
 
     fn fixture_lock_script(args_hex: &str) -> Script {
         Script {
@@ -1261,7 +1562,7 @@ mod tests {
             .resolve(&arena)
             .expect("resolved txs");
 
-        let addr_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner)
+        let addr_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
             .expect("history rows")
             .into_iter()
             .filter(|row| row.cf_name == CF_ADDR_TXS)
@@ -1306,7 +1607,7 @@ mod tests {
             .resolve(&arena)
             .expect("resolved txs");
 
-        let token_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner)
+        let token_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
             .expect("history rows")
             .into_iter()
             .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
@@ -1342,5 +1643,77 @@ mod tests {
         assert_eq!(transfer.amount, 100);
         assert!(!transfer.is_mint);
         assert!(!transfer.is_burn);
+    }
+
+    #[test]
+    fn build_history_rows_materializes_ckb_activity_bundles_in_tx_order() {
+        let block = bulk_build_addr_tx_fixture();
+        let create_tx_hash =
+            hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
+        let split_tx_hash =
+            hex::decode(&block.block.transactions[1].hash[2..]).expect("split tx hash");
+        let lock_a_hash = ScriptParser::compute_script_hash(&fixture_lock_script(&format!(
+            "0x{}",
+            "01".repeat(20)
+        )));
+        let lock_b_hash = ScriptParser::compute_script_hash(&fixture_lock_script(&format!(
+            "0x{}",
+            "02".repeat(20)
+        )));
+
+        let mut interner = interner::IdentityInterner::default();
+        let arena =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &mut interner)
+                .expect("facts arena");
+        let resolved = sequencer::BulkSequencer::default()
+            .resolve(&arena)
+            .expect("resolved txs");
+
+        let activity_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
+            .expect("history rows")
+            .into_iter()
+            .filter(|row| row.cf_name == CF_ACTIVITIES)
+            .collect();
+
+        assert_eq!(activity_rows.len(), 2);
+        let activity_bundles: HashMap<Vec<u8>, TxActivityBundle> = activity_rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.key,
+                    bincode::deserialize(&row.value).expect("deserialize tx activity bundle"),
+                )
+            })
+            .collect();
+
+        let create_key = keys::encode_tx_activity_bundle_key(14_000_888, 0, &create_tx_hash);
+        let split_key = keys::encode_tx_activity_bundle_key(14_000_888, 1, &split_tx_hash);
+        let create_bundle = activity_bundles.get(&create_key).expect("cellbase bundle");
+        assert_eq!(create_bundle.tx_hash, create_tx_hash);
+        assert!(create_bundle.is_cellbase);
+        assert_eq!(create_bundle.owners.len(), 1);
+
+        let split_bundle = activity_bundles.get(&split_key).expect("split bundle");
+        assert_eq!(split_bundle.tx_hash, split_tx_hash);
+        assert!(!split_bundle.is_cellbase);
+        assert_eq!(split_bundle.owners.len(), 2);
+
+        let owner_a = split_bundle
+            .owners
+            .iter()
+            .find(|owner| owner.lock_hash == lock_a_hash)
+            .expect("owner a");
+        assert_eq!(owner_a.ckb_delta, -100_00000000);
+        assert!(owner_a.asset_changes.is_empty());
+        assert_eq!(owner_a.peers, vec![lock_b_hash.clone()]);
+
+        let owner_b = split_bundle
+            .owners
+            .iter()
+            .find(|owner| owner.lock_hash == lock_b_hash)
+            .expect("owner b");
+        assert_eq!(owner_b.ckb_delta, 100_00000000);
+        assert!(owner_b.asset_changes.is_empty());
+        assert_eq!(owner_b.peers, vec![lock_a_hash]);
     }
 }

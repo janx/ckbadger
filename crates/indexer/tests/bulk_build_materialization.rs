@@ -171,7 +171,7 @@ fn bulk_build_materializes_history_rows_and_core_snapshots_from_single_pass() {
     let snapshot =
         materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
 
-    assert_eq!(snapshot.report.streamed_history_rows, 13);
+    assert_eq!(snapshot.report.streamed_history_rows, 15);
     assert!(snapshot.report.final_snapshot_rows > 0);
 
     let header = snapshot
@@ -218,7 +218,7 @@ fn bulk_build_materializes_append_only_cells_and_final_live_markers_from_single_
     let snapshot =
         materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
 
-    assert_eq!(snapshot.report.streamed_history_rows, 13);
+    assert_eq!(snapshot.report.streamed_history_rows, 15);
     assert_eq!(snapshot.cell_payloads.len(), 2);
     assert!(snapshot.cell_payloads.contains_key(&create_outpoint));
     assert!(snapshot.cell_payloads.contains_key(&consume_outpoint));
@@ -284,4 +284,39 @@ fn bulk_build_materializes_consumed_cells_and_live_cell_indexes_from_single_pass
     assert_eq!(snapshot.cell_by_data_hash.len(), 2);
     assert!(snapshot.cell_by_data_hash.contains(&expected_data_hash_create));
     assert!(snapshot.cell_by_data_hash.contains(&expected_data_hash_consume));
+}
+
+#[test]
+fn bulk_build_materializes_activity_bundles_from_single_pass() {
+    let block = same_block_create_then_consume_fixture();
+    let create_tx_hash = hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
+    let consume_tx_hash =
+        hex::decode(&block.block.transactions[1].hash[2..]).expect("consume tx hash");
+    let lock_hash = ScriptParser::compute_script_hash(&fixture_lock_script());
+
+    let snapshot =
+        materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
+
+    assert_eq!(snapshot.activity_bundles.len(), 2);
+
+    let create_key = keys::encode_tx_activity_bundle_key(14_000_321, 0, &create_tx_hash);
+    let consume_key = keys::encode_tx_activity_bundle_key(14_000_321, 1, &consume_tx_hash);
+
+    let create_bundle = snapshot
+        .activity_bundles
+        .get(&create_key)
+        .expect("cellbase activity bundle");
+    assert!(create_bundle.is_cellbase);
+    assert_eq!(create_bundle.owners.len(), 1);
+    assert_eq!(create_bundle.owners[0].lock_hash, lock_hash);
+
+    let consume_bundle = snapshot
+        .activity_bundles
+        .get(&consume_key)
+        .expect("consume activity bundle");
+    assert!(!consume_bundle.is_cellbase);
+    assert_eq!(consume_bundle.owners.len(), 1);
+    assert_eq!(consume_bundle.owners[0].lock_hash, lock_hash);
+    assert_eq!(consume_bundle.owners[0].ckb_delta, 0);
+    assert!(consume_bundle.owners[0].asset_changes.is_empty());
 }

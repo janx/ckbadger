@@ -153,6 +153,7 @@ pub(crate) struct CellFacts {
     pub(crate) type_args_id: Option<InternId>,
     pub(crate) occupied_capacity: i64,
     pub(crate) data_size: i32,
+    pub(crate) data: Vec<u8>,
     pub(crate) data_hash: Option<Vec<u8>>,
     pub(crate) udt_amount: Option<u128>,
     pub(crate) semantic_tag: CellSemanticTag,

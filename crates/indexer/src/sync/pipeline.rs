@@ -485,6 +485,7 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
                         cell.data_size,
                     ),
                     data_size: cell.data_size,
+                    data: cell.data.clone(),
                     data_hash: if cell.data_hash.is_empty() {
                         None
                     } else {
