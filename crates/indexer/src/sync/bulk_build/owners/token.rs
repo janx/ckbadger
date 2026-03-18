@@ -9,6 +9,7 @@ use ckbadger_store::{
     CF_TOKENS, CF_TOKEN_HOLDERS, CF_TOKEN_HOLDERS_BY_BALANCE,
 };
 use rocksdb::IteratorMode;
+use serde::Serialize;
 
 use super::{BulkReducer, ReducerContext};
 use crate::parser::{ParsedUdtCell, UdtParser};
@@ -26,8 +27,17 @@ pub(crate) struct TokenOwner {
     tokens: HashMap<Vec<u8>, TokenAccum>,
 }
 
+impl TokenOwner {
+    pub(crate) fn estimated_bytes(&self) -> u64 {
+        crate::sync::bulk_build::accounting::hash_map_bytes(&self.tokens, |type_hash, token| {
+            crate::sync::bulk_build::accounting::bytes_vec_bytes(type_hash)
+                + token.estimated_bytes()
+        })
+    }
+}
+
 impl BulkReducer for TokenOwner {
-    fn apply_tx(&mut self, tx: &ResolvedTxFacts, ctx: &ReducerContext<'_>) -> Result<()> {
+    fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
         let input_views = tx
             .resolved_inputs
             .iter()
@@ -177,7 +187,7 @@ impl BulkReducer for TokenOwner {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 struct TokenAccum {
     type_code_hash: Vec<u8>,
     hash_type: u8,
@@ -192,6 +202,22 @@ struct TokenAccum {
 }
 
 impl TokenAccum {
+    fn estimated_bytes(&self) -> u64 {
+        std::mem::size_of::<Self>() as u64
+            + crate::sync::bulk_build::accounting::bytes_vec_bytes(&self.type_code_hash)
+            + crate::sync::bulk_build::accounting::bytes_vec_bytes(&self.type_args)
+            + self.standard.len() as u64
+            + crate::sync::bulk_build::accounting::hash_map_bytes(
+                &self.holders,
+                |lock_hash, amount| {
+                    crate::sync::bulk_build::accounting::bytes_vec_bytes(lock_hash)
+                        + std::mem::size_of_val(amount) as u64
+                },
+            )
+            + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.hourly_transfers)
+            + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.daily_deltas)
+    }
+
     fn from_view(view: &TokenCellView, first_seen_block: i64) -> Self {
         Self {
             type_code_hash: view.type_code_hash.clone(),
@@ -207,7 +233,7 @@ impl TokenAccum {
         }
     }
 
-    fn apply_input(&mut self, view: &TokenCellView, tx: &ResolvedTxFacts) -> Result<()> {
+    fn apply_input(&mut self, view: &TokenCellView, tx: &ResolvedTxFacts<'_>) -> Result<()> {
         self.ensure_metadata(view, tx)?;
         self.live_supply = checked_next_i128(
             self.live_supply,
@@ -242,7 +268,7 @@ impl TokenAccum {
         Ok(())
     }
 
-    fn apply_output(&mut self, view: &TokenCellView, tx: &ResolvedTxFacts) -> Result<()> {
+    fn apply_output(&mut self, view: &TokenCellView, tx: &ResolvedTxFacts<'_>) -> Result<()> {
         self.ensure_metadata(view, tx)?;
         if tx.block_number < self.first_seen_block {
             self.first_seen_block = tx.block_number;
@@ -279,7 +305,7 @@ impl TokenAccum {
         &mut self,
         hour_bucket: i64,
         type_hash: &[u8],
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
     ) -> Result<()> {
         self.transfers_count = checked_next_i64(
             self.transfers_count,
@@ -302,7 +328,7 @@ impl TokenAccum {
         live_capacity_delta: i128,
         live_used_delta: i128,
         type_hash: &[u8],
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
     ) -> Result<()> {
         if live_capacity_delta == 0 && live_used_delta == 0 {
             return Ok(());
@@ -326,7 +352,7 @@ impl TokenAccum {
         Ok(())
     }
 
-    fn ensure_metadata(&self, view: &TokenCellView, tx: &ResolvedTxFacts) -> Result<()> {
+    fn ensure_metadata(&self, view: &TokenCellView, tx: &ResolvedTxFacts<'_>) -> Result<()> {
         if self.type_code_hash != view.type_code_hash
             || self.hash_type != view.type_hash_type as u8
             || self.type_args != view.type_args
@@ -380,7 +406,7 @@ impl TokenCellView {
     fn from_output(
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
     ) -> Result<Option<Self>> {
         Self::from_parts(
             cell.semantic_tag,
@@ -405,7 +431,7 @@ impl TokenCellView {
     fn from_input(
         input: &ResolvedInputFacts,
         ctx: &ReducerContext<'_>,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
     ) -> Result<Option<Self>> {
         Self::from_parts(
             input.semantic_tag,
@@ -439,7 +465,7 @@ impl TokenCellView {
         occupied_capacity: i64,
         udt_amount: Option<u128>,
         ctx: &ReducerContext<'_>,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
         location: String,
     ) -> Result<Option<Self>> {
         let standard = match semantic_tag {
@@ -537,7 +563,7 @@ fn checked_next_i128(
     delta: i128,
     metric: &str,
     type_hash: &[u8],
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
 ) -> Result<i128> {
     let next = current.checked_add(delta).ok_or_else(|| {
         anyhow!(
@@ -572,7 +598,7 @@ fn checked_next_i64(
     delta: i64,
     metric: &str,
     type_hash: &[u8],
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
 ) -> Result<i64> {
     let next = current.checked_add(delta).ok_or_else(|| {
         anyhow!(
@@ -607,7 +633,7 @@ fn checked_signed_i128(
     delta: i128,
     metric: &str,
     type_hash: &[u8],
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
 ) -> Result<i128> {
     current.checked_add(delta).ok_or_else(|| {
         anyhow!(
@@ -813,6 +839,7 @@ mod tests {
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x41; 32], 0),
                 created_at_block: 100,
+                created_by_block_dao_ar: 1,
                 capacity: 200_00000000,
                 lock_script_hash_id: lock_a,
                 lock_code_hash_id: InternId::new(99),
@@ -830,7 +857,8 @@ mod tests {
                 semantic_tag: CellSemanticTag::Sudt,
                 dao_state: None,
                 protocol_facts: None,
-            }],
+            }]
+            .into(),
         };
         let tx1 = ResolvedTxFacts {
             tx_hash: [0x42; 32],
@@ -843,6 +871,7 @@ mod tests {
             resolved_inputs: vec![ResolvedInputFacts {
                 outpoint: OutPointKey::new([0x41; 32], 0),
                 created_at_block: 100,
+                created_by_block_dao_ar: 1,
                 capacity: 200_00000000,
                 occupied_capacity: 142_00000000,
                 udt_amount: Some(1000),
@@ -856,12 +885,14 @@ mod tests {
                 type_args_id: Some(type_args_id),
                 semantic_tag: CellSemanticTag::Sudt,
                 dao_state: None,
+                dao_compensation_ars: None,
                 protocol_facts: None,
             }],
             cells: vec![
                 CellFacts {
                     outpoint: OutPointKey::new([0x42; 32], 0),
                     created_at_block: 100,
+                    created_by_block_dao_ar: 1,
                     capacity: 200_00000000,
                     lock_script_hash_id: lock_b,
                     lock_code_hash_id: InternId::new(97),
@@ -883,6 +914,7 @@ mod tests {
                 CellFacts {
                     outpoint: OutPointKey::new([0x42; 32], 1),
                     created_at_block: 100,
+                    created_by_block_dao_ar: 1,
                     capacity: 200_00000000,
                     lock_script_hash_id: lock_a,
                     lock_code_hash_id: InternId::new(95),
@@ -901,7 +933,8 @@ mod tests {
                     dao_state: None,
                     protocol_facts: None,
                 },
-            ],
+            ]
+            .into(),
         };
         let tx2 = ResolvedTxFacts {
             tx_hash: [0x43; 32],
@@ -914,6 +947,7 @@ mod tests {
             resolved_inputs: vec![ResolvedInputFacts {
                 outpoint: OutPointKey::new([0x42; 32], 1),
                 created_at_block: 100,
+                created_by_block_dao_ar: 1,
                 capacity: 200_00000000,
                 occupied_capacity: 142_00000000,
                 udt_amount: Some(400),
@@ -927,11 +961,13 @@ mod tests {
                 type_args_id: Some(type_args_id),
                 semantic_tag: CellSemanticTag::Sudt,
                 dao_state: None,
+                dao_compensation_ars: None,
                 protocol_facts: None,
             }],
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x43; 32], 0),
                 created_at_block: 100,
+                created_by_block_dao_ar: 1,
                 capacity: 200_00000000,
                 lock_script_hash_id: lock_b,
                 lock_code_hash_id: InternId::new(93),
@@ -949,7 +985,8 @@ mod tests {
                 semantic_tag: CellSemanticTag::Sudt,
                 dao_state: None,
                 protocol_facts: None,
-            }],
+            }]
+            .into(),
         };
 
         let mut owner = TokenOwner::default();

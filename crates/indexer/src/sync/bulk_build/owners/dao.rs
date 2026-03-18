@@ -31,7 +31,6 @@ use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 pub(crate) struct DaoOwner {
     deposits: HashMap<OutPointKey, DaoDepositCacheEntry>,
     request_outpoints: HashMap<OutPointKey, OutPointKey>,
-    block_ar_by_number: HashMap<i64, u64>,
     snapshot_dates: BTreeSet<NaiveDate>,
     daily_dao_fields: HashMap<NaiveDate, (i128, i128, i128)>,
     daily_active_delta: HashMap<NaiveDate, i128>,
@@ -43,8 +42,7 @@ pub(crate) struct DaoOwner {
 }
 
 impl BulkReducer for DaoOwner {
-    fn apply_tx(&mut self, tx: &ResolvedTxFacts, ctx: &ReducerContext<'_>) -> Result<()> {
-        self.record_block_ar(tx)?;
+    fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
         let tx_date = ckbadger_common::block_date_from_ms(tx.timestamp_ms);
 
         let dao_outputs = tx
@@ -166,6 +164,15 @@ impl BulkReducer for DaoOwner {
                     entry.status = 1;
                     entry.withdraw_request_block = Some(tx.block_number);
                     entry.withdraw_request_tx = Some(tx.tx_hash.to_vec());
+                    entry.withdraw_request_ar = Some(i64::try_from(tx.block_dao_ar).map_err(|_| {
+                        anyhow!(
+                            "DAO withdraw request AR exceeds i64 range in bulk reducer: block={}, tx=0x{}, tx_index={}, ar={}",
+                            tx.block_number,
+                            hex::encode(tx.tx_hash),
+                            tx.tx_index,
+                            tx.block_dao_ar
+                        )
+                    })?);
                     entry.withdraw_request_output_index = Some(checked_outpoint_index_i16(
                         request_output.outpoint,
                         tx,
@@ -233,34 +240,41 @@ impl BulkReducer for DaoOwner {
                             })?
                     };
 
-                    let deposit_ar =
-                        self.block_ar_by_number
-                            .get(&entry.deposit_block_number)
-                            .copied()
-                            .ok_or_else(|| {
-                                anyhow!(
-                                    "missing DAO AR for deposit block in bulk reducer: deposit_block={}, block={}, tx=0x{}, tx_index={}, origin_outpoint={}",
-                                    entry.deposit_block_number,
-                                    tx.block_number,
-                                    hex::encode(tx.tx_hash),
-                                    tx.tx_index,
-                                    format_outpoint(&origin_outpoint)
-                                )
-                            })?;
+                    let deposit_ar = u64::try_from(entry.deposit_ar).map_err(|_| {
+                        anyhow!(
+                            "negative DAO deposit AR in bulk reducer: deposit_block={}, block={}, tx=0x{}, tx_index={}, origin_outpoint={}, deposit_ar={}",
+                            entry.deposit_block_number,
+                            tx.block_number,
+                            hex::encode(tx.tx_hash),
+                            tx.tx_index,
+                            format_outpoint(&origin_outpoint),
+                            entry.deposit_ar
+                        )
+                    })?;
                     let request_ar =
-                        self.block_ar_by_number
-                            .get(&request_block)
-                            .copied()
-                            .ok_or_else(|| {
+                        entry.withdraw_request_ar.ok_or_else(|| {
+                            anyhow!(
+                                "withdraw_request_ar missing for DAO status=1 entry: request_block={}, block={}, tx=0x{}, tx_index={}, origin_outpoint={}",
+                                request_block,
+                                tx.block_number,
+                                hex::encode(tx.tx_hash),
+                                tx.tx_index,
+                                format_outpoint(&origin_outpoint)
+                            )
+                        })
+                        .and_then(|ar| {
+                            u64::try_from(ar).map_err(|_| {
                                 anyhow!(
-                                    "missing DAO AR for withdraw request block in bulk reducer: request_block={}, block={}, tx=0x{}, tx_index={}, origin_outpoint={}",
+                                    "negative DAO withdraw request AR in bulk reducer: request_block={}, block={}, tx=0x{}, tx_index={}, origin_outpoint={}, withdraw_request_ar={}",
                                     request_block,
                                     tx.block_number,
                                     hex::encode(tx.tx_hash),
                                     tx.tx_index,
-                                    format_outpoint(&origin_outpoint)
+                                    format_outpoint(&origin_outpoint),
+                                    ar
                                 )
-                            })?;
+                            })
+                        })?;
                     let compensation =
                         calculate_dao_compensation_from_ar(entry.capacity, deposit_ar, request_ar)?;
                     let withdraw_to_output_index = infer_withdraw_to_output_index_from_outputs(
@@ -271,9 +285,11 @@ impl BulkReducer for DaoOwner {
                     entry.status = 2;
                     entry.withdraw_block = Some(tx.block_number);
                     entry.withdraw_tx = Some(tx.tx_hash.to_vec());
+                    entry.withdraw_request_ar = None;
                     entry.withdraw_request_output_index = Some(request_output_index);
                     entry.withdraw_to_output_index = withdraw_to_output_index;
                     entry.compensation = Some(compensation);
+                    self.request_outpoints.remove(&input_view.outpoint);
                     Self::bump_daily_i64(
                         &mut self.daily_withdrawals_delta,
                         tx_date,
@@ -554,26 +570,35 @@ impl BulkReducer for DaoOwner {
 }
 
 impl DaoOwner {
+    pub(crate) fn estimated_bytes(&self) -> u64 {
+        let deposits_bytes =
+            crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.deposits);
+        let request_bytes =
+            crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.request_outpoints);
+        let date_set_bytes = std::mem::size_of::<BTreeSet<NaiveDate>>() as u64
+            + self.snapshot_dates.len() as u64 * std::mem::size_of::<NaiveDate>() as u64;
+        let fixed_map_bytes = self.daily_dao_fields.len() as u64
+            * std::mem::size_of::<(NaiveDate, (i128, i128, i128))>() as u64
+            + self.daily_active_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64
+            + self.daily_gross_deposit_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64
+            + self.daily_new_deposits_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i64)>() as u64
+            + self.daily_withdrawals_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i64)>() as u64
+            + self.daily_secondary_non_miner_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64;
+        std::mem::size_of::<Self>() as u64
+            + deposits_bytes
+            + request_bytes
+            + date_set_bytes
+            + fixed_map_bytes
+    }
+
     pub(crate) fn record_block(&mut self, block: &BlockFacts) -> Result<()> {
         let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
         self.snapshot_dates.insert(block_date);
-
-        let ar = crate::db::writer::dao::extract_ar_from_dao(&block.dao).ok_or_else(|| {
-            anyhow!(
-                "missing DAO AR in bulk reducer block header: block={}",
-                block.number
-            )
-        })?;
-        if let Some(existing) = self.block_ar_by_number.insert(block.number, ar) {
-            if existing != ar {
-                bail!(
-                    "conflicting DAO AR for block in bulk reducer header path: block={} existing={} new={}",
-                    block.number,
-                    existing,
-                    ar
-                );
-            }
-        }
 
         let (c, s, u) = extract_dao_csu(&block.dao).ok_or_else(|| {
             anyhow!(
@@ -597,25 +622,6 @@ impl DaoOwner {
             }
         }
         self.prev_dao_cs = Some((c, s));
-        Ok(())
-    }
-
-    fn record_block_ar(&mut self, tx: &ResolvedTxFacts) -> Result<()> {
-        if let Some(existing) = self
-            .block_ar_by_number
-            .insert(tx.block_number, tx.block_dao_ar)
-        {
-            if existing != tx.block_dao_ar {
-                bail!(
-                    "conflicting DAO AR for block in bulk reducer: block={}, existing={}, new={}, tx=0x{}, tx_index={}",
-                    tx.block_number,
-                    existing,
-                    tx.block_dao_ar,
-                    hex::encode(tx.tx_hash),
-                    tx.tx_index
-                );
-            }
-        }
         Ok(())
     }
 
@@ -739,7 +745,7 @@ impl DaoCellView {
     fn from_output(
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
     ) -> Result<Option<Self>> {
         Self::from_parts(
             cell.outpoint,
@@ -756,7 +762,7 @@ impl DaoCellView {
     fn from_input(
         input: &ResolvedInputFacts,
         ctx: &ReducerContext<'_>,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
     ) -> Result<Option<Self>> {
         Self::from_parts(
             input.outpoint,
@@ -777,7 +783,7 @@ impl DaoCellView {
         semantic_tag: CellSemanticTag,
         dao_state: Option<DaoCellState>,
         ctx: &ReducerContext<'_>,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
         location: String,
     ) -> Result<Option<Self>> {
         if !matches!(semantic_tag, CellSemanticTag::Dao) {
@@ -876,7 +882,7 @@ fn infer_withdraw_to_output_index_from_outputs(
 
 fn checked_outpoint_index_i16(
     outpoint: OutPointKey,
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
     context: &str,
 ) -> Result<i16> {
     i16::try_from(outpoint.index).map_err(|_| {
@@ -1063,6 +1069,7 @@ mod tests {
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x31; 32], 0),
                 created_at_block: 100,
+                created_by_block_dao_ar: 10_000,
                 capacity: 200_00000000,
                 lock_script_hash_id: lock_hash,
                 lock_code_hash_id: InternId::new(1),
@@ -1080,7 +1087,8 @@ mod tests {
                 semantic_tag: CellSemanticTag::Dao,
                 dao_state: Some(DaoCellState::Deposit),
                 protocol_facts: None,
-            }],
+            }]
+            .into(),
         };
         owner.apply_tx(&tx0, &ctx).expect("apply deposit");
 
@@ -1095,6 +1103,7 @@ mod tests {
             resolved_inputs: vec![ResolvedInputFacts {
                 outpoint: OutPointKey::new([0x31; 32], 0),
                 created_at_block: 100,
+                created_by_block_dao_ar: 10_000,
                 capacity: 200_00000000,
                 occupied_capacity: 142_00000000,
                 udt_amount: None,
@@ -1108,11 +1117,13 @@ mod tests {
                 type_args_id: Some(InternId::new(4)),
                 semantic_tag: CellSemanticTag::Dao,
                 dao_state: Some(DaoCellState::Deposit),
+                dao_compensation_ars: None,
                 protocol_facts: None,
             }],
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x32; 32], 0),
                 created_at_block: 101,
+                created_by_block_dao_ar: 12_000,
                 capacity: 200_00000000,
                 lock_script_hash_id: lock_hash,
                 lock_code_hash_id: InternId::new(1),
@@ -1132,7 +1143,8 @@ mod tests {
                     deposit_block_number: 100,
                 }),
                 protocol_facts: None,
-            }],
+            }]
+            .into(),
         };
         owner.apply_tx(&tx1, &ctx).expect("apply request");
 
@@ -1147,6 +1159,7 @@ mod tests {
             resolved_inputs: vec![ResolvedInputFacts {
                 outpoint: OutPointKey::new([0x32; 32], 0),
                 created_at_block: 101,
+                created_by_block_dao_ar: 12_000,
                 capacity: 200_00000000,
                 occupied_capacity: 142_00000000,
                 udt_amount: None,
@@ -1162,11 +1175,13 @@ mod tests {
                 dao_state: Some(DaoCellState::WithdrawRequest {
                     deposit_block_number: 100,
                 }),
+                dao_compensation_ars: None,
                 protocol_facts: None,
             }],
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x33; 32], 0),
                 created_at_block: 102,
+                created_by_block_dao_ar: 13_000,
                 capacity: 219_60000000,
                 lock_script_hash_id: lock_hash,
                 lock_code_hash_id: InternId::new(5),
@@ -1184,7 +1199,8 @@ mod tests {
                 semantic_tag: CellSemanticTag::Plain,
                 dao_state: None,
                 protocol_facts: None,
-            }],
+            }]
+            .into(),
         };
         owner.apply_tx(&tx2, &ctx).expect("apply completion");
 
@@ -1195,11 +1211,13 @@ mod tests {
         assert_eq!(entry.status, 2);
         assert_eq!(entry.withdraw_request_block, Some(101));
         assert_eq!(entry.withdraw_request_tx, Some(vec![0x32; 32]));
+        assert_eq!(entry.withdraw_request_ar, None);
         assert_eq!(entry.withdraw_request_output_index, Some(0));
         assert_eq!(entry.withdraw_block, Some(102));
         assert_eq!(entry.withdraw_tx, Some(vec![0x33; 32]));
         assert_eq!(entry.withdraw_to_output_index, Some(0));
         assert_eq!(entry.compensation, Some(19_60000000));
+        assert!(owner.request_outpoints.is_empty());
     }
 
     #[test]
@@ -1225,7 +1243,7 @@ mod tests {
                 withdraw_request_tx: Some(vec![0x32; 32]),
                 withdraw_request_output_index: None,
                 withdraw_request_block: Some(101),
-                withdraw_request_ar: None,
+                withdraw_request_ar: Some(12_000),
                 withdraw_block: None,
                 withdraw_tx: None,
                 withdraw_to_output_index: None,
@@ -1235,9 +1253,6 @@ mod tests {
         owner
             .request_outpoints
             .insert(request_outpoint, origin_outpoint);
-        owner.block_ar_by_number.insert(100, 10_000);
-        owner.block_ar_by_number.insert(101, 12_000);
-        owner.block_ar_by_number.insert(102, 13_000);
 
         let tx = ResolvedTxFacts {
             tx_hash: [0x33; 32],
@@ -1251,6 +1266,7 @@ mod tests {
                 ResolvedInputFacts {
                     outpoint: request_outpoint,
                     created_at_block: 101,
+                    created_by_block_dao_ar: 12_000,
                     capacity: 200_00000000,
                     occupied_capacity: 142_00000000,
                     udt_amount: None,
@@ -1266,11 +1282,13 @@ mod tests {
                     dao_state: Some(DaoCellState::WithdrawRequest {
                         deposit_block_number: 100,
                     }),
+                    dao_compensation_ars: None,
                     protocol_facts: None,
                 },
                 ResolvedInputFacts {
                     outpoint: OutPointKey::new([0x32; 32], 1),
                     created_at_block: 101,
+                    created_by_block_dao_ar: 12_000,
                     capacity: 61_00000000,
                     occupied_capacity: 61_00000000,
                     udt_amount: None,
@@ -1284,12 +1302,14 @@ mod tests {
                     type_args_id: None,
                     semantic_tag: CellSemanticTag::Plain,
                     dao_state: None,
+                    dao_compensation_ars: None,
                     protocol_facts: None,
                 },
             ],
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x33; 32], 0),
                 created_at_block: 102,
+                created_by_block_dao_ar: 13_000,
                 capacity: 219_60000000,
                 lock_script_hash_id: lock_hash,
                 lock_code_hash_id: InternId::new(7),
@@ -1307,7 +1327,8 @@ mod tests {
                 semantic_tag: CellSemanticTag::Plain,
                 dao_state: None,
                 protocol_facts: None,
-            }],
+            }]
+            .into(),
         };
 
         let result =

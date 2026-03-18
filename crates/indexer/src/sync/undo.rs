@@ -190,7 +190,7 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             type_script_hash: None,
-            data_hash: vec![],
+            data_hash: [0u8; 32],
             data_size: 8,
             data: if is_deposit {
                 vec![0u8; 8]

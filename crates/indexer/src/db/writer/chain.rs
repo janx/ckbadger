@@ -26,7 +26,7 @@ impl BatchWriter {
                 epoch_number: block.epoch_number,
                 epoch_index: block.epoch_index,
                 epoch_length: block.epoch_length,
-                dao: block.dao.clone(),
+                dao: block.dao.to_vec(),
                 transactions_count: block.transactions_count,
             };
             batch.put_block_header(block.number, &header);

@@ -43,8 +43,8 @@ use super::nft_helpers::*;
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
-    BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData, TxData, UnresolvedLocalProbeSummary,
-    UnresolvedRpcProbeSummary,
+    BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData, TxData,
+    UnresolvedLocalProbeSummary, UnresolvedRpcProbeSummary,
 };
 use super::undo::*;
 
@@ -999,7 +999,9 @@ impl Indexer {
             let chain_tip = self.progress.target();
             let sst_gb = stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0);
 
-            if let Err(e) = persist_bulk_sync_completion_status(self.writer.store().as_ref(), chain_tip) {
+            if let Err(e) =
+                persist_bulk_sync_completion_status(self.writer.store().as_ref(), chain_tip)
+            {
                 warn!(
                     error = %e,
                     chain_tip,
@@ -1630,10 +1632,8 @@ impl Indexer {
                         0i16, // status = 0 (active)
                     ),
                 );
-                let outpoint_key = ckbadger_store::keys::encode_outpoint(
-                    &deposit.tx_hash,
-                    deposit_output_index,
-                );
+                let outpoint_key =
+                    ckbadger_store::keys::encode_outpoint(&deposit.tx_hash, deposit_output_index);
                 pending_dao_entries.insert(
                     outpoint_key,
                     ckbadger_store::types::DaoDepositCacheEntry {
@@ -1660,8 +1660,7 @@ impl Indexer {
                 for parsed in all_parsed_blocks {
                     let tx_count_for_block =
                         checked_tx_count(parsed.transactions_count, parsed.number)?;
-                    let tx_slice =
-                        &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                    let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                     block_tx_idx += tx_count_for_block;
                     for tx_data in tx_slice {
                         if tx_data.is_cellbase || tx_data.inputs.is_empty() {
@@ -1797,9 +1796,7 @@ impl Indexer {
                     }
                     let tx = &block_response.block.transactions[tx_idx];
                     let mut output_udts: Vec<crate::parser::ParsedUdtCell> = Vec::new();
-                    for (output_index, udt_cell) in
-                        self.parse_udt_cells_with_store_fallback(tx)?
-                    {
+                    for (output_index, udt_cell) in self.parse_udt_cells_with_store_fallback(tx)? {
                         batch_udt_cells
                             .insert((tx_data.hash.to_vec(), output_index), udt_cell.clone());
                         self.udt_cell_cache.insert(
@@ -1871,8 +1868,7 @@ impl Indexer {
             }
 
             if !skip_token && !udt_tx_contexts.is_empty() {
-                let max_supply_observations =
-                    collect_token_max_supply_observations(&all_tx_data);
+                let max_supply_observations = collect_token_max_supply_observations(&all_tx_data);
                 let mut all_transfers: Vec<(crate::parser::ParsedUdtTransfer, Vec<u8>, i64)> =
                     Vec::new();
                 for ctx in &udt_tx_contexts {
@@ -1890,8 +1886,7 @@ impl Indexer {
                                 amount: *am,
                                 standard: crate::parser::UdtStandard::parse(std),
                             });
-                        } else if let Some(udt_cell) =
-                            batch_udt_cells.get(&(tx_hash.clone(), *idx))
+                        } else if let Some(udt_cell) = batch_udt_cells.get(&(tx_hash.clone(), *idx))
                         {
                             input_udts.push(udt_cell.clone());
                         }
@@ -1938,8 +1933,7 @@ impl Indexer {
         // Group C: NFT/Spore processing
         {
             let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
-            let mut batch_mnft_token_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> =
-                HashMap::new();
+            let mut batch_mnft_token_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
             let mut batch_mnft_last_output_tx_index: HashMap<Vec<u8>, usize> = HashMap::new();
             let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
             let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
@@ -2028,8 +2022,7 @@ impl Indexer {
                             }
                         }
                     }
-                    for (output_index, issuer) in
-                        MnftParser::parse_issuers_with_output_indices(tx)
+                    for (output_index, issuer) in MnftParser::parse_issuers_with_output_indices(tx)
                     {
                         let output_index_i16 = i16::try_from(output_index).map_err(|_| {
                             anyhow!(
@@ -2047,9 +2040,7 @@ impl Indexer {
                             &mut data_batch,
                         )?;
                     }
-                    for (output_index, class) in
-                        MnftParser::parse_classes_with_output_indices(tx)
-                    {
+                    for (output_index, class) in MnftParser::parse_classes_with_output_indices(tx) {
                         let output_index = i16::try_from(output_index).map_err(|_| {
                             anyhow!(
                                 "mNFT class output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
@@ -2067,9 +2058,7 @@ impl Indexer {
                             &mut mnft_state,
                         )?;
                     }
-                    for (output_index, token) in
-                        MnftParser::parse_tokens_with_output_indices(tx)
-                    {
+                    for (output_index, token) in MnftParser::parse_tokens_with_output_indices(tx) {
                         let output_index = i16::try_from(output_index).map_err(|_| {
                             anyhow!(
                                 "mNFT token output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
@@ -2214,10 +2203,8 @@ impl Indexer {
                 let spore_results = if bulk_sync_active {
                     Vec::new()
                 } else {
-                    self.writer.get_spore_ids_by_outpoints_batch(
-                        &all_prev_tx_hashes,
-                        &all_prev_indices,
-                    )?
+                    self.writer
+                        .get_spore_ids_by_outpoints_batch(&all_prev_tx_hashes, &all_prev_indices)?
                 };
                 let mnft_results = if bulk_sync_active {
                     Vec::new()
@@ -2314,15 +2301,13 @@ impl Indexer {
                                 *consume_tx_global_index,
                             );
                             if should_consume {
-                                if let Some(coll_id) =
-                                    self.writer.consume_mnft_token_with_state(
-                                        token_id,
-                                        *block_number,
-                                        consuming_tx_hash,
-                                        &mut data_batch,
-                                        &mut mnft_state,
-                                    )?
-                                {
+                                if let Some(coll_id) = self.writer.consume_mnft_token_with_state(
+                                    token_id,
+                                    *block_number,
+                                    consuming_tx_hash,
+                                    &mut data_batch,
+                                    &mut mnft_state,
+                                )? {
                                     object_activity_acc.record(
                                         &coll_id,
                                         consuming_tx_hash,
@@ -2348,34 +2333,33 @@ impl Indexer {
                     if let Some(account_id) = dotbit_account_id.as_ref() {
                         let latest_create_order =
                             batch_dotbit_latest_create_order.get(account_id).copied();
-                        if should_consume_dotbit_account(
-                            latest_create_order,
-                            *dotbit_consume_order,
-                        ) && self
-                            .writer
-                            .consume_dotbit_account_with_state(
-                                account_id,
-                                *block_number,
-                                consuming_tx_hash,
-                                &mut data_batch,
-                                &mut dotbit_state,
-                            )?
-                            .is_some()
+                        if should_consume_dotbit_account(latest_create_order, *dotbit_consume_order)
+                            && self
+                                .writer
+                                .consume_dotbit_account_with_state(
+                                    account_id,
+                                    *block_number,
+                                    consuming_tx_hash,
+                                    &mut data_batch,
+                                    &mut dotbit_state,
+                                )?
+                                .is_some()
                         {
                             let tx_key: [u8; 32] = consuming_tx_hash
                                 .as_slice()
                                 .try_into()
                                 .expect("consuming_tx_hash must be 32 bytes");
-                            let activity = dotbit_tx_activity_data
-                                .entry(tx_key)
-                                .or_insert_with(|| DotbitTxActivityData {
-                                    das_action: das_action_cache.get(&tx_key).cloned(),
-                                    created_account_ids: HashSet::new(),
-                                    consumed_account_ids: HashSet::new(),
-                                    block_number: *block_number,
-                                    block_hash: block_hash.clone(),
-                                    tx_idx: *ctx_tx_idx,
-                                    timestamp_ms: *ctx_ts_ms,
+                            let activity =
+                                dotbit_tx_activity_data.entry(tx_key).or_insert_with(|| {
+                                    DotbitTxActivityData {
+                                        das_action: das_action_cache.get(&tx_key).cloned(),
+                                        created_account_ids: HashSet::new(),
+                                        consumed_account_ids: HashSet::new(),
+                                        block_number: *block_number,
+                                        block_hash: block_hash.clone(),
+                                        tx_idx: *ctx_tx_idx,
+                                        timestamp_ms: *ctx_ts_ms,
+                                    }
                                 });
                             activity.consumed_account_ids.insert(account_id.clone());
                         }
@@ -2431,8 +2415,7 @@ impl Indexer {
                 })?;
             }
 
-            mnft_state
-                .extend_pending_collection_aggregates(&mut pending_object_collection_aggs);
+            mnft_state.extend_pending_collection_aggregates(&mut pending_object_collection_aggs);
             spore_state.extend_pending_cluster_ids(&mut pending_cluster_ids);
 
             pending_identity_aggs.extend(
@@ -2467,8 +2450,7 @@ impl Indexer {
             vec![
                 Box::new(crate::db::writer::rgbpp_detector::RgbppDetector::new(
                     self.config.is_mainnet(),
-                ))
-                    as Box<dyn crate::db::writer::activities::ProtocolDetector>,
+                )) as Box<dyn crate::db::writer::activities::ProtocolDetector>,
                 Box::new(crate::db::writer::fiber_detector::FiberDetector::new(
                     self.config.is_mainnet(),
                 )),
@@ -2520,11 +2502,12 @@ impl Indexer {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let bundles = crate::db::writer::activities::build_activity_bundles_for_block_with_detectors(
-                    &tx_views,
-                    &token_info_cache,
-                    &protocol_detectors,
-                )?;
+                let bundles =
+                    crate::db::writer::activities::build_activity_bundles_for_block_with_detectors(
+                        &tx_views,
+                        &token_info_cache,
+                        &protocol_detectors,
+                    )?;
 
                 for bundle in bundles {
                     for owner in &bundle.owners {
@@ -2642,8 +2625,7 @@ impl Indexer {
                     .filter(|x| seen.insert(x.clone()))
                     .collect()
             };
-            let refs: Vec<(&[u8], i16)> =
-                unique.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
+            let refs: Vec<(&[u8], i16)> = unique.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
             self.writer.find_consumed_dao_deposits_batch(&refs)?
         } else {
             HashMap::new()
@@ -2659,8 +2641,7 @@ impl Indexer {
                 block_date,
                 &mut prev_dao_cs,
             )?;
-            let tx_count_for_block =
-                checked_tx_count(parsed.transactions_count, parsed.number)?;
+            let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
             block_tx_idx += tx_count_for_block;
 
@@ -2738,7 +2719,7 @@ impl Indexer {
             }
             batch_stats
                 .daily_dao_fields
-                .insert(block_date, parsed.dao.clone());
+                .insert(block_date, parsed.dao.to_vec());
             {
                 let block_hour = truncate_to_hour(parsed.timestamp);
                 let entry = batch_stats.hourly_stats.entry(block_hour).or_default();
@@ -2839,192 +2820,192 @@ impl Indexer {
             batch_stats.dao_snapshot_dates.insert(block_date);
         }
         batch_stats.dao_deltas_computed = true;
-    let write_ms = t_write.elapsed().as_secs_f64() * 1000.0;
+        let write_ms = t_write.elapsed().as_secs_f64() * 1000.0;
 
-    // Finalization: block headers + stats
-    let t_finalize = Instant::now();
-    {
-        let mut core_batch = StoreBatch::new(self.writer.store());
-        self.writer
-            .insert_blocks_batch(&block_refs, &mut core_batch)?;
-        let mut stats_batch = StoreBatch::new(self.writer.store());
-        self.write_batch_stats_to_batch(&batch_stats, &mut stats_batch)?;
-        // Write accumulated daily activity stats
-        for (date, stats) in &daily_activity_accum {
-            let unique_count = daily_activity_addrs.get(date).map_or(0, |s| s.len() as u32);
-            self.writer.update_daily_activity_stats(
-                date,
-                stats,
-                unique_count,
-                &mut stats_batch,
-            )?;
+        // Finalization: block headers + stats
+        let t_finalize = Instant::now();
+        {
+            let mut core_batch = StoreBatch::new(self.writer.store());
+            self.writer
+                .insert_blocks_batch(&block_refs, &mut core_batch)?;
+            let mut stats_batch = StoreBatch::new(self.writer.store());
+            self.write_batch_stats_to_batch(&batch_stats, &mut stats_batch)?;
+            // Write accumulated daily activity stats
+            for (date, stats) in &daily_activity_accum {
+                let unique_count = daily_activity_addrs.get(date).map_or(0, |s| s.len() as u32);
+                self.writer.update_daily_activity_stats(
+                    date,
+                    stats,
+                    unique_count,
+                    &mut stats_batch,
+                )?;
+            }
+            // Write accumulated hourly activity stats
+            for (hour, stats) in &hourly_activity_accum {
+                let unique_count = hourly_activity_addrs
+                    .get(hour)
+                    .map_or(0, |s| s.len() as u32);
+                self.writer.update_hourly_activity_stats(
+                    hour,
+                    stats,
+                    unique_count,
+                    &mut stats_batch,
+                )?;
+            }
+            // Inject sync_status update into the finalize batch so it is
+            // committed atomically with block headers and domain data.
+            // Previously sync_status was written via a separate put_cf after
+            // commit, creating a crash window where totals could drift.
+            if let Some((block_number, ref block_hash)) = batch_stats.last_block {
+                let ema_rate = self.progress.ema_blocks_per_second();
+                let mut status = self.writer.store().get_sync_status()?;
+                status.tip_block_number = block_number;
+                status.tip_block_hash = block_hash.clone();
+                status.total_transactions += batch_stats.sync_totals.0;
+                status.total_cells_created += batch_stats.sync_totals.1;
+                status.total_cells_consumed += batch_stats.sync_totals.2;
+                status.last_synced_at = chrono::Utc::now().timestamp();
+                if ema_rate > 0.0 {
+                    status.sync_ema_rate = Some(ema_rate);
+                }
+                let status_bytes = bincode::serialize(&status)
+                    .with_context(|| "failed to serialize sync_status for atomic batch commit")?;
+                stats_batch.put_sync_meta(
+                    ckbadger_store::keys::sync_meta_keys::SYNC_STATUS,
+                    &status_bytes,
+                );
+            }
+
+            // Apply deferred activity count deltas atomically with finalize.
+            // In bulk mode, T6a/T6b worker threads commit aggregates independently
+            // before finalize. Applying deltas here (instead of as a separate commit)
+            // ensures a crash between worker commits and finalize cannot leave
+            // aggregate counters incremented without corresponding block headers.
+            if !deferred_identity_deltas.is_empty() || !deferred_object_deltas.is_empty() {
+                let empty_identity_aggs = HashMap::new();
+                apply_identity_collection_activity_count_deltas(
+                    self.writer.store(),
+                    &mut core_batch,
+                    deferred_identity_deltas,
+                    &empty_identity_aggs,
+                )?;
+                let empty_object_aggs = HashMap::new();
+                apply_object_collection_activity_count_deltas_with_pending(
+                    self.writer.store(),
+                    &mut core_batch,
+                    deferred_object_deltas,
+                    &empty_object_aggs,
+                    &HashSet::new(),
+                )?;
+            }
+
+            let commit_started = Instant::now();
+            // Live sync: merge headers and stats into the single data_batch
+            // that already holds all domain writes, then commit atomically.
+            data_batch.merge_from(core_batch);
+            data_batch.merge_from(stats_batch);
+            debug!(
+                phase = "domain_atomic_commit",
+                batch_start = first_block,
+                batch_end = last_block,
+                bulk_sync_mode,
+                "Atomic domain batch commit start"
+            );
+            data_batch.commit().with_context(|| {
+                format!(
+                    "atomic domain commit failed for blocks {}-{}",
+                    first_block, last_block
+                )
+            })?;
+            let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
+            write_commit_ms += commit_ms;
+            if commit_ms >= BULK_PHASE_COMMIT_SLOW_WARN_MS {
+                warn!(
+                    phase = "finalize_commit",
+                    batch_start = first_block,
+                    batch_end = last_block,
+                    commit_ms = format!("{:.1}", commit_ms),
+                    bulk_sync_mode,
+                    "Finalize commit slow"
+                );
+            } else {
+                debug!(
+                    phase = "finalize_commit",
+                    batch_start = first_block,
+                    batch_end = last_block,
+                    commit_ms = format!("{:.1}", commit_ms),
+                    bulk_sync_mode,
+                    "Finalize commit done"
+                );
+            }
         }
-        // Write accumulated hourly activity stats
-        for (hour, stats) in &hourly_activity_accum {
-            let unique_count = hourly_activity_addrs
-                .get(hour)
-                .map_or(0, |s| s.len() as u32);
-            self.writer.update_hourly_activity_stats(
-                hour,
-                stats,
-                unique_count,
-                &mut stats_batch,
-            )?;
-        }
-        // Inject sync_status update into the finalize batch so it is
-        // committed atomically with block headers and domain data.
-        // Previously sync_status was written via a separate put_cf after
-        // commit, creating a crash window where totals could drift.
+
+        self.update_hodl_wave(
+            all_parsed_blocks,
+            &all_tx_data,
+            &input_cell_info,
+            &batch_cell_infos,
+            &address_balance_changes,
+        )?;
+        self.update_cell_distribution(
+            all_parsed_blocks,
+            &all_tx_data,
+            &input_cell_info,
+            &batch_cell_infos,
+            &address_balance_changes,
+        )?;
+
+        // In-memory cache notification only — the DB sync_status update was
+        // already committed atomically in the finalize batch above.
         if let Some((block_number, ref block_hash)) = batch_stats.last_block {
             let ema_rate = self.progress.ema_blocks_per_second();
-            let mut status = self.writer.store().get_sync_status()?;
-            status.tip_block_number = block_number;
-            status.tip_block_hash = block_hash.clone();
-            status.total_transactions += batch_stats.sync_totals.0;
-            status.total_cells_created += batch_stats.sync_totals.1;
-            status.total_cells_consumed += batch_stats.sync_totals.2;
-            status.last_synced_at = chrono::Utc::now().timestamp();
-            if ema_rate > 0.0 {
-                status.sync_ema_rate = Some(ema_rate);
+            let ema_rate_opt = if ema_rate > 0.0 { Some(ema_rate) } else { None };
+            self.writer.refresh_latest_dao_statistics()?;
+            if let Some(cache) = self.writer.cache_invalidator() {
+                let hash_hex = format!("0x{}", hex::encode(block_hash));
+                cache
+                    .update_sync_status(|status| {
+                        status.update_batch(
+                            block_number,
+                            &hash_hex,
+                            batch_stats.sync_totals.0,
+                            batch_stats.sync_totals.1,
+                            batch_stats.sync_totals.2,
+                            batch_new_addresses,
+                            ema_rate_opt,
+                        );
+                    })
+                    .await;
             }
-            let status_bytes = bincode::serialize(&status)
-                .with_context(|| "failed to serialize sync_status for atomic batch commit")?;
-            stats_batch.put_sync_meta(
-                ckbadger_store::keys::sync_meta_keys::SYNC_STATUS,
-                &status_bytes,
-            );
         }
 
-        // Apply deferred activity count deltas atomically with finalize.
-        // In bulk mode, T6a/T6b worker threads commit aggregates independently
-        // before finalize. Applying deltas here (instead of as a separate commit)
-        // ensures a crash between worker commits and finalize cannot leave
-        // aggregate counters incremented without corresponding block headers.
-        if !deferred_identity_deltas.is_empty() || !deferred_object_deltas.is_empty() {
-            let empty_identity_aggs = HashMap::new();
-            apply_identity_collection_activity_count_deltas(
-                self.writer.store(),
-                &mut core_batch,
-                deferred_identity_deltas,
-                &empty_identity_aggs,
-            )?;
-            let empty_object_aggs = HashMap::new();
-            apply_object_collection_activity_count_deltas_with_pending(
-                self.writer.store(),
-                &mut core_batch,
-                deferred_object_deltas,
-                &empty_object_aggs,
-                &HashSet::new(),
-            )?;
-        }
-
-        let commit_started = Instant::now();
-        // Live sync: merge headers and stats into the single data_batch
-        // that already holds all domain writes, then commit atomically.
-        data_batch.merge_from(core_batch);
-        data_batch.merge_from(stats_batch);
-        debug!(
-            phase = "domain_atomic_commit",
-            batch_start = first_block,
-            batch_end = last_block,
-            bulk_sync_mode,
-            "Atomic domain batch commit start"
-        );
-        data_batch.commit().with_context(|| {
-            format!(
-                "atomic domain commit failed for blocks {}-{}",
-                first_block, last_block
-            )
-        })?;
-        let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
-        write_commit_ms += commit_ms;
-        if commit_ms >= BULK_PHASE_COMMIT_SLOW_WARN_MS {
-            warn!(
-                phase = "finalize_commit",
-                batch_start = first_block,
-                batch_end = last_block,
-                commit_ms = format!("{:.1}", commit_ms),
-                bulk_sync_mode,
-                "Finalize commit slow"
-            );
-        } else {
-            debug!(
-                phase = "finalize_commit",
-                batch_start = first_block,
-                batch_end = last_block,
-                commit_ms = format!("{:.1}", commit_ms),
-                bulk_sync_mode,
-                "Finalize commit done"
-            );
-        }
-    }
-
-    self.update_hodl_wave(
-        all_parsed_blocks,
-        &all_tx_data,
-        &input_cell_info,
-        &batch_cell_infos,
-        &address_balance_changes,
-    )?;
-    self.update_cell_distribution(
-        all_parsed_blocks,
-        &all_tx_data,
-        &input_cell_info,
-        &batch_cell_infos,
-        &address_balance_changes,
-    )?;
-
-    // In-memory cache notification only — the DB sync_status update was
-    // already committed atomically in the finalize batch above.
-    if let Some((block_number, ref block_hash)) = batch_stats.last_block {
-        let ema_rate = self.progress.ema_blocks_per_second();
-        let ema_rate_opt = if ema_rate > 0.0 { Some(ema_rate) } else { None };
-        self.writer.refresh_latest_dao_statistics()?;
-        if let Some(cache) = self.writer.cache_invalidator() {
-            let hash_hex = format!("0x{}", hex::encode(block_hash));
-            cache
-                .update_sync_status(|status| {
-                    status.update_batch(
-                        block_number,
-                        &hash_hex,
-                        batch_stats.sync_totals.0,
-                        batch_stats.sync_totals.1,
-                        batch_stats.sync_totals.2,
-                        batch_new_addresses,
-                        ema_rate_opt,
-                    );
-                })
+        let committed_proposal_ids = collect_committed_proposal_ids(&all_tx_data);
+        if !committed_proposal_ids.is_empty() {
+            self.cache_invalidator
+                .remove_committed_proposals(&committed_proposal_ids)
                 .await;
         }
-    }
+        let finalize_ms = t_finalize.elapsed().as_secs_f64() * 1000.0;
 
-    let committed_proposal_ids = collect_committed_proposal_ids(&all_tx_data);
-    if !committed_proposal_ids.is_empty() {
-        self.cache_invalidator
-            .remove_committed_proposals(&committed_proposal_ids)
-            .await;
-    }
-    let finalize_ms = t_finalize.elapsed().as_secs_f64() * 1000.0;
-
-    let batch_tx_count = all_tx_data.len();
-    let batch_cell_count: usize = all_tx_data.iter().map(|t| t.cells.len()).sum();
-    let batch_input_count: usize = all_tx_data
-        .iter()
-        .filter(|t| !t.is_cellbase)
-        .map(|t| t.inputs.len())
-        .sum();
-    info!(
-        precompute_ms = format!("{:.1}", precompute_ms),
-        prefetch_ms = format!("{:.1}", prefetch_ms),
-        write_ms = format!("{:.1}", write_ms),
-        write_commit_ms = format!("{:.1}", write_commit_ms),
-        finalize_ms = format!("{:.1}", finalize_ms),
-        txs = batch_tx_count,
-        cells = batch_cell_count,
-        inputs = batch_input_count,
-        "Batch write breakdown"
-    );
-    let thread_ms = [0.0; 10];
+        let batch_tx_count = all_tx_data.len();
+        let batch_cell_count: usize = all_tx_data.iter().map(|t| t.cells.len()).sum();
+        let batch_input_count: usize = all_tx_data
+            .iter()
+            .filter(|t| !t.is_cellbase)
+            .map(|t| t.inputs.len())
+            .sum();
+        info!(
+            precompute_ms = format!("{:.1}", precompute_ms),
+            prefetch_ms = format!("{:.1}", prefetch_ms),
+            write_ms = format!("{:.1}", write_ms),
+            write_commit_ms = format!("{:.1}", write_commit_ms),
+            finalize_ms = format!("{:.1}", finalize_ms),
+            txs = batch_tx_count,
+            cells = batch_cell_count,
+            inputs = batch_input_count,
+            "Batch write breakdown"
+        );
+        let thread_ms = [0.0; 10];
         Ok(BatchWriteMetrics {
             commit_ms: write_commit_ms,
             write_ms,

@@ -15,6 +15,9 @@ pub struct MaterializationReport {
     pub streamed_history_rows: usize,
     pub sealed_aggregate_rows: usize,
     pub final_snapshot_rows: usize,
+    pub history_flushes: usize,
+    pub sealed_aggregate_flushes: usize,
+    pub final_snapshot_flushes: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -57,11 +60,19 @@ impl<'a> Materializer<'a> {
     }
 
     pub(crate) fn stream_sealed_aggregate_rows(&mut self, rows: &[MaterializedRow]) -> Result<()> {
-        self.write_rows(rows, CfWritePolicy::SealedAggregate, CounterKind::SealedAggregate)
+        self.write_rows(
+            rows,
+            CfWritePolicy::SealedAggregate,
+            CounterKind::SealedAggregate,
+        )
     }
 
     pub(crate) fn materialize_final_snapshot(&mut self, rows: &[MaterializedRow]) -> Result<()> {
-        self.write_rows(rows, CfWritePolicy::FinalSnapshot, CounterKind::FinalSnapshot)
+        self.write_rows(
+            rows,
+            CfWritePolicy::FinalSnapshot,
+            CounterKind::FinalSnapshot,
+        )
     }
 
     pub(crate) fn finish(self) -> MaterializationReport {
@@ -74,11 +85,16 @@ impl<'a> Materializer<'a> {
         expected_policy: CfWritePolicy,
         counter_kind: CounterKind,
     ) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+
         let mut domain_batch = StoreBatch::new(self.domain_store);
         let mut append_batch = StoreBatch::new(self.append_only_store);
 
         for row in rows {
-            if matches!(counter_kind, CounterKind::FinalSnapshot) && is_append_only_cf_name(row.cf_name)
+            if matches!(counter_kind, CounterKind::FinalSnapshot)
+                && is_append_only_cf_name(row.cf_name)
             {
                 return Err(anyhow!(
                     "final snapshot cannot target append-only cf: {}",
@@ -111,9 +127,18 @@ impl<'a> Materializer<'a> {
         }
 
         match counter_kind {
-            CounterKind::History => self.report.streamed_history_rows += rows.len(),
-            CounterKind::SealedAggregate => self.report.sealed_aggregate_rows += rows.len(),
-            CounterKind::FinalSnapshot => self.report.final_snapshot_rows += rows.len(),
+            CounterKind::History => {
+                self.report.streamed_history_rows += rows.len();
+                self.report.history_flushes += 1;
+            }
+            CounterKind::SealedAggregate => {
+                self.report.sealed_aggregate_rows += rows.len();
+                self.report.sealed_aggregate_flushes += 1;
+            }
+            CounterKind::FinalSnapshot => {
+                self.report.final_snapshot_rows += rows.len();
+                self.report.final_snapshot_flushes += 1;
+            }
         }
 
         Ok(())
@@ -184,7 +209,9 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
             encode_live_cell_marker(42).to_vec(),
         )])?;
 
-        assert!(append_store.get_cf(append_store.cf_cells(), &outpoint_key)?.is_some());
+        assert!(append_store
+            .get_cf(append_store.cf_cells(), &outpoint_key)?
+            .is_some());
         assert!(domain_store
             .get_cf(domain_store.cf_block_headers(), &keys::encode_block_num(42))?
             .is_some());
@@ -237,7 +264,9 @@ mod tests {
             )])
             .unwrap_err();
 
-        assert!(err.to_string().contains("final snapshot cannot target append-only"));
+        assert!(err
+            .to_string()
+            .contains("final snapshot cannot target append-only"));
 
         drop(materializer);
         drop(append_store);

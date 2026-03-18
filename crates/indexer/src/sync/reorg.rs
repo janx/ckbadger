@@ -385,8 +385,7 @@ impl Indexer {
             "Processing automatic reorg"
         );
 
-        self
-            .writer
+        self.writer
             .execute_reorg(
                 self.append_only_store.as_ref(),
                 i64::try_from(fork_point)

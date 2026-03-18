@@ -930,7 +930,7 @@ mod tests {
             type_hash_type: None,
             type_args,
             type_script_hash,
-            data_hash: vec![0; 32],
+            data_hash: [0; 32],
             data_size,
             data,
         }
@@ -1922,7 +1922,7 @@ mod tests {
             type_hash_type: Some(1),
             type_args,
             type_script_hash: None,
-            data_hash: vec![0; 32],
+            data_hash: [0; 32],
             data_size: 0,
             data: vec![],
         }
@@ -2174,7 +2174,7 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             type_script_hash: None,
-            data_hash: vec![0; 32],
+            data_hash: [0; 32],
             data_size: 0,
             data: vec![],
         };

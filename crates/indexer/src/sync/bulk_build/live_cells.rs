@@ -1,9 +1,10 @@
 use anyhow::{anyhow, Result};
+use serde::Serialize;
 use std::collections::HashMap;
 
 use super::facts::{
-    CellFacts, CellProtocolFacts, CellSemanticTag, DaoCellState, FactsArena, OutPointKey,
-    ResolvedInputFacts,
+    CellFacts, CellProtocolFacts, CellSemanticTag, DaoCellState, DaoCompensationArs, FactsArena,
+    OutPointKey, ResolvedInputFacts,
 };
 use super::sequencer::BulkSequencer;
 use crate::sync::types::InternId;
@@ -20,6 +21,10 @@ impl LiveCellOwner {
 
     pub(crate) fn live_slots(&self) -> impl Iterator<Item = &LiveCellSlot> {
         self.live.values()
+    }
+
+    pub(crate) fn estimated_bytes(&self) -> u64 {
+        super::accounting::hash_map_serialized_bytes(&self.live)
     }
 
     pub(crate) fn insert_created(&mut self, slot: LiveCellSlot) -> Result<()> {
@@ -61,10 +66,11 @@ pub(crate) struct ConsumeContext {
     pub(crate) input_index: i32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct LiveCellSlot {
     pub(crate) outpoint: OutPointKey,
     pub(crate) created_at_block: i64,
+    pub(crate) created_by_block_dao_ar: u64,
     pub(crate) capacity: i64,
     pub(crate) occupied_capacity: i64,
     pub(crate) udt_amount: Option<u128>,
@@ -78,6 +84,7 @@ pub(crate) struct LiveCellSlot {
     pub(crate) type_args_id: Option<InternId>,
     pub(crate) semantic_tag: CellSemanticTag,
     pub(crate) dao_state: Option<DaoCellState>,
+    pub(crate) dao_compensation_ars: Option<DaoCompensationArs>,
     pub(crate) protocol_facts: Option<CellProtocolFacts>,
 }
 
@@ -86,6 +93,7 @@ impl LiveCellSlot {
         Self {
             outpoint: cell.outpoint,
             created_at_block: cell.created_at_block,
+            created_by_block_dao_ar: cell.created_by_block_dao_ar,
             capacity: cell.capacity,
             occupied_capacity: cell.occupied_capacity,
             udt_amount: cell.udt_amount,
@@ -99,14 +107,21 @@ impl LiveCellSlot {
             type_args_id: cell.type_args_id,
             semantic_tag: cell.semantic_tag,
             dao_state: cell.dao_state,
+            dao_compensation_ars: None,
             protocol_facts: cell.protocol_facts.clone(),
         }
+    }
+
+    pub(crate) fn with_dao_compensation_ars(mut self, ars: Option<DaoCompensationArs>) -> Self {
+        self.dao_compensation_ars = ars;
+        self
     }
 
     fn into_resolved_input_facts(self) -> ResolvedInputFacts {
         ResolvedInputFacts {
             outpoint: self.outpoint,
             created_at_block: self.created_at_block,
+            created_by_block_dao_ar: self.created_by_block_dao_ar,
             capacity: self.capacity,
             occupied_capacity: self.occupied_capacity,
             udt_amount: self.udt_amount,
@@ -120,6 +135,7 @@ impl LiveCellSlot {
             type_args_id: self.type_args_id,
             semantic_tag: self.semantic_tag,
             dao_state: self.dao_state,
+            dao_compensation_ars: self.dao_compensation_ars,
             protocol_facts: self.protocol_facts,
         }
     }
@@ -191,6 +207,7 @@ mod tests {
         LiveCellSlot {
             outpoint: sample_outpoint(),
             created_at_block: 14_000_000,
+            created_by_block_dao_ar: 10_000_000_000,
             capacity: 100_00000000,
             occupied_capacity: 61_00000000,
             udt_amount: None,
@@ -204,6 +221,7 @@ mod tests {
             type_args_id: None,
             semantic_tag: CellSemanticTag::Plain,
             dao_state: None,
+            dao_compensation_ars: None,
             protocol_facts: None,
         }
     }

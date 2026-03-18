@@ -631,7 +631,7 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x44; 32]),
             type_script_hash: Some(vec![0x55; 32]),
-            data_hash: vec![0x66; 32],
+            data_hash: [0x66; 32],
             data_size: data.len() as i32,
             data,
         }
@@ -673,7 +673,7 @@ mod tests {
                     data_hash: if cell.data_hash.is_empty() {
                         None
                     } else {
-                        Some(cell.data_hash.clone())
+                        Some(cell.data_hash.to_vec())
                     },
                 },
                 created_at_block,

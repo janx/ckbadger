@@ -30,9 +30,9 @@ use rayon::prelude::*;
 use super::adaptive::*;
 use super::batch::*;
 use super::bulk_build::facts::{
-    BlockFacts, CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts,
-    DaoCellState, DotbitProtocolFacts, FactsArena, MnftClassProtocolFacts,
-    MnftIssuerProtocolFacts, MnftTokenProtocolFacts, OutPointKey, SporeProtocolFacts, TxFacts,
+    BlockFacts, CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts, DaoCellState,
+    DotbitProtocolFacts, FactsArena, MnftClassProtocolFacts, MnftIssuerProtocolFacts,
+    MnftTokenProtocolFacts, OutPointKey, SporeProtocolFacts, TxFacts,
 };
 use super::bulk_build::interner::IdentityInterner;
 use super::dao_helpers::*;
@@ -56,9 +56,7 @@ struct ParserPrecomputePhaseMetrics {
 
 impl ParserPrecomputePhaseMetrics {
     fn total_ms(&self) -> f64 {
-        self.build_batch_cell_infos_ms
-            + self.compute_fee_ms
-            + self.cache_balance_and_script_ms
+        self.build_batch_cell_infos_ms + self.compute_fee_ms + self.cache_balance_and_script_ms
     }
 }
 
@@ -190,9 +188,10 @@ fn parse_bulk_protocol_facts(
     output_index: i16,
 ) -> Result<Option<CellProtocolFacts>> {
     match semantic_tag {
-        CellSemanticTag::Plain | CellSemanticTag::Dao | CellSemanticTag::Sudt | CellSemanticTag::Xudt => {
-            Ok(None)
-        }
+        CellSemanticTag::Plain
+        | CellSemanticTag::Dao
+        | CellSemanticTag::Sudt
+        | CellSemanticTag::Xudt => Ok(None),
         CellSemanticTag::Spore => {
             let spore = SporeParser::parse_spore_parsed_cell(cell).ok_or_else(|| {
                 anyhow!(
@@ -257,36 +256,32 @@ fn parse_bulk_protocol_facts(
             }
 
             if let Some(class) = MnftParser::parse_class_parsed_cell(cell) {
-                return Ok(Some(CellProtocolFacts::MnftClass(
-                    MnftClassProtocolFacts {
-                        class_id: class.class_id,
-                        issuer_id: parse_fixed_protocol_id::<20>(
-                            &class.issuer_id,
-                            "mnft class issuer_id",
-                            tx_hash,
-                            output_index,
-                        )?,
-                        name: class.name,
-                        description: class.description,
-                        renderer: class.renderer,
-                        total: class.total,
-                        issued: class.issued,
-                        configure: class.configure,
-                    },
-                )));
+                return Ok(Some(CellProtocolFacts::MnftClass(MnftClassProtocolFacts {
+                    class_id: class.class_id,
+                    issuer_id: parse_fixed_protocol_id::<20>(
+                        &class.issuer_id,
+                        "mnft class issuer_id",
+                        tx_hash,
+                        output_index,
+                    )?,
+                    name: class.name,
+                    description: class.description,
+                    renderer: class.renderer,
+                    total: class.total,
+                    issued: class.issued,
+                    configure: class.configure,
+                })));
             }
 
             if let Some(token) = MnftParser::parse_token_parsed_cell(cell) {
-                return Ok(Some(CellProtocolFacts::MnftToken(
-                    MnftTokenProtocolFacts {
-                        token_id: token.token_id,
-                        class_id: token.class_id,
-                        token_index: token.token_index,
-                        characteristic: token.characteristic,
-                        configure: token.configure,
-                        state: token.state,
-                    },
-                )));
+                return Ok(Some(CellProtocolFacts::MnftToken(MnftTokenProtocolFacts {
+                    token_id: token.token_id,
+                    class_id: token.class_id,
+                    token_index: token.token_index,
+                    characteristic: token.characteristic,
+                    configure: token.configure,
+                    state: token.state,
+                })));
             }
 
             Err(anyhow!(
@@ -349,12 +344,8 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
 
     for block in blocks {
         let parsed_block = BlockParser::parse(&block.block)?;
-        let block_hash = parse_fixed_protocol_id::<32>(
-            &parsed_block.hash,
-            "block_hash",
-            &[0u8; 32],
-            -1,
-        )?;
+        let block_hash =
+            parse_fixed_protocol_id::<32>(&parsed_block.hash, "block_hash", &[0u8; 32], -1)?;
         let timestamp_ms = parsed_block.timestamp.timestamp_millis();
         let block_dao_ar =
             DaoParser::extract_ar_from_dao_field(&parsed_block.dao).ok_or_else(|| {
@@ -401,7 +392,8 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
                     parsed_tx.outputs_count
                 )
             })?;
-            let cycles = parse_bulk_tx_cycles(block, tx_position, parsed_block.number, &parsed_tx.hash)?;
+            let cycles =
+                parse_bulk_tx_cycles(block, tx_position, parsed_block.number, &parsed_tx.hash)?;
             let output_start = arena.cells.len();
             let input_outpoints = if parsed_tx.is_cellbase {
                 Vec::new()
@@ -441,6 +433,7 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
                         }),
                     ),
                     created_at_block: parsed_block.number,
+                    created_by_block_dao_ar: block_dao_ar,
                     capacity: cell.capacity,
                     lock_script_hash_id: interner.intern_bytes(cell.lock_script_hash.clone()),
                     lock_code_hash_id: interner.intern_bytes(cell.lock_code_hash.clone()),
@@ -466,11 +459,7 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
                     ),
                     data_size: cell.data_size,
                     data: cell.data.clone(),
-                    data_hash: if cell.data_hash.is_empty() {
-                        None
-                    } else {
-                        Some(cell.data_hash.clone())
-                    },
+                    data_hash: Some(cell.data_hash),
                     udt_amount: parse_parsed_cell_udt_amount(
                         cell,
                         &parsed_tx.hash,
@@ -519,7 +508,7 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
             epoch_number: parsed_block.epoch_number,
             epoch_index: parsed_block.epoch_index,
             epoch_length: parsed_block.epoch_length,
-            dao: parsed_block.dao.clone(),
+            dao: parsed_block.dao,
             transactions_count: parsed_block.transactions_count,
             tx_range: block_tx_start..arena.txs.len(),
         });
@@ -1331,11 +1320,7 @@ impl Indexer {
                                     data_size: cell.data_size,
                                     occupied_capacity,
                                     udt_amount,
-                                    data_hash: if cell.data_hash.is_empty() {
-                                        None
-                                    } else {
-                                        Some(cell.data_hash.clone())
-                                    },
+                                    data_hash: Some(cell.data_hash.to_vec()),
                                 },
                                 tx_data.block_number,
                             ),
@@ -3152,10 +3137,7 @@ mod tests {
                             ),
                         ],
                         witnesses: vec![
-                            encode_dotbit_account_cell_witness(
-                                &dotbit_account_id,
-                                "alice.bit",
-                            ),
+                            encode_dotbit_account_cell_witness(&dotbit_account_id, "alice.bit"),
                             encode_das_action_witness("transfer_account"),
                         ],
                     },
@@ -3188,7 +3170,11 @@ mod tests {
             .find(|tx| tx.hash == [0xa2; 32])
             .expect("dotbit tx");
 
-        match cluster_cell.protocol_facts.as_ref().expect("cluster protocol facts") {
+        match cluster_cell
+            .protocol_facts
+            .as_ref()
+            .expect("cluster protocol facts")
+        {
             CellProtocolFacts::Cluster(cluster) => {
                 assert_eq!(cluster.cluster_id, cluster_id);
                 assert_eq!(cluster.name.as_deref(), Some("Genesis Cluster"));
@@ -3197,7 +3183,11 @@ mod tests {
             other => panic!("expected cluster facts, got {other:?}"),
         }
 
-        match spore_cell.protocol_facts.as_ref().expect("spore protocol facts") {
+        match spore_cell
+            .protocol_facts
+            .as_ref()
+            .expect("spore protocol facts")
+        {
             CellProtocolFacts::Spore(spore) => {
                 assert_eq!(spore.spore_id, spore_id);
                 assert_eq!(spore.cluster_id, Some(cluster_id));
@@ -3208,7 +3198,11 @@ mod tests {
             other => panic!("expected spore facts, got {other:?}"),
         }
 
-        match dotbit_cell.protocol_facts.as_ref().expect("dotbit protocol facts") {
+        match dotbit_cell
+            .protocol_facts
+            .as_ref()
+            .expect("dotbit protocol facts")
+        {
             CellProtocolFacts::Dotbit(dotbit) => {
                 assert_eq!(dotbit.account_id, dotbit_account_id);
                 assert_eq!(dotbit.account.as_deref(), Some("alice.bit"));
@@ -3218,10 +3212,7 @@ mod tests {
 
         assert_eq!(dotbit_tx.block_hash, [0x66; 32]);
         assert_eq!(dotbit_tx.timestamp_ms, 1_702_874_524_552);
-        assert_eq!(
-            dotbit_tx.dotbit_action.as_deref(),
-            Some("transfer_account")
-        );
+        assert_eq!(dotbit_tx.dotbit_action.as_deref(), Some("transfer_account"));
     }
 
     fn make_dao_parsed_cell(data: Vec<u8>) -> ParsedCell {
@@ -3237,7 +3228,7 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             type_script_hash: Some(vec![0x44; 32]),
-            data_hash: vec![0x55; 32],
+            data_hash: [0x55; 32],
             data_size: i32::try_from(data.len()).expect("data size"),
             data,
         }
@@ -3287,5 +3278,4 @@ mod tests {
 
         assert!((metrics.total_ms() - 60.0).abs() < f64::EPSILON);
     }
-
 }

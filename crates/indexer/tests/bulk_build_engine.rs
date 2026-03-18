@@ -1,9 +1,9 @@
+use ckbadger_indexer::parser::spore::{CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_V2};
+use ckbadger_indexer::parser::ScriptParser;
 use ckbadger_indexer::rpc::{
     BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
     TransactionView,
 };
-use ckbadger_indexer::parser::spore::{CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_V2};
-use ckbadger_indexer::parser::ScriptParser;
 use ckbadger_indexer::sync::{
     materialize_core_owner_state_for_test, resolve_live_cell_snapshot_for_test, CellSemanticTag,
     CoreOwnerStateSnapshot,
@@ -11,8 +11,7 @@ use ckbadger_indexer::sync::{
 
 fn fixture_lock_script() -> Script {
     Script {
-        code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
-            .to_string(),
+        code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8".to_string(),
         hash_type: "type".to_string(),
         args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
     }
@@ -112,11 +111,7 @@ fn create_cluster_type_script(cluster_id: &[u8; 32]) -> Script {
     }
 }
 
-fn create_spore_data(
-    content_type: &str,
-    content: &[u8],
-    cluster_id: Option<&[u8; 32]>,
-) -> Vec<u8> {
+fn create_spore_data(content_type: &str, content: &[u8], cluster_id: Option<&[u8; 32]>) -> Vec<u8> {
     let content_type_bytes = encode_molecule_bytes(content_type.as_bytes());
     let content_bytes = encode_molecule_bytes(content);
     let cluster_id_bytes = cluster_id.map(|id| encode_molecule_bytes(id));
@@ -124,8 +119,11 @@ fn create_spore_data(
     let offset_content_type = 16u32;
     let offset_content = offset_content_type + content_type_bytes.len() as u32;
     let offset_cluster_id = offset_content + content_bytes.len() as u32;
-    let total_size =
-        offset_cluster_id + cluster_id_bytes.as_ref().map(|bytes| bytes.len()).unwrap_or(0) as u32;
+    let total_size = offset_cluster_id
+        + cluster_id_bytes
+            .as_ref()
+            .map(|bytes| bytes.len())
+            .unwrap_or(0) as u32;
 
     let mut data = Vec::new();
     data.extend_from_slice(&total_size.to_le_bytes());
@@ -185,7 +183,10 @@ fn cluster_and_spore_fixture() -> Vec<BlockResponseWithCycles> {
             },
         ],
         outputs_data: vec![
-            format!("0x{}", hex::encode(create_cluster_data("Engine Cluster", "shared owner pass"))),
+            format!(
+                "0x{}",
+                hex::encode(create_cluster_data("Engine Cluster", "shared owner pass"))
+            ),
             format!(
                 "0x{}",
                 hex::encode(create_spore_data(
@@ -243,9 +244,17 @@ fn bulk_build_core_owner_pass_materializes_multiple_reducers_from_single_resolve
             .expect("core owner snapshot");
 
     assert!(snapshot.address_balances.contains_key(lock_hash.as_slice()));
-    assert!(snapshot.script_infos.contains_key(spore_code_hash.as_slice()));
-    assert!(snapshot.object_state.spores.contains_key(cluster_id.as_slice()));
-    assert!(snapshot.object_state.spores.contains_key(spore_id.as_slice()));
+    assert!(snapshot
+        .script_infos
+        .contains_key(spore_code_hash.as_slice()));
+    assert!(snapshot
+        .object_state
+        .spores
+        .contains_key(cluster_id.as_slice()));
+    assert!(snapshot
+        .object_state
+        .spores
+        .contains_key(spore_id.as_slice()));
     assert!(snapshot.token_state.tokens.is_empty());
     assert!(snapshot.dao_state.deposits.is_empty());
 }

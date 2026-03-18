@@ -21,7 +21,7 @@ pub(crate) struct FiberOwner {
 }
 
 impl BulkReducer for FiberOwner {
-    fn apply_tx(&mut self, tx: &ResolvedTxFacts, ctx: &ReducerContext<'_>) -> Result<()> {
+    fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
         let summary = FiberTxSummary::from_tx(tx, ctx)?;
         let Some(event) = summary.classify_event() else {
             return Ok(());
@@ -77,9 +77,19 @@ impl BulkReducer for FiberOwner {
 }
 
 impl FiberOwner {
+    pub(crate) fn estimated_bytes(&self) -> u64 {
+        crate::sync::bulk_build::accounting::btree_map_serialized_bytes(&self.channels)
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.channel_by_funding_args,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.channel_by_commitment,
+            )
+    }
+
     fn handle_channel_open(
         &mut self,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
         summary: &FiberTxSummary,
     ) -> Result<()> {
         let funding_lock_args = summary
@@ -173,7 +183,7 @@ impl FiberOwner {
 
     fn handle_channel_close(
         &mut self,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
         summary: &FiberTxSummary,
     ) -> Result<()> {
         let funding_lock_args = summary
@@ -223,7 +233,11 @@ impl FiberOwner {
         Ok(())
     }
 
-    fn handle_force_close(&mut self, tx: &ResolvedTxFacts, summary: &FiberTxSummary) -> Result<()> {
+    fn handle_force_close(
+        &mut self,
+        tx: &ResolvedTxFacts<'_>,
+        summary: &FiberTxSummary,
+    ) -> Result<()> {
         let funding_lock_args = summary
             .funding_input_pubkey_hash
             .as_deref()
@@ -300,7 +314,11 @@ impl FiberOwner {
         Ok(())
     }
 
-    fn handle_settlement(&mut self, tx: &ResolvedTxFacts, summary: &FiberTxSummary) -> Result<()> {
+    fn handle_settlement(
+        &mut self,
+        tx: &ResolvedTxFacts<'_>,
+        summary: &FiberTxSummary,
+    ) -> Result<()> {
         let commitment_args = summary.commitment_input_args.as_deref().ok_or_else(|| {
             anyhow!(
                 "fiber settlement missing commitment input args in bulk reducer: block={} tx=0x{} tx_index={}",
@@ -377,13 +395,13 @@ struct FiberTxSummary {
 }
 
 impl FiberTxSummary {
-    fn from_tx(tx: &ResolvedTxFacts, ctx: &ReducerContext<'_>) -> Result<Self> {
+    fn from_tx(tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<Self> {
         let mut summary = Self::default();
 
         for input in &tx.resolved_inputs {
             summary.record_input(tx, input, ctx)?;
         }
-        for cell in &tx.cells {
+        for cell in tx.cells.iter() {
             summary.record_output(tx, cell, ctx)?;
         }
 
@@ -406,7 +424,7 @@ impl FiberTxSummary {
 
     fn record_input(
         &mut self,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
         input: &ResolvedInputFacts,
         ctx: &ReducerContext<'_>,
     ) -> Result<()> {
@@ -457,7 +475,7 @@ impl FiberTxSummary {
 
     fn record_output(
         &mut self,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
     ) -> Result<()> {

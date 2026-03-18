@@ -375,7 +375,7 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             type_script_hash: Some(vec![2; 32]),
-            data_hash: vec![0; 32],
+            data_hash: [0; 32],
             data_size: 8,
             data: vec![0; 8],
         }];
@@ -401,7 +401,7 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             type_script_hash: Some(vec![2; 32]),
-            data_hash: vec![0; 32],
+            data_hash: [0; 32],
             data_size: 8,
             data: block_num.to_le_bytes().to_vec(),
         }];

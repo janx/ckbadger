@@ -538,8 +538,8 @@ mod tests {
 
     // -- Test helpers -------------------------------------------------------
 
-    fn build_dao_field(c: u64, s: u64, u: u64) -> Vec<u8> {
-        let mut dao = vec![0u8; 32];
+    fn build_dao_field(c: u64, s: u64, u: u64) -> [u8; 32] {
+        let mut dao = [0u8; 32];
         dao[0..8].copy_from_slice(&c.to_le_bytes());
         dao[16..24].copy_from_slice(&s.to_le_bytes());
         dao[24..32].copy_from_slice(&u.to_le_bytes());
@@ -547,7 +547,7 @@ mod tests {
     }
 
     fn dummy_parsed_block(
-        dao: Vec<u8>,
+        dao: [u8; 32],
         epoch_number: i64,
         epoch_length: i32,
     ) -> crate::parser::block::ParsedBlock {
@@ -586,7 +586,7 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             type_script_hash: None,
-            data_hash: vec![],
+            data_hash: [0u8; 32],
             data_size: 8,
             data: if is_deposit {
                 vec![0u8; 8]
@@ -959,7 +959,7 @@ mod tests {
         let mut stats = BatchStats::default();
         let mut prev = Some((30_000_000_000_000_i128, 10_000_i128));
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let block = dummy_parsed_block(vec![0u8; 8], 0, 1000);
+        let block = dummy_parsed_block([0u8; 32], 0, 1000);
 
         let err =
             accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev).unwrap_err();

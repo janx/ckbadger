@@ -28,6 +28,13 @@ impl ScriptOwner {
         &self.infos
     }
 
+    pub(crate) fn estimated_bytes(&self) -> u64 {
+        crate::sync::bulk_build::accounting::hash_map_bytes(&self.infos, |code_hash, info| {
+            crate::sync::bulk_build::accounting::bytes_vec_bytes(code_hash)
+                + crate::sync::bulk_build::accounting::serialized_bytes(info)
+        }) + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.daily_deltas)
+    }
+
     fn record_daily_delta(
         &mut self,
         code_hash: &[u8],
@@ -35,7 +42,7 @@ impl ScriptOwner {
         date_yyyymmdd: u32,
         live_capacity_delta: i128,
         live_used_delta: i128,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
     ) -> Result<()> {
         if live_capacity_delta == 0 && live_used_delta == 0 {
             return Ok(());
@@ -66,13 +73,13 @@ impl ScriptOwner {
 }
 
 impl BulkReducer for ScriptOwner {
-    fn apply_tx(&mut self, tx: &ResolvedTxFacts, ctx: &ReducerContext<'_>) -> Result<()> {
+    fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
         let mut deltas: HashMap<Vec<u8>, ScriptDelta> = HashMap::new();
 
         for input in &tx.resolved_inputs {
             apply_input_deltas(input, ctx, &mut deltas, tx)?;
         }
-        for cell in &tx.cells {
+        for cell in tx.cells.iter() {
             apply_output_deltas(cell, ctx, &mut deltas, tx)?;
         }
 
@@ -220,7 +227,7 @@ fn apply_input_deltas(
     input: &ResolvedInputFacts,
     ctx: &ReducerContext<'_>,
     deltas: &mut HashMap<Vec<u8>, ScriptDelta>,
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
 ) -> Result<()> {
     let lock_code_hash = input.lock_code_hash_id;
     let lock_delta = deltas
@@ -258,7 +265,7 @@ fn apply_output_deltas(
     cell: &CellFacts,
     ctx: &ReducerContext<'_>,
     deltas: &mut HashMap<Vec<u8>, ScriptDelta>,
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
 ) -> Result<()> {
     let lock_delta = deltas
         .entry(ctx.resolve_identity(cell.lock_code_hash_id).to_vec())
@@ -307,7 +314,7 @@ fn apply_lock_delta(
     info: &mut ScriptInfo,
     code_hash: &[u8],
     delta: &ScriptDelta,
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
 ) -> Result<()> {
     info.lock_cells_count = checked_next_i64(
         code_hash,
@@ -382,7 +389,7 @@ fn apply_type_delta(
     info: &mut ScriptInfo,
     code_hash: &[u8],
     delta: &ScriptDelta,
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
 ) -> Result<()> {
     info.type_cells_count = checked_next_i64(
         code_hash,
@@ -457,7 +464,7 @@ fn set_or_confirm_hash_type(
     delta: &mut ScriptDelta,
     hash_type: i16,
     script_kind: &str,
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
     code_hash_id: crate::sync::types::InternId,
 ) -> Result<()> {
     let next_hash_type = u8::try_from(hash_type).map_err(|_| {
@@ -498,7 +505,7 @@ fn checked_next_i64(
     metric: &str,
     current: i64,
     delta: i64,
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
 ) -> Result<i64> {
     let next = current.checked_add(delta).ok_or_else(|| {
         anyhow!(
@@ -536,7 +543,7 @@ fn checked_next_i128(
     metric: &str,
     current: i128,
     delta: i128,
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
 ) -> Result<i128> {
     let next = current.checked_add(delta).ok_or_else(|| {
         anyhow!(
@@ -574,7 +581,7 @@ fn checked_signed_i128(
     metric: &str,
     current: i128,
     delta: i128,
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
 ) -> Result<i128> {
     current.checked_add(delta).ok_or_else(|| {
         anyhow!(
@@ -677,6 +684,7 @@ mod tests {
                 CellFacts {
                     outpoint: OutPointKey::new([0x31; 32], 0),
                     created_at_block: 100,
+                    created_by_block_dao_ar: 1,
                     capacity: 100_00000000,
                     lock_script_hash_id: InternId::new(0),
                     lock_code_hash_id,
@@ -698,6 +706,7 @@ mod tests {
                 CellFacts {
                     outpoint: OutPointKey::new([0x31; 32], 1),
                     created_at_block: 100,
+                    created_by_block_dao_ar: 1,
                     capacity: 200_00000000,
                     lock_script_hash_id: InternId::new(3),
                     lock_code_hash_id,
@@ -716,7 +725,8 @@ mod tests {
                     dao_state: None,
                     protocol_facts: None,
                 },
-            ],
+            ]
+            .into(),
         };
         let tx1 = ResolvedTxFacts {
             tx_hash: [0x32; 32],
@@ -729,6 +739,7 @@ mod tests {
             resolved_inputs: vec![ResolvedInputFacts {
                 outpoint: OutPointKey::new([0x31; 32], 1),
                 created_at_block: 100,
+                created_by_block_dao_ar: 1,
                 capacity: 200_00000000,
                 occupied_capacity: 142_00000000,
                 udt_amount: Some(42),
@@ -742,11 +753,13 @@ mod tests {
                 type_args_id: Some(InternId::new(7)),
                 semantic_tag: crate::sync::CellSemanticTag::Sudt,
                 dao_state: None,
+                dao_compensation_ars: None,
                 protocol_facts: None,
             }],
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x32; 32], 0),
                 created_at_block: 100,
+                created_by_block_dao_ar: 1,
                 capacity: 80_00000000,
                 lock_script_hash_id: InternId::new(8),
                 lock_code_hash_id,
@@ -764,7 +777,8 @@ mod tests {
                 semantic_tag: crate::sync::CellSemanticTag::Plain,
                 dao_state: None,
                 protocol_facts: None,
-            }],
+            }]
+            .into(),
         };
 
         let mut owner = ScriptOwner::default();

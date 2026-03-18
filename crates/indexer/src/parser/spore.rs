@@ -626,7 +626,10 @@ mod tests {
         assert_eq!(parsed.content_type, "image/png");
         assert_eq!(parsed.content, b"fake png data");
         assert!(parsed.cluster_id.is_none());
-        assert_eq!(parsed.type_script_hash, parsed_cell.type_script_hash.unwrap());
+        assert_eq!(
+            parsed.type_script_hash,
+            parsed_cell.type_script_hash.unwrap()
+        );
     }
 
     #[test]
@@ -665,7 +668,10 @@ mod tests {
         assert_eq!(parsed.cluster_id.len(), 32);
         assert_eq!(parsed.name, Some("My Collection".to_string()));
         assert_eq!(parsed.description, Some("A collection of art".to_string()));
-        assert_eq!(parsed.type_script_hash, parsed_cell.type_script_hash.unwrap());
+        assert_eq!(
+            parsed.type_script_hash,
+            parsed_cell.type_script_hash.unwrap()
+        );
     }
 
     #[test]

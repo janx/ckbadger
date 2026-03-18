@@ -91,9 +91,13 @@ impl ObjectCollectionActivityAccumulator {
     /// Returns inserted `(collection_id, block_number, tx_idx, block_hash, tx_hash)` rows so callers
     /// can update block-scoped reorg indexes in the domain store.
     pub fn flush(self, batch: &mut StoreBatch) -> Vec<(Vec<u8>, i64, i32, Vec<u8>, Vec<u8>)> {
-        Self::flush_inner(self.into_resolved_entries(), batch, |b, cid, block_num, tx_idx, entry| {
-            b.put_object_collection_activity(cid, block_num, tx_idx, entry);
-        })
+        Self::flush_inner(
+            self.into_resolved_entries(),
+            batch,
+            |b, cid, block_num, tx_idx, entry| {
+                b.put_object_collection_activity(cid, block_num, tx_idx, entry);
+            },
+        )
     }
 
     /// Resolve raw actions into Mint/Transfer/Burn and write to the batch
@@ -105,9 +109,13 @@ impl ObjectCollectionActivityAccumulator {
         self,
         batch: &mut StoreBatch,
     ) -> Vec<(Vec<u8>, i64, i32, Vec<u8>, Vec<u8>)> {
-        Self::flush_inner(self.into_resolved_entries(), batch, |b, cid, block_num, tx_idx, entry| {
-            b.put_identity_collection_activity(cid, block_num, tx_idx, entry);
-        })
+        Self::flush_inner(
+            self.into_resolved_entries(),
+            batch,
+            |b, cid, block_num, tx_idx, entry| {
+                b.put_identity_collection_activity(cid, block_num, tx_idx, entry);
+            },
+        )
     }
 
     pub fn into_resolved_entries(self) -> Vec<ResolvedCollectionActivityEntry> {

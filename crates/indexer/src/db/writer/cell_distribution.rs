@@ -276,7 +276,10 @@ impl CellDistributionTracker {
             )
         })?;
         let cohort_month = cohort_date.format("%Y-%m").to_string();
-        let entry = self.cohort_accum.entry(cohort_month.clone()).or_insert((0, 0));
+        let entry = self
+            .cohort_accum
+            .entry(cohort_month.clone())
+            .or_insert((0, 0));
         entry.0 = entry.0.checked_add(used_capacity_delta).ok_or_else(|| {
             anyhow::anyhow!(
                 "address cohort used_capacity overflow: cohort_month={}, current={}, delta={}",

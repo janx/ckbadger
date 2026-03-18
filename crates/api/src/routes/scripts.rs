@@ -1662,8 +1662,9 @@ async fn get_script_capacity_history_chart_by_code_hash(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_script_chart_delta, checked_capacity_totals, latest_complete_script_chart_date_from_tip,
-        resolve_code_cell, resolve_script_capacity_chart_bounds, CodeCellQuery, ListParams,
+        apply_script_chart_delta, checked_capacity_totals,
+        latest_complete_script_chart_date_from_tip, resolve_code_cell,
+        resolve_script_capacity_chart_bounds, CodeCellQuery, ListParams,
     };
     use axum::extract::Query;
     use axum::http::StatusCode;
@@ -1755,8 +1756,9 @@ mod tests {
 
     #[test]
     fn list_params_deserializes_unused_query_schema_fields() {
-        let uri: Uri =
-            "/scripts?decoder_type=typeid&cursor=cursor-token&limit=25".parse().unwrap();
+        let uri: Uri = "/scripts?decoder_type=typeid&cursor=cursor-token&limit=25"
+            .parse()
+            .unwrap();
         let Query(params) = Query::<ListParams>::try_from_uri(&uri).unwrap();
 
         assert_eq!(params.cursor.as_deref(), Some("cursor-token"));

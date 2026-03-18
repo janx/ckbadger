@@ -16,7 +16,7 @@ pub struct ParsedBlock {
     pub epoch_number: i64,
     pub epoch_index: i32,
     pub epoch_length: i32,
-    pub dao: Vec<u8>,
+    pub dao: [u8; 32],
     pub nonce: Vec<u8>,
     pub extra_hash: Vec<u8>,
     pub proposals_hash: Vec<u8>,
@@ -62,7 +62,7 @@ impl BlockParser {
             epoch_number,
             epoch_index,
             epoch_length,
-            dao: parse_hex_to_bytes(&header.dao),
+            dao: Self::parse_fixed_hex_32(&header.dao, "header.dao")?,
             nonce: Self::parse_nonce(&header.nonce)?,
             extra_hash: parse_hex_to_bytes(&header.extra_hash),
             proposals_hash: parse_hex_to_bytes(&header.proposals_hash),
@@ -87,7 +87,7 @@ impl BlockParser {
             epoch_number,
             epoch_index,
             epoch_length,
-            dao: parse_hex_to_bytes(&header.dao),
+            dao: Self::parse_fixed_hex_32(&header.dao, "header.dao")?,
             nonce: Self::parse_nonce(&header.nonce)?,
             extra_hash: parse_hex_to_bytes(&header.extra_hash),
             proposals_hash: parse_hex_to_bytes(&header.proposals_hash),
@@ -102,6 +102,17 @@ impl BlockParser {
         let index = (epoch >> 24) & 0xFFFF;
         let number = epoch & 0xFFFFFF;
         Ok((number as i64, index as i32, length as i32))
+    }
+
+    fn parse_fixed_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
+        let bytes = parse_hex_to_bytes(value);
+        bytes.try_into().map_err(|actual: Vec<u8>| {
+            anyhow::anyhow!(
+                "invalid {} length: expected 32 bytes, got {}",
+                field,
+                actual.len()
+            )
+        })
     }
 
     pub fn parse_timestamp(timestamp_hex: &str) -> Result<DateTime<Utc>> {

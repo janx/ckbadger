@@ -29,6 +29,23 @@ impl IdentityInterner {
             )
         })
     }
+
+    pub(crate) fn estimated_bytes(&self) -> u64 {
+        let by_value_bytes = self.by_value.capacity() as u64
+            * std::mem::size_of::<(Vec<u8>, InternId)>() as u64
+            + self
+                .by_value
+                .keys()
+                .map(|value| value.capacity() as u64)
+                .sum::<u64>();
+        let values_bytes = self.values.capacity() as u64 * std::mem::size_of::<Vec<u8>>() as u64
+            + self
+                .values
+                .iter()
+                .map(|value| value.capacity() as u64)
+                .sum::<u64>();
+        std::mem::size_of::<Self>() as u64 + by_value_bytes + values_bytes
+    }
 }
 
 #[cfg(test)]

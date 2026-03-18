@@ -7,8 +7,8 @@
 
 use ckbadger_indexer::db::BatchWriter;
 use ckbadger_indexer::parser::cell::ParsedCell;
-use ckbadger_indexer::parser::CellParser;
 use ckbadger_indexer::parser::udt::SUDT_CODE_HASH;
+use ckbadger_indexer::parser::CellParser;
 use ckbadger_indexer::rpc::{
     BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
     TransactionView,
@@ -32,7 +32,7 @@ fn make_cell(capacity: i64, data_size: i32, lock_hash_byte: u8) -> ParsedCell {
         type_hash_type: Some(1),
         type_args: Some(vec![0x55u8; 20]),
         type_script_hash: Some(vec![0x66u8; 32]),
-        data_hash: vec![0x77u8; 32],
+        data_hash: [0x77u8; 32],
         data_size,
         data: vec![0u8; data_size as usize],
     }
@@ -59,8 +59,7 @@ fn occupied_capacity_from_cell(cell: &ParsedCell) -> i64 {
 
 fn facts_fixture_lock_script() -> Script {
     Script {
-        code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
-            .to_string(),
+        code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8".to_string(),
         hash_type: "type".to_string(),
         args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
     }
@@ -166,7 +165,7 @@ fn precomputed_infos_for_insert(
                         data_hash: if cell.data_hash.is_empty() {
                             None
                         } else {
-                            Some(cell.data_hash.clone())
+                            Some(cell.data_hash.to_vec())
                         },
                     },
                     *created_at_block,
@@ -277,7 +276,7 @@ fn test_full_cells_info_returns_lock_and_type() {
         type_hash_type: Some(1),
         type_args: Some(vec![0x55u8; 20]),
         type_script_hash: Some(vec![0x66u8; 32]),
-        data_hash: vec![0x77u8; 32],
+        data_hash: [0x77u8; 32],
         data_size: 100,
         data: vec![0u8; 100],
     };
@@ -311,7 +310,7 @@ fn test_full_cells_info_no_type_script() {
         type_hash_type: None,
         type_args: None,
         type_script_hash: None,
-        data_hash: vec![0x77u8; 32],
+        data_hash: [0x77u8; 32],
         data_size: 100,
         data: vec![0u8; 100],
     };

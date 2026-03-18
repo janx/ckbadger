@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 // ── UndoSeqScope constants & enum ──────────────────────────────────────
 
 pub(crate) const UNDO_SEQ_SCOPE_SHIFT: u32 = 48;
 pub(crate) const UNDO_SEQ_LOCAL_MAX: u64 = (1u64 << UNDO_SEQ_SCOPE_SHIFT) - 1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub(crate) struct InternId(u32);
 
 impl InternId {

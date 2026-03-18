@@ -60,9 +60,9 @@ pub fn bytes_to_hex(bytes: &[u8]) -> String {
 pub use batch::StoreBatch;
 pub use reorg_ops::RollbackResult;
 pub use store::{
-    cf_write_policy, known_append_only_secondary_store_paths, known_domain_secondary_store_paths,
-    is_append_only_cf_name, secondary_store_path, CfWritePolicy, CkbadgerStore, MemoryProfile,
-    SecondaryStoreOwner, StoreRuntimeConfig, ALL_CFS,
+    cf_write_policy, is_append_only_cf_name, known_append_only_secondary_store_paths,
+    known_domain_secondary_store_paths, secondary_store_path, CfWritePolicy, CkbadgerStore,
+    MemoryProfile, SecondaryStoreOwner, StoreRuntimeConfig, ALL_CFS,
 };
 pub use store::{
     APPEND_CFS, CF_ACTIVITIES, CF_ADDR_BALANCE, CF_ADDR_FIBER_CHANNELS, CF_ADDR_TOKENS_BY_BALANCE,

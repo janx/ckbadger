@@ -57,7 +57,7 @@ pub(crate) struct ObjectOwner {
 }
 
 impl BulkReducer for ObjectOwner {
-    fn apply_tx(&mut self, tx: &ResolvedTxFacts, ctx: &ReducerContext<'_>) -> Result<()> {
+    fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
         let mnft_tokens_consumed_in_tx = tx
             .resolved_inputs
             .iter()
@@ -82,7 +82,7 @@ impl BulkReducer for ObjectOwner {
             self.apply_input(input)?;
         }
 
-        for cell in &tx.cells {
+        for cell in tx.cells.iter() {
             self.apply_output(
                 cell,
                 ctx,
@@ -246,6 +246,69 @@ impl BulkReducer for ObjectOwner {
 }
 
 impl ObjectOwner {
+    pub(crate) fn estimated_bytes(&self) -> u64 {
+        crate::sync::bulk_build::accounting::btree_map_serialized_bytes(&self.spore_entries)
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(&self.mnft_entries)
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(&self.identities)
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(&self.cluster_aggs)
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.object_collection_aggs,
+            )
+            + self
+                .did_agg
+                .as_ref()
+                .map_or(0, crate::sync::bulk_build::accounting::serialized_bytes)
+            + self
+                .dotbit_agg
+                .as_ref()
+                .map_or(0, crate::sync::bulk_build::accounting::serialized_bytes)
+            + crate::sync::bulk_build::accounting::btree_set_serialized_bytes(
+                &self.identity_by_collection,
+            )
+            + crate::sync::bulk_build::accounting::btree_set_serialized_bytes(
+                &self.spore_by_cluster,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.stats_spore_rows,
+            )
+            + crate::sync::bulk_build::accounting::btree_set_serialized_bytes(
+                &self.mnft_by_collection,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.mnft_owner_counts,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.mnft_class_outpoints,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.mnft_token_outpoints,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.mnft_type_indexes,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.mnft_hourly_transfers,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.did_owner_counts,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.dotbit_owner_counts,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.dotbit_outpoints,
+            )
+            + crate::sync::bulk_build::accounting::btree_set_serialized_bytes(
+                &self.dotbit_outpoints_by_account,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.dotbit_hourly_transfers,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.cluster_owner_counts,
+            )
+    }
+
     pub(crate) fn apply_identity_activity_count_deltas(
         &mut self,
         deltas: &HashMap<Vec<u8>, i64>,
@@ -316,7 +379,7 @@ impl ObjectOwner {
         &mut self,
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
         mnft_tokens_consumed_in_tx: &BTreeSet<Vec<u8>>,
         dotbit_accounts_consumed_in_tx: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) -> Result<()> {
@@ -356,7 +419,7 @@ impl ObjectOwner {
         cluster: &crate::sync::bulk_build::facts::ClusterProtocolFacts,
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
     ) -> Result<()> {
         let cluster_id = cluster.cluster_id.to_vec();
         let existing = self.spore_entries.get(&cluster_id);
@@ -391,7 +454,7 @@ impl ObjectOwner {
         did: &crate::sync::bulk_build::facts::SporeProtocolFacts,
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
     ) -> Result<()> {
         let did_id = did.spore_id.to_vec();
         let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
@@ -479,7 +542,7 @@ impl ObjectOwner {
         spore: &crate::sync::bulk_build::facts::SporeProtocolFacts,
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
     ) -> Result<()> {
         let spore_id = spore.spore_id.to_vec();
         let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
@@ -692,7 +755,7 @@ impl ObjectOwner {
         issuer: &crate::sync::bulk_build::facts::MnftIssuerProtocolFacts,
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
     ) -> Result<()> {
         let issuer_id = issuer.issuer_id.to_vec();
         let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
@@ -741,7 +804,7 @@ impl ObjectOwner {
         class: &crate::sync::bulk_build::facts::MnftClassProtocolFacts,
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
     ) -> Result<()> {
         let class_id = class.class_id.clone();
         let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
@@ -819,7 +882,7 @@ impl ObjectOwner {
         token: &crate::sync::bulk_build::facts::MnftTokenProtocolFacts,
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
         consumed_in_same_tx: bool,
     ) -> Result<()> {
         let token_id = token.token_id.clone();
@@ -991,7 +1054,7 @@ impl ObjectOwner {
         dotbit: &crate::sync::bulk_build::facts::DotbitProtocolFacts,
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
         consumed_in_same_tx_owner: Option<&[u8]>,
     ) -> Result<()> {
         let account_id = dotbit.account_id.to_vec();
@@ -2098,6 +2161,25 @@ mod tests {
     };
     use crate::sync::types::InternId;
 
+    macro_rules! cell_facts {
+        ($($body:tt)*) => {
+            CellFacts {
+                created_by_block_dao_ar: 0,
+                $($body)*
+            }
+        };
+    }
+
+    macro_rules! resolved_input_facts {
+        ($($body:tt)*) => {
+            ResolvedInputFacts {
+                created_by_block_dao_ar: 0,
+                dao_compensation_ars: None,
+                $($body)*
+            }
+        };
+    }
+
     #[test]
     fn object_owner_materializes_spore_transfer_and_did_burn_without_db_reads() {
         let mut interner = crate::sync::bulk_build::interner::IdentityInterner::default();
@@ -2121,7 +2203,7 @@ mod tests {
             tx_index: 0,
             dotbit_action: None,
             resolved_inputs: Vec::new(),
-            cells: vec![CellFacts {
+            cells: vec![cell_facts! {
                 outpoint: OutPointKey::new([0x01; 32], 0),
                 created_at_block: 100,
                 capacity: 200_00000000,
@@ -2145,7 +2227,8 @@ mod tests {
                     name: Some("Genesis Cluster".to_string()),
                     description: Some("{\"dob\":{\"ver\":1}}".to_string()),
                 })),
-            }],
+            }]
+            .into(),
         };
 
         let tx1 = ResolvedTxFacts {
@@ -2158,7 +2241,7 @@ mod tests {
             dotbit_action: None,
             resolved_inputs: Vec::new(),
             cells: vec![
-                CellFacts {
+                cell_facts! {
                     outpoint: OutPointKey::new([0x02; 32], 0),
                     created_at_block: 100,
                     capacity: 200_00000000,
@@ -2185,7 +2268,7 @@ mod tests {
                         cluster_id: Some(cluster_id),
                     })),
                 },
-                CellFacts {
+                cell_facts! {
                     outpoint: OutPointKey::new([0x02; 32], 1),
                     created_at_block: 100,
                     capacity: 150_00000000,
@@ -2212,7 +2295,8 @@ mod tests {
                         cluster_id: None,
                     })),
                 },
-            ],
+            ]
+            .into(),
         };
 
         let tx2 = ResolvedTxFacts {
@@ -2223,7 +2307,7 @@ mod tests {
             block_dao_ar: 0,
             tx_index: 2,
             dotbit_action: None,
-            resolved_inputs: vec![ResolvedInputFacts {
+            resolved_inputs: vec![resolved_input_facts! {
                 outpoint: OutPointKey::new([0x02; 32], 0),
                 created_at_block: 100,
                 capacity: 200_00000000,
@@ -2247,7 +2331,7 @@ mod tests {
                     cluster_id: Some(cluster_id),
                 })),
             }],
-            cells: vec![CellFacts {
+            cells: vec![cell_facts! {
                 outpoint: OutPointKey::new([0x03; 32], 0),
                 created_at_block: 100,
                 capacity: 200_00000000,
@@ -2273,7 +2357,8 @@ mod tests {
                     content: b"spore-content".to_vec(),
                     cluster_id: Some(cluster_id),
                 })),
-            }],
+            }]
+            .into(),
         };
 
         let tx3 = ResolvedTxFacts {
@@ -2284,7 +2369,7 @@ mod tests {
             block_dao_ar: 0,
             tx_index: 3,
             dotbit_action: None,
-            resolved_inputs: vec![ResolvedInputFacts {
+            resolved_inputs: vec![resolved_input_facts! {
                 outpoint: OutPointKey::new([0x02; 32], 1),
                 created_at_block: 100,
                 capacity: 150_00000000,
@@ -2308,7 +2393,7 @@ mod tests {
                     cluster_id: None,
                 })),
             }],
-            cells: vec![],
+            cells: Vec::new().into(),
         };
 
         let mut owner = ObjectOwner::default();
@@ -2455,7 +2540,7 @@ mod tests {
             dotbit_action: None,
             resolved_inputs: Vec::new(),
             cells: vec![
-                CellFacts {
+                cell_facts! {
                     outpoint: OutPointKey::new([0x21; 32], 0),
                     created_at_block: 200,
                     capacity: 250_00000000,
@@ -2482,7 +2567,7 @@ mod tests {
                         set_count: 0,
                     })),
                 },
-                CellFacts {
+                cell_facts! {
                     outpoint: OutPointKey::new([0x21; 32], 1),
                     created_at_block: 200,
                     capacity: 260_00000000,
@@ -2512,7 +2597,7 @@ mod tests {
                         configure: 3,
                     })),
                 },
-                CellFacts {
+                cell_facts! {
                     outpoint: OutPointKey::new([0x21; 32], 2),
                     created_at_block: 200,
                     capacity: 270_00000000,
@@ -2540,7 +2625,8 @@ mod tests {
                         state: 0,
                     })),
                 },
-            ],
+            ]
+            .into(),
         };
 
         let tx1 = ResolvedTxFacts {
@@ -2551,7 +2637,7 @@ mod tests {
             block_dao_ar: 0,
             tx_index: 0,
             dotbit_action: None,
-            resolved_inputs: vec![ResolvedInputFacts {
+            resolved_inputs: vec![resolved_input_facts! {
                 outpoint: OutPointKey::new([0x21; 32], 2),
                 created_at_block: 200,
                 capacity: 270_00000000,
@@ -2576,7 +2662,7 @@ mod tests {
                     state: 0,
                 })),
             }],
-            cells: vec![CellFacts {
+            cells: vec![cell_facts! {
                 outpoint: OutPointKey::new([0x22; 32], 0),
                 created_at_block: 201,
                 capacity: 270_00000000,
@@ -2603,7 +2689,8 @@ mod tests {
                     configure: 1,
                     state: 0,
                 })),
-            }],
+            }]
+            .into(),
         };
 
         let tx2 = ResolvedTxFacts {
@@ -2614,7 +2701,7 @@ mod tests {
             block_dao_ar: 0,
             tx_index: 0,
             dotbit_action: None,
-            resolved_inputs: vec![ResolvedInputFacts {
+            resolved_inputs: vec![resolved_input_facts! {
                 outpoint: OutPointKey::new([0x22; 32], 0),
                 created_at_block: 201,
                 capacity: 270_00000000,
@@ -2639,7 +2726,7 @@ mod tests {
                     state: 0,
                 })),
             }],
-            cells: vec![],
+            cells: Vec::new().into(),
         };
 
         let mut owner = ObjectOwner::default();
@@ -2777,7 +2864,7 @@ mod tests {
             tx_index: 0,
             dotbit_action: Some("confirm_proposal".to_string()),
             resolved_inputs: Vec::new(),
-            cells: vec![CellFacts {
+            cells: vec![cell_facts! {
                 outpoint: OutPointKey::new([0x31; 32], 0),
                 created_at_block: 300,
                 capacity: 200_00000000,
@@ -2804,7 +2891,8 @@ mod tests {
                     registered_at: Some(1_700_000_000),
                     status: Some(0),
                 })),
-            }],
+            }]
+            .into(),
         };
 
         let tx1 = ResolvedTxFacts {
@@ -2815,7 +2903,7 @@ mod tests {
             block_dao_ar: 0,
             tx_index: 0,
             dotbit_action: Some("transfer_account".to_string()),
-            resolved_inputs: vec![ResolvedInputFacts {
+            resolved_inputs: vec![resolved_input_facts! {
                 outpoint: OutPointKey::new([0x31; 32], 0),
                 created_at_block: 300,
                 capacity: 200_00000000,
@@ -2840,7 +2928,7 @@ mod tests {
                     status: Some(0),
                 })),
             }],
-            cells: vec![CellFacts {
+            cells: vec![cell_facts! {
                 outpoint: OutPointKey::new([0x32; 32], 0),
                 created_at_block: 301,
                 capacity: 200_00000000,
@@ -2867,7 +2955,8 @@ mod tests {
                     registered_at: Some(1_700_000_000),
                     status: Some(0),
                 })),
-            }],
+            }]
+            .into(),
         };
 
         let tx2 = ResolvedTxFacts {
@@ -2878,7 +2967,7 @@ mod tests {
             block_dao_ar: 0,
             tx_index: 0,
             dotbit_action: Some("recycle_expired_account".to_string()),
-            resolved_inputs: vec![ResolvedInputFacts {
+            resolved_inputs: vec![resolved_input_facts! {
                 outpoint: OutPointKey::new([0x32; 32], 0),
                 created_at_block: 301,
                 capacity: 200_00000000,
@@ -2903,7 +2992,7 @@ mod tests {
                     status: Some(0),
                 })),
             }],
-            cells: vec![],
+            cells: Vec::new().into(),
         };
 
         let mut owner = ObjectOwner::default();

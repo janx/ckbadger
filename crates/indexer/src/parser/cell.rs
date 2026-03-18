@@ -15,7 +15,7 @@ pub struct ParsedCell {
     pub type_hash_type: Option<i16>,
     pub type_args: Option<Vec<u8>>,
     pub type_script_hash: Option<Vec<u8>>,
-    pub data_hash: Vec<u8>,
+    pub data_hash: [u8; 32],
     pub data_size: i32,
     pub data: Vec<u8>,
 }
@@ -161,8 +161,7 @@ mod tests {
         let data_hex = "0xdeadbeef";
         let parsed = CellParser::parse_output(&output, data_hex).unwrap();
 
-        assert_eq!(parsed.data_hash.len(), 32);
-        assert_ne!(parsed.data_hash, vec![0u8; 32]);
+        assert_ne!(parsed.data_hash, [0u8; 32]);
     }
 
     #[test]

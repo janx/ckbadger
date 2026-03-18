@@ -2839,7 +2839,10 @@ mod tests {
 
     #[test]
     fn test_cf_write_policy_marks_cell_by_data_hash_as_append_only_history() {
-        assert_eq!(cf_write_policy(CF_CELL_BY_DATA_HASH), CfWritePolicy::AppendOnly);
+        assert_eq!(
+            cf_write_policy(CF_CELL_BY_DATA_HASH),
+            CfWritePolicy::AppendOnly
+        );
     }
 
     #[test]

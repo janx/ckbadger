@@ -739,10 +739,7 @@ mod tests {
             Some("gold")
         );
         assert_eq!(
-            overrides
-                ._protocols
-                .get("rgbpp")
-                .map(|v| v.as_slice()),
+            overrides._protocols.get("rgbpp").map(|v| v.as_slice()),
             Some(&["xudt".to_string()][..])
         );
     }

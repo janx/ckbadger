@@ -13,7 +13,7 @@ pub(crate) mod script;
 pub(crate) mod token;
 
 pub(crate) trait BulkReducer {
-    fn apply_tx(&mut self, tx: &ResolvedTxFacts, ctx: &ReducerContext<'_>) -> Result<()>;
+    fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()>;
 
     fn flush_sealed(&mut self, _materializer: &mut Materializer<'_>) -> Result<()> {
         Ok(())

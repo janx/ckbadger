@@ -214,10 +214,7 @@ impl<'a> StoreBatch<'a> {
         value: &[u8],
     ) -> anyhow::Result<()> {
         if !self.store.has_cf(cf_name) {
-            anyhow::bail!(
-                "CF '{}' is not available in this store batch",
-                cf_name
-            );
+            anyhow::bail!("CF '{}' is not available in this store batch", cf_name);
         }
         let cf = self.store.cf(cf_name);
         self.put_cf(cf, key, value);

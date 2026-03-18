@@ -55,6 +55,7 @@ pub struct BatchSample {
     pub mem_available_mb: u64,
     pub disk_read_mb: f64,
     pub disk_write_mb: f64,
+    pub owner_memory_bytes: HashMap<String, u64>,
 }
 
 impl BatchSample {
@@ -102,6 +103,7 @@ impl BatchSample {
             mem_available_mb,
             disk_read_mb,
             disk_write_mb,
+            owner_memory_bytes: HashMap::new(),
         }
     }
 }
@@ -158,6 +160,13 @@ pub struct BulkSyncPerfMetrics {
     pub max_load_avg_1m: f64,
     pub min_mem_available_mb: u64,
     pub avg_disk_write_mb_per_batch: f64,
+    pub peak_owner_memory_bytes: HashMap<String, u64>,
+    pub streamed_history_rows: u64,
+    pub sealed_aggregate_rows: u64,
+    pub final_snapshot_rows: u64,
+    pub history_flushes: u64,
+    pub sealed_aggregate_flushes: u64,
+    pub final_snapshot_flushes: u64,
 }
 
 pub struct BulkSyncPerfRun {
@@ -171,6 +180,7 @@ pub struct BulkSyncPerfRun {
     heartbeat_samples: Vec<HeartbeatSample>,
     environment: Option<crate::sys_info::EnvironmentSnapshot>,
     rocksdb_config: Option<RocksDbConfig>,
+    materialization_report: Option<crate::sync::MaterializationReport>,
 }
 
 impl BulkSyncPerfRun {
@@ -198,6 +208,7 @@ impl BulkSyncPerfRun {
             heartbeat_samples: Vec::new(),
             environment: None,
             rocksdb_config: None,
+            materialization_report: None,
         };
         run.write_metadata()?;
         run.write_status(None)?;
@@ -235,6 +246,15 @@ impl BulkSyncPerfRun {
     pub fn record_heartbeat_sample(&mut self, sample: HeartbeatSample) -> Result<()> {
         self.append_sample("heartbeat", &sample)?;
         self.heartbeat_samples.push(sample);
+        self.write_metrics_file(&self.build_metrics(STATUS_RUNNING, None))?;
+        Ok(())
+    }
+
+    pub fn set_materialization_report(
+        &mut self,
+        report: crate::sync::MaterializationReport,
+    ) -> Result<()> {
+        self.materialization_report = Some(report);
         self.write_metrics_file(&self.build_metrics(STATUS_RUNNING, None))?;
         Ok(())
     }
@@ -358,6 +378,14 @@ impl BulkSyncPerfRun {
             .unwrap_or(0);
         let disk_writes: Vec<f64> = self.batch_samples.iter().map(|s| s.disk_write_mb).collect();
         let avg_disk_write_mb_per_batch = average(&disk_writes);
+        let mut peak_owner_memory_bytes = HashMap::new();
+        for sample in &self.batch_samples {
+            for (owner, bytes) in &sample.owner_memory_bytes {
+                let current_peak = peak_owner_memory_bytes.entry(owner.clone()).or_insert(0);
+                *current_peak = (*current_peak).max(*bytes);
+            }
+        }
+        let materialization_report = self.materialization_report.clone().unwrap_or_default();
 
         BulkSyncPerfMetrics {
             run_id: self.run_id.clone(),
@@ -383,6 +411,13 @@ impl BulkSyncPerfRun {
             max_load_avg_1m,
             min_mem_available_mb,
             avg_disk_write_mb_per_batch,
+            peak_owner_memory_bytes,
+            streamed_history_rows: materialization_report.streamed_history_rows as u64,
+            sealed_aggregate_rows: materialization_report.sealed_aggregate_rows as u64,
+            final_snapshot_rows: materialization_report.final_snapshot_rows as u64,
+            history_flushes: materialization_report.history_flushes as u64,
+            sealed_aggregate_flushes: materialization_report.sealed_aggregate_flushes as u64,
+            final_snapshot_flushes: materialization_report.final_snapshot_flushes as u64,
         }
     }
 
@@ -433,7 +468,7 @@ impl BulkSyncPerfRun {
             content.push_str(&format!("finished_at_utc={}\n", finished_at_utc));
         }
         content.push_str(&format!(
-            "wall_clock_seconds={}\nbatches={}\nblocks={}\nblocks_per_sec_wall={}\nblocks_per_batch={}\navg_batch_seconds={}\np95_batch_seconds={}\np99_batch_seconds={}\ntotal_commit_seconds={}\navg_commit_ms={}\np95_commit_ms={}\np99_commit_ms={}\nmax_compaction_pending_mb={}\nmax_l0_files={}\nmax_imm_memtables={}\navg_load_avg_1m={}\nmax_load_avg_1m={}\nmin_mem_available_mb={}\navg_disk_write_mb_per_batch={}\n",
+            "wall_clock_seconds={}\nbatches={}\nblocks={}\nblocks_per_sec_wall={}\nblocks_per_batch={}\navg_batch_seconds={}\np95_batch_seconds={}\np99_batch_seconds={}\ntotal_commit_seconds={}\navg_commit_ms={}\np95_commit_ms={}\np99_commit_ms={}\nmax_compaction_pending_mb={}\nmax_l0_files={}\nmax_imm_memtables={}\navg_load_avg_1m={}\nmax_load_avg_1m={}\nmin_mem_available_mb={}\navg_disk_write_mb_per_batch={}\nstreamed_history_rows={}\nsealed_aggregate_rows={}\nfinal_snapshot_rows={}\nhistory_flushes={}\nsealed_aggregate_flushes={}\nfinal_snapshot_flushes={}\n",
             format_float(metrics.wall_clock_seconds),
             metrics.batches,
             metrics.blocks,
@@ -453,7 +488,16 @@ impl BulkSyncPerfRun {
             format_float(metrics.max_load_avg_1m),
             metrics.min_mem_available_mb,
             format_float(metrics.avg_disk_write_mb_per_batch),
+            metrics.streamed_history_rows,
+            metrics.sealed_aggregate_rows,
+            metrics.final_snapshot_rows,
+            metrics.history_flushes,
+            metrics.sealed_aggregate_flushes,
+            metrics.final_snapshot_flushes,
         ));
+        for (owner, bytes) in owner_memory_entries(&metrics.peak_owner_memory_bytes) {
+            content.push_str(&format!("peak_owner_memory_bytes_{}={}\n", owner, bytes));
+        }
         fs::write(self.run_dir.join("metrics.env"), content)?;
         Ok(())
     }
@@ -544,7 +588,41 @@ impl BulkSyncPerfRun {
             "| avg_disk_write_mb_per_batch | {} |\n",
             format_float(metrics.avg_disk_write_mb_per_batch)
         ));
+        content.push_str(&format!(
+            "| streamed_history_rows | {} |\n",
+            metrics.streamed_history_rows
+        ));
+        content.push_str(&format!(
+            "| sealed_aggregate_rows | {} |\n",
+            metrics.sealed_aggregate_rows
+        ));
+        content.push_str(&format!(
+            "| final_snapshot_rows | {} |\n",
+            metrics.final_snapshot_rows
+        ));
+        content.push_str(&format!(
+            "| history_flushes | {} |\n",
+            metrics.history_flushes
+        ));
+        content.push_str(&format!(
+            "| sealed_aggregate_flushes | {} |\n",
+            metrics.sealed_aggregate_flushes
+        ));
+        content.push_str(&format!(
+            "| final_snapshot_flushes | {} |\n",
+            metrics.final_snapshot_flushes
+        ));
         content.push('\n');
+
+        if !metrics.peak_owner_memory_bytes.is_empty() {
+            content.push_str("## Peak Owner Memory\n\n");
+            content.push_str("| Component | Bytes |\n");
+            content.push_str("| --- | ---: |\n");
+            for (owner, bytes) in owner_memory_entries(&metrics.peak_owner_memory_bytes) {
+                content.push_str(&format!("| {} | {} |\n", owner, bytes));
+            }
+            content.push('\n');
+        }
 
         if let Some(baseline) = baseline {
             content.push_str("## Baseline Comparison\n\n");
@@ -811,6 +889,15 @@ fn format_delta_pct(current: f64, baseline: f64) -> String {
     format!("{:.2}%", ((current - baseline) / baseline) * 100.0)
 }
 
+fn owner_memory_entries(entries: &HashMap<String, u64>) -> Vec<(String, u64)> {
+    let mut rows = entries
+        .iter()
+        .map(|(owner, bytes)| (owner.clone(), *bytes))
+        .collect::<Vec<_>>();
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    rows
+}
+
 fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
     if !path.exists() {
         return Ok(None);
@@ -821,6 +908,13 @@ fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
         .lines()
         .filter_map(|line| line.split_once('='))
         .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect::<HashMap<_, _>>();
+    let peak_owner_memory_bytes = map
+        .iter()
+        .filter_map(|(key, value)| {
+            key.strip_prefix("peak_owner_memory_bytes_")
+                .map(|owner| (owner.to_string(), value.parse::<u64>().unwrap_or_default()))
+        })
         .collect::<HashMap<_, _>>();
 
     Ok(Some(BulkSyncPerfMetrics {
@@ -847,6 +941,13 @@ fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
         max_load_avg_1m: read_f64(&map, "max_load_avg_1m"),
         min_mem_available_mb: read_u64(&map, "min_mem_available_mb"),
         avg_disk_write_mb_per_batch: read_f64(&map, "avg_disk_write_mb_per_batch"),
+        peak_owner_memory_bytes,
+        streamed_history_rows: read_u64(&map, "streamed_history_rows"),
+        sealed_aggregate_rows: read_u64(&map, "sealed_aggregate_rows"),
+        final_snapshot_rows: read_u64(&map, "final_snapshot_rows"),
+        history_flushes: read_u64(&map, "history_flushes"),
+        sealed_aggregate_flushes: read_u64(&map, "sealed_aggregate_flushes"),
+        final_snapshot_flushes: read_u64(&map, "final_snapshot_flushes"),
     }))
 }
 
@@ -869,6 +970,7 @@ fn read_f64(map: &HashMap<String, String>, key: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{BatchSample, BulkSyncPerfRun, HeartbeatSample, RocksDbConfig};
+    use crate::sync::MaterializationReport;
     use crate::sys_info::EnvironmentSnapshot;
     use tempfile::TempDir;
 
@@ -1178,6 +1280,49 @@ mod tests {
         assert!(metrics.contains("max_load_avg_1m=8.500"));
         assert!(metrics.contains("min_mem_available_mb=60000"));
         assert!(metrics.contains("avg_disk_write_mb_per_batch=300.000"));
+    }
+
+    #[test]
+    fn test_perf_report_tracks_owner_memory_breakdown_and_materialization_totals() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        let mut sample = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        sample
+            .owner_memory_bytes
+            .insert("live_cells".to_string(), 4096);
+        sample
+            .owner_memory_bytes
+            .insert("owner.dao".to_string(), 2048);
+        run.record_batch_sample(sample).unwrap();
+        run.set_materialization_report(MaterializationReport {
+            streamed_history_rows: 11,
+            sealed_aggregate_rows: 7,
+            final_snapshot_rows: 3,
+            history_flushes: 2,
+            sealed_aggregate_flushes: 4,
+            final_snapshot_flushes: 1,
+        })
+        .unwrap();
+        run.finish_completed().unwrap();
+
+        let metrics = std::fs::read_to_string(dir.path().join("run-1/metrics.env")).unwrap();
+        assert!(metrics.contains("peak_owner_memory_bytes_live_cells=4096"));
+        assert!(metrics.contains("peak_owner_memory_bytes_owner.dao=2048"));
+        assert!(metrics.contains("streamed_history_rows=11"));
+        assert!(metrics.contains("sealed_aggregate_rows=7"));
+        assert!(metrics.contains("final_snapshot_rows=3"));
+        assert!(metrics.contains("history_flushes=2"));
+        assert!(metrics.contains("sealed_aggregate_flushes=4"));
+        assert!(metrics.contains("final_snapshot_flushes=1"));
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        assert!(report.contains("## Peak Owner Memory"));
+        assert!(report.contains("live_cells"));
+        assert!(report.contains("owner.dao"));
+        assert!(report.contains("streamed_history_rows"));
+        assert!(report.contains("final_snapshot_flushes"));
     }
 
     #[test]

@@ -65,11 +65,11 @@ impl ScriptParser {
         buf
     }
 
-    pub fn compute_data_hash(data: &[u8]) -> Vec<u8> {
+    pub fn compute_data_hash(data: &[u8]) -> [u8; 32] {
         let mut hasher = new_blake2b();
         hasher.update(data);
 
-        let mut hash = vec![0u8; 32];
+        let mut hash = [0u8; 32];
         hasher.finalize(&mut hash);
         hash
     }

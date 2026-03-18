@@ -35,6 +35,7 @@ use crate::parser::{ParsedUdtCell, ScriptParser, UdtParser, UdtStandard};
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::owners::BulkReducer;
 
+pub(crate) mod accounting;
 pub(crate) mod facts;
 pub(crate) mod interner;
 pub(crate) mod live_cells;
@@ -196,6 +197,7 @@ impl BulkBuildEngine {
                 )
             })?;
             sample.write_ms = build_elapsed.as_secs_f64() * 1000.0;
+            sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
             indexer.record_bulk_sync_perf_batch_sample(sample);
 
             info!(
@@ -226,7 +228,8 @@ impl BulkBuildEngine {
             previous_bulk_sync_allowed,
             "Bulk build stage handoff disabled bulk re-entry before pipeline takeover"
         );
-        let _ = materializer.finish();
+        let report = materializer.finish();
+        indexer.record_bulk_sync_perf_materialization_report(report);
         Ok(())
     }
 }
@@ -368,6 +371,17 @@ struct CoreOwners {
 }
 
 impl CoreOwners {
+    fn estimated_bytes_by_owner(&self) -> HashMap<String, u64> {
+        HashMap::from([
+            ("owner.address".to_string(), self.address.estimated_bytes()),
+            ("owner.script".to_string(), self.script.estimated_bytes()),
+            ("owner.token".to_string(), self.token.estimated_bytes()),
+            ("owner.dao".to_string(), self.dao.estimated_bytes()),
+            ("owner.fiber".to_string(), self.fiber.estimated_bytes()),
+            ("owner.object".to_string(), self.object.estimated_bytes()),
+        ])
+    }
+
     fn record_block(&mut self, block: &facts::BlockFacts) -> Result<()> {
         self.dao.record_block(block)
     }
@@ -375,7 +389,7 @@ impl CoreOwners {
     #[cfg(test)]
     fn apply_tx(
         &mut self,
-        tx: &facts::ResolvedTxFacts,
+        tx: &facts::ResolvedTxFacts<'_>,
         ctx: &owners::ReducerContext<'_>,
     ) -> Result<()> {
         self.apply_tx_and_return_address_deltas(tx, ctx).map(|_| ())
@@ -383,7 +397,7 @@ impl CoreOwners {
 
     fn apply_tx_and_return_address_deltas(
         &mut self,
-        tx: &facts::ResolvedTxFacts,
+        tx: &facts::ResolvedTxFacts<'_>,
         ctx: &owners::ReducerContext<'_>,
     ) -> Result<HashMap<Vec<u8>, owners::address::AddressTxDelta>> {
         let address_deltas = self.address.apply_tx_with_deltas(tx, ctx)?;
@@ -422,6 +436,25 @@ struct ActivityStatsAccumulator {
 }
 
 impl ActivityStatsAccumulator {
+    fn estimated_bytes(&self) -> u64 {
+        crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.daily_stats)
+            + crate::sync::bulk_build::accounting::hash_map_bytes(
+                &self.daily_addrs,
+                |date, addrs| {
+                    crate::sync::bulk_build::accounting::serialized_bytes(date)
+                        + crate::sync::bulk_build::accounting::hash_set_serialized_bytes(addrs)
+                },
+            )
+            + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.hourly_stats)
+            + crate::sync::bulk_build::accounting::hash_map_bytes(
+                &self.hourly_addrs,
+                |hour, addrs| {
+                    crate::sync::bulk_build::accounting::serialized_bytes(hour)
+                        + crate::sync::bulk_build::accounting::hash_set_serialized_bytes(addrs)
+                },
+            )
+    }
+
     fn apply_history_rows(&mut self, history_rows: &[materialize::MaterializedRow]) -> Result<()> {
         for row in history_rows
             .iter()
@@ -518,7 +551,6 @@ struct BulkBuildRuntimeState {
     interner: interner::IdentityInterner,
     sequencer: sequencer::BulkSequencer,
     owners: CoreOwners,
-    dao_block_ar_by_number: HashMap<i64, u64>,
     activity_stats: ActivityStatsAccumulator,
     hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker,
     cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker,
@@ -531,7 +563,6 @@ impl Default for BulkBuildRuntimeState {
             interner: interner::IdentityInterner::default(),
             sequencer: sequencer::BulkSequencer::default(),
             owners: CoreOwners::default(),
-            dao_block_ar_by_number: HashMap::new(),
             activity_stats: ActivityStatsAccumulator::default(),
             hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker::new(),
             cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker::new(),
@@ -541,6 +572,17 @@ impl Default for BulkBuildRuntimeState {
 }
 
 impl BulkBuildRuntimeState {
+    fn memory_breakdown_bytes(&self) -> HashMap<String, u64> {
+        let mut breakdown = self.owners.estimated_bytes_by_owner();
+        breakdown.insert("live_cells".to_string(), self.sequencer.live_cells_bytes());
+        breakdown.insert("interner".to_string(), self.interner.estimated_bytes());
+        breakdown.insert(
+            "activity_stats".to_string(),
+            self.activity_stats.estimated_bytes(),
+        );
+        breakdown
+    }
+
     fn apply_blocks(
         &mut self,
         blocks: &[BlockResponseWithCycles],
@@ -579,18 +621,7 @@ impl BulkBuildRuntimeState {
             .blocks
             .last()
             .ok_or_else(|| anyhow!("bulk build arena missing blocks for non-empty batch"))?;
-        extend_block_ar_lookup(
-            &mut self.dao_block_ar_by_number,
-            &arena.blocks,
-            "applying bulk build batch",
-        )?;
-        let history = build_history_rows(
-            &arena,
-            &resolved,
-            &self.interner,
-            &self.dao_block_ar_by_number,
-            is_mainnet,
-        )?;
+        let history = build_history_rows(&arena, &resolved, &self.interner, is_mainnet)?;
         let hodl_sealed_rows = self.apply_hodl_tracker_batch(&arena, &resolved)?;
 
         let BulkBuildRuntimeState {
@@ -610,7 +641,7 @@ impl BulkBuildRuntimeState {
                 for input in &tx.resolved_inputs {
                     cell_dist_tracker.cell_consumed(input.occupied_capacity)?;
                 }
-                for cell in &tx.cells {
+                for cell in tx.cells.iter() {
                     cell_dist_tracker.cell_created(cell.occupied_capacity);
                 }
 
@@ -701,7 +732,7 @@ impl BulkBuildRuntimeState {
     fn apply_hodl_tracker_batch(
         &mut self,
         arena: &facts::FactsArena,
-        resolved: &[facts::ResolvedTxFacts],
+        resolved: &[facts::ResolvedTxFacts<'_>],
     ) -> Result<Vec<materialize::MaterializedRow>> {
         if arena.txs.len() != resolved.len() {
             bail!(
@@ -723,7 +754,7 @@ impl BulkBuildRuntimeState {
                     self.hodl_tracker
                         .cell_consumed(input.created_at_block, input.capacity)?;
                 }
-                for cell in &tx.cells {
+                for cell in tx.cells.iter() {
                     self.update_hodl_holder_count(cell.lock_script_hash_id, 1, tx)?;
                     self.hodl_tracker.cell_created(block_date, cell.capacity);
                 }
@@ -746,7 +777,7 @@ impl BulkBuildRuntimeState {
         &mut self,
         lock_hash_id: crate::sync::types::InternId,
         delta: i32,
-        tx: &facts::ResolvedTxFacts,
+        tx: &facts::ResolvedTxFacts<'_>,
     ) -> Result<()> {
         let old_live = self
             .hodl_live_cells_by_lock
@@ -790,7 +821,7 @@ fn apply_cell_dist_cohort_deltas(
     tracker: &mut crate::db::writer::cell_distribution::CellDistributionTracker,
     balances: &HashMap<Vec<u8>, AddressBalance>,
     deltas: &HashMap<Vec<u8>, owners::address::AddressTxDelta>,
-    tx: &facts::ResolvedTxFacts,
+    tx: &facts::ResolvedTxFacts<'_>,
 ) -> Result<()> {
     for (lock_hash, delta) in deltas {
         let balance = balances.get(lock_hash).ok_or_else(|| {
@@ -1237,9 +1268,8 @@ fn collect_script_daily_deltas_snapshot(
 
 fn build_history_rows(
     arena: &facts::FactsArena,
-    resolved: &[facts::ResolvedTxFacts],
+    resolved: &[facts::ResolvedTxFacts<'_>],
     interner: &interner::IdentityInterner,
-    block_ar_by_number: &HashMap<i64, u64>,
     is_mainnet: bool,
 ) -> Result<HistoryBuildResult> {
     let mut rows = Vec::with_capacity(
@@ -1254,7 +1284,7 @@ fn build_history_rows(
             epoch_number: block.epoch_number,
             epoch_index: block.epoch_index,
             epoch_length: block.epoch_length,
-            dao: block.dao.clone(),
+            dao: block.dao.to_vec(),
             transactions_count: block.transactions_count,
         };
         rows.push(materialize::MaterializedRow::new(
@@ -1318,7 +1348,7 @@ fn build_history_rows(
         ));
 
         let mut touched_lock_hash_ids = HashSet::new();
-        for output in &resolved_tx.cells {
+        for output in resolved_tx.cells.iter() {
             touched_lock_hash_ids.insert(output.lock_script_hash_id);
         }
         for input in &resolved_tx.resolved_inputs {
@@ -1359,13 +1389,7 @@ fn build_history_rows(
     }
 
     rows.extend(build_token_transfer_rows(resolved, interner)?);
-    rows.extend(build_activity_rows(
-        arena,
-        resolved,
-        interner,
-        block_ar_by_number,
-        is_mainnet,
-    )?);
+    rows.extend(build_activity_rows(arena, resolved, interner, is_mainnet)?);
     let object_activity_rows =
         build_object_collection_activity_rows(resolved, &mut identity_activity_count_deltas)?;
     rows.extend(object_activity_rows);
@@ -1400,7 +1424,7 @@ fn build_history_rows(
 }
 
 fn build_object_collection_activity_rows(
-    resolved: &[facts::ResolvedTxFacts],
+    resolved: &[facts::ResolvedTxFacts<'_>],
     identity_activity_count_deltas: &mut HashMap<Vec<u8>, i64>,
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let mut object_activity_acc =
@@ -1441,7 +1465,7 @@ fn build_object_collection_activity_rows(
             }
         }
 
-        for cell in &tx.cells {
+        for cell in tx.cells.iter() {
             let Some(protocol) = cell.protocol_facts.as_ref() else {
                 continue;
             };
@@ -1557,9 +1581,8 @@ fn build_sealed_aggregate_rows(
 
 fn build_activity_rows(
     arena: &facts::FactsArena,
-    resolved: &[facts::ResolvedTxFacts],
+    resolved: &[facts::ResolvedTxFacts<'_>],
     interner: &interner::IdentityInterner,
-    block_ar_by_number: &HashMap<i64, u64>,
     is_mainnet: bool,
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let detectors = build_activity_protocol_detectors(resolved, interner, is_mainnet)?;
@@ -1607,13 +1630,7 @@ fn build_activity_rows(
                 resolved_tx
                     .resolved_inputs
                     .iter()
-                    .map(|input| {
-                        activity_input_view_from_resolved_input(
-                            input,
-                            interner,
-                            &block_ar_by_number,
-                        )
-                    })
+                    .map(|input| activity_input_view_from_resolved_input(input, interner))
                     .collect::<Result<Vec<_>>>()?,
             );
         }
@@ -1658,37 +1675,8 @@ fn build_activity_rows(
     Ok(rows)
 }
 
-fn extend_block_ar_lookup(
-    block_ar_by_number: &mut HashMap<i64, u64>,
-    blocks: &[facts::BlockFacts],
-    context: &str,
-) -> Result<()> {
-    for block in blocks {
-        let ar = crate::db::writer::dao::extract_ar_from_dao(&block.dao).ok_or_else(|| {
-            anyhow!(
-                "missing AR in block DAO field while {}: block={}",
-                context,
-                block.number
-            )
-        })?;
-        if let Some(existing) = block_ar_by_number.insert(block.number, ar) {
-            if existing != ar {
-                bail!(
-                    "conflicting DAO AR while {}: block={} existing_ar={} new_ar={}",
-                    context,
-                    block.number,
-                    existing,
-                    ar
-                );
-            }
-        }
-    }
-
-    Ok(())
-}
-
 fn build_token_transfer_rows(
-    resolved: &[facts::ResolvedTxFacts],
+    resolved: &[facts::ResolvedTxFacts<'_>],
     interner: &interner::IdentityInterner,
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let mut rows = Vec::new();
@@ -1739,7 +1727,7 @@ fn build_token_transfer_rows(
 }
 
 fn build_activity_protocol_detectors(
-    resolved: &[facts::ResolvedTxFacts],
+    resolved: &[facts::ResolvedTxFacts<'_>],
     interner: &interner::IdentityInterner,
     is_mainnet: bool,
 ) -> Result<Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>>> {
@@ -1764,7 +1752,7 @@ fn build_activity_protocol_detectors(
             }
         }
 
-        for cell in &tx.cells {
+        for cell in tx.cells.iter() {
             lock_code_hashes.insert(activity_code_hash(
                 interner,
                 cell.lock_code_hash_id,
@@ -1805,7 +1793,7 @@ fn activity_code_hash(
     interner: &interner::IdentityInterner,
     id: crate::sync::types::InternId,
     label: &str,
-    tx: &facts::ResolvedTxFacts,
+    tx: &facts::ResolvedTxFacts<'_>,
 ) -> Result<[u8; 32]> {
     interner.resolve_bytes(id).try_into().map_err(|_| {
         anyhow!(
@@ -1822,34 +1810,31 @@ fn activity_code_hash(
 fn activity_input_view_from_resolved_input(
     input: &facts::ResolvedInputFacts,
     interner: &interner::IdentityInterner,
-    block_ar_by_number: &HashMap<i64, u64>,
 ) -> Result<crate::db::writer::activities::InputCellView> {
-    let (is_dao_withdraw_request, dao_compensation) = match input.dao_state {
-        Some(facts::DaoCellState::WithdrawRequest {
-            deposit_block_number,
-        }) => {
-            let deposit_ar = *block_ar_by_number.get(&deposit_block_number).ok_or_else(|| {
-                anyhow!(
-                    "missing deposit block AR while building bulk DAO activity input: deposit_block={} outpoint=0x{}:{}",
-                    deposit_block_number,
-                    hex::encode(input.outpoint.tx_hash),
-                    input.outpoint.index
-                )
-            })?;
-            let request_ar = *block_ar_by_number.get(&input.created_at_block).ok_or_else(|| {
-                anyhow!(
-                    "missing withdraw-request block AR while building bulk DAO activity input: request_block={} outpoint=0x{}:{}",
-                    input.created_at_block,
-                    hex::encode(input.outpoint.tx_hash),
-                    input.outpoint.index
-                )
-            })?;
-            let compensation = crate::db::writer::dao::calculate_dao_compensation_from_ar(
+    let (is_dao_withdraw_request, dao_compensation) = match (
+        input.dao_state,
+        input.dao_compensation_ars,
+    ) {
+        (
+            Some(facts::DaoCellState::WithdrawRequest { .. }),
+            Some(facts::DaoCompensationArs {
+                deposit_ar,
+                withdraw_request_ar,
+            }),
+        ) => (
+            true,
+            Some(crate::db::writer::dao::calculate_dao_compensation_from_ar(
                 input.capacity,
                 deposit_ar,
-                request_ar,
-            )?;
-            (true, Some(compensation))
+                withdraw_request_ar,
+            )?),
+        ),
+        (Some(facts::DaoCellState::WithdrawRequest { .. }), None) => {
+            bail!(
+                    "missing DAO compensation ARs while building bulk DAO activity input: outpoint=0x{}:{}",
+                    hex::encode(input.outpoint.tx_hash),
+                    input.outpoint.index
+                );
         }
         _ => (false, None),
     };
@@ -1910,7 +1895,6 @@ fn parsed_cell_from_facts(
             .map(|id| interner.resolve_bytes(id).to_vec()),
         data_hash: cell
             .data_hash
-            .clone()
             .unwrap_or_else(|| ScriptParser::compute_data_hash(&cell.data)),
         data_size: cell.data_size,
         data: cell.data.clone(),
@@ -1920,7 +1904,7 @@ fn parsed_cell_from_facts(
 fn parsed_udt_cell_from_output(
     cell: &facts::CellFacts,
     interner: &interner::IdentityInterner,
-    tx: &facts::ResolvedTxFacts,
+    tx: &facts::ResolvedTxFacts<'_>,
 ) -> Result<Option<ParsedUdtCell>> {
     parsed_udt_cell_from_parts(
         cell.semantic_tag,
@@ -1945,7 +1929,7 @@ fn parsed_udt_cell_from_output(
 fn parsed_udt_cell_from_input(
     input: &facts::ResolvedInputFacts,
     interner: &interner::IdentityInterner,
-    tx: &facts::ResolvedTxFacts,
+    tx: &facts::ResolvedTxFacts<'_>,
 ) -> Result<Option<ParsedUdtCell>> {
     parsed_udt_cell_from_parts(
         input.semantic_tag,
@@ -2094,7 +2078,7 @@ fn build_final_snapshot_rows(
     Ok(rows)
 }
 
-fn resolved_tx_fee(tx: &facts::TxFacts, resolved_tx: &facts::ResolvedTxFacts) -> Result<i64> {
+fn resolved_tx_fee(tx: &facts::TxFacts, resolved_tx: &facts::ResolvedTxFacts<'_>) -> Result<i64> {
     if tx.is_cellbase {
         return Ok(0);
     }
@@ -2161,7 +2145,7 @@ fn cell_facts_to_live_cell_info(
         data_size: cell.data_size,
         occupied_capacity: cell.occupied_capacity,
         udt_amount: cell.udt_amount,
-        data_hash: cell.data_hash.clone(),
+        data_hash: cell.data_hash.map(|hash| hash.to_vec()),
     }
 }
 
@@ -3288,20 +3272,12 @@ mod tests {
             .resolve(&arena)
             .expect("resolved txs");
 
-        let mut block_ar_by_number = HashMap::new();
-        extend_block_ar_lookup(
-            &mut block_ar_by_number,
-            &arena.blocks,
-            "building address history rows in test",
-        )
-        .expect("block AR lookup");
-        let addr_rows: Vec<_> =
-            build_history_rows(&arena, &resolved, &interner, &block_ar_by_number, true)
-                .expect("history rows")
-                .rows
-                .into_iter()
-                .filter(|row| row.cf_name == CF_ADDR_TXS)
-                .collect();
+        let addr_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
+            .expect("history rows")
+            .rows
+            .into_iter()
+            .filter(|row| row.cf_name == CF_ADDR_TXS)
+            .collect();
 
         let expected = [
             keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 0, &create_tx_hash),
@@ -3342,20 +3318,12 @@ mod tests {
             .resolve(&arena)
             .expect("resolved txs");
 
-        let mut block_ar_by_number = HashMap::new();
-        extend_block_ar_lookup(
-            &mut block_ar_by_number,
-            &arena.blocks,
-            "building token history rows in test",
-        )
-        .expect("block AR lookup");
-        let token_rows: Vec<_> =
-            build_history_rows(&arena, &resolved, &interner, &block_ar_by_number, true)
-                .expect("history rows")
-                .rows
-                .into_iter()
-                .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
-                .collect();
+        let token_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
+            .expect("history rows")
+            .rows
+            .into_iter()
+            .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
+            .collect();
 
         assert_eq!(token_rows.len(), 2);
         let token_records: HashMap<Vec<u8>, TokenTransferRecord> = token_rows
@@ -3413,20 +3381,12 @@ mod tests {
             .resolve(&arena)
             .expect("resolved txs");
 
-        let mut block_ar_by_number = HashMap::new();
-        extend_block_ar_lookup(
-            &mut block_ar_by_number,
-            &arena.blocks,
-            "building activity history rows in test",
-        )
-        .expect("block AR lookup");
-        let activity_rows: Vec<_> =
-            build_history_rows(&arena, &resolved, &interner, &block_ar_by_number, true)
-                .expect("history rows")
-                .rows
-                .into_iter()
-                .filter(|row| row.cf_name == CF_ACTIVITIES)
-                .collect();
+        let activity_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
+            .expect("history rows")
+            .rows
+            .into_iter()
+            .filter(|row| row.cf_name == CF_ACTIVITIES)
+            .collect();
 
         assert_eq!(activity_rows.len(), 2);
         let activity_bundles: HashMap<Vec<u8>, TxActivityBundle> = activity_rows
@@ -3486,15 +3446,7 @@ mod tests {
         let resolved = sequencer.resolve(&arena).expect("resolved txs");
         let mut owners = CoreOwners::default();
         let ctx = owners::ReducerContext::new(&interner);
-        let mut block_ar_by_number = HashMap::new();
-        extend_block_ar_lookup(
-            &mut block_ar_by_number,
-            &arena.blocks,
-            "building fiber history rows in test",
-        )
-        .expect("block AR lookup");
-        let history = build_history_rows(&arena, &resolved, &interner, &block_ar_by_number, true)
-            .expect("history rows");
+        let history = build_history_rows(&arena, &resolved, &interner, true).expect("history rows");
         let sealed_rows = build_sealed_aggregate_rows(&history.rows).expect("sealed rows");
         let final_snapshot_rows =
             build_final_snapshot_rows(&sequencer, &interner).expect("final snapshot rows");
@@ -3576,23 +3528,15 @@ mod tests {
             .resolve(&arena)
             .expect("resolved txs");
 
-        let mut block_ar_by_number = HashMap::new();
-        extend_block_ar_lookup(
-            &mut block_ar_by_number,
-            &arena.blocks,
-            "building object activity history rows in test",
-        )
-        .expect("block AR lookup");
-        let history_rows: Vec<_> =
-            build_history_rows(&arena, &resolved, &interner, &block_ar_by_number, true)
-                .expect("history rows")
-                .rows
-                .into_iter()
-                .filter(|row| {
-                    row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES
-                        || row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES
-                })
-                .collect();
+        let history_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true)
+            .expect("history rows")
+            .rows
+            .into_iter()
+            .filter(|row| {
+                row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES
+                    || row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES
+            })
+            .collect();
 
         let object_rows: std::collections::HashMap<Vec<u8>, ObjectCollectionActivityEntry> =
             history_rows
@@ -3680,6 +3624,7 @@ mod tests {
             CellFacts {
                 outpoint: OutPointKey::new([tx_hash_byte; 32], 0),
                 created_at_block: 0,
+                created_by_block_dao_ar: 0,
                 capacity: 200_00000000,
                 lock_script_hash_id: lock_hash_id,
                 lock_code_hash_id: InternId::new(401),
@@ -3716,6 +3661,7 @@ mod tests {
             ResolvedInputFacts {
                 outpoint: OutPointKey::new([tx_hash_byte; 32], 0),
                 created_at_block: 0,
+                created_by_block_dao_ar: 0,
                 capacity: 200_00000000,
                 occupied_capacity: 61_00000000,
                 udt_amount: None,
@@ -3729,6 +3675,7 @@ mod tests {
                 type_args_id: Some(InternId::new(405)),
                 semantic_tag: CellSemanticTag::Dotbit,
                 dao_state: None,
+                dao_compensation_ars: None,
                 protocol_facts: Some(CellProtocolFacts::Dotbit(DotbitProtocolFacts {
                     account_id,
                     account: Some(account.to_string()),
@@ -3755,7 +3702,7 @@ mod tests {
                 tx_index: 0,
                 dotbit_action: Some("confirm_proposal".to_string()),
                 resolved_inputs: Vec::new(),
-                cells: vec![dotbit_output(0x31, owner_a, account_a, "alice.bit")],
+                cells: vec![dotbit_output(0x31, owner_a, account_a, "alice.bit")].into(),
             },
             ResolvedTxFacts {
                 tx_hash: [0x32; 32],
@@ -3766,7 +3713,7 @@ mod tests {
                 tx_index: 0,
                 dotbit_action: Some("transfer_account".to_string()),
                 resolved_inputs: vec![dotbit_input(0x31, owner_a, account_a, "alice.bit")],
-                cells: vec![dotbit_output(0x32, owner_b, account_a, "alice.bit")],
+                cells: vec![dotbit_output(0x32, owner_b, account_a, "alice.bit")].into(),
             },
             ResolvedTxFacts {
                 tx_hash: [0x33; 32],
@@ -3777,7 +3724,7 @@ mod tests {
                 tx_index: 0,
                 dotbit_action: Some("recycle_expired_account".to_string()),
                 resolved_inputs: vec![dotbit_input(0x32, owner_b, account_a, "alice.bit")],
-                cells: Vec::new(),
+                cells: Vec::new().into(),
             },
             ResolvedTxFacts {
                 tx_hash: [0x34; 32],
@@ -3788,7 +3735,7 @@ mod tests {
                 tx_index: 0,
                 dotbit_action: Some("confirm_proposal".to_string()),
                 resolved_inputs: vec![dotbit_input(0x40, owner_a, account_b, "bob.bit")],
-                cells: vec![dotbit_output(0x34, owner_a, account_b, "bob.bit")],
+                cells: vec![dotbit_output(0x34, owner_a, account_b, "bob.bit")].into(),
             },
         ];
 

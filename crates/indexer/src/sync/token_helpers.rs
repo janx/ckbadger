@@ -721,7 +721,7 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(unique_type_args),
             type_script_hash: Some(vec![0x50; 32]),
-            data_hash: vec![0x60; 32],
+            data_hash: [0x60; 32],
             data_size: data.len() as i32,
             data,
         }
@@ -743,7 +743,7 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(type_args),
             type_script_hash: Some(token_type_hash.to_vec()),
-            data_hash: vec![0x44; 32],
+            data_hash: [0x44; 32],
             data_size: 16,
             data: vec![0u8; 16],
         }
@@ -851,7 +851,7 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x44; 32]),
             type_script_hash: Some(vec![0x55; 32]),
-            data_hash: vec![0x66; 32],
+            data_hash: [0x66; 32],
             data_size: 0,
             data: vec![],
         };
@@ -877,7 +877,7 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x44; 32]),
             type_script_hash: Some(vec![0x55; 32]),
-            data_hash: vec![0x66; 32],
+            data_hash: [0x66; 32],
             data_size: 16,
             data,
         };
@@ -954,7 +954,7 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x66; 32]),
             type_script_hash: Some(supply_info_type_hash.to_vec()),
-            data_hash: vec![0x77; 32],
+            data_hash: [0x77; 32],
             data_size: info_cell_data.len() as i32,
             data: info_cell_data,
         };

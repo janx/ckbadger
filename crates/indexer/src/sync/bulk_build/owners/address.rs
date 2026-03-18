@@ -31,9 +31,16 @@ impl AddressOwner {
         &self.balances
     }
 
+    pub(crate) fn estimated_bytes(&self) -> u64 {
+        crate::sync::bulk_build::accounting::hash_map_bytes(&self.balances, |lock_hash, balance| {
+            crate::sync::bulk_build::accounting::bytes_vec_bytes(lock_hash)
+                + crate::sync::bulk_build::accounting::serialized_bytes(balance)
+        })
+    }
+
     pub(crate) fn apply_tx_with_deltas(
         &mut self,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
         ctx: &ReducerContext<'_>,
     ) -> Result<HashMap<Vec<u8>, AddressTxDelta>> {
         let deltas = collect_tx_deltas(tx, ctx)?;
@@ -43,7 +50,7 @@ impl AddressOwner {
 
     fn apply_tx_deltas(
         &mut self,
-        tx: &ResolvedTxFacts,
+        tx: &ResolvedTxFacts<'_>,
         deltas: &HashMap<Vec<u8>, AddressTxDelta>,
     ) -> Result<()> {
         for (lock_hash, delta) in deltas {
@@ -125,7 +132,7 @@ impl AddressOwner {
 }
 
 impl BulkReducer for AddressOwner {
-    fn apply_tx(&mut self, tx: &ResolvedTxFacts, ctx: &ReducerContext<'_>) -> Result<()> {
+    fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
         self.apply_tx_with_deltas(tx, ctx).map(|_| ())
     }
 
@@ -179,7 +186,7 @@ fn apply_output_deltas(
 }
 
 fn collect_tx_deltas(
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
     ctx: &ReducerContext<'_>,
 ) -> Result<HashMap<Vec<u8>, AddressTxDelta>> {
     let mut deltas = HashMap::new();
@@ -188,7 +195,7 @@ fn collect_tx_deltas(
         apply_input_deltas(input, ctx, &mut deltas)?;
     }
 
-    for cell in &tx.cells {
+    for cell in tx.cells.iter() {
         apply_output_deltas(cell, ctx, &mut deltas)?;
     }
 
@@ -200,7 +207,7 @@ fn checked_add_i128(
     delta: i128,
     metric: &str,
     lock_hash: &[u8],
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
 ) -> Result<i128> {
     let next = current.checked_add(delta).ok_or_else(|| {
         anyhow!(
@@ -235,7 +242,7 @@ fn checked_add_i64(
     delta: i64,
     metric: &str,
     lock_hash: &[u8],
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
 ) -> Result<i64> {
     let next = current.checked_add(delta).ok_or_else(|| {
         anyhow!(
@@ -270,7 +277,7 @@ fn checked_add_i32(
     delta: i32,
     metric: &str,
     lock_hash: &[u8],
-    tx: &ResolvedTxFacts,
+    tx: &ResolvedTxFacts<'_>,
 ) -> Result<i32> {
     let next = current.checked_add(delta).ok_or_else(|| {
         anyhow!(
@@ -382,6 +389,7 @@ mod tests {
             cells: vec![CellFacts {
                 outpoint: OutPointKey::new([0x11; 32], 0),
                 created_at_block: 100,
+                created_by_block_dao_ar: 1,
                 capacity: 200_00000000,
                 lock_script_hash_id: lock_a,
                 lock_code_hash_id: InternId::new(2),
@@ -399,7 +407,8 @@ mod tests {
                 semantic_tag: CellSemanticTag::Plain,
                 dao_state: None,
                 protocol_facts: None,
-            }],
+            }]
+            .into(),
         };
         let tx1 = ResolvedTxFacts {
             tx_hash: [0x22; 32],
@@ -412,6 +421,7 @@ mod tests {
             resolved_inputs: vec![ResolvedInputFacts {
                 outpoint: OutPointKey::new([0x11; 32], 0),
                 created_at_block: 100,
+                created_by_block_dao_ar: 1,
                 capacity: 200_00000000,
                 occupied_capacity: 61_00000000,
                 udt_amount: None,
@@ -425,12 +435,14 @@ mod tests {
                 type_args_id: None,
                 semantic_tag: CellSemanticTag::Plain,
                 dao_state: None,
+                dao_compensation_ars: None,
                 protocol_facts: None,
             }],
             cells: vec![
                 CellFacts {
                     outpoint: OutPointKey::new([0x22; 32], 0),
                     created_at_block: 100,
+                    created_by_block_dao_ar: 1,
                     capacity: 100_00000000,
                     lock_script_hash_id: lock_a,
                     lock_code_hash_id: InternId::new(2),
@@ -452,6 +464,7 @@ mod tests {
                 CellFacts {
                     outpoint: OutPointKey::new([0x22; 32], 1),
                     created_at_block: 100,
+                    created_by_block_dao_ar: 1,
                     capacity: 100_00000000,
                     lock_script_hash_id: lock_b,
                     lock_code_hash_id: InternId::new(4),
@@ -470,7 +483,8 @@ mod tests {
                     dao_state: None,
                     protocol_facts: None,
                 },
-            ],
+            ]
+            .into(),
         };
 
         let mut owner = AddressOwner::default();

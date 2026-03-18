@@ -305,7 +305,10 @@ fn incomplete_bulk_build_session_fail_fast_message(
 
 fn fail_fast_if_bulk_build_session_incomplete(store: &CkbadgerStore) -> Result<()> {
     if let Some(marker) = store.get_bulk_build_session_marker()? {
-        bail!("{}", incomplete_bulk_build_session_fail_fast_message(&marker));
+        bail!(
+            "{}",
+            incomplete_bulk_build_session_fail_fast_message(&marker)
+        );
     }
     Ok(())
 }
@@ -697,6 +700,23 @@ impl Indexer {
                 run_id = %self.run_id,
                 error = %e,
                 "Failed to record bulk-sync perf batch sample"
+            );
+        }
+    }
+
+    pub fn record_bulk_sync_perf_materialization_report(
+        &self,
+        report: crate::sync::MaterializationReport,
+    ) {
+        let mut guard = self.bulk_sync_perf_run.lock().unwrap();
+        let Some(run) = guard.as_mut() else {
+            return;
+        };
+        if let Err(e) = run.set_materialization_report(report) {
+            warn!(
+                run_id = %self.run_id,
+                error = %e,
+                "Failed to record bulk-sync materialization report"
             );
         }
     }
@@ -1297,13 +1317,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         store
-            .set_bulk_build_session_marker(Some(
-                &ckbadger_store::types::BulkBuildSessionMarker {
-                    run_id: "run-bulk-1".to_string(),
-                    started_at: 1_710_000_000,
-                    start_block: 0,
-                },
-            ))
+            .set_bulk_build_session_marker(Some(&ckbadger_store::types::BulkBuildSessionMarker {
+                run_id: "run-bulk-1".to_string(),
+                started_at: 1_710_000_000,
+                start_block: 0,
+            }))
             .unwrap();
 
         let err = fail_fast_if_bulk_build_session_incomplete(&store).unwrap_err();
@@ -1328,7 +1346,10 @@ mod tests {
         let previously_allowed =
             finalize_bulk_stage_handoff_state(&bulk_sync_allowed, &was_bulk_sync_active);
 
-        assert!(previously_allowed, "handoff should observe prior bulk allowance");
+        assert!(
+            previously_allowed,
+            "handoff should observe prior bulk allowance"
+        );
         assert!(
             !bulk_sync_allowed.load(Ordering::SeqCst),
             "handoff must permanently disable bulk re-entry before pipeline takes over"

@@ -1,4 +1,7 @@
+use std::borrow::Cow;
 use std::ops::Range;
+
+use serde::Serialize;
 
 use crate::sync::types::InternId;
 
@@ -17,12 +20,12 @@ pub(crate) struct BlockFacts {
     pub(crate) epoch_number: i64,
     pub(crate) epoch_index: i32,
     pub(crate) epoch_length: i32,
-    pub(crate) dao: Vec<u8>,
+    pub(crate) dao: [u8; 32],
     pub(crate) transactions_count: i32,
     pub(crate) tx_range: Range<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct SporeProtocolFacts {
     pub(crate) spore_id: [u8; 32],
     pub(crate) is_did: bool,
@@ -31,14 +34,14 @@ pub(crate) struct SporeProtocolFacts {
     pub(crate) cluster_id: Option<[u8; 32]>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ClusterProtocolFacts {
     pub(crate) cluster_id: [u8; 32],
     pub(crate) name: Option<String>,
     pub(crate) description: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct MnftIssuerProtocolFacts {
     pub(crate) issuer_id: [u8; 20],
     pub(crate) name: Option<String>,
@@ -47,7 +50,7 @@ pub(crate) struct MnftIssuerProtocolFacts {
     pub(crate) set_count: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct MnftClassProtocolFacts {
     pub(crate) class_id: Vec<u8>,
     pub(crate) issuer_id: [u8; 20],
@@ -59,7 +62,7 @@ pub(crate) struct MnftClassProtocolFacts {
     pub(crate) configure: u8,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct MnftTokenProtocolFacts {
     pub(crate) token_id: Vec<u8>,
     pub(crate) class_id: Vec<u8>,
@@ -69,7 +72,7 @@ pub(crate) struct MnftTokenProtocolFacts {
     pub(crate) state: u8,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct DotbitProtocolFacts {
     pub(crate) account_id: [u8; 20],
     pub(crate) account: Option<String>,
@@ -79,7 +82,7 @@ pub(crate) struct DotbitProtocolFacts {
     pub(crate) status: Option<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) enum CellProtocolFacts {
     Spore(SporeProtocolFacts),
     Cluster(ClusterProtocolFacts),
@@ -107,7 +110,7 @@ pub(crate) struct TxFacts {
     pub(crate) output_range: Range<usize>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize)]
 pub(crate) struct OutPointKey {
     pub(crate) tx_hash: [u8; 32],
     pub(crate) index: u32,
@@ -120,7 +123,7 @@ impl OutPointKey {
 }
 
 #[doc(hidden)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum CellSemanticTag {
     Plain,
     Dao,
@@ -132,16 +135,23 @@ pub enum CellSemanticTag {
     Cluster,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) enum DaoCellState {
     Deposit,
     WithdrawRequest { deposit_block_number: i64 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct DaoCompensationArs {
+    pub(crate) deposit_ar: u64,
+    pub(crate) withdraw_request_ar: u64,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct CellFacts {
     pub(crate) outpoint: OutPointKey,
     pub(crate) created_at_block: i64,
+    pub(crate) created_by_block_dao_ar: u64,
     pub(crate) capacity: i64,
     pub(crate) lock_script_hash_id: InternId,
     pub(crate) lock_code_hash_id: InternId,
@@ -154,7 +164,7 @@ pub(crate) struct CellFacts {
     pub(crate) occupied_capacity: i64,
     pub(crate) data_size: i32,
     pub(crate) data: Vec<u8>,
-    pub(crate) data_hash: Option<Vec<u8>>,
+    pub(crate) data_hash: Option<[u8; 32]>,
     pub(crate) udt_amount: Option<u128>,
     pub(crate) semantic_tag: CellSemanticTag,
     pub(crate) dao_state: Option<DaoCellState>,
@@ -165,6 +175,7 @@ pub(crate) struct CellFacts {
 pub(crate) struct ResolvedInputFacts {
     pub(crate) outpoint: OutPointKey,
     pub(crate) created_at_block: i64,
+    pub(crate) created_by_block_dao_ar: u64,
     pub(crate) capacity: i64,
     pub(crate) occupied_capacity: i64,
     pub(crate) udt_amount: Option<u128>,
@@ -178,11 +189,12 @@ pub(crate) struct ResolvedInputFacts {
     pub(crate) type_args_id: Option<InternId>,
     pub(crate) semantic_tag: CellSemanticTag,
     pub(crate) dao_state: Option<DaoCellState>,
+    pub(crate) dao_compensation_ars: Option<DaoCompensationArs>,
     pub(crate) protocol_facts: Option<CellProtocolFacts>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ResolvedTxFacts {
+pub(crate) struct ResolvedTxFacts<'a> {
     pub(crate) tx_hash: [u8; 32],
     pub(crate) block_number: i64,
     pub(crate) block_hash: [u8; 32],
@@ -191,7 +203,7 @@ pub(crate) struct ResolvedTxFacts {
     pub(crate) tx_index: i32,
     pub(crate) dotbit_action: Option<String>,
     pub(crate) resolved_inputs: Vec<ResolvedInputFacts>,
-    pub(crate) cells: Vec<CellFacts>,
+    pub(crate) cells: Cow<'a, [CellFacts]>,
 }
 
 #[doc(hidden)]

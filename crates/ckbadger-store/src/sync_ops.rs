@@ -4,14 +4,10 @@ use anyhow::anyhow;
 
 use crate::keys::sync_meta_keys;
 use crate::store::CkbadgerStore;
-use crate::types::{
-    BulkBuildSessionMarker, DeepForkInfo, ReorgEvent, RuntimeStatus, SyncStatus,
-};
+use crate::types::{BulkBuildSessionMarker, DeepForkInfo, ReorgEvent, RuntimeStatus, SyncStatus};
 
 impl CkbadgerStore {
-    pub fn get_bulk_build_session_marker(
-        &self,
-    ) -> anyhow::Result<Option<BulkBuildSessionMarker>> {
+    pub fn get_bulk_build_session_marker(&self) -> anyhow::Result<Option<BulkBuildSessionMarker>> {
         match self.get_cf(
             self.cf_sync_meta(),
             sync_meta_keys::BULK_BUILD_SESSION_IN_PROGRESS,
