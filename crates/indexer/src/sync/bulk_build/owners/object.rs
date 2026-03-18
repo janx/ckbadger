@@ -4,15 +4,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::keys;
-use ckbadger_store::store::{CF_IDENTITY_BY_COLLECTION, CF_STATS_IDENTITY};
+use ckbadger_store::store::{
+    CF_IDENTITY_BY_COLLECTION, CF_OBJECT_BY_COLLECTION, CF_STATS_IDENTITY,
+};
 use ckbadger_store::types::{
     ClusterAggregate, IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
-    ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex, StorageDependencyTier,
-    DID_CKB_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    ObjectCollectionAggregate, ObjectEntry, ObjectExtra, ObjectStandard, ObjectTypeIndex,
+    SporeTypeIndex, StorageDependencyTier, DID_CKB_SENTINEL_COLLECTION,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
-    CkbadgerStore, CF_CLUSTER_AGG, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_SPORE_BY_CLUSTER,
-    CF_SPORE_DATA, CF_STATS_SPORE,
+    CkbadgerStore, CF_CLUSTER_AGG, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_OBJECT_COLLECTION_AGG,
+    CF_OBJECT_DATA, CF_SPORE_BY_CLUSTER, CF_SPORE_DATA, CF_STATS_OBJECT, CF_STATS_SPORE,
 };
 use rocksdb::IteratorMode;
 
@@ -30,35 +33,83 @@ use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 #[derive(Debug, Default)]
 pub(crate) struct ObjectOwner {
     spore_entries: BTreeMap<Vec<u8>, ObjectEntry>,
+    mnft_entries: BTreeMap<Vec<u8>, ObjectEntry>,
     identities: BTreeMap<Vec<u8>, IdentityEntry>,
     cluster_aggs: BTreeMap<Vec<u8>, ClusterAggregate>,
+    object_collection_aggs: BTreeMap<Vec<u8>, ObjectCollectionAggregate>,
     did_agg: Option<IdentityCollectionAggregate>,
     identity_by_collection: BTreeSet<Vec<u8>>,
     spore_by_cluster: BTreeSet<Vec<u8>>,
     stats_spore_rows: BTreeMap<Vec<u8>, Vec<u8>>,
+    mnft_by_collection: BTreeSet<Vec<u8>>,
+    mnft_owner_counts: BTreeMap<(Vec<u8>, Vec<u8>), i64>,
+    mnft_class_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
+    mnft_token_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
+    mnft_type_indexes: BTreeMap<Vec<u8>, ObjectTypeIndex>,
+    mnft_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     did_owner_counts: BTreeMap<Vec<u8>, i64>,
     cluster_owner_counts: BTreeMap<(Vec<u8>, Vec<u8>), i64>,
 }
 
 impl BulkReducer for ObjectOwner {
     fn apply_tx(&mut self, tx: &ResolvedTxFacts, ctx: &ReducerContext<'_>) -> Result<()> {
+        let mnft_tokens_consumed_in_tx = tx
+            .resolved_inputs
+            .iter()
+            .filter_map(|input| match input.protocol_facts.as_ref() {
+                Some(CellProtocolFacts::MnftToken(token)) => Some(token.token_id.clone()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+
         for input in &tx.resolved_inputs {
             self.apply_input(input)?;
         }
 
         for cell in &tx.cells {
-            self.apply_output(cell, ctx, tx)?;
+            self.apply_output(cell, ctx, tx, &mnft_tokens_consumed_in_tx)?;
         }
 
         Ok(())
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let sealed_rows: Vec<MaterializedRow> = self
+        let mut sealed_rows: Vec<MaterializedRow> = self
             .stats_spore_rows
             .iter()
             .map(|(key, value)| MaterializedRow::new(CF_STATS_SPORE, key.clone(), value.clone()))
             .collect();
+        sealed_rows.extend(
+            self.mnft_class_outpoints.iter().map(|(key, value)| {
+                MaterializedRow::new(CF_STATS_OBJECT, key.clone(), value.clone())
+            }),
+        );
+        sealed_rows.extend(
+            self.mnft_token_outpoints.iter().map(|(key, value)| {
+                MaterializedRow::new(CF_STATS_OBJECT, key.clone(), value.clone())
+            }),
+        );
+        sealed_rows.extend(self.mnft_type_indexes.iter().map(|(type_hash, index)| {
+            MaterializedRow::new(
+                CF_STATS_OBJECT,
+                keys::encode_nft_type_index_key(type_hash).to_vec(),
+                bincode::serialize(index).expect("object type index serialization must succeed"),
+            )
+        }));
+        sealed_rows.extend(self.mnft_hourly_transfers.iter().map(|(key, count)| {
+            MaterializedRow::new(CF_STATS_OBJECT, key.clone(), count.to_le_bytes().to_vec())
+        }));
+        sealed_rows.extend(self.mnft_owner_counts.iter().filter_map(
+            |((class_id, lock_hash), count)| {
+                (*count > 0).then(|| {
+                    MaterializedRow::new(
+                        CF_STATS_OBJECT,
+                        keys::encode_nft_collection_owner_key(class_id, lock_hash).to_vec(),
+                        count.to_le_bytes().to_vec(),
+                    )
+                })
+            },
+        ));
         if !sealed_rows.is_empty() {
             materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
         }
@@ -74,6 +125,20 @@ impl BulkReducer for ObjectOwner {
         for key in &self.spore_by_cluster {
             final_rows.push(MaterializedRow::new(
                 CF_SPORE_BY_CLUSTER,
+                key.clone(),
+                Vec::new(),
+            ));
+        }
+        for (id, entry) in &self.mnft_entries {
+            final_rows.push(MaterializedRow::new(
+                CF_OBJECT_DATA,
+                id.clone(),
+                bincode::serialize(entry)?,
+            ));
+        }
+        for key in &self.mnft_by_collection {
+            final_rows.push(MaterializedRow::new(
+                CF_OBJECT_BY_COLLECTION,
                 key.clone(),
                 Vec::new(),
             ));
@@ -103,6 +168,13 @@ impl BulkReducer for ObjectOwner {
             final_rows.push(MaterializedRow::new(
                 CF_CLUSTER_AGG,
                 cluster_id.clone(),
+                bincode::serialize(agg)?,
+            ));
+        }
+        for (class_id, agg) in &self.object_collection_aggs {
+            final_rows.push(MaterializedRow::new(
+                CF_OBJECT_COLLECTION_AGG,
+                class_id.clone(),
                 bincode::serialize(agg)?,
             ));
         }
@@ -138,11 +210,13 @@ impl ObjectOwner {
                 );
             }
 
-            let agg = self.did_agg.get_or_insert_with(|| IdentityCollectionAggregate {
-                name: Some("did:ckb".to_string()),
-                standard: IdentityStandard::DidCkb,
-                ..IdentityCollectionAggregate::default()
-            });
+            let agg = self
+                .did_agg
+                .get_or_insert_with(|| IdentityCollectionAggregate {
+                    name: Some("did:ckb".to_string()),
+                    standard: IdentityStandard::DidCkb,
+                    ..IdentityCollectionAggregate::default()
+                });
             agg.activities_count = checked_next_i64(
                 agg.activities_count,
                 *delta,
@@ -165,15 +239,15 @@ impl ObjectOwner {
                 self.consume_did(spore.spore_id.as_slice())
             }
             CellProtocolFacts::Spore(spore) => self.consume_spore(spore.spore_id.as_slice()),
+            CellProtocolFacts::MnftIssuer(issuer) => self.consume_mnft_issuer(&issuer.issuer_id),
+            CellProtocolFacts::MnftClass(class) => self.consume_mnft_class(&class.class_id),
+            CellProtocolFacts::MnftToken(token) => self.consume_mnft_token(&token.token_id),
             CellProtocolFacts::Cluster(_) => bail!(
                 "object owner does not support consumed cluster cells yet: outpoint=0x{}:{}",
                 hex::encode(input.outpoint.tx_hash),
                 input.outpoint.index
             ),
-            CellProtocolFacts::MnftIssuer(_)
-            | CellProtocolFacts::MnftClass(_)
-            | CellProtocolFacts::MnftToken(_)
-            | CellProtocolFacts::Dotbit(_) => bail!(
+            CellProtocolFacts::Dotbit(_) => bail!(
                 "object owner received unsupported protocol facts on input: outpoint=0x{}:{} protocol={:?}",
                 hex::encode(input.outpoint.tx_hash),
                 input.outpoint.index,
@@ -187,6 +261,7 @@ impl ObjectOwner {
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts,
+        mnft_tokens_consumed_in_tx: &BTreeSet<Vec<u8>>,
     ) -> Result<()> {
         let Some(protocol) = cell.protocol_facts.as_ref() else {
             return Ok(());
@@ -198,10 +273,16 @@ impl ObjectOwner {
                 self.insert_did(spore, cell, ctx, tx)
             }
             CellProtocolFacts::Spore(spore) => self.insert_spore(spore, cell, ctx, tx),
-            CellProtocolFacts::MnftIssuer(_)
-            | CellProtocolFacts::MnftClass(_)
-            | CellProtocolFacts::MnftToken(_)
-            | CellProtocolFacts::Dotbit(_) => bail!(
+            CellProtocolFacts::MnftIssuer(issuer) => self.insert_mnft_issuer(issuer, cell, ctx, tx),
+            CellProtocolFacts::MnftClass(class) => self.insert_mnft_class(class, cell, ctx, tx),
+            CellProtocolFacts::MnftToken(token) => self.insert_mnft_token(
+                token,
+                cell,
+                ctx,
+                tx,
+                mnft_tokens_consumed_in_tx.contains(token.token_id.as_slice()),
+            ),
+            CellProtocolFacts::Dotbit(_) => bail!(
                 "object owner received unsupported protocol facts on output: outpoint=0x{}:{} protocol={:?}",
                 hex::encode(cell.outpoint.tx_hash),
                 cell.outpoint.index,
@@ -257,7 +338,9 @@ impl ObjectOwner {
         let existing = self.identities.get(&did_id).cloned();
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
         let old_owner = if was_live {
-            existing.as_ref().and_then(|entry| entry.owner_lock_hash.clone())
+            existing
+                .as_ref()
+                .and_then(|entry| entry.owner_lock_hash.clone())
         } else {
             None
         };
@@ -289,11 +372,13 @@ impl ObjectOwner {
         }
 
         let did_owner_counts = &mut self.did_owner_counts;
-        let agg = self.did_agg.get_or_insert_with(|| IdentityCollectionAggregate {
-            name: Some("did:ckb".to_string()),
-            standard: IdentityStandard::DidCkb,
-            ..IdentityCollectionAggregate::default()
-        });
+        let agg = self
+            .did_agg
+            .get_or_insert_with(|| IdentityCollectionAggregate {
+                name: Some("did:ckb".to_string()),
+                standard: IdentityStandard::DidCkb,
+                ..IdentityCollectionAggregate::default()
+            });
         if existing.is_none() {
             agg.total_count = checked_next_i64(
                 agg.total_count,
@@ -352,11 +437,15 @@ impl ObjectOwner {
 
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
         let old_owner = if was_live {
-            existing.as_ref().and_then(|entry| entry.owner_lock_hash.clone())
+            existing
+                .as_ref()
+                .and_then(|entry| entry.owner_lock_hash.clone())
         } else {
             None
         };
-        let old_cluster = existing.as_ref().and_then(|entry| entry.collection_id.clone());
+        let old_cluster = existing
+            .as_ref()
+            .and_then(|entry| entry.collection_id.clone());
         let old_tier = existing
             .as_ref()
             .map(Self::spore_media_tier)
@@ -455,9 +544,8 @@ impl ObjectOwner {
             }
         }
 
-        self.spore_by_cluster.insert(
-            keys::encode_spore_by_cluster_key(&cluster_id, &spore_id).to_vec(),
-        );
+        self.spore_by_cluster
+            .insert(keys::encode_spore_by_cluster_key(&cluster_id, &spore_id).to_vec());
 
         let agg = self.cluster_aggs.entry(cluster_id.clone()).or_default();
         if existing.is_none() {
@@ -539,6 +627,305 @@ impl ObjectOwner {
         Ok(())
     }
 
+    fn insert_mnft_issuer(
+        &mut self,
+        issuer: &crate::sync::bulk_build::facts::MnftIssuerProtocolFacts,
+        cell: &CellFacts,
+        ctx: &ReducerContext<'_>,
+        tx: &ResolvedTxFacts,
+    ) -> Result<()> {
+        let issuer_id = issuer.issuer_id.to_vec();
+        let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
+        let existing = self.mnft_entries.get(&issuer_id).cloned();
+        if existing
+            .as_ref()
+            .is_some_and(|entry| entry.standard != ObjectStandard::MnftIssuer)
+        {
+            bail!(
+                "mNFT issuer id collides with non-issuer object entry: issuer_id=0x{} block={}",
+                hex::encode(&issuer_id),
+                tx.block_number
+            );
+        }
+
+        self.mnft_entries.insert(
+            issuer_id,
+            ObjectEntry {
+                standard: ObjectStandard::MnftIssuer,
+                collection_id: None,
+                token_id: None,
+                owner_lock_hash: Some(owner_lock),
+                name: issuer.name.clone(),
+                description: None,
+                is_live: true,
+                created_at_block: existing
+                    .as_ref()
+                    .map(|entry| entry.created_at_block)
+                    .unwrap_or(tx.block_number),
+                created_at_tx: existing
+                    .as_ref()
+                    .map(|entry| entry.created_at_tx.clone())
+                    .unwrap_or_else(|| tx.tx_hash.to_vec()),
+                extra: ObjectExtra::MnftIssuer {
+                    class_count: issuer.class_count,
+                    set_count: issuer.set_count,
+                    info: issuer.info.clone(),
+                },
+            },
+        );
+        Ok(())
+    }
+
+    fn insert_mnft_class(
+        &mut self,
+        class: &crate::sync::bulk_build::facts::MnftClassProtocolFacts,
+        cell: &CellFacts,
+        ctx: &ReducerContext<'_>,
+        tx: &ResolvedTxFacts,
+    ) -> Result<()> {
+        let class_id = class.class_id.clone();
+        let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
+        let existing = self.mnft_entries.get(&class_id).cloned();
+        if existing
+            .as_ref()
+            .is_some_and(|entry| entry.standard != ObjectStandard::MnftClass)
+        {
+            bail!(
+                "mNFT class id collides with non-class object entry: class_id=0x{} block={}",
+                hex::encode(&class_id),
+                tx.block_number
+            );
+        }
+        if let Some(existing_collection_id) = existing
+            .as_ref()
+            .and_then(|entry| entry.collection_id.as_ref())
+        {
+            if existing_collection_id.as_slice() != class.issuer_id {
+                bail!(
+                    "mNFT class issuer changed across writes: class_id=0x{} old_issuer=0x{} new_issuer=0x{} block={}",
+                    hex::encode(&class_id),
+                    hex::encode(existing_collection_id),
+                    hex::encode(class.issuer_id),
+                    tx.block_number
+                );
+            }
+        }
+
+        self.mnft_entries.insert(
+            class_id.clone(),
+            ObjectEntry {
+                standard: ObjectStandard::MnftClass,
+                collection_id: Some(class.issuer_id.to_vec()),
+                token_id: None,
+                owner_lock_hash: Some(owner_lock),
+                name: class.name.clone(),
+                description: class.description.clone(),
+                is_live: true,
+                created_at_block: existing
+                    .as_ref()
+                    .map(|entry| entry.created_at_block)
+                    .unwrap_or(tx.block_number),
+                created_at_tx: existing
+                    .as_ref()
+                    .map(|entry| entry.created_at_tx.clone())
+                    .unwrap_or_else(|| tx.tx_hash.to_vec()),
+                extra: ObjectExtra::MnftClass {
+                    description: class.description.clone(),
+                    renderer: class.renderer.clone(),
+                    total: class.total,
+                    issued: class.issued,
+                    configure: class.configure,
+                },
+            },
+        );
+
+        let agg = self
+            .object_collection_aggs
+            .entry(class_id.clone())
+            .or_default();
+        agg.name = class.name.clone();
+        agg.standard = ObjectStandard::MnftClass;
+
+        let output_index = Self::as_i16_outpoint_index(&cell.outpoint, "mNFT class")?;
+        self.mnft_class_outpoints.insert(
+            keys::encode_mnft_class_outpoint_key(&cell.outpoint.tx_hash, output_index).to_vec(),
+            class_id,
+        );
+        Ok(())
+    }
+
+    fn insert_mnft_token(
+        &mut self,
+        token: &crate::sync::bulk_build::facts::MnftTokenProtocolFacts,
+        cell: &CellFacts,
+        ctx: &ReducerContext<'_>,
+        tx: &ResolvedTxFacts,
+        consumed_in_same_tx: bool,
+    ) -> Result<()> {
+        let token_id = token.token_id.clone();
+        let class_id = token.class_id.clone();
+        let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
+        let existing = self.mnft_entries.get(&token_id).cloned();
+        if existing
+            .as_ref()
+            .is_some_and(|entry| entry.standard != ObjectStandard::MnftToken)
+        {
+            bail!(
+                "mNFT token id collides with non-token object entry: token_id=0x{} block={}",
+                hex::encode(&token_id),
+                tx.block_number
+            );
+        }
+        if let Some(existing_collection_id) = existing
+            .as_ref()
+            .and_then(|entry| entry.collection_id.as_ref())
+        {
+            if existing_collection_id != &class_id {
+                bail!(
+                    "mNFT token class changed across writes: token_id=0x{} old_class=0x{} new_class=0x{} block={}",
+                    hex::encode(&token_id),
+                    hex::encode(existing_collection_id),
+                    hex::encode(&class_id),
+                    tx.block_number
+                );
+            }
+        }
+
+        let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
+        let old_owner = if was_live {
+            existing
+                .as_ref()
+                .and_then(|entry| entry.owner_lock_hash.clone())
+        } else {
+            None
+        };
+        if was_live && old_owner.is_none() {
+            bail!(
+                "mNFT live token missing owner_lock_hash during transfer: class_id=0x{}, token_id=0x{}",
+                hex::encode(&class_id),
+                hex::encode(&token_id)
+            );
+        }
+
+        self.mnft_entries.insert(
+            token_id.clone(),
+            ObjectEntry {
+                standard: ObjectStandard::MnftToken,
+                collection_id: Some(class_id.clone()),
+                token_id: Some(token_id.clone()),
+                owner_lock_hash: Some(owner_lock.clone()),
+                name: None,
+                description: None,
+                is_live: true,
+                created_at_block: existing
+                    .as_ref()
+                    .map(|entry| entry.created_at_block)
+                    .unwrap_or(tx.block_number),
+                created_at_tx: existing
+                    .as_ref()
+                    .map(|entry| entry.created_at_tx.clone())
+                    .unwrap_or_else(|| tx.tx_hash.to_vec()),
+                extra: ObjectExtra::MnftToken {
+                    token_index: token.token_index,
+                    characteristic: token.characteristic.clone(),
+                    configure: token.configure,
+                    state: token.state,
+                },
+            },
+        );
+
+        self.mnft_by_collection
+            .insert(keys::encode_nft_by_collection_key(&class_id, &token_id));
+
+        let agg = self
+            .object_collection_aggs
+            .entry(class_id.clone())
+            .or_default();
+        agg.standard = ObjectStandard::MnftClass;
+        if existing.is_none() {
+            agg.total_count = checked_next_i64(
+                agg.total_count,
+                1,
+                "mnft collection total_count insert",
+                &token_id,
+                tx.block_number,
+            )?;
+            agg.live_count = checked_next_i64(
+                agg.live_count,
+                1,
+                "mnft collection live_count insert",
+                &token_id,
+                tx.block_number,
+            )?;
+            Self::apply_mnft_owner_transition(
+                &mut self.mnft_owner_counts,
+                &class_id,
+                None,
+                Some(owner_lock.as_slice()),
+                agg,
+            )?;
+        } else if !was_live {
+            agg.live_count = checked_next_i64(
+                agg.live_count,
+                1,
+                "mnft collection live_count reactivate",
+                &token_id,
+                tx.block_number,
+            )?;
+            Self::apply_mnft_owner_transition(
+                &mut self.mnft_owner_counts,
+                &class_id,
+                None,
+                Some(owner_lock.as_slice()),
+                agg,
+            )?;
+            if consumed_in_same_tx {
+                self.increment_mnft_hourly_transfer(
+                    &class_id,
+                    &token_id,
+                    tx.timestamp_ms,
+                    tx.block_number,
+                )?;
+            }
+        } else {
+            Self::apply_mnft_owner_transition(
+                &mut self.mnft_owner_counts,
+                &class_id,
+                old_owner.as_deref(),
+                Some(owner_lock.as_slice()),
+                agg,
+            )?;
+            if old_owner.as_deref() != Some(owner_lock.as_slice()) {
+                self.increment_mnft_hourly_transfer(
+                    &class_id,
+                    &token_id,
+                    tx.timestamp_ms,
+                    tx.block_number,
+                )?;
+            }
+        }
+
+        let type_script_hash = cell
+            .type_script_hash_id
+            .map(|id| ctx.resolve_identity(id).to_vec())
+            .ok_or_else(|| {
+                anyhow!(
+                    "missing type_script_hash for mNFT token output: token_id=0x{}, outpoint=0x{}:{}",
+                    hex::encode(&token_id),
+                    hex::encode(cell.outpoint.tx_hash),
+                    cell.outpoint.index
+                )
+            })?;
+        self.insert_mnft_type_index(type_script_hash, &class_id, &token_id, tx.block_number)?;
+
+        let output_index = Self::as_i16_outpoint_index(&cell.outpoint, "mNFT token")?;
+        self.mnft_token_outpoints.insert(
+            keys::encode_mnft_token_outpoint_key(&cell.outpoint.tx_hash, output_index).to_vec(),
+            token_id,
+        );
+        Ok(())
+    }
+
     fn consume_did(&mut self, did_id: &[u8]) -> Result<()> {
         let entry = self.identities.get_mut(did_id).ok_or_else(|| {
             anyhow!(
@@ -547,25 +934,34 @@ impl ObjectOwner {
             )
         })?;
         if !entry.is_live {
-            bail!("did:ckb identity already consumed: did_id=0x{}", hex::encode(did_id));
+            bail!(
+                "did:ckb identity already consumed: did_id=0x{}",
+                hex::encode(did_id)
+            );
         }
         let old_owner = entry.owner_lock_hash.clone();
         entry.is_live = false;
         entry.owner_lock_hash = None;
 
         let did_owner_counts = &mut self.did_owner_counts;
-        let agg = self.did_agg.get_or_insert_with(|| IdentityCollectionAggregate {
-            name: Some("did:ckb".to_string()),
-            standard: IdentityStandard::DidCkb,
-            ..IdentityCollectionAggregate::default()
-        });
-        agg.live_count = checked_next_i64(agg.live_count, -1, "did:ckb live_count consume", did_id, 0)?;
+        let agg = self
+            .did_agg
+            .get_or_insert_with(|| IdentityCollectionAggregate {
+                name: Some("did:ckb".to_string()),
+                standard: IdentityStandard::DidCkb,
+                ..IdentityCollectionAggregate::default()
+            });
+        agg.live_count =
+            checked_next_i64(agg.live_count, -1, "did:ckb live_count consume", did_id, 0)?;
         Self::apply_did_owner_transition(did_owner_counts, old_owner.as_deref(), None, agg)
     }
 
     fn consume_spore(&mut self, spore_id: &[u8]) -> Result<()> {
         let entry = self.spore_entries.get_mut(spore_id).ok_or_else(|| {
-            anyhow!("missing spore during consume: spore_id=0x{}", hex::encode(spore_id))
+            anyhow!(
+                "missing spore during consume: spore_id=0x{}",
+                hex::encode(spore_id)
+            )
         })?;
         if entry.standard != ObjectStandard::Spore {
             bail!(
@@ -575,7 +971,10 @@ impl ObjectOwner {
             );
         }
         if !entry.is_live {
-            bail!("spore already consumed: spore_id=0x{}", hex::encode(spore_id));
+            bail!(
+                "spore already consumed: spore_id=0x{}",
+                hex::encode(spore_id)
+            );
         }
 
         let old_owner = entry.owner_lock_hash.clone();
@@ -589,13 +988,16 @@ impl ObjectOwner {
         entry.is_live = false;
         entry.owner_lock_hash = None;
 
-        let agg = self.cluster_aggs.get_mut(cluster_id.as_slice()).ok_or_else(|| {
-            anyhow!(
+        let agg = self
+            .cluster_aggs
+            .get_mut(cluster_id.as_slice())
+            .ok_or_else(|| {
+                anyhow!(
                 "missing cluster aggregate during spore consume: cluster_id=0x{}, spore_id=0x{}",
                 hex::encode(&cluster_id),
                 hex::encode(spore_id)
             )
-        })?;
+            })?;
         agg.live_count = checked_next_i64(
             agg.live_count,
             -1,
@@ -609,6 +1011,120 @@ impl ObjectOwner {
             &mut self.stats_spore_rows,
             &cluster_id,
             old_owner.as_deref(),
+            None,
+            agg,
+        )
+    }
+
+    fn consume_mnft_issuer(&mut self, issuer_id: &[u8; 20]) -> Result<()> {
+        let entry = self
+            .mnft_entries
+            .get_mut(issuer_id.as_slice())
+            .ok_or_else(|| {
+                anyhow!(
+                    "missing mNFT issuer during consume: issuer_id=0x{}",
+                    hex::encode(issuer_id)
+                )
+            })?;
+        if entry.standard != ObjectStandard::MnftIssuer {
+            bail!(
+                "consume_mnft_issuer expected issuer entry, found {:?}: issuer_id=0x{}",
+                entry.standard,
+                hex::encode(issuer_id)
+            );
+        }
+        if !entry.is_live {
+            bail!(
+                "mNFT issuer already consumed: issuer_id=0x{}",
+                hex::encode(issuer_id)
+            );
+        }
+        entry.is_live = false;
+        entry.owner_lock_hash = None;
+        Ok(())
+    }
+
+    fn consume_mnft_class(&mut self, class_id: &[u8]) -> Result<()> {
+        let entry = self.mnft_entries.get_mut(class_id).ok_or_else(|| {
+            anyhow!(
+                "missing mNFT class during consume: class_id=0x{}",
+                hex::encode(class_id)
+            )
+        })?;
+        if entry.standard != ObjectStandard::MnftClass {
+            bail!(
+                "consume_mnft_class expected class entry, found {:?}: class_id=0x{}",
+                entry.standard,
+                hex::encode(class_id)
+            );
+        }
+        if !entry.is_live {
+            bail!(
+                "mNFT class already consumed: class_id=0x{}",
+                hex::encode(class_id)
+            );
+        }
+        entry.is_live = false;
+        entry.owner_lock_hash = None;
+        Ok(())
+    }
+
+    fn consume_mnft_token(&mut self, token_id: &[u8]) -> Result<()> {
+        let entry = self.mnft_entries.get_mut(token_id).ok_or_else(|| {
+            anyhow!(
+                "missing mNFT token during consume: token_id=0x{}",
+                hex::encode(token_id)
+            )
+        })?;
+        if entry.standard != ObjectStandard::MnftToken {
+            bail!(
+                "consume_mnft_token expected token entry, found {:?}: token_id=0x{}",
+                entry.standard,
+                hex::encode(token_id)
+            );
+        }
+        if !entry.is_live {
+            bail!(
+                "mNFT token already consumed: token_id=0x{}",
+                hex::encode(token_id)
+            );
+        }
+        let old_owner = entry.owner_lock_hash.clone().ok_or_else(|| {
+            anyhow!(
+                "mNFT live token missing owner_lock_hash during consume: token_id=0x{}",
+                hex::encode(token_id)
+            )
+        })?;
+        let class_id = entry.collection_id.clone().ok_or_else(|| {
+            anyhow!(
+                "mNFT token missing class_id during consume: token_id=0x{}",
+                hex::encode(token_id)
+            )
+        })?;
+        entry.is_live = false;
+        entry.owner_lock_hash = None;
+
+        let agg = self
+            .object_collection_aggs
+            .get_mut(class_id.as_slice())
+            .ok_or_else(|| {
+                anyhow!(
+                    "mNFT collection aggregate missing during consume: class_id=0x{}, token_id=0x{}",
+                    hex::encode(&class_id),
+                    hex::encode(token_id)
+                )
+            })?;
+        agg.live_count = checked_next_i64(
+            agg.live_count,
+            -1,
+            "mnft collection live_count consume",
+            token_id,
+            0,
+        )?;
+        Self::apply_mnft_owner_transition(
+            &mut self.mnft_owner_counts,
+            &class_id,
+            Some(old_owner.as_slice()),
             None,
             agg,
         )
@@ -664,6 +1180,56 @@ impl ObjectOwner {
         Ok(())
     }
 
+    fn apply_mnft_owner_transition(
+        mnft_owner_counts: &mut BTreeMap<(Vec<u8>, Vec<u8>), i64>,
+        class_id: &[u8],
+        old_owner: Option<&[u8]>,
+        new_owner: Option<&[u8]>,
+        agg: &mut ObjectCollectionAggregate,
+    ) -> Result<()> {
+        if old_owner == new_owner {
+            return Ok(());
+        }
+
+        if let Some(old_owner) = old_owner {
+            let key = (class_id.to_vec(), old_owner.to_vec());
+            let current = *mnft_owner_counts.get(&key).unwrap_or(&0);
+            if current <= 0 {
+                bail!(
+                    "mnft owner count underflow: class_id=0x{}, lock_hash=0x{}, current={}",
+                    hex::encode(class_id),
+                    hex::encode(old_owner),
+                    current
+                );
+            }
+            if current == 1 {
+                mnft_owner_counts.remove(&key);
+                agg.holders_count = checked_next_i64(
+                    agg.holders_count,
+                    -1,
+                    "mnft holders_count remove",
+                    class_id,
+                    0,
+                )?;
+            } else {
+                mnft_owner_counts.insert(key, current - 1);
+            }
+        }
+
+        if let Some(new_owner) = new_owner {
+            let key = (class_id.to_vec(), new_owner.to_vec());
+            let current = *mnft_owner_counts.get(&key).unwrap_or(&0);
+            if current == 0 {
+                agg.holders_count =
+                    checked_next_i64(agg.holders_count, 1, "mnft holders_count add", class_id, 0)?;
+            }
+            let next = checked_next_i64(current, 1, "mnft owner count add", class_id, 0)?;
+            mnft_owner_counts.insert(key, next);
+        }
+
+        Ok(())
+    }
+
     fn apply_cluster_owner_transition(
         cluster_owner_counts: &mut BTreeMap<(Vec<u8>, Vec<u8>), i64>,
         stats_spore_rows: &mut BTreeMap<Vec<u8>, Vec<u8>>,
@@ -712,13 +1278,8 @@ impl ObjectOwner {
             let key = (cluster_id.to_vec(), new_owner.to_vec());
             let current = *cluster_owner_counts.get(&key).unwrap_or(&0);
             if current == 0 {
-                agg.owner_count = checked_next_i64(
-                    agg.owner_count,
-                    1,
-                    "cluster owner_count add",
-                    cluster_id,
-                    0,
-                )?;
+                agg.owner_count =
+                    checked_next_i64(agg.owner_count, 1, "cluster owner_count add", cluster_id, 0)?;
             }
             let next = current + 1;
             cluster_owner_counts.insert(key, next);
@@ -729,6 +1290,64 @@ impl ObjectOwner {
         }
 
         Ok(())
+    }
+
+    fn insert_mnft_type_index(
+        &mut self,
+        type_hash: Vec<u8>,
+        class_id: &[u8],
+        token_id: &[u8],
+        block_number: i64,
+    ) -> Result<()> {
+        if let Some(existing) = self.mnft_type_indexes.get(type_hash.as_slice()) {
+            if existing.collection_id != class_id {
+                bail!(
+                    "mNFT type index changed collection_id: type_hash=0x{}, old_class=0x{}, new_class=0x{}, token_id=0x{}, block={}",
+                    hex::encode(&type_hash),
+                    hex::encode(&existing.collection_id),
+                    hex::encode(class_id),
+                    hex::encode(token_id),
+                    block_number
+                );
+            }
+        } else {
+            self.mnft_type_indexes.insert(
+                type_hash,
+                ObjectTypeIndex {
+                    collection_id: class_id.to_vec(),
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn increment_mnft_hourly_transfer(
+        &mut self,
+        class_id: &[u8],
+        token_id: &[u8],
+        timestamp_ms: i64,
+        block_number: i64,
+    ) -> Result<()> {
+        let hour_bucket = timestamp_ms / 3_600_000;
+        let key = keys::encode_nft_hourly_key(class_id, hour_bucket).to_vec();
+        let current = *self.mnft_hourly_transfers.get(key.as_slice()).unwrap_or(&0);
+        let next = checked_next_i64(current, 1, "mnft hourly transfer", token_id, block_number)?;
+        self.mnft_hourly_transfers.insert(key, next);
+        Ok(())
+    }
+
+    fn as_i16_outpoint_index(
+        outpoint: &crate::sync::bulk_build::facts::OutPointKey,
+        label: &str,
+    ) -> Result<i16> {
+        i16::try_from(outpoint.index).map_err(|_| {
+            anyhow!(
+                "{} outpoint index exceeds i16: outpoint=0x{}:{}",
+                label,
+                hex::encode(outpoint.tx_hash),
+                outpoint.index
+            )
+        })
     }
 
     fn insert_spore_outpoint_rows(&mut self, spore_id: &[u8], cell: &CellFacts) -> Result<()> {
@@ -796,7 +1415,13 @@ impl ObjectOwner {
     }
 }
 
-fn checked_next_i64(current: i64, delta: i64, label: &str, key: &[u8], block_number: i64) -> Result<i64> {
+fn checked_next_i64(
+    current: i64,
+    delta: i64,
+    label: &str,
+    key: &[u8],
+    block_number: i64,
+) -> Result<i64> {
     let next = current.checked_add(delta).ok_or_else(|| {
         anyhow!(
             "{} overflow: key=0x{}, current={}, delta={}, block={}",
@@ -824,15 +1449,23 @@ fn checked_next_i64(current: i64, delta: i64, label: &str, key: &[u8], block_num
 #[derive(Debug, Default, Clone)]
 pub struct ObjectStateSnapshot {
     pub spores: HashMap<Vec<u8>, ObjectEntry>,
+    pub objects: HashMap<Vec<u8>, ObjectEntry>,
     pub identities: HashMap<Vec<u8>, IdentityEntry>,
     pub cluster_aggs: HashMap<Vec<u8>, ClusterAggregate>,
+    pub object_collection_aggs: HashMap<Vec<u8>, ObjectCollectionAggregate>,
     pub did_agg: Option<IdentityCollectionAggregate>,
     pub identities_by_collection: HashMap<Vec<u8>, Vec<Vec<u8>>>,
     pub spores_by_cluster: HashMap<Vec<u8>, Vec<Vec<u8>>>,
+    pub objects_by_collection: HashMap<Vec<u8>, Vec<Vec<u8>>>,
     pub did_owner_counts: HashMap<Vec<u8>, i64>,
     pub cluster_owner_counts: HashMap<Vec<u8>, HashMap<Vec<u8>, i64>>,
+    pub object_owner_counts: HashMap<Vec<u8>, HashMap<Vec<u8>, i64>>,
     pub spore_outpoints: HashMap<Vec<u8>, Vec<(Vec<u8>, i16)>>,
     pub spore_type_indexes: HashMap<Vec<u8>, SporeTypeIndex>,
+    pub object_type_indexes: HashMap<Vec<u8>, ObjectTypeIndex>,
+    pub mnft_class_outpoints: HashMap<Vec<u8>, Vec<(Vec<u8>, i16)>>,
+    pub mnft_token_outpoints: HashMap<Vec<u8>, Vec<(Vec<u8>, i16)>>,
+    pub object_hourly_transfers: HashMap<Vec<u8>, HashMap<i64, i64>>,
 }
 
 #[doc(hidden)]
@@ -867,6 +1500,10 @@ pub(crate) fn materialize_object_state_for_test(
             .list_spores(usize::MAX)?
             .into_iter()
             .collect::<HashMap<_, _>>();
+        let objects = domain_store
+            .list_objects(usize::MAX)?
+            .into_iter()
+            .collect::<HashMap<_, _>>();
         let identities = domain_store
             .list_identities(usize::MAX)?
             .into_iter()
@@ -875,12 +1512,19 @@ pub(crate) fn materialize_object_state_for_test(
             .list_cluster_aggregates()?
             .into_iter()
             .collect::<HashMap<_, _>>();
+        let object_collection_aggs = domain_store
+            .list_object_collection_aggregates()?
+            .into_iter()
+            .collect::<HashMap<_, _>>();
         let did_agg =
             domain_store.get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)?;
 
         let mut identities_by_collection = HashMap::new();
-        let mut did_ids =
-            domain_store.list_identity_ids_by_collection(&DID_CKB_SENTINEL_COLLECTION, None, usize::MAX)?;
+        let mut did_ids = domain_store.list_identity_ids_by_collection(
+            &DID_CKB_SENTINEL_COLLECTION,
+            None,
+            usize::MAX,
+        )?;
         did_ids.sort();
         if !did_ids.is_empty() {
             identities_by_collection.insert(DID_CKB_SENTINEL_COLLECTION.to_vec(), did_ids);
@@ -904,6 +1548,70 @@ pub(crate) fn materialize_object_state_for_test(
             cluster_owner_counts.insert(cluster_id.clone(), owners);
         }
 
+        let mut objects_by_collection = HashMap::new();
+        let mut object_owner_counts = HashMap::new();
+        let mut object_hourly_transfers = HashMap::new();
+        for collection_id in object_collection_aggs.keys() {
+            let mut members =
+                domain_store.list_object_ids_by_collection(collection_id, None, usize::MAX)?;
+            members.sort();
+            if !members.is_empty() {
+                objects_by_collection.insert(collection_id.clone(), members);
+            }
+
+            let owners = domain_store
+                .list_object_collection_owner_counts(collection_id)?
+                .into_iter()
+                .collect::<HashMap<_, _>>();
+            if !owners.is_empty() {
+                object_owner_counts.insert(collection_id.clone(), owners);
+            }
+
+            let prefix = keys::encode_nft_hourly_prefix(collection_id);
+            let iter = domain_store.prefix_iterator_cf(domain_store.cf_stats_object(), &prefix);
+            let mut hourly = HashMap::new();
+            for item in iter {
+                let (key, value) = item.map_err(|e| {
+                    anyhow!(
+                        "failed to iterate stats_object hourly rows in object snapshot helper: collection_id=0x{}, error={}",
+                        hex::encode(collection_id),
+                        e
+                    )
+                })?;
+                if !key.starts_with(prefix.as_slice()) {
+                    break;
+                }
+                if key.len() != 41 {
+                    bail!(
+                        "invalid mNFT hourly transfer key length in object snapshot helper: collection_id=0x{}, len={}",
+                        hex::encode(collection_id),
+                        key.len()
+                    );
+                }
+                if value.len() != 8 {
+                    bail!(
+                        "invalid mNFT hourly transfer value length in object snapshot helper: collection_id=0x{}, len={}",
+                        hex::encode(collection_id),
+                        value.len()
+                    );
+                }
+                let hour_bucket = i64::from_be_bytes(
+                    key[33..41]
+                        .try_into()
+                        .expect("hour bucket slice length must be 8"),
+                );
+                let count = i64::from_le_bytes(
+                    value[..8]
+                        .try_into()
+                        .expect("hourly transfer value length must be 8"),
+                );
+                hourly.insert(hour_bucket, count);
+            }
+            if !hourly.is_empty() {
+                object_hourly_transfers.insert(collection_id.clone(), hourly);
+            }
+        }
+
         let did_owner_counts = domain_store
             .list_identity_owner_counts(&DID_CKB_SENTINEL_COLLECTION)?
             .into_iter()
@@ -920,6 +1628,9 @@ pub(crate) fn materialize_object_state_for_test(
         }
 
         let mut spore_type_indexes = HashMap::new();
+        let mut object_type_indexes = HashMap::new();
+        let mut mnft_class_outpoints: HashMap<Vec<u8>, Vec<(Vec<u8>, i16)>> = HashMap::new();
+        let mut mnft_token_outpoints: HashMap<Vec<u8>, Vec<(Vec<u8>, i16)>> = HashMap::new();
         let iter = domain_store.iterator_cf(domain_store.cf_stats_spore(), IteratorMode::Start);
         for item in iter {
             let (key, value) = item?;
@@ -939,17 +1650,82 @@ pub(crate) fn materialize_object_state_for_test(
             spore_type_indexes.insert(type_hash, index);
         }
 
+        for (object_id, entry) in &objects {
+            if entry.standard != ObjectStandard::MnftToken {
+                continue;
+            }
+            let mut outpoints = domain_store.list_mnft_token_outpoints_by_token_id(object_id)?;
+            outpoints.sort();
+            if !outpoints.is_empty() {
+                mnft_token_outpoints.insert(object_id.clone(), outpoints);
+            }
+        }
+
+        let mut stats_object_iter =
+            domain_store.iterator_cf(domain_store.cf_stats_object(), IteratorMode::Start);
+        for item in &mut stats_object_iter {
+            let (key, value) = item?;
+            match key.first().copied() {
+                Some(keys::STATS_PREFIX_NFT_TYPE_INDEX) => {
+                    if key.len() != keys::NFT_TYPE_INDEX_KEY_SIZE {
+                        bail!(
+                            "invalid object type index key length in object snapshot helper: len={}",
+                            key.len()
+                        );
+                    }
+                    let type_hash = key[1..33].to_vec();
+                    let index: ObjectTypeIndex =
+                        bincode::deserialize(&value).map_err(|e| {
+                            anyhow!(
+                                "failed to deserialize ObjectTypeIndex in object snapshot helper: type_hash=0x{}, error={}",
+                                hex::encode(&type_hash),
+                                e
+                            )
+                        })?;
+                    object_type_indexes.insert(type_hash, index);
+                }
+                Some(keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT) => {
+                    if key.len() != keys::MNFT_CLASS_OUTPOINT_KEY_SIZE {
+                        bail!(
+                            "invalid mNFT class outpoint key length in object snapshot helper: len={}",
+                            key.len()
+                        );
+                    }
+                    if value.is_empty() {
+                        bail!("empty mNFT class outpoint value in object snapshot helper");
+                    }
+                    let outpoint = keys::decode_outpoint(&key[1..35]);
+                    mnft_class_outpoints
+                        .entry(value.to_vec())
+                        .or_default()
+                        .push(outpoint);
+                }
+                _ => {}
+            }
+        }
+        for outpoints in mnft_class_outpoints.values_mut() {
+            outpoints.sort();
+        }
+
         ObjectStateSnapshot {
             spores,
+            objects,
             identities,
             cluster_aggs,
+            object_collection_aggs,
             did_agg,
             identities_by_collection,
             spores_by_cluster,
+            objects_by_collection,
             did_owner_counts,
             cluster_owner_counts,
+            object_owner_counts,
             spore_outpoints,
             spore_type_indexes,
+            object_type_indexes,
+            mnft_class_outpoints,
+            mnft_token_outpoints,
+            object_hourly_transfers,
         }
     };
 
@@ -974,7 +1750,8 @@ fn unique_temp_test_dir(prefix: &str) -> PathBuf {
 mod tests {
     use super::*;
     use crate::sync::bulk_build::facts::{
-        CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts, OutPointKey,
+        CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts,
+        MnftClassProtocolFacts, MnftIssuerProtocolFacts, MnftTokenProtocolFacts, OutPointKey,
         ResolvedInputFacts, ResolvedTxFacts, SporeProtocolFacts,
     };
     use crate::sync::types::InternId;
@@ -1235,7 +2012,10 @@ mod tests {
             .expect("get cluster")
             .expect("stored cluster");
         assert_eq!(stored_cluster.standard, ObjectStandard::SporeCluster);
-        assert_eq!(stored_cluster.description.as_deref(), Some("{\"dob\":{\"ver\":1}}"));
+        assert_eq!(
+            stored_cluster.description.as_deref(),
+            Some("{\"dob\":{\"ver\":1}}")
+        );
 
         let cluster_agg = domain_store
             .get_cluster_aggregate(&cluster_id)
@@ -1307,6 +2087,343 @@ mod tests {
                 .get_identity_owner_count(&DID_CKB_SENTINEL_COLLECTION, &[0xcc; 32])
                 .expect("did owner count"),
             0
+        );
+
+        drop(materializer);
+        drop(append_store);
+        drop(domain_store);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn object_owner_materializes_mnft_transfer_and_consume_without_db_reads() {
+        let mut interner = crate::sync::bulk_build::interner::IdentityInterner::default();
+        let owner_a = interner.intern_bytes(vec![0xaa; 32]);
+        let owner_b = interner.intern_bytes(vec![0xbb; 32]);
+        let issuer_type_hash = interner.intern_bytes(vec![0x71; 32]);
+        let class_type_hash = interner.intern_bytes(vec![0x72; 32]);
+        let token_type_hash = interner.intern_bytes(vec![0x73; 32]);
+        let ctx = ReducerContext::new(&interner);
+
+        let issuer_id = [0x11; 20];
+        let mut class_id = issuer_id.to_vec();
+        class_id.extend_from_slice(&7u32.to_le_bytes());
+        let mut token_id = class_id.clone();
+        token_id.extend_from_slice(&9u32.to_le_bytes());
+
+        let tx0 = ResolvedTxFacts {
+            tx_hash: [0x21; 32],
+            block_number: 200,
+            block_hash: [0x90; 32],
+            timestamp_ms: 1_700_000_100_000,
+            block_dao_ar: 0,
+            tx_index: 0,
+            is_cellbase: false,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![
+                CellFacts {
+                    outpoint: OutPointKey::new([0x21; 32], 0),
+                    created_at_block: 200,
+                    capacity: 250_00000000,
+                    lock_script_hash_id: owner_a,
+                    lock_code_hash_id: InternId::new(101),
+                    lock_hash_type: 1,
+                    lock_args_id: InternId::new(102),
+                    type_script_hash_id: Some(issuer_type_hash),
+                    type_code_hash_id: Some(InternId::new(103)),
+                    type_hash_type: Some(1),
+                    type_args_id: Some(InternId::new(104)),
+                    occupied_capacity: 61_00000000,
+                    data_size: 0,
+                    data: Vec::new(),
+                    data_hash: None,
+                    udt_amount: None,
+                    semantic_tag: CellSemanticTag::Mnft,
+                    dao_state: None,
+                    protocol_facts: Some(CellProtocolFacts::MnftIssuer(MnftIssuerProtocolFacts {
+                        issuer_id,
+                        name: Some("Test Issuer".to_string()),
+                        info: Some(b"{\"name\":\"Test Issuer\"}".to_vec()),
+                        class_count: 1,
+                        set_count: 0,
+                    })),
+                },
+                CellFacts {
+                    outpoint: OutPointKey::new([0x21; 32], 1),
+                    created_at_block: 200,
+                    capacity: 260_00000000,
+                    lock_script_hash_id: owner_a,
+                    lock_code_hash_id: InternId::new(105),
+                    lock_hash_type: 1,
+                    lock_args_id: InternId::new(106),
+                    type_script_hash_id: Some(class_type_hash),
+                    type_code_hash_id: Some(InternId::new(107)),
+                    type_hash_type: Some(1),
+                    type_args_id: Some(InternId::new(108)),
+                    occupied_capacity: 61_00000000,
+                    data_size: 0,
+                    data: Vec::new(),
+                    data_hash: None,
+                    udt_amount: None,
+                    semantic_tag: CellSemanticTag::Mnft,
+                    dao_state: None,
+                    protocol_facts: Some(CellProtocolFacts::MnftClass(MnftClassProtocolFacts {
+                        class_id: class_id.clone(),
+                        issuer_id,
+                        name: Some("Genesis Class".to_string()),
+                        description: Some("class description".to_string()),
+                        renderer: Some("renderer".to_string()),
+                        total: 100,
+                        issued: 1,
+                        configure: 3,
+                    })),
+                },
+                CellFacts {
+                    outpoint: OutPointKey::new([0x21; 32], 2),
+                    created_at_block: 200,
+                    capacity: 270_00000000,
+                    lock_script_hash_id: owner_a,
+                    lock_code_hash_id: InternId::new(109),
+                    lock_hash_type: 1,
+                    lock_args_id: InternId::new(110),
+                    type_script_hash_id: Some(token_type_hash),
+                    type_code_hash_id: Some(InternId::new(111)),
+                    type_hash_type: Some(1),
+                    type_args_id: Some(InternId::new(112)),
+                    occupied_capacity: 61_00000000,
+                    data_size: 0,
+                    data: Vec::new(),
+                    data_hash: None,
+                    udt_amount: None,
+                    semantic_tag: CellSemanticTag::Mnft,
+                    dao_state: None,
+                    protocol_facts: Some(CellProtocolFacts::MnftToken(MnftTokenProtocolFacts {
+                        token_id: token_id.clone(),
+                        class_id: class_id.clone(),
+                        token_index: 9,
+                        characteristic: vec![1, 2, 3, 4],
+                        configure: 1,
+                        state: 0,
+                    })),
+                },
+            ],
+        };
+
+        let tx1 = ResolvedTxFacts {
+            tx_hash: [0x22; 32],
+            block_number: 201,
+            block_hash: [0x91; 32],
+            timestamp_ms: 1_700_000_200_000,
+            block_dao_ar: 0,
+            tx_index: 0,
+            is_cellbase: false,
+            dotbit_action: None,
+            resolved_inputs: vec![ResolvedInputFacts {
+                outpoint: OutPointKey::new([0x21; 32], 2),
+                created_at_block: 200,
+                capacity: 270_00000000,
+                occupied_capacity: 61_00000000,
+                data_size: 0,
+                data_hash: None,
+                udt_amount: None,
+                lock_script_hash_id: owner_a,
+                lock_code_hash_id: InternId::new(109),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(110),
+                type_script_hash_id: Some(token_type_hash),
+                type_code_hash_id: Some(InternId::new(111)),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(112)),
+                semantic_tag: CellSemanticTag::Mnft,
+                dao_state: None,
+                protocol_facts: Some(CellProtocolFacts::MnftToken(MnftTokenProtocolFacts {
+                    token_id: token_id.clone(),
+                    class_id: class_id.clone(),
+                    token_index: 9,
+                    characteristic: vec![1, 2, 3, 4],
+                    configure: 1,
+                    state: 0,
+                })),
+            }],
+            cells: vec![CellFacts {
+                outpoint: OutPointKey::new([0x22; 32], 0),
+                created_at_block: 201,
+                capacity: 270_00000000,
+                lock_script_hash_id: owner_b,
+                lock_code_hash_id: InternId::new(113),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(114),
+                type_script_hash_id: Some(token_type_hash),
+                type_code_hash_id: Some(InternId::new(111)),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(112)),
+                occupied_capacity: 61_00000000,
+                data_size: 0,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: CellSemanticTag::Mnft,
+                dao_state: None,
+                protocol_facts: Some(CellProtocolFacts::MnftToken(MnftTokenProtocolFacts {
+                    token_id: token_id.clone(),
+                    class_id: class_id.clone(),
+                    token_index: 9,
+                    characteristic: vec![1, 2, 3, 4],
+                    configure: 1,
+                    state: 0,
+                })),
+            }],
+        };
+
+        let tx2 = ResolvedTxFacts {
+            tx_hash: [0x23; 32],
+            block_number: 202,
+            block_hash: [0x92; 32],
+            timestamp_ms: 1_700_000_260_000,
+            block_dao_ar: 0,
+            tx_index: 0,
+            is_cellbase: false,
+            dotbit_action: None,
+            resolved_inputs: vec![ResolvedInputFacts {
+                outpoint: OutPointKey::new([0x22; 32], 0),
+                created_at_block: 201,
+                capacity: 270_00000000,
+                occupied_capacity: 61_00000000,
+                data_size: 0,
+                data_hash: None,
+                udt_amount: None,
+                lock_script_hash_id: owner_b,
+                lock_code_hash_id: InternId::new(113),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(114),
+                type_script_hash_id: Some(token_type_hash),
+                type_code_hash_id: Some(InternId::new(111)),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(112)),
+                semantic_tag: CellSemanticTag::Mnft,
+                dao_state: None,
+                protocol_facts: Some(CellProtocolFacts::MnftToken(MnftTokenProtocolFacts {
+                    token_id: token_id.clone(),
+                    class_id: class_id.clone(),
+                    token_index: 9,
+                    characteristic: vec![1, 2, 3, 4],
+                    configure: 1,
+                    state: 0,
+                })),
+            }],
+            cells: vec![],
+        };
+
+        let mut owner = ObjectOwner::default();
+        owner.apply_tx(&tx0, &ctx).expect("apply create");
+        owner.apply_tx(&tx1, &ctx).expect("apply transfer");
+        owner.apply_tx(&tx2, &ctx).expect("apply consume");
+
+        let root = unique_temp_test_dir("bulk-build-object-owner-mnft");
+        std::fs::create_dir_all(&root).expect("root");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("domain");
+        std::fs::create_dir_all(&append_path).expect("append");
+
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("domain store");
+        let append_store = CkbadgerStore::open_append_only(&append_path).expect("append store");
+        let mut materializer = Materializer::new(&domain_store, &append_store);
+        owner
+            .materialize_final(&mut materializer)
+            .expect("materialize object owner");
+
+        let issuer_entry = domain_store
+            .get_object(&issuer_id)
+            .expect("get issuer")
+            .expect("issuer entry");
+        assert_eq!(issuer_entry.standard, ObjectStandard::MnftIssuer);
+        assert!(issuer_entry.is_live);
+        assert_eq!(issuer_entry.owner_lock_hash, Some(vec![0xaa; 32]));
+
+        let class_entry = domain_store
+            .get_object(&class_id)
+            .expect("get class")
+            .expect("class entry");
+        assert_eq!(class_entry.standard, ObjectStandard::MnftClass);
+        assert!(class_entry.is_live);
+        assert_eq!(class_entry.collection_id, Some(issuer_id.to_vec()));
+
+        let token_entry = domain_store
+            .get_object(&token_id)
+            .expect("get token")
+            .expect("token entry");
+        assert_eq!(token_entry.standard, ObjectStandard::MnftToken);
+        assert!(!token_entry.is_live);
+        assert!(token_entry.owner_lock_hash.is_none());
+        assert_eq!(token_entry.created_at_block, 200);
+        assert_eq!(token_entry.created_at_tx, vec![0x21; 32]);
+
+        let class_agg = domain_store
+            .get_object_collection_aggregate(&class_id)
+            .expect("class agg")
+            .expect("class agg exists");
+        assert_eq!(class_agg.standard, ObjectStandard::MnftClass);
+        assert_eq!(class_agg.name.as_deref(), Some("Genesis Class"));
+        assert_eq!(class_agg.total_count, 1);
+        assert_eq!(class_agg.live_count, 0);
+        assert_eq!(class_agg.holders_count, 0);
+
+        let class_members = domain_store
+            .list_object_ids_by_collection(&class_id, None, 10)
+            .expect("class members");
+        assert_eq!(class_members, vec![token_id.clone()]);
+
+        assert_eq!(
+            domain_store
+                .get_object_collection_owner_count(&class_id, &[0xaa; 32])
+                .expect("owner count a"),
+            0
+        );
+        assert_eq!(
+            domain_store
+                .get_object_collection_owner_count(&class_id, &[0xbb; 32])
+                .expect("owner count b"),
+            0
+        );
+
+        let type_index = domain_store
+            .get_object_type_index(&[0x73; 32])
+            .expect("object type index")
+            .expect("object type index exists");
+        assert_eq!(type_index.collection_id, class_id);
+
+        let create_outpoint = domain_store
+            .get_mnft_class_id_by_outpoint(&[0x21; 32], 1)
+            .expect("class outpoint")
+            .expect("class outpoint exists");
+        assert_eq!(create_outpoint, class_id);
+        let first_token_outpoint = domain_store
+            .get_mnft_token_id_by_outpoint(&[0x21; 32], 2)
+            .expect("first token outpoint")
+            .expect("first token outpoint exists");
+        assert_eq!(first_token_outpoint, token_id);
+        let second_token_outpoint = domain_store
+            .get_mnft_token_id_by_outpoint(&[0x22; 32], 0)
+            .expect("second token outpoint")
+            .expect("second token outpoint exists");
+        assert_eq!(second_token_outpoint, token_id);
+
+        let token_outpoints = domain_store
+            .list_mnft_token_outpoints_by_token_id(&token_id)
+            .expect("token outpoints");
+        assert_eq!(token_outpoints.len(), 2);
+
+        let hour_bucket = tx1.timestamp_ms / 3_600_000;
+        let hourly_key = keys::encode_nft_hourly_key(&class_id, hour_bucket);
+        let hourly_value = domain_store
+            .get_stats_key(&hourly_key)
+            .expect("stats lookup")
+            .expect("hourly stats");
+        assert_eq!(
+            i64::from_le_bytes(hourly_value[..8].try_into().expect("hourly bytes")),
+            1
         );
 
         drop(materializer);

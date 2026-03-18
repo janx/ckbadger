@@ -1,3 +1,6 @@
+use ckbadger_indexer::parser::mnft::{
+    MNFT_CLASS_CODE_HASH, MNFT_ISSUER_CODE_HASH, MNFT_TOKEN_CODE_HASH,
+};
 use ckbadger_indexer::parser::spore::{
     CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2,
 };
@@ -7,7 +10,7 @@ use ckbadger_indexer::rpc::{
     TransactionView,
 };
 use ckbadger_indexer::sync::{materialize_object_state_for_test, ObjectStateSnapshot};
-use ckbadger_store::types::{DID_CKB_SENTINEL_COLLECTION, ObjectStandard};
+use ckbadger_store::types::{ObjectStandard, DID_CKB_SENTINEL_COLLECTION};
 
 fn fixture_lock_script(args_hex: &str) -> Script {
     Script {
@@ -65,11 +68,7 @@ fn create_cluster_type_script(cluster_id: &[u8; 32]) -> Script {
     }
 }
 
-fn create_spore_data(
-    content_type: &str,
-    content: &[u8],
-    cluster_id: Option<&[u8; 32]>,
-) -> Vec<u8> {
+fn create_spore_data(content_type: &str, content: &[u8], cluster_id: Option<&[u8; 32]>) -> Vec<u8> {
     let content_type_bytes = encode_molecule_bytes(content_type.as_bytes());
     let content_bytes = encode_molecule_bytes(content);
     let cluster_id_bytes = cluster_id.map(|id| encode_molecule_bytes(id));
@@ -77,8 +76,11 @@ fn create_spore_data(
     let offset_content_type = 16u32;
     let offset_content = offset_content_type + content_type_bytes.len() as u32;
     let offset_cluster_id = offset_content + content_bytes.len() as u32;
-    let total_size =
-        offset_cluster_id + cluster_id_bytes.as_ref().map(|bytes| bytes.len()).unwrap_or(0) as u32;
+    let total_size = offset_cluster_id
+        + cluster_id_bytes
+            .as_ref()
+            .map(|bytes| bytes.len())
+            .unwrap_or(0) as u32;
 
     let mut data = Vec::new();
     data.extend_from_slice(&total_size.to_le_bytes());
@@ -107,6 +109,72 @@ fn create_cluster_data(name: &str, description: &str) -> Vec<u8> {
     data.extend_from_slice(&offset_end.to_le_bytes());
     data.extend_from_slice(&name_bytes);
     data.extend_from_slice(&description_bytes);
+    data
+}
+
+fn create_mnft_issuer_type_script(type_id_hex: &str) -> Script {
+    Script {
+        code_hash: MNFT_ISSUER_CODE_HASH.to_string(),
+        hash_type: "type".to_string(),
+        args: type_id_hex.to_string(),
+    }
+}
+
+fn create_mnft_class_type_script(issuer_id: &[u8; 20], class_index: u32) -> Script {
+    let mut args = issuer_id.to_vec();
+    args.extend_from_slice(&class_index.to_le_bytes());
+    Script {
+        code_hash: MNFT_CLASS_CODE_HASH.to_string(),
+        hash_type: "type".to_string(),
+        args: format!("0x{}", hex::encode(args)),
+    }
+}
+
+fn create_mnft_token_type_script(class_id: &[u8], token_index: u32) -> Script {
+    let mut args = class_id.to_vec();
+    args.extend_from_slice(&token_index.to_le_bytes());
+    Script {
+        code_hash: MNFT_TOKEN_CODE_HASH.to_string(),
+        hash_type: "type".to_string(),
+        args: format!("0x{}", hex::encode(args)),
+    }
+}
+
+fn create_mnft_issuer_data(class_count: u32, set_count: u32, info: Option<&str>) -> Vec<u8> {
+    let mut data = vec![0u8];
+    data.extend_from_slice(&class_count.to_be_bytes());
+    data.extend_from_slice(&set_count.to_be_bytes());
+    if let Some(info) = info {
+        data.extend_from_slice(&(info.len() as u16).to_be_bytes());
+        data.extend_from_slice(info.as_bytes());
+    }
+    data
+}
+
+fn create_mnft_class_data(
+    total: u32,
+    issued: u32,
+    configure: u8,
+    name: &str,
+    description: &str,
+) -> Vec<u8> {
+    let mut data = vec![0u8];
+    data.extend_from_slice(&total.to_be_bytes());
+    data.extend_from_slice(&issued.to_be_bytes());
+    data.push(configure);
+    data.extend_from_slice(&(name.len() as u16).to_be_bytes());
+    data.extend_from_slice(name.as_bytes());
+    data.extend_from_slice(&(description.len() as u16).to_be_bytes());
+    data.extend_from_slice(description.as_bytes());
+    data.extend_from_slice(&0u16.to_be_bytes());
+    data
+}
+
+fn create_mnft_token_data(characteristic: &[u8; 8], configure: u8, state: u8) -> Vec<u8> {
+    let mut data = vec![0u8];
+    data.extend_from_slice(characteristic);
+    data.push(configure);
+    data.push(state);
     data
 }
 
@@ -145,7 +213,13 @@ fn bulk_build_object_fixture() -> Vec<BlockResponseWithCycles> {
             },
         ],
         outputs_data: vec![
-            format!("0x{}", hex::encode(create_cluster_data("Genesis Cluster", "{\"dob\":{\"ver\":1}}"))),
+            format!(
+                "0x{}",
+                hex::encode(create_cluster_data(
+                    "Genesis Cluster",
+                    "{\"dob\":{\"ver\":1}}"
+                ))
+            ),
             format!(
                 "0x{}",
                 hex::encode(create_spore_data(
@@ -239,6 +313,142 @@ fn bulk_build_object_fixture() -> Vec<BlockResponseWithCycles> {
     ]
 }
 
+fn bulk_build_mnft_object_fixture() -> Vec<BlockResponseWithCycles> {
+    let issuer_id = [0x44; 20];
+    let mut class_id = issuer_id.to_vec();
+    class_id.extend_from_slice(&7u32.to_le_bytes());
+    let mut token_id = class_id.clone();
+    token_id.extend_from_slice(&9u32.to_le_bytes());
+    let issuer_type_id = format!("0x{}", "ab".repeat(32));
+
+    let create_tx = TransactionView {
+        hash: format!("0x{}", "c1".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![
+            CellOutput {
+                capacity: format!("0x{:x}", 250_00000000u64),
+                lock: fixture_lock_script(&format!("0x{}", "0a".repeat(20))),
+                type_: Some(create_mnft_issuer_type_script(&issuer_type_id)),
+            },
+            CellOutput {
+                capacity: format!("0x{:x}", 260_00000000u64),
+                lock: fixture_lock_script(&format!("0x{}", "0a".repeat(20))),
+                type_: Some(create_mnft_class_type_script(&issuer_id, 7)),
+            },
+            CellOutput {
+                capacity: format!("0x{:x}", 270_00000000u64),
+                lock: fixture_lock_script(&format!("0x{}", "0a".repeat(20))),
+                type_: Some(create_mnft_token_type_script(&class_id, 9)),
+            },
+        ],
+        outputs_data: vec![
+            format!(
+                "0x{}",
+                hex::encode(create_mnft_issuer_data(
+                    1,
+                    0,
+                    Some(r#"{"name":"Test Issuer"}"#)
+                ))
+            ),
+            format!(
+                "0x{}",
+                hex::encode(create_mnft_class_data(
+                    100,
+                    1,
+                    3,
+                    "Genesis Class",
+                    "class description"
+                ))
+            ),
+            format!(
+                "0x{}",
+                hex::encode(create_mnft_token_data(&[1, 2, 3, 4, 5, 6, 7, 8], 1, 0))
+            ),
+        ],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let transfer_tx = TransactionView {
+        hash: format!("0x{}", "d1".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: create_tx.hash.clone(),
+                index: "0x2".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: format!("0x{:x}", 270_00000000u64),
+            lock: fixture_lock_script(&format!("0x{}", "0b".repeat(20))),
+            type_: Some(create_mnft_token_type_script(&class_id, 9)),
+        }],
+        outputs_data: vec![format!(
+            "0x{}",
+            hex::encode(create_mnft_token_data(&[1, 2, 3, 4, 5, 6, 7, 8], 1, 0))
+        )],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let consume_tx = TransactionView {
+        hash: format!("0x{}", "e1".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: transfer_tx.hash.clone(),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![],
+        outputs_data: vec![],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    vec![
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header(14_002_000, 0x91, 1_700_100_000_000),
+                uncles: vec![],
+                transactions: vec![create_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header(14_002_001, 0x92, 1_700_100_010_000),
+                uncles: vec![],
+                transactions: vec![transfer_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+        BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header(14_002_002, 0x93, 1_700_100_020_000),
+                uncles: vec![],
+                transactions: vec![consume_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        },
+    ]
+}
+
 #[test]
 fn bulk_build_object_owner_materializes_spore_cluster_and_did_state_without_db_reads() {
     let cluster_id = [0x11; 32];
@@ -250,8 +460,7 @@ fn bulk_build_object_owner_materializes_spore_cluster_and_did_state_without_db_r
         ScriptParser::compute_script_hash(&fixture_lock_script(&format!("0x{}", "02".repeat(20))));
     let create_tx_hash = vec![0xa1; 32];
     let transfer_tx_hash = vec![0xb1; 32];
-    let spore_type_hash =
-        ScriptParser::compute_script_hash(&create_spore_type_script(&spore_id));
+    let spore_type_hash = ScriptParser::compute_script_hash(&create_spore_type_script(&spore_id));
 
     let snapshot: ObjectStateSnapshot =
         materialize_object_state_for_test(&bulk_build_object_fixture()).expect("object snapshot");
@@ -333,4 +542,101 @@ fn bulk_build_object_owner_materializes_spore_cluster_and_did_state_without_db_r
         .expect("spore type index exists");
     assert_eq!(type_index.spore_id, spore_id.to_vec());
     assert_eq!(type_index.cluster_id, Some(cluster_id.to_vec()));
+}
+
+#[test]
+fn bulk_build_object_owner_materializes_mnft_state_without_db_reads() {
+    let class_issuer_id = [0x44; 20];
+    let mut class_id = class_issuer_id.to_vec();
+    class_id.extend_from_slice(&7u32.to_le_bytes());
+    let mut token_id = class_id.clone();
+    token_id.extend_from_slice(&9u32.to_le_bytes());
+    let issuer_type_id = format!("0x{}", "ab".repeat(32));
+    let issuer_object_id =
+        ScriptParser::compute_script_hash(&create_mnft_issuer_type_script(&issuer_type_id))[..20]
+            .to_vec();
+    let owner_a_hash =
+        ScriptParser::compute_script_hash(&fixture_lock_script(&format!("0x{}", "0a".repeat(20))));
+    let issuer_tx_hash = vec![0xc1; 32];
+    let transfer_tx_hash = vec![0xd1; 32];
+    let token_type_hash =
+        ScriptParser::compute_script_hash(&create_mnft_token_type_script(&class_id, 9));
+    let transfer_hour_bucket = 1_700_100_010_000_i64 / 3_600_000;
+
+    let snapshot = materialize_object_state_for_test(&bulk_build_mnft_object_fixture())
+        .expect("mnft object snapshot");
+
+    let issuer = snapshot
+        .objects
+        .get(issuer_object_id.as_slice())
+        .expect("issuer entry exists");
+    assert_eq!(issuer.standard, ObjectStandard::MnftIssuer);
+    assert!(issuer.is_live);
+    assert_eq!(issuer.owner_lock_hash, Some(owner_a_hash.clone()));
+
+    let class = snapshot
+        .objects
+        .get(class_id.as_slice())
+        .expect("class entry exists");
+    assert_eq!(class.standard, ObjectStandard::MnftClass);
+    assert!(class.is_live);
+    assert_eq!(class.collection_id, Some(class_issuer_id.to_vec()));
+
+    let token = snapshot
+        .objects
+        .get(token_id.as_slice())
+        .expect("token entry exists");
+    assert_eq!(token.standard, ObjectStandard::MnftToken);
+    assert!(!token.is_live);
+    assert!(token.owner_lock_hash.is_none());
+    assert_eq!(token.created_at_tx, issuer_tx_hash.clone());
+
+    let class_agg = snapshot
+        .object_collection_aggs
+        .get(class_id.as_slice())
+        .expect("class aggregate exists");
+    assert_eq!(class_agg.standard, ObjectStandard::MnftClass);
+    assert_eq!(class_agg.name.as_deref(), Some("Genesis Class"));
+    assert_eq!(class_agg.total_count, 1);
+    assert_eq!(class_agg.live_count, 0);
+    assert_eq!(class_agg.holders_count, 0);
+
+    assert_eq!(
+        snapshot
+            .objects_by_collection
+            .get(class_id.as_slice())
+            .expect("class members"),
+        &vec![token_id.clone()]
+    );
+    assert!(snapshot
+        .object_owner_counts
+        .get(class_id.as_slice())
+        .is_none());
+
+    let class_outpoints = snapshot
+        .mnft_class_outpoints
+        .get(class_id.as_slice())
+        .expect("class outpoints");
+    assert_eq!(class_outpoints, &vec![(issuer_tx_hash.clone(), 1_i16)]);
+
+    let token_outpoints = snapshot
+        .mnft_token_outpoints
+        .get(token_id.as_slice())
+        .expect("token outpoints");
+    assert_eq!(
+        token_outpoints,
+        &vec![(issuer_tx_hash, 2_i16), (transfer_tx_hash, 0_i16)]
+    );
+
+    let type_index = snapshot
+        .object_type_indexes
+        .get(token_type_hash.as_slice())
+        .expect("token type index exists");
+    assert_eq!(type_index.collection_id, class_id);
+
+    let hourly = snapshot
+        .object_hourly_transfers
+        .get(type_index.collection_id.as_slice())
+        .expect("hourly transfer stats exist");
+    assert_eq!(hourly.get(&transfer_hour_bucket), Some(&1));
 }

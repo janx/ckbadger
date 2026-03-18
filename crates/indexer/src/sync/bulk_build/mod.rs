@@ -1587,6 +1587,7 @@ fn collect_core_owner_state_snapshot(domain_store: &CkbadgerStore) -> Result<Cor
         cluster_owner_counts,
         spore_outpoints,
         spore_type_indexes,
+        ..owners::object::ObjectStateSnapshot::default()
     };
 
     Ok(CoreOwnerStateSnapshot {
