@@ -35,28 +35,31 @@ mod bundled {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 struct UdtLabelInfo {
     pub name: Option<String>,
     pub symbol: String,
     pub icon: Option<String>,
     pub decimal: i16,
-    pub tags: Option<Vec<String>>,
-    pub manager: Option<String>,
+    #[serde(rename = "tags")]
+    pub _tags: Option<Vec<String>>,
+    #[serde(rename = "manager")]
+    pub _manager: Option<String>,
     #[serde(rename = "type")]
     pub type_script: UdtTypeScript,
     pub type_hash: String,
     pub description: Option<String>,
     pub udt_type: String,
     pub published: bool,
-    pub email: Option<String>,
-    pub famous: bool,
-    pub operator_website: Option<String>,
+    #[serde(rename = "email")]
+    pub _email: Option<String>,
+    #[serde(rename = "famous")]
+    pub _famous: bool,
+    #[serde(rename = "operatorWebsite")]
+    pub _operator_website: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 struct UdtTypeScript {
     pub code_hash: String,
     pub hash_type: String,
@@ -65,13 +68,14 @@ struct UdtTypeScript {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 struct ScriptLabelInfo {
     pub name: String,
     pub description: String,
-    pub rfc: String,
+    #[serde(rename = "rfc")]
+    pub _rfc: String,
     pub website: String,
-    pub source_url: String,
+    #[serde(rename = "sourceUrl")]
+    pub _source_url: String,
     pub decoder_type: Option<String>,
     pub deployments: ScriptDeployments,
 }
@@ -84,13 +88,14 @@ struct ScriptDeployments {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 struct ScriptDeployment {
-    pub tag: Option<String>,
+    #[serde(rename = "tag")]
+    pub _tag: Option<String>,
     pub deprecated: bool,
     pub hash_type: String,
     pub data_hash: String,
-    pub type_hash: String,
+    #[serde(rename = "typeHash")]
+    pub _type_hash: String,
     pub code_hash: String,
 }
 
@@ -101,14 +106,14 @@ struct ScriptNameOverrides {
     #[serde(default)]
     pub known_scripts: Vec<ScriptLabelInfo>,
     // Parsed for shared docs compatibility; currently consumed by API-side NFT metadata logic.
-    #[allow(dead_code)]
+    #[serde(rename = "nftStorageTierOverrides")]
     #[serde(default)]
-    pub nft_storage_tier_overrides: std::collections::HashMap<String, String>,
+    pub _nft_storage_tier_overrides: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub deprecated: Vec<String>,
-    #[allow(dead_code)]
+    #[serde(rename = "protocols")]
     #[serde(default)]
-    pub protocols: std::collections::HashMap<String, Vec<String>>,
+    pub _protocols: std::collections::HashMap<String, Vec<String>>,
 }
 
 pub fn run_label_import(
@@ -645,6 +650,104 @@ mod tests {
     }
 
     #[test]
+    fn test_udt_label_info_deserializes_schema_compat_fields() {
+        let label: UdtLabelInfo = serde_json::from_str(
+            r#"{
+                "name": "Compat Token",
+                "symbol": "COMP",
+                "icon": "https://example.com/icon.png",
+                "decimal": 8,
+                "tags": ["featured"],
+                "manager": "0x1234",
+                "type": {
+                    "codeHash": "0x01",
+                    "hashType": "type",
+                    "args": "0x02"
+                },
+                "typeHash": "0x03",
+                "description": "schema compat",
+                "udtType": "sudt",
+                "published": true,
+                "email": "ops@example.com",
+                "famous": false,
+                "operatorWebsite": "https://example.com"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(label.name.as_deref(), Some("Compat Token"));
+        assert_eq!(label._tags.as_deref(), Some(&["featured".to_string()][..]));
+        assert_eq!(label._manager.as_deref(), Some("0x1234"));
+        assert_eq!(label._email.as_deref(), Some("ops@example.com"));
+        assert!(!label._famous);
+        assert_eq!(
+            label._operator_website.as_deref(),
+            Some("https://example.com")
+        );
+    }
+
+    #[test]
+    fn test_script_label_info_deserializes_schema_compat_fields() {
+        let script: ScriptLabelInfo = serde_json::from_str(
+            r#"{
+                "name": "Compat Script",
+                "description": "schema compat",
+                "rfc": "rfc-1",
+                "website": "https://example.com",
+                "sourceUrl": "https://github.com/example/repo",
+                "decoderType": "native",
+                "deployments": {
+                    "mainnet": [{
+                        "tag": "v1",
+                        "deprecated": false,
+                        "hashType": "type",
+                        "dataHash": "0x11",
+                        "typeHash": "0x22",
+                        "codeHash": "0x33"
+                    }],
+                    "testnet": []
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(script._rfc, "rfc-1");
+        assert_eq!(script._source_url, "https://github.com/example/repo");
+        assert_eq!(script.deployments.mainnet.len(), 1);
+        assert_eq!(script.deployments.mainnet[0]._tag.as_deref(), Some("v1"));
+        assert_eq!(script.deployments.mainnet[0]._type_hash, "0x22");
+    }
+
+    #[test]
+    fn test_script_name_overrides_deserializes_schema_compat_maps() {
+        let overrides: ScriptNameOverrides = serde_json::from_str(
+            r#"{
+                "overrides": {"Old": "New"},
+                "knownScripts": [],
+                "nftStorageTierOverrides": {"0x01": "gold"},
+                "deprecated": ["0x02"],
+                "protocols": {"rgbpp": ["xudt"]}
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            overrides
+                ._nft_storage_tier_overrides
+                .get("0x01")
+                .map(String::as_str),
+            Some("gold")
+        );
+        assert_eq!(
+            overrides
+                ._protocols
+                .get("rgbpp")
+                .map(|v| v.as_slice()),
+            Some(&["xudt".to_string()][..])
+        );
+    }
+
+    #[test]
     fn test_run_label_import_missing_path_returns_default() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
@@ -695,8 +798,8 @@ mod tests {
             symbol: "CAP".to_string(),
             icon: None,
             decimal: 8,
-            tags: None,
-            manager: None,
+            _tags: None,
+            _manager: None,
             type_script: UdtTypeScript {
                 code_hash: "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
                     .to_string(),
@@ -708,9 +811,9 @@ mod tests {
             description: None,
             udt_type: "sudt".to_string(),
             published: true,
-            email: None,
-            famous: false,
-            operator_website: None,
+            _email: None,
+            _famous: false,
+            _operator_website: None,
         };
 
         upsert_token_label(&store, &label).unwrap();
@@ -730,8 +833,8 @@ mod tests {
             symbol: "BROKEN".to_string(),
             icon: None,
             decimal: 8,
-            tags: None,
-            manager: None,
+            _tags: None,
+            _manager: None,
             type_script: UdtTypeScript {
                 code_hash: "0xzz".to_string(),
                 hash_type: "type".to_string(),
@@ -742,9 +845,9 @@ mod tests {
             description: None,
             udt_type: "sudt".to_string(),
             published: true,
-            email: None,
-            famous: false,
-            operator_website: None,
+            _email: None,
+            _famous: false,
+            _operator_website: None,
         };
 
         let err = upsert_token_label(&store, &label).unwrap_err();
