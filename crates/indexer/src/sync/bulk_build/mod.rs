@@ -9,9 +9,10 @@ use anyhow::{anyhow, bail};
 use ckbadger_store::keys;
 use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use ckbadger_store::types::{
-    decode_live_cell_marker, CachedBlockHeader, ConsumedCellMeta, DailyActivityStats, LiveCellInfo,
-    ObjectStandard, SporeTypeIndex, TokenTransferRecord, TxActivityBundle, TxIndexEntry,
-    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    decode_live_cell_marker, BulkBuildSessionMarker, CachedBlockHeader, ConsumedCellMeta,
+    DailyActivityStats, LiveCellInfo, ObjectStandard, SporeTypeIndex, SyncStatus,
+    TokenTransferRecord, TxActivityBundle, TxIndexEntry, DID_CKB_SENTINEL_COLLECTION,
+    DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ACTIVITIES, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX,
@@ -46,15 +47,11 @@ impl BulkBuildEngine {
                 indexer.progress.current()
             )
         })?;
-        let marker = ckbadger_store::types::BulkBuildSessionMarker {
-            run_id: indexer.run_id.clone(),
-            started_at: chrono::Utc::now().timestamp(),
+        start_bulk_build_session_marker(
+            indexer.writer.store().as_ref(),
+            &indexer.run_id,
             start_block,
-        };
-        indexer
-            .writer
-            .store()
-            .set_bulk_build_session_marker(Some(&marker))?;
+        )?;
 
         // Temporary routing seam: startup bulk sync now has an explicit build-engine
         // entrypoint, while the underlying execution still delegates to the existing
@@ -69,6 +66,131 @@ impl BulkBuildEngine {
         }
         result
     }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct BatchExecutionStats {
+    last_block_number: Option<i64>,
+    last_block_hash: Option<Vec<u8>>,
+    block_count: u64,
+    tx_count: u64,
+    cells_created: i64,
+    cells_consumed: i64,
+}
+
+impl BatchExecutionStats {
+    fn is_empty(&self) -> bool {
+        self.block_count == 0
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct BulkBuildSyncTotals {
+    last_block_number: Option<i64>,
+    last_block_hash: Option<Vec<u8>>,
+    total_transactions: i64,
+    total_cells_created: i64,
+    total_cells_consumed: i64,
+}
+
+impl BulkBuildSyncTotals {
+    fn record_batch(&mut self, stats: &BatchExecutionStats) -> Result<()> {
+        if stats.is_empty() {
+            return Ok(());
+        }
+
+        self.last_block_number = stats.last_block_number;
+        self.last_block_hash = stats.last_block_hash.clone();
+        self.total_transactions = checked_add_sync_total(
+            "total_transactions",
+            self.total_transactions,
+            i64::try_from(stats.tx_count).map_err(|_| {
+                anyhow!(
+                    "bulk build tx_count exceeds i64 range while recording batch sync totals: tx_count={}",
+                    stats.tx_count
+                )
+            })?,
+            self.last_block_number.unwrap_or_default(),
+        )?;
+        self.total_cells_created = checked_add_sync_total(
+            "total_cells_created",
+            self.total_cells_created,
+            stats.cells_created,
+            self.last_block_number.unwrap_or_default(),
+        )?;
+        self.total_cells_consumed = checked_add_sync_total(
+            "total_cells_consumed",
+            self.total_cells_consumed,
+            stats.cells_consumed,
+            self.last_block_number.unwrap_or_default(),
+        )?;
+        Ok(())
+    }
+
+    fn finalize_success(self, store: &CkbadgerStore) -> Result<SyncStatus> {
+        let mut status = store.get_sync_status()?;
+
+        if let Some(last_block_number) = self.last_block_number {
+            status.tip_block_number = last_block_number;
+        }
+        if let Some(last_block_hash) = self.last_block_hash {
+            status.tip_block_hash = last_block_hash;
+        }
+
+        status.total_transactions = checked_add_sync_total(
+            "total_transactions",
+            status.total_transactions,
+            self.total_transactions,
+            status.tip_block_number,
+        )?;
+        status.total_cells_created = checked_add_sync_total(
+            "total_cells_created",
+            status.total_cells_created,
+            self.total_cells_created,
+            status.tip_block_number,
+        )?;
+        status.total_cells_consumed = checked_add_sync_total(
+            "total_cells_consumed",
+            status.total_cells_consumed,
+            self.total_cells_consumed,
+            status.tip_block_number,
+        )?;
+        status.last_synced_at = chrono::Utc::now().timestamp();
+        status.mark_bulk_sync_completed(status.tip_block_number);
+        store.set_sync_status(&status)?;
+        Ok(status)
+    }
+}
+
+fn checked_add_sync_total(
+    label: &str,
+    current: i64,
+    delta: i64,
+    block_number: i64,
+) -> Result<i64> {
+    current.checked_add(delta).ok_or_else(|| {
+        anyhow!(
+            "bulk build sync total overflow: field={} current={} delta={} block={}",
+            label,
+            current,
+            delta,
+            block_number
+        )
+    })
+}
+
+fn start_bulk_build_session_marker(
+    store: &CkbadgerStore,
+    run_id: &str,
+    start_block: i64,
+) -> Result<BulkBuildSessionMarker> {
+    let marker = BulkBuildSessionMarker {
+        run_id: run_id.to_string(),
+        started_at: chrono::Utc::now().timestamp(),
+        start_block,
+    };
+    store.set_bulk_build_session_marker(Some(&marker))?;
+    Ok(marker)
 }
 
 #[derive(Default)]
@@ -226,14 +348,41 @@ impl BulkBuildRuntimeState {
         domain_store: &CkbadgerStore,
         materializer: &mut materialize::Materializer<'_>,
         is_mainnet: bool,
-    ) -> Result<()> {
+    ) -> Result<BatchExecutionStats> {
         if blocks.is_empty() {
-            return Ok(());
+            return Ok(BatchExecutionStats::default());
         }
 
         let arena =
             crate::sync::pipeline::build_bulk_facts_arena_from_blocks(blocks, &mut self.interner)?;
         let resolved = self.sequencer.resolve(&arena)?;
+        let tx_count = u64::try_from(arena.txs.len()).map_err(|_| {
+            anyhow!(
+                "bulk build tx count exceeds u64 range while applying block batch: txs={}",
+                arena.txs.len()
+            )
+        })?;
+        let cells_created = i64::try_from(arena.cells.len()).map_err(|_| {
+            anyhow!(
+                "bulk build created cell count exceeds i64 range while applying block batch: cells={}",
+                arena.cells.len()
+            )
+        })?;
+        let consumed_cells = i64::try_from(
+            resolved
+                .iter()
+                .map(|tx| tx.resolved_inputs.len())
+                .sum::<usize>(),
+        )
+        .map_err(|_| {
+            anyhow!(
+                "bulk build consumed cell count exceeds i64 range while applying block batch"
+            )
+        })?;
+        let last_block = arena
+            .blocks
+            .last()
+            .ok_or_else(|| anyhow!("bulk build arena missing blocks for non-empty batch"))?;
         let history = build_history_rows(&arena, &resolved, &self.interner, is_mainnet)?;
         let ctx = owners::ReducerContext::new(&self.interner);
 
@@ -248,7 +397,19 @@ impl BulkBuildRuntimeState {
         materializer.stream_history_rows(&history.rows)?;
         materialize_activity_secondary_state(domain_store, &history.rows)?;
 
-        Ok(())
+        Ok(BatchExecutionStats {
+            last_block_number: Some(last_block.number),
+            last_block_hash: Some(last_block.hash.to_vec()),
+            block_count: u64::try_from(arena.blocks.len()).map_err(|_| {
+                anyhow!(
+                    "bulk build block count exceeds u64 range while applying block batch: blocks={}",
+                    arena.blocks.len()
+                )
+            })?,
+            tx_count,
+            cells_created,
+            cells_consumed: consumed_cells,
+        })
     }
 
     fn finalize(self, materializer: &mut materialize::Materializer<'_>) -> Result<()> {
@@ -283,6 +444,8 @@ pub struct CoreOwnerStateSnapshot {
 #[derive(Debug, Default, Clone)]
 pub struct BulkArtifactSnapshot {
     pub report: materialize::MaterializationReport,
+    pub sync_status: SyncStatus,
+    pub bulk_build_session_marker: Option<BulkBuildSessionMarker>,
     pub block_headers: HashMap<i64, CachedBlockHeader>,
     pub block_numbers_by_hash: HashMap<Vec<u8>, i64>,
     pub txs_by_hash: HashMap<Vec<u8>, (i64, i32, TxIndexEntry)>,
@@ -326,6 +489,7 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
     block_batches: &[&[BlockResponseWithCycles]],
 ) -> Result<BulkArtifactSnapshot> {
     let mut runtime = BulkBuildRuntimeState::default();
+    let mut sync_totals = BulkBuildSyncTotals::default();
 
     let root = unique_temp_test_dir("bulk-build-core-owners");
     std::fs::create_dir_all(&root)?;
@@ -337,11 +501,16 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
     let snapshot = {
         let domain_store = CkbadgerStore::open_domain(&domain_path)?;
         let append_store = CkbadgerStore::open_append_only(&append_path)?;
+        domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
+        start_bulk_build_session_marker(&domain_store, "bulk-build-test-session", 0)?;
         let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
         for batch in block_batches {
-            runtime.apply_blocks(batch, &domain_store, &mut materializer, true)?;
+            let batch_stats = runtime.apply_blocks(batch, &domain_store, &mut materializer, true)?;
+            sync_totals.record_batch(&batch_stats)?;
         }
         runtime.finalize(&mut materializer)?;
+        let sync_status = sync_totals.finalize_success(&domain_store)?;
+        domain_store.clear_bulk_build_session_marker()?;
         let report = materializer.finish();
 
         let core = collect_core_owner_state_snapshot(&domain_store)?;
@@ -359,9 +528,12 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             cell_by_type_code,
             cell_by_data_hash,
         ) = collect_cell_snapshot(&domain_store, &append_store)?;
+        let bulk_build_session_marker = domain_store.get_bulk_build_session_marker()?;
 
         BulkArtifactSnapshot {
             report,
+            sync_status,
+            bulk_build_session_marker,
             block_headers,
             block_numbers_by_hash,
             txs_by_hash,

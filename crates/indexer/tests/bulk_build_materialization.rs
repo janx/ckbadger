@@ -11,6 +11,7 @@ use ckbadger_indexer::sync::{
     run_sample_bulk_materialization_for_test,
 };
 use ckbadger_store::keys;
+use ckbadger_store::SyncStatus;
 use ckbadger_store::types::ConsumedCellMeta;
 use ckbadger_store::types::DID_CKB_SENTINEL_COLLECTION;
 
@@ -718,5 +719,27 @@ fn bulk_build_multi_batch_materialization_matches_single_pass_for_cross_batch_st
     assert_eq!(
         split_hourly.unique_address_count,
         single_hourly.unique_address_count
+    );
+}
+
+#[test]
+fn bulk_build_session_materialization_sets_final_sync_status_and_clears_marker() {
+    let blocks = object_activity_fixture();
+    let split_batches = vec![vec![blocks[0].clone()], vec![blocks[1].clone()]];
+
+    let snapshot = materialize_bulk_artifacts_from_batches_for_test(&split_batches)
+        .expect("multi-batch bulk build artifact");
+    let status: SyncStatus = snapshot.sync_status.clone();
+
+    assert_eq!(status.tip_block_number, 14_001_001);
+    assert_eq!(status.total_transactions, 3);
+    assert_eq!(status.total_cells_created, 5);
+    assert_eq!(status.total_cells_consumed, 2);
+    assert!(status.sync_started_at.is_some());
+    assert!(status.bulk_sync_completed_at.is_some());
+    assert_eq!(status.bulk_sync_completed_block, Some(14_001_001));
+    assert!(
+        snapshot.bulk_build_session_marker.is_none(),
+        "successful bulk-build session must clear the in-progress marker"
     );
 }
