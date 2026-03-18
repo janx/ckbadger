@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -368,6 +366,7 @@ struct CoreOwners {
 }
 
 impl CoreOwners {
+    #[cfg(test)]
     fn apply_tx(
         &mut self,
         tx: &facts::ResolvedTxFacts,
@@ -1324,6 +1323,7 @@ fn build_object_collection_activity_rows(
     Ok(rows)
 }
 
+#[cfg(test)]
 fn build_sealed_aggregate_rows(
     history_rows: &[materialize::MaterializedRow],
 ) -> Result<Vec<materialize::MaterializedRow>> {
@@ -3397,8 +3397,6 @@ mod tests {
                 created_at_block: 0,
                 capacity: 200_00000000,
                 occupied_capacity: 61_00000000,
-                data_size: 0,
-                data_hash: None,
                 udt_amount: None,
                 lock_script_hash_id: lock_hash_id,
                 lock_code_hash_id: InternId::new(401),
@@ -3434,7 +3432,6 @@ mod tests {
                 timestamp_ms: 1_700_100_000_000,
                 block_dao_ar: 0,
                 tx_index: 0,
-                is_cellbase: false,
                 dotbit_action: Some("confirm_proposal".to_string()),
                 resolved_inputs: Vec::new(),
                 cells: vec![dotbit_output(0x31, owner_a, account_a, "alice.bit")],
@@ -3446,7 +3443,6 @@ mod tests {
                 timestamp_ms: 1_700_100_360_000,
                 block_dao_ar: 0,
                 tx_index: 0,
-                is_cellbase: false,
                 dotbit_action: Some("transfer_account".to_string()),
                 resolved_inputs: vec![dotbit_input(0x31, owner_a, account_a, "alice.bit")],
                 cells: vec![dotbit_output(0x32, owner_b, account_a, "alice.bit")],
@@ -3458,7 +3454,6 @@ mod tests {
                 timestamp_ms: 1_700_100_720_000,
                 block_dao_ar: 0,
                 tx_index: 0,
-                is_cellbase: false,
                 dotbit_action: Some("recycle_expired_account".to_string()),
                 resolved_inputs: vec![dotbit_input(0x32, owner_b, account_a, "alice.bit")],
                 cells: Vec::new(),
@@ -3470,7 +3465,6 @@ mod tests {
                 timestamp_ms: 1_700_101_080_000,
                 block_dao_ar: 0,
                 tx_index: 0,
-                is_cellbase: false,
                 dotbit_action: Some("confirm_proposal".to_string()),
                 resolved_inputs: vec![dotbit_input(0x40, owner_a, account_b, "bob.bit")],
                 cells: vec![dotbit_output(0x34, owner_a, account_b, "bob.bit")],

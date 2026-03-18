@@ -67,8 +67,6 @@ pub(crate) struct LiveCellSlot {
     pub(crate) created_at_block: i64,
     pub(crate) capacity: i64,
     pub(crate) occupied_capacity: i64,
-    pub(crate) data_size: i32,
-    pub(crate) data_hash: Option<Vec<u8>>,
     pub(crate) udt_amount: Option<u128>,
     pub(crate) lock_script_hash_id: InternId,
     pub(crate) lock_code_hash_id: InternId,
@@ -90,8 +88,6 @@ impl LiveCellSlot {
             created_at_block: cell.created_at_block,
             capacity: cell.capacity,
             occupied_capacity: cell.occupied_capacity,
-            data_size: cell.data_size,
-            data_hash: cell.data_hash.clone(),
             udt_amount: cell.udt_amount,
             lock_script_hash_id: cell.lock_script_hash_id,
             lock_code_hash_id: cell.lock_code_hash_id,
@@ -113,8 +109,6 @@ impl LiveCellSlot {
             created_at_block: self.created_at_block,
             capacity: self.capacity,
             occupied_capacity: self.occupied_capacity,
-            data_size: self.data_size,
-            data_hash: self.data_hash,
             udt_amount: self.udt_amount,
             lock_script_hash_id: self.lock_script_hash_id,
             lock_code_hash_id: self.lock_code_hash_id,
@@ -127,31 +121,6 @@ impl LiveCellSlot {
             semantic_tag: self.semantic_tag,
             dao_state: self.dao_state,
             protocol_facts: self.protocol_facts,
-        }
-    }
-
-    pub(crate) fn to_live_cell_info(
-        &self,
-        interner: &super::interner::IdentityInterner,
-    ) -> ckbadger_store::types::LiveCellInfo {
-        ckbadger_store::types::LiveCellInfo {
-            capacity: self.capacity,
-            lock_script_hash: interner.resolve_bytes(self.lock_script_hash_id).to_vec(),
-            lock_code_hash: interner.resolve_bytes(self.lock_code_hash_id).to_vec(),
-            lock_hash_type: self.lock_hash_type,
-            lock_args: interner.resolve_bytes(self.lock_args_id).to_vec(),
-            type_script_hash: self
-                .type_script_hash_id
-                .map(|id| interner.resolve_bytes(id).to_vec()),
-            type_code_hash: self
-                .type_code_hash_id
-                .map(|id| interner.resolve_bytes(id).to_vec()),
-            type_hash_type: self.type_hash_type,
-            type_args: self.type_args_id.map(|id| interner.resolve_bytes(id).to_vec()),
-            data_size: self.data_size,
-            occupied_capacity: self.occupied_capacity,
-            udt_amount: self.udt_amount,
-            data_hash: self.data_hash.clone(),
         }
     }
 }
@@ -224,8 +193,6 @@ mod tests {
             created_at_block: 14_000_000,
             capacity: 100_00000000,
             occupied_capacity: 61_00000000,
-            data_size: 0,
-            data_hash: None,
             udt_amount: None,
             lock_script_hash_id: InternId::new(0),
             lock_code_hash_id: InternId::new(1),

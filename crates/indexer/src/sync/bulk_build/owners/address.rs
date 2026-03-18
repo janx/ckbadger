@@ -377,7 +377,6 @@ mod tests {
             timestamp_ms: 1_700_000_000_000,
             block_dao_ar: 1,
             tx_index: 0,
-            is_cellbase: false,
             dotbit_action: None,
             resolved_inputs: Vec::new(),
             cells: vec![CellFacts {
@@ -409,15 +408,12 @@ mod tests {
             timestamp_ms: 1_700_000_000_001,
             block_dao_ar: 1,
             tx_index: 1,
-            is_cellbase: false,
             dotbit_action: None,
             resolved_inputs: vec![ResolvedInputFacts {
                 outpoint: OutPointKey::new([0x11; 32], 0),
                 created_at_block: 100,
                 capacity: 200_00000000,
                 occupied_capacity: 61_00000000,
-                data_size: 0,
-                data_hash: None,
                 udt_amount: None,
                 lock_script_hash_id: lock_a,
                 lock_code_hash_id: InternId::new(2),

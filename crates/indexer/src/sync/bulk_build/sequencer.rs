@@ -61,7 +61,6 @@ impl BulkSequencer {
                 timestamp_ms: tx.timestamp_ms,
                 block_dao_ar: tx.block_dao_ar,
                 tx_index: tx.tx_index,
-                is_cellbase: tx.is_cellbase,
                 dotbit_action: tx.dotbit_action.clone(),
                 resolved_inputs,
                 cells: outputs.to_vec(),
