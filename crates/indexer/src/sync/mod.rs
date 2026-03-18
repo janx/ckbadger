@@ -62,6 +62,16 @@ pub fn materialize_script_infos_for_test(
     bulk_build::owners::script::materialize_script_infos_for_test(blocks)
 }
 
+#[doc(hidden)]
+pub use bulk_build::owners::token::TokenStateSnapshot;
+
+#[doc(hidden)]
+pub fn materialize_token_state_for_test(
+    blocks: &[crate::rpc::BlockResponseWithCycles],
+) -> anyhow::Result<TokenStateSnapshot> {
+    bulk_build::owners::token::materialize_token_state_for_test(blocks)
+}
+
 /// Convert transactions_count (i32) to usize, failing if negative.
 pub(crate) fn checked_tx_count(count: i32, block_number: i64) -> anyhow::Result<usize> {
     usize::try_from(count).map_err(|_| {

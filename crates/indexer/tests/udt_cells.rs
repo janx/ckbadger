@@ -3,6 +3,11 @@
 //! Tests token insertion, holder balance management, holder deletion,
 //! and listing operations with limits.
 
+use ckbadger_indexer::rpc::{
+    BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
+    TransactionView,
+};
+use ckbadger_indexer::sync::materialize_token_state_for_test;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::TokenInfo;
@@ -13,6 +18,122 @@ fn setup_store() -> Arc<CkbadgerStore> {
     let store = Arc::new(CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap());
     std::mem::forget(dir);
     store
+}
+
+fn fixture_lock_script(args_hex: &str) -> Script {
+    Script {
+        code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8".to_string(),
+        hash_type: "type".to_string(),
+        args: args_hex.to_string(),
+    }
+}
+
+fn fixture_header(number: u64) -> HeaderView {
+    HeaderView {
+        version: "0x0".to_string(),
+        compact_target: "0x1a08a97e".to_string(),
+        timestamp: "0x18c7b3b2b00".to_string(),
+        number: format!("0x{number:x}"),
+        epoch: "0x7080006000028".to_string(),
+        parent_hash: format!("0x{}", "11".repeat(32)),
+        transactions_root: format!("0x{}", "22".repeat(32)),
+        proposals_hash: format!("0x{}", "33".repeat(32)),
+        extra_hash: format!("0x{}", "44".repeat(32)),
+        dao: format!("0x{}", "00".repeat(32)),
+        nonce: "0x1".to_string(),
+        hash: format!("0x{}", "55".repeat(32)),
+    }
+}
+
+fn bulk_build_udt_fixture() -> BlockResponseWithCycles {
+    let type_script = Script {
+        code_hash: "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5".to_string(),
+        hash_type: "type".to_string(),
+        args: format!("0x{}", "12".repeat(32)),
+    };
+
+    let tx0 = TransactionView {
+        hash: format!("0x{}", "da".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: format!("0x{:x}", 200_00000000u64),
+            lock: fixture_lock_script(&format!("0x{}", "01".repeat(20))),
+            type_: Some(type_script.clone()),
+        }],
+        outputs_data: vec![format!("0x{}", hex::encode(1000u128.to_le_bytes()))],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let tx1 = TransactionView {
+        hash: format!("0x{}", "db".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: tx0.hash.clone(),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![
+            CellOutput {
+                capacity: format!("0x{:x}", 200_00000000u64),
+                lock: fixture_lock_script(&format!("0x{}", "02".repeat(20))),
+                type_: Some(type_script.clone()),
+            },
+            CellOutput {
+                capacity: format!("0x{:x}", 200_00000000u64),
+                lock: fixture_lock_script(&format!("0x{}", "03".repeat(20))),
+                type_: Some(type_script.clone()),
+            },
+        ],
+        outputs_data: vec![
+            format!("0x{}", hex::encode(400u128.to_le_bytes())),
+            format!("0x{}", hex::encode(600u128.to_le_bytes())),
+        ],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    let tx2 = TransactionView {
+        hash: format!("0x{}", "dc".repeat(32)),
+        version: "0x0".to_string(),
+        cell_deps: vec![],
+        header_deps: vec![],
+        inputs: vec![CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: tx1.hash.clone(),
+                index: "0x0".to_string(),
+            },
+        }],
+        outputs: vec![CellOutput {
+            capacity: format!("0x{:x}", 200_00000000u64),
+            lock: fixture_lock_script(&format!("0x{}", "03".repeat(20))),
+            type_: Some(type_script),
+        }],
+        outputs_data: vec![format!("0x{}", hex::encode(400u128.to_le_bytes()))],
+        witnesses: vec!["0x".to_string()],
+    };
+
+    BlockResponseWithCycles {
+        block: BlockView {
+            header: fixture_header(14_000_900),
+            uncles: vec![],
+            transactions: vec![tx0, tx1, tx2],
+            proposals: vec![],
+        },
+        cycles: None,
+    }
 }
 
 fn make_token(
@@ -201,4 +322,45 @@ fn test_list_token_holders_with_limit() {
         empty.is_empty(),
         "unrelated type_hash should have no holders"
     );
+}
+
+#[test]
+fn bulk_build_token_owner_materializes_live_token_and_holder_state_without_db_reads() {
+    let snapshot =
+        materialize_token_state_for_test(&[bulk_build_udt_fixture()]).expect("token snapshot");
+
+    assert_eq!(snapshot.tokens.len(), 1);
+    let (type_hash, token) = snapshot.tokens.iter().next().expect("token info");
+    assert_eq!(token.standard, "sudt");
+    assert_eq!(
+        token.type_code_hash,
+        vec![
+            0x5e, 0x7a, 0x36, 0xa7, 0x7e, 0x68, 0xee, 0xcc, 0x01, 0x3d, 0xfa, 0x2f, 0xe6, 0xa2,
+            0x3f, 0x3b, 0x6c, 0x34, 0x4b, 0x04, 0x00, 0x58, 0x08, 0x69, 0x4a, 0xe6, 0xdd, 0x45,
+            0xee, 0xa4, 0xcf, 0xd5,
+        ]
+    );
+    assert_eq!(token.hash_type, 1);
+    assert_eq!(token.type_args, vec![0x12; 32]);
+    assert_eq!(token.first_seen_block, 14_000_900);
+    assert_eq!(token.total_supply, Some(1000));
+    assert_eq!(token.holders_count, 1);
+    assert_eq!(token.transfers_count, 0);
+
+    let holders = snapshot.token_holders.get(type_hash).expect("holders");
+    assert_eq!(holders.len(), 1);
+    let holder_balances: Vec<i128> = holders.values().copied().collect();
+    assert_eq!(holder_balances, vec![1000]);
+
+    assert_eq!(snapshot.addr_tokens.len(), 1);
+    let mut addr_balances = snapshot
+        .addr_tokens
+        .values()
+        .map(|tokens: &std::collections::HashMap<Vec<u8>, i128>| {
+            assert_eq!(tokens.len(), 1);
+            *tokens.get(type_hash).expect("address token balance")
+        })
+        .collect::<Vec<_>>();
+    addr_balances.sort_unstable();
+    assert_eq!(addr_balances, vec![1000]);
 }
