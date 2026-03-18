@@ -1274,3 +1274,18 @@ fn startup_fresh_tip_at_bulk_threshold_routes_to_pipeline_without_running_bulk_b
         "fresh startup at the exact bulk threshold must stay on pipeline path"
     );
 }
+
+#[test]
+fn startup_route_fail_fast_when_chain_tip_is_behind_sync_tip() {
+    let err = simulate_startup_sync_path_for_test(
+        &bulk_stage_handoff_fixture(),
+        2,
+        1,
+        3,
+        Some(vec![0x22; 32]),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("invalid tip ordering"));
+    assert!(err.to_string().contains("startup sync path test"));
+}
