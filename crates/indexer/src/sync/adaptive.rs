@@ -31,8 +31,6 @@ pub(crate) const ADAPTIVE_BATCH_PARSE_MODERATE_MS: f64 = 2_000.0;
 pub(crate) const ADAPTIVE_BATCH_PARSE_SEVERE_MS: f64 = 4_000.0;
 pub(crate) const ADAPTIVE_BATCH_PRECOMPUTE_MODERATE_MS: f64 = 5_000.0;
 pub(crate) const ADAPTIVE_BATCH_PRECOMPUTE_SEVERE_MS: f64 = 12_000.0;
-pub(crate) const ADAPTIVE_BATCH_NFT_PRECOMPUTE_MODERATE_MS: f64 = 3_000.0;
-pub(crate) const ADAPTIVE_BATCH_NFT_PRECOMPUTE_SEVERE_MS: f64 = 8_000.0;
 #[allow(dead_code)] // Kept for future use; removed from decision paths.
 pub(crate) const ADAPTIVE_BATCH_MODERATE_L0_TOTAL_FILES: u64 = 48;
 #[allow(dead_code)] // Kept for future use; removed from decision paths.
@@ -107,7 +105,6 @@ pub(crate) struct AdaptiveBatchInput {
     pub(crate) blocks_remaining: u64,
     pub(crate) parse_ms: Option<f64>,
     pub(crate) precompute_ms: Option<f64>,
-    pub(crate) nft_precompute_ms: Option<f64>,
     pub(crate) parse_queue_fill_pct: Option<f64>,
     pub(crate) writer_queue_fill_pct: Option<f64>,
     pub(crate) memory_ratio_pct: Option<f64>,
@@ -363,19 +360,13 @@ impl AdaptiveBatchController {
             .is_some_and(|ms| ms >= ADAPTIVE_BATCH_PARSE_MODERATE_MS)
             || input
                 .precompute_ms
-                .is_some_and(|ms| ms >= ADAPTIVE_BATCH_PRECOMPUTE_MODERATE_MS)
-            || input
-                .nft_precompute_ms
-                .is_some_and(|ms| ms >= ADAPTIVE_BATCH_NFT_PRECOMPUTE_MODERATE_MS);
+                .is_some_and(|ms| ms >= ADAPTIVE_BATCH_PRECOMPUTE_MODERATE_MS);
         let parser_severe_pressure = input
             .parse_ms
             .is_some_and(|ms| ms >= ADAPTIVE_BATCH_PARSE_SEVERE_MS)
             || input
                 .precompute_ms
-                .is_some_and(|ms| ms >= ADAPTIVE_BATCH_PRECOMPUTE_SEVERE_MS)
-            || input
-                .nft_precompute_ms
-                .is_some_and(|ms| ms >= ADAPTIVE_BATCH_NFT_PRECOMPUTE_SEVERE_MS);
+                .is_some_and(|ms| ms >= ADAPTIVE_BATCH_PRECOMPUTE_SEVERE_MS);
 
         // RocksDB internal pressure signals: detect compaction backlog, L0 pile-up,
         // and immutable memtable accumulation BEFORE they cause write stalls.
@@ -705,7 +696,6 @@ mod tests {
                 blocks_remaining: 0,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -753,7 +743,6 @@ mod tests {
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -783,7 +772,6 @@ mod tests {
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -814,7 +802,6 @@ mod tests {
                 blocks_remaining: 0,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -854,7 +841,6 @@ mod tests {
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 1,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -905,7 +891,6 @@ mod tests {
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(98.0),
                 writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(85.0),
@@ -935,7 +920,6 @@ mod tests {
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(98.0),
                 writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(85.0),
@@ -979,7 +963,6 @@ mod tests {
             blocks_remaining: 0,
             parse_ms: None,
             precompute_ms: None,
-            nft_precompute_ms: None,
             parse_queue_fill_pct: Some(97.0),
             writer_queue_fill_pct: Some(95.0),
             memory_ratio_pct: Some(85.0),
@@ -1006,7 +989,6 @@ mod tests {
                 blocks_remaining: 0,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(97.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
@@ -1047,7 +1029,6 @@ mod tests {
                 blocks_remaining: 0,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -1082,7 +1063,6 @@ mod tests {
                 blocks_remaining: 0,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(98.0),
                 writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(10.0),
@@ -1107,7 +1087,6 @@ mod tests {
                 blocks_remaining: 0,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(98.0),
                 writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(10.0),
@@ -1139,7 +1118,6 @@ mod tests {
                 blocks_remaining: 0,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -1163,7 +1141,6 @@ mod tests {
             blocks_remaining: 0,
             parse_ms: None,
             precompute_ms: None,
-            nft_precompute_ms: None,
             parse_queue_fill_pct: Some(99.0),
             writer_queue_fill_pct: Some(99.0),
             memory_ratio_pct: Some(10.0),
@@ -1197,7 +1174,6 @@ mod tests {
             blocks_remaining: 0,
             parse_ms: None,
             precompute_ms: None,
-            nft_precompute_ms: None,
             parse_queue_fill_pct: Some(97.0),
             writer_queue_fill_pct: Some(95.0),
             memory_ratio_pct: Some(10.0),
@@ -1241,7 +1217,6 @@ mod tests {
                 blocks_remaining: 10_000,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(95.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(10.0),
@@ -1276,7 +1251,6 @@ mod tests {
                 blocks_remaining: 0,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -1300,7 +1274,6 @@ mod tests {
             blocks_remaining: 0,
             parse_ms: None,
             precompute_ms: None,
-            nft_precompute_ms: None,
             parse_queue_fill_pct: Some(10.0),
             writer_queue_fill_pct: Some(10.0),
             memory_ratio_pct: Some(10.0),
@@ -1331,7 +1304,6 @@ mod tests {
                 blocks_remaining: 0,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(95.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
@@ -1354,7 +1326,6 @@ mod tests {
                 blocks_remaining: 0,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(95.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
@@ -1378,7 +1349,6 @@ mod tests {
             blocks_remaining: 0,
             parse_ms: None,
             precompute_ms: None,
-            nft_precompute_ms: None,
             parse_queue_fill_pct: Some(10.0),
             writer_queue_fill_pct: Some(10.0),
             memory_ratio_pct: Some(10.0),
@@ -1568,7 +1538,6 @@ mod tests {
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -1619,7 +1588,6 @@ mod tests {
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -1669,7 +1637,6 @@ mod tests {
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -1713,7 +1680,6 @@ mod tests {
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
                 parse_ms: None,
                 precompute_ms: None,
-                nft_precompute_ms: None,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -1755,7 +1721,6 @@ mod tests {
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
                 parse_ms: Some(4_494.3),
                 precompute_ms: Some(26_414.2),
-                nft_precompute_ms: Some(24_990.3),
                 parse_queue_fill_pct: Some(0.0),
                 writer_queue_fill_pct: Some(0.0),
                 memory_ratio_pct: Some(10.0),

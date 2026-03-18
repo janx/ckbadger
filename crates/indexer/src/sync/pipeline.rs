@@ -52,12 +52,6 @@ struct ParserPrecomputePhaseMetrics {
     build_batch_cell_infos_ms: f64,
     compute_fee_ms: f64,
     cache_balance_and_script_ms: f64,
-    spore_precompute_ms: f64,
-    nft_precompute_ms: f64,
-    nft_fallback_db_ms: f64,
-    nft_dotbit_witness_parse_ms: f64,
-    nft_output_scan_ms: f64,
-    nft_input_scan_ms: f64,
 }
 
 impl ParserPrecomputePhaseMetrics {
@@ -65,8 +59,6 @@ impl ParserPrecomputePhaseMetrics {
         self.build_batch_cell_infos_ms
             + self.compute_fee_ms
             + self.cache_balance_and_script_ms
-            + self.spore_precompute_ms
-            + self.nft_precompute_ms
     }
 }
 
@@ -74,11 +66,6 @@ impl ParserPrecomputePhaseMetrics {
 struct ParserBatchPerfSample {
     parse_ms: f64,
     precompute_ms: f64,
-    nft_precompute_ms: f64,
-    nft_fallback_db_ms: f64,
-    nft_dotbit_witness_parse_ms: f64,
-    nft_output_scan_ms: f64,
-    nft_input_scan_ms: f64,
 }
 
 fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemanticTag {
@@ -1901,20 +1888,6 @@ impl Indexer {
                         "{:.1}",
                         precompute_phase_metrics.cache_balance_and_script_ms
                     ),
-                    spore_precompute_ms =
-                        format!("{:.1}", precompute_phase_metrics.spore_precompute_ms),
-                    nft_precompute_ms =
-                        format!("{:.1}", precompute_phase_metrics.nft_precompute_ms),
-                    nft_fallback_db_ms =
-                        format!("{:.1}", precompute_phase_metrics.nft_fallback_db_ms),
-                    nft_dotbit_witness_parse_ms = format!(
-                        "{:.1}",
-                        precompute_phase_metrics.nft_dotbit_witness_parse_ms
-                    ),
-                    nft_output_scan_ms =
-                        format!("{:.1}", precompute_phase_metrics.nft_output_scan_ms),
-                    nft_input_scan_ms =
-                        format!("{:.1}", precompute_phase_metrics.nft_input_scan_ms),
                     total_ms = format!("{:.1}", total_parser_ms),
                     txs = tx_count,
                     cells = cell_count,
@@ -1950,12 +1923,6 @@ impl Indexer {
                 let parser_perf_sample = ParserBatchPerfSample {
                     parse_ms: t_parse_ms,
                     precompute_ms: precompute_parser_ms,
-                    nft_precompute_ms: precompute_phase_metrics.nft_precompute_ms,
-                    nft_fallback_db_ms: precompute_phase_metrics.nft_fallback_db_ms,
-                    nft_dotbit_witness_parse_ms: precompute_phase_metrics
-                        .nft_dotbit_witness_parse_ms,
-                    nft_output_scan_ms: precompute_phase_metrics.nft_output_scan_ms,
-                    nft_input_scan_ms: precompute_phase_metrics.nft_input_scan_ms,
                 };
                 if parse_tx
                     .send(ParsedBatch {
@@ -2476,7 +2443,6 @@ impl Indexer {
                                     blocks_remaining,
                                     parse_ms: Some(parser_perf_sample.parse_ms),
                                     precompute_ms: Some(parser_perf_sample.precompute_ms),
-                                    nft_precompute_ms: Some(parser_perf_sample.nft_precompute_ms),
                                     parse_queue_fill_pct: queue_pressure.parse_queue_fill_pct,
                                     writer_queue_fill_pct: queue_pressure.writer_queue_fill_pct,
                                     memory_ratio_pct,
@@ -2539,12 +2505,6 @@ impl Indexer {
                             inputs: write_metrics.inputs,
                             parse_ms: parser_perf_sample.parse_ms,
                             precompute_ms: parser_perf_sample.precompute_ms,
-                            nft_precompute_ms: parser_perf_sample.nft_precompute_ms,
-                            nft_fallback_db_ms: parser_perf_sample.nft_fallback_db_ms,
-                            nft_dotbit_witness_parse_ms: parser_perf_sample
-                                .nft_dotbit_witness_parse_ms,
-                            nft_output_scan_ms: parser_perf_sample.nft_output_scan_ms,
-                            nft_input_scan_ms: parser_perf_sample.nft_input_scan_ms,
                             write_ms: write_metrics.write_ms,
                             prefetch_ms: write_metrics.prefetch_ms,
                             finalize_ms: write_metrics.finalize_ms,
@@ -3318,17 +3278,15 @@ mod tests {
     }
 
     #[test]
-    fn test_parser_precompute_phase_metrics_total_ms_sums_all_phases() {
+    fn test_parser_precompute_phase_metrics_total_ms_sums_live_phases() {
         let metrics = super::ParserPrecomputePhaseMetrics {
             build_batch_cell_infos_ms: 10.0,
             compute_fee_ms: 20.0,
             cache_balance_and_script_ms: 30.0,
-            spore_precompute_ms: 40.0,
-            nft_precompute_ms: 50.0,
             ..Default::default()
         };
 
-        assert!((metrics.total_ms() - 150.0).abs() < f64::EPSILON);
+        assert!((metrics.total_ms() - 60.0).abs() < f64::EPSILON);
     }
 
 }
