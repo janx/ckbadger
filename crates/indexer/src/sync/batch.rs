@@ -35,7 +35,10 @@ use super::checked_tx_count;
 use super::dao_helpers::*;
 use super::diagnostics::*;
 use super::helpers::*;
-use super::indexer::{take_bulk_sync_completion_transition, Indexer, CACHE_INVALIDATION_INTERVAL};
+use super::indexer::{
+    persist_bulk_sync_completion_status, take_bulk_sync_completion_transition, Indexer,
+    CACHE_INVALIDATION_INTERVAL,
+};
 use super::nft_helpers::*;
 use super::sync_mode::*;
 use super::token_helpers::*;
@@ -994,21 +997,12 @@ impl Indexer {
             let stats = self.writer.store().memory_stats();
             let current = self.progress.current();
             let chain_tip = self.progress.target();
-            let chain_tip_i64 = i64::try_from(chain_tip).unwrap_or_else(|_| {
-                panic!(
-                    "chain tip over i64 range while marking bulk sync complete: {} (max={})",
-                    chain_tip,
-                    i64::MAX
-                )
-            });
             let sst_gb = stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0);
 
-            if let Err(e) = self.writer.store().update_sync_status(|status| {
-                status.mark_bulk_sync_completed(chain_tip_i64);
-            }) {
+            if let Err(e) = persist_bulk_sync_completion_status(self.writer.store().as_ref(), chain_tip) {
                 warn!(
                     error = %e,
-                    chain_tip = chain_tip_i64,
+                    chain_tip,
                     "Failed to persist bulk sync completion marker in sync status"
                 );
             }

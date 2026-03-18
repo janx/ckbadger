@@ -286,6 +286,22 @@ pub(crate) fn take_bulk_sync_completion_transition(
     previously_bulk_sync_active && !currently_bulk_sync_active
 }
 
+pub(crate) fn persist_bulk_sync_completion_status(
+    store: &CkbadgerStore,
+    chain_tip: u64,
+) -> Result<()> {
+    let chain_tip_i64 = i64::try_from(chain_tip).map_err(|_| {
+        anyhow!(
+            "chain tip over i64 range while marking bulk sync complete: {} (max={})",
+            chain_tip,
+            i64::MAX
+        )
+    })?;
+    store.update_sync_status(|status| {
+        status.mark_bulk_sync_completed(chain_tip_i64);
+    })
+}
+
 pub(super) fn mempool_short_tx_id(tx_hash: &str) -> &str {
     // Node-provided tx hashes are always "0x" + 64 hex chars; skip prefix, take first 20.
     &tx_hash[2..22]
@@ -1323,6 +1339,38 @@ mod tests {
             was_bulk_sync_active.load(Ordering::SeqCst),
             "the transition helper must remember that bulk sync has become active"
         );
+    }
+
+    #[test]
+    fn persist_bulk_sync_completion_status_marks_store_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store
+            .update_sync_status(|status| status.init_sync_start(128, true))
+            .unwrap();
+
+        persist_bulk_sync_completion_status(&store, 256).unwrap();
+        let first = store.get_sync_status().unwrap();
+        assert!(first.bulk_sync_completed_at.is_some());
+        assert_eq!(first.bulk_sync_completed_block, Some(256));
+
+        persist_bulk_sync_completion_status(&store, 512).unwrap();
+        let second = store.get_sync_status().unwrap();
+        assert_eq!(
+            second.bulk_sync_completed_block,
+            Some(256),
+            "completion marker must remain idempotent once written"
+        );
+        assert_eq!(second.bulk_sync_completed_at, first.bulk_sync_completed_at);
+    }
+
+    #[test]
+    fn persist_bulk_sync_completion_status_errors_on_chain_tip_overflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let err = persist_bulk_sync_completion_status(&store, u64::MAX).unwrap_err();
+        assert!(err.to_string().contains("chain tip over i64 range"));
     }
 
     #[test]
