@@ -345,7 +345,8 @@ fn bulk_build_token_owner_materializes_live_token_and_holder_state_without_db_re
     assert_eq!(token.first_seen_block, 14_000_900);
     assert_eq!(token.total_supply, Some(1000));
     assert_eq!(token.holders_count, 1);
-    assert_eq!(token.transfers_count, 0);
+    assert_eq!(token.transfers_count, 4);
+    assert_eq!(snapshot.token_transfer_counts.get(type_hash), Some(&4));
 
     let holders = snapshot.token_holders.get(type_hash).expect("holders");
     assert_eq!(holders.len(), 1);
@@ -363,4 +364,10 @@ fn bulk_build_token_owner_materializes_live_token_and_holder_state_without_db_re
         .collect::<Vec<_>>();
     addr_balances.sort_unstable();
     assert_eq!(addr_balances, vec![1000]);
+
+    let hourly = snapshot
+        .token_hourly_transfers
+        .get(type_hash)
+        .expect("hourly transfers");
+    assert_eq!(hourly.values().copied().collect::<Vec<_>>(), vec![4]);
 }

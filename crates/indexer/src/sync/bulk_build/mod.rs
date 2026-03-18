@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -9,9 +10,10 @@ use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use ckbadger_store::types::{
     decode_live_cell_marker, BulkBuildSessionMarker, CachedBlockHeader,
     CellDistributionTrackerState, ConsumedCellMeta, DailyActivityStats, DailyAddressCohort,
-    DailyCellDistribution, DailyHodlWave, HodlTrackerState, LiveCellInfo, ObjectStandard,
-    SporeTypeIndex, SyncStatus, TokenTransferRecord, TxActivityBundle, TxIndexEntry,
-    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    DailyCellDistribution, DailyHodlWave, DaoDailySnapshot, DaoLatestStatistics, DaoTopDepositors,
+    HodlTrackerState, LiveCellInfo, ObjectStandard, ScriptDailyDelta, SporeTypeIndex, SyncStatus,
+    TokenTransferRecord, TxActivityBundle, TxIndexEntry, DID_CKB_SENTINEL_COLLECTION,
+    DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ACTIVITIES, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX,
@@ -213,6 +215,7 @@ impl BulkBuildEngine {
 
         runtime.finalize(indexer.writer.store().as_ref(), &mut materializer)?;
         sync_totals.finalize_success(indexer.writer.store().as_ref(), false)?;
+        indexer.writer.refresh_latest_dao_statistics()?;
         indexer.writer.store().clear_bulk_build_session_marker()?;
         let previous_bulk_sync_allowed = finalize_bulk_stage_handoff_state(
             &indexer.bulk_sync_allowed,
@@ -365,6 +368,10 @@ struct CoreOwners {
 }
 
 impl CoreOwners {
+    fn record_block(&mut self, block: &facts::BlockFacts) -> Result<()> {
+        self.dao.record_block(block)
+    }
+
     #[cfg(test)]
     fn apply_tx(
         &mut self,
@@ -595,6 +602,7 @@ impl BulkBuildRuntimeState {
         let ctx = owners::ReducerContext::new(interner);
         let mut cell_dist_sealed_rows = Vec::new();
         for block in &arena.blocks {
+            owners.record_block(block)?;
             let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
             cell_dist_tracker.record_block_date(block.number, block_date);
 
@@ -848,6 +856,10 @@ pub struct BulkArtifactSnapshot {
     pub activity_bundles: HashMap<Vec<u8>, TxActivityBundle>,
     pub daily_activity_stats: HashMap<String, DailyActivityStats>,
     pub hourly_activity_stats: HashMap<String, DailyActivityStats>,
+    pub dao_daily_snapshots: HashMap<String, DaoDailySnapshot>,
+    pub latest_dao_statistics: Option<DaoLatestStatistics>,
+    pub dao_top_depositors: Option<DaoTopDepositors>,
+    pub script_daily_deltas: HashMap<(Vec<u8>, bool), HashMap<u32, ScriptDailyDelta>>,
     pub cell_payloads: HashMap<Vec<u8>, LiveCellInfo>,
     pub live_cells: HashMap<Vec<u8>, i64>,
     pub consumed_cells: HashMap<Vec<u8>, ConsumedCellMeta>,
@@ -956,11 +968,12 @@ where
     std::fs::create_dir_all(&append_path)?;
 
     let snapshot = {
-        let domain_store = CkbadgerStore::open_domain(&domain_path)?;
-        let append_store = CkbadgerStore::open_append_only(&append_path)?;
+        let domain_store = Arc::new(CkbadgerStore::open_domain(&domain_path)?);
+        let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path)?);
         domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
-        start_bulk_build_session_marker(&domain_store, "bulk-build-test-session", 0)?;
-        let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
+        start_bulk_build_session_marker(domain_store.as_ref(), "bulk-build-test-session", 0)?;
+        let mut materializer =
+            materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
         let mut current_block = 0u64;
         let mut processed_blocks = 0usize;
 
@@ -984,14 +997,16 @@ where
             processed_blocks = block_idx + 1;
         }
 
-        runtime.finalize(&domain_store, &mut materializer)?;
-        let sync_status = sync_totals.finalize_success(&domain_store, false)?;
+        runtime.finalize(domain_store.as_ref(), &mut materializer)?;
+        let sync_status = sync_totals.finalize_success(domain_store.as_ref(), false)?;
+        crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
+            .refresh_latest_dao_statistics()?;
         domain_store.clear_bulk_build_session_marker()?;
         let report = materializer.finish();
 
         finish(
-            &domain_store,
-            &append_store,
+            domain_store.as_ref(),
+            append_store.as_ref(),
             BulkStageTestState {
                 processed_blocks,
                 report,
@@ -1076,20 +1091,28 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
     std::fs::create_dir_all(&append_path)?;
 
     let snapshot = {
-        let domain_store = CkbadgerStore::open_domain(&domain_path)?;
-        let append_store = CkbadgerStore::open_append_only(&append_path)?;
+        let domain_store = Arc::new(CkbadgerStore::open_domain(&domain_path)?);
+        let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path)?);
         domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
-        start_bulk_build_session_marker(&domain_store, "bulk-build-test-session", 0)?;
-        let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
+        start_bulk_build_session_marker(domain_store.as_ref(), "bulk-build-test-session", 0)?;
+        let mut materializer =
+            materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
         for batch in block_batches {
             let batch_stats = runtime.apply_blocks(batch, &mut materializer, true)?;
             sync_totals.record_batch(&batch_stats)?;
         }
-        runtime.finalize(&domain_store, &mut materializer)?;
-        let sync_status = sync_totals.finalize_success(&domain_store, true)?;
+        runtime.finalize(domain_store.as_ref(), &mut materializer)?;
+        let sync_status = sync_totals.finalize_success(domain_store.as_ref(), true)?;
+        crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
+            .refresh_latest_dao_statistics()?;
         domain_store.clear_bulk_build_session_marker()?;
         let report = materializer.finish();
-        collect_bulk_artifact_snapshot(&domain_store, &append_store, report, sync_status)?
+        collect_bulk_artifact_snapshot(
+            domain_store.as_ref(),
+            append_store.as_ref(),
+            report,
+            sync_status,
+        )?
     };
 
     let _ = std::fs::remove_dir_all(&root);
@@ -1107,6 +1130,9 @@ fn collect_bulk_artifact_snapshot(
         collect_history_snapshot(domain_store)?;
     let (daily_activity_stats, hourly_activity_stats) =
         collect_activity_stats_snapshot(domain_store)?;
+    let (dao_daily_snapshots, latest_dao_statistics, dao_top_depositors) =
+        collect_dao_stats_snapshot(domain_store)?;
+    let script_daily_deltas = collect_script_daily_deltas_snapshot(domain_store)?;
     let (hodl_waves, cell_distribution_snapshots, address_cohort_snapshots) =
         collect_hodl_stats_snapshot(domain_store)?;
     let (
@@ -1138,6 +1164,10 @@ fn collect_bulk_artifact_snapshot(
         activity_bundles,
         daily_activity_stats,
         hourly_activity_stats,
+        dao_daily_snapshots,
+        latest_dao_statistics,
+        dao_top_depositors,
+        script_daily_deltas,
         cell_payloads,
         live_cells,
         consumed_cells,
@@ -1148,6 +1178,61 @@ fn collect_bulk_artifact_snapshot(
         cell_by_data_hash,
         core,
     })
+}
+
+fn collect_dao_stats_snapshot(
+    domain_store: &CkbadgerStore,
+) -> Result<(
+    HashMap<String, DaoDailySnapshot>,
+    Option<DaoLatestStatistics>,
+    Option<DaoTopDepositors>,
+)> {
+    let dao_daily_snapshots = domain_store
+        .list_dao_daily_snapshots()?
+        .into_iter()
+        .map(|snapshot| (snapshot.date.clone(), snapshot))
+        .collect::<HashMap<_, _>>();
+    let latest_dao_statistics = domain_store.get_latest_dao_statistics()?;
+    let dao_top_depositors = domain_store.get_dao_top_depositors()?;
+    Ok((
+        dao_daily_snapshots,
+        latest_dao_statistics,
+        dao_top_depositors,
+    ))
+}
+
+fn collect_script_daily_deltas_snapshot(
+    domain_store: &CkbadgerStore,
+) -> Result<HashMap<(Vec<u8>, bool), HashMap<u32, ScriptDailyDelta>>> {
+    let iter = domain_store.iterator_cf(domain_store.cf_stats_script(), IteratorMode::Start);
+    let mut script_daily_deltas: HashMap<(Vec<u8>, bool), HashMap<u32, ScriptDailyDelta>> =
+        HashMap::new();
+
+    for item in iter {
+        let (key, value) = item?;
+        if key.len() != keys::SCRIPT_DAILY_KEY_SIZE
+            || key.first().copied() != Some(keys::STATS_PREFIX_SCRIPT_DAILY)
+        {
+            continue;
+        }
+
+        let (code_hash, is_type, date) = keys::decode_script_daily_key(&key);
+        let delta: ScriptDailyDelta = bincode::deserialize(&value).map_err(|e| {
+            anyhow!(
+                "failed to deserialize script daily delta in bulk artifact snapshot helper: code_hash=0x{}, is_type={}, date={}, error={}",
+                hex::encode(&code_hash),
+                is_type,
+                date,
+                e
+            )
+        })?;
+        script_daily_deltas
+            .entry((code_hash, is_type))
+            .or_default()
+            .insert(date, delta);
+    }
+
+    Ok(script_daily_deltas)
 }
 
 fn build_history_rows(
@@ -2417,12 +2502,72 @@ fn collect_core_owner_state_snapshot(
         .into_iter()
         .collect::<HashMap<_, _>>();
     let mut token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>> = HashMap::new();
+    let mut token_transfer_counts = HashMap::new();
+    let mut token_hourly_transfers = HashMap::new();
+    let mut token_daily_deltas = HashMap::new();
     for type_hash in tokens.keys() {
         let holders = domain_store
             .list_token_holders(type_hash, usize::MAX)?
             .into_iter()
             .collect::<HashMap<_, _>>();
         token_holders.insert(type_hash.clone(), holders);
+
+        token_transfer_counts.insert(
+            type_hash.clone(),
+            domain_store.get_token_transfers_count(type_hash)?,
+        );
+
+        let prefix = keys::encode_token_hourly_prefix(type_hash);
+        let iter = domain_store.prefix_iterator_cf(domain_store.cf_stats_token(), &prefix);
+        let mut hourly = HashMap::new();
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow!(
+                    "failed to iterate stats_token hourly rows in core owner snapshot helper: type_hash=0x{}, error={}",
+                    hex::encode(type_hash),
+                    e
+                )
+            })?;
+            if !key.starts_with(prefix.as_slice()) {
+                break;
+            }
+            if key.len() != 41 {
+                bail!(
+                    "invalid token hourly key length in core owner snapshot helper: type_hash=0x{}, len={}",
+                    hex::encode(type_hash),
+                    key.len()
+                );
+            }
+            if value.len() != 8 {
+                bail!(
+                    "invalid token hourly value length in core owner snapshot helper: type_hash=0x{}, len={}",
+                    hex::encode(type_hash),
+                    value.len()
+                );
+            }
+            let hour_bucket = i64::from_be_bytes(
+                key[33..41]
+                    .try_into()
+                    .expect("hour bucket slice length must be 8"),
+            );
+            let count = i64::from_le_bytes(
+                value[..8]
+                    .try_into()
+                    .expect("hourly transfer value length must be 8"),
+            );
+            hourly.insert(hour_bucket, count);
+        }
+        if !hourly.is_empty() {
+            token_hourly_transfers.insert(type_hash.clone(), hourly);
+        }
+
+        let daily_deltas = domain_store
+            .list_token_daily_deltas(type_hash)?
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        if !daily_deltas.is_empty() {
+            token_daily_deltas.insert(type_hash.clone(), daily_deltas);
+        }
     }
     let mut addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>> = HashMap::new();
     let addr_tokens_iter = domain_store.iterator_cf(
@@ -2447,6 +2592,9 @@ fn collect_core_owner_state_snapshot(
         tokens,
         token_holders,
         addr_tokens,
+        token_transfer_counts,
+        token_hourly_transfers,
+        token_daily_deltas,
     };
 
     let deposits = domain_store

@@ -56,10 +56,10 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `cluster_agg`                    | cluster_id                                            | ClusterAgg              | Spore cluster aggregate stats                                                             |
 | `script_info`                    | code_hash (32B)                                       | ScriptInfo              | Legacy/compatibility script metadata keyed by bare hash                                   |
 | `stats_chain`                    | prefixed keys                                         | chain chart snapshots   | Daily/hourly/epoch/miner/block stats (DailyActivityStats includes protocol_action_counts) |
-| `stats_dao`                      | prefixed keys                                         | DAO snapshots           | DAO daily snapshots                                                                       |
+| `stats_dao`                      | prefixed keys                                         | DAO snapshots           | DAO daily snapshots plus latest/top DAO summaries (sealed aggregates in bulk build)       |
 | `stats_hodl`                     | prefixed keys                                         | HODL/chart snapshots    | HODL waves, cell distribution, address cohorts                                            |
-| `stats_script`                   | prefixed keys                                         | ScriptDailyDelta        | Script daily deltas                                                                       |
-| `stats_token`                    | prefixed keys                                         | token rollups + deltas  | Token transfer/hourly/daily stats                                                         |
+| `stats_script`                   | prefixed keys                                         | ScriptDailyDelta        | Script daily deltas (per `code_hash` + lock/type + day; sealed in bulk build)             |
+| `stats_token`                    | prefixed keys                                         | token rollups + deltas  | Token transfer totals, hourly buckets, and daily deltas (sealed in bulk build)            |
 | `stats_spore`                    | prefixed keys                                         | spore rollups/indexes   | Spore/cluster daily + owner/index stats                                                   |
 | `stats_object`                   | prefixed keys                                         | object rollups/indexes  | Object/mNFT daily + hourly + indexes                                                      |
 | `script_versions`                | version_hash                                          | ScriptVersionInfo       | Canonical script code version rows keyed by `H(script_code)`                              |
@@ -90,6 +90,17 @@ model that future script schema refactors should follow.
 - `dao_by_block`: key = `i64::MAX - deposit_block` (big-endian) + deposit outpoint, supports global DAO deposit pagination in newest-first order.
 - `dao_by_lock_block`: key = `lock_script_hash(32B)` + block_desc + outpoint, supports per-address DAO deposit pagination.
 - `dao_by_status_block`: key = `status(i16 BE)` + block_desc + outpoint, supports status-filtered DAO queries (`deposited/withdrawing/withdrawn`).
+
+### Bulk-Build Sealed Aggregate Note
+
+During fresh-db bulk sync, the indexer writes `stats_dao`, `stats_script`, and `stats_token`
+inline as Class C sealed aggregates:
+
+- `stats_dao` stores DAO daily snapshots keyed by date, then refreshes the latest/top summary rows
+  after sync tip metadata is finalized.
+- `stats_script` stores `ScriptDailyDelta` rows keyed by `code_hash + kind(lock/type) + YYYYMMDD`.
+- `stats_token` stores total transfer counters, hourly transfer buckets, and `TokenDailyDelta`
+  rows keyed by token `type_script_hash`.
 
 ### stats_hodl Key Prefixes
 

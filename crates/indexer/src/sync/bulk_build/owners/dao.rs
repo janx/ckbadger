@@ -1,24 +1,30 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Result};
+use chrono::NaiveDate;
 use ckbadger_store::keys;
-use ckbadger_store::types::DaoDepositCacheEntry;
+use ckbadger_store::types::{DaoDailySnapshot, DaoDepositCacheEntry};
 use ckbadger_store::{
     CkbadgerStore, CF_DAO_BY_BLOCK, CF_DAO_BY_LOCK_BLOCK, CF_DAO_BY_STATUS_BLOCK,
-    CF_DAO_BY_WITHDRAW_TX, CF_DAO_DEPOSITS,
+    CF_DAO_BY_WITHDRAW_TX, CF_DAO_DEPOSITS, CF_STATS_DAO,
 };
 
 use super::{BulkReducer, ReducerContext};
 use crate::db::writer::dao::calculate_dao_compensation_from_ar;
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::facts::{
-    CellFacts, CellSemanticTag, DaoCellState, OutPointKey, ResolvedInputFacts, ResolvedTxFacts,
+    BlockFacts, CellFacts, CellSemanticTag, DaoCellState, OutPointKey, ResolvedInputFacts,
+    ResolvedTxFacts,
 };
 use crate::sync::bulk_build::interner::IdentityInterner;
 use crate::sync::bulk_build::materialize::{MaterializedRow, Materializer};
 use crate::sync::bulk_build::sequencer::BulkSequencer;
+use crate::sync::dao_helpers::{
+    derive_running_depositors, extract_dao_csu, resolve_non_miner_secondary_delta_for_snapshot,
+    split_secondary_issuance,
+};
 use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 
 #[derive(Debug, Default)]
@@ -26,11 +32,20 @@ pub(crate) struct DaoOwner {
     deposits: HashMap<OutPointKey, DaoDepositCacheEntry>,
     request_outpoints: HashMap<OutPointKey, OutPointKey>,
     block_ar_by_number: HashMap<i64, u64>,
+    snapshot_dates: BTreeSet<NaiveDate>,
+    daily_dao_fields: HashMap<NaiveDate, (i128, i128, i128)>,
+    daily_active_delta: HashMap<NaiveDate, i128>,
+    daily_gross_deposit_delta: HashMap<NaiveDate, i128>,
+    daily_new_deposits_delta: HashMap<NaiveDate, i64>,
+    daily_withdrawals_delta: HashMap<NaiveDate, i64>,
+    daily_secondary_non_miner_delta: HashMap<NaiveDate, i128>,
+    prev_dao_cs: Option<(i128, i128)>,
 }
 
 impl BulkReducer for DaoOwner {
     fn apply_tx(&mut self, tx: &ResolvedTxFacts, ctx: &ReducerContext<'_>) -> Result<()> {
         self.record_block_ar(tx)?;
+        let tx_date = ckbadger_common::block_date_from_ms(tx.timestamp_ms);
 
         let dao_outputs = tx
             .cells
@@ -142,6 +157,12 @@ impl BulkReducer for DaoOwner {
                     })?;
                     consumed_request_output_positions.insert(request_output_pos);
 
+                    Self::bump_daily_i128(
+                        &mut self.daily_active_delta,
+                        tx_date,
+                        -(entry.capacity as i128),
+                        "dao daily active delta",
+                    )?;
                     entry.status = 1;
                     entry.withdraw_request_block = Some(tx.block_number);
                     entry.withdraw_request_tx = Some(tx.tx_hash.to_vec());
@@ -253,6 +274,12 @@ impl BulkReducer for DaoOwner {
                     entry.withdraw_request_output_index = Some(request_output_index);
                     entry.withdraw_to_output_index = withdraw_to_output_index;
                     entry.compensation = Some(compensation);
+                    Self::bump_daily_i64(
+                        &mut self.daily_withdrawals_delta,
+                        tx_date,
+                        1,
+                        "dao daily withdrawals delta",
+                    )?;
                 }
                 status => {
                     bail!(
@@ -307,9 +334,151 @@ impl BulkReducer for DaoOwner {
                     format_outpoint(&output.outpoint)
                 );
             }
+
+            Self::bump_daily_i128(
+                &mut self.daily_active_delta,
+                tx_date,
+                output.capacity as i128,
+                "dao daily active delta",
+            )?;
+            Self::bump_daily_i128(
+                &mut self.daily_gross_deposit_delta,
+                tx_date,
+                output.capacity as i128,
+                "dao daily gross deposit delta",
+            )?;
+            Self::bump_daily_i64(
+                &mut self.daily_new_deposits_delta,
+                tx_date,
+                1,
+                "dao daily new deposits delta",
+            )?;
         }
 
         Ok(())
+    }
+
+    fn flush_sealed(&mut self, materializer: &mut Materializer<'_>) -> Result<()> {
+        let mut rows = Vec::new();
+        let mut running_total_deposited = 0i128;
+        let mut running_total_deposit_count = 0i64;
+        let mut running_total_withdrawal_count = 0i64;
+        let mut running_cumulative_deposit_amount = 0i128;
+        let mut running_cum_miner = 0i128;
+        let mut running_cum_dao = 0i128;
+        let mut running_cum_treasury = 0i128;
+        let mut prev_secondary_pool = 0i128;
+
+        for date in &self.snapshot_dates {
+            running_total_deposited = checked_next_i128_total(
+                running_total_deposited,
+                self.daily_active_delta.get(date).copied().unwrap_or(0),
+                "dao running total_deposited",
+                *date,
+            )?;
+            running_cumulative_deposit_amount = checked_next_i128_total(
+                running_cumulative_deposit_amount,
+                self.daily_gross_deposit_delta
+                    .get(date)
+                    .copied()
+                    .unwrap_or(0),
+                "dao running cumulative_deposit_amount",
+                *date,
+            )?;
+            running_total_deposit_count = checked_next_i64_total(
+                running_total_deposit_count,
+                self.daily_new_deposits_delta
+                    .get(date)
+                    .copied()
+                    .unwrap_or(0),
+                "dao running total_deposit_count",
+                *date,
+            )?;
+            running_total_withdrawal_count = checked_next_i64_total(
+                running_total_withdrawal_count,
+                self.daily_withdrawals_delta.get(date).copied().unwrap_or(0),
+                "dao running total_withdrawal_count",
+                *date,
+            )?;
+
+            let (total_issuance, secondary_pool, occupied_capacity) = self
+                .daily_dao_fields
+                .get(date)
+                .copied()
+                .ok_or_else(|| anyhow!("missing DAO field for bulk snapshot date {}", date))?;
+            let non_miner_secondary = resolve_non_miner_secondary_delta_for_snapshot(
+                *date,
+                self.daily_secondary_non_miner_delta.get(date).copied(),
+                secondary_pool,
+                prev_secondary_pool,
+            )?;
+            let (daily_miner, daily_dao_share, daily_treasury_share) =
+                if total_issuance > 0 && non_miner_secondary > 0 {
+                    split_secondary_issuance(
+                        total_issuance,
+                        occupied_capacity,
+                        running_total_deposited,
+                        non_miner_secondary,
+                    )?
+                } else {
+                    (0, 0, 0)
+                };
+            running_cum_miner = checked_next_i128_total(
+                running_cum_miner,
+                daily_miner,
+                "dao running cum_miner_secondary",
+                *date,
+            )?;
+            running_cum_dao = checked_next_i128_total(
+                running_cum_dao,
+                daily_dao_share,
+                "dao running cum_dao_compensation",
+                *date,
+            )?;
+            running_cum_treasury = checked_next_i128_total(
+                running_cum_treasury,
+                daily_treasury_share,
+                "dao running cum_treasury",
+                *date,
+            )?;
+            prev_secondary_pool = secondary_pool;
+
+            let snapshot = DaoDailySnapshot {
+                date: date.format("%Y-%m-%d").to_string(),
+                total_deposited: running_total_deposited,
+                depositors_count: derive_running_depositors(
+                    running_total_deposit_count,
+                    running_total_withdrawal_count,
+                    *date,
+                )?,
+                new_deposits: running_total_deposit_count,
+                withdrawals: running_total_withdrawal_count,
+                compensation: running_cum_dao,
+                cumulative_deposit_amount: running_cumulative_deposit_amount,
+                total_issuance,
+                secondary_pool,
+                occupied_capacity,
+                cum_miner_secondary: running_cum_miner,
+                cum_dao_compensation: running_cum_dao,
+                cum_treasury: running_cum_treasury,
+                unclaimed_compensation: 0,
+            };
+            let key = keys::encode_stats_key(
+                keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+                date.format("%Y%m%d").to_string().as_bytes(),
+            );
+            rows.push(MaterializedRow::new(
+                CF_STATS_DAO,
+                key,
+                bincode::serialize(&snapshot)?,
+            ));
+        }
+
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        materializer.stream_sealed_aggregate_rows(&rows)
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
@@ -385,6 +554,52 @@ impl BulkReducer for DaoOwner {
 }
 
 impl DaoOwner {
+    pub(crate) fn record_block(&mut self, block: &BlockFacts) -> Result<()> {
+        let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
+        self.snapshot_dates.insert(block_date);
+
+        let ar = crate::db::writer::dao::extract_ar_from_dao(&block.dao).ok_or_else(|| {
+            anyhow!(
+                "missing DAO AR in bulk reducer block header: block={}",
+                block.number
+            )
+        })?;
+        if let Some(existing) = self.block_ar_by_number.insert(block.number, ar) {
+            if existing != ar {
+                bail!(
+                    "conflicting DAO AR for block in bulk reducer header path: block={} existing={} new={}",
+                    block.number,
+                    existing,
+                    ar
+                );
+            }
+        }
+
+        let (c, s, u) = extract_dao_csu(&block.dao).ok_or_else(|| {
+            anyhow!(
+                "invalid DAO field bytes in bulk reducer block header: block={} dao_len={}",
+                block.number,
+                block.dao.len()
+            )
+        })?;
+        self.daily_dao_fields.insert(block_date, (c, s, u));
+
+        if let Some((prev_c, prev_s)) = self.prev_dao_cs {
+            let _c_delta = c - prev_c;
+            let s_delta = s - prev_s;
+            if s_delta > 0 {
+                Self::bump_daily_i128(
+                    &mut self.daily_secondary_non_miner_delta,
+                    block_date,
+                    s_delta,
+                    "dao daily secondary non-miner delta",
+                )?;
+            }
+        }
+        self.prev_dao_cs = Some((c, s));
+        Ok(())
+    }
+
     fn record_block_ar(&mut self, tx: &ResolvedTxFacts) -> Result<()> {
         if let Some(existing) = self
             .block_ar_by_number
@@ -403,6 +618,113 @@ impl DaoOwner {
         }
         Ok(())
     }
+
+    fn bump_daily_i128(
+        target: &mut HashMap<NaiveDate, i128>,
+        date: NaiveDate,
+        delta: i128,
+        metric: &str,
+    ) -> Result<()> {
+        if delta == 0 {
+            return Ok(());
+        }
+        let current = target.get(&date).copied().unwrap_or(0);
+        let next = current.checked_add(delta).ok_or_else(|| {
+            anyhow!(
+                "{} overflow: date={} current={} delta={}",
+                metric,
+                date,
+                current,
+                delta
+            )
+        })?;
+        target.insert(date, next);
+        Ok(())
+    }
+
+    fn bump_daily_i64(
+        target: &mut HashMap<NaiveDate, i64>,
+        date: NaiveDate,
+        delta: i64,
+        metric: &str,
+    ) -> Result<()> {
+        if delta == 0 {
+            return Ok(());
+        }
+        let current = target.get(&date).copied().unwrap_or(0);
+        let next = current.checked_add(delta).ok_or_else(|| {
+            anyhow!(
+                "{} overflow: date={} current={} delta={}",
+                metric,
+                date,
+                current,
+                delta
+            )
+        })?;
+        if next < 0 {
+            bail!(
+                "{} underflow: date={} current={} delta={} next={}",
+                metric,
+                date,
+                current,
+                delta,
+                next
+            );
+        }
+        target.insert(date, next);
+        Ok(())
+    }
+}
+
+fn checked_next_i128_total(
+    current: i128,
+    delta: i128,
+    metric: &str,
+    date: NaiveDate,
+) -> Result<i128> {
+    let next = current.checked_add(delta).ok_or_else(|| {
+        anyhow!(
+            "{} overflow: date={} current={} delta={}",
+            metric,
+            date,
+            current,
+            delta
+        )
+    })?;
+    if next < 0 {
+        bail!(
+            "{} underflow: date={} current={} delta={} next={}",
+            metric,
+            date,
+            current,
+            delta,
+            next
+        );
+    }
+    Ok(next)
+}
+
+fn checked_next_i64_total(current: i64, delta: i64, metric: &str, date: NaiveDate) -> Result<i64> {
+    let next = current.checked_add(delta).ok_or_else(|| {
+        anyhow!(
+            "{} overflow: date={} current={} delta={}",
+            metric,
+            date,
+            current,
+            delta
+        )
+    })?;
+    if next < 0 {
+        bail!(
+            "{} underflow: date={} current={} delta={} next={}",
+            metric,
+            date,
+            current,
+            delta,
+            next
+        );
+    }
+    Ok(next)
 }
 
 #[derive(Debug, Clone)]

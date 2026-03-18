@@ -1189,6 +1189,94 @@ fn bulk_build_multi_batch_materialization_matches_single_pass_for_dao_activity_a
 }
 
 #[test]
+fn bulk_build_materializes_dao_daily_snapshot_and_latest_stats() {
+    let blocks = bulk_build_dao_activity_fixture();
+    let snapshot =
+        materialize_bulk_artifacts_for_test(&blocks).expect("bulk build dao artifact snapshot");
+
+    let dao_daily = snapshot
+        .dao_daily_snapshots
+        .values()
+        .next()
+        .expect("dao daily snapshot");
+    assert_eq!(dao_daily.total_deposited, 0);
+    assert_eq!(dao_daily.depositors_count, 0);
+    assert_eq!(dao_daily.new_deposits, 1);
+    assert_eq!(dao_daily.withdrawals, 1);
+
+    let latest = snapshot
+        .latest_dao_statistics
+        .as_ref()
+        .expect("latest dao statistics");
+    assert_eq!(latest.tip_block_number, 102);
+    assert_eq!(latest.total_deposited, 0);
+    assert_eq!(latest.total_depositors, 0);
+    assert_eq!(latest.active_deposits, 0);
+    assert_eq!(latest.total_compensation_paid, 19_60000000);
+
+    let top = snapshot
+        .dao_top_depositors
+        .as_ref()
+        .expect("dao top depositors");
+    assert_eq!(top.tip_block_number, 102);
+}
+
+#[test]
+fn bulk_build_materializes_script_daily_deltas_from_same_block_recreate() {
+    let block = same_block_typed_data_create_then_consume_fixture();
+    let lock_code_hash = hex::decode(&fixture_lock_script().code_hash[2..]).expect("lock code");
+    let type_code_hash = hex::decode(&fixture_type_script().code_hash[2..]).expect("type code");
+
+    let snapshot =
+        materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
+    let date = snapshot
+        .daily_activity_stats
+        .keys()
+        .next()
+        .expect("single date")
+        .parse::<u32>()
+        .expect("date key");
+
+    let lock_daily = snapshot
+        .script_daily_deltas
+        .get(&(lock_code_hash.clone(), false))
+        .and_then(|timeline| timeline.get(&date))
+        .expect("lock daily delta");
+    let lock_info = snapshot
+        .core
+        .script_infos
+        .get(&lock_code_hash)
+        .expect("lock script info");
+    assert_eq!(
+        lock_daily.live_capacity_delta,
+        lock_info.lock_live_capacity_sum
+    );
+    assert_eq!(
+        lock_daily.live_used_capacity_delta,
+        lock_info.lock_live_used_capacity_sum
+    );
+
+    let type_daily = snapshot
+        .script_daily_deltas
+        .get(&(type_code_hash.clone(), true))
+        .and_then(|timeline| timeline.get(&date))
+        .expect("type daily delta");
+    let type_info = snapshot
+        .core
+        .script_infos
+        .get(&type_code_hash)
+        .expect("type script info");
+    assert_eq!(
+        type_daily.live_capacity_delta,
+        type_info.type_live_capacity_sum
+    );
+    assert_eq!(
+        type_daily.live_used_capacity_delta,
+        type_info.type_live_used_capacity_sum
+    );
+}
+
+#[test]
 fn bulk_build_session_materialization_sets_final_sync_status_and_clears_marker() {
     let blocks = object_activity_fixture();
     let split_batches = vec![vec![blocks[0].clone()], vec![blocks[1].clone()]];

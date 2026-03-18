@@ -254,25 +254,38 @@ impl ObjectOwner {
             if *delta == 0 {
                 continue;
             }
-            if collection_id.as_slice() != DID_CKB_SENTINEL_COLLECTION {
-                bail!(
-                    "object owner only supports did:ckb identity activity deltas for now: collection_id=0x{} delta={}",
-                    hex::encode(collection_id),
-                    delta
-                );
-            }
+            let (label, agg) = match collection_id.as_slice() {
+                x if x == DID_CKB_SENTINEL_COLLECTION => (
+                    "did:ckb",
+                    self.did_agg
+                        .get_or_insert_with(|| IdentityCollectionAggregate {
+                            name: Some("did:ckb".to_string()),
+                            standard: IdentityStandard::DidCkb,
+                            ..IdentityCollectionAggregate::default()
+                        }),
+                ),
+                x if x == DOTBIT_SENTINEL_COLLECTION => (
+                    ".bit",
+                    self.dotbit_agg
+                        .get_or_insert_with(|| IdentityCollectionAggregate {
+                            name: Some(".bit".to_string()),
+                            standard: IdentityStandard::DotBit,
+                            ..IdentityCollectionAggregate::default()
+                        }),
+                ),
+                _ => {
+                    bail!(
+                        "unsupported identity activity delta in object owner: collection_id=0x{} delta={}",
+                        hex::encode(collection_id),
+                        delta
+                    );
+                }
+            };
 
-            let agg = self
-                .did_agg
-                .get_or_insert_with(|| IdentityCollectionAggregate {
-                    name: Some("did:ckb".to_string()),
-                    standard: IdentityStandard::DidCkb,
-                    ..IdentityCollectionAggregate::default()
-                });
             agg.activities_count = checked_next_i64(
                 agg.activities_count,
                 *delta,
-                "did:ckb activities_count",
+                &format!("{} activities_count", label),
                 collection_id,
                 0,
             )?;
@@ -2897,6 +2910,12 @@ mod tests {
         owner.apply_tx(&tx0, &ctx).expect("apply create");
         owner.apply_tx(&tx1, &ctx).expect("apply transfer");
         owner.apply_tx(&tx2, &ctx).expect("apply consume");
+        owner
+            .apply_identity_activity_count_deltas(&HashMap::from([(
+                ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION.to_vec(),
+                1,
+            )]))
+            .expect("apply dotbit activity delta");
 
         let root = unique_temp_test_dir("bulk-build-object-owner-dotbit");
         std::fs::create_dir_all(&root).expect("root");
@@ -2940,6 +2959,7 @@ mod tests {
         assert_eq!(agg.total_count, 1);
         assert_eq!(agg.live_count, 0);
         assert_eq!(agg.holders_count, 0);
+        assert_eq!(agg.activities_count, 1);
 
         let account_ids = domain_store
             .list_identity_ids_by_collection(

@@ -331,27 +331,38 @@ All code hash data is now available from `LiveCellInfo` — no separate DB reads
 2. Reduce `batch_size`
 3. Monitor for memory leaks in channel handling
 
-## Bulk Sync Statistics Optimization
+## Bulk Build Statistics
 
-During bulk sync (when `blocks_remaining > bulk_sync_threshold`, default 1000), the indexer skips expensive work to maximize write throughput.
+Fresh-db bulk sync uses the bulk-build engine, not the live writer's "skip now, rebuild later"
+strategy. Per [docs/prompts/BULK_SYNC.md](./prompts/BULK_SYNC.md), all required data must be
+computed inline on the canonical block path.
 
-### Skipped Statistics (during bulk sync)
+### Bulk-Build Write Classes
 
-| Column Family       | Rebuilt After | Description                  |
-| ------------------- | ------------- | ---------------------------- |
-| `daily_stats`       | Yes           | Daily block/tx/cell counts   |
-| `daily_block_stats` | Yes           | Daily difficulty/uncle stats |
-| `hourly_stats`      | Yes           | Hourly activity metrics      |
-| `miner_stats`       | Yes           | Per-miner block counts       |
-| `block_time_dist`   | Yes           | Block time histogram         |
-| `epoch_time_dist`   | Yes           | Epoch duration histogram     |
+- Class A history rows stream immediately as immutable event data (`cells`, `block_headers`,
+  `tx_index`, `addr_txs`, `token_transfers`, `activities`, collection activity feeds).
+- Class C sealed aggregates flush once the reducer has finished the bucket/window:
+  `stats_chain`, `stats_dao`, `stats_hodl`, `stats_script`, `stats_token`, `stats_spore`,
+  `stats_object`.
+- Final snapshots are written once after reducer convergence (`addr_balance`, `script_info`,
+  `tokens`, DAO indexes, object/identity/fiber state, sync metadata).
 
-### Always Updated (even during bulk sync)
+### Bulk-Build Stats Coverage
 
-| Column Family | Reason                                          |
-| ------------- | ----------------------------------------------- |
-| `sync_status` | Critical for crash recovery                     |
-| `epoch_stats` | Contains epoch metadata (start/end block, etc.) |
+- `stats_dao`: daily DAO snapshots are materialized during bulk build; latest/top DAO summaries are
+  refreshed after sync tip metadata is finalized.
+- `stats_script`: daily per-code-hash deltas are written during bulk build and read directly by the
+  script chart APIs.
+- `stats_token`: transfer totals, hourly transfer buckets, and token daily deltas are written
+  during bulk build and become the starting point for later live-sync accumulation.
+- `stats_chain` / `stats_hodl` / object-related sealed stats are also written inline; bulk build
+  does not rely on a post-sync backfill pass.
+
+### Still Skipped In Bulk Build
+
+- Reorg detection/rollback paths
+- Partial-state recovery flows
+- Live-sync-only metadata such as `pending_proposals`
 
 ### Bulk-Sync Completion Behavior
 

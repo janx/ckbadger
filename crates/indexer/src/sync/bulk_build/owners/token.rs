@@ -5,12 +5,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::keys;
 use ckbadger_store::{
-    CkbadgerStore, TokenInfo, CF_ADDR_TOKENS_BY_BALANCE, CF_TOKENS, CF_TOKEN_HOLDERS,
-    CF_TOKEN_HOLDERS_BY_BALANCE,
+    CkbadgerStore, TokenDailyDelta, TokenInfo, CF_ADDR_TOKENS_BY_BALANCE, CF_STATS_TOKEN,
+    CF_TOKENS, CF_TOKEN_HOLDERS, CF_TOKEN_HOLDERS_BY_BALANCE,
 };
 use rocksdb::IteratorMode;
 
 use super::{BulkReducer, ReducerContext};
+use crate::parser::{ParsedUdtCell, UdtParser};
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::facts::{
     CellFacts, CellSemanticTag, ResolvedInputFacts, ResolvedTxFacts,
@@ -27,29 +28,107 @@ pub(crate) struct TokenOwner {
 
 impl BulkReducer for TokenOwner {
     fn apply_tx(&mut self, tx: &ResolvedTxFacts, ctx: &ReducerContext<'_>) -> Result<()> {
-        for input in &tx.resolved_inputs {
-            let Some(view) = TokenCellView::from_input(input, ctx, tx)? else {
-                continue;
-            };
+        let input_views = tx
+            .resolved_inputs
+            .iter()
+            .filter_map(|input| TokenCellView::from_input(input, ctx, tx).transpose())
+            .collect::<Result<Vec<_>>>()?;
+        let output_views = tx
+            .cells
+            .iter()
+            .filter_map(|cell| TokenCellView::from_output(cell, ctx, tx).transpose())
+            .collect::<Result<Vec<_>>>()?;
+
+        for view in &input_views {
             let token = self
                 .tokens
                 .entry(view.type_hash.clone())
-                .or_insert_with(|| TokenAccum::from_view(&view, tx.block_number));
-            token.apply_input(&view, tx)?;
+                .or_insert_with(|| TokenAccum::from_view(view, tx.block_number));
+            token.apply_input(view, tx)?;
         }
 
-        for cell in &tx.cells {
-            let Some(view) = TokenCellView::from_output(cell, ctx, tx)? else {
-                continue;
-            };
+        for view in &output_views {
             let token = self
                 .tokens
                 .entry(view.type_hash.clone())
-                .or_insert_with(|| TokenAccum::from_view(&view, tx.block_number));
-            token.apply_output(&view, tx)?;
+                .or_insert_with(|| TokenAccum::from_view(view, tx.block_number));
+            token.apply_output(view, tx)?;
+        }
+
+        let parsed_inputs = input_views
+            .iter()
+            .map(TokenCellView::to_parsed_udt_cell)
+            .collect::<Vec<_>>();
+        let parsed_outputs = output_views
+            .iter()
+            .map(TokenCellView::to_parsed_udt_cell)
+            .collect::<Vec<_>>();
+        let hour_bucket = tx.timestamp_ms / 3_600_000;
+
+        for transfer in UdtParser::build_transfers_from_cells(&parsed_inputs, &parsed_outputs) {
+            let token = self
+                .tokens
+                .get_mut(&transfer.type_script_hash)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "token transfer missing live token accumulator in bulk reducer: type_hash=0x{} block={} tx=0x{} tx_index={}",
+                        hex::encode(&transfer.type_script_hash),
+                        tx.block_number,
+                        hex::encode(tx.tx_hash),
+                        tx.tx_index
+                    )
+                })?;
+            token.record_transfer(hour_bucket, &transfer.type_script_hash, tx)?;
         }
 
         Ok(())
+    }
+
+    fn flush_sealed(&mut self, materializer: &mut Materializer<'_>) -> Result<()> {
+        let mut rows = Vec::new();
+        let mut type_hashes: Vec<&Vec<u8>> = self.tokens.keys().collect();
+        type_hashes.sort();
+
+        for type_hash in type_hashes {
+            let token = self
+                .tokens
+                .get(type_hash)
+                .expect("sorted token type hash must exist");
+            rows.push(MaterializedRow::new(
+                CF_STATS_TOKEN,
+                keys::encode_token_transfers_key(type_hash),
+                token.transfers_count.to_le_bytes().to_vec(),
+            ));
+
+            let mut hour_buckets = token.hourly_transfers.iter().collect::<Vec<_>>();
+            hour_buckets.sort_by_key(|(hour_bucket, _)| *hour_bucket);
+            for (hour_bucket, count) in hour_buckets {
+                rows.push(MaterializedRow::new(
+                    CF_STATS_TOKEN,
+                    keys::encode_token_hourly_key(type_hash, *hour_bucket),
+                    count.to_le_bytes().to_vec(),
+                ));
+            }
+
+            let mut daily_dates = token.daily_deltas.iter().collect::<Vec<_>>();
+            daily_dates.sort_by_key(|(date, _)| *date);
+            for (date, delta) in daily_dates {
+                if delta.live_capacity_delta == 0 && delta.live_used_capacity_delta == 0 {
+                    continue;
+                }
+                rows.push(MaterializedRow::new(
+                    CF_STATS_TOKEN,
+                    keys::encode_token_daily_key(type_hash, *date).to_vec(),
+                    bincode::serialize(delta)?,
+                ));
+            }
+        }
+
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        materializer.stream_sealed_aggregate_rows(&rows)
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
@@ -107,6 +186,9 @@ struct TokenAccum {
     first_seen_block: i64,
     live_supply: i128,
     holders: HashMap<Vec<u8>, i128>,
+    transfers_count: i64,
+    hourly_transfers: HashMap<i64, i64>,
+    daily_deltas: HashMap<u32, TokenDailyDelta>,
 }
 
 impl TokenAccum {
@@ -119,6 +201,9 @@ impl TokenAccum {
             first_seen_block,
             live_supply: 0,
             holders: HashMap::new(),
+            transfers_count: 0,
+            hourly_transfers: HashMap::new(),
+            daily_deltas: HashMap::new(),
         }
     }
 
@@ -146,6 +231,14 @@ impl TokenAccum {
             self.holders.insert(view.lock_hash.clone(), next);
         }
 
+        self.record_daily_delta(
+            keys::timestamp_ms_to_date(tx.timestamp_ms),
+            -i128::from(view.capacity),
+            -i128::from(view.occupied_capacity),
+            &view.type_hash,
+            tx,
+        )?;
+
         Ok(())
     }
 
@@ -171,6 +264,65 @@ impl TokenAccum {
             tx,
         )?;
         self.holders.insert(view.lock_hash.clone(), next);
+
+        self.record_daily_delta(
+            keys::timestamp_ms_to_date(tx.timestamp_ms),
+            i128::from(view.capacity),
+            i128::from(view.occupied_capacity),
+            &view.type_hash,
+            tx,
+        )?;
+        Ok(())
+    }
+
+    fn record_transfer(
+        &mut self,
+        hour_bucket: i64,
+        type_hash: &[u8],
+        tx: &ResolvedTxFacts,
+    ) -> Result<()> {
+        self.transfers_count = checked_next_i64(
+            self.transfers_count,
+            1,
+            "token transfers_count",
+            type_hash,
+            tx,
+        )?;
+
+        let current_hourly = *self.hourly_transfers.get(&hour_bucket).unwrap_or(&0);
+        let next_hourly =
+            checked_next_i64(current_hourly, 1, "token hourly transfers", type_hash, tx)?;
+        self.hourly_transfers.insert(hour_bucket, next_hourly);
+        Ok(())
+    }
+
+    fn record_daily_delta(
+        &mut self,
+        date_yyyymmdd: u32,
+        live_capacity_delta: i128,
+        live_used_delta: i128,
+        type_hash: &[u8],
+        tx: &ResolvedTxFacts,
+    ) -> Result<()> {
+        if live_capacity_delta == 0 && live_used_delta == 0 {
+            return Ok(());
+        }
+
+        let entry = self.daily_deltas.entry(date_yyyymmdd).or_default();
+        entry.live_capacity_delta = checked_signed_i128(
+            entry.live_capacity_delta,
+            live_capacity_delta,
+            "token daily live_capacity_delta",
+            type_hash,
+            tx,
+        )?;
+        entry.live_used_capacity_delta = checked_signed_i128(
+            entry.live_used_capacity_delta,
+            live_used_delta,
+            "token daily live_used_capacity_delta",
+            type_hash,
+            tx,
+        )?;
         Ok(())
     }
 
@@ -206,7 +358,7 @@ impl TokenAccum {
             first_seen_block: self.first_seen_block,
             icon_url: None,
             description: None,
-            transfers_count: 0,
+            transfers_count: self.transfers_count,
         }
     }
 }
@@ -218,6 +370,8 @@ struct TokenCellView {
     type_hash_type: i16,
     type_args: Vec<u8>,
     lock_hash: Vec<u8>,
+    capacity: i64,
+    occupied_capacity: i64,
     amount: u128,
     standard: &'static str,
 }
@@ -235,6 +389,8 @@ impl TokenCellView {
             cell.type_hash_type,
             cell.type_args_id,
             cell.lock_script_hash_id,
+            cell.capacity,
+            cell.occupied_capacity,
             cell.udt_amount,
             ctx,
             tx,
@@ -258,6 +414,8 @@ impl TokenCellView {
             input.type_hash_type,
             input.type_args_id,
             input.lock_script_hash_id,
+            input.capacity,
+            input.occupied_capacity,
             input.udt_amount,
             ctx,
             tx,
@@ -277,6 +435,8 @@ impl TokenCellView {
         type_hash_type: Option<i16>,
         type_args_id: Option<crate::sync::types::InternId>,
         lock_script_hash_id: crate::sync::types::InternId,
+        capacity: i64,
+        occupied_capacity: i64,
         udt_amount: Option<u128>,
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts,
@@ -351,9 +511,24 @@ impl TokenCellView {
             type_hash_type,
             type_args,
             lock_hash,
+            capacity,
+            occupied_capacity,
             amount,
             standard,
         }))
+    }
+
+    fn to_parsed_udt_cell(&self) -> ParsedUdtCell {
+        ParsedUdtCell {
+            type_script_hash: self.type_hash.clone(),
+            type_code_hash: self.type_code_hash.clone(),
+            type_hash_type: self.type_hash_type,
+            type_args: self.type_args.clone(),
+            lock_script_hash: self.lock_hash.clone(),
+            amount: self.amount,
+            standard: UdtParser::is_udt_code_hash_bytes(&self.type_code_hash, self.type_hash_type)
+                .expect("token cell view must carry a recognized UDT standard"),
+        }
     }
 }
 
@@ -392,12 +567,71 @@ fn checked_next_i128(
     Ok(next)
 }
 
+fn checked_next_i64(
+    current: i64,
+    delta: i64,
+    metric: &str,
+    type_hash: &[u8],
+    tx: &ResolvedTxFacts,
+) -> Result<i64> {
+    let next = current.checked_add(delta).ok_or_else(|| {
+        anyhow!(
+            "{} overflow: type_hash=0x{}, current={}, delta={}, block={}, tx=0x{}, tx_index={}",
+            metric,
+            hex::encode(type_hash),
+            current,
+            delta,
+            tx.block_number,
+            hex::encode(tx.tx_hash),
+            tx.tx_index
+        )
+    })?;
+    if next < 0 {
+        bail!(
+            "{} underflow: type_hash=0x{}, current={}, delta={}, next={}, block={}, tx=0x{}, tx_index={}",
+            metric,
+            hex::encode(type_hash),
+            current,
+            delta,
+            next,
+            tx.block_number,
+            hex::encode(tx.tx_hash),
+            tx.tx_index
+        );
+    }
+    Ok(next)
+}
+
+fn checked_signed_i128(
+    current: i128,
+    delta: i128,
+    metric: &str,
+    type_hash: &[u8],
+    tx: &ResolvedTxFacts,
+) -> Result<i128> {
+    current.checked_add(delta).ok_or_else(|| {
+        anyhow!(
+            "{} overflow: type_hash=0x{}, current={}, delta={}, block={}, tx=0x{}, tx_index={}",
+            metric,
+            hex::encode(type_hash),
+            current,
+            delta,
+            tx.block_number,
+            hex::encode(tx.tx_hash),
+            tx.tx_index
+        )
+    })
+}
+
 #[doc(hidden)]
 #[derive(Debug, Default, Clone)]
 pub struct TokenStateSnapshot {
     pub tokens: HashMap<Vec<u8>, TokenInfo>,
     pub token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>>,
     pub addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>>,
+    pub token_transfer_counts: HashMap<Vec<u8>, i64>,
+    pub token_hourly_transfers: HashMap<Vec<u8>, HashMap<i64, i64>>,
+    pub token_daily_deltas: HashMap<Vec<u8>, HashMap<u32, TokenDailyDelta>>,
 }
 
 #[doc(hidden)]
@@ -425,6 +659,7 @@ pub(crate) fn materialize_token_state_for_test(
         let domain_store = CkbadgerStore::open_domain(&domain_path)?;
         let append_store = CkbadgerStore::open_append_only(&append_path)?;
         let mut materializer = Materializer::new(&domain_store, &append_store);
+        owner.flush_sealed(&mut materializer)?;
         owner.materialize_final(&mut materializer)?;
         let _ = materializer.finish();
 
@@ -434,12 +669,72 @@ pub(crate) fn materialize_token_state_for_test(
             .collect::<HashMap<_, _>>();
 
         let mut token_holders: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>> = HashMap::new();
+        let mut token_transfer_counts = HashMap::new();
+        let mut token_hourly_transfers = HashMap::new();
+        let mut token_daily_deltas = HashMap::new();
         for (type_hash, _info) in &tokens {
             let holders = domain_store
                 .list_token_holders(type_hash, usize::MAX)?
                 .into_iter()
                 .collect::<HashMap<_, _>>();
             token_holders.insert(type_hash.clone(), holders);
+
+            token_transfer_counts.insert(
+                type_hash.clone(),
+                domain_store.get_token_transfers_count(type_hash)?,
+            );
+
+            let prefix = keys::encode_token_hourly_prefix(type_hash);
+            let iter = domain_store.prefix_iterator_cf(domain_store.cf_stats_token(), &prefix);
+            let mut hourly = HashMap::new();
+            for item in iter {
+                let (key, value) = item.map_err(|e| {
+                    anyhow!(
+                        "failed to iterate stats_token hourly rows in token snapshot helper: type_hash=0x{}, error={}",
+                        hex::encode(type_hash),
+                        e
+                    )
+                })?;
+                if !key.starts_with(prefix.as_slice()) {
+                    break;
+                }
+                if key.len() != 41 {
+                    bail!(
+                        "invalid token hourly key length in token snapshot helper: type_hash=0x{}, len={}",
+                        hex::encode(type_hash),
+                        key.len()
+                    );
+                }
+                if value.len() != 8 {
+                    bail!(
+                        "invalid token hourly value length in token snapshot helper: type_hash=0x{}, len={}",
+                        hex::encode(type_hash),
+                        value.len()
+                    );
+                }
+                let hour_bucket = i64::from_be_bytes(
+                    key[33..41]
+                        .try_into()
+                        .expect("hour bucket slice length must be 8"),
+                );
+                let count = i64::from_le_bytes(
+                    value[..8]
+                        .try_into()
+                        .expect("hourly transfer value length must be 8"),
+                );
+                hourly.insert(hour_bucket, count);
+            }
+            if !hourly.is_empty() {
+                token_hourly_transfers.insert(type_hash.clone(), hourly);
+            }
+
+            let daily_deltas = domain_store
+                .list_token_daily_deltas(type_hash)?
+                .into_iter()
+                .collect::<HashMap<_, _>>();
+            if !daily_deltas.is_empty() {
+                token_daily_deltas.insert(type_hash.clone(), daily_deltas);
+            }
         }
 
         let mut addr_tokens: HashMap<Vec<u8>, HashMap<Vec<u8>, i128>> = HashMap::new();
@@ -466,6 +761,9 @@ pub(crate) fn materialize_token_state_for_test(
             tokens,
             token_holders,
             addr_tokens,
+            token_transfer_counts,
+            token_hourly_transfers,
+            token_daily_deltas,
         }
     };
 

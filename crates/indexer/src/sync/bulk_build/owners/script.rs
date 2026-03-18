@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Result};
-use ckbadger_store::{CkbadgerStore, ScriptInfo, CF_SCRIPT_INFO};
+use ckbadger_store::keys;
+use ckbadger_store::{
+    CkbadgerStore, ScriptDailyDelta, ScriptInfo, CF_SCRIPT_INFO, CF_STATS_SCRIPT,
+};
 
 use super::{BulkReducer, ReducerContext};
 use crate::rpc::BlockResponseWithCycles;
@@ -16,12 +19,49 @@ use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 #[derive(Debug, Default)]
 pub(crate) struct ScriptOwner {
     infos: HashMap<Vec<u8>, ScriptInfo>,
+    daily_deltas: HashMap<(Vec<u8>, bool, u32), ScriptDailyDelta>,
 }
 
 impl ScriptOwner {
     #[cfg(test)]
     pub(crate) fn infos(&self) -> &HashMap<Vec<u8>, ScriptInfo> {
         &self.infos
+    }
+
+    fn record_daily_delta(
+        &mut self,
+        code_hash: &[u8],
+        is_type: bool,
+        date_yyyymmdd: u32,
+        live_capacity_delta: i128,
+        live_used_delta: i128,
+        tx: &ResolvedTxFacts,
+    ) -> Result<()> {
+        if live_capacity_delta == 0 && live_used_delta == 0 {
+            return Ok(());
+        }
+
+        let entry = self
+            .daily_deltas
+            .entry((code_hash.to_vec(), is_type, date_yyyymmdd))
+            .or_default();
+        entry.live_capacity_delta = checked_signed_i128(
+            code_hash,
+            if is_type { "type" } else { "lock" },
+            "daily live_capacity_delta",
+            entry.live_capacity_delta,
+            live_capacity_delta,
+            tx,
+        )?;
+        entry.live_used_capacity_delta = checked_signed_i128(
+            code_hash,
+            if is_type { "type" } else { "lock" },
+            "daily live_used_capacity_delta",
+            entry.live_used_capacity_delta,
+            live_used_delta,
+            tx,
+        )?;
+        Ok(())
     }
 }
 
@@ -36,55 +76,104 @@ impl BulkReducer for ScriptOwner {
             apply_output_deltas(cell, ctx, &mut deltas, tx)?;
         }
 
+        let date_yyyymmdd = keys::timestamp_ms_to_date(tx.timestamp_ms);
         for (code_hash, delta) in deltas {
-            let info = self
-                .infos
-                .entry(code_hash.clone())
-                .or_insert_with(|| ScriptInfo {
-                    code_hash: code_hash.clone(),
-                    hash_type: delta.hash_type,
-                    ..Default::default()
-                });
+            {
+                let info = self
+                    .infos
+                    .entry(code_hash.clone())
+                    .or_insert_with(|| ScriptInfo {
+                        code_hash: code_hash.clone(),
+                        hash_type: delta.hash_type,
+                        ..Default::default()
+                    });
 
-            if info.hash_type != delta.hash_type {
-                bail!(
-                    "script reducer hash_type mismatch: code_hash=0x{}, existing_hash_type={}, incoming_hash_type={}, block={}, tx=0x{}, tx_index={}",
-                    hex::encode(&code_hash),
-                    info.hash_type,
-                    delta.hash_type,
-                    tx.block_number,
-                    hex::encode(tx.tx_hash),
-                    tx.tx_index
-                );
+                if info.hash_type != delta.hash_type {
+                    bail!(
+                        "script reducer hash_type mismatch: code_hash=0x{}, existing_hash_type={}, incoming_hash_type={}, block={}, tx=0x{}, tx_index={}",
+                        hex::encode(&code_hash),
+                        info.hash_type,
+                        delta.hash_type,
+                        tx.block_number,
+                        hex::encode(tx.tx_hash),
+                        tx.tx_index
+                    );
+                }
+
+                apply_lock_delta(info, &code_hash, &delta, tx)?;
+                apply_type_delta(info, &code_hash, &delta, tx)?;
+                info.cells_count = info
+                    .lock_cells_count
+                    .checked_add(info.type_cells_count)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "script total cells_count overflow: code_hash=0x{}, lock_cells_count={}, type_cells_count={}",
+                            hex::encode(&code_hash),
+                            info.lock_cells_count,
+                            info.type_cells_count
+                        )
+                    })?;
+                info.capacity_used = info
+                    .lock_capacity_sum
+                    .checked_add(info.type_capacity_sum)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "script total capacity_used overflow: code_hash=0x{}, lock_capacity_sum={}, type_capacity_sum={}",
+                            hex::encode(&code_hash),
+                            info.lock_capacity_sum,
+                            info.type_capacity_sum
+                        )
+                    })?;
             }
 
-            apply_lock_delta(info, &code_hash, &delta, tx)?;
-            apply_type_delta(info, &code_hash, &delta, tx)?;
-            info.cells_count = info
-                .lock_cells_count
-                .checked_add(info.type_cells_count)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "script total cells_count overflow: code_hash=0x{}, lock_cells_count={}, type_cells_count={}",
-                        hex::encode(&code_hash),
-                        info.lock_cells_count,
-                        info.type_cells_count
-                    )
-                })?;
-            info.capacity_used = info
-                .lock_capacity_sum
-                .checked_add(info.type_capacity_sum)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "script total capacity_used overflow: code_hash=0x{}, lock_capacity_sum={}, type_capacity_sum={}",
-                        hex::encode(&code_hash),
-                        info.lock_capacity_sum,
-                        info.type_capacity_sum
-                    )
-                })?;
+            self.record_daily_delta(
+                &code_hash,
+                false,
+                date_yyyymmdd,
+                delta.lock_live_capacity_delta,
+                delta.lock_live_used_capacity_delta,
+                tx,
+            )?;
+            self.record_daily_delta(
+                &code_hash,
+                true,
+                date_yyyymmdd,
+                delta.type_live_capacity_delta,
+                delta.type_live_used_capacity_delta,
+                tx,
+            )?;
         }
 
         Ok(())
+    }
+
+    fn flush_sealed(&mut self, materializer: &mut Materializer<'_>) -> Result<()> {
+        let mut daily_keys = self.daily_deltas.keys().collect::<Vec<_>>();
+        daily_keys.sort();
+
+        let rows = daily_keys
+            .into_iter()
+            .filter_map(|(code_hash, is_type, date)| {
+                let delta = self
+                    .daily_deltas
+                    .get(&(code_hash.clone(), *is_type, *date))
+                    .expect("sorted script daily key must exist");
+                (delta.live_capacity_delta != 0 || delta.live_used_capacity_delta != 0).then_some(
+                    MaterializedRow::new(
+                        CF_STATS_SCRIPT,
+                        keys::encode_script_daily_key(code_hash, *is_type, *date).to_vec(),
+                        bincode::serialize(delta)
+                            .expect("script daily delta serialization must succeed"),
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        materializer.stream_sealed_aggregate_rows(&rows)
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
@@ -477,6 +566,29 @@ fn checked_next_i128(
         );
     }
     Ok(next)
+}
+
+fn checked_signed_i128(
+    code_hash: &[u8],
+    script_kind: &str,
+    metric: &str,
+    current: i128,
+    delta: i128,
+    tx: &ResolvedTxFacts,
+) -> Result<i128> {
+    current.checked_add(delta).ok_or_else(|| {
+        anyhow!(
+            "script {} {} overflow: code_hash=0x{}, current={}, delta={}, block={}, tx=0x{}, tx_index={}",
+            script_kind,
+            metric,
+            hex::encode(code_hash),
+            current,
+            delta,
+            tx.block_number,
+            hex::encode(tx.tx_hash),
+            tx.tx_index
+        )
+    })
 }
 
 #[doc(hidden)]
