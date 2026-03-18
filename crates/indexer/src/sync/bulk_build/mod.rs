@@ -40,6 +40,22 @@ pub(crate) struct BulkBuildEngine;
 
 impl BulkBuildEngine {
     pub(crate) async fn run(indexer: &Indexer) -> Result<()> {
+        let start_block = i64::try_from(indexer.progress.current()).map_err(|_| {
+            anyhow!(
+                "bulk build start block exceeds i64 range: current_block={}",
+                indexer.progress.current()
+            )
+        })?;
+        let marker = ckbadger_store::types::BulkBuildSessionMarker {
+            run_id: indexer.run_id.clone(),
+            started_at: chrono::Utc::now().timestamp(),
+            start_block,
+        };
+        indexer
+            .writer
+            .store()
+            .set_bulk_build_session_marker(Some(&marker))?;
+
         // Temporary routing seam: startup bulk sync now has an explicit build-engine
         // entrypoint, while the underlying execution still delegates to the existing
         // pipeline until reducers/materialization land in later tasks.
@@ -47,7 +63,11 @@ impl BulkBuildEngine {
             run_id = %indexer.run_id,
             "Bulk build engine route selected; delegating to pipeline until build engine materialization is implemented"
         );
-        indexer.run_pipeline().await
+        let result = indexer.run_pipeline().await;
+        if result.is_ok() {
+            indexer.writer.store().clear_bulk_build_session_marker()?;
+        }
+        result
     }
 }
 

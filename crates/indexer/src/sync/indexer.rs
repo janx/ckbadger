@@ -252,6 +252,23 @@ fn startup_header_gap_fail_fast_message(
     )
 }
 
+fn incomplete_bulk_build_session_fail_fast_message(
+    marker: &ckbadger_store::types::BulkBuildSessionMarker,
+) -> String {
+    format!(
+        "startup fail-fast: detected incomplete bulk build session (run_id={}, started_at={}, start_block={}). \
+         bulk sync is single-shot rebuild only; delete RocksDB and re-sync from genesis",
+        marker.run_id, marker.started_at, marker.start_block
+    )
+}
+
+fn fail_fast_if_bulk_build_session_incomplete(store: &CkbadgerStore) -> Result<()> {
+    if let Some(marker) = store.get_bulk_build_session_marker()? {
+        bail!("{}", incomplete_bulk_build_session_fail_fast_message(&marker));
+    }
+    Ok(())
+}
+
 pub(super) fn mempool_short_tx_id(tx_hash: &str) -> &str {
     // Node-provided tx hashes are always "0x" + 64 hex chars; skip prefix, take first 20.
     &tx_hash[2..22]
@@ -935,6 +952,8 @@ impl Indexer {
             );
         }
 
+        fail_fast_if_bulk_build_session_incomplete(self.writer.store().as_ref())?;
+
         ensure_bulk_sync_fresh_start(
             bulk_sync_mode,
             start_block,
@@ -1197,6 +1216,34 @@ mod tests {
     fn startup_existing_sync_tip_uses_pipeline_even_when_lagging() {
         let route = select_startup_sync_path(10_000, 72, 5, &Some(vec![0x11; 32]));
         assert_eq!(route, SyncPath::Pipeline);
+    }
+
+    #[test]
+    fn startup_fail_fast_when_incomplete_bulk_build_session_marker_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store
+            .set_bulk_build_session_marker(Some(
+                &ckbadger_store::types::BulkBuildSessionMarker {
+                    run_id: "run-bulk-1".to_string(),
+                    started_at: 1_710_000_000,
+                    start_block: 0,
+                },
+            ))
+            .unwrap();
+
+        let err = fail_fast_if_bulk_build_session_incomplete(&store).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("incomplete bulk build session"));
+        assert!(msg.contains("run-bulk-1"));
+        assert!(msg.contains("delete RocksDB and re-sync from genesis"));
+    }
+
+    #[test]
+    fn startup_allows_clean_store_without_bulk_build_session_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        fail_fast_if_bulk_build_session_incomplete(&store).unwrap();
     }
 
     #[test]

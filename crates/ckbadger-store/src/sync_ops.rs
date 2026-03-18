@@ -4,9 +4,47 @@ use anyhow::anyhow;
 
 use crate::keys::sync_meta_keys;
 use crate::store::CkbadgerStore;
-use crate::types::{DeepForkInfo, ReorgEvent, RuntimeStatus, SyncStatus};
+use crate::types::{
+    BulkBuildSessionMarker, DeepForkInfo, ReorgEvent, RuntimeStatus, SyncStatus,
+};
 
 impl CkbadgerStore {
+    pub fn get_bulk_build_session_marker(
+        &self,
+    ) -> anyhow::Result<Option<BulkBuildSessionMarker>> {
+        match self.get_cf(
+            self.cf_sync_meta(),
+            sync_meta_keys::BULK_BUILD_SESSION_IN_PROGRESS,
+        )? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn set_bulk_build_session_marker(
+        &self,
+        marker: Option<&BulkBuildSessionMarker>,
+    ) -> anyhow::Result<()> {
+        match marker {
+            Some(marker) => {
+                let value = bincode::serialize(marker)?;
+                self.put_cf(
+                    self.cf_sync_meta(),
+                    sync_meta_keys::BULK_BUILD_SESSION_IN_PROGRESS,
+                    &value,
+                )
+            }
+            None => self.clear_bulk_build_session_marker(),
+        }
+    }
+
+    pub fn clear_bulk_build_session_marker(&self) -> anyhow::Result<()> {
+        self.delete_cf(
+            self.cf_sync_meta(),
+            sync_meta_keys::BULK_BUILD_SESSION_IN_PROGRESS,
+        )
+    }
+
     pub fn get_sync_status(&self) -> anyhow::Result<SyncStatus> {
         match self.get_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_STATUS)? {
             Some(value) => Ok(bincode::deserialize(&value)?),
@@ -496,6 +534,30 @@ mod tests {
 
         store.set_rollback_cleanup_in_progress(false).unwrap();
         assert!(!store.is_rollback_cleanup_in_progress().unwrap());
+    }
+
+    #[test]
+    fn test_bulk_build_session_marker_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        assert!(store.get_bulk_build_session_marker().unwrap().is_none());
+
+        let session = crate::types::BulkBuildSessionMarker {
+            run_id: "run-bulk-1".to_string(),
+            started_at: 1_710_000_000,
+            start_block: 0,
+        };
+        store.set_bulk_build_session_marker(Some(&session)).unwrap();
+
+        let restored = store
+            .get_bulk_build_session_marker()
+            .unwrap()
+            .expect("bulk build session marker");
+        assert_eq!(restored, session);
+
+        store.clear_bulk_build_session_marker().unwrap();
+        assert!(store.get_bulk_build_session_marker().unwrap().is_none());
     }
 
     #[test]

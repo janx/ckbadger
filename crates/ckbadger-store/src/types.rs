@@ -914,6 +914,13 @@ pub struct RuntimeStatus {
     pub last_shutdown_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BulkBuildSessionMarker {
+    pub run_id: String,
+    pub started_at: i64,
+    pub start_block: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeepForkInfo {
     pub db_tip: i64,
