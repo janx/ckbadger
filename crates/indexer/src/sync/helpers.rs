@@ -213,20 +213,6 @@ pub(crate) fn cgroup_memory_ratio_pct(snapshot: &CgroupMemorySnapshot) -> Option
 }
 
 // ---------------------------------------------------------------------------
-// Panic helpers
-// ---------------------------------------------------------------------------
-
-pub(crate) fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(msg) = payload.downcast_ref::<&str>() {
-        return (*msg).to_string();
-    }
-    if let Some(msg) = payload.downcast_ref::<String>() {
-        return msg.clone();
-    }
-    "non-string panic payload".to_string()
-}
-
-// ---------------------------------------------------------------------------
 // Atomics
 // ---------------------------------------------------------------------------
 
@@ -373,16 +359,6 @@ mod tests {
         assert!(sample.contains(&format!("0x{}:0", "11".repeat(32))));
         assert!(sample.contains(&format!("0x{}:1", "22".repeat(32))));
         assert!(!sample.contains(&format!("0x{}:2", "33".repeat(32))));
-    }
-
-    #[test]
-    fn test_panic_payload_to_string_handles_common_payload_types() {
-        assert_eq!(panic_payload_to_string(&"panic-str"), "panic-str");
-        assert_eq!(
-            panic_payload_to_string(&"panic-owned".to_string()),
-            "panic-owned"
-        );
-        assert_eq!(panic_payload_to_string(&123u32), "non-string panic payload");
     }
 
     #[test]

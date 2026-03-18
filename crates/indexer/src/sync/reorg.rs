@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Result};
 use tracing::{error, info, warn};
 
-use ckbadger_store::types::{AddressBalance, PositionedCellInfo};
+use ckbadger_store::types::PositionedCellInfo;
 
 use crate::cache::CacheInvalidator;
 use crate::config::DEEP_FORK_DEPTH;
@@ -209,135 +209,6 @@ impl Indexer {
 
         Ok(())
     }
-
-    /// Merged tracker update: runs both HODL wave and cell distribution trackers
-    /// in a single cell traversal loop. Used in the bulk sync parallel path (T_TRACK thread)
-    /// to avoid the overhead of two separate traversals.
-    pub(crate) fn update_trackers(
-        &self,
-        all_parsed_blocks: &[crate::parser::block::ParsedBlock],
-        all_tx_data: &[TxData],
-        input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-        batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-        address_balance_changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
-        prefetched_addr_balances: &HashMap<Vec<u8>, Option<AddressBalance>>,
-    ) -> Result<()> {
-        let mut hodl = self.hodl_tracker.lock().unwrap();
-        let mut cell_dist = self.cell_dist_tracker.lock().unwrap();
-        let store = self.writer.store();
-        let mut batch = ckbadger_store::batch::StoreBatch::new(store);
-
-        // Update cohort accumulator from address balance changes (before block loop
-        // so that cohort_snapshot() is up-to-date at day boundaries)
-        cell_dist.update_cohort_deltas(address_balance_changes, prefetched_addr_balances);
-
-        // Phase 1: Single traversal over blocks/txs/cells for both trackers
-        let mut block_tx_idx = 0usize;
-        for parsed in all_parsed_blocks {
-            let block_date = ckbadger_common::block_date(parsed.timestamp);
-            hodl.record_block_date(parsed.number, block_date);
-            cell_dist.record_block_date(parsed.number, block_date);
-
-            let tx_count = checked_tx_count(parsed.transactions_count, parsed.number)?;
-            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
-            block_tx_idx += tx_count;
-
-            for tx_data in tx_slice {
-                // Cell creates
-                for cell in &tx_data.cells {
-                    hodl.cell_created(block_date, cell.capacity);
-                    let occ = occupied_capacity_shannons_i64(
-                        cell.lock_args.len(),
-                        cell.type_args.as_ref().map(|args| args.len()),
-                        cell.data_size,
-                    );
-                    cell_dist.cell_created(occ);
-                }
-                // Cell consumes
-                if !tx_data.is_cellbase {
-                    for input in &tx_data.inputs {
-                        let key = (
-                            input.previous_tx_hash.to_vec(),
-                            parsed_input_outpoint_index_i16(
-                                input.previous_output_index,
-                                "update_trackers",
-                            ),
-                        );
-                        let info = input_cell_info
-                            .get(&key)
-                            .or_else(|| batch_cell_infos.get(&key));
-                        if let Some(info) = info {
-                            hodl.cell_consumed(info.created_at_block, info.capacity)?;
-                            cell_dist.cell_consumed(info.occupied_capacity)?;
-                        }
-                    }
-                }
-            }
-
-            // HODL day boundary snapshot
-            if let Some((snapshot_date, snapshot)) = hodl.maybe_snapshot(block_date) {
-                let date_str = snapshot_date.format("%Y%m%d").to_string();
-                batch.put_hodl_wave(&date_str, &snapshot);
-            }
-
-            // Cell distribution day boundary snapshot + address cohort
-            if let Some((snapshot_date, snapshot)) = cell_dist.maybe_snapshot(block_date) {
-                let date_str = snapshot_date.format("%Y%m%d").to_string();
-                batch.put_cell_distribution(&date_str, &snapshot);
-
-                // Materialize address cohort snapshot from incremental accumulator
-                let cohort = cell_dist.cohort_snapshot();
-                batch.put_address_cohort(&date_str, &cohort);
-            }
-        }
-
-        // Phase 2: Update HODL holder count from address balance changes
-        // Use prefetched (pre-batch) balances and compute post-batch live count from deltas
-        for (
-            lock_hash,
-            (
-                _balance_delta,
-                live_delta,
-                _total_delta,
-                _tx_delta,
-                _block_num,
-                _tx_hash,
-                _used_delta,
-            ),
-        ) in address_balance_changes
-        {
-            let pre_live = prefetched_addr_balances
-                .get(lock_hash)
-                .and_then(|o| o.as_ref())
-                .map(|b| b.live_cells_count)
-                .unwrap_or(0);
-            let post_live_i64 = pre_live as i64 + *live_delta as i64;
-            if post_live_i64 < 0 {
-                anyhow::bail!(
-                    "post-batch live cells underflow in update_trackers: pre_live={}, live_delta={}",
-                    pre_live,
-                    live_delta
-                );
-            }
-            if post_live_i64 > i32::MAX as i64 {
-                anyhow::bail!(
-                    "post-batch live cells overflow in update_trackers: pre_live={}, live_delta={}",
-                    pre_live,
-                    live_delta
-                );
-            }
-            let post_live = post_live_i64 as i32;
-            hodl.update_holder_count(pre_live, post_live)?;
-        }
-
-        // Phase 3: Persist both tracker states atomically with snapshots
-        batch.put_hodl_tracker_state(&hodl.to_state());
-        batch.put_cell_dist_tracker_state(&cell_dist.to_state());
-        batch.commit()?;
-
-        Ok(())
-    }
-
     // === get_chain_block_hash, get_chain_tip ===
 
     /// Get the block hash for a given block number, using direct RocksDB reads when available.
