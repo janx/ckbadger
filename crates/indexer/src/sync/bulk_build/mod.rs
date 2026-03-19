@@ -1700,6 +1700,17 @@ fn build_history_rows(
     })
 }
 
+/// Serialize into a pre-allocated Vec, avoiding realloc overhead of `bincode::serialize`
+/// which starts with a small buffer and grows. Pre-computes exact size first.
+fn bincode_serialize_presized<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
+    let size = bincode::serialized_size(value)
+        .map_err(|e| anyhow!("bincode size estimation failed: {}", e))?;
+    let mut buf = Vec::with_capacity(size as usize);
+    bincode::serialize_into(&mut buf, value)
+        .map_err(|e| anyhow!("bincode serialize_into failed: {}", e))?;
+    Ok(buf)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_history_rows_for_block(
     block: &facts::BlockFacts,
@@ -1710,9 +1721,17 @@ fn build_history_rows_for_block(
     detectors: &[Box<dyn crate::db::writer::activities::ProtocolDetector>],
     token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
 ) -> Result<BlockHistoryRows> {
-    let mut rows = Vec::with_capacity(
-        2 + block_txs.len() * 4, // header+hash + ~4 rows per tx estimate
-    );
+    let input_count: usize = block_resolved
+        .iter()
+        .map(|tx| tx.resolved_inputs.len())
+        .sum();
+    let cell_count: usize = block_txs.iter().map(|tx| tx.output_range.len()).sum();
+    let estimated_rows = 2 // block header + hash index
+        + block_txs.len() * 4 // tx_index + tx_hash_map + ~2 addr_txs
+        + input_count // consumed_cells
+        + cell_count * 2 // cells + possible data_hash
+        + block_txs.len(); // activity bundles estimate
+    let mut rows = Vec::with_capacity(estimated_rows);
     let mut identity_activity_count_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
 
     // Block header + hash index (2 rows per block).
@@ -1728,7 +1747,7 @@ fn build_history_rows_for_block(
     rows.push(materialize::MaterializedRow::new(
         CF_BLOCK_HEADERS,
         keys::encode_block_num(block.number).to_vec(),
-        bincode::serialize(&header)?,
+        bincode_serialize_presized(&header)?,
     ));
     rows.push(materialize::MaterializedRow::new(
         CF_BLOCK_HASH_INDEX,
@@ -1778,7 +1797,7 @@ fn build_history_rows_for_block(
         rows.push(materialize::MaterializedRow::new(
             CF_TX_INDEX,
             tx_location.to_vec(),
-            bincode::serialize(&entry)?,
+            bincode_serialize_presized(&entry)?,
         ));
         rows.push(materialize::MaterializedRow::new(
             CF_TX_HASH_MAP,
@@ -1818,7 +1837,7 @@ fn build_history_rows_for_block(
                     resolved_input_outpoint_index_i16(input)?,
                 )
                 .to_vec(),
-                bincode::serialize(&ConsumedCellMeta {
+                bincode_serialize_presized(&ConsumedCellMeta {
                     created_at_block: input.created_at_block,
                     consumed_at_block: tx.block_number,
                     consumed_by_tx: Some(tx.hash.to_vec()),
@@ -1863,7 +1882,7 @@ fn build_history_rows_for_block(
                         tx.block_number,
                         *idx,
                     ),
-                    bincode::serialize(&record)?,
+                    bincode_serialize_presized(&record)?,
                 ));
                 *idx = idx.checked_add(1).ok_or_else(|| {
                     anyhow!(
@@ -1953,7 +1972,7 @@ fn build_history_rows_for_block(
                     bundle.tx_index,
                     &bundle.tx_hash,
                 ),
-                bincode::serialize(&bundle)?,
+                bincode_serialize_presized(&bundle)?,
             ));
         }
     }
@@ -2055,7 +2074,7 @@ fn build_history_rows_for_block(
                         &tx.tx_hash,
                     )
                     .to_vec(),
-                    bincode::serialize(&entry)?,
+                    bincode_serialize_presized(&entry)?,
                 ));
                 let delta = identity_activity_count_deltas
                     .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
@@ -2081,7 +2100,7 @@ fn build_history_rows_for_block(
                     &resolved_entry.entry.tx_hash,
                 )
                 .to_vec(),
-                bincode::serialize(&resolved_entry.entry)?,
+                bincode_serialize_presized(&resolved_entry.entry)?,
             ));
         }
 
@@ -2105,7 +2124,7 @@ fn build_history_rows_for_block(
                     &resolved_entry.entry.tx_hash,
                 )
                 .to_vec(),
-                bincode::serialize(&resolved_entry.entry)?,
+                bincode_serialize_presized(&resolved_entry.entry)?,
             ));
         }
     }
@@ -2119,7 +2138,7 @@ fn build_history_rows_for_block(
             rows.push(materialize::MaterializedRow::new(
                 CF_CELLS,
                 outpoint_key,
-                bincode::serialize(&cell_facts_to_live_cell_info(cell, interner))?,
+                bincode_serialize_presized(&cell_facts_to_live_cell_info(cell, interner))?,
             ));
 
             if let Some(data_hash) = &cell.data_hash {
