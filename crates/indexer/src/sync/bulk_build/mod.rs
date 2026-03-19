@@ -803,8 +803,11 @@ impl BulkBuildRuntimeState {
 
         let facts_started = Instant::now();
         let arena =
-            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(blocks, &mut self.interner)?;
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(blocks, &self.interner)?;
         let facts_elapsed = facts_started.elapsed();
+
+        // Snapshot interner for zero-copy reads during resolve/reduce phases.
+        let frozen = self.interner.snapshot_for_reads();
 
         let resolve_started = Instant::now();
         let resolved = self.sequencer.resolve(&arena)?;
@@ -836,17 +839,15 @@ impl BulkBuildRuntimeState {
             .blocks
             .last()
             .ok_or_else(|| anyhow!("bulk build arena missing blocks for non-empty batch"))?;
-        let history =
-            build_history_rows(&arena, &resolved, &self.interner, is_mainnet, domain_store)?;
+        let history = build_history_rows(&arena, &resolved, &frozen, is_mainnet, domain_store)?;
         let hodl_sealed_rows = self.apply_hodl_tracker_batch(&arena, &resolved)?;
 
         let BulkBuildRuntimeState {
-            interner,
             owners,
             cell_dist_tracker,
             ..
         } = self;
-        let ctx = owners::ReducerContext::new(interner);
+        let ctx = owners::ReducerContext::new(&frozen);
         let mut cell_dist_sealed_rows = Vec::new();
 
         // Phase 1 (serial): address reducer + cell_dist_tracker.
@@ -1004,7 +1005,8 @@ impl BulkBuildRuntimeState {
         let sealed_rows = activity_stats.build_rows()?;
         materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
 
-        let final_snapshot_rows = build_final_snapshot_rows(&sequencer, &interner)?;
+        let frozen = interner.snapshot_for_reads();
+        let final_snapshot_rows = build_final_snapshot_rows(&sequencer, &frozen)?;
         materializer.materialize_final_snapshot(&final_snapshot_rows)?;
 
         let mut owners = owners;
@@ -1568,7 +1570,7 @@ fn collect_script_daily_deltas_snapshot(
 fn build_history_rows(
     arena: &facts::FactsArena,
     resolved: &[facts::ResolvedTxFacts<'_>],
-    interner: &interner::IdentityInterner,
+    interner: &interner::FrozenIdentityView,
     is_mainnet: bool,
     store: &CkbadgerStore,
 ) -> Result<HistoryBuildResult> {
@@ -1885,7 +1887,7 @@ fn build_object_collection_activity_rows(
 #[allow(clippy::type_complexity)]
 fn build_token_info_cache_from_facts(
     resolved: &[facts::ResolvedTxFacts<'_>],
-    interner: &interner::IdentityInterner,
+    interner: &interner::FrozenIdentityView,
     store: &CkbadgerStore,
 ) -> Result<FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>> {
     let mut type_hash_set: FxHashSet<Vec<u8>> = FxHashSet::default();
@@ -1940,7 +1942,7 @@ fn build_sealed_aggregate_rows(
 fn build_activity_rows(
     arena: &facts::FactsArena,
     resolved: &[facts::ResolvedTxFacts<'_>],
-    interner: &interner::IdentityInterner,
+    interner: &interner::FrozenIdentityView,
     is_mainnet: bool,
     store: &CkbadgerStore,
 ) -> Result<Vec<materialize::MaterializedRow>> {
@@ -2036,7 +2038,7 @@ fn build_activity_rows(
 
 fn build_token_transfer_rows(
     resolved: &[facts::ResolvedTxFacts<'_>],
-    interner: &interner::IdentityInterner,
+    interner: &interner::FrozenIdentityView,
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let mut rows = Vec::new();
     let mut transfer_idx: FxHashMap<(Vec<u8>, i64), i32> = FxHashMap::default();
@@ -2087,7 +2089,7 @@ fn build_token_transfer_rows(
 
 fn build_activity_protocol_detectors(
     resolved: &[facts::ResolvedTxFacts<'_>],
-    interner: &interner::IdentityInterner,
+    interner: &interner::FrozenIdentityView,
     is_mainnet: bool,
 ) -> Result<Vec<Box<dyn crate::db::writer::activities::ProtocolDetector>>> {
     let mut lock_code_hashes = HashSet::new();
@@ -2149,7 +2151,7 @@ fn build_activity_protocol_detectors(
 }
 
 fn activity_code_hash(
-    interner: &interner::IdentityInterner,
+    interner: &interner::FrozenIdentityView,
     id: crate::sync::types::InternId,
     label: &str,
     tx: &facts::ResolvedTxFacts<'_>,
@@ -2168,7 +2170,7 @@ fn activity_code_hash(
 
 fn activity_input_view_from_resolved_input(
     input: &facts::ResolvedInputFacts,
-    interner: &interner::IdentityInterner,
+    interner: &interner::FrozenIdentityView,
 ) -> Result<crate::db::writer::activities::InputCellView> {
     let (is_dao_withdraw_request, dao_compensation) = match (
         input.dao_state,
@@ -2224,7 +2226,7 @@ fn activity_input_view_from_resolved_input(
 
 fn parsed_cell_from_facts(
     cell: &facts::CellFacts,
-    interner: &interner::IdentityInterner,
+    interner: &interner::FrozenIdentityView,
 ) -> Result<ParsedCell> {
     if usize::try_from(cell.data_size).ok() != Some(cell.data.len()) {
         bail!(
@@ -2262,7 +2264,7 @@ fn parsed_cell_from_facts(
 
 fn parsed_udt_cell_from_output(
     cell: &facts::CellFacts,
-    interner: &interner::IdentityInterner,
+    interner: &interner::FrozenIdentityView,
     tx: &facts::ResolvedTxFacts<'_>,
 ) -> Result<Option<ParsedUdtCell>> {
     parsed_udt_cell_from_parts(
@@ -2287,7 +2289,7 @@ fn parsed_udt_cell_from_output(
 
 fn parsed_udt_cell_from_input(
     input: &facts::ResolvedInputFacts,
-    interner: &interner::IdentityInterner,
+    interner: &interner::FrozenIdentityView,
     tx: &facts::ResolvedTxFacts<'_>,
 ) -> Result<Option<ParsedUdtCell>> {
     parsed_udt_cell_from_parts(
@@ -2319,7 +2321,7 @@ fn parsed_udt_cell_from_parts(
     type_args_id: Option<crate::sync::types::InternId>,
     lock_script_hash_id: crate::sync::types::InternId,
     udt_amount: Option<u128>,
-    interner: &interner::IdentityInterner,
+    interner: &interner::FrozenIdentityView,
     context: &str,
 ) -> Result<Option<ParsedUdtCell>> {
     let Some(standard) = udt_standard_for_semantic_tag(semantic_tag) else {
@@ -2378,7 +2380,7 @@ fn udt_standard_for_semantic_tag(semantic_tag: facts::CellSemanticTag) -> Option
 
 fn build_final_snapshot_rows(
     sequencer: &sequencer::BulkSequencer,
-    interner: &interner::IdentityInterner,
+    interner: &interner::FrozenIdentityView,
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let mut rows = Vec::with_capacity(sequencer.live_count() * 5);
 
@@ -2484,7 +2486,7 @@ fn resolved_tx_fee(tx: &facts::TxFacts, resolved_tx: &facts::ResolvedTxFacts<'_>
 
 fn cell_facts_to_live_cell_info(
     cell: &facts::CellFacts,
-    interner: &interner::IdentityInterner,
+    interner: &interner::FrozenIdentityView,
 ) -> LiveCellInfo {
     LiveCellInfo {
         capacity: cell.capacity,
@@ -3635,16 +3637,16 @@ mod tests {
         let split_tx_hash =
             hex::decode(&block.block.transactions[1].hash[2..]).expect("split tx hash");
 
-        let mut interner = interner::IdentityInterner::default();
-        let arena =
-            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &mut interner)
-                .expect("facts arena");
+        let interner = interner::IdentityInterner::default();
+        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
+            .expect("facts arena");
         let resolved = sequencer::BulkSequencer::default()
             .resolve(&arena)
             .expect("resolved txs");
+        let frozen = interner.snapshot_for_reads();
 
         let (test_store, test_root) = open_empty_domain_store("bulk-build-addr-tx-test");
-        let addr_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true, &test_store)
+        let addr_rows: Vec<_> = build_history_rows(&arena, &resolved, &frozen, true, &test_store)
             .expect("history rows")
             .rows
             .into_iter()
@@ -3683,22 +3685,21 @@ mod tests {
         let split_tx_hash =
             hex::decode(&block.block.transactions[1].hash[2..]).expect("split tx hash");
 
-        let mut interner = interner::IdentityInterner::default();
-        let arena =
-            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &mut interner)
-                .expect("facts arena");
+        let interner = interner::IdentityInterner::default();
+        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
+            .expect("facts arena");
         let resolved = sequencer::BulkSequencer::default()
             .resolve(&arena)
             .expect("resolved txs");
+        let frozen = interner.snapshot_for_reads();
 
         let (test_store, test_root) = open_empty_domain_store("bulk-build-token-transfer-test");
-        let token_rows: Vec<_> =
-            build_history_rows(&arena, &resolved, &interner, true, &test_store)
-                .expect("history rows")
-                .rows
-                .into_iter()
-                .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
-                .collect();
+        let token_rows: Vec<_> = build_history_rows(&arena, &resolved, &frozen, true, &test_store)
+            .expect("history rows")
+            .rows
+            .into_iter()
+            .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
+            .collect();
         let _ = std::fs::remove_dir_all(&test_root);
 
         assert_eq!(token_rows.len(), 2);
@@ -3736,10 +3737,9 @@ mod tests {
     #[test]
     fn flush_bulk_build_materialized_state_flushes_domain_and_append_memtables() {
         let block = bulk_build_addr_tx_fixture();
-        let mut interner = interner::IdentityInterner::default();
-        let arena =
-            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &mut interner)
-                .expect("facts arena");
+        let interner = interner::IdentityInterner::default();
+        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
+            .expect("facts arena");
         let resolved = sequencer::BulkSequencer::default()
             .resolve(&arena)
             .expect("resolved txs");
@@ -3751,10 +3751,11 @@ mod tests {
         std::fs::create_dir_all(&domain_path).expect("create domain dir");
         std::fs::create_dir_all(&append_path).expect("create append-only dir");
 
+        let frozen = interner.snapshot_for_reads();
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
         let append_store =
             CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
-        let history = build_history_rows(&arena, &resolved, &interner, true, &domain_store)
+        let history = build_history_rows(&arena, &resolved, &frozen, true, &domain_store)
             .expect("history rows");
         let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
         materializer
@@ -3782,13 +3783,13 @@ mod tests {
     #[test]
     fn build_token_info_cache_from_facts_errors_on_invalid_decimals() {
         let block = bulk_build_token_transfer_fixture();
-        let mut interner = interner::IdentityInterner::default();
-        let arena =
-            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &mut interner)
-                .expect("facts arena");
+        let interner = interner::IdentityInterner::default();
+        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
+            .expect("facts arena");
         let resolved = sequencer::BulkSequencer::default()
             .resolve(&arena)
             .expect("resolved txs");
+        let frozen = interner.snapshot_for_reads();
 
         let (test_store, test_root) = open_empty_domain_store("bulk-build-token-cache-invalid");
         let type_script = fixture_sudt_type_script();
@@ -3816,7 +3817,7 @@ mod tests {
             )
             .expect("put token");
 
-        let err = build_token_info_cache_from_facts(&resolved, &interner, &test_store)
+        let err = build_token_info_cache_from_facts(&resolved, &frozen, &test_store)
             .expect_err("invalid decimals should fail fast");
         assert!(err.to_string().contains("out of u8 range"));
 
@@ -3826,13 +3827,13 @@ mod tests {
     #[test]
     fn build_token_info_cache_from_facts_uses_symbol_and_decimals_from_store() {
         let block = bulk_build_token_transfer_fixture();
-        let mut interner = interner::IdentityInterner::default();
-        let arena =
-            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &mut interner)
-                .expect("facts arena");
+        let interner = interner::IdentityInterner::default();
+        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
+            .expect("facts arena");
         let resolved = sequencer::BulkSequencer::default()
             .resolve(&arena)
             .expect("resolved txs");
+        let frozen = interner.snapshot_for_reads();
 
         let (test_store, test_root) = open_empty_domain_store("bulk-build-token-cache-valid");
         let type_script = fixture_sudt_type_script();
@@ -3860,7 +3861,7 @@ mod tests {
             )
             .expect("put token");
 
-        let cache = build_token_info_cache_from_facts(&resolved, &interner, &test_store)
+        let cache = build_token_info_cache_from_facts(&resolved, &frozen, &test_store)
             .expect("build token info cache");
         assert_eq!(
             cache.get(&type_hash),
@@ -3886,17 +3887,17 @@ mod tests {
             "02".repeat(20)
         )));
 
-        let mut interner = interner::IdentityInterner::default();
-        let arena =
-            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &mut interner)
-                .expect("facts arena");
+        let interner = interner::IdentityInterner::default();
+        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
+            .expect("facts arena");
         let resolved = sequencer::BulkSequencer::default()
             .resolve(&arena)
             .expect("resolved txs");
+        let frozen = interner.snapshot_for_reads();
 
         let (test_store, test_root) = open_empty_domain_store("bulk-build-activity-test");
         let activity_rows: Vec<_> =
-            build_history_rows(&arena, &resolved, &interner, true, &test_store)
+            build_history_rows(&arena, &resolved, &frozen, true, &test_store)
                 .expect("history rows")
                 .rows
                 .into_iter()
@@ -3979,14 +3980,14 @@ mod tests {
         let funding_args = hex::decode("bb".repeat(20)).expect("funding args");
         let expected_channel_id = keys::encode_fiber_channel_id(&open_tx_hash, 0);
 
-        let mut interner = interner::IdentityInterner::default();
-        let arena =
-            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &mut interner)
-                .expect("facts arena");
+        let interner = interner::IdentityInterner::default();
+        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
+            .expect("facts arena");
+        let frozen = interner.snapshot_for_reads();
         let mut sequencer = sequencer::BulkSequencer::default();
         let resolved = sequencer.resolve(&arena).expect("resolved txs");
         let mut owners = CoreOwners::default();
-        let ctx = owners::ReducerContext::new(&interner);
+        let ctx = owners::ReducerContext::new(&frozen);
 
         let root = unique_temp_test_dir("bulk-build-fiber-activity");
         std::fs::create_dir_all(&root).expect("create root dir");
@@ -3996,11 +3997,11 @@ mod tests {
         std::fs::create_dir_all(&append_path).expect("create append-only dir");
 
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
-        let history = build_history_rows(&arena, &resolved, &interner, true, &domain_store)
+        let history = build_history_rows(&arena, &resolved, &frozen, true, &domain_store)
             .expect("history rows");
         let sealed_rows = build_sealed_aggregate_rows(&history.rows).expect("sealed rows");
         let final_snapshot_rows =
-            build_final_snapshot_rows(&sequencer, &interner).expect("final snapshot rows");
+            build_final_snapshot_rows(&sequencer, &frozen).expect("final snapshot rows");
 
         let open_bundle = history
             .rows
@@ -4062,17 +4063,17 @@ mod tests {
         let create_tx_hash = vec![0xa1; 32];
         let transfer_tx_hash = vec![0xb1; 32];
 
-        let mut interner = interner::IdentityInterner::default();
-        let arena =
-            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&blocks, &mut interner)
-                .expect("facts arena");
+        let interner = interner::IdentityInterner::default();
+        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&blocks, &interner)
+            .expect("facts arena");
         let resolved = sequencer::BulkSequencer::default()
             .resolve(&arena)
             .expect("resolved txs");
+        let frozen = interner.snapshot_for_reads();
 
         let (test_store, test_root) = open_empty_domain_store("bulk-build-spore-did-activity-test");
         let history_rows: Vec<_> =
-            build_history_rows(&arena, &resolved, &interner, true, &test_store)
+            build_history_rows(&arena, &resolved, &frozen, true, &test_store)
                 .expect("history rows")
                 .rows
                 .into_iter()
@@ -4439,10 +4440,10 @@ mod tests {
         // Process both blocks through bulk build - this must not error.
         // Before the fix, block 0 was skipped and this would fail with
         // "missing live input" at block 11.
-        let mut interner = interner::IdentityInterner::default();
+        let interner = interner::IdentityInterner::default();
         let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(
             &[genesis_block, block_11],
-            &mut interner,
+            &interner,
         )
         .expect("facts arena");
 
@@ -4462,11 +4463,12 @@ mod tests {
 
     #[test]
     fn test_xudt_owner_mode_cell_without_amount_returns_none() {
-        let mut interner = interner::IdentityInterner::default();
+        let interner = interner::IdentityInterner::default();
         let script_hash_id = interner.intern_bytes(vec![0xaa; 32]);
         let code_hash_id = interner.intern_bytes(vec![0xbb; 32]);
         let args_id = interner.intern_bytes(vec![0xcc; 20]);
         let lock_id = interner.intern_bytes(vec![0xdd; 32]);
+        let frozen = interner.snapshot_for_reads();
 
         // xUDT cell with no amount (owner-mode) should return Ok(None), not error
         let result = parsed_udt_cell_from_parts(
@@ -4477,7 +4479,7 @@ mod tests {
             Some(args_id),
             lock_id,
             None, // no udt_amount — owner-mode cell
-            &interner,
+            &frozen,
             "test xudt owner-mode",
         );
         assert!(result.is_ok(), "should not error on xUDT without amount");
@@ -4489,11 +4491,12 @@ mod tests {
 
     #[test]
     fn test_xudt_cell_with_amount_returns_parsed_cell() {
-        let mut interner = interner::IdentityInterner::default();
+        let interner = interner::IdentityInterner::default();
         let script_hash_id = interner.intern_bytes(vec![0xaa; 32]);
         let code_hash_id = interner.intern_bytes(vec![0xbb; 32]);
         let args_id = interner.intern_bytes(vec![0xcc; 20]);
         let lock_id = interner.intern_bytes(vec![0xdd; 32]);
+        let frozen = interner.snapshot_for_reads();
 
         let result = parsed_udt_cell_from_parts(
             CellSemanticTag::Xudt,
@@ -4503,7 +4506,7 @@ mod tests {
             Some(args_id),
             lock_id,
             Some(1000),
-            &interner,
+            &frozen,
             "test xudt with amount",
         );
         let cell = result
@@ -4515,8 +4518,9 @@ mod tests {
 
     #[test]
     fn test_plain_cell_skipped_for_udt_processing() {
-        let mut interner = interner::IdentityInterner::default();
+        let interner = interner::IdentityInterner::default();
         let lock_id = interner.intern_bytes(vec![0xdd; 32]);
+        let frozen = interner.snapshot_for_reads();
 
         let result = parsed_udt_cell_from_parts(
             CellSemanticTag::Plain,
@@ -4526,7 +4530,7 @@ mod tests {
             None,
             lock_id,
             None,
-            &interner,
+            &frozen,
             "test plain cell",
         );
         assert!(result.unwrap().is_none());

@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use super::facts::ResolvedTxFacts;
-use super::interner::IdentityInterner;
+use super::interner::FrozenIdentityView;
 use super::materialize::Materializer;
 use crate::sync::types::InternId;
 
@@ -24,11 +24,11 @@ pub(crate) trait BulkReducer {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ReducerContext<'a> {
-    identities: &'a IdentityInterner,
+    identities: &'a FrozenIdentityView,
 }
 
 impl<'a> ReducerContext<'a> {
-    pub(crate) fn new(identities: &'a IdentityInterner) -> Self {
+    pub(crate) fn new(identities: &'a FrozenIdentityView) -> Self {
         Self { identities }
     }
 

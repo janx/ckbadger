@@ -348,183 +348,216 @@ fn parse_bulk_protocol_facts(
 
 pub(crate) fn build_bulk_facts_arena_from_blocks(
     blocks: &[BlockResponseWithCycles],
-    interner: &mut IdentityInterner,
+    interner: &IdentityInterner,
 ) -> Result<FactsArena> {
+    // Parse each block in parallel via rayon. Each block produces local
+    // (BlockFacts, Vec<TxFacts>, Vec<CellFacts>) with output_range starting
+    // at local index 0. The merge phase below remaps offsets sequentially.
+    let per_block_results: Vec<Result<(BlockFacts, Vec<TxFacts>, Vec<CellFacts>)>> = blocks
+        .par_iter()
+        .map(|block| parse_single_block(block, interner))
+        .collect();
+
     let mut arena = FactsArena::default();
+    for result in per_block_results {
+        let (block_facts, txs, cells) = result?;
+        let tx_start = arena.txs.len();
+        let cell_start = arena.cells.len();
 
-    for block in blocks {
-        let parsed_block = BlockParser::parse(&block.block)?;
-        let block_hash =
-            parse_fixed_protocol_id::<32>(&parsed_block.hash, "block_hash", &[0u8; 32], -1)?;
-        let timestamp_ms = parsed_block.timestamp.timestamp_millis();
-        let block_dao_ar =
-            DaoParser::extract_ar_from_dao_field(&parsed_block.dao).ok_or_else(|| {
-                anyhow!(
-                    "failed to extract block DAO AR in bulk facts: block={}, dao_len={}",
-                    parsed_block.number,
-                    parsed_block.dao.len()
-                )
-            })?;
-        let block_tx_start = arena.txs.len();
+        for mut tx in txs {
+            tx.output_range =
+                (cell_start + tx.output_range.start)..(cell_start + tx.output_range.end);
+            arena.txs.push(tx);
+        }
+        arena.cells.extend(cells);
 
-        for (tx_position, tx) in block.block.transactions.iter().enumerate() {
-            crate::parser::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
-            let parsed_tx = TransactionParser::parse(tx)?;
-            let parsed_inputs = TransactionParser::parse_inputs(tx)?;
-            let parsed_cells = CellParser::parse_outputs(tx)?;
-            let witness_bundle = if may_contain_das_witness(&tx.witnesses) {
-                parse_dotbit_witness_bundle(&tx.witnesses)
-            } else {
-                DotbitWitnessBundle::default()
-            };
-            let tx_index = i32::try_from(tx_position).map_err(|_| {
-                anyhow!(
-                    "bulk facts tx index exceeds i32 range: block={} tx_position={}",
-                    parsed_block.number,
-                    tx_position
-                )
-            })?;
-            let inputs_count = i16::try_from(parsed_tx.inputs_count).map_err(|_| {
-                anyhow!(
-                    "bulk facts inputs_count exceeds i16 range: block={} tx=0x{} tx_index={} inputs_count={}",
-                    parsed_block.number,
-                    hex::encode(parsed_tx.hash),
-                    tx_index,
-                    parsed_tx.inputs_count
-                )
-            })?;
-            let outputs_count = i16::try_from(parsed_tx.outputs_count).map_err(|_| {
-                anyhow!(
-                    "bulk facts outputs_count exceeds i16 range: block={} tx=0x{} tx_index={} outputs_count={}",
-                    parsed_block.number,
-                    hex::encode(parsed_tx.hash),
-                    tx_index,
-                    parsed_tx.outputs_count
-                )
-            })?;
-            let cycles =
-                parse_bulk_tx_cycles(block, tx_position, parsed_block.number, &parsed_tx.hash)?;
-            let output_start = arena.cells.len();
-            let input_outpoints = if parsed_tx.is_cellbase {
-                Vec::new()
-            } else {
-                parsed_inputs
-                    .iter()
-                    .enumerate()
-                    .map(|(input_position, input)| {
-                        let output_index =
-                            u32::try_from(input.previous_output_index).map_err(|_| {
-                                anyhow!(
-                                    "negative previous_output_index in bulk facts: block={} tx=0x{} tx_index={} input_index={} previous_output_index={}",
-                                    parsed_block.number,
-                                    hex::encode(parsed_tx.hash),
-                                    tx_index,
-                                    input_position,
-                                    input.previous_output_index
-                                )
-                            })?;
-                        Ok(OutPointKey::new(input.previous_tx_hash, output_index))
-                    })
-                    .collect::<Result<Vec<_>>>()?
-            };
+        let tx_end = arena.txs.len();
+        let mut block = block_facts;
+        block.tx_range = tx_start..tx_end;
+        arena.blocks.push(block);
+    }
+    Ok(arena)
+}
 
-            for (output_index, cell) in parsed_cells.iter().enumerate() {
-                let output_index_i16 =
-                    checked_usize_to_i16(output_index, "bulk facts arena output index")?;
-                let semantic_tag = classify_bulk_cell_semantic_tag(cell);
-                arena.cells.push(CellFacts {
-                    outpoint: OutPointKey::new(
-                        parsed_tx.hash,
-                        u32::try_from(output_index).unwrap_or_else(|_| {
-                            panic!(
-                                "bulk facts arena output index {} exceeds u32::MAX",
-                                output_index
-                            )
-                        }),
-                    ),
-                    created_at_block: parsed_block.number,
-                    created_by_block_dao_ar: block_dao_ar,
-                    capacity: cell.capacity,
-                    lock_script_hash_id: interner.intern_bytes(cell.lock_script_hash.clone()),
-                    lock_code_hash_id: interner.intern_bytes(cell.lock_code_hash.clone()),
-                    lock_hash_type: cell.lock_hash_type,
-                    lock_args_id: interner.intern_bytes(cell.lock_args.clone()),
-                    type_script_hash_id: cell
-                        .type_script_hash
-                        .clone()
-                        .map(|value| interner.intern_bytes(value)),
-                    type_code_hash_id: cell
-                        .type_code_hash
-                        .clone()
-                        .map(|value| interner.intern_bytes(value)),
-                    type_hash_type: cell.type_hash_type,
-                    type_args_id: cell
-                        .type_args
-                        .clone()
-                        .map(|value| interner.intern_bytes(value)),
-                    occupied_capacity: occupied_capacity_shannons_i64(
-                        cell.lock_args.len(),
-                        cell.type_args.as_ref().map(|args| args.len()),
-                        cell.data_size,
-                    ),
-                    data_size: cell.data_size,
-                    data: cell.data.clone(),
-                    data_hash: Some(cell.data_hash),
-                    udt_amount: parse_parsed_cell_udt_amount(
-                        cell,
-                        &parsed_tx.hash,
-                        output_index_i16,
-                        None,
-                    )?,
-                    semantic_tag,
-                    dao_state: parse_bulk_dao_cell_state(
-                        cell,
-                        semantic_tag,
-                        &parsed_tx.hash,
-                        output_index_i16,
-                    )?,
-                    protocol_facts: parse_bulk_protocol_facts(
-                        cell,
-                        semantic_tag,
-                        &witness_bundle,
-                        &parsed_tx.hash,
-                        output_index_i16,
-                    )?,
-                });
-            }
+/// Parse a single block into local facts with output ranges starting at 0.
+fn parse_single_block(
+    block: &BlockResponseWithCycles,
+    interner: &IdentityInterner,
+) -> Result<(BlockFacts, Vec<TxFacts>, Vec<CellFacts>)> {
+    let parsed_block = BlockParser::parse(&block.block)?;
+    let block_hash =
+        parse_fixed_protocol_id::<32>(&parsed_block.hash, "block_hash", &[0u8; 32], -1)?;
+    let timestamp_ms = parsed_block.timestamp.timestamp_millis();
+    let block_dao_ar =
+        DaoParser::extract_ar_from_dao_field(&parsed_block.dao).ok_or_else(|| {
+            anyhow!(
+                "failed to extract block DAO AR in bulk facts: block={}, dao_len={}",
+                parsed_block.number,
+                parsed_block.dao.len()
+            )
+        })?;
 
-            arena.txs.push(TxFacts {
-                hash: parsed_tx.hash,
-                block_number: parsed_block.number,
-                block_hash,
-                timestamp_ms,
-                block_dao_ar,
+    let mut local_txs = Vec::with_capacity(block.block.transactions.len());
+    let mut local_cells = Vec::new();
+
+    for (tx_position, tx) in block.block.transactions.iter().enumerate() {
+        crate::parser::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
+        let parsed_tx = TransactionParser::parse(tx)?;
+        let parsed_inputs = TransactionParser::parse_inputs(tx)?;
+        let parsed_cells = CellParser::parse_outputs(tx)?;
+        let witness_bundle = if may_contain_das_witness(&tx.witnesses) {
+            parse_dotbit_witness_bundle(&tx.witnesses)
+        } else {
+            DotbitWitnessBundle::default()
+        };
+        let tx_index = i32::try_from(tx_position).map_err(|_| {
+            anyhow!(
+                "bulk facts tx index exceeds i32 range: block={} tx_position={}",
+                parsed_block.number,
+                tx_position
+            )
+        })?;
+        let inputs_count = i16::try_from(parsed_tx.inputs_count).map_err(|_| {
+            anyhow!(
+                "bulk facts inputs_count exceeds i16 range: block={} tx=0x{} tx_index={} inputs_count={}",
+                parsed_block.number,
+                hex::encode(parsed_tx.hash),
                 tx_index,
-                is_cellbase: parsed_tx.is_cellbase,
-                inputs_count,
-                outputs_count,
-                tx_size: parsed_tx.tx_size,
-                cycles,
-                dotbit_action: witness_bundle.action.clone(),
-                input_outpoints,
-                output_range: output_start..arena.cells.len(),
+                parsed_tx.inputs_count
+            )
+        })?;
+        let outputs_count = i16::try_from(parsed_tx.outputs_count).map_err(|_| {
+            anyhow!(
+                "bulk facts outputs_count exceeds i16 range: block={} tx=0x{} tx_index={} outputs_count={}",
+                parsed_block.number,
+                hex::encode(parsed_tx.hash),
+                tx_index,
+                parsed_tx.outputs_count
+            )
+        })?;
+        let cycles =
+            parse_bulk_tx_cycles(block, tx_position, parsed_block.number, &parsed_tx.hash)?;
+        let output_start = local_cells.len();
+        let input_outpoints = if parsed_tx.is_cellbase {
+            Vec::new()
+        } else {
+            parsed_inputs
+                .iter()
+                .enumerate()
+                .map(|(input_position, input)| {
+                    let output_index =
+                        u32::try_from(input.previous_output_index).map_err(|_| {
+                            anyhow!(
+                                "negative previous_output_index in bulk facts: block={} tx=0x{} tx_index={} input_index={} previous_output_index={}",
+                                parsed_block.number,
+                                hex::encode(parsed_tx.hash),
+                                tx_index,
+                                input_position,
+                                input.previous_output_index
+                            )
+                        })?;
+                    Ok(OutPointKey::new(input.previous_tx_hash, output_index))
+                })
+                .collect::<Result<Vec<_>>>()?
+        };
+
+        for (output_index, cell) in parsed_cells.iter().enumerate() {
+            let output_index_i16 =
+                checked_usize_to_i16(output_index, "bulk facts arena output index")?;
+            let semantic_tag = classify_bulk_cell_semantic_tag(cell);
+            local_cells.push(CellFacts {
+                outpoint: OutPointKey::new(
+                    parsed_tx.hash,
+                    u32::try_from(output_index).unwrap_or_else(|_| {
+                        panic!(
+                            "bulk facts arena output index {} exceeds u32::MAX",
+                            output_index
+                        )
+                    }),
+                ),
+                created_at_block: parsed_block.number,
+                created_by_block_dao_ar: block_dao_ar,
+                capacity: cell.capacity,
+                lock_script_hash_id: interner.intern_bytes(cell.lock_script_hash.clone()),
+                lock_code_hash_id: interner.intern_bytes(cell.lock_code_hash.clone()),
+                lock_hash_type: cell.lock_hash_type,
+                lock_args_id: interner.intern_bytes(cell.lock_args.clone()),
+                type_script_hash_id: cell
+                    .type_script_hash
+                    .clone()
+                    .map(|value| interner.intern_bytes(value)),
+                type_code_hash_id: cell
+                    .type_code_hash
+                    .clone()
+                    .map(|value| interner.intern_bytes(value)),
+                type_hash_type: cell.type_hash_type,
+                type_args_id: cell
+                    .type_args
+                    .clone()
+                    .map(|value| interner.intern_bytes(value)),
+                occupied_capacity: occupied_capacity_shannons_i64(
+                    cell.lock_args.len(),
+                    cell.type_args.as_ref().map(|args| args.len()),
+                    cell.data_size,
+                ),
+                data_size: cell.data_size,
+                data: cell.data.clone(),
+                data_hash: Some(cell.data_hash),
+                udt_amount: parse_parsed_cell_udt_amount(
+                    cell,
+                    &parsed_tx.hash,
+                    output_index_i16,
+                    None,
+                )?,
+                semantic_tag,
+                dao_state: parse_bulk_dao_cell_state(
+                    cell,
+                    semantic_tag,
+                    &parsed_tx.hash,
+                    output_index_i16,
+                )?,
+                protocol_facts: parse_bulk_protocol_facts(
+                    cell,
+                    semantic_tag,
+                    &witness_bundle,
+                    &parsed_tx.hash,
+                    output_index_i16,
+                )?,
             });
         }
 
-        arena.blocks.push(BlockFacts {
-            number: parsed_block.number,
-            hash: block_hash,
+        local_txs.push(TxFacts {
+            hash: parsed_tx.hash,
+            block_number: parsed_block.number,
+            block_hash,
             timestamp_ms,
-            epoch_number: parsed_block.epoch_number,
-            epoch_index: parsed_block.epoch_index,
-            epoch_length: parsed_block.epoch_length,
-            dao: parsed_block.dao,
-            transactions_count: parsed_block.transactions_count,
-            tx_range: block_tx_start..arena.txs.len(),
+            block_dao_ar,
+            tx_index,
+            is_cellbase: parsed_tx.is_cellbase,
+            inputs_count,
+            outputs_count,
+            tx_size: parsed_tx.tx_size,
+            cycles,
+            dotbit_action: witness_bundle.action.clone(),
+            input_outpoints,
+            output_range: output_start..local_cells.len(),
         });
     }
 
-    Ok(arena)
+    let block_facts = BlockFacts {
+        number: parsed_block.number,
+        hash: block_hash,
+        timestamp_ms,
+        epoch_number: parsed_block.epoch_number,
+        epoch_index: parsed_block.epoch_index,
+        epoch_length: parsed_block.epoch_length,
+        dao: parsed_block.dao,
+        transactions_count: parsed_block.transactions_count,
+        // Placeholder tx_range; remapped in the merge phase.
+        tx_range: 0..local_txs.len(),
+    };
+
+    Ok((block_facts, local_txs, local_cells))
 }
 
 fn parse_bulk_tx_cycles(
@@ -3034,8 +3067,9 @@ mod tests {
     #[test]
     fn build_facts_arena_captures_exact_cell_semantics() {
         let blocks = vec![create_facts_fixture_block_with_two_txs()];
-        let mut interner = IdentityInterner::default();
-        let arena = build_bulk_facts_arena_from_blocks(&blocks, &mut interner).expect("facts");
+        let interner = IdentityInterner::default();
+        let arena = build_bulk_facts_arena_from_blocks(&blocks, &interner).expect("facts");
+        let frozen = interner.snapshot_for_reads();
         let sudt_cell = arena
             .cells
             .iter()
@@ -3045,10 +3079,10 @@ mod tests {
         assert_eq!(arena.txs.len(), 2);
         assert!(arena.cells.iter().any(|cell| cell.occupied_capacity > 0));
         assert_eq!(sudt_cell.lock_hash_type, 1);
-        assert_eq!(interner.resolve_bytes(sudt_cell.lock_args_id).len(), 20);
+        assert_eq!(frozen.resolve_bytes(sudt_cell.lock_args_id).len(), 20);
         assert_eq!(sudt_cell.type_hash_type, Some(1));
         assert_eq!(
-            interner.resolve_bytes(sudt_cell.type_args_id.expect("type args")),
+            frozen.resolve_bytes(sudt_cell.type_args_id.expect("type args")),
             &[0x12; 32]
         );
         assert!(
@@ -3169,8 +3203,8 @@ mod tests {
             cycles: None,
         };
 
-        let mut interner = IdentityInterner::default();
-        let arena = build_bulk_facts_arena_from_blocks(&[block], &mut interner).expect("facts");
+        let interner = IdentityInterner::default();
+        let arena = build_bulk_facts_arena_from_blocks(&[block], &interner).expect("facts");
         let cluster_cell = arena
             .cells
             .iter()
@@ -3454,9 +3488,9 @@ mod tests {
             cycles: None,
         };
 
-        let mut interner = IdentityInterner::default();
+        let interner = IdentityInterner::default();
         let arena =
-            build_bulk_facts_arena_from_blocks(&[block], &mut interner).expect("should not crash");
+            build_bulk_facts_arena_from_blocks(&[block], &interner).expect("should not crash");
 
         let dotbit_cell = arena
             .cells

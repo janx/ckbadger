@@ -31,8 +31,8 @@ pub use progress::SyncProgress;
 pub fn build_facts_arena_snapshot_for_test(
     blocks: &[crate::rpc::BlockResponseWithCycles],
 ) -> anyhow::Result<FactsArenaSnapshot> {
-    let mut interner = bulk_build::interner::IdentityInterner::default();
-    let arena = pipeline::build_bulk_facts_arena_from_blocks(blocks, &mut interner)?;
+    let interner = bulk_build::interner::IdentityInterner::default();
+    let arena = pipeline::build_bulk_facts_arena_from_blocks(blocks, &interner)?;
     Ok(FactsArenaSnapshot::from_facts_arena(&arena))
 }
 
@@ -40,8 +40,8 @@ pub fn build_facts_arena_snapshot_for_test(
 pub fn resolve_live_cell_snapshot_for_test(
     blocks: &[crate::rpc::BlockResponseWithCycles],
 ) -> anyhow::Result<LiveCellResolutionSnapshot> {
-    let mut interner = bulk_build::interner::IdentityInterner::default();
-    let arena = pipeline::build_bulk_facts_arena_from_blocks(blocks, &mut interner)?;
+    let interner = bulk_build::interner::IdentityInterner::default();
+    let arena = pipeline::build_bulk_facts_arena_from_blocks(blocks, &interner)?;
     bulk_build::live_cells::resolve_live_cell_snapshot_for_test(&arena)
 }
 

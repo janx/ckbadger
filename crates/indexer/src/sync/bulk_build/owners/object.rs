@@ -1881,10 +1881,11 @@ pub struct ObjectStateSnapshot {
 pub(crate) fn materialize_object_state_for_test(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<ObjectStateSnapshot> {
-    let mut interner = IdentityInterner::default();
-    let arena = build_bulk_facts_arena_from_blocks(blocks, &mut interner)?;
+    let interner = IdentityInterner::default();
+    let arena = build_bulk_facts_arena_from_blocks(blocks, &interner)?;
     let resolved = BulkSequencer::default().resolve(&arena)?;
-    let ctx = ReducerContext::new(&interner);
+    let frozen = interner.snapshot_for_reads();
+    let ctx = ReducerContext::new(&frozen);
     let mut owner = ObjectOwner::default();
 
     for tx in &resolved {
@@ -2175,13 +2176,14 @@ mod tests {
 
     #[test]
     fn object_owner_materializes_spore_transfer_and_did_burn_without_db_reads() {
-        let mut interner = crate::sync::bulk_build::interner::IdentityInterner::default();
+        let interner = crate::sync::bulk_build::interner::IdentityInterner::default();
         let lock_a = interner.intern_bytes(vec![0xaa; 32]);
         let lock_b = interner.intern_bytes(vec![0xbb; 32]);
         let lock_c = interner.intern_bytes(vec![0xcc; 32]);
         let spore_type_hash = interner.intern_bytes(vec![0x91; 32]);
         let did_type_hash = interner.intern_bytes(vec![0x92; 32]);
-        let ctx = ReducerContext::new(&interner);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
 
         let cluster_id = [0x11; 32];
         let spore_id = [0x22; 32];
@@ -2509,13 +2511,14 @@ mod tests {
 
     #[test]
     fn object_owner_materializes_mnft_transfer_and_consume_without_db_reads() {
-        let mut interner = crate::sync::bulk_build::interner::IdentityInterner::default();
+        let interner = crate::sync::bulk_build::interner::IdentityInterner::default();
         let owner_a = interner.intern_bytes(vec![0xaa; 32]);
         let owner_b = interner.intern_bytes(vec![0xbb; 32]);
         let issuer_type_hash = interner.intern_bytes(vec![0x71; 32]);
         let class_type_hash = interner.intern_bytes(vec![0x72; 32]);
         let token_type_hash = interner.intern_bytes(vec![0x73; 32]);
-        let ctx = ReducerContext::new(&interner);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
 
         let issuer_id = [0x11; 20];
         let mut class_id = issuer_id.to_vec();
@@ -2841,10 +2844,11 @@ mod tests {
 
     #[test]
     fn object_owner_materializes_dotbit_transfer_and_consume_without_db_reads() {
-        let mut interner = crate::sync::bulk_build::interner::IdentityInterner::default();
+        let interner = crate::sync::bulk_build::interner::IdentityInterner::default();
         let owner_a = interner.intern_bytes(vec![0xa1; 32]);
         let owner_b = interner.intern_bytes(vec![0xb2; 32]);
-        let ctx = ReducerContext::new(&interner);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
 
         let account_id = [0x51; 20];
 

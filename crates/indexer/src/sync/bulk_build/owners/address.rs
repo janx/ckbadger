@@ -310,10 +310,11 @@ fn checked_add_i32(
 pub(crate) fn materialize_address_balances_for_test(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<HashMap<Vec<u8>, AddressBalance>> {
-    let mut interner = IdentityInterner::default();
-    let arena = build_bulk_facts_arena_from_blocks(blocks, &mut interner)?;
+    let interner = IdentityInterner::default();
+    let arena = build_bulk_facts_arena_from_blocks(blocks, &interner)?;
     let resolved = BulkSequencer::default().resolve(&arena)?;
-    let ctx = ReducerContext::new(&interner);
+    let frozen = interner.snapshot_for_reads();
+    let ctx = ReducerContext::new(&frozen);
     let mut owner = AddressOwner::default();
 
     for tx in &resolved {
@@ -359,10 +360,11 @@ mod tests {
 
     #[test]
     fn address_owner_reduces_same_block_create_then_consume() {
-        let mut interner = IdentityInterner::default();
+        let interner = IdentityInterner::default();
         let lock_a = interner.intern_bytes(vec![0xaa; 32]);
         let lock_b = interner.intern_bytes(vec![0xbb; 32]);
-        let ctx = ReducerContext::new(&interner);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
         let tx0 = ResolvedTxFacts {
             tx_hash: [0x11; 32],
             block_number: 100,

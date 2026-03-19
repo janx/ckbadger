@@ -926,10 +926,11 @@ pub struct DaoStateSnapshot {
 pub(crate) fn materialize_dao_state_for_test(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<DaoStateSnapshot> {
-    let mut interner = IdentityInterner::default();
-    let arena = build_bulk_facts_arena_from_blocks(blocks, &mut interner)?;
+    let interner = IdentityInterner::default();
+    let arena = build_bulk_facts_arena_from_blocks(blocks, &interner)?;
     let resolved = BulkSequencer::default().resolve(&arena)?;
-    let ctx = ReducerContext::new(&interner);
+    let frozen = interner.snapshot_for_reads();
+    let ctx = ReducerContext::new(&frozen);
     let mut owner = DaoOwner::default();
 
     for tx in &resolved {
@@ -1037,11 +1038,12 @@ mod tests {
 
     #[test]
     fn dao_owner_reduces_deposit_request_completion_lifecycle() {
-        let mut interner = IdentityInterner::default();
+        let interner = IdentityInterner::default();
         let lock_hash = interner.intern_bytes(vec![0xaa; 32]);
         let dao_code_hash_id =
             interner.intern_bytes(hex::decode(&DAO_CODE_HASH[2..]).expect("dao code hash"));
-        let ctx = ReducerContext::new(&interner);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
         let mut owner = DaoOwner::default();
 
         let tx0 = ResolvedTxFacts {
@@ -1209,12 +1211,13 @@ mod tests {
 
     #[test]
     fn dao_owner_returns_error_instead_of_panicking_when_request_output_index_is_ambiguous() {
-        let mut interner = IdentityInterner::default();
+        let interner = IdentityInterner::default();
         let lock_hash = interner.intern_bytes(vec![0xaa; 32]);
         let plain_lock_hash = interner.intern_bytes(vec![0xbb; 32]);
         let dao_code_hash_id =
             interner.intern_bytes(hex::decode(&DAO_CODE_HASH[2..]).expect("dao code hash"));
-        let ctx = ReducerContext::new(&interner);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
         let mut owner = DaoOwner::default();
 
         let origin_outpoint = OutPointKey::new([0x31; 32], 0);

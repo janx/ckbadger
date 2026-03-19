@@ -751,10 +751,11 @@ pub struct TokenStateSnapshot {
 pub(crate) fn materialize_token_state_for_test(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<TokenStateSnapshot> {
-    let mut interner = IdentityInterner::default();
-    let arena = build_bulk_facts_arena_from_blocks(blocks, &mut interner)?;
+    let interner = IdentityInterner::default();
+    let arena = build_bulk_facts_arena_from_blocks(blocks, &interner)?;
     let resolved = BulkSequencer::default().resolve(&arena)?;
-    let ctx = ReducerContext::new(&interner);
+    let frozen = interner.snapshot_for_reads();
+    let ctx = ReducerContext::new(&frozen);
     let mut owner = TokenOwner::default();
 
     for tx in &resolved {
@@ -892,7 +893,7 @@ mod tests {
 
     #[test]
     fn token_owner_reduces_live_supply_and_holder_removal() {
-        let mut interner = IdentityInterner::default();
+        let interner = IdentityInterner::default();
         let lock_a = interner.intern_bytes(vec![0xaa; 32]);
         let lock_b = interner.intern_bytes(vec![0xbb; 32]);
         let type_hash_id = interner.intern_bytes(vec![0xcc; 32]);
@@ -903,7 +904,8 @@ mod tests {
         for i in interner.len()..=100 {
             interner.intern_bytes(vec![0xf0, (i >> 8) as u8, i as u8]);
         }
-        let ctx = ReducerContext::new(&interner);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
 
         let tx0 = ResolvedTxFacts {
             tx_hash: [0x41; 32],
@@ -1081,7 +1083,7 @@ mod tests {
 
     #[test]
     fn token_owner_rejects_type_hash_type_out_of_u8_range() {
-        let mut interner = IdentityInterner::default();
+        let interner = IdentityInterner::default();
         let lock_hash_id = interner.intern_bytes(vec![0xaa; 32]);
         let type_hash_id = interner.intern_bytes(vec![0xbb; 32]);
         let type_code_hash_id =
@@ -1089,7 +1091,8 @@ mod tests {
         let type_args_id = interner.intern_bytes(vec![0x11; 32]);
         let lock_code_hash_id = interner.intern_bytes(vec![0x22; 32]);
         let lock_args_id = interner.intern_bytes(vec![0x33; 20]);
-        let ctx = ReducerContext::new(&interner);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
 
         let tx = ResolvedTxFacts {
             tx_hash: [0x55; 32],

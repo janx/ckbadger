@@ -610,10 +610,11 @@ fn checked_signed_i128(
 pub(crate) fn materialize_script_infos_for_test(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<HashMap<Vec<u8>, ScriptInfo>> {
-    let mut interner = IdentityInterner::default();
-    let arena = build_bulk_facts_arena_from_blocks(blocks, &mut interner)?;
+    let interner = IdentityInterner::default();
+    let arena = build_bulk_facts_arena_from_blocks(blocks, &interner)?;
     let resolved = BulkSequencer::default().resolve(&arena)?;
-    let ctx = ReducerContext::new(&interner);
+    let frozen = interner.snapshot_for_reads();
+    let ctx = ReducerContext::new(&frozen);
     let mut owner = ScriptOwner::default();
 
     for tx in &resolved {
@@ -653,7 +654,7 @@ mod tests {
     fn script_owner_reduces_lock_and_type_live_usage() {
         let lock_code_hash = vec![0x11; 32];
         let type_code_hash = vec![0x22; 32];
-        let mut interner = IdentityInterner::default();
+        let interner = IdentityInterner::default();
         interner.intern_bytes(vec![0xaa; 32]);
         let lock_code_hash_id = interner.intern_bytes(lock_code_hash.clone());
         interner.intern_bytes(vec![0xab; 20]);
@@ -664,7 +665,8 @@ mod tests {
         interner.intern_bytes(vec![0xee; 32]);
         interner.intern_bytes(vec![0xf0; 32]);
         interner.intern_bytes(vec![0xff; 20]);
-        let ctx = ReducerContext::new(&interner);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
 
         let tx0 = ResolvedTxFacts {
             tx_hash: [0x31; 32],
