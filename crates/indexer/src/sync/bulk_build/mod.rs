@@ -24,6 +24,7 @@ use ckbadger_store::{
     CF_LIVE_CELLS, CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_HASH_MAP,
     CF_TX_INDEX,
 };
+use rayon::prelude::*;
 use rocksdb::IteratorMode;
 use tracing::info;
 
@@ -1221,6 +1222,11 @@ struct HistoryBuildResult {
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
 }
 
+struct BlockHistoryRows {
+    rows: Vec<materialize::MaterializedRow>,
+    identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
+}
+
 #[doc(hidden)]
 #[derive(Debug, Default, Clone)]
 pub struct CoreOwnerStateSnapshot {
@@ -1643,33 +1649,6 @@ fn build_history_rows(
     is_mainnet: bool,
     store: &CkbadgerStore,
 ) -> Result<HistoryBuildResult> {
-    let mut rows = Vec::with_capacity(
-        arena.blocks.len() * 2 + arena.txs.len() * 2 + arena.cells.len() * 2 + arena.txs.len(),
-    );
-    let mut identity_activity_count_deltas = FxHashMap::default();
-
-    for block in &arena.blocks {
-        let header = CachedBlockHeader {
-            hash: block.hash.to_vec(),
-            timestamp: block.timestamp_ms,
-            epoch_number: block.epoch_number,
-            epoch_index: block.epoch_index,
-            epoch_length: block.epoch_length,
-            dao: block.dao.to_vec(),
-            transactions_count: block.transactions_count,
-        };
-        rows.push(materialize::MaterializedRow::new(
-            CF_BLOCK_HEADERS,
-            keys::encode_block_num(block.number).to_vec(),
-            bincode::serialize(&header)?,
-        ));
-        rows.push(materialize::MaterializedRow::new(
-            CF_BLOCK_HASH_INDEX,
-            block.hash.to_vec(),
-            block.number.to_le_bytes().to_vec(),
-        ));
-    }
-
     if arena.txs.len() != resolved.len() {
         bail!(
             "bulk build history tx count mismatch: facts_txs={} resolved_txs={}",
@@ -1678,7 +1657,96 @@ fn build_history_rows(
         );
     }
 
-    for (tx, resolved_tx) in arena.txs.iter().zip(resolved) {
+    let detectors = build_activity_protocol_detectors(resolved, interner, is_mainnet)?;
+    let token_info_cache = build_token_info_cache_from_facts(resolved, interner, store)?;
+
+    let block_results: Vec<Result<BlockHistoryRows>> = arena
+        .blocks
+        .par_iter()
+        .map(|block| {
+            let block_txs = &arena.txs[block.tx_range.clone()];
+            let block_resolved = &resolved[block.tx_range.clone()];
+            build_history_rows_for_block(
+                block,
+                block_txs,
+                block_resolved,
+                &arena.cells,
+                interner,
+                &detectors,
+                &token_info_cache,
+            )
+        })
+        .collect();
+
+    // Merge results preserving block order.
+    let estimated_total =
+        arena.blocks.len() * 2 + arena.txs.len() * 2 + arena.cells.len() * 2 + arena.txs.len();
+    let mut all_rows = Vec::with_capacity(estimated_total);
+    let mut all_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
+    for result in block_results {
+        let block_rows = result?;
+        all_rows.extend(block_rows.rows);
+        for (k, v) in block_rows.identity_activity_count_deltas {
+            let entry = all_deltas.entry(k).or_insert(0);
+            *entry = entry
+                .checked_add(v)
+                .ok_or_else(|| anyhow!("identity activity delta overflow during parallel merge"))?;
+        }
+    }
+
+    Ok(HistoryBuildResult {
+        rows: all_rows,
+        identity_activity_count_deltas: all_deltas,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_history_rows_for_block(
+    block: &facts::BlockFacts,
+    block_txs: &[facts::TxFacts],
+    block_resolved: &[facts::ResolvedTxFacts<'_>],
+    arena_cells: &[facts::CellFacts],
+    interner: &interner::FrozenIdentityView,
+    detectors: &[Box<dyn crate::db::writer::activities::ProtocolDetector>],
+    token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
+) -> Result<BlockHistoryRows> {
+    let mut rows = Vec::with_capacity(
+        2 + block_txs.len() * 4, // header+hash + ~4 rows per tx estimate
+    );
+    let mut identity_activity_count_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
+
+    // Block header + hash index (2 rows per block).
+    let header = CachedBlockHeader {
+        hash: block.hash.to_vec(),
+        timestamp: block.timestamp_ms,
+        epoch_number: block.epoch_number,
+        epoch_index: block.epoch_index,
+        epoch_length: block.epoch_length,
+        dao: block.dao.to_vec(),
+        transactions_count: block.transactions_count,
+    };
+    rows.push(materialize::MaterializedRow::new(
+        CF_BLOCK_HEADERS,
+        keys::encode_block_num(block.number).to_vec(),
+        bincode::serialize(&header)?,
+    ));
+    rows.push(materialize::MaterializedRow::new(
+        CF_BLOCK_HASH_INDEX,
+        block.hash.to_vec(),
+        block.number.to_le_bytes().to_vec(),
+    ));
+
+    if block_txs.len() != block_resolved.len() {
+        bail!(
+            "bulk build history tx count mismatch within block: block={} facts_txs={} resolved_txs={}",
+            block.number,
+            block_txs.len(),
+            block_resolved.len()
+        );
+    }
+
+    // Per-tx: tx_index, tx_hash_map, addr_txs, consumed_cells.
+    for (tx, resolved_tx) in block_txs.iter().zip(block_resolved) {
         if tx.hash != resolved_tx.tx_hash
             || tx.block_number != resolved_tx.block_number
             || tx.tx_index != resolved_tx.tx_index
@@ -1759,43 +1827,323 @@ fn build_history_rows(
         }
     }
 
-    rows.extend(build_token_transfer_rows(resolved, interner)?);
-    rows.extend(build_activity_rows(
-        arena, resolved, interner, is_mainnet, store,
-    )?);
-    let object_activity_rows =
-        build_object_collection_activity_rows(resolved, &mut identity_activity_count_deltas)?;
-    rows.extend(object_activity_rows);
+    // Token transfers for this block's txs (block-local transfer_idx).
+    {
+        let mut transfer_idx: FxHashMap<(Vec<u8>, i64), i32> = FxHashMap::default();
+        for tx in block_resolved {
+            let input_udts = tx
+                .resolved_inputs
+                .iter()
+                .filter_map(|input| parsed_udt_cell_from_input(input, interner, tx).transpose())
+                .collect::<Result<Vec<_>>>()?;
+            let output_udts = tx
+                .cells
+                .iter()
+                .filter_map(|cell| parsed_udt_cell_from_output(cell, interner, tx).transpose())
+                .collect::<Result<Vec<_>>>()?;
 
-    for cell in &arena.cells {
-        let outpoint_key =
-            keys::encode_outpoint(&cell.outpoint.tx_hash, cell_outpoint_index_i16(cell)?).to_vec();
-        rows.push(materialize::MaterializedRow::new(
-            CF_CELLS,
-            outpoint_key,
-            bincode::serialize(&cell_facts_to_live_cell_info(cell, interner))?,
-        ));
+            for transfer in UdtParser::build_transfers_from_cells(&input_udts, &output_udts) {
+                let idx = transfer_idx
+                    .entry((transfer.type_script_hash.clone(), tx.block_number))
+                    .or_insert(0);
+                let record = TokenTransferRecord {
+                    tx_hash: tx.tx_hash.to_vec(),
+                    block_number: tx.block_number,
+                    from_lock_hash: transfer.from_lock_hash.clone(),
+                    to_lock_hash: transfer.to_lock_hash.clone(),
+                    amount: transfer.amount,
+                    is_mint: transfer.is_mint,
+                    is_burn: transfer.is_burn,
+                    timestamp: tx.timestamp_ms,
+                };
+                rows.push(materialize::MaterializedRow::new(
+                    CF_TOKEN_TRANSFERS,
+                    keys::encode_token_transfer_key(
+                        &transfer.type_script_hash,
+                        tx.block_number,
+                        *idx,
+                    ),
+                    bincode::serialize(&record)?,
+                ));
+                *idx = idx.checked_add(1).ok_or_else(|| {
+                    anyhow!(
+                        "token transfer index overflow in bulk build history rows: type_hash=0x{} block={}",
+                        hex::encode(&transfer.type_script_hash),
+                        tx.block_number
+                    )
+                })?;
+            }
+        }
+    }
 
-        if let Some(data_hash) = &cell.data_hash {
+    // Activity bundles for this block.
+    {
+        if block_txs.len() != block_resolved.len() {
+            bail!(
+                "bulk build activity tx count mismatch within block: block={} facts_txs={} resolved_txs={}",
+                block.number,
+                block_txs.len(),
+                block_resolved.len()
+            );
+        }
+
+        let mut block_inputs = Vec::with_capacity(block_txs.len());
+        let mut block_outputs = Vec::with_capacity(block_txs.len());
+        for (tx, resolved_tx) in block_txs.iter().zip(block_resolved) {
+            if tx.hash != resolved_tx.tx_hash
+                || tx.block_number != resolved_tx.block_number
+                || tx.tx_index != resolved_tx.tx_index
+            {
+                bail!(
+                    "bulk build activity tx alignment mismatch: facts_tx=0x{} facts_block={} facts_tx_index={} resolved_tx=0x{} resolved_block={} resolved_tx_index={}",
+                    hex::encode(tx.hash),
+                    tx.block_number,
+                    tx.tx_index,
+                    hex::encode(resolved_tx.tx_hash),
+                    resolved_tx.block_number,
+                    resolved_tx.tx_index
+                );
+            }
+
+            block_outputs.push(
+                resolved_tx
+                    .cells
+                    .iter()
+                    .map(|cell| parsed_cell_from_facts(cell, interner))
+                    .collect::<Result<Vec<_>>>()?,
+            );
+            block_inputs.push(
+                resolved_tx
+                    .resolved_inputs
+                    .iter()
+                    .map(|input| activity_input_view_from_resolved_input(input, interner))
+                    .collect::<Result<Vec<_>>>()?,
+            );
+        }
+
+        let tx_views = block_txs
+            .iter()
+            .zip(block_inputs)
+            .zip(block_outputs.iter())
+            .map(
+                |((tx, inputs), outputs)| crate::db::writer::activities::TxView {
+                    tx_hash: &tx.hash,
+                    block_hash: &tx.block_hash,
+                    tx_index: tx.tx_index,
+                    block_number: tx.block_number,
+                    timestamp: tx.timestamp_ms,
+                    is_cellbase: tx.is_cellbase,
+                    inputs,
+                    outputs,
+                },
+            )
+            .collect::<Vec<_>>();
+
+        let bundles =
+            crate::db::writer::activities::build_activity_bundles_for_block_with_detectors(
+                &tx_views,
+                token_info_cache,
+                detectors,
+            )?;
+        for bundle in bundles {
             rows.push(materialize::MaterializedRow::new(
-                CF_CELL_BY_DATA_HASH,
-                keys::encode_cell_index_key(
-                    data_hash,
-                    cell.created_at_block,
-                    &cell.outpoint.tx_hash,
-                    cell_outpoint_index_i16(cell)?,
+                CF_ACTIVITIES,
+                keys::encode_tx_activity_bundle_key(
+                    bundle.block_number,
+                    bundle.tx_index,
+                    &bundle.tx_hash,
                 ),
-                Vec::new(),
+                bincode::serialize(&bundle)?,
             ));
         }
     }
 
-    Ok(HistoryBuildResult {
+    // Object/identity collection activities for this block's txs.
+    {
+        let mut object_activity_acc =
+            crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator::new();
+        let mut identity_activity_acc =
+            crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator::new();
+
+        for tx in block_resolved {
+            let mut dotbit_created_account_ids = FxHashSet::default();
+            let mut dotbit_consumed_account_ids = FxHashSet::default();
+
+            for input in &tx.resolved_inputs {
+                let Some(protocol) = input.protocol_facts.as_ref() else {
+                    continue;
+                };
+                match protocol {
+                    facts::CellProtocolFacts::Spore(spore) if !spore.is_did => {
+                        let collection_id = spore
+                            .cluster_id
+                            .map(|id| id.to_vec())
+                            .unwrap_or_else(|| SOLE_SPORES_SENTINEL_COLLECTION.to_vec());
+                        object_activity_acc.record(
+                            &collection_id,
+                            &tx.tx_hash,
+                            &spore.spore_id,
+                            &tx.block_hash,
+                            tx.block_number,
+                            tx.tx_index,
+                            tx.timestamp_ms,
+                            false,
+                        );
+                    }
+                    facts::CellProtocolFacts::Dotbit(dotbit) => {
+                        dotbit_consumed_account_ids.insert(dotbit.account_id.to_vec());
+                    }
+                    _ => {}
+                }
+            }
+
+            for cell in tx.cells.iter() {
+                let Some(protocol) = cell.protocol_facts.as_ref() else {
+                    continue;
+                };
+                match protocol {
+                    facts::CellProtocolFacts::Spore(spore) if spore.is_did => {
+                        identity_activity_acc.record(
+                            &DID_CKB_SENTINEL_COLLECTION,
+                            &tx.tx_hash,
+                            &spore.spore_id,
+                            &tx.block_hash,
+                            tx.block_number,
+                            tx.tx_index,
+                            tx.timestamp_ms,
+                            true,
+                        );
+                    }
+                    facts::CellProtocolFacts::Spore(spore) => {
+                        let collection_id = spore
+                            .cluster_id
+                            .map(|id| id.to_vec())
+                            .unwrap_or_else(|| SOLE_SPORES_SENTINEL_COLLECTION.to_vec());
+                        object_activity_acc.record(
+                            &collection_id,
+                            &tx.tx_hash,
+                            &spore.spore_id,
+                            &tx.block_hash,
+                            tx.block_number,
+                            tx.tx_index,
+                            tx.timestamp_ms,
+                            true,
+                        );
+                    }
+                    facts::CellProtocolFacts::Dotbit(dotbit) => {
+                        dotbit_created_account_ids.insert(dotbit.account_id.to_vec());
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(entry) = crate::db::writer::dotbit::build_dotbit_tx_activity_entry(
+                tx.dotbit_action.as_deref(),
+                &dotbit_created_account_ids,
+                &dotbit_consumed_account_ids,
+                &tx.tx_hash,
+                &tx.block_hash,
+                tx.timestamp_ms,
+            ) {
+                rows.push(materialize::MaterializedRow::new(
+                    CF_IDENTITY_COLLECTION_ACTIVITIES,
+                    keys::encode_nft_collection_activity_key(
+                        &DOTBIT_SENTINEL_COLLECTION,
+                        tx.block_number,
+                        tx.tx_index,
+                        &tx.block_hash,
+                        &tx.tx_hash,
+                    )
+                    .to_vec(),
+                    bincode::serialize(&entry)?,
+                ));
+                let delta = identity_activity_count_deltas
+                    .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
+                    .or_insert(0);
+                *delta = delta.checked_add(1).ok_or_else(|| {
+                    anyhow!(
+                        "dotbit identity activity delta overflow in bulk build: block={} tx=0x{}",
+                        tx.block_number,
+                        hex::encode(tx.tx_hash)
+                    )
+                })?;
+            }
+        }
+
+        for resolved_entry in object_activity_acc.into_resolved_entries() {
+            rows.push(materialize::MaterializedRow::new(
+                CF_OBJECT_COLLECTION_ACTIVITIES,
+                keys::encode_nft_collection_activity_key(
+                    &resolved_entry.collection_id,
+                    resolved_entry.block_number,
+                    resolved_entry.tx_idx,
+                    &resolved_entry.entry.block_hash,
+                    &resolved_entry.entry.tx_hash,
+                )
+                .to_vec(),
+                bincode::serialize(&resolved_entry.entry)?,
+            ));
+        }
+
+        for resolved_entry in identity_activity_acc.into_resolved_entries() {
+            let delta = identity_activity_count_deltas
+                .entry(resolved_entry.collection_id.clone())
+                .or_insert(0);
+            *delta = delta.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "identity collection activity delta overflow in bulk build history rows: collection_id=0x{}",
+                    hex::encode(&resolved_entry.collection_id)
+                )
+            })?;
+            rows.push(materialize::MaterializedRow::new(
+                CF_IDENTITY_COLLECTION_ACTIVITIES,
+                keys::encode_nft_collection_activity_key(
+                    &resolved_entry.collection_id,
+                    resolved_entry.block_number,
+                    resolved_entry.tx_idx,
+                    &resolved_entry.entry.block_hash,
+                    &resolved_entry.entry.tx_hash,
+                )
+                .to_vec(),
+                bincode::serialize(&resolved_entry.entry)?,
+            ));
+        }
+    }
+
+    // Cell payloads (CF_CELLS) + data_hash index (CF_CELL_BY_DATA_HASH) for this block's cells.
+    for tx in block_txs {
+        for cell in &arena_cells[tx.output_range.clone()] {
+            let outpoint_key =
+                keys::encode_outpoint(&cell.outpoint.tx_hash, cell_outpoint_index_i16(cell)?)
+                    .to_vec();
+            rows.push(materialize::MaterializedRow::new(
+                CF_CELLS,
+                outpoint_key,
+                bincode::serialize(&cell_facts_to_live_cell_info(cell, interner))?,
+            ));
+
+            if let Some(data_hash) = &cell.data_hash {
+                rows.push(materialize::MaterializedRow::new(
+                    CF_CELL_BY_DATA_HASH,
+                    keys::encode_cell_index_key(
+                        data_hash,
+                        cell.created_at_block,
+                        &cell.outpoint.tx_hash,
+                        cell_outpoint_index_i16(cell)?,
+                    ),
+                    Vec::new(),
+                ));
+            }
+        }
+    }
+
+    Ok(BlockHistoryRows {
         rows,
         identity_activity_count_deltas,
     })
 }
 
+#[cfg(test)]
 fn build_object_collection_activity_rows(
     resolved: &[facts::ResolvedTxFacts<'_>],
     identity_activity_count_deltas: &mut FxHashMap<Vec<u8>, i64>,
@@ -2006,154 +2354,6 @@ fn build_sealed_aggregate_rows(
     let mut accumulator = ActivityStatsAccumulator::default();
     accumulator.apply_history_rows(history_rows)?;
     accumulator.build_rows()
-}
-
-fn build_activity_rows(
-    arena: &facts::FactsArena,
-    resolved: &[facts::ResolvedTxFacts<'_>],
-    interner: &interner::FrozenIdentityView,
-    is_mainnet: bool,
-    store: &CkbadgerStore,
-) -> Result<Vec<materialize::MaterializedRow>> {
-    let detectors = build_activity_protocol_detectors(resolved, interner, is_mainnet)?;
-    let token_info_cache = build_token_info_cache_from_facts(resolved, interner, store)?;
-    let mut rows = Vec::new();
-
-    for block in &arena.blocks {
-        let txs = &arena.txs[block.tx_range.clone()];
-        let resolved_txs = &resolved[block.tx_range.clone()];
-        if txs.len() != resolved_txs.len() {
-            bail!(
-                "bulk build activity tx count mismatch within block: block={} facts_txs={} resolved_txs={}",
-                block.number,
-                txs.len(),
-                resolved_txs.len()
-            );
-        }
-
-        let mut block_inputs = Vec::with_capacity(txs.len());
-        let mut block_outputs = Vec::with_capacity(txs.len());
-        for (tx, resolved_tx) in txs.iter().zip(resolved_txs) {
-            if tx.hash != resolved_tx.tx_hash
-                || tx.block_number != resolved_tx.block_number
-                || tx.tx_index != resolved_tx.tx_index
-            {
-                bail!(
-                    "bulk build activity tx alignment mismatch: facts_tx=0x{} facts_block={} facts_tx_index={} resolved_tx=0x{} resolved_block={} resolved_tx_index={}",
-                    hex::encode(tx.hash),
-                    tx.block_number,
-                    tx.tx_index,
-                    hex::encode(resolved_tx.tx_hash),
-                    resolved_tx.block_number,
-                    resolved_tx.tx_index
-                );
-            }
-
-            block_outputs.push(
-                resolved_tx
-                    .cells
-                    .iter()
-                    .map(|cell| parsed_cell_from_facts(cell, interner))
-                    .collect::<Result<Vec<_>>>()?,
-            );
-            block_inputs.push(
-                resolved_tx
-                    .resolved_inputs
-                    .iter()
-                    .map(|input| activity_input_view_from_resolved_input(input, interner))
-                    .collect::<Result<Vec<_>>>()?,
-            );
-        }
-
-        let tx_views = txs
-            .iter()
-            .zip(block_inputs.into_iter())
-            .zip(block_outputs.iter())
-            .map(
-                |((tx, inputs), outputs)| crate::db::writer::activities::TxView {
-                    tx_hash: &tx.hash,
-                    block_hash: &tx.block_hash,
-                    tx_index: tx.tx_index,
-                    block_number: tx.block_number,
-                    timestamp: tx.timestamp_ms,
-                    is_cellbase: tx.is_cellbase,
-                    inputs,
-                    outputs,
-                },
-            )
-            .collect::<Vec<_>>();
-
-        let bundles =
-            crate::db::writer::activities::build_activity_bundles_for_block_with_detectors(
-                &tx_views,
-                &token_info_cache,
-                &detectors,
-            )?;
-        for bundle in bundles {
-            rows.push(materialize::MaterializedRow::new(
-                CF_ACTIVITIES,
-                keys::encode_tx_activity_bundle_key(
-                    bundle.block_number,
-                    bundle.tx_index,
-                    &bundle.tx_hash,
-                ),
-                bincode::serialize(&bundle)?,
-            ));
-        }
-    }
-
-    Ok(rows)
-}
-
-fn build_token_transfer_rows(
-    resolved: &[facts::ResolvedTxFacts<'_>],
-    interner: &interner::FrozenIdentityView,
-) -> Result<Vec<materialize::MaterializedRow>> {
-    let mut rows = Vec::new();
-    let mut transfer_idx: FxHashMap<(Vec<u8>, i64), i32> = FxHashMap::default();
-
-    for tx in resolved {
-        let input_udts = tx
-            .resolved_inputs
-            .iter()
-            .filter_map(|input| parsed_udt_cell_from_input(input, interner, tx).transpose())
-            .collect::<Result<Vec<_>>>()?;
-        let output_udts = tx
-            .cells
-            .iter()
-            .filter_map(|cell| parsed_udt_cell_from_output(cell, interner, tx).transpose())
-            .collect::<Result<Vec<_>>>()?;
-
-        for transfer in UdtParser::build_transfers_from_cells(&input_udts, &output_udts) {
-            let idx = transfer_idx
-                .entry((transfer.type_script_hash.clone(), tx.block_number))
-                .or_insert(0);
-            let record = TokenTransferRecord {
-                tx_hash: tx.tx_hash.to_vec(),
-                block_number: tx.block_number,
-                from_lock_hash: transfer.from_lock_hash.clone(),
-                to_lock_hash: transfer.to_lock_hash.clone(),
-                amount: transfer.amount,
-                is_mint: transfer.is_mint,
-                is_burn: transfer.is_burn,
-                timestamp: tx.timestamp_ms,
-            };
-            rows.push(materialize::MaterializedRow::new(
-                CF_TOKEN_TRANSFERS,
-                keys::encode_token_transfer_key(&transfer.type_script_hash, tx.block_number, *idx),
-                bincode::serialize(&record)?,
-            ));
-            *idx = idx.checked_add(1).ok_or_else(|| {
-                anyhow!(
-                    "token transfer index overflow in bulk build history rows: type_hash=0x{} block={}",
-                    hex::encode(&transfer.type_script_hash),
-                    tx.block_number
-                )
-            })?;
-        }
-    }
-
-    Ok(rows)
 }
 
 fn build_activity_protocol_detectors(
