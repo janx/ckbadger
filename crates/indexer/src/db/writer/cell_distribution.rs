@@ -440,7 +440,7 @@ mod tests {
         let mut tracker = CellDistributionTracker::new();
         let jan15 = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
         let jan16 = NaiveDate::from_ymd_opt(2024, 1, 16).unwrap();
-        tracker.cell_created(100_00000000);
+        tracker.cell_created(100_00000000); // 100 CKB → bucket 1
 
         // First call: sets last_snapshot_date, no snapshot produced
         assert!(tracker.maybe_snapshot(jan15).is_none());
@@ -451,8 +451,8 @@ mod tests {
         assert!(result.is_some());
         let (date, dist) = result.unwrap();
         assert_eq!(date, jan15);
-        assert_eq!(dist.size_bucket_counts, [1, 0, 0, 0, 0, 0]);
-        assert_eq!(dist.size_bucket_capacities, [100_00000000, 0, 0, 0, 0, 0]);
+        assert_eq!(dist.size_bucket_counts, [0, 1, 0, 0, 0, 0]);
+        assert_eq!(dist.size_bucket_capacities, [0, 100_00000000, 0, 0, 0, 0]);
         // Same day again: no snapshot
         assert!(tracker.maybe_snapshot(jan16).is_none());
     }

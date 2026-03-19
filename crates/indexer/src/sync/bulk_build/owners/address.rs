@@ -348,7 +348,6 @@ pub(crate) fn materialize_address_balances_for_test(
     Ok(balances)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

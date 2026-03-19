@@ -2141,7 +2141,6 @@ pub(crate) fn materialize_object_state_for_test(
     Ok(snapshot)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

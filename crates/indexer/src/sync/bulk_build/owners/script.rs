@@ -652,7 +652,6 @@ pub(crate) fn materialize_script_infos_for_test(
     Ok(infos)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

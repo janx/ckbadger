@@ -1329,6 +1329,7 @@ fn collect_bulk_artifact_snapshot(
     })
 }
 
+#[allow(clippy::type_complexity)]
 fn collect_dao_stats_snapshot(
     domain_store: &CkbadgerStore,
 ) -> Result<(
@@ -1350,6 +1351,7 @@ fn collect_dao_stats_snapshot(
     ))
 }
 
+#[allow(clippy::type_complexity)]
 fn collect_script_daily_deltas_snapshot(
     domain_store: &CkbadgerStore,
 ) -> Result<HashMap<(Vec<u8>, bool), HashMap<u32, ScriptDailyDelta>>> {
@@ -1701,6 +1703,7 @@ fn build_object_collection_activity_rows(
     Ok(rows)
 }
 
+#[allow(clippy::type_complexity)]
 fn build_token_info_cache_from_facts(
     resolved: &[facts::ResolvedTxFacts<'_>],
     interner: &interner::IdentityInterner,
@@ -2128,6 +2131,7 @@ fn parsed_udt_cell_from_input(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parsed_udt_cell_from_parts(
     semantic_tag: facts::CellSemanticTag,
     type_script_hash_id: Option<crate::sync::types::InternId>,
@@ -2356,6 +2360,7 @@ fn resolved_input_outpoint_index_i16(input: &facts::ResolvedInputFacts) -> Resul
     })
 }
 
+#[allow(clippy::type_complexity)]
 fn collect_history_snapshot(
     domain_store: &CkbadgerStore,
 ) -> Result<(
@@ -2456,6 +2461,7 @@ fn collect_activity_stats_snapshot(
     Ok((daily_activity_stats, hourly_activity_stats))
 }
 
+#[allow(clippy::type_complexity)]
 fn collect_hodl_stats_snapshot(
     domain_store: &CkbadgerStore,
 ) -> Result<(
@@ -2533,6 +2539,7 @@ fn collect_hodl_stats_snapshot(
     ))
 }
 
+#[allow(clippy::type_complexity)]
 fn collect_cell_snapshot(
     domain_store: &CkbadgerStore,
     append_store: &CkbadgerStore,
@@ -4139,7 +4146,7 @@ mod tests {
 
         assert_eq!(identity_rows.len(), 3);
         assert_eq!(
-            identity_activity_count_deltas.get(&DOTBIT_SENTINEL_COLLECTION.to_vec()),
+            identity_activity_count_deltas.get(DOTBIT_SENTINEL_COLLECTION.as_slice()),
             Some(&3_i64)
         );
 

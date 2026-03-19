@@ -965,8 +965,7 @@ mod tests {
 
         // Verify the happy path doesn't error with a valid all-zero 32-byte DAO field.
         let block = dummy_parsed_block([0u8; 32], 0, 1000);
-        let result =
-            accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev);
+        let result = accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev);
         assert!(result.is_ok());
     }
 

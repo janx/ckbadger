@@ -774,6 +774,7 @@ impl DaoCellView {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn from_parts(
         outpoint: OutPointKey,
         capacity: i64,
