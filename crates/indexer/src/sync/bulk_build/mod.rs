@@ -858,23 +858,44 @@ impl BulkBuildRuntimeState {
             .blocks
             .last()
             .ok_or_else(|| anyhow!("bulk build arena missing blocks for non-empty batch"))?;
-        let history_started = Instant::now();
-        let history = build_history_rows(&arena, &resolved, &frozen, is_mainnet, domain_store)?;
-        let history_elapsed = history_started.elapsed();
-        let hodl_sealed_rows = self.apply_hodl_tracker_batch(&arena, &resolved)?;
 
+        // Destructure self to split borrows for rayon::join overlap.
         let BulkBuildRuntimeState {
             owners,
             cell_dist_tracker,
+            hodl_tracker,
+            hodl_live_cells_by_lock,
+            activity_stats,
             ..
         } = self;
         let ctx = owners::ReducerContext::new(&frozen);
-        let mut cell_dist_sealed_rows = Vec::new();
 
-        // Phase 1 (serial): address reducer + cell_dist_tracker.
-        // Address must run first because cell_dist_tracker needs per-tx address deltas.
-        let address_started = Instant::now();
-        for block in &arena.blocks {
+        // Overlap: build_history_rows (read-only) runs in parallel with all reducers.
+        // History rows depend only on immutable arena/resolved/frozen/store — zero
+        // dependency on reducer mutable state.
+        let history_started = Instant::now();
+        let (history_result, reduce_right_result) = rayon::join(
+            // LEFT: history materialization (read-only, no mutable state)
+            || build_history_rows(&arena, &resolved, &frozen, is_mainnet, domain_store),
+            // RIGHT: all reducers (mutable state, disjoint from LEFT)
+            || -> Result<(
+                Vec<materialize::MaterializedRow>,
+                Vec<materialize::MaterializedRow>,
+                std::time::Duration,
+            )> {
+                let hodl_sealed_rows = apply_hodl_tracker_batch_standalone(
+                    hodl_tracker,
+                    hodl_live_cells_by_lock,
+                    &arena,
+                    &resolved,
+                )?;
+
+                let address_started = Instant::now();
+                let mut cell_dist_sealed_rows = Vec::new();
+
+                // Phase 1 (serial): address reducer + cell_dist_tracker.
+                // Address must run first because cell_dist_tracker needs per-tx address deltas.
+                for block in &arena.blocks {
             let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
             cell_dist_tracker.record_block_date(block.number, block_date);
 
@@ -914,71 +935,81 @@ impl BulkBuildRuntimeState {
             }
         }
 
-        let address_elapsed = address_started.elapsed();
+                let address_elapsed = address_started.elapsed();
 
-        // Phase 2 (parallel): 5 independent reducers via nested rayon::join.
-        // Each reducer reads immutable ResolvedTxFacts and writes only its own state.
-        let CoreOwners {
-            address: _,
-            ref mut script,
-            ref mut token,
-            ref mut dao,
-            ref mut fiber,
-            ref mut object,
-        } = *owners;
+                // Phase 2 (parallel): 5 independent reducers via nested rayon::join.
+                // Each reducer reads immutable ResolvedTxFacts and writes only its own state.
+                let CoreOwners {
+                    address: _,
+                    ref mut script,
+                    ref mut token,
+                    ref mut dao,
+                    ref mut fiber,
+                    ref mut object,
+                } = *owners;
 
-        let (r_left, r_right) = rayon::join(
-            || -> Result<()> {
-                for block in &arena.blocks {
-                    for tx in &resolved[block.tx_range.clone()] {
-                        script.apply_tx(tx, &ctx)?;
-                    }
-                }
-                for block in &arena.blocks {
-                    for tx in &resolved[block.tx_range.clone()] {
-                        token.apply_tx(tx, &ctx)?;
-                    }
-                }
-                Ok(())
-            },
-            || -> Result<()> {
-                for block in &arena.blocks {
-                    dao.record_block(block)?;
-                    for tx in &resolved[block.tx_range.clone()] {
-                        dao.apply_tx(tx, &ctx)?;
-                    }
-                }
-                let (r_fiber, r_object) = rayon::join(
+                let (r_left, r_right) = rayon::join(
                     || -> Result<()> {
                         for block in &arena.blocks {
                             for tx in &resolved[block.tx_range.clone()] {
-                                fiber.apply_tx(tx, &ctx)?;
+                                script.apply_tx(tx, &ctx)?;
+                            }
+                        }
+                        for block in &arena.blocks {
+                            for tx in &resolved[block.tx_range.clone()] {
+                                token.apply_tx(tx, &ctx)?;
                             }
                         }
                         Ok(())
                     },
                     || -> Result<()> {
                         for block in &arena.blocks {
+                            dao.record_block(block)?;
                             for tx in &resolved[block.tx_range.clone()] {
-                                object.apply_tx(tx, &ctx)?;
+                                dao.apply_tx(tx, &ctx)?;
                             }
                         }
+                        let (r_fiber, r_object) = rayon::join(
+                            || -> Result<()> {
+                                for block in &arena.blocks {
+                                    for tx in &resolved[block.tx_range.clone()] {
+                                        fiber.apply_tx(tx, &ctx)?;
+                                    }
+                                }
+                                Ok(())
+                            },
+                            || -> Result<()> {
+                                for block in &arena.blocks {
+                                    for tx in &resolved[block.tx_range.clone()] {
+                                        object.apply_tx(tx, &ctx)?;
+                                    }
+                                }
+                                Ok(())
+                            },
+                        );
+                        r_fiber?;
+                        r_object?;
                         Ok(())
                     },
                 );
-                r_fiber?;
-                r_object?;
-                Ok(())
+                r_left?;
+                r_right?;
+
+                Ok((hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed))
             },
         );
-        r_left?;
-        r_right?;
+        let history_elapsed = history_started.elapsed();
+        let history = history_result?;
+        let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = reduce_right_result?;
 
-        object.apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
+        // Post-overlap: identity deltas need both history + object reducer done.
+        owners
+            .object
+            .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
         let reduce_elapsed = reduce_started.elapsed();
 
         // Accumulate activity stats in-memory (cheap CPU work, no I/O).
-        self.activity_stats.apply_history_rows(&history.rows)?;
+        activity_stats.apply_history_rows(&history.rows)?;
 
         // Collect all sealed rows into a single vec for the pending flush.
         let mut all_sealed = hodl_sealed_rows;
@@ -1045,93 +1076,106 @@ impl BulkBuildRuntimeState {
         }
         Ok(())
     }
+}
 
-    fn apply_hodl_tracker_batch(
-        &mut self,
-        arena: &facts::FactsArena,
-        resolved: &[facts::ResolvedTxFacts<'_>],
-    ) -> Result<Vec<materialize::MaterializedRow>> {
-        if arena.txs.len() != resolved.len() {
-            bail!(
-                "bulk build hodl tracker tx count mismatch: facts_txs={} resolved_txs={}",
-                arena.txs.len(),
-                resolved.len()
-            );
-        }
-
-        let mut sealed_rows = Vec::new();
-        for block in &arena.blocks {
-            let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
-            self.hodl_tracker
-                .record_block_date(block.number, block_date);
-
-            for tx in &resolved[block.tx_range.clone()] {
-                for input in &tx.resolved_inputs {
-                    self.update_hodl_holder_count(input.lock_script_hash_id, -1, tx)?;
-                    self.hodl_tracker
-                        .cell_consumed(input.created_at_block, input.capacity)?;
-                }
-                for cell in tx.cells.iter() {
-                    self.update_hodl_holder_count(cell.lock_script_hash_id, 1, tx)?;
-                    self.hodl_tracker.cell_created(block_date, cell.capacity);
-                }
-            }
-
-            if let Some((snapshot_date, snapshot)) = self.hodl_tracker.maybe_snapshot(block_date) {
-                let date_str = snapshot_date.format("%Y%m%d").to_string();
-                sealed_rows.push(materialize::MaterializedRow::new(
-                    CF_STATS_HODL,
-                    keys::encode_stats_key(keys::stats_prefix::HODL_WAVE, date_str.as_bytes()),
-                    bincode::serialize(&snapshot)?,
-                ));
-            }
-        }
-
-        Ok(sealed_rows)
+/// Standalone hodl tracker batch processing. Extracted from `BulkBuildRuntimeState`
+/// to allow split borrows in `rayon::join` (hodl fields borrowed separately from other fields).
+fn apply_hodl_tracker_batch_standalone(
+    hodl_tracker: &mut crate::db::writer::hodl_wave::HodlWaveTracker,
+    hodl_live_cells_by_lock: &mut FxHashMap<crate::sync::types::InternId, i32>,
+    arena: &facts::FactsArena,
+    resolved: &[facts::ResolvedTxFacts<'_>],
+) -> Result<Vec<materialize::MaterializedRow>> {
+    if arena.txs.len() != resolved.len() {
+        bail!(
+            "bulk build hodl tracker tx count mismatch: facts_txs={} resolved_txs={}",
+            arena.txs.len(),
+            resolved.len()
+        );
     }
 
-    fn update_hodl_holder_count(
-        &mut self,
-        lock_hash_id: crate::sync::types::InternId,
-        delta: i32,
-        tx: &facts::ResolvedTxFacts<'_>,
-    ) -> Result<()> {
-        let old_live = self
-            .hodl_live_cells_by_lock
-            .get(&lock_hash_id)
-            .copied()
-            .unwrap_or(0);
-        let new_live = old_live.checked_add(delta).ok_or_else(|| {
-            anyhow!(
-                "hodl live cell count overflow: tx=0x{} block={} tx_index={} lock_hash_id={:?} old_live={} delta={}",
-                hex::encode(tx.tx_hash),
-                tx.block_number,
-                tx.tx_index,
-                lock_hash_id,
-                old_live,
-                delta
-            )
-        })?;
-        if new_live < 0 {
-            bail!(
-                "hodl live cell count underflow: tx=0x{} block={} tx_index={} lock_hash_id={:?} old_live={} delta={}",
-                hex::encode(tx.tx_hash),
-                tx.block_number,
-                tx.tx_index,
-                lock_hash_id,
-                old_live,
-                delta
-            );
+    let mut sealed_rows = Vec::new();
+    for block in &arena.blocks {
+        let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
+        hodl_tracker.record_block_date(block.number, block_date);
+
+        for tx in &resolved[block.tx_range.clone()] {
+            for input in &tx.resolved_inputs {
+                update_hodl_holder_count(
+                    hodl_tracker,
+                    hodl_live_cells_by_lock,
+                    input.lock_script_hash_id,
+                    -1,
+                    tx,
+                )?;
+                hodl_tracker.cell_consumed(input.created_at_block, input.capacity)?;
+            }
+            for cell in tx.cells.iter() {
+                update_hodl_holder_count(
+                    hodl_tracker,
+                    hodl_live_cells_by_lock,
+                    cell.lock_script_hash_id,
+                    1,
+                    tx,
+                )?;
+                hodl_tracker.cell_created(block_date, cell.capacity);
+            }
         }
 
-        self.hodl_tracker.update_holder_count(old_live, new_live)?;
-        if new_live == 0 {
-            self.hodl_live_cells_by_lock.remove(&lock_hash_id);
-        } else {
-            self.hodl_live_cells_by_lock.insert(lock_hash_id, new_live);
+        if let Some((snapshot_date, snapshot)) = hodl_tracker.maybe_snapshot(block_date) {
+            let date_str = snapshot_date.format("%Y%m%d").to_string();
+            sealed_rows.push(materialize::MaterializedRow::new(
+                CF_STATS_HODL,
+                keys::encode_stats_key(keys::stats_prefix::HODL_WAVE, date_str.as_bytes()),
+                bincode::serialize(&snapshot)?,
+            ));
         }
-        Ok(())
     }
+
+    Ok(sealed_rows)
+}
+
+fn update_hodl_holder_count(
+    hodl_tracker: &mut crate::db::writer::hodl_wave::HodlWaveTracker,
+    hodl_live_cells_by_lock: &mut FxHashMap<crate::sync::types::InternId, i32>,
+    lock_hash_id: crate::sync::types::InternId,
+    delta: i32,
+    tx: &facts::ResolvedTxFacts<'_>,
+) -> Result<()> {
+    let old_live = hodl_live_cells_by_lock
+        .get(&lock_hash_id)
+        .copied()
+        .unwrap_or(0);
+    let new_live = old_live.checked_add(delta).ok_or_else(|| {
+        anyhow!(
+            "hodl live cell count overflow: tx=0x{} block={} tx_index={} lock_hash_id={:?} old_live={} delta={}",
+            hex::encode(tx.tx_hash),
+            tx.block_number,
+            tx.tx_index,
+            lock_hash_id,
+            old_live,
+            delta
+        )
+    })?;
+    if new_live < 0 {
+        bail!(
+            "hodl live cell count underflow: tx=0x{} block={} tx_index={} lock_hash_id={:?} old_live={} delta={}",
+            hex::encode(tx.tx_hash),
+            tx.block_number,
+            tx.tx_index,
+            lock_hash_id,
+            old_live,
+            delta
+        );
+    }
+
+    hodl_tracker.update_holder_count(old_live, new_live)?;
+    if new_live == 0 {
+        hodl_live_cells_by_lock.remove(&lock_hash_id);
+    } else {
+        hodl_live_cells_by_lock.insert(lock_hash_id, new_live);
+    }
+    Ok(())
 }
 
 fn apply_cell_dist_cohort_deltas(
