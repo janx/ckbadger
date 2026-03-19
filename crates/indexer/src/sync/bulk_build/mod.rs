@@ -824,11 +824,321 @@ fn checked_unique_address_count(len: usize, bucket: &str) -> Result<u32> {
     })
 }
 
+/// Accumulates chain-level daily statistics during bulk-build.
+///
+/// Covers `DailyStats`, `DailyBlockStats`, block-time distribution, and
+/// epoch-time distribution — the same data that `SyncBatch::finalize()`
+/// writes during live sync.
+#[derive(Default)]
+#[allow(clippy::type_complexity)]
+struct ChainStatsAccumulator {
+    /// Per-day: (blocks, txs, cells_created, cells_consumed, capacity_transferred,
+    ///           used_cap_created, used_cap_consumed, data_size_added, data_size_consumed)
+    daily_stats: FxHashMap<chrono::NaiveDate, (i32, i32, i32, i32, i128, i128, i128, i64, i64)>,
+    /// Per-day: (sum_compact_target, block_count, total_uncles)
+    daily_block_stats: FxHashMap<chrono::NaiveDate, (i128, i32, i32)>,
+    /// Last DAO field seen per day (for knowledge_size).
+    daily_dao_fields: FxHashMap<chrono::NaiveDate, [u8; 32]>,
+    /// Per-day block time accumulation: (sum_ms, count)
+    daily_block_times: FxHashMap<chrono::NaiveDate, (i64, i32)>,
+    /// Block time distribution buckets (seconds → count).
+    block_time_dist: FxHashMap<i32, i32>,
+    /// Epoch time distribution buckets (minutes → count).
+    epoch_time_dist: FxHashMap<i32, i32>,
+    /// Timestamp of the previous block (for inter-block time deltas).
+    prev_timestamp_ms: Option<i64>,
+    /// Previous epoch: (epoch_number, epoch_start_timestamp_ms).
+    prev_epoch: Option<(i64, i64)>,
+}
+
+impl ChainStatsAccumulator {
+    fn estimated_bytes(&self) -> u64 {
+        // Rough estimate: ~100 bytes per entry across all maps
+        let daily_count = self.daily_stats.len()
+            + self.daily_block_stats.len()
+            + self.daily_dao_fields.len()
+            + self.daily_block_times.len();
+        let dist_count = self.block_time_dist.len() + self.epoch_time_dist.len();
+        (daily_count * 100 + dist_count * 16) as u64
+    }
+
+    /// Accumulate chain statistics from a batch of blocks.
+    ///
+    /// Requires the resolved tx facts to compute per-block consumed cell stats
+    /// (occupied_capacity and data_size of consumed inputs).
+    fn apply_blocks(
+        &mut self,
+        arena: &facts::FactsArena,
+        resolved: &[facts::ResolvedTxFacts<'_>],
+    ) -> Result<()> {
+        for block in &arena.blocks {
+            let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
+
+            // --- DailyStats fields ---
+            let mut cells_created: i32 = 0;
+            let mut cells_consumed: i32 = 0;
+            let mut capacity_transferred: i128 = 0;
+            let mut used_cap_created: i128 = 0;
+            let mut used_cap_consumed: i128 = 0;
+            let mut data_size_added: i64 = 0;
+            let mut data_size_consumed: i64 = 0;
+
+            for tx in &resolved[block.tx_range.clone()] {
+                let tx_cells_created = i32::try_from(tx.cells.len()).map_err(|_| {
+                    anyhow!(
+                        "chain stats: output count exceeds i32: block={} tx_index={}",
+                        block.number,
+                        tx.tx_index
+                    )
+                })?;
+                cells_created += tx_cells_created;
+
+                for cell in tx.cells.iter() {
+                    used_cap_created += i128::from(cell.occupied_capacity);
+                    data_size_added += cell.data_size as i64;
+                }
+
+                if tx.tx_index > 0 {
+                    // Non-cellbase
+                    let tx_consumed = i32::try_from(tx.resolved_inputs.len()).map_err(|_| {
+                        anyhow!(
+                            "chain stats: input count exceeds i32: block={} tx_index={}",
+                            block.number,
+                            tx.tx_index
+                        )
+                    })?;
+                    cells_consumed += tx_consumed;
+                    capacity_transferred += tx
+                        .cells
+                        .iter()
+                        .map(|c| i128::from(c.capacity))
+                        .sum::<i128>();
+
+                    for input in &tx.resolved_inputs {
+                        used_cap_consumed += i128::from(input.occupied_capacity);
+                        data_size_consumed += input.data_size as i64;
+                    }
+                }
+            }
+
+            let entry = self.daily_stats.entry(block_date).or_default();
+            entry.0 += 1; // blocks
+            entry.1 += block.transactions_count; // txs
+            entry.2 += cells_created;
+            entry.3 += cells_consumed;
+            entry.4 = entry.4.checked_add(capacity_transferred).ok_or_else(|| {
+                anyhow!(
+                    "chain stats: daily capacity_transferred overflow: date={} block={}",
+                    block_date,
+                    block.number
+                )
+            })?;
+            entry.5 = entry.5.checked_add(used_cap_created).ok_or_else(|| {
+                anyhow!(
+                    "chain stats: daily used_cap_created overflow: date={} block={}",
+                    block_date,
+                    block.number
+                )
+            })?;
+            entry.6 = entry.6.checked_add(used_cap_consumed).ok_or_else(|| {
+                anyhow!(
+                    "chain stats: daily used_cap_consumed overflow: date={} block={}",
+                    block_date,
+                    block.number
+                )
+            })?;
+            entry.7 += data_size_added;
+            entry.8 += data_size_consumed;
+
+            // --- DAO field (last per day wins) ---
+            self.daily_dao_fields.insert(block_date, block.dao);
+
+            // --- DailyBlockStats ---
+            let block_entry = self.daily_block_stats.entry(block_date).or_default();
+            block_entry.0 += block.compact_target as i128;
+            block_entry.1 += 1;
+            block_entry.2 += block.uncles_count;
+
+            // --- Inter-block time ---
+            if let Some(prev_ts) = self.prev_timestamp_ms {
+                let delta_ms = block.timestamp_ms - prev_ts;
+                if delta_ms >= 0 {
+                    let delta_seconds = delta_ms / 1000;
+                    *self
+                        .block_time_dist
+                        .entry(crate::sync::dao_helpers::block_time_to_bucket(
+                            delta_seconds,
+                        ))
+                        .or_default() += 1;
+
+                    let bt_entry = self.daily_block_times.entry(block_date).or_insert((0, 0));
+                    bt_entry.0 += delta_ms;
+                    bt_entry.1 += 1;
+                }
+            }
+            self.prev_timestamp_ms = Some(block.timestamp_ms);
+
+            // --- Epoch time distribution ---
+            if block.epoch_index == 0 && block.epoch_number > 0 {
+                if let Some((prev_epoch_num, prev_start_ts)) = self.prev_epoch {
+                    if prev_epoch_num == block.epoch_number - 1 {
+                        let epoch_duration_minutes =
+                            (block.timestamp_ms - prev_start_ts) as f64 / 60_000.0;
+                        let bucket_minutes = epoch_duration_minutes.round() as i32;
+                        *self.epoch_time_dist.entry(bucket_minutes).or_default() += 1;
+                    }
+                }
+            }
+            if block.epoch_index == 0 {
+                self.prev_epoch = Some((block.epoch_number, block.timestamp_ms));
+            }
+        }
+        Ok(())
+    }
+
+    /// Build sealed aggregate rows for `CF_STATS_CHAIN`.
+    fn build_rows(&self) -> Result<Vec<materialize::MaterializedRow>> {
+        let mut rows = Vec::new();
+
+        // --- DailyStats (cumulative totals threaded forward) ---
+        let mut sorted_dates: Vec<_> = self.daily_stats.keys().copied().collect();
+        sorted_dates.sort();
+
+        let mut cum_live: i64 = 0;
+        let mut cum_dead: i64 = 0;
+        let mut cum_all: i64 = 0;
+        let mut cum_data_size: i64 = 0;
+
+        for date in &sorted_dates {
+            let (
+                blocks,
+                txs,
+                created,
+                consumed,
+                capacity,
+                occ_created,
+                occ_consumed,
+                data_added,
+                data_consumed,
+            ) = self.daily_stats[date];
+
+            cum_live += (created - consumed) as i64;
+            cum_dead += consumed as i64;
+            cum_all += created as i64;
+            cum_data_size += data_added - data_consumed;
+
+            let knowledge_size = self
+                .daily_dao_fields
+                .get(date)
+                .and_then(|dao| crate::db::writer::calculate_knowledge_size(dao));
+
+            let avg_block_time_ms = self.daily_block_times.get(date).and_then(|(sum, count)| {
+                if *count > 0 {
+                    Some(*sum / *count as i64)
+                } else {
+                    None
+                }
+            });
+
+            let stats = ckbadger_store::types::DailyStats {
+                blocks_count: blocks,
+                transactions_count: txs,
+                cells_created: created,
+                cells_consumed: consumed,
+                capacity_transferred: capacity,
+                used_capacity_created: occ_created,
+                used_capacity_consumed: occ_consumed,
+                total_live_cells: cum_live,
+                total_dead_cells: cum_dead,
+                total_all_cells: cum_all,
+                total_data_size: cum_data_size,
+                knowledge_size,
+                avg_block_time_ms,
+            };
+            rows.push(materialize::MaterializedRow::new(
+                CF_STATS_CHAIN,
+                keys::encode_stats_key(
+                    keys::stats_prefix::DAILY,
+                    date.format("%Y%m%d").to_string().as_bytes(),
+                ),
+                bincode::serialize(&stats)?,
+            ));
+        }
+
+        // --- DailyBlockStats ---
+        let mut sorted_block_dates: Vec<_> = self.daily_block_stats.keys().copied().collect();
+        sorted_block_dates.sort();
+        for date in &sorted_block_dates {
+            let (sum_target, count, uncles) = self.daily_block_stats[date];
+            let avg_compact_target = if count > 0 {
+                let avg_i64 = i64::try_from(sum_target / count as i128).map_err(|_| {
+                    anyhow!(
+                        "chain stats: daily avg compact target exceeds i64: date={} sum={} count={}",
+                        date,
+                        sum_target,
+                        count
+                    )
+                })?;
+                avg_i64 as f64
+            } else {
+                0.0
+            };
+
+            let avg_block_time_ms = self
+                .daily_block_times
+                .get(date)
+                .and_then(|(sum, bt_count)| {
+                    if *bt_count > 0 {
+                        Some(*sum / *bt_count as i64)
+                    } else {
+                        None
+                    }
+                });
+
+            let stats = ckbadger_store::types::DailyBlockStats {
+                avg_compact_target,
+                block_count: count,
+                total_uncles: uncles,
+                avg_block_time_ms,
+            };
+            rows.push(materialize::MaterializedRow::new(
+                CF_STATS_CHAIN,
+                keys::encode_stats_key(
+                    keys::stats_prefix::DAILY_BLOCK,
+                    date.format("%Y%m%d").to_string().as_bytes(),
+                ),
+                bincode::serialize(&stats)?,
+            ));
+        }
+
+        // --- Block time distribution ---
+        for (bucket, count) in &self.block_time_dist {
+            rows.push(materialize::MaterializedRow::new(
+                CF_STATS_CHAIN,
+                keys::encode_stats_key(keys::stats_prefix::BLOCK_TIME_DIST, &bucket.to_be_bytes()),
+                count.to_le_bytes().to_vec(),
+            ));
+        }
+
+        // --- Epoch time distribution ---
+        for (bucket, count) in &self.epoch_time_dist {
+            rows.push(materialize::MaterializedRow::new(
+                CF_STATS_CHAIN,
+                keys::encode_stats_key(keys::stats_prefix::EPOCH_TIME_DIST, &bucket.to_be_bytes()),
+                count.to_le_bytes().to_vec(),
+            ));
+        }
+
+        Ok(rows)
+    }
+}
+
 struct BulkBuildRuntimeState {
     interner: interner::IdentityInterner,
     sequencer: sequencer::BulkSequencer,
     owners: CoreOwners,
     activity_stats: ActivityStatsAccumulator,
+    chain_stats: ChainStatsAccumulator,
     hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker,
     cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker,
     hodl_live_cells_by_lock: FxHashMap<crate::sync::types::InternId, i32>,
@@ -841,6 +1151,7 @@ impl Default for BulkBuildRuntimeState {
             sequencer: sequencer::BulkSequencer::default(),
             owners: CoreOwners::default(),
             activity_stats: ActivityStatsAccumulator::default(),
+            chain_stats: ChainStatsAccumulator::default(),
             hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker::new(),
             cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker::new(),
             hodl_live_cells_by_lock: FxHashMap::default(),
@@ -856,6 +1167,10 @@ impl BulkBuildRuntimeState {
         breakdown.insert(
             "activity_stats".to_string(),
             self.activity_stats.estimated_bytes(),
+        );
+        breakdown.insert(
+            "chain_stats".to_string(),
+            self.chain_stats.estimated_bytes(),
         );
         breakdown.insert(
             "hodl_live_cells_by_lock".to_string(),
@@ -932,6 +1247,7 @@ impl BulkBuildRuntimeState {
             hodl_tracker,
             hodl_live_cells_by_lock,
             activity_stats,
+            chain_stats,
             ..
         } = self;
         let ctx = owners::ReducerContext::new(&frozen);
@@ -1089,6 +1405,9 @@ impl BulkBuildRuntimeState {
         activity_stats.apply_bundles(&history.activity_bundles)?;
         let activity_stats_elapsed = activity_stats_started.elapsed();
 
+        // Accumulate chain-level daily statistics (block counts, difficulty, etc.).
+        chain_stats.apply_blocks(&arena, &resolved)?;
+
         // Collect all sealed rows into a single vec for the pending flush.
         let mut all_sealed = hodl_sealed_rows;
         all_sealed.extend(cell_dist_sealed_rows);
@@ -1178,6 +1497,7 @@ impl BulkBuildRuntimeState {
             hodl_tracker,
             hodl_live_cells_by_lock,
             activity_stats,
+            chain_stats,
             ..
         } = self;
         let ctx = owners::ReducerContext::new(&frozen);
@@ -1223,6 +1543,7 @@ impl BulkBuildRuntimeState {
         let activity_stats_started = Instant::now();
         activity_stats.apply_bundles(&history.activity_bundles)?;
         let activity_stats_elapsed = activity_stats_started.elapsed();
+        chain_stats.apply_blocks(&arena, &resolved)?;
         let mut all_sealed = hodl_sealed_rows;
         all_sealed.extend(cell_dist_sealed_rows);
         Ok((
@@ -1259,6 +1580,7 @@ impl BulkBuildRuntimeState {
             sequencer,
             owners,
             activity_stats,
+            chain_stats,
             hodl_tracker,
             cell_dist_tracker,
             ..
@@ -1266,6 +1588,9 @@ impl BulkBuildRuntimeState {
 
         let sealed_rows = activity_stats.build_rows()?;
         materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
+
+        let chain_sealed_rows = chain_stats.build_rows()?;
+        materializer.stream_sealed_aggregate_rows(&chain_sealed_rows)?;
 
         let frozen = interner.snapshot_for_reads();
         let final_snapshot_rows = build_final_snapshot_rows(&sequencer, &frozen)?;
@@ -4665,6 +4990,7 @@ mod tests {
                 created_by_block_dao_ar: 0,
                 capacity: 200_00000000,
                 occupied_capacity: 61_00000000,
+                data_size: 0,
                 udt_amount: None,
                 lock_script_hash_id: lock_hash_id,
                 lock_code_hash_id: InternId::new(401),
@@ -5173,5 +5499,364 @@ mod tests {
         assert_eq!(daily.coinbase_count, 1);
         assert_eq!(daily.transfer_count, 0);
         assert!(!acc.daily_addrs.contains_key(&date_key) || acc.daily_addrs[&date_key].is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // ChainStatsAccumulator tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn chain_stats_accumulator_daily_stats_from_two_blocks() {
+        use std::borrow::Cow;
+
+        // Two blocks on the same day, 10 seconds apart.
+        // Block 1: timestamp 2023-11-14 22:13:20 UTC, 1 cellbase tx with 1 output
+        // Block 2: timestamp 2023-11-14 22:13:30 UTC, 1 cellbase + 1 spend tx
+        let ts1: i64 = 1_700_000_000_000;
+        let ts2: i64 = 1_700_000_010_000; // +10s
+
+        // Manually construct arena + resolved for direct accumulator test.
+        let arena = facts::FactsArena {
+            blocks: vec![
+                facts::BlockFacts {
+                    number: 100,
+                    hash: [0x01; 32],
+                    timestamp_ms: ts1,
+                    epoch_number: 5,
+                    epoch_index: 10,
+                    epoch_length: 1800,
+                    dao: [0x00; 32],
+                    compact_target: 0x1a08a97e,
+                    uncles_count: 0,
+                    transactions_count: 1,
+                    tx_range: 0..1,
+                },
+                facts::BlockFacts {
+                    number: 101,
+                    hash: [0x02; 32],
+                    timestamp_ms: ts2,
+                    epoch_number: 5,
+                    epoch_index: 11,
+                    epoch_length: 1800,
+                    dao: [0x00; 32],
+                    compact_target: 0x1a08a97e,
+                    uncles_count: 1,
+                    transactions_count: 2,
+                    tx_range: 1..3,
+                },
+            ],
+            txs: vec![
+                // Block 100: cellbase
+                facts::TxFacts {
+                    hash: [0xaa; 32],
+                    block_number: 100,
+                    block_hash: [0x01; 32],
+                    timestamp_ms: ts1,
+                    block_dao_ar: 10_000_000_000,
+                    tx_index: 0,
+                    is_cellbase: true,
+                    inputs_count: 1,
+                    outputs_count: 1,
+                    tx_size: 120,
+                    cycles: Some(0),
+                    dotbit_action: None,
+                    input_outpoints: Vec::new(),
+                    output_range: 0..1,
+                },
+                // Block 101: cellbase
+                facts::TxFacts {
+                    hash: [0xbb; 32],
+                    block_number: 101,
+                    block_hash: [0x02; 32],
+                    timestamp_ms: ts2,
+                    block_dao_ar: 10_000_000_000,
+                    tx_index: 0,
+                    is_cellbase: true,
+                    inputs_count: 1,
+                    outputs_count: 1,
+                    tx_size: 120,
+                    cycles: Some(0),
+                    dotbit_action: None,
+                    input_outpoints: Vec::new(),
+                    output_range: 1..2,
+                },
+                // Block 101: spend tx (consumes cell from block 100 cellbase)
+                facts::TxFacts {
+                    hash: [0xcc; 32],
+                    block_number: 101,
+                    block_hash: [0x02; 32],
+                    timestamp_ms: ts2,
+                    block_dao_ar: 10_000_000_000,
+                    tx_index: 1,
+                    is_cellbase: false,
+                    inputs_count: 1,
+                    outputs_count: 1,
+                    tx_size: 200,
+                    cycles: Some(1000),
+                    dotbit_action: None,
+                    input_outpoints: vec![facts::OutPointKey::new([0xaa; 32], 0)],
+                    output_range: 2..3,
+                },
+            ],
+            cells: vec![
+                // Block 100 cellbase output
+                facts::CellFacts {
+                    outpoint: facts::OutPointKey::new([0xaa; 32], 0),
+                    created_at_block: 100,
+                    created_by_block_dao_ar: 10_000_000_000,
+                    capacity: 100_00000000,
+                    lock_script_hash_id: InternId::new(0),
+                    lock_code_hash_id: InternId::new(1),
+                    lock_hash_type: 1,
+                    lock_args_id: InternId::new(2),
+                    type_script_hash_id: None,
+                    type_code_hash_id: None,
+                    type_hash_type: None,
+                    type_args_id: None,
+                    occupied_capacity: 61_00000000,
+                    data_size: 10,
+                    data: vec![0; 10],
+                    data_hash: None,
+                    udt_amount: None,
+                    semantic_tag: facts::CellSemanticTag::Plain,
+                    dao_state: None,
+                    protocol_facts: None,
+                },
+                // Block 101 cellbase output
+                facts::CellFacts {
+                    outpoint: facts::OutPointKey::new([0xbb; 32], 0),
+                    created_at_block: 101,
+                    created_by_block_dao_ar: 10_000_000_000,
+                    capacity: 50_00000000,
+                    lock_script_hash_id: InternId::new(0),
+                    lock_code_hash_id: InternId::new(1),
+                    lock_hash_type: 1,
+                    lock_args_id: InternId::new(2),
+                    type_script_hash_id: None,
+                    type_code_hash_id: None,
+                    type_hash_type: None,
+                    type_args_id: None,
+                    occupied_capacity: 61_00000000,
+                    data_size: 0,
+                    data: Vec::new(),
+                    data_hash: None,
+                    udt_amount: None,
+                    semantic_tag: facts::CellSemanticTag::Plain,
+                    dao_state: None,
+                    protocol_facts: None,
+                },
+                // Block 101 spend tx output
+                facts::CellFacts {
+                    outpoint: facts::OutPointKey::new([0xcc; 32], 0),
+                    created_at_block: 101,
+                    created_by_block_dao_ar: 10_000_000_000,
+                    capacity: 99_00000000,
+                    lock_script_hash_id: InternId::new(3),
+                    lock_code_hash_id: InternId::new(4),
+                    lock_hash_type: 1,
+                    lock_args_id: InternId::new(5),
+                    type_script_hash_id: None,
+                    type_code_hash_id: None,
+                    type_hash_type: None,
+                    type_args_id: None,
+                    occupied_capacity: 61_00000000,
+                    data_size: 5,
+                    data: vec![0; 5],
+                    data_hash: None,
+                    udt_amount: None,
+                    semantic_tag: facts::CellSemanticTag::Plain,
+                    dao_state: None,
+                    protocol_facts: None,
+                },
+            ],
+        };
+
+        // Build resolved tx facts manually (can't use sequencer since we need
+        // to keep arena alive for the borrow).
+        let resolved_input = facts::ResolvedInputFacts {
+            outpoint: facts::OutPointKey::new([0xaa; 32], 0),
+            created_at_block: 100,
+            created_by_block_dao_ar: 10_000_000_000,
+            capacity: 100_00000000,
+            occupied_capacity: 61_00000000,
+            data_size: 10,
+            udt_amount: None,
+            lock_script_hash_id: InternId::new(0),
+            lock_code_hash_id: InternId::new(1),
+            lock_hash_type: 1,
+            lock_args_id: InternId::new(2),
+            type_script_hash_id: None,
+            type_code_hash_id: None,
+            type_hash_type: None,
+            type_args_id: None,
+            semantic_tag: facts::CellSemanticTag::Plain,
+            dao_state: None,
+            dao_compensation_ars: None,
+            protocol_facts: None,
+        };
+
+        let resolved: Vec<facts::ResolvedTxFacts<'_>> = vec![
+            // Block 100 cellbase
+            facts::ResolvedTxFacts {
+                tx_hash: [0xaa; 32],
+                block_number: 100,
+                block_hash: [0x01; 32],
+                timestamp_ms: ts1,
+                block_dao_ar: 10_000_000_000,
+                tx_index: 0,
+                dotbit_action: None,
+                resolved_inputs: vec![],
+                cells: Cow::Borrowed(&arena.cells[0..1]),
+            },
+            // Block 101 cellbase
+            facts::ResolvedTxFacts {
+                tx_hash: [0xbb; 32],
+                block_number: 101,
+                block_hash: [0x02; 32],
+                timestamp_ms: ts2,
+                block_dao_ar: 10_000_000_000,
+                tx_index: 0,
+                dotbit_action: None,
+                resolved_inputs: vec![],
+                cells: Cow::Borrowed(&arena.cells[1..2]),
+            },
+            // Block 101 spend
+            facts::ResolvedTxFacts {
+                tx_hash: [0xcc; 32],
+                block_number: 101,
+                block_hash: [0x02; 32],
+                timestamp_ms: ts2,
+                block_dao_ar: 10_000_000_000,
+                tx_index: 1,
+                dotbit_action: None,
+                resolved_inputs: vec![resolved_input],
+                cells: Cow::Borrowed(&arena.cells[2..3]),
+            },
+        ];
+
+        let mut acc = ChainStatsAccumulator::default();
+        acc.apply_blocks(&arena, &resolved).unwrap();
+
+        // Both blocks are on the same date: 2023-11-14
+        let date = ckbadger_common::block_date_from_ms(ts1);
+        let daily = acc.daily_stats.get(&date).expect("daily stats entry");
+
+        // blocks: 2
+        assert_eq!(daily.0, 2, "blocks_count");
+        // txs: block 100 has 1, block 101 has 2
+        assert_eq!(daily.1, 3, "transactions_count");
+        // cells_created: block 100 cellbase=1, block 101 cellbase=1 + spend=1 = 3
+        assert_eq!(daily.2, 3, "cells_created");
+        // cells_consumed: only non-cellbase tx in block 101 consumes 1
+        assert_eq!(daily.3, 1, "cells_consumed");
+        // capacity_transferred: spend tx output = 99 CKB (non-cellbase only)
+        assert_eq!(daily.4, 99_00000000i128, "capacity_transferred");
+        // used_cap_created: 61 + 61 + 61 = 183 CKB (all cells)
+        assert_eq!(daily.5, 183_00000000i128, "used_capacity_created");
+        // used_cap_consumed: 61 CKB (the consumed input)
+        assert_eq!(daily.6, 61_00000000i128, "used_capacity_consumed");
+        // data_size_added: 10 + 0 + 5 = 15
+        assert_eq!(daily.7, 15, "data_size_added");
+        // data_size_consumed: 10 (the consumed input had data_size=10)
+        assert_eq!(daily.8, 10, "data_size_consumed");
+
+        // DailyBlockStats: both blocks on same day
+        let block_stats = acc.daily_block_stats.get(&date).expect("daily block stats");
+        // sum_compact_target: 0x1a08a97e * 2
+        assert_eq!(block_stats.0, 0x1a08a97e_i128 * 2, "sum_compact_target");
+        assert_eq!(block_stats.1, 2, "block_count");
+        // uncles: block 100=0, block 101=1
+        assert_eq!(block_stats.2, 1, "total_uncles");
+
+        // Block time: 10 seconds between blocks
+        let bt = acc.daily_block_times.get(&date).expect("block times");
+        assert_eq!(bt.0, 10_000, "block_time_sum_ms");
+        assert_eq!(bt.1, 1, "block_time_count");
+
+        // Block time distribution: 10s bucket
+        assert_eq!(acc.block_time_dist.get(&10), Some(&1));
+
+        // No epoch boundary crossing, so epoch_time_dist should be empty
+        assert!(acc.epoch_time_dist.is_empty());
+    }
+
+    #[test]
+    fn chain_stats_accumulator_build_rows_threads_cumulative_totals() {
+        use chrono::NaiveDate;
+
+        let mut acc = ChainStatsAccumulator::default();
+
+        // Day 1: 5 created, 2 consumed
+        let day1 = NaiveDate::from_ymd_opt(2023, 11, 14).unwrap();
+        acc.daily_stats
+            .insert(day1, (10, 20, 5, 2, 1000, 500, 200, 100, 30));
+
+        // Day 2: 3 created, 1 consumed
+        let day2 = NaiveDate::from_ymd_opt(2023, 11, 15).unwrap();
+        acc.daily_stats
+            .insert(day2, (8, 15, 3, 1, 800, 300, 100, 50, 10));
+
+        let rows = acc.build_rows().unwrap();
+
+        // Find daily stats rows (prefix DAILY = 0x01)
+        let daily_rows: Vec<_> = rows
+            .iter()
+            .filter(|r| {
+                r.cf_name == CF_STATS_CHAIN
+                    && r.key.len() > 1
+                    && r.key[0] == ckbadger_store::keys::stats_prefix::DAILY
+            })
+            .collect();
+        assert_eq!(daily_rows.len(), 2, "two daily stats rows");
+
+        // Deserialize day 1
+        let stats1: ckbadger_store::types::DailyStats =
+            bincode::deserialize(&daily_rows[0].value).unwrap();
+        assert_eq!(stats1.total_live_cells, 3); // 5-2
+        assert_eq!(stats1.total_dead_cells, 2);
+        assert_eq!(stats1.total_all_cells, 5);
+        assert_eq!(stats1.total_data_size, 70); // 100-30
+
+        // Deserialize day 2 (cumulative from day 1)
+        let stats2: ckbadger_store::types::DailyStats =
+            bincode::deserialize(&daily_rows[1].value).unwrap();
+        assert_eq!(stats2.total_live_cells, 5); // 3 + (3-1) = 5
+        assert_eq!(stats2.total_dead_cells, 3); // 2 + 1
+        assert_eq!(stats2.total_all_cells, 8); // 5 + 3
+        assert_eq!(stats2.total_data_size, 110); // 70 + (50-10)
+    }
+
+    #[test]
+    fn chain_stats_accumulator_epoch_time_distribution() {
+        let mut acc = ChainStatsAccumulator::default();
+
+        // Simulate epoch boundary: epoch 5 starts at ts=0, epoch 6 starts 240 min later
+        let arena = facts::FactsArena {
+            blocks: vec![
+                facts::BlockFacts {
+                    number: 1000,
+                    epoch_number: 5,
+                    epoch_index: 0,
+                    timestamp_ms: 1_700_000_000_000,
+                    ..Default::default()
+                },
+                facts::BlockFacts {
+                    number: 2800,
+                    epoch_number: 6,
+                    epoch_index: 0,
+                    // 240 minutes = 14,400,000 ms later
+                    timestamp_ms: 1_700_000_000_000 + 14_400_000,
+                    ..Default::default()
+                },
+            ],
+            txs: vec![],
+            cells: vec![],
+        };
+
+        let resolved: Vec<facts::ResolvedTxFacts<'_>> = vec![];
+        acc.apply_blocks(&arena, &resolved).unwrap();
+
+        // Epoch 5→6 boundary: 240 minutes
+        assert_eq!(acc.epoch_time_dist.get(&240), Some(&1));
     }
 }

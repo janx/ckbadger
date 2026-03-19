@@ -21,6 +21,8 @@ pub(crate) struct BlockFacts {
     pub(crate) epoch_index: i32,
     pub(crate) epoch_length: i32,
     pub(crate) dao: [u8; 32],
+    pub(crate) compact_target: u32,
+    pub(crate) uncles_count: i32,
     pub(crate) transactions_count: i32,
     pub(crate) tx_range: Range<usize>,
 }
@@ -187,6 +189,7 @@ pub(crate) struct ResolvedInputFacts {
     pub(crate) type_code_hash_id: Option<InternId>,
     pub(crate) type_hash_type: Option<i16>,
     pub(crate) type_args_id: Option<InternId>,
+    pub(crate) data_size: i32,
     pub(crate) semantic_tag: CellSemanticTag,
     pub(crate) dao_state: Option<DaoCellState>,
     pub(crate) dao_compensation_ars: Option<DaoCompensationArs>,

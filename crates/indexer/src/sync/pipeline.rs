@@ -552,6 +552,14 @@ fn parse_single_block(
         epoch_index: parsed_block.epoch_index,
         epoch_length: parsed_block.epoch_length,
         dao: parsed_block.dao,
+        compact_target: u32::try_from(parsed_block.compact_target).map_err(|_| {
+            anyhow!(
+                "compact_target exceeds u32 range: block={} compact_target={}",
+                parsed_block.number,
+                parsed_block.compact_target
+            )
+        })?,
+        uncles_count: parsed_block.uncles_count,
         transactions_count: parsed_block.transactions_count,
         // Placeholder tx_range; remapped in the merge phase.
         tx_range: 0..local_txs.len(),

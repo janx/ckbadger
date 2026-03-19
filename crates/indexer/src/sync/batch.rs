@@ -807,13 +807,7 @@ fn collect_committed_proposal_ids(txs: &[TxData]) -> Vec<String> {
 }
 
 fn block_time_to_bucket(block_time_seconds: i64) -> i32 {
-    if block_time_seconds < 1 {
-        0
-    } else if block_time_seconds < 30 {
-        block_time_seconds as i32
-    } else {
-        30
-    }
+    super::dao_helpers::block_time_to_bucket(block_time_seconds)
 }
 
 fn truncate_to_hour(dt: DateTime<Utc>) -> DateTime<Utc> {

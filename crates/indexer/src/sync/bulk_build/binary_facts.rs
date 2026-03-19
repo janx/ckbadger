@@ -100,6 +100,14 @@ pub(crate) fn parse_block_to_facts(
     })?;
 
     let dao: [u8; 32] = header.dao().unpack();
+    let compact_target: u32 = header.compact_target();
+    let uncles_count = i32::try_from(raw.block.uncle_hashes().len()).map_err(|_| {
+        anyhow!(
+            "binary facts uncles count exceeds i32 range: block={} uncles={}",
+            block_number,
+            raw.block.uncle_hashes().len()
+        )
+    })?;
 
     let block_dao_ar = DaoParser::extract_ar_from_dao_field(&dao).ok_or_else(|| {
         anyhow!(
@@ -395,6 +403,8 @@ pub(crate) fn parse_block_to_facts(
         epoch_index,
         epoch_length,
         dao,
+        compact_target,
+        uncles_count,
         transactions_count,
         // Placeholder tx_range; remapped in the merge phase.
         tx_range: 0..local_txs.len(),

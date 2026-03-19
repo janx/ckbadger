@@ -72,4 +72,5 @@ pub(crate) mod utxoswap_detector;
 
 pub use dao::{DaoWithdrawalContext, DaoWithdrawalContextTrait};
 pub use reorg::ReorgResult;
+pub use statistics::calculate_knowledge_size;
 pub use statistics::DaoSnapshotInput;

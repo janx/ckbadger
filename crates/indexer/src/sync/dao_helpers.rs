@@ -143,6 +143,22 @@ pub(crate) fn derive_pre_batch_live_cells(post_live_cells: i32, live_delta: i32)
 }
 
 // ---------------------------------------------------------------------------
+// Block time bucketing (shared between bulk-build and live sync)
+// ---------------------------------------------------------------------------
+
+/// Map inter-block time (seconds) to a histogram bucket.
+/// Buckets: 0 (<1s), 1..29 (per-second), 30 (>=30s).
+pub(crate) fn block_time_to_bucket(block_time_seconds: i64) -> i32 {
+    if block_time_seconds < 1 {
+        0
+    } else if block_time_seconds < 30 {
+        block_time_seconds as i32
+    } else {
+        30
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Occupied capacity
 // ---------------------------------------------------------------------------
 

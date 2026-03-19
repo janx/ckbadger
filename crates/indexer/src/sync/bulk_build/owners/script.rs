@@ -739,6 +739,7 @@ mod tests {
                 created_by_block_dao_ar: 1,
                 capacity: 200_00000000,
                 occupied_capacity: 142_00000000,
+                data_size: 0,
                 udt_amount: Some(42),
                 lock_script_hash_id: InternId::new(3),
                 lock_code_hash_id,
