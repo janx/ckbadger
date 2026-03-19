@@ -2786,6 +2786,42 @@ impl Indexer {
         results.into_iter().collect()
     }
 
+    /// Fetch blocks from CKB RocksDB as raw molecule `BlockView` + cycles.
+    /// Bypasses `block_view_to_rpc` hex encoding for binary-native bulk sync.
+    pub(crate) fn fetch_blocks_direct_binary(
+        store: &CkbChainReader,
+        start: u64,
+        end: u64,
+    ) -> Result<Vec<crate::sync::bulk_build::binary_facts::RawCkbBlock>> {
+        use ckb_types::prelude::*;
+        let block_numbers: Vec<u64> = (start..=end).collect();
+        let results: Vec<Result<crate::sync::bulk_build::binary_facts::RawCkbBlock>> =
+            block_numbers
+                .par_iter()
+                .map(|&num| {
+                    let hash = store.get_block_hash(num).ok_or_else(|| {
+                        anyhow::anyhow!("Block {} hash not found in CKB RocksDB", num)
+                    })?;
+                    let block = store.get_block(&hash).ok_or_else(|| {
+                        anyhow::anyhow!("Block {} data not found in CKB RocksDB", num)
+                    })?;
+                    let hash_bytes: [u8; 32] = block.hash().unpack();
+                    let cycles = store
+                        .get_block_ext(&hash_bytes)
+                        .and_then(|(_, cycles_vec)| {
+                            if cycles_vec.is_empty() {
+                                None
+                            } else {
+                                Some(cycles_vec)
+                            }
+                        })
+                        .unwrap_or_default();
+                    Ok(crate::sync::bulk_build::binary_facts::RawCkbBlock { block, cycles })
+                })
+                .collect();
+        results.into_iter().collect()
+    }
+
     async fn drain_channel<T>(rx: &mut tokio::sync::mpsc::Receiver<T>) -> usize {
         let mut drained = 0;
         while rx.try_recv().is_ok() {

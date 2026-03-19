@@ -39,6 +39,7 @@ use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::owners::BulkReducer;
 
 pub(crate) mod accounting;
+pub(crate) mod binary_facts;
 pub(crate) mod facts;
 pub(crate) mod interner;
 pub(crate) mod live_cells;
@@ -104,7 +105,7 @@ impl BulkBuildEngine {
         // None on first iteration; populated when the next batch is fetched
         // concurrently with the current batch's CPU-bound processing.
         let mut prefetched_blocks: Option<(
-            Vec<BlockResponseWithCycles>,
+            Vec<binary_facts::RawCkbBlock>,
             std::time::Duration,
             u64,
         )> = None;
@@ -181,7 +182,7 @@ impl BulkBuildEngine {
                     let s = start_block;
                     let e = end_block;
                     let blocks = tokio::task::spawn_blocking(move || {
-                        Indexer::fetch_blocks_direct(&store, s, e)
+                        Indexer::fetch_blocks_direct_binary(&store, s, e)
                     })
                     .await
                     .map_err(|e| anyhow!("bulk build fetch task panicked: {}", e))??;
@@ -206,7 +207,7 @@ impl BulkBuildEngine {
                 let store = ckb_store.clone();
                 Some(tokio::task::spawn_blocking(move || {
                     let started = Instant::now();
-                    let blocks = Indexer::fetch_blocks_direct(&store, next_start, next_end)?;
+                    let blocks = Indexer::fetch_blocks_direct_binary(&store, next_start, next_end)?;
                     Ok::<_, anyhow::Error>((blocks, started.elapsed(), next_end))
                 }))
             } else {
@@ -832,7 +833,7 @@ impl BulkBuildRuntimeState {
 
     fn apply_blocks(
         &mut self,
-        blocks: &[BlockResponseWithCycles],
+        blocks: &[binary_facts::RawCkbBlock],
         is_mainnet: bool,
         token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
     ) -> Result<(BatchExecutionStats, BatchBuildTimings, PendingFlush)> {
@@ -848,8 +849,7 @@ impl BulkBuildRuntimeState {
         }
 
         let facts_started = Instant::now();
-        let arena =
-            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(blocks, &self.interner)?;
+        let arena = binary_facts::build_bulk_facts_arena_from_raw_blocks(blocks, &self.interner)?;
         let facts_elapsed = facts_started.elapsed();
 
         // Snapshot interner for zero-copy reads during resolve/reduce phases.
@@ -1081,6 +1081,133 @@ impl BulkBuildRuntimeState {
             cells_created,
             cells_consumed: consumed_cells,
         }, timings, pending))
+    }
+
+    /// Apply blocks from hex-based RPC fixtures (used by test helpers and integration tests).
+    fn apply_blocks_hex(
+        &mut self,
+        blocks: &[BlockResponseWithCycles],
+        is_mainnet: bool,
+        token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
+    ) -> Result<(BatchExecutionStats, BatchBuildTimings, PendingFlush)> {
+        if blocks.is_empty() {
+            return Ok((
+                BatchExecutionStats::default(),
+                BatchBuildTimings::default(),
+                PendingFlush {
+                    history_rows: Vec::new(),
+                    sealed_rows: Vec::new(),
+                },
+            ));
+        }
+        let facts_started = Instant::now();
+        let arena =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(blocks, &self.interner)?;
+        let facts_elapsed = facts_started.elapsed();
+        let frozen = self.interner.snapshot_for_reads();
+        let resolve_started = Instant::now();
+        let resolved = self.sequencer.resolve(&arena)?;
+        let resolve_elapsed = resolve_started.elapsed();
+
+        let tx_count = u64::try_from(arena.txs.len()).map_err(|_| {
+            anyhow!(
+                "bulk build tx count exceeds u64 range while applying block batch: txs={}",
+                arena.txs.len()
+            )
+        })?;
+        let cells_created = i64::try_from(arena.cells.len()).map_err(|_| {
+            anyhow!(
+                "bulk build created cell count exceeds i64 range: cells={}",
+                arena.cells.len()
+            )
+        })?;
+        let consumed_cells = i64::try_from(
+            resolved
+                .iter()
+                .map(|tx| tx.resolved_inputs.len())
+                .sum::<usize>(),
+        )
+        .map_err(|_| anyhow!("bulk build consumed cell count exceeds i64 range"))?;
+        let reduce_started = Instant::now();
+        let last_block = arena
+            .blocks
+            .last()
+            .ok_or_else(|| anyhow!("bulk build arena missing blocks for non-empty batch"))?;
+        let BulkBuildRuntimeState {
+            owners,
+            cell_dist_tracker,
+            hodl_tracker,
+            hodl_live_cells_by_lock,
+            activity_stats,
+            ..
+        } = self;
+        let ctx = owners::ReducerContext::new(&frozen);
+        let (history_result_with_elapsed, reduce_right_result) = rayon::join(
+            || { let started = Instant::now(); let result = build_history_rows(&arena, &resolved, &frozen, is_mainnet, token_info_cache); (result, started.elapsed()) },
+            || -> Result<(Vec<materialize::MaterializedRow>, Vec<materialize::MaterializedRow>, std::time::Duration)> {
+                let hodl_sealed_rows = apply_hodl_tracker_batch_standalone(hodl_tracker, hodl_live_cells_by_lock, &arena, &resolved)?;
+                let address_started = Instant::now();
+                let mut cell_dist_sealed_rows = Vec::new();
+                for block in &arena.blocks {
+                    let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
+                    cell_dist_tracker.record_block_date(block.number, block_date);
+                    for tx in &resolved[block.tx_range.clone()] {
+                        for input in &tx.resolved_inputs { cell_dist_tracker.cell_consumed(input.occupied_capacity)?; }
+                        for cell in tx.cells.iter() { cell_dist_tracker.cell_created(cell.occupied_capacity); }
+                        let address_deltas = owners.address.apply_tx_with_deltas(tx, &ctx)?;
+                        apply_cell_dist_cohort_deltas(cell_dist_tracker, owners.address.balances(), &address_deltas, tx)?;
+                    }
+                    if let Some((snapshot_date, snapshot)) = cell_dist_tracker.maybe_snapshot(block_date) {
+                        let date_str = snapshot_date.format("%Y%m%d").to_string();
+                        let cohort = cell_dist_tracker.cohort_snapshot();
+                        cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::CELL_DISTRIBUTION, date_str.as_bytes()), bincode::serialize(&snapshot)?));
+                        cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::ADDR_COHORT, date_str.as_bytes()), bincode::serialize(&cohort)?));
+                    }
+                }
+                let address_elapsed = address_started.elapsed();
+                let CoreOwners { address: _, ref mut script, ref mut token, ref mut dao, ref mut fiber, ref mut object } = *owners;
+                let (r_left, r_right) = rayon::join(
+                    || -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { script.apply_tx(tx, &ctx)?; } } for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { token.apply_tx(tx, &ctx)?; } } Ok(()) },
+                    || -> Result<()> { for block in &arena.blocks { dao.record_block(block)?; for tx in &resolved[block.tx_range.clone()] { dao.apply_tx(tx, &ctx)?; } } let (r_fiber, r_object) = rayon::join(|| -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { fiber.apply_tx(tx, &ctx)?; } } Ok(()) }, || -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { object.apply_tx(tx, &ctx)?; } } Ok(()) }); r_fiber?; r_object?; Ok(()) },
+                );
+                r_left?; r_right?;
+                Ok((hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed))
+            },
+        );
+        let (history_result, history_elapsed) = history_result_with_elapsed;
+        let history = history_result?;
+        let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = reduce_right_result?;
+        owners
+            .object
+            .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
+        let reduce_elapsed = reduce_started.elapsed();
+        let activity_stats_started = Instant::now();
+        activity_stats.apply_bundles(&history.activity_bundles)?;
+        let activity_stats_elapsed = activity_stats_started.elapsed();
+        let mut all_sealed = hodl_sealed_rows;
+        all_sealed.extend(cell_dist_sealed_rows);
+        Ok((
+            BatchExecutionStats {
+                last_block_number: Some(last_block.number),
+                last_block_hash: Some(last_block.hash.to_vec()),
+                block_count: u64::try_from(arena.blocks.len()).unwrap_or(0),
+                tx_count,
+                cells_created,
+                cells_consumed: consumed_cells,
+            },
+            BatchBuildTimings {
+                facts_ms: facts_elapsed.as_secs_f64() * 1000.0,
+                resolve_ms: resolve_elapsed.as_secs_f64() * 1000.0,
+                reduce_ms: reduce_elapsed.as_secs_f64() * 1000.0,
+                history_ms: history_elapsed.as_secs_f64() * 1000.0,
+                address_reduce_ms: address_elapsed.as_secs_f64() * 1000.0,
+                activity_stats_ms: activity_stats_elapsed.as_secs_f64() * 1000.0,
+            },
+            PendingFlush {
+                history_rows: history.rows,
+                sealed_rows: all_sealed,
+            },
+        ))
     }
 
     fn finalize(
@@ -1421,8 +1548,11 @@ where
                 break;
             }
 
-            let (batch_stats, _timings, pending) =
-                runtime.apply_blocks(std::slice::from_ref(block), true, &FxHashMap::default())?;
+            let (batch_stats, _timings, pending) = runtime.apply_blocks_hex(
+                std::slice::from_ref(block),
+                true,
+                &FxHashMap::default(),
+            )?;
             materializer.stream_history_rows(&pending.history_rows)?;
             materializer.stream_sealed_aggregate_rows(&pending.sealed_rows)?;
             sync_totals.record_batch(&batch_stats)?;
@@ -1541,7 +1671,7 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
         for batch in block_batches {
             let (batch_stats, _timings, pending) =
-                runtime.apply_blocks(batch, true, &FxHashMap::default())?;
+                runtime.apply_blocks_hex(batch, true, &FxHashMap::default())?;
             materializer.stream_history_rows(&pending.history_rows)?;
             materializer.stream_sealed_aggregate_rows(&pending.sealed_rows)?;
             sync_totals.record_batch(&batch_stats)?;
