@@ -26,9 +26,13 @@ static COMMITMENT_TESTNET: LazyLock<Vec<u8>> =
 /// Minimum length for funding lock args: 20 bytes (pubkey_hash).
 const FUNDING_LOCK_ARGS_MIN_LEN: usize = 20;
 
-/// Minimum length for commitment lock args:
-/// pubkey_hash (20B) + delay_epoch (8B) + version (8B) + settlement_hash (20B) + settlement_flag (1B) = 57B.
-const COMMITMENT_LOCK_ARGS_MIN_LEN: usize = 57;
+/// Minimum length for commitment lock args (short format):
+/// pubkey_hash (20B) + delay_epoch (8B) + version (8B) = 36B.
+/// Full format adds: settlement_hash (20B) + settlement_flag (1B) = 57B.
+const COMMITMENT_LOCK_ARGS_MIN_LEN: usize = 36;
+
+/// Length threshold for the full commitment lock args format (with settlement fields).
+const COMMITMENT_LOCK_ARGS_FULL_LEN: usize = 57;
 
 /// Parsed funding lock args from a Fiber funding-lock cell.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,10 +50,10 @@ pub struct CommitmentLockArgs {
     pub delay_epoch: u64,
     /// Version of the commitment (8 bytes, big-endian).
     pub version: u64,
-    /// Hash of the settlement transaction (20 bytes).
-    pub settlement_hash: Vec<u8>,
-    /// Settlement flag (1 byte).
-    pub settlement_flag: u8,
+    /// Hash of the settlement transaction (20 bytes). Present only in the full (>=57B) format.
+    pub settlement_hash: Option<Vec<u8>>,
+    /// Settlement flag (1 byte). Present only in the full (>=57B) format.
+    pub settlement_flag: Option<u8>,
 }
 
 /// Returns true if the given code_hash matches a Fiber funding-lock (mainnet or testnet).
@@ -87,8 +91,9 @@ pub fn parse_funding_lock_args(args: &[u8]) -> Option<FundingLockArgs> {
 }
 
 /// Parses commitment lock args from raw bytes.
-/// Layout: pubkey_hash (20B) + delay_epoch (8B LE) + version (8B BE) + settlement_hash (20B) + settlement_flag (1B) = 57B.
-/// Returns None if args is too short.
+/// Short format (36B): pubkey_hash (20B) + delay_epoch (8B LE) + version (8B BE).
+/// Full format (57B): short + settlement_hash (20B) + settlement_flag (1B).
+/// Returns None if args is shorter than 36 bytes.
 pub fn parse_commitment_lock_args(args: &[u8]) -> Option<CommitmentLockArgs> {
     if args.len() < COMMITMENT_LOCK_ARGS_MIN_LEN {
         return None;
@@ -97,8 +102,12 @@ pub fn parse_commitment_lock_args(args: &[u8]) -> Option<CommitmentLockArgs> {
     let pubkey_hash = args[0..20].to_vec();
     let delay_epoch = u64::from_le_bytes(args[20..28].try_into().ok()?);
     let version = u64::from_be_bytes(args[28..36].try_into().ok()?);
-    let settlement_hash = args[36..56].to_vec();
-    let settlement_flag = args[56];
+
+    let (settlement_hash, settlement_flag) = if args.len() >= COMMITMENT_LOCK_ARGS_FULL_LEN {
+        (Some(args[36..56].to_vec()), Some(args[56]))
+    } else {
+        (None, None)
+    };
 
     Some(CommitmentLockArgs {
         pubkey_hash,
@@ -249,8 +258,44 @@ mod tests {
         assert_eq!(parsed.pubkey_hash, pubkey_hash);
         assert_eq!(parsed.delay_epoch, delay_epoch);
         assert_eq!(parsed.version, version);
-        assert_eq!(parsed.settlement_hash, settlement_hash);
-        assert_eq!(parsed.settlement_flag, settlement_flag);
+        assert_eq!(parsed.settlement_hash, Some(settlement_hash));
+        assert_eq!(parsed.settlement_flag, Some(settlement_flag));
+    }
+
+    #[test]
+    fn test_parse_commitment_lock_args_short_format() {
+        // 36-byte format: pubkey_hash(20) + delay_epoch(8) + version(8)
+        let mut args = Vec::with_capacity(36);
+        let pubkey_hash = vec![0x55; 20];
+        args.extend_from_slice(&pubkey_hash);
+
+        let delay_epoch: u64 = 42;
+        args.extend_from_slice(&delay_epoch.to_le_bytes());
+
+        let version: u64 = 3;
+        args.extend_from_slice(&version.to_be_bytes());
+
+        assert_eq!(args.len(), 36);
+
+        let parsed = parse_commitment_lock_args(&args).unwrap();
+        assert_eq!(parsed.pubkey_hash, pubkey_hash);
+        assert_eq!(parsed.delay_epoch, delay_epoch);
+        assert_eq!(parsed.version, version);
+        assert_eq!(parsed.settlement_hash, None);
+        assert_eq!(parsed.settlement_flag, None);
+    }
+
+    #[test]
+    fn test_parse_commitment_lock_args_between_short_and_full() {
+        // 40 bytes: short fields present, not enough for full settlement fields
+        let mut args = vec![0xAA; 20]; // pubkey_hash
+        args.extend_from_slice(&1u64.to_le_bytes()); // delay_epoch
+        args.extend_from_slice(&1u64.to_be_bytes()); // version
+        args.extend_from_slice(&[0xFF; 4]); // extra but not enough for settlement
+
+        let parsed = parse_commitment_lock_args(&args).unwrap();
+        assert_eq!(parsed.settlement_hash, None);
+        assert_eq!(parsed.settlement_flag, None);
     }
 
     #[test]
@@ -267,13 +312,13 @@ mod tests {
         assert_eq!(parsed.pubkey_hash, vec![0x33; 20]);
         assert_eq!(parsed.delay_epoch, 100);
         assert_eq!(parsed.version, 2);
-        assert_eq!(parsed.settlement_hash, vec![0x44; 20]);
-        assert_eq!(parsed.settlement_flag, 0x00);
+        assert_eq!(parsed.settlement_hash, Some(vec![0x44; 20]));
+        assert_eq!(parsed.settlement_flag, Some(0x00));
     }
 
     #[test]
     fn test_parse_commitment_lock_args_too_short() {
-        let args = vec![0u8; 56]; // one byte short
+        let args = vec![0u8; 35]; // one byte short of minimum
         assert!(parse_commitment_lock_args(&args).is_none());
     }
 
@@ -289,8 +334,8 @@ mod tests {
         assert_eq!(parsed.pubkey_hash, vec![0u8; 20]);
         assert_eq!(parsed.delay_epoch, 0);
         assert_eq!(parsed.version, 0);
-        assert_eq!(parsed.settlement_hash, vec![0u8; 20]);
-        assert_eq!(parsed.settlement_flag, 0);
+        assert_eq!(parsed.settlement_hash, Some(vec![0u8; 20]));
+        assert_eq!(parsed.settlement_flag, Some(0));
     }
 
     #[test]

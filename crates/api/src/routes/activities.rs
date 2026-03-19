@@ -377,29 +377,32 @@ fn decode_fiber_funding_lock_args(args: &[u8]) -> Option<serde_json::Value> {
 }
 
 fn decode_fiber_commitment_lock_args(args: &[u8]) -> Option<serde_json::Value> {
-    // Commitment lock args layout (minimum 57 bytes):
-    //   [0..20]   pubkey_hash (20 bytes)
-    //   [20..28]  delay_epoch (8 bytes LE)
-    //   [28..36]  version (8 bytes BE)
-    //   [36..56]  settlement_hash (20 bytes)
-    //   [56]      settlement_flag (1 byte)
-    if args.len() < 57 {
+    // Commitment lock args layout:
+    //   Short (36B): pubkey_hash(20) + delay_epoch(8 LE) + version(8 BE)
+    //   Full (57B):  short + settlement_hash(20) + settlement_flag(1)
+    if args.len() < 36 {
         return None;
     }
     let pubkey_hash = &args[0..20];
     let delay_epoch = u64::from_le_bytes(args[20..28].try_into().ok()?);
     let version = u64::from_be_bytes(args[28..36].try_into().ok()?);
-    let settlement_hash = &args[36..56];
-    let settlement_flag = args[56];
-    Some(serde_json::json!({
+
+    let mut obj = serde_json::json!({
         "protocol": "fiber",
         "action": "commitment",
         "pubkeyHash": format!("0x{}", hex::encode(pubkey_hash)),
         "delayEpoch": delay_epoch,
         "version": version,
-        "settlementHash": format!("0x{}", hex::encode(settlement_hash)),
-        "settlementFlag": settlement_flag,
-    }))
+    });
+
+    if args.len() >= 57 {
+        let settlement_hash = &args[36..56];
+        let settlement_flag = args[56];
+        obj["settlementHash"] = serde_json::json!(format!("0x{}", hex::encode(settlement_hash)));
+        obj["settlementFlag"] = serde_json::json!(settlement_flag);
+    }
+
+    Some(obj)
 }
 
 fn decode_utxoswap_intent_args(args: &[u8]) -> Option<serde_json::Value> {
@@ -1417,8 +1420,23 @@ mod tests {
 
     #[test]
     fn test_decode_fiber_commitment_lock_args_too_short() {
-        let args = vec![0; 56]; // 1 byte short of minimum 57
+        let args = vec![0; 35]; // 1 byte short of minimum 36
         assert!(decode_fiber_commitment_lock_args(&args).is_none());
+    }
+
+    #[test]
+    fn test_decode_fiber_commitment_lock_args_short_format() {
+        // 36-byte short format: no settlement fields
+        let mut args = vec![0u8; 36];
+        args[0..20].copy_from_slice(&[0x11; 20]); // pubkey_hash
+        args[20..28].copy_from_slice(&42u64.to_le_bytes()); // delay_epoch
+        args[28..36].copy_from_slice(&3u64.to_be_bytes()); // version
+
+        let result = decode_fiber_commitment_lock_args(&args).unwrap();
+        assert_eq!(result["delayEpoch"], 42);
+        assert_eq!(result["version"], 3);
+        assert!(result.get("settlementHash").is_none());
+        assert!(result.get("settlementFlag").is_none());
     }
 
     #[test]
