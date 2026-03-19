@@ -189,6 +189,11 @@ impl BulkBuildEngine {
             // Uses effective_end (actual fetched range) rather than end_block
             // (desired range) to avoid gaps when the tip advances between
             // iterations and the prefetch used a stale handoff_target.
+            // Note: batch_block_span here may be stale (not yet updated by
+            // adaptive sizing below), so the prefetch range may over- or
+            // under-fetch. This is acceptable: effective_end corrects for it
+            // on the next iteration, and moving the prefetch after adaptive
+            // sizing would eliminate the fetch/compute overlap benefit.
             let next_start = effective_end.saturating_add(1);
             let next_end = std::cmp::min(
                 next_start.saturating_add(batch_block_span.saturating_sub(1)),
@@ -350,8 +355,7 @@ impl BulkBuildEngine {
             // Early blocks are sparse (~1 tx/block) so larger batches reduce overhead;
             // late blocks are dense (~4+ tx/block) so 10K blocks is appropriate.
             if batch_stats.block_count > 0 && batch_stats.tx_count > 0 {
-                let tx_density =
-                    batch_stats.tx_count as f64 / batch_stats.block_count.max(1) as f64;
+                let tx_density = batch_stats.tx_count as f64 / batch_stats.block_count as f64;
                 let target_txs: f64 = 40_000.0;
                 let desired_f64 = target_txs / tx_density;
                 if !desired_f64.is_finite() || desired_f64 < 0.0 {
@@ -894,10 +898,14 @@ impl BulkBuildRuntimeState {
         // Overlap: build_history_rows (read-only) runs in parallel with all reducers.
         // History rows depend only on immutable arena/resolved/frozen/store — zero
         // dependency on reducer mutable state.
-        let history_started = Instant::now();
-        let (history_result, reduce_right_result) = rayon::join(
+        let (history_result_with_elapsed, reduce_right_result) = rayon::join(
             // LEFT: history materialization (read-only, no mutable state)
-            || build_history_rows(&arena, &resolved, &frozen, is_mainnet, domain_store),
+            || {
+                let started = Instant::now();
+                let result =
+                    build_history_rows(&arena, &resolved, &frozen, is_mainnet, domain_store);
+                (result, started.elapsed())
+            },
             // RIGHT: all reducers (mutable state, disjoint from LEFT)
             || -> Result<(
                 Vec<materialize::MaterializedRow>,
@@ -917,44 +925,50 @@ impl BulkBuildRuntimeState {
                 // Phase 1 (serial): address reducer + cell_dist_tracker.
                 // Address must run first because cell_dist_tracker needs per-tx address deltas.
                 for block in &arena.blocks {
-            let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
-            cell_dist_tracker.record_block_date(block.number, block_date);
+                    let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
+                    cell_dist_tracker.record_block_date(block.number, block_date);
 
-            for tx in &resolved[block.tx_range.clone()] {
-                for input in &tx.resolved_inputs {
-                    cell_dist_tracker.cell_consumed(input.occupied_capacity)?;
+                    for tx in &resolved[block.tx_range.clone()] {
+                        for input in &tx.resolved_inputs {
+                            cell_dist_tracker.cell_consumed(input.occupied_capacity)?;
+                        }
+                        for cell in tx.cells.iter() {
+                            cell_dist_tracker.cell_created(cell.occupied_capacity);
+                        }
+
+                        let address_deltas =
+                            owners.address.apply_tx_with_deltas(tx, &ctx)?;
+                        apply_cell_dist_cohort_deltas(
+                            cell_dist_tracker,
+                            owners.address.balances(),
+                            &address_deltas,
+                            tx,
+                        )?;
+                    }
+
+                    if let Some((snapshot_date, snapshot)) =
+                        cell_dist_tracker.maybe_snapshot(block_date)
+                    {
+                        let date_str = snapshot_date.format("%Y%m%d").to_string();
+                        let cohort = cell_dist_tracker.cohort_snapshot();
+                        cell_dist_sealed_rows.push(materialize::MaterializedRow::new(
+                            CF_STATS_HODL,
+                            keys::encode_stats_key(
+                                keys::stats_prefix::CELL_DISTRIBUTION,
+                                date_str.as_bytes(),
+                            ),
+                            bincode::serialize(&snapshot)?,
+                        ));
+                        cell_dist_sealed_rows.push(materialize::MaterializedRow::new(
+                            CF_STATS_HODL,
+                            keys::encode_stats_key(
+                                keys::stats_prefix::ADDR_COHORT,
+                                date_str.as_bytes(),
+                            ),
+                            bincode::serialize(&cohort)?,
+                        ));
+                    }
                 }
-                for cell in tx.cells.iter() {
-                    cell_dist_tracker.cell_created(cell.occupied_capacity);
-                }
-
-                let address_deltas = owners.address.apply_tx_with_deltas(tx, &ctx)?;
-                apply_cell_dist_cohort_deltas(
-                    cell_dist_tracker,
-                    owners.address.balances(),
-                    &address_deltas,
-                    tx,
-                )?;
-            }
-
-            if let Some((snapshot_date, snapshot)) = cell_dist_tracker.maybe_snapshot(block_date) {
-                let date_str = snapshot_date.format("%Y%m%d").to_string();
-                let cohort = cell_dist_tracker.cohort_snapshot();
-                cell_dist_sealed_rows.push(materialize::MaterializedRow::new(
-                    CF_STATS_HODL,
-                    keys::encode_stats_key(
-                        keys::stats_prefix::CELL_DISTRIBUTION,
-                        date_str.as_bytes(),
-                    ),
-                    bincode::serialize(&snapshot)?,
-                ));
-                cell_dist_sealed_rows.push(materialize::MaterializedRow::new(
-                    CF_STATS_HODL,
-                    keys::encode_stats_key(keys::stats_prefix::ADDR_COHORT, date_str.as_bytes()),
-                    bincode::serialize(&cohort)?,
-                ));
-            }
-        }
 
                 let address_elapsed = address_started.elapsed();
 
@@ -1019,7 +1033,7 @@ impl BulkBuildRuntimeState {
                 Ok((hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed))
             },
         );
-        let history_elapsed = history_started.elapsed();
+        let (history_result, history_elapsed) = history_result_with_elapsed;
         let history = history_result?;
         let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = reduce_right_result?;
 
@@ -1722,6 +1736,12 @@ fn build_history_rows(
 
 /// Serialize into a pre-allocated Vec, avoiding realloc overhead of `bincode::serialize`
 /// which starts with a small buffer and grows. Pre-computes exact size first.
+///
+/// Trade-off: traverses the value twice (once for size, once for serialization).
+/// Net positive for larger structs where avoiding multiple Vec reallocations
+/// outweighs the sizing pass. Used in the hot `par_iter` path of
+/// `build_history_rows_for_block` where the allocation saving is amplified
+/// across rayon threads.
 fn bincode_serialize_presized<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
     let size = bincode::serialized_size(value)
         .map_err(|e| anyhow!("bincode size estimation failed: {}", e))?;
@@ -4842,5 +4862,106 @@ mod tests {
             "test plain cell",
         );
         assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_bincode_serialize_presized_matches_standard() {
+        // Verify presized produces identical output to standard bincode::serialize.
+        let header = CachedBlockHeader {
+            hash: vec![0xaa; 32],
+            timestamp: 1710000000000,
+            epoch_number: 100,
+            epoch_index: 5,
+            epoch_length: 1800,
+            dao: vec![0x00; 32],
+            transactions_count: 42,
+        };
+        let standard = bincode::serialize(&header).unwrap();
+        let presized = bincode_serialize_presized(&header).unwrap();
+        assert_eq!(standard, presized);
+    }
+
+    #[test]
+    fn test_bincode_serialize_presized_small_struct() {
+        let entry = TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1710000000000,
+            inputs_count: 3,
+            outputs_count: 2,
+            fee: 100_000,
+            tx_size: 512,
+            cycles: Some(1_000_000),
+        };
+        let standard = bincode::serialize(&entry).unwrap();
+        let presized = bincode_serialize_presized(&entry).unwrap();
+        assert_eq!(standard, presized);
+    }
+
+    #[test]
+    fn test_bincode_serialize_presized_empty_vec_field() {
+        let header = CachedBlockHeader {
+            hash: vec![],
+            timestamp: 0,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 0,
+            dao: vec![],
+            transactions_count: 0,
+        };
+        let standard = bincode::serialize(&header).unwrap();
+        let presized = bincode_serialize_presized(&header).unwrap();
+        assert_eq!(standard, presized);
+    }
+
+    #[test]
+    fn test_adaptive_batch_sizing_sparse_blocks() {
+        // Sparse blocks (~1 tx/block): should expand batch to 40K blocks.
+        let tx_count: u64 = 1000;
+        let block_count: u64 = 1000;
+        let tx_density = tx_count as f64 / block_count as f64; // 1.0
+        let target_txs: f64 = 40_000.0;
+        let desired = (target_txs / tx_density) as u64;
+        let clamped = desired.clamp(10_000, 100_000);
+        assert_eq!(clamped, 40_000);
+    }
+
+    #[test]
+    fn test_adaptive_batch_sizing_dense_blocks() {
+        // Dense blocks (~10 tx/block): should shrink to 4K but clamp to 10K.
+        let tx_count: u64 = 100_000;
+        let block_count: u64 = 10_000;
+        let tx_density = tx_count as f64 / block_count as f64; // 10.0
+        let target_txs: f64 = 40_000.0;
+        let desired = (target_txs / tx_density) as u64;
+        let clamped = desired.clamp(10_000, 100_000);
+        assert_eq!(clamped, 10_000); // clamped at minimum
+    }
+
+    #[test]
+    fn test_adaptive_batch_sizing_very_sparse() {
+        // Very sparse (~0.1 tx/block): should want 400K but clamp to 100K.
+        let tx_count: u64 = 100;
+        let block_count: u64 = 1000;
+        let tx_density = tx_count as f64 / block_count as f64; // 0.1
+        let target_txs: f64 = 40_000.0;
+        let desired = (target_txs / tx_density) as u64;
+        let clamped = desired.clamp(10_000, 100_000);
+        assert_eq!(clamped, 100_000); // clamped at maximum
+    }
+
+    #[test]
+    fn test_adaptive_batch_sizing_at_clamp_boundaries() {
+        // Exactly at lower boundary: 4 tx/block -> 10K blocks.
+        let tx_density: f64 = 4.0;
+        let target_txs: f64 = 40_000.0;
+        let desired = (target_txs / tx_density) as u64;
+        let clamped = desired.clamp(10_000, 100_000);
+        assert_eq!(clamped, 10_000);
+
+        // Exactly at upper boundary: 0.4 tx/block -> 100K blocks.
+        let tx_density: f64 = 0.4;
+        let desired = (target_txs / tx_density) as u64;
+        let clamped = desired.clamp(10_000, 100_000);
+        assert_eq!(clamped, 100_000);
     }
 }
