@@ -93,16 +93,11 @@ impl BulkReducer for ScriptOwner {
                         ..Default::default()
                     });
 
+                // CKB allows the same code_hash to be referenced with different
+                // hash_types (data=0, type=1, data1=2, data2=4). The pipeline
+                // path handles this by overwriting; match that behavior here.
                 if info.hash_type != delta.hash_type {
-                    bail!(
-                        "script reducer hash_type mismatch: code_hash=0x{}, existing_hash_type={}, incoming_hash_type={}, block={}, tx=0x{}, tx_index={}",
-                        hex::encode(&code_hash),
-                        info.hash_type,
-                        delta.hash_type,
-                        tx.block_number,
-                        hex::encode(tx.tx_hash),
-                        tx.tx_index
-                    );
+                    info.hash_type = delta.hash_type;
                 }
 
                 apply_lock_delta(info, &code_hash, &delta, tx)?;
@@ -501,16 +496,11 @@ fn set_or_confirm_hash_type(
         return Ok(());
     }
 
+    // Same code_hash can appear with different hash_types within one tx
+    // (e.g. a lock script used as data hash and a type script used as type hash
+    // that happen to share the same code_hash). Accept latest, matching pipeline.
     if delta.hash_type != next_hash_type {
-        bail!(
-            "script reducer delta hash_type mismatch: code_hash_id={}, existing_hash_type={}, incoming_hash_type={}, block={}, tx=0x{}, tx_index={}",
-            code_hash_id.as_usize(),
-            delta.hash_type,
-            next_hash_type,
-            tx.block_number,
-            hex::encode(tx.tx_hash),
-            tx.tx_index
-        );
+        delta.hash_type = next_hash_type;
     }
 
     Ok(())

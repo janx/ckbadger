@@ -109,12 +109,20 @@ impl BulkBuildEngine {
                 break;
             }
 
-            let start_block = current_block.checked_add(1).ok_or_else(|| {
-                anyhow!(
-                    "bulk build start block overflow: current_block={}",
-                    current_block
-                )
-            })?;
+            // Fresh DB: progress.current() == 0 means "no blocks processed yet",
+            // not "block 0 has been processed". On the first batch, start from
+            // genesis (block 0). After the first batch, current() reflects the
+            // last completed block, so start from current + 1.
+            let start_block = if current_block == 0 && batch_count == 0 {
+                0
+            } else {
+                current_block.checked_add(1).ok_or_else(|| {
+                    anyhow!(
+                        "bulk build start block overflow: current_block={}",
+                        current_block
+                    )
+                })?
+            };
             let handoff_target = chain_tip.saturating_sub(indexer.config.bulk_sync_threshold);
             if start_block > handoff_target {
                 break;
@@ -4165,5 +4173,119 @@ mod tests {
             .expect("dotbit recycle");
         assert_eq!(recycle.actions.len(), 1);
         assert!(matches!(recycle.actions[0], AssetAction::Recycle));
+    }
+
+    /// Regression: bulk build must include genesis block 0 in the first batch.
+    /// When block 0 is skipped, cells created in genesis are missing from the
+    /// live cell map and later blocks that consume them fail with
+    /// "missing live input".
+    #[test]
+    fn bulk_build_genesis_cells_available_for_consumption_in_later_block() {
+        let lock_args = format!("0x{}", "01".repeat(20));
+
+        // Block 0 (genesis): cellbase creates a cell
+        let genesis_cellbase = TransactionView {
+            hash: format!("0x{}", "e2".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", "00".repeat(32)),
+                    index: "0xffffffff".to_string(),
+                },
+            }],
+            outputs: vec![CellOutput {
+                capacity: format!("0x{:x}", 500_00000000u64),
+                lock: fixture_lock_script(&lock_args),
+                type_: None,
+            }],
+            outputs_data: vec!["0x".to_string()],
+            witnesses: vec!["0x".to_string()],
+        };
+        let genesis_block = BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header(0, 0x00),
+                uncles: vec![],
+                transactions: vec![genesis_cellbase.clone()],
+                proposals: vec![],
+            },
+            cycles: None,
+        };
+
+        // Block 11: tx consumes genesis cellbase output
+        let block11_cellbase = TransactionView {
+            hash: format!("0x{}", "fc".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", "00".repeat(32)),
+                    index: "0xffffffff".to_string(),
+                },
+            }],
+            outputs: vec![CellOutput {
+                capacity: format!("0x{:x}", 100_00000000u64),
+                lock: fixture_lock_script(&lock_args),
+                type_: None,
+            }],
+            outputs_data: vec!["0x".to_string()],
+            witnesses: vec!["0x".to_string()],
+        };
+        let spend_tx = TransactionView {
+            hash: format!("0x{}", "dd".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: genesis_cellbase.hash.clone(),
+                    index: "0x0".to_string(),
+                },
+            }],
+            outputs: vec![CellOutput {
+                capacity: format!("0x{:x}", 499_00000000u64),
+                lock: fixture_lock_script(&lock_args),
+                type_: None,
+            }],
+            outputs_data: vec!["0x".to_string()],
+            witnesses: vec!["0x".to_string()],
+        };
+        let block_11 = BlockResponseWithCycles {
+            block: BlockView {
+                header: fixture_header(11, 0x0b),
+                uncles: vec![],
+                transactions: vec![block11_cellbase, spend_tx],
+                proposals: vec![],
+            },
+            cycles: None,
+        };
+
+        // Process both blocks through bulk build - this must not error.
+        // Before the fix, block 0 was skipped and this would fail with
+        // "missing live input" at block 11.
+        let mut interner = interner::IdentityInterner::default();
+        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(
+            &[genesis_block, block_11],
+            &mut interner,
+        )
+        .expect("facts arena");
+
+        let mut sequencer = sequencer::BulkSequencer::default();
+        let resolved = sequencer
+            .resolve(&arena)
+            .expect("resolve must succeed when genesis is included");
+
+        // Block 0 cellbase: 0 inputs (cellbase), 1 output
+        assert!(resolved[0].resolved_inputs.is_empty());
+        // Block 11 cellbase: 0 inputs, 1 output
+        assert!(resolved[1].resolved_inputs.is_empty());
+        // Block 11 spend tx: 1 input (genesis cell), 1 output
+        assert_eq!(resolved[2].resolved_inputs.len(), 1);
+        assert_eq!(resolved[2].resolved_inputs[0].capacity, 500_00000000);
     }
 }
