@@ -78,11 +78,16 @@ impl<'a> Materializer<'a> {
 
     /// Track rows that were flushed externally (e.g. via `flush_rows_to_stores`
     /// in a background `spawn_blocking` task).
-    pub(crate) fn add_external_counts(&mut self, history: usize, sealed: usize) {
+    pub(crate) fn add_external_counts(
+        &mut self,
+        history: usize,
+        sealed: usize,
+        flush_count: usize,
+    ) {
         self.report.streamed_history_rows += history;
-        self.report.history_flushes += 1;
+        self.report.history_flushes += flush_count;
         self.report.sealed_aggregate_rows += sealed;
-        self.report.sealed_aggregate_flushes += 1;
+        self.report.sealed_aggregate_flushes += flush_count;
     }
 
     pub(crate) fn finish(self) -> MaterializationReport {
@@ -478,14 +483,14 @@ mod tests {
         let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
         let mut materializer = Materializer::new(&domain_store, &append_store);
 
-        materializer.add_external_counts(100, 50);
-        materializer.add_external_counts(200, 75);
+        materializer.add_external_counts(100, 50, 3);
+        materializer.add_external_counts(200, 75, 5);
 
         let report = materializer.finish();
         assert_eq!(report.streamed_history_rows, 300);
         assert_eq!(report.sealed_aggregate_rows, 125);
-        assert_eq!(report.history_flushes, 2);
-        assert_eq!(report.sealed_aggregate_flushes, 2);
+        assert_eq!(report.history_flushes, 8);
+        assert_eq!(report.sealed_aggregate_flushes, 8);
 
         let _ = std::fs::remove_dir_all(&root);
     }

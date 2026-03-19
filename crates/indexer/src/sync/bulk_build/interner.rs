@@ -1,5 +1,5 @@
 use dashmap::DashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::sync::types::InternId;
 
@@ -7,7 +7,7 @@ use crate::sync::types::InternId;
 #[derive(Debug)]
 pub(crate) struct IdentityInterner {
     by_value: DashMap<Vec<u8>, InternId>,
-    values: Mutex<Vec<Vec<u8>>>,
+    values: Mutex<Vec<Arc<[u8]>>>,
 }
 
 impl Default for IdentityInterner {
@@ -32,12 +32,15 @@ impl IdentityInterner {
             return *id;
         }
         let id = InternId::new(values.len());
-        values.push(bytes.clone());
+        values.push(Arc::from(bytes.as_slice()));
         self.by_value.insert(bytes, id);
         id
     }
 
-    /// Create a frozen snapshot for zero-copy reads during reduce phase.
+    /// Create a frozen snapshot for read-only access during reduce phase.
+    ///
+    /// Cloning the inner `Vec<Arc<[u8]>>` is cheap: it copies Arc pointers
+    /// and bumps reference counts, without deep-copying the byte data.
     ///
     /// # Precondition
     ///
@@ -64,10 +67,10 @@ impl IdentityInterner {
     }
 }
 
-/// Frozen snapshot for lock-free, zero-copy reads. Send + Sync safe.
+/// Frozen snapshot for lock-free reads. Send + Sync safe.
 #[derive(Debug)]
 pub(crate) struct FrozenIdentityView {
-    values: Vec<Vec<u8>>,
+    values: Vec<Arc<[u8]>>,
 }
 
 impl FrozenIdentityView {

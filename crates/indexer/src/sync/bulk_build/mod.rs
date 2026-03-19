@@ -100,17 +100,22 @@ impl BulkBuildEngine {
         // Pre-fetched blocks from the previous iteration's background fetch.
         // None on first iteration; populated when the next batch is fetched
         // concurrently with the current batch's CPU-bound processing.
-        let mut prefetched_blocks: Option<(Vec<BlockResponseWithCycles>, std::time::Duration)> =
-            None;
+        let mut prefetched_blocks: Option<(
+            Vec<BlockResponseWithCycles>,
+            std::time::Duration,
+            u64,
+        )> = None;
         // Async flush: overlap RocksDB writes with next batch's compute.
         // The flush handle runs in spawn_blocking; we await it before starting
-        // the next apply_blocks to ensure ordering.
+        // the next apply_blocks to ensure ordering. Spawned at the end of each
+        // iteration (after all fallible ops) to prevent orphaned flush tasks.
         let domain_store_arc = indexer.writer.store().clone();
         let append_store_arc = indexer.append_only_store.clone();
         let mut pending_flush_handle: Option<
             tokio::task::JoinHandle<anyhow::Result<materialize::FlushResult>>,
         > = None;
         let mut flush_row_totals = (0usize, 0usize);
+        let mut flush_count: usize = 0;
         let mut prev_flush_ms: f64 = 0.0;
 
         loop {
@@ -160,25 +165,30 @@ impl BulkBuildEngine {
 
             // Use prefetched blocks from previous iteration if available,
             // otherwise fetch synchronously (first iteration or after no prefetch).
-            let (blocks, fetch_elapsed) = if let Some((blocks, elapsed)) = prefetched_blocks.take()
-            {
-                (blocks, elapsed)
-            } else {
-                let fetch_started = Instant::now();
-                let store = ckb_store.clone();
-                let s = start_block;
-                let e = end_block;
-                let blocks =
-                    tokio::task::spawn_blocking(move || Indexer::fetch_blocks_direct(&store, s, e))
-                        .await
-                        .map_err(|e| anyhow!("bulk build fetch task panicked: {}", e))??;
-                (blocks, fetch_started.elapsed())
-            };
+            // effective_end tracks the actual last block in the fetched data,
+            // which may be less than end_block if the prefetch used a stale
+            // handoff_target (tip advanced between iterations).
+            let (blocks, fetch_elapsed, effective_end) =
+                if let Some((blocks, elapsed, prefetched_end)) = prefetched_blocks.take() {
+                    (blocks, elapsed, prefetched_end)
+                } else {
+                    let fetch_started = Instant::now();
+                    let store = ckb_store.clone();
+                    let s = start_block;
+                    let e = end_block;
+                    let blocks = tokio::task::spawn_blocking(move || {
+                        Indexer::fetch_blocks_direct(&store, s, e)
+                    })
+                    .await
+                    .map_err(|e| anyhow!("bulk build fetch task panicked: {}", e))??;
+                    (blocks, fetch_started.elapsed(), end_block)
+                };
 
             // Compute next batch boundaries and spawn a background prefetch.
-            // The fetch runs concurrently with the CPU-bound apply_blocks below,
-            // hiding ~200ms of I/O latency behind ~3-4s of compute.
-            let next_start = end_block.saturating_add(1);
+            // Uses effective_end (actual fetched range) rather than end_block
+            // (desired range) to avoid gaps when the tip advances between
+            // iterations and the prefetch used a stale handoff_target.
+            let next_start = effective_end.saturating_add(1);
             let next_end = std::cmp::min(
                 next_start.saturating_add(batch_block_span.saturating_sub(1)),
                 handoff_target,
@@ -188,7 +198,7 @@ impl BulkBuildEngine {
                 Some(tokio::task::spawn_blocking(move || {
                     let started = Instant::now();
                     let blocks = Indexer::fetch_blocks_direct(&store, next_start, next_end)?;
-                    Ok::<_, anyhow::Error>((blocks, started.elapsed()))
+                    Ok::<_, anyhow::Error>((blocks, started.elapsed(), next_end))
                 }))
             } else {
                 None
@@ -204,6 +214,7 @@ impl BulkBuildEngine {
                     .map_err(|e| anyhow!("bulk build flush panicked: {}", e))??;
                 flush_row_totals.0 += result.history_rows;
                 flush_row_totals.1 += result.sealed_rows;
+                flush_count += 1;
                 prev_flush_ms = result.flush_ms;
             }
 
@@ -214,20 +225,6 @@ impl BulkBuildEngine {
                 indexer.config.is_mainnet(),
             )?;
             let build_elapsed = build_started.elapsed();
-
-            // Spawn background flush: RocksDB writes run concurrently with
-            // next batch's fetch + compute. Safe because reducers never read
-            // from DB — they work purely from in-memory state.
-            let ds = domain_store_arc.clone();
-            let as_ = append_store_arc.clone();
-            pending_flush_handle = Some(tokio::task::spawn_blocking(move || {
-                materialize::flush_rows_to_stores(
-                    &ds,
-                    &as_,
-                    pending_flush.history_rows,
-                    pending_flush.sealed_rows,
-                )
-            }));
 
             // Collect prefetched next batch (typically already done since build >> fetch).
             if let Some(handle) = prefetch_handle {
@@ -241,9 +238,9 @@ impl BulkBuildEngine {
 
             let last_block_number = batch_stats.last_block_number.ok_or_else(|| {
                 anyhow!(
-                    "bulk build batch missing last block number: start_block={} end_block={}",
+                    "bulk build batch missing last block number: start_block={} effective_end={}",
                     start_block,
-                    end_block
+                    effective_end
                 )
             })?;
             let last_block_u64 = u64::try_from(last_block_number).map_err(|_| {
@@ -304,6 +301,20 @@ impl BulkBuildEngine {
             sample.cumulative_snapshot_rows = 0; // snapshots are written at finalize
             indexer.record_bulk_sync_perf_batch_sample(sample);
 
+            // Spawn background flush AFTER all fallible operations above.
+            // This ensures no orphaned flush task can mutate RocksDB if the
+            // loop body returns an error before the next iteration drains it.
+            let ds = domain_store_arc.clone();
+            let as_ = append_store_arc.clone();
+            pending_flush_handle = Some(tokio::task::spawn_blocking(move || {
+                materialize::flush_rows_to_stores(
+                    &ds,
+                    &as_,
+                    pending_flush.history_rows,
+                    pending_flush.sealed_rows,
+                )
+            }));
+
             batch_count += 1;
             let progress_pct = if chain_tip > 0 {
                 last_block_u64 as f64 / chain_tip as f64 * 100.0
@@ -313,7 +324,7 @@ impl BulkBuildEngine {
             info!(
                 run_id = %indexer.run_id,
                 start_block,
-                end_block,
+                end_block = effective_end,
                 blocks = batch_stats.block_count,
                 txs = batch_stats.tx_count,
                 current_block = last_block_u64,
@@ -349,8 +360,9 @@ impl BulkBuildEngine {
                 .map_err(|e| anyhow!("bulk build final flush panicked: {}", e))??;
             flush_row_totals.0 += result.history_rows;
             flush_row_totals.1 += result.sealed_rows;
+            flush_count += 1;
         }
-        materializer.add_external_counts(flush_row_totals.0, flush_row_totals.1);
+        materializer.add_external_counts(flush_row_totals.0, flush_row_totals.1, flush_count);
 
         let finalize_started = Instant::now();
         runtime.finalize(indexer.writer.store().as_ref(), &mut materializer)?;
