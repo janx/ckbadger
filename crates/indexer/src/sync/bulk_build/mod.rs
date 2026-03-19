@@ -469,10 +469,6 @@ impl CoreOwners {
         ])
     }
 
-    fn record_block(&mut self, block: &facts::BlockFacts) -> Result<()> {
-        self.dao.record_block(block)
-    }
-
     #[cfg(test)]
     fn apply_tx(
         &mut self,
@@ -482,6 +478,7 @@ impl CoreOwners {
         self.apply_tx_and_return_address_deltas(tx, ctx).map(|_| ())
     }
 
+    #[cfg(test)]
     fn apply_tx_and_return_address_deltas(
         &mut self,
         tx: &facts::ResolvedTxFacts<'_>,
@@ -748,8 +745,10 @@ impl BulkBuildRuntimeState {
         } = self;
         let ctx = owners::ReducerContext::new(interner);
         let mut cell_dist_sealed_rows = Vec::new();
+
+        // Phase 1 (serial): address reducer + cell_dist_tracker.
+        // Address must run first because cell_dist_tracker needs per-tx address deltas.
         for block in &arena.blocks {
-            owners.record_block(block)?;
             let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
             cell_dist_tracker.record_block_date(block.number, block_date);
 
@@ -761,7 +760,7 @@ impl BulkBuildRuntimeState {
                     cell_dist_tracker.cell_created(cell.occupied_capacity);
                 }
 
-                let address_deltas = owners.apply_tx_and_return_address_deltas(tx, &ctx)?;
+                let address_deltas = owners.address.apply_tx_with_deltas(tx, &ctx)?;
                 apply_cell_dist_cohort_deltas(
                     cell_dist_tracker,
                     owners.address.balances(),
@@ -788,9 +787,66 @@ impl BulkBuildRuntimeState {
                 ));
             }
         }
-        owners
-            .object
-            .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
+
+        // Phase 2 (parallel): 5 independent reducers via nested rayon::join.
+        // Each reducer reads immutable ResolvedTxFacts and writes only its own state.
+        let CoreOwners {
+            address: _,
+            ref mut script,
+            ref mut token,
+            ref mut dao,
+            ref mut fiber,
+            ref mut object,
+        } = *owners;
+
+        let (r_left, r_right) = rayon::join(
+            || -> Result<()> {
+                for block in &arena.blocks {
+                    for tx in &resolved[block.tx_range.clone()] {
+                        script.apply_tx(tx, &ctx)?;
+                    }
+                }
+                for block in &arena.blocks {
+                    for tx in &resolved[block.tx_range.clone()] {
+                        token.apply_tx(tx, &ctx)?;
+                    }
+                }
+                Ok(())
+            },
+            || -> Result<()> {
+                for block in &arena.blocks {
+                    dao.record_block(block)?;
+                    for tx in &resolved[block.tx_range.clone()] {
+                        dao.apply_tx(tx, &ctx)?;
+                    }
+                }
+                let (r_fiber, r_object) = rayon::join(
+                    || -> Result<()> {
+                        for block in &arena.blocks {
+                            for tx in &resolved[block.tx_range.clone()] {
+                                fiber.apply_tx(tx, &ctx)?;
+                            }
+                        }
+                        Ok(())
+                    },
+                    || -> Result<()> {
+                        for block in &arena.blocks {
+                            for tx in &resolved[block.tx_range.clone()] {
+                                object.apply_tx(tx, &ctx)?;
+                            }
+                        }
+                        Ok(())
+                    },
+                );
+                r_fiber?;
+                r_object?;
+                Ok(())
+            },
+        );
+        r_left?;
+        r_right?;
+
+        object.apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
         let reduce_elapsed = reduce_started.elapsed();
 
         let flush_started = Instant::now();
