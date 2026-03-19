@@ -820,6 +820,7 @@ async fn lookup_scripts(
         code_hash_bytes.map_err(|_| ApiError::bad_request("Invalid hex in code_hashes"))?;
 
     let mut result: HashMap<String, ScriptLookupInfo> = HashMap::new();
+    let all_script_infos = load_script_infos_cached(&state)?;
 
     for code_hash in &code_hash_bytes {
         let reference_hash_hex = format!("0x{}", hex::encode(code_hash));
@@ -831,6 +832,7 @@ async fn lookup_scripts(
                     mut code_cells,
                 } = *resolved;
                 sort_code_cells(&mut code_cells);
+                let script_info = state.store.get_script_info(code_hash).ok().flatten();
                 let (
                     _cells_count,
                     live_cells_count,
@@ -838,25 +840,23 @@ async fn lookup_scripts(
                     live_capacity_sum,
                     _used_sum,
                     live_used_sum,
-                ) = version_totals(&version_info);
+                ) = resolve_version_capacity(
+                    &version_info,
+                    script_info.as_ref(),
+                    &all_script_infos,
+                )?;
                 let code_cell = code_cells.first();
 
                 // Derive hash_type from ScriptInfo if available
-                let hash_type = state
-                    .store
-                    .get_script_info(code_hash)
-                    .ok()
-                    .flatten()
+                let hash_type = script_info
+                    .as_ref()
                     .and_then(|info| hash_type_to_string(info.hash_type).map(|s| s.to_string()));
 
                 // Derive deployment hashes from ScriptInfo
-                let (deployment_type_hash, deployment_data_hash) = state
-                    .store
-                    .get_script_info(code_hash)
-                    .ok()
-                    .flatten()
+                let (deployment_type_hash, deployment_data_hash) = script_info
+                    .as_ref()
                     .map(|info| {
-                        let (type_ref, data_ref) = deployment_reference_hashes(&info);
+                        let (type_ref, data_ref) = deployment_reference_hashes(info);
                         (
                             type_ref.map(|h| format!("0x{}", hex::encode(h))),
                             data_ref.map(|h| format!("0x{}", hex::encode(h))),
