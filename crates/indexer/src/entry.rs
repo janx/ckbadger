@@ -112,6 +112,9 @@ async fn run_startup_label_import(store: Arc<CkbadgerStore>, config: &Config) ->
             summary.udt_labels_imported, summary.script_labels_imported
         );
     } else {
+        for err in &summary.errors {
+            warn!("Label import error: {}", err);
+        }
         warn!(
             "Startup label import completed with {} errors: {} UDT, {} scripts",
             summary.errors.len(),

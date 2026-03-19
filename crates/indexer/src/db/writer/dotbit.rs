@@ -77,6 +77,7 @@ pub(crate) fn classify_das_action(action: &str) -> DasActionKind {
         // Registration infrastructure
         "apply_register"
         | "refund_apply"
+        | "refund_pay"
         | "pre_register"
         | "refund_pre_register"
         | "propose"
@@ -85,6 +86,8 @@ pub(crate) fn classify_das_action(action: &str) -> DasActionKind {
         | "config"
         | "deploy"
         | "init_account_chain" => DasActionKind::Suppressed,
+        // Order / payment refunds
+        "order_refund" => DasActionKind::Suppressed,
         // Offers — OfferCell, not AccountCell
         "make_offer" | "edit_offer" | "cancel_offer" => DasActionKind::Suppressed,
         // Income / Balance
@@ -1288,6 +1291,8 @@ mod tests {
             "mint_dp",
             "retract_reverse_record",
             "create_device_key_list",
+            "refund_pay",
+            "order_refund",
         ];
         for action in &suppressed {
             assert!(
