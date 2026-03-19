@@ -85,9 +85,13 @@ impl<'a> Materializer<'a> {
         flush_count: usize,
     ) {
         self.report.streamed_history_rows += history;
-        self.report.history_flushes += flush_count;
+        if history > 0 {
+            self.report.history_flushes += flush_count;
+        }
         self.report.sealed_aggregate_rows += sealed;
-        self.report.sealed_aggregate_flushes += flush_count;
+        if sealed > 0 {
+            self.report.sealed_aggregate_flushes += flush_count;
+        }
     }
 
     pub(crate) fn finish(self) -> MaterializationReport {

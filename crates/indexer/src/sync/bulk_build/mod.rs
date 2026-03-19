@@ -91,12 +91,13 @@ impl BulkBuildEngine {
             indexer.append_only_store.as_ref(),
         );
         let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(String::new());
-        let mut batch_block_span = u64::try_from(indexer.config.batch_size).map_err(|_| {
+        let configured_batch_size = u64::try_from(indexer.config.batch_size).map_err(|_| {
             anyhow!(
                 "bulk build batch_size exceeds u64 range: batch_size={}",
                 indexer.config.batch_size
             )
         })?;
+        let mut batch_block_span = configured_batch_size;
         let mut batch_count: u64 = 0;
         // Pre-fetched blocks from the previous iteration's background fetch.
         // None on first iteration; populated when the next batch is fetched
@@ -106,10 +107,11 @@ impl BulkBuildEngine {
             std::time::Duration,
             u64,
         )> = None;
-        // Async flush: overlap RocksDB writes with next batch's compute.
+        // Async flush: overlap RocksDB writes with the next batch's prefetch.
         // The flush handle runs in spawn_blocking; we await it before starting
-        // the next apply_blocks to ensure ordering. Spawned at the end of each
-        // iteration (after all fallible ops) to prevent orphaned flush tasks.
+        // the next apply_blocks so batch compute always sees committed state.
+        // Spawned at the end of each iteration (after all fallible ops) to
+        // prevent orphaned flush tasks.
         let domain_store_arc = indexer.writer.store().clone();
         let append_store_arc = indexer.append_only_store.clone();
         let mut pending_flush_handle: Option<
@@ -212,8 +214,8 @@ impl BulkBuildEngine {
 
             // Wait for previous batch's flush to complete before starting
             // the next apply_blocks. This ensures DB writes from batch N are
-            // committed before batch N+1 completes (though N+1's compute can
-            // overlap with N's flush since reducers work from in-memory state).
+            // committed before batch N+1's compute begins. The flush only
+            // overlaps with the next batch's prefetch (spawned above).
             if let Some(handle) = pending_flush_handle.take() {
                 let result = handle
                     .await
@@ -366,7 +368,11 @@ impl BulkBuildEngine {
                         desired_f64
                     );
                 }
-                batch_block_span = (desired_f64 as u64).clamp(10_000, 100_000);
+                // Respect configured batch_size as upper bound so operators can
+                // limit memory by lowering batch_size. When batch_size < 10K the
+                // minimum equals batch_size (no silent override).
+                let adaptive_min = std::cmp::min(10_000, configured_batch_size);
+                batch_block_span = (desired_f64 as u64).clamp(adaptive_min, configured_batch_size);
             }
 
             // Periodic memory summary every 10 batches
