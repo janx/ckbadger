@@ -12,6 +12,7 @@ use crate::sync::types::InternId;
 #[derive(Debug, Default)]
 pub(crate) struct LiveCellOwner {
     live: FxHashMap<OutPointKey, LiveCellSlot>,
+    protocol_facts: FxHashMap<OutPointKey, CellProtocolFacts>,
 }
 
 impl LiveCellOwner {
@@ -25,10 +26,18 @@ impl LiveCellOwner {
 
     pub(crate) fn estimated_bytes(&self) -> u64 {
         super::accounting::hash_map_serialized_bytes(&self.live)
+            + super::accounting::hash_map_serialized_bytes(&self.protocol_facts)
     }
 
-    pub(crate) fn insert_created(&mut self, slot: LiveCellSlot) -> Result<()> {
+    pub(crate) fn insert_created(
+        &mut self,
+        slot: LiveCellSlot,
+        protocol_facts: Option<CellProtocolFacts>,
+    ) -> Result<()> {
         let outpoint = slot.outpoint;
+        if let Some(facts) = protocol_facts {
+            self.protocol_facts.insert(outpoint, facts);
+        }
         if self.live.insert(outpoint, slot).is_some() {
             return Err(anyhow!(
                 "duplicate live output insertion: outpoint={}",
@@ -53,8 +62,9 @@ impl LiveCellOwner {
                 format_outpoint(outpoint),
             )
         })?;
+        let facts = self.protocol_facts.remove(outpoint);
 
-        Ok(slot.into_resolved_input_facts())
+        Ok(slot.into_resolved_input_facts(facts))
     }
 }
 
@@ -66,7 +76,7 @@ pub(crate) struct ConsumeContext {
     pub(crate) input_index: i32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub(crate) struct LiveCellSlot {
     pub(crate) outpoint: OutPointKey,
     pub(crate) created_at_block: i64,
@@ -85,7 +95,6 @@ pub(crate) struct LiveCellSlot {
     pub(crate) semantic_tag: CellSemanticTag,
     pub(crate) dao_state: Option<DaoCellState>,
     pub(crate) dao_compensation_ars: Option<DaoCompensationArs>,
-    pub(crate) protocol_facts: Option<CellProtocolFacts>,
 }
 
 impl LiveCellSlot {
@@ -108,7 +117,6 @@ impl LiveCellSlot {
             semantic_tag: cell.semantic_tag,
             dao_state: cell.dao_state,
             dao_compensation_ars: None,
-            protocol_facts: cell.protocol_facts.clone(),
         }
     }
 
@@ -117,7 +125,10 @@ impl LiveCellSlot {
         self
     }
 
-    fn into_resolved_input_facts(self) -> ResolvedInputFacts {
+    fn into_resolved_input_facts(
+        self,
+        protocol_facts: Option<CellProtocolFacts>,
+    ) -> ResolvedInputFacts {
         ResolvedInputFacts {
             outpoint: self.outpoint,
             created_at_block: self.created_at_block,
@@ -136,7 +147,7 @@ impl LiveCellSlot {
             semantic_tag: self.semantic_tag,
             dao_state: self.dao_state,
             dao_compensation_ars: self.dao_compensation_ars,
-            protocol_facts: self.protocol_facts,
+            protocol_facts,
         }
     }
 }
@@ -222,7 +233,6 @@ mod tests {
             semantic_tag: CellSemanticTag::Plain,
             dao_state: None,
             dao_compensation_ars: None,
-            protocol_facts: None,
         }
     }
 
@@ -244,7 +254,9 @@ mod tests {
     #[test]
     fn live_cell_owner_resolves_same_batch_create_then_consume() {
         let mut owner = LiveCellOwner::default();
-        owner.insert_created(sample_created_slot()).expect("insert");
+        owner
+            .insert_created(sample_created_slot(), None)
+            .expect("insert");
 
         let resolved = owner
             .consume(&sample_outpoint(), &sample_consume_ctx())
@@ -279,11 +291,11 @@ mod tests {
     fn live_cell_owner_errors_on_duplicate_created_outpoint() {
         let mut owner = LiveCellOwner::default();
         owner
-            .insert_created(sample_created_slot())
+            .insert_created(sample_created_slot(), None)
             .expect("first insert");
 
         let err = owner
-            .insert_created(sample_created_slot())
+            .insert_created(sample_created_slot(), None)
             .expect_err("duplicate outpoint must fail");
 
         assert!(err.to_string().contains(&format!(

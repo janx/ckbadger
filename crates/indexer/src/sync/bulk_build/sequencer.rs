@@ -68,6 +68,7 @@ impl BulkSequencer {
                 self.live_cells.insert_created(
                     LiveCellSlot::from_cell_facts(cell)
                         .with_dao_compensation_ars(request_output_ars[output_pos]),
+                    cell.protocol_facts.clone(),
                 )?;
             }
 
