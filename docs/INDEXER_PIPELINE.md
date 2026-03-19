@@ -129,10 +129,10 @@ Block N arrives
 
 | Parameter             | Default | Description                                              |
 | --------------------- | ------- | -------------------------------------------------------- |
-| `pipeline_buffer`     | `8`     | Channel capacity between stages                          |
+| `pipeline_buffer`     | `16`    | Channel capacity between stages                          |
 | `batch_size`          | `10000` | Blocks per batch                                         |
 | `parallel_fetch_size` | `64`    | Concurrent block fetch work units in the pipeline        |
-| `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat sync as bulk mode             |
+| `bulk_sync_threshold` | `72`    | Blocks behind tip to treat sync as bulk mode             |
 | `ckb.workdir`         | -       | CKB node config directory; ckbadger derives RocksDB path |
 
 ### Relevant Config
@@ -154,10 +154,10 @@ workdir = "/var/lib/ckb"
 
 ```bash
 cargo run -p ckbadger-indexer -- \
-  --pipeline-buffer 4 \
+  --pipeline-buffer 16 \
   --batch-size 10000 \
   --parallel-fetch-size 64 \
-  --bulk-sync-threshold 1000
+  --bulk-sync-threshold 72
 ```
 
 ## Error Handling
@@ -242,9 +242,12 @@ Pipeline mode uses more memory due to buffered batches:
 
 ```
 Memory ≈ pipeline_buffer × batch_size × (block_size + parsed_data)
-       ≈ 8 × 10000 × (~100KB per block)
-       ≈ 8GB additional
+       ≈ 16 × 10000 × (~100KB per block)
+       ≈ 16GB additional
 ```
+
+Bulk-build mode adds in-memory state for the live-cell set (LiveCellOwner), intern tables, and
+reducer-owned domain state. See the Bulk-Build Engine section for details.
 
 ### Channel Backpressure
 
@@ -327,25 +330,67 @@ All code hash data is now available from `LiveCellInfo` — no separate DB reads
 
 ### High Memory Usage
 
-1. Reduce `pipeline_buffer` (e.g., to 2-4 from default 8)
+1. Reduce `pipeline_buffer` (e.g., to 4-8 from default 16)
 2. Reduce `batch_size`
 3. Monitor for memory leaks in channel handling
 
-## Bulk Build Statistics
+## Bulk-Build Engine
 
-Fresh-db bulk sync uses the bulk-build engine, not the live writer's "skip now, rebuild later"
-strategy. Per [docs/prompts/BULK_SYNC.md](./prompts/BULK_SYNC.md), all required data must be
-computed inline on the canonical block path.
+Fresh-db bulk sync uses a dedicated build engine that treats RocksDB as a write-once artifact
+rather than working memory. Per [docs/prompts/BULK_SYNC.md](./prompts/BULK_SYNC.md), all required
+data must be computed inline on the canonical block path. See
+[docs/superpowers/specs/2026-03-17-bulk-sync-build-engine-design.md](./superpowers/specs/2026-03-17-bulk-sync-build-engine-design.md)
+for the full design rationale.
+
+### Architecture
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│ Batch N                                                                   │
+│                                                                           │
+│  1. Chain Reader ─── read blocks from CKB RocksDB                        │
+│  2. Fact Extractor ─ parallel parse (rayon) → FactsArena                 │
+│     └─ concurrent IdentityInterner (DashMap + Mutex<Vec>)                │
+│  3. Sequencer ────── LiveCellOwner resolves inputs from memory           │
+│  4. Owner Reducers ─ address (serial) │ script,token,dao,fiber,object    │
+│     └─ address returns cell_dist      │ (parallel via rayon::join)       │
+│  5. Materializer ─── Class A/C rows → StoreBatch → RocksDB              │
+│                                                                           │
+│  Pipelining: fetch batch N+1 overlaps with build N                       │
+│  Flush overlap: RocksDB flush N runs as background task during build N+1 │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key data structures**:
+
+- **FactsArena**: per-batch fact graph with `BlockFacts`, `TxFacts`, `CellFacts`, interned identities
+- **IdentityInterner**: `DashMap<Vec<u8>, u32>` for concurrent insert during parallel parsing;
+  freezes to `FrozenIdentityView` (lock-free `Vec` snapshot) for the reduce phase
+- **LiveCellOwner**: `FxHashMap<OutPointKey, LiveCellSlot>` — authoritative in-memory live-cell set;
+  resolves all consumed inputs without DB reads. Protocol facts stored in a separate
+  `FxHashMap<OutPointKey, CellProtocolFacts>` side-map (only ~1-2% of cells have protocol facts)
+- **FxHashMap**: replaces `std::HashMap` in hot structures for 2-5x faster hashing on fixed-size keys
+
+### Performance Optimizations
+
+1. **FxHashMap**: non-cryptographic hash for `OutPointKey` (36B), lock/type hashes, and all reducer maps
+2. **Protocol facts side-map**: removed `Option<CellProtocolFacts>` from every `LiveCellSlot`, saving ~24B per entry
+3. **Parallel reducers**: address runs serially (produces cell distribution deltas), then script + token + dao + fiber + object run in parallel via nested `rayon::join`
+4. **Inter-batch pipelining**: `tokio::spawn` fetches batch N+1 from CKB RocksDB while batch N is being built (~200ms fetch hidden behind ~3-4s build)
+5. **RocksDB flush overlap**: after materializing batch N, flush is dispatched as `spawn_blocking` and runs concurrently with batch N+1 compute
+6. **Parallel block parsing**: `rayon::par_iter` parses blocks within a batch, merges output ranges for global cell indices post-merge
 
 ### Bulk-Build Write Classes
 
-- Class A history rows stream immediately as immutable event data (`cells`, `block_headers`,
-  `tx_index`, `addr_txs`, `token_transfers`, `activities`, collection activity feeds).
-- Class C sealed aggregates flush once the reducer has finished the bucket/window:
-  `stats_chain`, `stats_dao`, `stats_hodl`, `stats_script`, `stats_token`, `stats_spore`,
-  `stats_object`.
-- Final snapshots are written once after reducer convergence (`addr_balance`, `script_info`,
-  `tokens`, DAO indexes, object/identity/fiber state, sync metadata).
+- **Class A** (immutable event rows): streamed immediately as each batch completes — `cells`,
+  `block_headers`, `tx_index`, `addr_txs`, `token_transfers`, `activities`, collection activity feeds
+- **Class B** (final snapshot): held in reducer memory, written once after all batches —
+  `live_cells`, `cell_by_*`, `addr_balance`, `tokens`, `token_holders*`, `dao_*`,
+  `script_info`, object/identity/fiber state
+- **Class C** (sealed aggregates): flushed once the time bucket/epoch closes — `stats_chain`,
+  `stats_dao`, `stats_hodl`, `stats_script`, `stats_token`, `stats_spore`, `stats_object`
+- **Class D** (bulk-disabled): `reorg_undo_log_by_block`, `pending_proposals` — not written during
+  bulk sync; `sync_meta` holds only build metadata and final completion state
 
 ### Bulk-Build Stats Coverage
 
@@ -381,6 +426,27 @@ When bulk sync completes (transitions from `blocks_remaining > threshold` to `<=
 - No automatic call to `BatchWriter::rebuild_all_statistics()` in current runtime path
 - Fresh-db bulk sync writes perf artifacts directly from the indexer runtime under `workdir/perf/bulk-sync/`; failed runs keep their own directory and only completed runs refresh `workdir/perf/bulk-sync/latest/`
 - `metadata.env` records both `run_id` and `build_version`, so artifact comparisons can separate one runtime execution from another binary build
+
+### Module Structure
+
+```
+crates/indexer/src/sync/bulk_build/
+  mod.rs           # Build loop, inter-batch pipelining, flush overlap
+  facts.rs         # FactsArena — per-batch fact graph
+  interner.rs      # IdentityInterner (DashMap) + FrozenIdentityView
+  live_cells.rs    # LiveCellOwner — in-memory UTXO set + protocol facts side-map
+  sequencer.rs     # Canonical tx-order sequencing + input resolution
+  accounting.rs    # Fee/capacity accounting
+  materialize.rs   # StoreBatch assembly + flush_rows_to_stores()
+  owners/
+    mod.rs         # ReducerContext, parallel reducer dispatch
+    address.rs     # AddressOwner — balances, cell counts, addr_stats
+    dao.rs         # DaoOwner — deposit lifecycle, DAO indexes
+    token.rs       # TokenOwner — UDT metadata, holders, transfers
+    script.rs      # ScriptOwner — script usage, daily deltas
+    object.rs      # ObjectOwner — spore/mNFT/object/identity/cluster state
+    fiber.rs       # FiberOwner — fiber channel registry
+```
 
 ## Crash Recovery
 
@@ -523,4 +589,4 @@ pub struct MemoryStatsData {
 
 ---
 
-_Last updated: 2026-02-28_
+_Last updated: 2026-03-19_

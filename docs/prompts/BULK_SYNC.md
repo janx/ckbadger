@@ -42,3 +42,24 @@ Bulk sync is the high-throughput index building path used with a fresh store.
 - Keep bulk sync logic simple and write-throughput oriented.
 - Reorg-specific correction logic belongs to bounded reorg handling paths, not bulk rebuild paths.
 - Avoid adding bulk-mode logic that assumes resuming from half-built state.
+
+## Implementation
+
+The bulk-build engine (`crates/indexer/src/sync/bulk_build/`) implements these rules via an
+in-memory build model where RocksDB is the final write-once artifact, not working memory.
+
+See [docs/superpowers/specs/2026-03-17-bulk-sync-build-engine-design.md](../superpowers/specs/2026-03-17-bulk-sync-build-engine-design.md)
+for the full design spec and [docs/INDEXER_PIPELINE.md](../INDEXER_PIPELINE.md) for runtime
+architecture details.
+
+### Key invariants
+
+- **LiveCellOwner** is the authoritative in-memory live-cell set. All input resolution uses it
+  directly — no DB reads for correctness-critical data.
+- **IdentityInterner** deduplicates lock/type/data hashes into `u32` IDs, keeping per-cell memory
+  compact.
+- **Owner reducers** (address, script, token, DAO, object, fiber) consume resolved tx facts and
+  maintain their domain state in memory until materialization.
+- CF writes are classified by policy: Class A (append-only event rows streamed immediately),
+  Class B (final snapshot written once after convergence), Class C (sealed aggregates flushed
+  when time bucket closes), Class D (disabled during bulk sync).
