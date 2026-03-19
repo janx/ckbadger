@@ -245,16 +245,17 @@ impl BulkBuildEngine {
                 let interner_entries = runtime.interner.len();
                 info!(
                     total_memory_mb = total_mb,
-                    live_cells,
-                    interner_entries,
-                    batch_count,
-                    "Bulk build memory snapshot"
+                    live_cells, interner_entries, batch_count, "Bulk build memory snapshot"
                 );
             }
         }
 
         let finalize_started = Instant::now();
         runtime.finalize(indexer.writer.store().as_ref(), &mut materializer)?;
+        flush_bulk_build_materialized_state(
+            indexer.writer.store().as_ref(),
+            indexer.writer.append_only_store(),
+        )?;
         sync_totals.finalize_success(indexer.writer.store().as_ref(), false)?;
         indexer.writer.refresh_latest_dao_statistics()?;
         indexer.writer.store().clear_bulk_build_session_marker()?;
@@ -417,6 +418,25 @@ fn start_bulk_build_session_marker(
     Ok(marker)
 }
 
+fn flush_bulk_build_materialized_state(
+    domain_store: &CkbadgerStore,
+    append_store: &CkbadgerStore,
+) -> Result<()> {
+    append_store.flush_all_memtables().map_err(|e| {
+        anyhow!(
+            "failed to flush append-only bulk build memtables before sync status persistence: {}",
+            e
+        )
+    })?;
+    domain_store.flush_all_memtables().map_err(|e| {
+        anyhow!(
+            "failed to flush domain bulk build memtables before sync status persistence: {}",
+            e
+        )
+    })?;
+    Ok(())
+}
+
 #[derive(Default)]
 struct CoreOwners {
     address: owners::address::AddressOwner,
@@ -574,7 +594,7 @@ impl ActivityStatsAccumulator {
             stats.unique_address_count = self
                 .daily_addrs
                 .get(&date)
-                .map_or(0, |set| set.len() as u32);
+                .map_or(Ok(0), |set| checked_unique_address_count(set.len(), &date))?;
             rows.push(materialize::MaterializedRow::new(
                 CF_STATS_CHAIN,
                 keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes()),
@@ -592,7 +612,7 @@ impl ActivityStatsAccumulator {
             stats.unique_address_count = self
                 .hourly_addrs
                 .get(&hour)
-                .map_or(0, |set| set.len() as u32);
+                .map_or(Ok(0), |set| checked_unique_address_count(set.len(), &hour))?;
             rows.push(materialize::MaterializedRow::new(
                 CF_STATS_CHAIN,
                 keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour.as_bytes()),
@@ -602,6 +622,16 @@ impl ActivityStatsAccumulator {
 
         Ok(rows)
     }
+}
+
+fn checked_unique_address_count(len: usize, bucket: &str) -> Result<u32> {
+    u32::try_from(len).map_err(|_| {
+        anyhow!(
+            "unique_address_count exceeds u32 range while building bulk activity stats: bucket={} len={}",
+            bucket,
+            len
+        )
+    })
 }
 
 struct BulkBuildRuntimeState {
@@ -636,6 +666,16 @@ impl BulkBuildRuntimeState {
         breakdown.insert(
             "activity_stats".to_string(),
             self.activity_stats.estimated_bytes(),
+        );
+        breakdown.insert(
+            "hodl_live_cells_by_lock".to_string(),
+            crate::sync::bulk_build::accounting::hash_map_bytes(
+                &self.hodl_live_cells_by_lock,
+                |lock_hash_id, live_count| {
+                    std::mem::size_of_val(lock_hash_id) as u64
+                        + std::mem::size_of_val(live_count) as u64
+                },
+            ),
         );
         breakdown
     }
@@ -686,7 +726,8 @@ impl BulkBuildRuntimeState {
             .last()
             .ok_or_else(|| anyhow!("bulk build arena missing blocks for non-empty batch"))?;
         let domain_store = materializer.domain_store();
-        let history = build_history_rows(&arena, &resolved, &self.interner, is_mainnet, domain_store)?;
+        let history =
+            build_history_rows(&arena, &resolved, &self.interner, is_mainnet, domain_store)?;
         let hodl_sealed_rows = self.apply_hodl_tracker_batch(&arena, &resolved)?;
 
         let BulkBuildRuntimeState {
@@ -1104,6 +1145,7 @@ where
         }
 
         runtime.finalize(domain_store.as_ref(), &mut materializer)?;
+        flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
         let sync_status = sync_totals.finalize_success(domain_store.as_ref(), false)?;
         crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
             .refresh_latest_dao_statistics()?;
@@ -1208,6 +1250,7 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             sync_totals.record_batch(&batch_stats)?;
         }
         runtime.finalize(domain_store.as_ref(), &mut materializer)?;
+        flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
         let sync_status = sync_totals.finalize_success(domain_store.as_ref(), true)?;
         crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
             .refresh_latest_dao_statistics()?;
@@ -1465,7 +1508,9 @@ fn build_history_rows(
     }
 
     rows.extend(build_token_transfer_rows(resolved, interner)?);
-    rows.extend(build_activity_rows(arena, resolved, interner, is_mainnet, store)?);
+    rows.extend(build_activity_rows(
+        arena, resolved, interner, is_mainnet, store,
+    )?);
     let object_activity_rows =
         build_object_collection_activity_rows(resolved, &mut identity_activity_count_deltas)?;
     rows.extend(object_activity_rows);
@@ -1684,7 +1729,16 @@ fn build_token_info_cache_from_facts(
     for (type_hash, maybe_info) in store.get_tokens_batch(&type_hashes)? {
         if let Some(info) = maybe_info {
             let display_name = info.symbol.or(info.name);
-            let decimals = info.decimals.and_then(|d| u8::try_from(d).ok());
+            let decimals = match info.decimals {
+                Some(value) => Some(u8::try_from(value).map_err(|_| {
+                    anyhow!(
+                        "token decimals out of u8 range while building bulk activity cache: type_hash=0x{}, decimals={}",
+                        hex::encode(&type_hash),
+                        value
+                    )
+                })?),
+                None => None,
+            };
             cache.insert(type_hash, (display_name, decimals));
         }
     }
@@ -2896,8 +2950,9 @@ mod tests {
     use crate::sync::types::InternId;
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
     use ckbadger_store::types::{
-        AssetAction, FiberChannelState, ObjectCollectionActivityEntry, TokenTransferRecord,
-        TxActivityBundle, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+        AssetAction, FiberChannelState, ObjectCollectionActivityEntry, TokenInfo,
+        TokenTransferRecord, TxActivityBundle, DID_CKB_SENTINEL_COLLECTION,
+        DOTBIT_SENTINEL_COLLECTION,
     };
     use ckbadger_store::{
         keys, CF_ACTIVITIES, CF_ADDR_TXS, CF_IDENTITY_COLLECTION_ACTIVITIES,
@@ -3451,12 +3506,13 @@ mod tests {
             .expect("resolved txs");
 
         let (test_store, test_root) = open_empty_domain_store("bulk-build-token-transfer-test");
-        let token_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true, &test_store)
-            .expect("history rows")
-            .rows
-            .into_iter()
-            .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
-            .collect();
+        let token_rows: Vec<_> =
+            build_history_rows(&arena, &resolved, &interner, true, &test_store)
+                .expect("history rows")
+                .rows
+                .into_iter()
+                .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
+                .collect();
         let _ = std::fs::remove_dir_all(&test_root);
 
         assert_eq!(token_rows.len(), 2);
@@ -3492,6 +3548,143 @@ mod tests {
     }
 
     #[test]
+    fn flush_bulk_build_materialized_state_flushes_domain_and_append_memtables() {
+        let block = bulk_build_addr_tx_fixture();
+        let mut interner = interner::IdentityInterner::default();
+        let arena =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &mut interner)
+                .expect("facts arena");
+        let resolved = sequencer::BulkSequencer::default()
+            .resolve(&arena)
+            .expect("resolved txs");
+
+        let root = unique_temp_test_dir("bulk-build-flush-helper-test");
+        std::fs::create_dir_all(&root).expect("create root dir");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("create domain dir");
+        std::fs::create_dir_all(&append_path).expect("create append-only dir");
+
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
+        let append_store =
+            CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
+        let history = build_history_rows(&arena, &resolved, &interner, true, &domain_store)
+            .expect("history rows");
+        let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
+        materializer
+            .stream_history_rows(&history.rows)
+            .expect("stream history rows");
+
+        let domain_stats_before = domain_store.memory_stats();
+        let append_stats_before = append_store.memory_stats();
+        assert!(
+            domain_stats_before.memtable_bytes > 0 || append_stats_before.memtable_bytes > 0,
+            "expected pending no-WAL memtable bytes before flush helper"
+        );
+
+        flush_bulk_build_materialized_state(&domain_store, &append_store)
+            .expect("flush bulk build state");
+
+        let domain_stats_after = domain_store.memory_stats();
+        let append_stats_after = append_store.memory_stats();
+        assert!(domain_stats_after.sst_files_size > domain_stats_before.sst_files_size);
+        assert!(append_stats_after.sst_files_size > append_stats_before.sst_files_size);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn build_token_info_cache_from_facts_errors_on_invalid_decimals() {
+        let block = bulk_build_token_transfer_fixture();
+        let mut interner = interner::IdentityInterner::default();
+        let arena =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &mut interner)
+                .expect("facts arena");
+        let resolved = sequencer::BulkSequencer::default()
+            .resolve(&arena)
+            .expect("resolved txs");
+
+        let (test_store, test_root) = open_empty_domain_store("bulk-build-token-cache-invalid");
+        let type_script = fixture_sudt_type_script();
+        let type_hash = ScriptParser::compute_script_hash(&type_script);
+        let type_args = crate::rpc::parse_hex_to_bytes(&type_script.args);
+        test_store
+            .put_token_direct(
+                &type_hash,
+                &TokenInfo {
+                    type_code_hash: crate::rpc::parse_hex_to_bytes(&type_script.code_hash),
+                    hash_type: 1,
+                    type_args,
+                    standard: "sUDT".to_string(),
+                    name: Some("Seal".to_string()),
+                    symbol: Some("SEAL".to_string()),
+                    decimals: Some(i32::from(u8::MAX) + 1),
+                    total_supply: Some(200),
+                    max_supply: None,
+                    holders_count: 1,
+                    first_seen_block: 14_000_889,
+                    icon_url: None,
+                    description: None,
+                    transfers_count: 1,
+                },
+            )
+            .expect("put token");
+
+        let err = build_token_info_cache_from_facts(&resolved, &interner, &test_store)
+            .expect_err("invalid decimals should fail fast");
+        assert!(err.to_string().contains("out of u8 range"));
+
+        let _ = std::fs::remove_dir_all(&test_root);
+    }
+
+    #[test]
+    fn build_token_info_cache_from_facts_uses_symbol_and_decimals_from_store() {
+        let block = bulk_build_token_transfer_fixture();
+        let mut interner = interner::IdentityInterner::default();
+        let arena =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &mut interner)
+                .expect("facts arena");
+        let resolved = sequencer::BulkSequencer::default()
+            .resolve(&arena)
+            .expect("resolved txs");
+
+        let (test_store, test_root) = open_empty_domain_store("bulk-build-token-cache-valid");
+        let type_script = fixture_sudt_type_script();
+        let type_hash = ScriptParser::compute_script_hash(&type_script);
+        let type_args = crate::rpc::parse_hex_to_bytes(&type_script.args);
+        test_store
+            .put_token_direct(
+                &type_hash,
+                &TokenInfo {
+                    type_code_hash: crate::rpc::parse_hex_to_bytes(&type_script.code_hash),
+                    hash_type: 1,
+                    type_args,
+                    standard: "sUDT".to_string(),
+                    name: Some("Seal".to_string()),
+                    symbol: Some("SEAL".to_string()),
+                    decimals: Some(8),
+                    total_supply: Some(200),
+                    max_supply: None,
+                    holders_count: 1,
+                    first_seen_block: 14_000_889,
+                    icon_url: None,
+                    description: None,
+                    transfers_count: 1,
+                },
+            )
+            .expect("put token");
+
+        let cache = build_token_info_cache_from_facts(&resolved, &interner, &test_store)
+            .expect("build token info cache");
+        assert_eq!(
+            cache.get(&type_hash),
+            Some(&(Some("SEAL".to_string()), Some(8)))
+        );
+
+        let _ = std::fs::remove_dir_all(&test_root);
+    }
+
+    #[test]
     fn build_history_rows_materializes_ckb_activity_bundles_in_tx_order() {
         let block = bulk_build_addr_tx_fixture();
         let create_tx_hash =
@@ -3516,12 +3709,13 @@ mod tests {
             .expect("resolved txs");
 
         let (test_store, test_root) = open_empty_domain_store("bulk-build-activity-test");
-        let activity_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true, &test_store)
-            .expect("history rows")
-            .rows
-            .into_iter()
-            .filter(|row| row.cf_name == CF_ACTIVITIES)
-            .collect();
+        let activity_rows: Vec<_> =
+            build_history_rows(&arena, &resolved, &interner, true, &test_store)
+                .expect("history rows")
+                .rows
+                .into_iter()
+                .filter(|row| row.cf_name == CF_ACTIVITIES)
+                .collect();
         let _ = std::fs::remove_dir_all(&test_root);
 
         assert_eq!(activity_rows.len(), 2);
@@ -3567,6 +3761,31 @@ mod tests {
     }
 
     #[test]
+    fn bulk_build_memory_breakdown_includes_hodl_live_cells_by_lock() {
+        let mut runtime = BulkBuildRuntimeState::default();
+        runtime.hodl_live_cells_by_lock.insert(InternId::new(7), 2);
+        runtime.hodl_live_cells_by_lock.insert(InternId::new(8), 1);
+
+        let breakdown = runtime.memory_breakdown_bytes();
+        assert!(
+            breakdown
+                .get("hodl_live_cells_by_lock")
+                .copied()
+                .unwrap_or_default()
+                > 0
+        );
+    }
+
+    #[test]
+    fn checked_unique_address_count_rejects_overflow() {
+        let overflow_len = usize::try_from(u64::from(u32::MAX) + 1).expect("overflow len");
+        let err = checked_unique_address_count(overflow_len, "daily 20260319")
+            .expect_err("overflow should fail fast");
+        assert!(err.to_string().contains("daily 20260319"));
+        assert!(err.to_string().contains("unique_address_count"));
+    }
+
+    #[test]
     fn bulk_build_materializes_fiber_channels_via_core_owner_final_state() {
         let block = bulk_build_fiber_open_fixture();
         let open_tx_hash =
@@ -3591,7 +3810,8 @@ mod tests {
         std::fs::create_dir_all(&append_path).expect("create append-only dir");
 
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
-        let history = build_history_rows(&arena, &resolved, &interner, true, &domain_store).expect("history rows");
+        let history = build_history_rows(&arena, &resolved, &interner, true, &domain_store)
+            .expect("history rows");
         let sealed_rows = build_sealed_aggregate_rows(&history.rows).expect("sealed rows");
         let final_snapshot_rows =
             build_final_snapshot_rows(&sequencer, &interner).expect("final snapshot rows");
@@ -3665,15 +3885,16 @@ mod tests {
             .expect("resolved txs");
 
         let (test_store, test_root) = open_empty_domain_store("bulk-build-spore-did-activity-test");
-        let history_rows: Vec<_> = build_history_rows(&arena, &resolved, &interner, true, &test_store)
-            .expect("history rows")
-            .rows
-            .into_iter()
-            .filter(|row| {
-                row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES
-                    || row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES
-            })
-            .collect();
+        let history_rows: Vec<_> =
+            build_history_rows(&arena, &resolved, &interner, true, &test_store)
+                .expect("history rows")
+                .rows
+                .into_iter()
+                .filter(|row| {
+                    row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES
+                        || row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES
+                })
+                .collect();
         let _ = std::fs::remove_dir_all(&test_root);
 
         let object_rows: std::collections::HashMap<Vec<u8>, ObjectCollectionActivityEntry> =

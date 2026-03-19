@@ -38,11 +38,7 @@ impl TokenOwner {
         )
     }
 
-    fn observe_max_supply_from_output(
-        &mut self,
-        cell: &CellFacts,
-        ctx: &ReducerContext<'_>,
-    ) {
+    fn observe_max_supply_from_output(&mut self, cell: &CellFacts, ctx: &ReducerContext<'_>) {
         let lock_code_hash = ctx.resolve_identity(cell.lock_code_hash_id);
         if !crate::sync::token_helpers::is_omnilock_code_hash(lock_code_hash) {
             return;
@@ -297,7 +293,7 @@ impl TokenAccum {
     fn from_view(view: &TokenCellView, first_seen_block: i64) -> Self {
         Self {
             type_code_hash: view.type_code_hash.clone(),
-            hash_type: view.type_hash_type as u8,
+            hash_type: view.type_hash_type,
             type_args: view.type_args.clone(),
             standard: view.standard,
             first_seen_block,
@@ -430,7 +426,7 @@ impl TokenAccum {
 
     fn ensure_metadata(&self, view: &TokenCellView, tx: &ResolvedTxFacts<'_>) -> Result<()> {
         if self.type_code_hash != view.type_code_hash
-            || self.hash_type != view.type_hash_type as u8
+            || self.hash_type != view.type_hash_type
             || self.type_args != view.type_args
             || self.standard != view.standard
         {
@@ -469,7 +465,7 @@ impl TokenAccum {
 struct TokenCellView {
     type_hash: Vec<u8>,
     type_code_hash: Vec<u8>,
-    type_hash_type: i16,
+    type_hash_type: u8,
     type_args: Vec<u8>,
     lock_hash: Vec<u8>,
     capacity: i64,
@@ -606,6 +602,17 @@ impl TokenCellView {
             })?)
             .to_vec();
         let lock_hash = ctx.resolve_identity(lock_script_hash_id).to_vec();
+        let type_hash_type = u8::try_from(type_hash_type).map_err(|_| {
+            anyhow!(
+                "UDT cell type_hash_type out of u8 range: type_hash=0x{}, hash_type={}, block={}, tx=0x{}, tx_index={}, {}",
+                hex::encode(&type_hash),
+                type_hash_type,
+                tx.block_number,
+                hex::encode(tx.tx_hash),
+                tx.tx_index,
+                location
+            )
+        })?;
 
         Ok(Some(Self {
             type_hash,
@@ -624,12 +631,15 @@ impl TokenCellView {
         ParsedUdtCell {
             type_script_hash: self.type_hash.clone(),
             type_code_hash: self.type_code_hash.clone(),
-            type_hash_type: self.type_hash_type,
+            type_hash_type: i16::from(self.type_hash_type),
             type_args: self.type_args.clone(),
             lock_script_hash: self.lock_hash.clone(),
             amount: self.amount,
-            standard: UdtParser::is_udt_code_hash_bytes(&self.type_code_hash, self.type_hash_type)
-                .expect("token cell view must carry a recognized UDT standard"),
+            standard: UdtParser::is_udt_code_hash_bytes(
+                &self.type_code_hash,
+                i16::from(self.type_hash_type),
+            )
+            .expect("token cell view must carry a recognized UDT standard"),
         }
     }
 }
@@ -873,7 +883,6 @@ pub(crate) fn materialize_token_state_for_test(
     Ok(snapshot)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1067,5 +1076,58 @@ mod tests {
         assert_eq!(token.holders.len(), 1);
         assert_eq!(token.holders.get(&vec![0xbb; 32]), Some(&1000));
         assert!(!token.holders.contains_key(&vec![0xaa; 32]));
+    }
+
+    #[test]
+    fn token_owner_rejects_type_hash_type_out_of_u8_range() {
+        let mut interner = IdentityInterner::default();
+        let lock_hash_id = interner.intern_bytes(vec![0xaa; 32]);
+        let type_hash_id = interner.intern_bytes(vec![0xbb; 32]);
+        let type_code_hash_id =
+            interner.intern_bytes(hex::decode(&crate::parser::udt::SUDT_CODE_HASH[2..]).unwrap());
+        let type_args_id = interner.intern_bytes(vec![0x11; 32]);
+        let lock_code_hash_id = interner.intern_bytes(vec![0x22; 32]);
+        let lock_args_id = interner.intern_bytes(vec![0x33; 20]);
+        let ctx = ReducerContext::new(&interner);
+
+        let tx = ResolvedTxFacts {
+            tx_hash: [0x55; 32],
+            block_number: 123,
+            block_hash: [0x66; 32],
+            timestamp_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index: 0,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![CellFacts {
+                outpoint: OutPointKey::new([0x55; 32], 0),
+                created_at_block: 123,
+                created_by_block_dao_ar: 1,
+                capacity: 200_00000000,
+                lock_script_hash_id: lock_hash_id,
+                lock_code_hash_id,
+                lock_hash_type: 1,
+                lock_args_id,
+                type_script_hash_id: Some(type_hash_id),
+                type_code_hash_id: Some(type_code_hash_id),
+                type_hash_type: Some(i16::from(u8::MAX) + 1),
+                type_args_id: Some(type_args_id),
+                occupied_capacity: 142_00000000,
+                data_size: 16,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: Some(1000),
+                semantic_tag: CellSemanticTag::Sudt,
+                dao_state: None,
+                protocol_facts: None,
+            }]
+            .into(),
+        };
+
+        let err = TokenOwner::default()
+            .apply_tx(&tx, &ctx)
+            .expect_err("invalid hash_type should fail fast");
+        assert!(err.to_string().contains("out of u8 range"));
+        assert!(err.to_string().contains("type_hash"));
     }
 }
