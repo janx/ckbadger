@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
 
 use anyhow::{anyhow, Result};
 
@@ -101,6 +100,11 @@ impl BulkSequencer {
     }
 }
 
+/// Resolve DAO compensation AR values for withdraw-request outputs.
+///
+/// Per RFC 0023: "For a deposit cell at input index `i`, a withdrawing cell
+/// MUST be created at output index `i`."  Matching is therefore positional —
+/// the lock script may change between deposit and withdraw-request.
 fn resolve_request_output_ars(
     outputs: &[super::facts::CellFacts],
     resolved_inputs: &[ResolvedInputFacts],
@@ -109,70 +113,62 @@ fn resolve_request_output_ars(
     tx_index: i32,
     block_dao_ar: u64,
 ) -> Result<Vec<Option<DaoCompensationArs>>> {
-    let request_outputs = outputs
+    let has_any_request = outputs
         .iter()
-        .enumerate()
-        .filter_map(|(pos, cell)| match cell.dao_state {
-            Some(DaoCellState::WithdrawRequest {
-                deposit_block_number,
-            }) => Some((
-                pos,
-                cell.capacity,
-                deposit_block_number,
-                cell.lock_script_hash_id,
-            )),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if request_outputs.is_empty() {
+        .any(|c| matches!(c.dao_state, Some(DaoCellState::WithdrawRequest { .. })));
+    if !has_any_request {
         return Ok(vec![None; outputs.len()]);
     }
 
-    let mut consumed_request_positions = HashSet::new();
     let mut matched = vec![None; outputs.len()];
-    let mut matched_count = 0usize;
-    for input in resolved_inputs
-        .iter()
-        .filter(|input| matches!(input.dao_state, Some(DaoCellState::Deposit)))
-    {
-        let (matched_pos, _, _, _) = request_outputs
-            .iter()
-            .filter(|(pos, capacity, deposit_block_number, lock_script_hash_id)| {
-                *capacity == input.capacity
-                    && *deposit_block_number == input.created_at_block
-                    && *lock_script_hash_id == input.lock_script_hash_id
-                    && !consumed_request_positions.contains(pos)
-            })
-            .min_by_key(|(pos, _, _, _)| (outputs[*pos].outpoint.index, *pos))
-            .copied()
-            .ok_or_else(|| {
-                anyhow!(
-                    "missing matched DAO withdraw-request output while resolving tx: block={} tx=0x{} tx_index={} input_outpoint=0x{}:{} deposit_block={}",
+
+    for (input_index, input) in resolved_inputs.iter().enumerate() {
+        if !matches!(input.dao_state, Some(DaoCellState::Deposit)) {
+            continue;
+        }
+
+        // RFC 0023 positional rule: deposit at input[i] → withdraw-request at output[i]
+        let output = outputs.get(input_index).ok_or_else(|| {
+            anyhow!(
+                "DAO deposit at input index {} has no corresponding output: block={} tx=0x{} tx_index={}",
+                input_index,
+                block_number,
+                hex::encode(tx_hash),
+                tx_index,
+            )
+        })?;
+
+        match output.dao_state {
+            Some(DaoCellState::WithdrawRequest {
+                deposit_block_number,
+            }) => {
+                if deposit_block_number != input.created_at_block {
+                    return Err(anyhow!(
+                        "DAO withdraw-request at output {} deposit_block mismatch: expected={} actual={} block={} tx=0x{} tx_index={}",
+                        input_index,
+                        input.created_at_block,
+                        deposit_block_number,
+                        block_number,
+                        hex::encode(tx_hash),
+                        tx_index,
+                    ));
+                }
+                matched[input_index] = Some(DaoCompensationArs {
+                    deposit_ar: input.created_by_block_dao_ar,
+                    withdraw_request_ar: block_dao_ar,
+                });
+            }
+            _ => {
+                return Err(anyhow!(
+                    "DAO deposit at input {} expected withdraw-request at same output position, found {:?}: block={} tx=0x{} tx_index={}",
+                    input_index,
+                    output.dao_state,
                     block_number,
                     hex::encode(tx_hash),
                     tx_index,
-                    hex::encode(input.outpoint.tx_hash),
-                    input.outpoint.index,
-                    input.created_at_block
-                )
-            })?;
-        consumed_request_positions.insert(matched_pos);
-        matched[matched_pos] = Some(DaoCompensationArs {
-            deposit_ar: input.created_by_block_dao_ar,
-            withdraw_request_ar: block_dao_ar,
-        });
-        matched_count += 1;
-    }
-
-    if matched_count != request_outputs.len() {
-        return Err(anyhow!(
-            "unmatched DAO withdraw-request outputs while resolving tx: block={} tx=0x{} tx_index={} request_outputs={} matched_outputs={}",
-            block_number,
-            hex::encode(tx_hash),
-            tx_index,
-            request_outputs.len(),
-            matched_count
-        ));
+                ));
+            }
+        }
     }
 
     Ok(matched)
@@ -344,5 +340,78 @@ mod tests {
 
         assert!(matches!(resolved[0].cells, Cow::Borrowed(_)));
         assert_eq!(resolved[0].cells.as_ptr(), arena.cells[0..1].as_ptr());
+    }
+
+    /// Regression: block 5733774 crashed because the DAO withdraw-request
+    /// matching required lock_script_hash_id equality.  CKB DAO allows
+    /// changing the lock script during Phase 1 (RFC 0023).  After the fix,
+    /// positional matching (input[i] → output[i]) is used instead.
+    #[test]
+    fn resolve_request_output_ars_allows_lock_script_change() {
+        let deposit_ar = 10_000_000_000u64;
+        let block_dao_ar = 10_500_000_000u64;
+        let deposit_block = 5_668_752i64;
+
+        // Deposit cell uses lock_script_hash_id 100
+        let deposit_input = ResolvedInputFacts {
+            outpoint: OutPointKey::new([0x6e; 32], 0),
+            created_at_block: deposit_block,
+            created_by_block_dao_ar: deposit_ar,
+            capacity: 200_00000000,
+            occupied_capacity: 102_00000000,
+            udt_amount: None,
+            lock_script_hash_id: InternId::new(100),
+            lock_code_hash_id: InternId::new(1),
+            lock_hash_type: 1,
+            lock_args_id: InternId::new(2),
+            type_script_hash_id: Some(InternId::new(10)),
+            type_code_hash_id: Some(InternId::new(11)),
+            type_hash_type: Some(1),
+            type_args_id: Some(InternId::new(12)),
+            semantic_tag: CellSemanticTag::Dao,
+            dao_state: Some(DaoCellState::Deposit),
+            dao_compensation_ars: None,
+            protocol_facts: None,
+        };
+
+        // Withdraw-request output uses DIFFERENT lock_script_hash_id 999
+        let request_output = CellFacts {
+            outpoint: OutPointKey::new([0x1d; 32], 0),
+            created_at_block: 5_733_774,
+            created_by_block_dao_ar: block_dao_ar,
+            capacity: 200_00000000,
+            occupied_capacity: 102_00000000,
+            udt_amount: None,
+            lock_script_hash_id: InternId::new(999), // different!
+            lock_code_hash_id: InternId::new(50),
+            lock_hash_type: 1,
+            lock_args_id: InternId::new(51),
+            type_script_hash_id: Some(InternId::new(10)),
+            type_code_hash_id: Some(InternId::new(11)),
+            type_hash_type: Some(1),
+            type_args_id: Some(InternId::new(12)),
+            data_size: 8,
+            data: deposit_block.to_le_bytes().to_vec(),
+            data_hash: None,
+            semantic_tag: CellSemanticTag::Dao,
+            dao_state: Some(DaoCellState::WithdrawRequest {
+                deposit_block_number: deposit_block,
+            }),
+            protocol_facts: None,
+        };
+
+        let result = resolve_request_output_ars(
+            &[request_output],
+            &[deposit_input],
+            5_733_774,
+            [0x1d; 32],
+            1,
+            block_dao_ar,
+        );
+
+        let matched = result.expect("should match despite different lock scripts");
+        let ars = matched[0].expect("output 0 should have compensation ARs");
+        assert_eq!(ars.deposit_ar, deposit_ar);
+        assert_eq!(ars.withdraw_request_ar, block_dao_ar);
     }
 }

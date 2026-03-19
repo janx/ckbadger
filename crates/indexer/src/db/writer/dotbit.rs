@@ -18,19 +18,36 @@ use super::BatchWriter;
 
 use ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION;
 
-/// Map a DAS action string to AssetAction.
+/// Classification of a DAS action: mapped to an AssetAction, known but
+/// suppressed (no collection activity), or truly unknown.
+#[derive(Debug)]
+pub(crate) enum DasActionKind {
+    Mapped(AssetAction),
+    Suppressed,
+    Unknown,
+}
+
+/// Classify a DAS action string.
 ///
-/// Returns `None` for suppressed actions (sub-account infra ops).
-pub(crate) fn das_action_to_asset_action(action: &str) -> Option<AssetAction> {
+/// Full DAS action catalogue sourced from:
+/// - `dotbitHQ/did-contracts` libs/das-types/rust/src/constants.rs (Action enum)
+/// - `dotbitHQ/das-lib` common/action.go (includes legacy actions)
+pub(crate) fn classify_das_action(action: &str) -> DasActionKind {
     match action {
-        "confirm_proposal" => Some(AssetAction::Mint),
+        // Registration
+        "confirm_proposal" => DasActionKind::Mapped(AssetAction::Mint),
+        // Transfers
         "transfer_account"
         | "buy_account"
         | "accept_offer"
         | "fulfill_approval"
-        | "bid_expired_account_dutch_auction" => Some(AssetAction::Transfer),
-        "recycle_expired_account" => Some(AssetAction::Recycle),
-        "renew_account" => Some(AssetAction::Renew),
+        | "bid_expired_account_dutch_auction"
+        | "sell_account" => DasActionKind::Mapped(AssetAction::Transfer),
+        // Recycle
+        "recycle_expired_account" => DasActionKind::Mapped(AssetAction::Recycle),
+        // Renew
+        "renew_account" => DasActionKind::Mapped(AssetAction::Renew),
+        // Account updates
         "edit_records"
         | "edit_manager"
         | "start_account_sale"
@@ -40,21 +57,63 @@ pub(crate) fn das_action_to_asset_action(action: &str) -> Option<AssetAction> {
         | "lock_account_for_cross_chain"
         | "unlock_account_for_cross_chain"
         | "create_approval"
-        | "revoke_approval" => Some(AssetAction::Update),
+        | "delay_approval"
+        | "revoke_approval"
+        | "upgrade_did"
+        | "account_cell_upgrade" => DasActionKind::Mapped(AssetAction::Update),
         // Sub-account infrastructure — suppress collection activity
         "enable_sub_account"
         | "create_sub_account"
         | "edit_sub_account"
         | "renew_sub_account"
         | "recycle_sub_account"
+        | "update_sub_account"
         | "config_sub_account_custom_script"
         | "config_sub_account"
         | "collect_sub_account_profit"
-        | "collect_sub_account_channel_profit" => None,
-        _ => {
-            // Unknown action — let caller fall back to generic detection
-            None
+        | "collect_sub_account_channel_profit"
+        | "lock_sub_account_for_cross_chain"
+        | "unlock_sub_account_for_cross_chain" => DasActionKind::Suppressed,
+        // Registration infrastructure
+        "apply_register"
+        | "refund_apply"
+        | "pre_register"
+        | "refund_pre_register"
+        | "propose"
+        | "extend_proposal"
+        | "recycle_proposal"
+        | "config"
+        | "deploy"
+        | "init_account_chain" => DasActionKind::Suppressed,
+        // Offers — OfferCell, not AccountCell
+        "make_offer" | "edit_offer" | "cancel_offer" => DasActionKind::Suppressed,
+        // Income / Balance
+        "create_income"
+        | "consolidate_income"
+        | "transfer"
+        | "transfer_balance"
+        | "withdraw_from_wallet" => DasActionKind::Suppressed,
+        // DPoint
+        "mint_dp" | "transfer_dp" | "burn_dp" => DasActionKind::Suppressed,
+        // Reverse records
+        "retract_reverse_record"
+        | "create_reverse_record_root"
+        | "update_reverse_record_root"
+        | "declare_reverse_record"
+        | "redeclare_reverse_record" => DasActionKind::Suppressed,
+        // Device key list
+        "create_device_key_list" | "update_device_key_list" | "destroy_device_key_list" => {
+            DasActionKind::Suppressed
         }
+        _ => DasActionKind::Unknown,
+    }
+}
+
+/// Convenience: extract the mapped AssetAction (if any).
+pub(crate) fn das_action_to_asset_action(action: &str) -> Option<AssetAction> {
+    match classify_das_action(action) {
+        DasActionKind::Mapped(a) => Some(a),
+        _ => None,
     }
 }
 
@@ -98,8 +157,7 @@ pub(crate) fn build_dotbit_tx_activity_entry(
         },
         None if das_action.is_some() => {
             let action_str = das_action.unwrap_or("");
-            if das_action_to_asset_action(action_str).is_none()
-                && !action_str.contains("sub_account")
+            if matches!(classify_das_action(action_str), DasActionKind::Unknown)
                 && !action_str.is_empty()
             {
                 warn!(
@@ -1181,6 +1239,10 @@ mod tests {
             Some(AssetAction::Update)
         ));
         assert!(matches!(
+            das_action_to_asset_action("delay_approval"),
+            Some(AssetAction::Update)
+        ));
+        assert!(matches!(
             das_action_to_asset_action("revoke_approval"),
             Some(AssetAction::Update)
         ));
@@ -1188,6 +1250,55 @@ mod tests {
         assert!(matches!(
             das_action_to_asset_action("fulfill_approval"),
             Some(AssetAction::Transfer)
+        ));
+    }
+
+    #[test]
+    fn test_das_action_to_asset_action_new_mappings() {
+        assert!(matches!(
+            das_action_to_asset_action("upgrade_did"),
+            Some(AssetAction::Update)
+        ));
+        assert!(matches!(
+            das_action_to_asset_action("account_cell_upgrade"),
+            Some(AssetAction::Update)
+        ));
+        assert!(matches!(
+            das_action_to_asset_action("sell_account"),
+            Some(AssetAction::Transfer)
+        ));
+    }
+
+    #[test]
+    fn test_classify_das_action_suppressed_vs_unknown() {
+        // Suppressed actions (known, no activity) must NOT trigger warning
+        let suppressed = [
+            "update_sub_account",
+            "lock_sub_account_for_cross_chain",
+            "unlock_sub_account_for_cross_chain",
+            "propose",
+            "apply_register",
+            "pre_register",
+            "recycle_proposal",
+            "consolidate_income",
+            "deploy",
+            "transfer_balance",
+            "config",
+            "make_offer",
+            "mint_dp",
+            "retract_reverse_record",
+            "create_device_key_list",
+        ];
+        for action in &suppressed {
+            assert!(
+                matches!(classify_das_action(action), DasActionKind::Suppressed),
+                "{action} should be Suppressed"
+            );
+        }
+        // Unknown action triggers warning
+        assert!(matches!(
+            classify_das_action("some_future_action"),
+            DasActionKind::Unknown
         ));
     }
 
