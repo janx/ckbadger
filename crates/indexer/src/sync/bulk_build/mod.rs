@@ -97,6 +97,11 @@ impl BulkBuildEngine {
             )
         })?;
         let mut batch_count: u64 = 0;
+        // Pre-fetched blocks from the previous iteration's background fetch.
+        // None on first iteration; populated when the next batch is fetched
+        // concurrently with the current batch's CPU-bound processing.
+        let mut prefetched_blocks: Option<(Vec<BlockResponseWithCycles>, std::time::Duration)> =
+            None;
 
         loop {
             ckb_store.refresh()?;
@@ -143,19 +148,55 @@ impl BulkBuildEngine {
                 handoff_target,
             );
 
-            let fetch_started = Instant::now();
-            let store = ckb_store.clone();
-            let blocks = tokio::task::spawn_blocking(move || {
-                Indexer::fetch_blocks_direct(&store, start_block, end_block)
-            })
-            .await
-            .map_err(|e| anyhow!("bulk build fetch task panicked: {}", e))??;
-            let fetch_elapsed = fetch_started.elapsed();
+            // Use prefetched blocks from previous iteration if available,
+            // otherwise fetch synchronously (first iteration or after no prefetch).
+            let (blocks, fetch_elapsed) = if let Some((blocks, elapsed)) = prefetched_blocks.take()
+            {
+                (blocks, elapsed)
+            } else {
+                let fetch_started = Instant::now();
+                let store = ckb_store.clone();
+                let s = start_block;
+                let e = end_block;
+                let blocks =
+                    tokio::task::spawn_blocking(move || Indexer::fetch_blocks_direct(&store, s, e))
+                        .await
+                        .map_err(|e| anyhow!("bulk build fetch task panicked: {}", e))??;
+                (blocks, fetch_started.elapsed())
+            };
+
+            // Compute next batch boundaries and spawn a background prefetch.
+            // The fetch runs concurrently with the CPU-bound apply_blocks below,
+            // hiding ~200ms of I/O latency behind ~3-4s of compute.
+            let next_start = end_block.saturating_add(1);
+            let next_end = std::cmp::min(
+                next_start.saturating_add(batch_block_span.saturating_sub(1)),
+                handoff_target,
+            );
+            let prefetch_handle = if next_start <= handoff_target {
+                let store = ckb_store.clone();
+                Some(tokio::task::spawn_blocking(move || {
+                    let started = Instant::now();
+                    let blocks = Indexer::fetch_blocks_direct(&store, next_start, next_end)?;
+                    Ok::<_, anyhow::Error>((blocks, started.elapsed()))
+                }))
+            } else {
+                None
+            };
 
             let build_started = Instant::now();
             let (batch_stats, build_timings) =
                 runtime.apply_blocks(&blocks, &mut materializer, indexer.config.is_mainnet())?;
             let build_elapsed = build_started.elapsed();
+
+            // Collect prefetched next batch (typically already done since build >> fetch).
+            if let Some(handle) = prefetch_handle {
+                prefetched_blocks = Some(
+                    handle
+                        .await
+                        .map_err(|e| anyhow!("bulk build prefetch task panicked: {}", e))??,
+                );
+            }
             sync_totals.record_batch(&batch_stats)?;
 
             let last_block_number = batch_stats.last_block_number.ok_or_else(|| {
