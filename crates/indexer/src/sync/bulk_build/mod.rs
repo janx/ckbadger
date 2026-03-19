@@ -102,6 +102,15 @@ impl BulkBuildEngine {
         // concurrently with the current batch's CPU-bound processing.
         let mut prefetched_blocks: Option<(Vec<BlockResponseWithCycles>, std::time::Duration)> =
             None;
+        // Async flush: overlap RocksDB writes with next batch's compute.
+        // The flush handle runs in spawn_blocking; we await it before starting
+        // the next apply_blocks to ensure ordering.
+        let domain_store_arc = indexer.writer.store().clone();
+        let append_store_arc = indexer.append_only_store.clone();
+        let mut pending_flush_handle: Option<
+            tokio::task::JoinHandle<anyhow::Result<materialize::FlushResult>>,
+        > = None;
+        let mut flush_row_totals = (0usize, 0usize);
 
         loop {
             ckb_store.refresh()?;
@@ -184,10 +193,39 @@ impl BulkBuildEngine {
                 None
             };
 
+            // Wait for previous batch's flush to complete before starting
+            // the next apply_blocks. This ensures DB writes from batch N are
+            // committed before batch N+1 completes (though N+1's compute can
+            // overlap with N's flush since reducers work from in-memory state).
+            if let Some(handle) = pending_flush_handle.take() {
+                let result = handle
+                    .await
+                    .map_err(|e| anyhow!("bulk build flush panicked: {}", e))??;
+                flush_row_totals.0 += result.history_rows;
+                flush_row_totals.1 += result.sealed_rows;
+            }
+
             let build_started = Instant::now();
-            let (batch_stats, build_timings) =
-                runtime.apply_blocks(&blocks, &mut materializer, indexer.config.is_mainnet())?;
+            let (batch_stats, build_timings, pending_flush) = runtime.apply_blocks(
+                &blocks,
+                indexer.writer.store().as_ref(),
+                indexer.config.is_mainnet(),
+            )?;
             let build_elapsed = build_started.elapsed();
+
+            // Spawn background flush: RocksDB writes run concurrently with
+            // next batch's fetch + compute. Safe because reducers never read
+            // from DB — they work purely from in-memory state.
+            let ds = domain_store_arc.clone();
+            let as_ = append_store_arc.clone();
+            pending_flush_handle = Some(tokio::task::spawn_blocking(move || {
+                materialize::flush_rows_to_stores(
+                    &ds,
+                    &as_,
+                    pending_flush.history_rows,
+                    pending_flush.sealed_rows,
+                )
+            }));
 
             // Collect prefetched next batch (typically already done since build >> fetch).
             if let Some(handle) = prefetch_handle {
@@ -220,7 +258,6 @@ impl BulkBuildEngine {
 
             let perf_stats = indexer.writer.store().memory_stats();
             let batch_env = crate::sys_info::read_batch_environment(&mut disk_tracker);
-            let mat_totals = materializer.current_totals();
             let mut sample = BatchSample::new(
                 batch_stats.block_count,
                 fetch_elapsed.as_secs_f64() + build_elapsed.as_secs_f64(),
@@ -258,9 +295,11 @@ impl BulkBuildEngine {
             sample.flush_ms = build_timings.flush_ms;
             sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
-            sample.cumulative_history_rows = mat_totals.streamed_history_rows as u64;
-            sample.cumulative_sealed_rows = mat_totals.sealed_aggregate_rows as u64;
-            sample.cumulative_snapshot_rows = mat_totals.final_snapshot_rows as u64;
+            // Cumulative row counts: flush_row_totals tracks completed async flushes.
+            // The in-flight flush (if any) is not yet counted.
+            sample.cumulative_history_rows = flush_row_totals.0 as u64;
+            sample.cumulative_sealed_rows = flush_row_totals.1 as u64;
+            sample.cumulative_snapshot_rows = 0; // snapshots are written at finalize
             indexer.record_bulk_sync_perf_batch_sample(sample);
 
             batch_count += 1;
@@ -300,6 +339,16 @@ impl BulkBuildEngine {
                 );
             }
         }
+
+        // Drain the last in-flight flush before finalization.
+        if let Some(handle) = pending_flush_handle.take() {
+            let result = handle
+                .await
+                .map_err(|e| anyhow!("bulk build final flush panicked: {}", e))??;
+            flush_row_totals.0 += result.history_rows;
+            flush_row_totals.1 += result.sealed_rows;
+        }
+        materializer.add_external_counts(flush_row_totals.0, flush_row_totals.1);
 
         let finalize_started = Instant::now();
         runtime.finalize(indexer.writer.store().as_ref(), &mut materializer)?;
@@ -357,6 +406,13 @@ struct BatchBuildTimings {
     resolve_ms: f64,
     reduce_ms: f64,
     flush_ms: f64,
+}
+
+/// Rows produced by `apply_blocks` that need to be flushed to RocksDB.
+/// Designed to be `Send` so it can be moved into `spawn_blocking`.
+pub(super) struct PendingFlush {
+    pub(super) history_rows: Vec<materialize::MaterializedRow>,
+    pub(super) sealed_rows: Vec<materialize::MaterializedRow>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -731,11 +787,18 @@ impl BulkBuildRuntimeState {
     fn apply_blocks(
         &mut self,
         blocks: &[BlockResponseWithCycles],
-        materializer: &mut materialize::Materializer<'_>,
+        domain_store: &CkbadgerStore,
         is_mainnet: bool,
-    ) -> Result<(BatchExecutionStats, BatchBuildTimings)> {
+    ) -> Result<(BatchExecutionStats, BatchBuildTimings, PendingFlush)> {
         if blocks.is_empty() {
-            return Ok((BatchExecutionStats::default(), BatchBuildTimings::default()));
+            return Ok((
+                BatchExecutionStats::default(),
+                BatchBuildTimings::default(),
+                PendingFlush {
+                    history_rows: Vec::new(),
+                    sealed_rows: Vec::new(),
+                },
+            ));
         }
 
         let facts_started = Instant::now();
@@ -773,7 +836,6 @@ impl BulkBuildRuntimeState {
             .blocks
             .last()
             .ok_or_else(|| anyhow!("bulk build arena missing blocks for non-empty batch"))?;
-        let domain_store = materializer.domain_store();
         let history =
             build_history_rows(&arena, &resolved, &self.interner, is_mainnet, domain_store)?;
         let hodl_sealed_rows = self.apply_hodl_tracker_batch(&arena, &resolved)?;
@@ -890,18 +952,23 @@ impl BulkBuildRuntimeState {
         object.apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
         let reduce_elapsed = reduce_started.elapsed();
 
-        let flush_started = Instant::now();
-        materializer.stream_sealed_aggregate_rows(&hodl_sealed_rows)?;
-        materializer.stream_sealed_aggregate_rows(&cell_dist_sealed_rows)?;
+        // Accumulate activity stats in-memory (cheap CPU work, no I/O).
         self.activity_stats.apply_history_rows(&history.rows)?;
-        materializer.stream_history_rows(&history.rows)?;
-        let flush_elapsed = flush_started.elapsed();
+
+        // Collect all sealed rows into a single vec for the pending flush.
+        let mut all_sealed = hodl_sealed_rows;
+        all_sealed.extend(cell_dist_sealed_rows);
+
+        let pending = PendingFlush {
+            history_rows: history.rows,
+            sealed_rows: all_sealed,
+        };
 
         let timings = BatchBuildTimings {
             facts_ms: facts_elapsed.as_secs_f64() * 1000.0,
             resolve_ms: resolve_elapsed.as_secs_f64() * 1000.0,
             reduce_ms: reduce_elapsed.as_secs_f64() * 1000.0,
-            flush_ms: flush_elapsed.as_secs_f64() * 1000.0,
+            flush_ms: 0.0, // flush is now async, overlapped with next batch
         };
 
         Ok((BatchExecutionStats {
@@ -916,7 +983,7 @@ impl BulkBuildRuntimeState {
             tx_count,
             cells_created,
             cells_consumed: consumed_cells,
-        }, timings))
+        }, timings, pending))
     }
 
     fn finalize(
@@ -1236,8 +1303,10 @@ where
                 break;
             }
 
-            let (batch_stats, _timings) =
-                runtime.apply_blocks(std::slice::from_ref(block), &mut materializer, true)?;
+            let (batch_stats, _timings, pending) =
+                runtime.apply_blocks(std::slice::from_ref(block), domain_store.as_ref(), true)?;
+            materializer.stream_history_rows(&pending.history_rows)?;
+            materializer.stream_sealed_aggregate_rows(&pending.sealed_rows)?;
             sync_totals.record_batch(&batch_stats)?;
             let last_block_number = batch_stats
                 .last_block_number
@@ -1353,7 +1422,10 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         let mut materializer =
             materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
         for batch in block_batches {
-            let (batch_stats, _timings) = runtime.apply_blocks(batch, &mut materializer, true)?;
+            let (batch_stats, _timings, pending) =
+                runtime.apply_blocks(batch, domain_store.as_ref(), true)?;
+            materializer.stream_history_rows(&pending.history_rows)?;
+            materializer.stream_sealed_aggregate_rows(&pending.sealed_rows)?;
             sync_totals.record_batch(&batch_stats)?;
         }
         runtime.finalize(domain_store.as_ref(), &mut materializer)?;
