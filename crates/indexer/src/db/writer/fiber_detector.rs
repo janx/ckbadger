@@ -24,8 +24,10 @@ enum FiberEvent {
     ChannelClose,
     /// Funding-lock input consumed + commitment-lock output.
     ForceClose,
-    /// Commitment-lock input consumed.
+    /// Commitment-lock input consumed (final sweep, no new commitment output).
     Settlement,
+    /// Commitment-lock input consumed + commitment-lock output (revocation/dispute).
+    CommitmentRevocation,
 }
 
 /// Summary of Fiber-related cells in a transaction.
@@ -141,6 +143,8 @@ impl FiberDetector {
             Some(FiberEvent::ChannelClose)
         } else if summary.has_funding_input && summary.has_commitment_output {
             Some(FiberEvent::ForceClose)
+        } else if summary.has_commitment_input && summary.has_commitment_output {
+            Some(FiberEvent::CommitmentRevocation)
         } else if summary.has_commitment_input {
             Some(FiberEvent::Settlement)
         } else {
@@ -262,6 +266,28 @@ impl FiberDetector {
 
                 Ok(serde_json::Value::Object(meta))
             }
+            FiberEvent::CommitmentRevocation => {
+                let mut meta = serde_json::Map::new();
+                meta.insert(
+                    "event".to_string(),
+                    serde_json::json!("commitment_revocation"),
+                );
+
+                if let Some(ref args) = summary.commitment_input_args {
+                    meta.insert(
+                        "oldCommitmentLockArgs".to_string(),
+                        serde_json::json!(format!("0x{}", hex::encode(args))),
+                    );
+                }
+                if let Some(ref args) = summary.commitment_output_args {
+                    meta.insert(
+                        "newCommitmentLockArgs".to_string(),
+                        serde_json::json!(format!("0x{}", hex::encode(args))),
+                    );
+                }
+
+                Ok(serde_json::Value::Object(meta))
+            }
         }
     }
 
@@ -337,6 +363,7 @@ impl ProtocolDetector for FiberDetector {
             FiberEvent::ChannelClose => "channel_close",
             FiberEvent::ForceClose => "force_close",
             FiberEvent::Settlement => "settlement",
+            FiberEvent::CommitmentRevocation => "commitment_revocation",
         };
 
         vec![ProtocolAction::new("fiber", action, metadata)]
@@ -925,6 +952,159 @@ mod tests {
             has_funding_input: true,
             has_funding_output: false,
             has_commitment_input: false,
+            has_commitment_output: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            detector.classify_event(&summary_force),
+            Some(FiberEvent::ForceClose)
+        );
+    }
+
+    #[test]
+    fn test_commitment_revocation() {
+        // Commitment-lock input consumed + commitment-lock output -> commitment_revocation
+        let commitment_code_hash = parse_hex_to_bytes(COMMITMENT_LOCK_CODE_HASH_MAINNET);
+        let standard_lock = vec![0x11; 32];
+
+        let commitment_owner_in: u8 = 0xF1;
+        let commitment_owner_out: u8 = 0xF2;
+        let participant: u8 = 0xAA;
+
+        let mut old_commitment_args = vec![0xCC; 20];
+        old_commitment_args.extend_from_slice(&100u64.to_le_bytes());
+        old_commitment_args.extend_from_slice(&1u64.to_be_bytes());
+        old_commitment_args.extend_from_slice(&[0xDD; 20]);
+        old_commitment_args.push(0x01);
+
+        let mut new_commitment_args = vec![0xCC; 20];
+        new_commitment_args.extend_from_slice(&100u64.to_le_bytes());
+        new_commitment_args.extend_from_slice(&1u64.to_be_bytes());
+        new_commitment_args.extend_from_slice(&[0xEE; 20]); // different settlement_hash
+        new_commitment_args.push(0x01);
+
+        // commitment-lock input consumed (old commitment)
+        let input_commitment = make_input_with_lock(
+            commitment_owner_in,
+            commitment_code_hash.clone(),
+            old_commitment_args.clone(),
+            100_00000000,
+            None,
+            None,
+        );
+        // fee input from participant
+        let input_fee = make_input_with_lock(
+            participant,
+            standard_lock.clone(),
+            vec![0x22; 20],
+            10_00000000,
+            None,
+            None,
+        );
+
+        // commitment-lock output created (new commitment) + change
+        let outputs = vec![
+            make_output_with_lock(
+                commitment_owner_out,
+                commitment_code_hash,
+                new_commitment_args.clone(),
+                100_00000000,
+                None,
+                None,
+            ),
+            make_output_with_lock(
+                participant,
+                standard_lock,
+                vec![0x22; 20],
+                9_00000000,
+                None,
+                None,
+            ),
+        ];
+
+        let tx = TxView {
+            tx_hash: &[0x45; 32],
+            block_hash: &[0xC5; 32],
+            tx_index: 1,
+            block_number: 5005,
+            timestamp: 1_700_200_050,
+            is_cellbase: false,
+            inputs: vec![input_commitment, input_fee],
+            outputs: &outputs,
+        };
+
+        let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
+        let bundles =
+            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
+                .unwrap();
+
+        assert_eq!(bundles.len(), 1);
+
+        let participant_delta = bundles[0]
+            .owners
+            .iter()
+            .find(|o| o.lock_hash == vec![participant; 32])
+            .expect("participant should be present");
+        assert_eq!(participant_delta.protocol_actions.len(), 1);
+        assert_eq!(participant_delta.protocol_actions[0].protocol, "fiber");
+        assert_eq!(
+            participant_delta.protocol_actions[0].action,
+            "commitment_revocation"
+        );
+
+        let meta = participant_delta.protocol_actions[0]
+            .metadata_value()
+            .unwrap();
+        assert_eq!(meta["event"], "commitment_revocation");
+        assert_eq!(
+            meta["oldCommitmentLockArgs"],
+            format!("0x{}", hex::encode(&old_commitment_args))
+        );
+        assert_eq!(
+            meta["newCommitmentLockArgs"],
+            format!("0x{}", hex::encode(&new_commitment_args))
+        );
+
+        // Commitment lock owners should NOT get action
+        let commitment_in = bundles[0]
+            .owners
+            .iter()
+            .find(|o| o.lock_hash == vec![commitment_owner_in; 32]);
+        if let Some(delta) = commitment_in {
+            assert!(delta.protocol_actions.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_classify_commitment_revocation_vs_settlement() {
+        let detector = FiberDetector::new(true);
+
+        // commitment input + commitment output -> revocation
+        let summary_revocation = FiberCellSummary {
+            has_commitment_input: true,
+            has_commitment_output: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            detector.classify_event(&summary_revocation),
+            Some(FiberEvent::CommitmentRevocation)
+        );
+
+        // commitment input only -> settlement
+        let summary_settlement = FiberCellSummary {
+            has_commitment_input: true,
+            has_commitment_output: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            detector.classify_event(&summary_settlement),
+            Some(FiberEvent::Settlement)
+        );
+
+        // funding input + commitment input + commitment output -> force_close (takes priority)
+        let summary_force = FiberCellSummary {
+            has_funding_input: true,
+            has_commitment_input: true,
             has_commitment_output: true,
             ..Default::default()
         };

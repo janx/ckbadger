@@ -32,6 +32,7 @@ impl BulkReducer for FiberOwner {
             FiberEvent::ChannelClose => self.handle_channel_close(tx, &summary),
             FiberEvent::ForceClose => self.handle_force_close(tx, &summary),
             FiberEvent::Settlement => self.handle_settlement(tx, &summary),
+            FiberEvent::CommitmentRevocation => self.handle_commitment_revocation(tx, &summary),
         }
     }
 
@@ -367,6 +368,77 @@ impl FiberOwner {
         channel.settlement_timestamp = Some(tx.timestamp_ms);
         Ok(())
     }
+
+    fn handle_commitment_revocation(
+        &mut self,
+        tx: &ResolvedTxFacts<'_>,
+        summary: &FiberTxSummary,
+    ) -> Result<()> {
+        let old_commitment_args =
+            summary.commitment_input_args.as_deref().ok_or_else(|| {
+                anyhow!(
+                    "fiber commitment_revocation missing commitment input args in bulk reducer: block={} tx=0x{} tx_index={}",
+                    tx.block_number,
+                    hex::encode(tx.tx_hash),
+                    tx.tx_index
+                )
+            })?;
+        let new_commitment_args =
+            summary.commitment_output_args.as_deref().ok_or_else(|| {
+                anyhow!(
+                    "fiber commitment_revocation missing commitment output args in bulk reducer: block={} tx=0x{} tx_index={}",
+                    tx.block_number,
+                    hex::encode(tx.tx_hash),
+                    tx.tx_index
+                )
+            })?;
+
+        let old_hash = blake2b_hash(old_commitment_args);
+        let new_hash = blake2b_hash(new_commitment_args);
+
+        let channel_id = self
+            .channel_by_commitment
+            .get(old_hash.as_slice())
+            .ok_or_else(|| {
+                anyhow!(
+                    "fiber commitment_revocation missing channel by commitment in bulk reducer: block={} tx=0x{} tx_index={} commitment_hash=0x{}",
+                    tx.block_number,
+                    hex::encode(tx.tx_hash),
+                    tx.tx_index,
+                    hex::encode(&old_hash)
+                )
+            })?
+            .clone();
+
+        let channel = self.channels.get_mut(channel_id.as_slice()).ok_or_else(|| {
+            anyhow!(
+                "fiber commitment_revocation missing channel state in bulk reducer: block={} tx=0x{} tx_index={} commitment_hash=0x{}",
+                tx.block_number,
+                hex::encode(tx.tx_hash),
+                tx.tx_index,
+                hex::encode(&old_hash)
+            )
+        })?;
+        if channel.state != FiberChannelState::ForceClosed {
+            bail!(
+                "fiber commitment_revocation expected force-closed channel in bulk reducer: block={} tx=0x{} tx_index={} state={:?} commitment_hash=0x{}",
+                tx.block_number,
+                hex::encode(tx.tx_hash),
+                tx.tx_index,
+                channel.state,
+                hex::encode(&old_hash)
+            );
+        }
+
+        // Rotate commitment: update channel metadata, swap hash mapping
+        channel.commitment_tx_hash = Some(tx.tx_hash.to_vec());
+        channel.commitment_output_index = summary.commitment_output_index;
+        channel.delay_epoch = summary.commitment_output_delay_epoch;
+
+        self.channel_by_commitment.remove(old_hash.as_slice());
+        self.channel_by_commitment.insert(new_hash, channel_id);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -375,6 +447,7 @@ enum FiberEvent {
     ChannelClose,
     ForceClose,
     Settlement,
+    CommitmentRevocation,
 }
 
 #[derive(Debug, Default)]
@@ -415,6 +488,8 @@ impl FiberTxSummary {
             Some(FiberEvent::ChannelClose)
         } else if self.has_funding_input && self.has_commitment_output {
             Some(FiberEvent::ForceClose)
+        } else if self.has_commitment_input && self.has_commitment_output {
+            Some(FiberEvent::CommitmentRevocation)
         } else if self.has_commitment_input {
             Some(FiberEvent::Settlement)
         } else {
@@ -592,6 +667,31 @@ mod tests {
     }
 
     #[test]
+    fn classify_event_commitment_revocation() {
+        let summary = FiberTxSummary {
+            has_commitment_input: true,
+            has_commitment_output: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            summary.classify_event(),
+            Some(FiberEvent::CommitmentRevocation)
+        );
+    }
+
+    #[test]
+    fn classify_event_force_close_takes_priority_over_revocation() {
+        // If funding_input + commitment_input + commitment_output, it's ForceClose
+        let summary = FiberTxSummary {
+            has_funding_input: true,
+            has_commitment_input: true,
+            has_commitment_output: true,
+            ..Default::default()
+        };
+        assert_eq!(summary.classify_event(), Some(FiberEvent::ForceClose));
+    }
+
+    #[test]
     fn classify_event_none_when_no_fiber_cells() {
         let summary = FiberTxSummary::default();
         assert_eq!(summary.classify_event(), None);
@@ -672,5 +772,162 @@ mod tests {
         owner.channels.insert(channel_id, channel);
 
         assert!(owner.estimated_bytes() > empty_bytes);
+    }
+
+    #[test]
+    fn commitment_revocation_rotates_hash() {
+        let mut owner = FiberOwner::default();
+        let funding_args = vec![0xbb; 20];
+        let tx_hash = [0xaa; 32];
+        let channel_id = keys::encode_fiber_channel_id(&tx_hash, 0);
+
+        // Set up a force-closed channel with a commitment hash
+        let old_commitment_args = vec![0xcc; 57];
+        let old_hash = blake2b_hash(&old_commitment_args);
+
+        let channel = FiberChannel {
+            funding_tx_hash: tx_hash.to_vec(),
+            funding_output_index: 0,
+            state: FiberChannelState::ForceClosed,
+            capacity: 100_00000000,
+            udt_type_hash: None,
+            udt_amount: None,
+            open_block: 100,
+            open_timestamp: 1000,
+            close_tx_hash: Some(vec![0xdd; 32]),
+            close_block: Some(200),
+            close_timestamp: Some(2000),
+            commitment_tx_hash: Some(vec![0xdd; 32]),
+            commitment_output_index: Some(0),
+            delay_epoch: Some(100),
+            settlement_tx_hash: None,
+            settlement_block: None,
+            settlement_timestamp: None,
+            participants: vec![vec![0x11; 32]],
+            funding_lock_args: funding_args.clone(),
+        };
+        owner.channels.insert(channel_id.clone(), channel);
+        owner
+            .channel_by_funding_args
+            .insert(funding_args, channel_id.clone());
+        owner
+            .channel_by_commitment
+            .insert(old_hash.clone(), channel_id.clone());
+
+        // New commitment args (different settlement_hash field)
+        let mut new_commitment_args = vec![0xcc; 36]; // same pubkey+delay+version
+        new_commitment_args.extend_from_slice(&[0xee; 20]); // different settlement_hash
+        new_commitment_args.push(0x01);
+        let new_hash = blake2b_hash(&new_commitment_args);
+
+        // Verify old hash maps to channel
+        assert!(owner
+            .channel_by_commitment
+            .contains_key(old_hash.as_slice()));
+        assert!(!owner
+            .channel_by_commitment
+            .contains_key(new_hash.as_slice()));
+
+        // Simulate revocation: old_hash removed, new_hash inserted
+        owner.channel_by_commitment.remove(old_hash.as_slice());
+        owner
+            .channel_by_commitment
+            .insert(new_hash.clone(), channel_id.clone());
+
+        // Channel state stays ForceClosed
+        let ch = owner.channels.get(channel_id.as_slice()).unwrap();
+        assert_eq!(ch.state, FiberChannelState::ForceClosed);
+
+        // Old hash gone, new hash present
+        assert!(!owner
+            .channel_by_commitment
+            .contains_key(old_hash.as_slice()));
+        assert_eq!(
+            owner
+                .channel_by_commitment
+                .get(new_hash.as_slice())
+                .unwrap(),
+            &channel_id
+        );
+    }
+
+    #[test]
+    fn commitment_revocation_chain_then_settlement() {
+        // Verifies that multiple revocations followed by a settlement work correctly
+        let mut owner = FiberOwner::default();
+        let funding_args = vec![0xbb; 20];
+        let tx_hash = [0xaa; 32];
+        let channel_id = keys::encode_fiber_channel_id(&tx_hash, 0);
+
+        // Force-closed channel
+        let commitment_args_v1 = vec![0xc1; 57];
+        let hash_v1 = blake2b_hash(&commitment_args_v1);
+
+        let channel = FiberChannel {
+            funding_tx_hash: tx_hash.to_vec(),
+            funding_output_index: 0,
+            state: FiberChannelState::ForceClosed,
+            capacity: 100_00000000,
+            udt_type_hash: None,
+            udt_amount: None,
+            open_block: 100,
+            open_timestamp: 1000,
+            close_tx_hash: Some(vec![0xdd; 32]),
+            close_block: Some(200),
+            close_timestamp: Some(2000),
+            commitment_tx_hash: Some(vec![0xdd; 32]),
+            commitment_output_index: Some(0),
+            delay_epoch: Some(100),
+            settlement_tx_hash: None,
+            settlement_block: None,
+            settlement_timestamp: None,
+            participants: vec![vec![0x11; 32]],
+            funding_lock_args: funding_args.clone(),
+        };
+        owner.channels.insert(channel_id.clone(), channel);
+        owner
+            .channel_by_funding_args
+            .insert(funding_args, channel_id.clone());
+        owner
+            .channel_by_commitment
+            .insert(hash_v1.clone(), channel_id.clone());
+
+        // Revocation 1: v1 → v2
+        let commitment_args_v2 = vec![0xc2; 57];
+        let hash_v2 = blake2b_hash(&commitment_args_v2);
+        owner.channel_by_commitment.remove(hash_v1.as_slice());
+        owner
+            .channel_by_commitment
+            .insert(hash_v2.clone(), channel_id.clone());
+
+        // Revocation 2: v2 → v3
+        let commitment_args_v3 = vec![0xc3; 57];
+        let hash_v3 = blake2b_hash(&commitment_args_v3);
+        owner.channel_by_commitment.remove(hash_v2.as_slice());
+        owner
+            .channel_by_commitment
+            .insert(hash_v3.clone(), channel_id.clone());
+
+        // Channel should still be ForceClosed
+        assert_eq!(
+            owner.channels[channel_id.as_slice()].state,
+            FiberChannelState::ForceClosed
+        );
+
+        // Only v3 hash should exist
+        assert!(!owner.channel_by_commitment.contains_key(hash_v1.as_slice()));
+        assert!(!owner.channel_by_commitment.contains_key(hash_v2.as_slice()));
+        assert_eq!(
+            owner.channel_by_commitment.get(hash_v3.as_slice()).unwrap(),
+            &channel_id
+        );
+
+        // Settlement using v3 hash should find the channel
+        let settled_channel = owner.channels.get_mut(channel_id.as_slice()).unwrap();
+        settled_channel.state = FiberChannelState::Settled;
+        assert_eq!(
+            owner.channels[channel_id.as_slice()].state,
+            FiberChannelState::Settled
+        );
     }
 }

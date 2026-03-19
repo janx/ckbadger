@@ -50,6 +50,9 @@ pub fn process_fiber_channel_events(
                 "settlement" => {
                     handle_settlement(batch, store, bundle, &metadata)?;
                 }
+                "commitment_revocation" => {
+                    handle_commitment_revocation(batch, store, bundle, &metadata)?;
+                }
                 other => {
                     warn!(
                         action = other,
@@ -379,6 +382,92 @@ fn handle_settlement(
     channel.settlement_block = Some(bundle.block_number);
     channel.settlement_timestamp = Some(bundle.timestamp);
 
+    batch.put_fiber_channel(&channel_id, &channel);
+
+    Ok(())
+}
+
+/// Handle `commitment_revocation`: commitment-lock input consumed + new commitment-lock output.
+/// Rotates the commitment hash index to the new commitment args.
+fn handle_commitment_revocation(
+    batch: &mut StoreBatch<'_>,
+    store: &CkbadgerStore,
+    bundle: &TxActivityBundle,
+    metadata: &serde_json::Value,
+) -> Result<()> {
+    let old_args_hex = match metadata
+        .get("oldCommitmentLockArgs")
+        .and_then(|v| v.as_str())
+    {
+        Some(s) => s,
+        None => {
+            anyhow::bail!(
+                "fiber commitment_revocation missing oldCommitmentLockArgs metadata in tx 0x{} — detector bug",
+                hex::encode(&bundle.tx_hash)
+            );
+        }
+    };
+    let new_args_hex = match metadata
+        .get("newCommitmentLockArgs")
+        .and_then(|v| v.as_str())
+    {
+        Some(s) => s,
+        None => {
+            anyhow::bail!(
+                "fiber commitment_revocation missing newCommitmentLockArgs metadata in tx 0x{} — detector bug",
+                hex::encode(&bundle.tx_hash)
+            );
+        }
+    };
+
+    let old_args = decode_hex_with_prefix(old_args_hex).ok_or_else(|| {
+        anyhow::anyhow!(
+            "fiber commitment_revocation: failed to decode oldCommitmentLockArgs hex '{}' in tx 0x{}",
+            old_args_hex,
+            hex::encode(&bundle.tx_hash)
+        )
+    })?;
+    let new_args = decode_hex_with_prefix(new_args_hex).ok_or_else(|| {
+        anyhow::anyhow!(
+            "fiber commitment_revocation: failed to decode newCommitmentLockArgs hex '{}' in tx 0x{}",
+            new_args_hex,
+            hex::encode(&bundle.tx_hash)
+        )
+    })?;
+
+    let old_hash = blake2b_hash(&old_args);
+    let new_hash = blake2b_hash(&new_args);
+
+    let channel_id = match store.get_fiber_channel_id_by_commitment(&old_hash)? {
+        Some(id) => id,
+        None => {
+            warn!(
+                tx_hash = %hex::encode(&bundle.tx_hash),
+                old_commitment_lock_args = %old_args_hex,
+                "fiber commitment_revocation: no channel found for old commitment, skipping"
+            );
+            return Ok(());
+        }
+    };
+
+    let mut channel = match store.get_fiber_channel(&channel_id)? {
+        Some(ch) => ch,
+        None => {
+            warn!(
+                tx_hash = %hex::encode(&bundle.tx_hash),
+                channel_id = %hex::encode(&channel_id),
+                "fiber commitment_revocation: channel not found by id, skipping"
+            );
+            return Ok(());
+        }
+    };
+
+    // Update commitment metadata, keep state as ForceClosed
+    channel.commitment_tx_hash = Some(bundle.tx_hash.clone());
+
+    // Rotate commitment hash index: remove old, insert new
+    batch.delete_fiber_channel_by_commitment(&old_hash);
+    batch.put_fiber_channel_by_commitment(&new_hash, &channel_id);
     batch.put_fiber_channel(&channel_id, &channel);
 
     Ok(())
@@ -742,5 +831,209 @@ mod tests {
         assert_eq!(a_channels.len(), 1);
         let b_channels = store.list_addr_fiber_channels(&participant_b, 10).unwrap();
         assert_eq!(b_channels.len(), 1);
+    }
+
+    #[test]
+    fn test_commitment_revocation_rotates_hash() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let funding_tx_hash = [0x10; 32];
+        let funding_lock_args = [0xCC; 20];
+        let participant = [0xAA; 32];
+
+        // Open channel
+        let open_metadata =
+            make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
+        let open_owner = make_owner_with_fiber_action(&participant, "channel_open", open_metadata);
+        let open_bundle = make_bundle(&[0x40; 32], 5000, 1_700_000_000, vec![open_owner]);
+
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &store, &open_bundle).unwrap();
+        batch.commit().unwrap();
+
+        // Force close
+        let mut commitment_args_v1 = vec![0xDD; 20];
+        commitment_args_v1.extend_from_slice(&100u64.to_le_bytes());
+        commitment_args_v1.extend_from_slice(&1u64.to_be_bytes());
+        commitment_args_v1.extend_from_slice(&[0xE1; 20]);
+        commitment_args_v1.push(0x01);
+
+        let force_close_metadata = serde_json::json!({
+            "event": "force_close",
+            "capacity": "50000000000",
+            "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
+            "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v1)),
+        });
+        let fc_owner =
+            make_owner_with_fiber_action(&participant, "force_close", force_close_metadata);
+        let fc_bundle = make_bundle(&[0x42; 32], 5002, 1_700_000_020, vec![fc_owner]);
+
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &store, &fc_bundle).unwrap();
+        batch.commit().unwrap();
+
+        let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, 0);
+        let hash_v1 = blake2b_hash(&commitment_args_v1);
+        assert!(store
+            .get_fiber_channel_id_by_commitment(&hash_v1)
+            .unwrap()
+            .is_some());
+
+        // Commitment revocation: v1 → v2
+        let mut commitment_args_v2 = vec![0xDD; 20];
+        commitment_args_v2.extend_from_slice(&100u64.to_le_bytes());
+        commitment_args_v2.extend_from_slice(&1u64.to_be_bytes());
+        commitment_args_v2.extend_from_slice(&[0xE2; 20]); // different settlement_hash
+        commitment_args_v2.push(0x01);
+
+        let revocation_metadata = serde_json::json!({
+            "event": "commitment_revocation",
+            "oldCommitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v1)),
+            "newCommitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v2)),
+        });
+        let rev_owner = make_owner_with_fiber_action(
+            &participant,
+            "commitment_revocation",
+            revocation_metadata,
+        );
+        let rev_bundle = make_bundle(&[0x44; 32], 5004, 1_700_000_040, vec![rev_owner]);
+
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &store, &rev_bundle).unwrap();
+        batch.commit().unwrap();
+
+        // Old hash should be gone, new hash should map to the channel
+        let hash_v2 = blake2b_hash(&commitment_args_v2);
+        assert!(store
+            .get_fiber_channel_id_by_commitment(&hash_v1)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .get_fiber_channel_id_by_commitment(&hash_v2)
+                .unwrap()
+                .unwrap(),
+            channel_id
+        );
+
+        // Channel state should remain ForceClosed
+        let channel = store.get_fiber_channel(&channel_id).unwrap().unwrap();
+        assert_eq!(channel.state, FiberChannelState::ForceClosed);
+        assert_eq!(channel.commitment_tx_hash, Some(vec![0x44; 32]));
+    }
+
+    #[test]
+    fn test_revocation_chain_then_settlement() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let funding_tx_hash = [0x10; 32];
+        let funding_lock_args = [0xCC; 20];
+        let participant = [0xAA; 32];
+
+        // Open
+        let open_metadata =
+            make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
+        let open_owner = make_owner_with_fiber_action(&participant, "channel_open", open_metadata);
+        let open_bundle = make_bundle(&[0x40; 32], 5000, 1_700_000_000, vec![open_owner]);
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &store, &open_bundle).unwrap();
+        batch.commit().unwrap();
+
+        // Force close with v1
+        let mut args_v1 = vec![0xDD; 20];
+        args_v1.extend_from_slice(&100u64.to_le_bytes());
+        args_v1.extend_from_slice(&1u64.to_be_bytes());
+        args_v1.extend_from_slice(&[0xE1; 20]);
+        args_v1.push(0x01);
+
+        let fc_meta = serde_json::json!({
+            "event": "force_close",
+            "capacity": "50000000000",
+            "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
+            "commitmentLockArgs": format!("0x{}", hex::encode(&args_v1)),
+        });
+        let fc_owner = make_owner_with_fiber_action(&participant, "force_close", fc_meta);
+        let fc_bundle = make_bundle(&[0x42; 32], 5002, 1_700_000_020, vec![fc_owner]);
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &store, &fc_bundle).unwrap();
+        batch.commit().unwrap();
+
+        // Revocation 1: v1 → v2
+        let mut args_v2 = vec![0xDD; 20];
+        args_v2.extend_from_slice(&100u64.to_le_bytes());
+        args_v2.extend_from_slice(&1u64.to_be_bytes());
+        args_v2.extend_from_slice(&[0xE2; 20]);
+        args_v2.push(0x01);
+
+        let rev1_meta = serde_json::json!({
+            "event": "commitment_revocation",
+            "oldCommitmentLockArgs": format!("0x{}", hex::encode(&args_v1)),
+            "newCommitmentLockArgs": format!("0x{}", hex::encode(&args_v2)),
+        });
+        let rev1_owner =
+            make_owner_with_fiber_action(&participant, "commitment_revocation", rev1_meta);
+        let rev1_bundle = make_bundle(&[0x44; 32], 5004, 1_700_000_040, vec![rev1_owner]);
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &store, &rev1_bundle).unwrap();
+        batch.commit().unwrap();
+
+        // Revocation 2: v2 → v3
+        let mut args_v3 = vec![0xDD; 20];
+        args_v3.extend_from_slice(&100u64.to_le_bytes());
+        args_v3.extend_from_slice(&1u64.to_be_bytes());
+        args_v3.extend_from_slice(&[0xE3; 20]);
+        args_v3.push(0x01);
+
+        let rev2_meta = serde_json::json!({
+            "event": "commitment_revocation",
+            "oldCommitmentLockArgs": format!("0x{}", hex::encode(&args_v2)),
+            "newCommitmentLockArgs": format!("0x{}", hex::encode(&args_v3)),
+        });
+        let rev2_owner =
+            make_owner_with_fiber_action(&participant, "commitment_revocation", rev2_meta);
+        let rev2_bundle = make_bundle(&[0x45; 32], 5005, 1_700_000_050, vec![rev2_owner]);
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &store, &rev2_bundle).unwrap();
+        batch.commit().unwrap();
+
+        // Settlement using v3
+        let settle_meta = serde_json::json!({
+            "event": "settlement",
+            "capacity": "50000000000",
+            "commitmentLockArgs": format!("0x{}", hex::encode(&args_v3)),
+        });
+        let settle_owner = make_owner_with_fiber_action(&participant, "settlement", settle_meta);
+        let settle_bundle = make_bundle(&[0x46; 32], 5006, 1_700_000_060, vec![settle_owner]);
+        let mut batch = StoreBatch::new(&store);
+        process_fiber_channel_events(&mut batch, &store, &settle_bundle).unwrap();
+        batch.commit().unwrap();
+
+        let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, 0);
+        let channel = store.get_fiber_channel(&channel_id).unwrap().unwrap();
+        assert_eq!(channel.state, FiberChannelState::Settled);
+        assert_eq!(channel.settlement_tx_hash, Some(vec![0x46; 32]));
+        assert_eq!(channel.settlement_block, Some(5006));
+
+        // Only v3 hash should exist, v1 and v2 should be gone
+        let hash_v1 = blake2b_hash(&args_v1);
+        let hash_v2 = blake2b_hash(&args_v2);
+        let hash_v3 = blake2b_hash(&args_v3);
+        assert!(store
+            .get_fiber_channel_id_by_commitment(&hash_v1)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_fiber_channel_id_by_commitment(&hash_v2)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .get_fiber_channel_id_by_commitment(&hash_v3)
+                .unwrap()
+                .unwrap(),
+            channel_id
+        );
     }
 }
