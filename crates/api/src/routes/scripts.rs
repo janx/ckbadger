@@ -546,7 +546,6 @@ fn checked_capacity_totals(
 /// Tier 2: name-based search in cached ScriptInfo (handles type-ref scripts where
 /// version_hash is a data_hash, not a code_hash).
 /// Tier 3: fall back to ScriptVersionInfo fields (zeros).
-#[allow(dead_code)] // used by get_script / lookup_scripts / get_script_usage after handler migration
 fn resolve_version_capacity(
     version: &ckbadger_store::types::ScriptVersionInfo,
     direct_script_info: Option<&ckbadger_store::ScriptInfo>,
@@ -1210,6 +1209,7 @@ async fn get_script(
         return Err(ApiError::not_found("Script not found"));
     }
     let mut scripts = Vec::new();
+    let all_script_infos = load_script_infos_cached(&state)?;
 
     for (version_hash, version_info) in matching {
         let mut code_cells =
@@ -1217,6 +1217,8 @@ async fn get_script(
                 .map_err(|e| ApiError::internal(e.to_string()))?;
         sort_code_cells(&mut code_cells);
 
+        // Derive hash_type, type_hash, data_hash from ScriptInfo if available
+        let script_info = state.store.get_script_info(&version_hash).ok().flatten();
         let (
             cells_count,
             live_cells_count,
@@ -1224,15 +1226,12 @@ async fn get_script(
             live_capacity_sum,
             _used_sum,
             live_used_sum,
-        ) = version_totals(&version_info);
+        ) = resolve_version_capacity(&version_info, script_info.as_ref(), &all_script_infos)?;
         let code_cells_live_count = code_cells
             .iter()
             .filter(|(_, _, _, is_live)| *is_live)
             .count() as i64;
         let code_cells_total = code_cells.len() as i64;
-
-        // Derive hash_type, type_hash, data_hash from ScriptInfo if available
-        let script_info = state.store.get_script_info(&version_hash).ok().flatten();
         let hash_type = script_info
             .as_ref()
             .and_then(|info| hash_type_to_string(info.hash_type).map(|s| s.to_string()));
