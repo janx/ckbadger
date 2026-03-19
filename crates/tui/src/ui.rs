@@ -3315,6 +3315,37 @@ fn stage_trend_line(
     ])
 }
 
+#[allow(dead_code)]
+fn percentile_from_history(history: &VecDeque<f64>, window: usize, pct: f64) -> Option<f64> {
+    if history.is_empty() {
+        return None;
+    }
+    let mut values: Vec<f64> = history.iter().rev().take(window).copied().collect();
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx = ((values.len() as f64 * pct / 100.0) as usize).min(values.len() - 1);
+    Some(values[idx])
+}
+
+#[allow(dead_code)]
+fn render_gauge(filled: usize, total: usize) -> String {
+    if total == 0 {
+        return String::new();
+    }
+    let filled = filled.min(total);
+    format!("{}{}", "█".repeat(filled), "░".repeat(total - filled))
+}
+
+#[allow(dead_code)]
+fn format_num_compact(value: u64) -> String {
+    if value >= 1_000_000 {
+        format!("{:.1}M", value as f64 / 1_000_000.0)
+    } else if value >= 1_000 {
+        format!("{}K", value / 1_000)
+    } else {
+        value.to_string()
+    }
+}
+
 fn pipeline_stability_label(history: &VecDeque<f64>) -> (&'static str, Color) {
     let jitter = rate_jitter(history, 30);
     let mean = history
@@ -3942,17 +3973,18 @@ mod tests {
         compact_overview_layout, compact_sync_layout, consumed_cells_source_color,
         consumed_cells_source_label, dense_right_lines, detail_right_lines,
         diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label, footer_hint_line,
-        footer_status_message, format_age_secs, format_num, format_num_commas, format_rate_pair,
-        format_signed_num_i128, format_stage_commit_gap_ms, header_right_line, header_title_line,
-        heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop, overview_log_min_height,
-        overview_services_min_height, pipeline_bottleneck, pipeline_flow_state,
-        pipeline_reset_line, rate_jitter, runtime_health_state, runtime_live_delta,
-        service_log_tails_line, sparkline, stack_sync_charts, stale_age_secs, stale_status,
-        startup_phase_label, storage_runtime_columns, supervisor_services_line, sync_bottleneck,
-        sync_chart_specs, sync_timing_lines, system_kv_line, system_store_path_lines,
-        system_workdir_lines, trend_delta, trim_for_panel, AdaptiveControlSnapshot, App, Color,
-        CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
-        SyncChartKind, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
+        footer_status_message, format_age_secs, format_num, format_num_commas, format_num_compact,
+        format_rate_pair, format_signed_num_i128, format_stage_commit_gap_ms, header_right_line,
+        header_title_line, heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop,
+        overview_log_min_height, overview_services_min_height, percentile_from_history,
+        pipeline_bottleneck, pipeline_flow_state, pipeline_reset_line, rate_jitter, render_gauge,
+        runtime_health_state, runtime_live_delta, service_log_tails_line, sparkline,
+        stack_sync_charts, stale_age_secs, stale_status, startup_phase_label,
+        storage_runtime_columns, supervisor_services_line, sync_bottleneck, sync_chart_specs,
+        sync_timing_lines, system_kv_line, system_store_path_lines, system_workdir_lines,
+        trend_delta, trim_for_panel, AdaptiveControlSnapshot, App, Color, CompactOverviewLayout,
+        CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck, SyncChartKind, CYAN,
+        STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
     use crate::db::{
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
@@ -4781,5 +4813,80 @@ mod tests {
         assert_eq!(after_third, after_second + 1);
 
         drop(app);
+    }
+
+    #[test]
+    fn test_percentile_from_history_empty() {
+        let history: VecDeque<f64> = VecDeque::new();
+        assert!(percentile_from_history(&history, 300, 95.0).is_none());
+    }
+
+    #[test]
+    fn test_percentile_from_history_single_element() {
+        let mut history: VecDeque<f64> = VecDeque::new();
+        history.push_back(42.0);
+        assert_eq!(percentile_from_history(&history, 300, 95.0), Some(42.0));
+    }
+
+    #[test]
+    fn test_percentile_from_history_identical_values() {
+        let history: VecDeque<f64> = vec![10.0; 100].into_iter().collect();
+        assert_eq!(percentile_from_history(&history, 300, 95.0), Some(10.0));
+    }
+
+    #[test]
+    fn test_percentile_from_history_normal_case() {
+        let history: VecDeque<f64> = (0..100).map(|i| i as f64).collect();
+        let p95 = percentile_from_history(&history, 300, 95.0).unwrap();
+        assert!((p95 - 95.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_percentile_from_history_window_smaller_than_history() {
+        let history: VecDeque<f64> = (0..300).map(|i| i as f64).collect();
+        let p95 = percentile_from_history(&history, 50, 95.0).unwrap();
+        assert!((295.0..=300.0).contains(&p95));
+    }
+
+    #[test]
+    fn test_render_gauge_zero_total() {
+        assert_eq!(render_gauge(0, 0), "");
+    }
+
+    #[test]
+    fn test_render_gauge_empty() {
+        assert_eq!(render_gauge(0, 10), "░░░░░░░░░░");
+    }
+
+    #[test]
+    fn test_render_gauge_full() {
+        assert_eq!(render_gauge(10, 10), "██████████");
+    }
+
+    #[test]
+    fn test_render_gauge_half() {
+        let g = render_gauge(5, 10);
+        assert_eq!(g, "█████░░░░░");
+    }
+
+    #[test]
+    fn test_format_num_compact_small() {
+        assert_eq!(format_num_compact(0), "0");
+        assert_eq!(format_num_compact(999), "999");
+    }
+
+    #[test]
+    fn test_format_num_compact_thousands() {
+        assert_eq!(format_num_compact(1_000), "1K");
+        assert_eq!(format_num_compact(50_000), "50K");
+        assert_eq!(format_num_compact(180_000), "180K");
+        assert_eq!(format_num_compact(999_999), "999K");
+    }
+
+    #[test]
+    fn test_format_num_compact_millions() {
+        assert_eq!(format_num_compact(1_000_000), "1.0M");
+        assert_eq!(format_num_compact(1_500_000), "1.5M");
+        assert_eq!(format_num_compact(12_300_000), "12.3M");
     }
 }
