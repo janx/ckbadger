@@ -291,6 +291,8 @@ impl BulkBuildEngine {
             sample.facts_ms = build_timings.facts_ms;
             sample.resolve_ms = build_timings.resolve_ms;
             sample.reduce_ms = build_timings.reduce_ms;
+            sample.history_ms = build_timings.history_ms;
+            sample.address_reduce_ms = build_timings.address_reduce_ms;
             sample.flush_ms = prev_flush_ms;
             sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
@@ -336,6 +338,8 @@ impl BulkBuildEngine {
                 facts_ms = format!("{:.1}", build_timings.facts_ms),
                 resolve_ms = format!("{:.1}", build_timings.resolve_ms),
                 reduce_ms = format!("{:.1}", build_timings.reduce_ms),
+                history_ms = format!("{:.1}", build_timings.history_ms),
+                address_reduce_ms = format!("{:.1}", build_timings.address_reduce_ms),
                 prev_flush_ms = format!("{:.1}", prev_flush_ms),
                 "Bulk build materialized batch"
             );
@@ -419,6 +423,8 @@ struct BatchBuildTimings {
     facts_ms: f64,
     resolve_ms: f64,
     reduce_ms: f64,
+    history_ms: f64,
+    address_reduce_ms: f64,
 }
 
 /// Rows produced by `apply_blocks` that need to be flushed to RocksDB.
@@ -852,7 +858,9 @@ impl BulkBuildRuntimeState {
             .blocks
             .last()
             .ok_or_else(|| anyhow!("bulk build arena missing blocks for non-empty batch"))?;
+        let history_started = Instant::now();
         let history = build_history_rows(&arena, &resolved, &frozen, is_mainnet, domain_store)?;
+        let history_elapsed = history_started.elapsed();
         let hodl_sealed_rows = self.apply_hodl_tracker_batch(&arena, &resolved)?;
 
         let BulkBuildRuntimeState {
@@ -865,6 +873,7 @@ impl BulkBuildRuntimeState {
 
         // Phase 1 (serial): address reducer + cell_dist_tracker.
         // Address must run first because cell_dist_tracker needs per-tx address deltas.
+        let address_started = Instant::now();
         for block in &arena.blocks {
             let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
             cell_dist_tracker.record_block_date(block.number, block_date);
@@ -904,6 +913,8 @@ impl BulkBuildRuntimeState {
                 ));
             }
         }
+
+        let address_elapsed = address_started.elapsed();
 
         // Phase 2 (parallel): 5 independent reducers via nested rayon::join.
         // Each reducer reads immutable ResolvedTxFacts and writes only its own state.
@@ -982,6 +993,8 @@ impl BulkBuildRuntimeState {
             facts_ms: facts_elapsed.as_secs_f64() * 1000.0,
             resolve_ms: resolve_elapsed.as_secs_f64() * 1000.0,
             reduce_ms: reduce_elapsed.as_secs_f64() * 1000.0,
+            history_ms: history_elapsed.as_secs_f64() * 1000.0,
+            address_reduce_ms: address_elapsed.as_secs_f64() * 1000.0,
         };
 
         Ok((BatchExecutionStats {
