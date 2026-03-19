@@ -301,6 +301,7 @@ impl BulkBuildEngine {
             sample.reduce_ms = build_timings.reduce_ms;
             sample.history_ms = build_timings.history_ms;
             sample.address_reduce_ms = build_timings.address_reduce_ms;
+            sample.activity_stats_ms = build_timings.activity_stats_ms;
             sample.flush_ms = prev_flush_ms;
             sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
@@ -348,6 +349,7 @@ impl BulkBuildEngine {
                 reduce_ms = format!("{:.1}", build_timings.reduce_ms),
                 history_ms = format!("{:.1}", build_timings.history_ms),
                 address_reduce_ms = format!("{:.1}", build_timings.address_reduce_ms),
+                activity_stats_ms = format!("{:.1}", build_timings.activity_stats_ms),
                 prev_flush_ms = format!("{:.1}", prev_flush_ms),
                 "Bulk build materialized batch"
             );
@@ -456,6 +458,7 @@ struct BatchBuildTimings {
     reduce_ms: f64,
     history_ms: f64,
     address_reduce_ms: f64,
+    activity_stats_ms: f64,
 }
 
 /// Rows produced by `apply_blocks` that need to be flushed to RocksDB.
@@ -686,18 +689,12 @@ impl ActivityStatsAccumulator {
             )
     }
 
-    fn apply_history_rows(&mut self, history_rows: &[materialize::MaterializedRow]) -> Result<()> {
-        for row in history_rows
-            .iter()
-            .filter(|row| row.cf_name == CF_ACTIVITIES)
-        {
-            let bundle: TxActivityBundle = bincode::deserialize(&row.value).map_err(|e| {
-                anyhow!(
-                    "failed to deserialize TxActivityBundle while building sealed bulk activity stats: key=0x{} error={}",
-                    hex::encode(&row.key),
-                    e
-                )
-            })?;
+    /// Accumulate activity stats directly from in-memory bundles.
+    /// Replaces the old `apply_history_rows` which deserialized bundles
+    /// from bincode MaterializedRows — a serialize→deserialize roundtrip
+    /// costing ~410ms/batch at steady state.
+    fn apply_bundles(&mut self, bundles: &[TxActivityBundle]) -> Result<()> {
+        for bundle in bundles {
             let date = ckbadger_common::block_date_from_ms(bundle.timestamp)
                 .format("%Y%m%d")
                 .to_string();
@@ -1049,8 +1046,10 @@ impl BulkBuildRuntimeState {
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
         let reduce_elapsed = reduce_started.elapsed();
 
-        // Accumulate activity stats in-memory (cheap CPU work, no I/O).
-        activity_stats.apply_history_rows(&history.rows)?;
+        // Accumulate activity stats from in-memory bundles (no deserialization).
+        let activity_stats_started = Instant::now();
+        activity_stats.apply_bundles(&history.activity_bundles)?;
+        let activity_stats_elapsed = activity_stats_started.elapsed();
 
         // Collect all sealed rows into a single vec for the pending flush.
         let mut all_sealed = hodl_sealed_rows;
@@ -1067,6 +1066,7 @@ impl BulkBuildRuntimeState {
             reduce_ms: reduce_elapsed.as_secs_f64() * 1000.0,
             history_ms: history_elapsed.as_secs_f64() * 1000.0,
             address_reduce_ms: address_elapsed.as_secs_f64() * 1000.0,
+            activity_stats_ms: activity_stats_elapsed.as_secs_f64() * 1000.0,
         };
 
         Ok((BatchExecutionStats {
@@ -1260,11 +1260,13 @@ fn apply_cell_dist_cohort_deltas(
 struct HistoryBuildResult {
     rows: Vec<materialize::MaterializedRow>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
+    activity_bundles: Vec<ckbadger_store::types::TxActivityBundle>,
 }
 
 struct BlockHistoryRows {
     rows: Vec<materialize::MaterializedRow>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
+    activity_bundles: Vec<ckbadger_store::types::TxActivityBundle>,
 }
 
 #[doc(hidden)]
@@ -1723,9 +1725,11 @@ fn build_history_rows(
         arena.blocks.len() * 2 + arena.txs.len() * 2 + arena.cells.len() * 2 + arena.txs.len();
     let mut all_rows = Vec::with_capacity(estimated_total);
     let mut all_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
+    let mut all_bundles: Vec<ckbadger_store::types::TxActivityBundle> = Vec::new();
     for result in block_results {
         let block_rows = result?;
         all_rows.extend(block_rows.rows);
+        all_bundles.extend(block_rows.activity_bundles);
         for (k, v) in block_rows.identity_activity_count_deltas {
             let entry = all_deltas.entry(k).or_insert(0);
             *entry = entry
@@ -1737,6 +1741,7 @@ fn build_history_rows(
     Ok(HistoryBuildResult {
         rows: all_rows,
         identity_activity_count_deltas: all_deltas,
+        activity_bundles: all_bundles,
     })
 }
 
@@ -1942,6 +1947,7 @@ fn build_history_rows_for_block(
     }
 
     // Activity bundles for this block.
+    let mut activity_bundles;
     {
         if block_txs.len() != block_resolved.len() {
             bail!(
@@ -2010,6 +2016,7 @@ fn build_history_rows_for_block(
                 token_info_cache,
                 detectors,
             )?;
+        activity_bundles = Vec::with_capacity(bundles.len());
         for bundle in bundles {
             rows.push(materialize::MaterializedRow::new(
                 CF_ACTIVITIES,
@@ -2020,6 +2027,7 @@ fn build_history_rows_for_block(
                 ),
                 bincode_serialize_presized(&bundle)?,
             ));
+            activity_bundles.push(bundle);
         }
     }
 
@@ -2205,6 +2213,7 @@ fn build_history_rows_for_block(
     Ok(BlockHistoryRows {
         rows,
         identity_activity_count_deltas,
+        activity_bundles,
     })
 }
 
@@ -2414,10 +2423,10 @@ fn build_token_info_cache_from_facts(
 
 #[cfg(test)]
 fn build_sealed_aggregate_rows(
-    history_rows: &[materialize::MaterializedRow],
+    bundles: &[TxActivityBundle],
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let mut accumulator = ActivityStatsAccumulator::default();
-    accumulator.apply_history_rows(history_rows)?;
+    accumulator.apply_bundles(bundles)?;
     accumulator.build_rows()
 }
 
@@ -4333,7 +4342,8 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
         let history = build_history_rows(&arena, &resolved, &frozen, true, &domain_store)
             .expect("history rows");
-        let sealed_rows = build_sealed_aggregate_rows(&history.rows).expect("sealed rows");
+        let sealed_rows =
+            build_sealed_aggregate_rows(&history.activity_bundles).expect("sealed rows");
         let final_snapshot_rows =
             build_final_snapshot_rows(&sequencer, &frozen).expect("final snapshot rows");
 
@@ -4969,5 +4979,88 @@ mod tests {
         let desired = (target_txs / tx_density) as u64;
         let clamped = desired.clamp(10_000, 100_000);
         assert_eq!(clamped, 100_000);
+    }
+
+    #[test]
+    fn apply_bundles_accumulates_daily_and_hourly_stats() {
+        let bundle = TxActivityBundle {
+            tx_hash: vec![0x11; 32],
+            block_hash: vec![0x22; 32],
+            block_number: 100,
+            tx_index: 0,
+            timestamp: 1_700_000_000_000, // 2023-11-14 22:13:20 UTC
+            is_cellbase: false,
+            owners: vec![ckbadger_store::types::OwnerActivityDelta {
+                lock_hash: vec![0x33; 32],
+                lock_code_hash: vec![0x44; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0x55; 20],
+                ckb_delta: 100_00000000,
+                used_delta: 0,
+                has_type_script: false,
+                involved_script_code_hashes: vec![vec![0x44; 32]],
+                asset_changes: vec![],
+                type_calls: None,
+                lock_calls: None,
+                protocol_actions: vec![],
+                peers: vec![],
+            }],
+        };
+
+        let mut acc = ActivityStatsAccumulator::default();
+        acc.apply_bundles(&[bundle]).unwrap();
+
+        let date_key = ckbadger_common::block_date_from_ms(1_700_000_000_000)
+            .format("%Y%m%d")
+            .to_string();
+        let daily = acc.daily_stats.get(&date_key).expect("daily stats");
+        assert_eq!(daily.transfer_count, 1, "pure CKB transfer");
+        assert_eq!(daily.total_ckb_moved, 100_00000000);
+        assert_eq!(daily.coinbase_count, 0);
+        assert_eq!(acc.daily_addrs.get(&date_key).unwrap().len(), 1);
+
+        let hour_key = ckbadger_common::block_datetime_from_ms(1_700_000_000_000)
+            .format("%Y%m%d%H")
+            .to_string();
+        assert!(acc.hourly_stats.contains_key(&hour_key));
+        assert_eq!(acc.hourly_addrs.get(&hour_key).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn apply_bundles_excludes_coinbase_from_unique_addrs() {
+        let bundle = TxActivityBundle {
+            tx_hash: vec![0x11; 32],
+            block_hash: vec![0x22; 32],
+            block_number: 100,
+            tx_index: 0,
+            timestamp: 1_700_000_000_000,
+            is_cellbase: true,
+            owners: vec![ckbadger_store::types::OwnerActivityDelta {
+                lock_hash: vec![0x33; 32],
+                lock_code_hash: vec![0x44; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0x55; 20],
+                ckb_delta: 100_00000000,
+                used_delta: 0,
+                has_type_script: false,
+                involved_script_code_hashes: vec![],
+                asset_changes: vec![],
+                type_calls: None,
+                lock_calls: None,
+                protocol_actions: vec![],
+                peers: vec![],
+            }],
+        };
+
+        let mut acc = ActivityStatsAccumulator::default();
+        acc.apply_bundles(&[bundle]).unwrap();
+
+        let date_key = ckbadger_common::block_date_from_ms(1_700_000_000_000)
+            .format("%Y%m%d")
+            .to_string();
+        let daily = acc.daily_stats.get(&date_key).expect("daily stats");
+        assert_eq!(daily.coinbase_count, 1);
+        assert_eq!(daily.transfer_count, 0);
+        assert!(!acc.daily_addrs.contains_key(&date_key) || acc.daily_addrs[&date_key].is_empty());
     }
 }
