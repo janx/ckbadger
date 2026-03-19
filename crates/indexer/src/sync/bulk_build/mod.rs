@@ -2179,12 +2179,12 @@ fn parsed_udt_cell_from_parts(
             context
         )
     })?;
-    let amount = udt_amount.ok_or_else(|| {
-        anyhow!(
-            "missing udt_amount for bulk build token transfer cell: {}",
-            context
-        )
-    })?;
+    // xUDT-compatible cells can carry non-amount payloads (e.g. owner-mode cells).
+    // These are legitimately tagged Xudt by semantic classification but have no
+    // fungible amount — skip them for token transfer processing.
+    let Some(amount) = udt_amount else {
+        return Ok(None);
+    };
 
     Ok(Some(ParsedUdtCell {
         type_script_hash: interner.resolve_bytes(type_script_hash_id).to_vec(),
@@ -4287,5 +4287,77 @@ mod tests {
         // Block 11 spend tx: 1 input (genesis cell), 1 output
         assert_eq!(resolved[2].resolved_inputs.len(), 1);
         assert_eq!(resolved[2].resolved_inputs[0].capacity, 500_00000000);
+    }
+
+    #[test]
+    fn test_xudt_owner_mode_cell_without_amount_returns_none() {
+        let mut interner = interner::IdentityInterner::default();
+        let script_hash_id = interner.intern_bytes(vec![0xaa; 32]);
+        let code_hash_id = interner.intern_bytes(vec![0xbb; 32]);
+        let args_id = interner.intern_bytes(vec![0xcc; 20]);
+        let lock_id = interner.intern_bytes(vec![0xdd; 32]);
+
+        // xUDT cell with no amount (owner-mode) should return Ok(None), not error
+        let result = parsed_udt_cell_from_parts(
+            CellSemanticTag::Xudt,
+            Some(script_hash_id),
+            Some(code_hash_id),
+            Some(1),
+            Some(args_id),
+            lock_id,
+            None, // no udt_amount — owner-mode cell
+            &interner,
+            "test xudt owner-mode",
+        );
+        assert!(result.is_ok(), "should not error on xUDT without amount");
+        assert!(
+            result.unwrap().is_none(),
+            "should return None for owner-mode xUDT"
+        );
+    }
+
+    #[test]
+    fn test_xudt_cell_with_amount_returns_parsed_cell() {
+        let mut interner = interner::IdentityInterner::default();
+        let script_hash_id = interner.intern_bytes(vec![0xaa; 32]);
+        let code_hash_id = interner.intern_bytes(vec![0xbb; 32]);
+        let args_id = interner.intern_bytes(vec![0xcc; 20]);
+        let lock_id = interner.intern_bytes(vec![0xdd; 32]);
+
+        let result = parsed_udt_cell_from_parts(
+            CellSemanticTag::Xudt,
+            Some(script_hash_id),
+            Some(code_hash_id),
+            Some(1),
+            Some(args_id),
+            lock_id,
+            Some(1000),
+            &interner,
+            "test xudt with amount",
+        );
+        let cell = result
+            .unwrap()
+            .expect("should return Some for xUDT with amount");
+        assert_eq!(cell.amount, 1000);
+        assert!(matches!(cell.standard, UdtStandard::Xudt));
+    }
+
+    #[test]
+    fn test_plain_cell_skipped_for_udt_processing() {
+        let mut interner = interner::IdentityInterner::default();
+        let lock_id = interner.intern_bytes(vec![0xdd; 32]);
+
+        let result = parsed_udt_cell_from_parts(
+            CellSemanticTag::Plain,
+            None,
+            None,
+            None,
+            None,
+            lock_id,
+            None,
+            &interner,
+            "test plain cell",
+        );
+        assert!(result.unwrap().is_none());
     }
 }

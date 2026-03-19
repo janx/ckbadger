@@ -87,7 +87,7 @@ pub(crate) fn classify_das_action(action: &str) -> DasActionKind {
         | "deploy"
         | "init_account_chain" => DasActionKind::Suppressed,
         // Order / payment refunds
-        "order_refund" => DasActionKind::Suppressed,
+        "order_refund" | "cross_refund" => DasActionKind::Suppressed,
         // Offers — OfferCell, not AccountCell
         "make_offer" | "edit_offer" | "cancel_offer" => DasActionKind::Suppressed,
         // Income / Balance
@@ -1293,6 +1293,7 @@ mod tests {
             "create_device_key_list",
             "refund_pay",
             "order_refund",
+            "cross_refund",
         ];
         for action in &suppressed {
             assert!(
