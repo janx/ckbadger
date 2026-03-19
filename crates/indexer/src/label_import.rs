@@ -598,19 +598,23 @@ fn import_single_deployment(
     store.put_script_info_direct(&code_hash, &info)?;
 
     // Resolve version_hash from the deployment's data_hash.
+    // Pseudo-scripts (Type ID, Zero Lock) have no deployed code cell and therefore
+    // no meaningful dataHash — skip the version-write; code_hash-level metadata
+    // was already persisted above.
     let data_hash = decode_hex(&deployment.data_hash).ok();
     let is_zero_data = data_hash
         .as_ref()
         .map(|h| h.iter().all(|&b| b == 0))
         .unwrap_or(true);
     let version_hash = if is_zero_data { None } else { data_hash };
-    let version_hash = version_hash.ok_or_else(|| {
-        anyhow::anyhow!(
-            "script label deployment missing non-zero dataHash: script={}, code_hash=0x{}",
-            script.name,
-            hex::encode(&code_hash)
-        )
-    })?;
+    let Some(version_hash) = version_hash else {
+        debug!(
+            script = script.name,
+            code_hash = hex::encode(&code_hash),
+            "skipping version-write for pseudo-script with no dataHash"
+        );
+        return Ok(());
+    };
     let mut version_info = store.get_script_version(&version_hash)?.unwrap_or_else(|| {
         ckbadger_store::types::ScriptVersionInfo {
             version_hash: version_hash.clone(),
@@ -933,6 +937,62 @@ mod tests {
                 .list_script_version_hashes_by_label("Test Script")
                 .unwrap(),
             vec![version_hash]
+        );
+    }
+
+    #[test]
+    fn test_import_pseudo_script_with_zero_data_hash_succeeds() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        // Type ID is a protocol-level pseudo-script with no deployed code cell.
+        let script = ScriptLabelInfo {
+            name: "Type ID".to_string(),
+            description: "CKB built-in type ID".to_string(),
+            _rfc: String::new(),
+            website: String::new(),
+            _source_url: String::new(),
+            decoder_type: None,
+            deployments: ScriptDeployments {
+                mainnet: vec![ScriptDeployment {
+                    _tag: None,
+                    deprecated: false,
+                    hash_type: "type".to_string(),
+                    data_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+                        .to_string(),
+                    _type_hash: String::new(),
+                    code_hash: "0x00000000000000000000000000000000000000000000000000545950455f4944"
+                        .to_string(),
+                }],
+                testnet: vec![],
+            },
+        };
+
+        // Should succeed — no error returned.
+        upsert_script_label(&store, &script, "mainnet").unwrap();
+
+        // Code-hash-level metadata IS written.
+        let code_hash =
+            hex::decode("00000000000000000000000000000000000000000000000000545950455f4944")
+                .unwrap();
+        let info = store.get_script_info(&code_hash).unwrap().unwrap();
+        assert_eq!(info.name.as_deref(), Some("Type ID"));
+
+        // No version entry (no real dataHash to key on).
+        let zero_hash = vec![0u8; 32];
+        assert!(store.get_script_version(&zero_hash).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_bundled_label_import_has_no_errors() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        let result = super::run_label_import_bundled(&store, "mainnet").unwrap();
+        assert!(
+            result.errors.is_empty(),
+            "expected zero import errors, got: {:?}",
+            result.errors
         );
     }
 

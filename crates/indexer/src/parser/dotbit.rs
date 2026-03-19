@@ -138,15 +138,15 @@ impl DotbitParser {
             return None;
         }
 
-        let account_id_from_args = cell.type_args.as_ref()?;
-        let account_id_from_data = data[HASH_BYTES_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN].to_vec();
+        let account_id_from_args = cell.type_args.as_deref();
+        let account_id_from_data = &data[HASH_BYTES_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN];
 
-        let account_id = if account_id_from_args.len() == ACCOUNT_ID_LEN
-            && !account_id_from_args.iter().all(|&b| b == 0)
+        let account_id = if let Some(args) =
+            account_id_from_args.filter(|a| a.len() == ACCOUNT_ID_LEN && !a.iter().all(|&b| b == 0))
         {
-            account_id_from_args.clone()
+            args.to_vec()
         } else if !account_id_from_data.iter().all(|&b| b == 0) {
-            account_id_from_data
+            account_id_from_data.to_vec()
         } else {
             return None;
         };
@@ -1218,6 +1218,68 @@ mod tests {
         assert_eq!(parsed[0].account.account.as_deref(), Some("bob.bit"));
         assert_eq!(parsed[0].account.registered_at, Some(registered_at));
         assert_eq!(parsed[0].account.status, Some(status));
+    }
+
+    #[test]
+    fn test_parse_account_parsed_cell_falls_back_to_data_when_type_args_absent() {
+        let account_id = [0x55u8; 20];
+        // Build a ParsedCell with type_code_hash set to DotBit AccountCell
+        // but type_args = None (simulating historical cells without type args).
+        let dotbit_code_hash = crate::rpc::parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID);
+        let type_script_hash = vec![0xAA; 32]; // dummy
+
+        let data = create_account_cell_data(&account_id, None, Some(1735689600));
+
+        let parsed_cell = crate::parser::cell::ParsedCell {
+            capacity: 100_00000000,
+            lock_code_hash: vec![0; 32],
+            lock_hash_type: 0,
+            lock_args: vec![],
+            lock_script_hash: vec![0xBB; 32],
+            type_code_hash: Some(dotbit_code_hash),
+            type_hash_type: Some(1),
+            type_args: None, // <-- the key condition: no type_args
+            type_script_hash: Some(type_script_hash),
+            data_hash: [0; 32],
+            data_size: data.len() as i32,
+            data,
+        };
+
+        let result = DotbitParser::parse_account_parsed_cell(&parsed_cell);
+        assert!(
+            result.is_some(),
+            "should fall back to data[32..52] when type_args is None"
+        );
+        assert_eq!(result.unwrap().account_id, account_id.to_vec());
+    }
+
+    #[test]
+    fn test_parse_account_parsed_cell_returns_none_when_both_sources_zero() {
+        let dotbit_code_hash = crate::rpc::parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID);
+
+        let zero_account_id = [0u8; 20];
+        let data = create_account_cell_data(&zero_account_id, None, None);
+
+        let parsed_cell = crate::parser::cell::ParsedCell {
+            capacity: 100_00000000,
+            lock_code_hash: vec![0; 32],
+            lock_hash_type: 0,
+            lock_args: vec![],
+            lock_script_hash: vec![0xBB; 32],
+            type_code_hash: Some(dotbit_code_hash),
+            type_hash_type: Some(1),
+            type_args: None,
+            type_script_hash: Some(vec![0xAA; 32]),
+            data_hash: [0; 32],
+            data_size: data.len() as i32,
+            data,
+        };
+
+        let result = DotbitParser::parse_account_parsed_cell(&parsed_cell);
+        assert!(
+            result.is_none(),
+            "should return None when both type_args and data account_id are zero"
+        );
     }
 
     #[test]
