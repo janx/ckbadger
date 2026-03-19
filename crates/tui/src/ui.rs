@@ -33,6 +33,9 @@ const SLATE_700: Color = Color::Rgb(80, 95, 115);
 const SLATE_500: Color = Color::Rgb(160, 174, 192);
 const FOREGROUND: Color = Color::Rgb(237, 237, 237);
 const ERROR_RED: Color = Color::Rgb(239, 68, 68);
+const L0_GAUGE_MAX: u64 = 20;
+const P95_WINDOW: usize = 300;
+const P95_MIN_WIDTH: u16 = 40;
 
 #[derive(Debug, Clone)]
 pub struct LogEntry {
@@ -1667,248 +1670,318 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
         let spark_width = cols[1].width.saturating_sub(14).clamp(8, 24) as usize;
         let (left, right) = if dense_panel {
             (
-                vec![
-                    Line::from(vec![
-                        Span::styled("State ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            format!("[{}]", state),
-                            Style::default()
-                                .fg(Color::Black)
-                                .bg(state_color)
-                                .add_modifier(Modifier::BOLD),
+                {
+                    let mut left = vec![
+                        Line::from(vec![
+                            Span::styled("State ", Style::default().fg(SLATE_500)),
+                            Span::styled(
+                                format!("[{}]", state),
+                                Style::default()
+                                    .fg(Color::Black)
+                                    .bg(state_color)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled("  Bottleneck ", Style::default().fg(SLATE_500)),
+                            Span::styled(stage, Style::default().fg(stage_color)),
+                        ]),
+                        pipeline_stage_line(
+                            "FETCH",
+                            pipeline.fetch_ms,
+                            pipeline.fetch_queue_depth,
+                            pipeline.fetch_queue_capacity,
+                            TERMINAL_DIM,
                         ),
-                        Span::styled("  Bottleneck ", Style::default().fg(SLATE_500)),
-                        Span::styled(stage, Style::default().fg(stage_color)),
-                    ]),
-                    pipeline_stage_line(
-                        "FETCH",
-                        pipeline.fetch_ms,
-                        pipeline.fetch_queue_depth,
-                        pipeline.fetch_queue_capacity,
-                        TERMINAL_DIM,
-                    ),
-                    pipeline_stage_line(
-                        "PARSE",
-                        pipeline.parse_ms,
-                        pipeline.parse_queue_depth,
-                        pipeline.parse_queue_capacity,
-                        AMBER,
-                    ),
-                    pipeline_stage_line(
-                        "WRITE",
-                        pipeline.write_ms,
-                        pipeline.writer_queue_depth,
-                        pipeline.writer_queue_capacity,
-                        TERMINAL_GREEN,
-                    ),
-                    Line::from(vec![
-                        Span::styled("Commit ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            pipeline_commit_ms_text.clone(),
-                            Style::default().fg(FOREGROUND),
+                        pipeline_stage_line(
+                            "PARSE",
+                            pipeline.parse_ms,
+                            pipeline.parse_queue_depth,
+                            pipeline.parse_queue_capacity,
+                            AMBER,
                         ),
-                        Span::styled("  ", Style::default().fg(SLATE_700)),
-                        Span::styled("Wait ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            pipeline
-                                .writer_wait_ms
-                                .map(|v| format!("{v:.1}ms"))
-                                .unwrap_or_else(|| "-".to_string()),
-                            Style::default().fg(FOREGROUND),
+                        pipeline_stage_line(
+                            "WRITE",
+                            pipeline.write_ms,
+                            pipeline.writer_queue_depth,
+                            pipeline.writer_queue_capacity,
+                            TERMINAL_GREEN,
                         ),
-                        Span::styled("  Trend ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            bottleneck_delta_text,
-                            Style::default().fg(delta_color(bottleneck_delta)),
-                        ),
-                    ]),
-                    adaptive_control_line(AdaptiveControlSnapshot {
-                        last_batch_blocks: sync.last_batch_blocks,
-                        adaptive_inflight_batches,
-                        adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
-                        adaptive_inflight_limit: sync.adaptive_inflight_limit,
-                        adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
-                        adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
-                        adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
-                        adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
-                        adaptive_last_adjusted_age_secs: sync.adaptive_last_adjusted_age_secs,
-                        adaptive_backoff_streak: sync.adaptive_backoff_streak,
-                    }),
-                    pipeline_reset_line(
+                        Line::from(vec![
+                            Span::styled("Commit ", Style::default().fg(SLATE_500)),
+                            Span::styled(
+                                pipeline_commit_ms_text.clone(),
+                                Style::default().fg(FOREGROUND),
+                            ),
+                            Span::styled("  ", Style::default().fg(SLATE_700)),
+                            Span::styled("Wait ", Style::default().fg(SLATE_500)),
+                            Span::styled(
+                                pipeline
+                                    .writer_wait_ms
+                                    .map(|v| format!("{v:.1}ms"))
+                                    .unwrap_or_else(|| "-".to_string()),
+                                Style::default().fg(FOREGROUND),
+                            ),
+                            Span::styled("  Trend ", Style::default().fg(SLATE_500)),
+                            Span::styled(
+                                bottleneck_delta_text,
+                                Style::default().fg(delta_color(bottleneck_delta)),
+                            ),
+                        ]),
+                    ];
+                    let adaptive = adaptive_control_lines(
+                        AdaptiveControlSnapshot {
+                            last_batch_blocks: sync.last_batch_blocks,
+                            adaptive_inflight_batches,
+                            adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
+                            adaptive_inflight_limit: sync.adaptive_inflight_limit,
+                            adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
+                            adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
+                            adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
+                            adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
+                            adaptive_last_adjusted_age_secs: sync.adaptive_last_adjusted_age_secs,
+                            adaptive_backoff_streak: sync.adaptive_backoff_streak,
+                        },
+                        dense_panel,
                         sync.pipeline_reset_epoch,
                         sync.pipeline_reset_reason.as_deref(),
-                    ),
-                ],
-                dense_right_lines(
-                    stage_trend_line("F", TERMINAL_DIM, &app.fetch_stage_history, spark_width),
-                    stage_trend_line("P", AMBER, &app.parse_stage_history, spark_width),
-                    stage_trend_line("W", TERMINAL_GREEN, &app.write_stage_history, spark_width),
-                    stage_trend_line("C", CYAN, &app.db_commit_history, spark_width),
-                    Line::from(vec![
-                        Span::styled("Stability ", Style::default().fg(SLATE_500)),
-                        Span::styled(stability, Style::default().fg(stability_color)),
-                    ]),
-                    io_fetch_write_jitter_line(
-                        &fetch_ms_text,
-                        &pipeline_write_stage_ms_text,
-                        &pipeline_commit_ms_text,
-                        &pipeline_gap_ms_text,
-                        &rate_jitter_text,
-                    ),
-                ),
+                    );
+                    left.extend(adaptive);
+                    left
+                },
+                {
+                    let show_p95 = cols[1].width >= P95_MIN_WIDTH;
+                    let gauge_width = (cols[1].width / 4).clamp(6, 12) as usize;
+                    let spark_fp = merged_sparkline_p95_line(
+                        "F",
+                        TERMINAL_DIM,
+                        &app.fetch_stage_history,
+                        "P",
+                        AMBER,
+                        &app.parse_stage_history,
+                        spark_width,
+                        show_p95,
+                    );
+                    let spark_wc = merged_sparkline_p95_line(
+                        "W",
+                        TERMINAL_GREEN,
+                        &app.write_stage_history,
+                        "C",
+                        CYAN,
+                        &app.db_commit_history,
+                        spark_width,
+                        show_p95,
+                    );
+                    let (l0_line, wbm_line, pressure_line) = if let Some(mem) = &app.memory_stats {
+                        (
+                            storage_pressure_l0_line(mem, gauge_width),
+                            storage_pressure_wbm_line(mem, gauge_width),
+                            storage_pressure_summary_line(mem),
+                        )
+                    } else {
+                        (
+                            Line::from(Span::styled("L0 -", Style::default().fg(SLATE_500))),
+                            Line::from(Span::styled("WBM -", Style::default().fg(SLATE_500))),
+                            Line::from(Span::styled("Compact -", Style::default().fg(SLATE_500))),
+                        )
+                    };
+                    dense_right_lines(
+                        spark_fp,
+                        spark_wc,
+                        l0_line,
+                        wbm_line,
+                        pressure_line,
+                        Line::from(vec![
+                            Span::styled("Stability ", Style::default().fg(SLATE_500)),
+                            Span::styled(stability, Style::default().fg(stability_color)),
+                            Span::styled("  jitter ", Style::default().fg(SLATE_500)),
+                            Span::styled(rate_jitter_text.to_string(), Style::default().fg(AMBER)),
+                        ]),
+                    )
+                },
             )
         } else {
             (
-                vec![
-                    Line::from(vec![
-                        Span::styled("State ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            format!("[{}]", state),
-                            Style::default()
-                                .fg(Color::Black)
-                                .bg(state_color)
-                                .add_modifier(Modifier::BOLD),
+                {
+                    let mut left = vec![
+                        Line::from(vec![
+                            Span::styled("State ", Style::default().fg(SLATE_500)),
+                            Span::styled(
+                                format!("[{}]", state),
+                                Style::default()
+                                    .fg(Color::Black)
+                                    .bg(state_color)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled("  Bottleneck ", Style::default().fg(SLATE_500)),
+                            Span::styled(stage, Style::default().fg(stage_color)),
+                            Span::styled("  Δ ", Style::default().fg(SLATE_500)),
+                            Span::styled(
+                                bottleneck_delta_text,
+                                Style::default().fg(delta_color(bottleneck_delta)),
+                            ),
+                        ]),
+                        pipeline_stage_line(
+                            "FETCH",
+                            pipeline.fetch_ms,
+                            pipeline.fetch_queue_depth,
+                            pipeline.fetch_queue_capacity,
+                            TERMINAL_DIM,
                         ),
-                        Span::styled("  Bottleneck ", Style::default().fg(SLATE_500)),
-                        Span::styled(stage, Style::default().fg(stage_color)),
-                        Span::styled("  Δ ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            bottleneck_delta_text,
-                            Style::default().fg(delta_color(bottleneck_delta)),
+                        pipeline_stage_line(
+                            "PARSE",
+                            pipeline.parse_ms,
+                            pipeline.parse_queue_depth,
+                            pipeline.parse_queue_capacity,
+                            AMBER,
                         ),
-                    ]),
-                    pipeline_stage_line(
-                        "FETCH",
-                        pipeline.fetch_ms,
-                        pipeline.fetch_queue_depth,
-                        pipeline.fetch_queue_capacity,
-                        TERMINAL_DIM,
-                    ),
-                    pipeline_stage_line(
-                        "PARSE",
-                        pipeline.parse_ms,
-                        pipeline.parse_queue_depth,
-                        pipeline.parse_queue_capacity,
-                        AMBER,
-                    ),
-                    pipeline_stage_line(
-                        "WRITE",
-                        pipeline.write_ms,
-                        pipeline.writer_queue_depth,
-                        pipeline.writer_queue_capacity,
-                        TERMINAL_GREEN,
-                    ),
-                    Line::from(vec![
-                        Span::styled("Util F/P/W ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            format!("{}/{}/{}", fetch_util, parse_util, write_util),
-                            Style::default().fg(FOREGROUND),
+                        pipeline_stage_line(
+                            "WRITE",
+                            pipeline.write_ms,
+                            pipeline.writer_queue_depth,
+                            pipeline.writer_queue_capacity,
+                            TERMINAL_GREEN,
                         ),
-                        Span::styled("  Commit ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            pipeline_commit_ms_text.clone(),
-                            Style::default().fg(FOREGROUND),
-                        ),
-                        Span::styled("  Wait ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            pipeline
-                                .writer_wait_ms
-                                .map(|v| format!("{v:.1}ms"))
-                                .unwrap_or_else(|| "-".to_string()),
-                            Style::default().fg(AMBER),
-                        ),
-                    ]),
-                    adaptive_control_line(AdaptiveControlSnapshot {
-                        last_batch_blocks: sync.last_batch_blocks,
-                        adaptive_inflight_batches,
-                        adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
-                        adaptive_inflight_limit: sync.adaptive_inflight_limit,
-                        adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
-                        adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
-                        adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
-                        adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
-                        adaptive_last_adjusted_age_secs: sync.adaptive_last_adjusted_age_secs,
-                        adaptive_backoff_streak: sync.adaptive_backoff_streak,
-                    }),
-                    pipeline_reset_line(
+                        Line::from(vec![
+                            Span::styled("Util F/P/W ", Style::default().fg(SLATE_500)),
+                            Span::styled(
+                                format!("{}/{}/{}", fetch_util, parse_util, write_util),
+                                Style::default().fg(FOREGROUND),
+                            ),
+                            Span::styled("  Commit ", Style::default().fg(SLATE_500)),
+                            Span::styled(
+                                pipeline_commit_ms_text.clone(),
+                                Style::default().fg(FOREGROUND),
+                            ),
+                            Span::styled("  Wait ", Style::default().fg(SLATE_500)),
+                            Span::styled(
+                                pipeline
+                                    .writer_wait_ms
+                                    .map(|v| format!("{v:.1}ms"))
+                                    .unwrap_or_else(|| "-".to_string()),
+                                Style::default().fg(AMBER),
+                            ),
+                        ]),
+                    ];
+                    let adaptive = adaptive_control_lines(
+                        AdaptiveControlSnapshot {
+                            last_batch_blocks: sync.last_batch_blocks,
+                            adaptive_inflight_batches,
+                            adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
+                            adaptive_inflight_limit: sync.adaptive_inflight_limit,
+                            adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
+                            adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
+                            adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
+                            adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
+                            adaptive_last_adjusted_age_secs: sync.adaptive_last_adjusted_age_secs,
+                            adaptive_backoff_streak: sync.adaptive_backoff_streak,
+                        },
+                        false,
                         sync.pipeline_reset_epoch,
                         sync.pipeline_reset_reason.as_deref(),
-                    ),
-                ],
-                detail_right_lines(
-                    stage_trend_line("F", TERMINAL_DIM, &app.fetch_stage_history, spark_width),
-                    stage_trend_line("P", AMBER, &app.parse_stage_history, spark_width),
-                    stage_trend_line("W", TERMINAL_GREEN, &app.write_stage_history, spark_width),
-                    stage_trend_line("C", CYAN, &app.db_commit_history, spark_width),
-                    Line::from(vec![
-                        Span::styled("Stability ", Style::default().fg(SLATE_500)),
-                        Span::styled(stability, Style::default().fg(stability_color)),
-                        Span::styled("  ETA ", Style::default().fg(SLATE_500)),
-                        Span::styled(eta_conf.0, Style::default().fg(eta_conf.1)),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("Rate ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            format!(
-                                "{}  {}",
-                                format_rate_pair(sync.rate_realtime, sync.rate_ema, "blk/s"),
-                                format_rate_pair(sync.tx_rate_realtime, sync.tx_rate_ema, "tx/s"),
-                            ),
-                            Style::default().fg(TERMINAL_GREEN),
+                    );
+                    left.extend(adaptive);
+                    left
+                },
+                {
+                    let show_p95 = cols[1].width >= P95_MIN_WIDTH;
+                    let gauge_width = (cols[1].width / 4).clamp(6, 12) as usize;
+                    let spark_fp = merged_sparkline_p95_line(
+                        "F",
+                        TERMINAL_DIM,
+                        &app.fetch_stage_history,
+                        "P",
+                        AMBER,
+                        &app.parse_stage_history,
+                        spark_width,
+                        show_p95,
+                    );
+                    let spark_wc = merged_sparkline_p95_line(
+                        "W",
+                        TERMINAL_GREEN,
+                        &app.write_stage_history,
+                        "C",
+                        CYAN,
+                        &app.db_commit_history,
+                        spark_width,
+                        show_p95,
+                    );
+                    let (l0_line, wbm_line, pressure_line) = if let Some(mem) = &app.memory_stats {
+                        (
+                            storage_pressure_l0_line(mem, gauge_width),
+                            storage_pressure_wbm_line(mem, gauge_width),
+                            storage_pressure_summary_line(mem),
+                        )
+                    } else {
+                        (
+                            Line::from(Span::styled("L0 -", Style::default().fg(SLATE_500))),
+                            Line::from(Span::styled("WBM -", Style::default().fg(SLATE_500))),
+                            Line::from(Span::styled("Compact -", Style::default().fg(SLATE_500))),
+                        )
+                    };
+                    detail_right_lines(
+                        spark_fp,
+                        spark_wc,
+                        l0_line,
+                        wbm_line,
+                        pressure_line,
+                        Line::from(vec![
+                            Span::styled("Stability ", Style::default().fg(SLATE_500)),
+                            Span::styled(stability, Style::default().fg(stability_color)),
+                            Span::styled("  ETA ", Style::default().fg(SLATE_500)),
+                            Span::styled(eta_conf.0, Style::default().fg(eta_conf.1)),
+                        ]),
+                        io_fetch_write_jitter_line(
+                            &fetch_ms_text,
+                            &pipeline_write_stage_ms_text,
+                            &pipeline_commit_ms_text,
+                            &pipeline_gap_ms_text,
+                            &rate_jitter_text,
                         ),
-                        Span::styled("  samples ", Style::default().fg(SLATE_500)),
-                        Span::styled(
-                            format_num_u64(app.write_stage_history.len() as u64),
-                            Style::default().fg(FOREGROUND),
-                        ),
-                    ]),
-                    io_fetch_write_jitter_line(
-                        &fetch_ms_text,
-                        &pipeline_write_stage_ms_text,
-                        &pipeline_commit_ms_text,
-                        &pipeline_gap_ms_text,
-                        &rate_jitter_text,
-                    ),
-                ),
+                    )
+                },
             )
         };
 
         (left, right)
     } else {
         (
-            vec![
-                Line::from(vec![
-                    Span::styled("State ", Style::default().fg(SLATE_500)),
-                    Span::styled("N/A", Style::default().fg(SLATE_500)),
-                ]),
-                Line::from(vec![
-                    Span::styled("Pipeline ", Style::default().fg(SLATE_500)),
-                    Span::styled("not available", Style::default().fg(SLATE_500)),
-                ]),
-                Line::from(vec![
-                    Span::styled("Samples ", Style::default().fg(SLATE_500)),
-                    Span::styled(
-                        format_num_u64(app.rate_history.len() as u64),
-                        Style::default().fg(FOREGROUND),
-                    ),
-                ]),
-                adaptive_control_line(AdaptiveControlSnapshot {
-                    last_batch_blocks: sync.last_batch_blocks,
-                    adaptive_inflight_batches: None,
-                    adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
-                    adaptive_inflight_limit: sync.adaptive_inflight_limit,
-                    adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
-                    adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
-                    adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
-                    adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
-                    adaptive_last_adjusted_age_secs: sync.adaptive_last_adjusted_age_secs,
-                    adaptive_backoff_streak: sync.adaptive_backoff_streak,
-                }),
-                pipeline_reset_line(
+            {
+                let mut left = vec![
+                    Line::from(vec![
+                        Span::styled("State ", Style::default().fg(SLATE_500)),
+                        Span::styled("N/A", Style::default().fg(SLATE_500)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("Pipeline ", Style::default().fg(SLATE_500)),
+                        Span::styled("not available", Style::default().fg(SLATE_500)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("Samples ", Style::default().fg(SLATE_500)),
+                        Span::styled(
+                            format_num_u64(app.rate_history.len() as u64),
+                            Style::default().fg(FOREGROUND),
+                        ),
+                    ]),
+                ];
+                let adaptive = adaptive_control_lines(
+                    AdaptiveControlSnapshot {
+                        last_batch_blocks: sync.last_batch_blocks,
+                        adaptive_inflight_batches: None,
+                        adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
+                        adaptive_inflight_limit: sync.adaptive_inflight_limit,
+                        adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
+                        adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
+                        adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
+                        adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
+                        adaptive_last_adjusted_age_secs: sync.adaptive_last_adjusted_age_secs,
+                        adaptive_backoff_streak: sync.adaptive_backoff_streak,
+                    },
+                    dense_panel,
                     sync.pipeline_reset_epoch,
                     sync.pipeline_reset_reason.as_deref(),
-                ),
-            ],
+                );
+                left.extend(adaptive);
+                left
+            },
             vec![
                 {
                     let write_stage_ms_text = sync
@@ -1999,7 +2072,12 @@ struct AdaptiveControlSnapshot<'a> {
     adaptive_backoff_streak: Option<u64>,
 }
 
-fn adaptive_control_line(snapshot: AdaptiveControlSnapshot<'_>) -> Line<'static> {
+fn adaptive_control_lines(
+    snapshot: AdaptiveControlSnapshot<'_>,
+    dense: bool,
+    pipeline_reset_epoch: Option<u64>,
+    pipeline_reset_reason: Option<&str>,
+) -> Vec<Line<'static>> {
     let (state, state_color) = adaptive_state_label(snapshot.adaptive_last_reason);
     let batch_blocks_text = snapshot
         .last_batch_blocks
@@ -2007,11 +2085,11 @@ fn adaptive_control_line(snapshot: AdaptiveControlSnapshot<'_>) -> Line<'static>
         .unwrap_or_else(|| "-".to_string());
     let target_text = snapshot
         .adaptive_target_batch_txs
-        .map(format_num_u64)
+        .map(format_num_compact)
         .unwrap_or_else(|| "-".to_string());
-    let min_target_text = snapshot
+    let floor_text = snapshot
         .adaptive_min_target_batch_txs
-        .map(format_num_u64)
+        .map(format_num_compact)
         .unwrap_or_else(|| "-".to_string());
     let inflight_text = match (
         snapshot.adaptive_inflight_batches,
@@ -2022,6 +2100,41 @@ fn adaptive_control_line(snapshot: AdaptiveControlSnapshot<'_>) -> Line<'static>
         (None, Some(limit)) => format!("-/{limit}"),
         (None, None) => "-".to_string(),
     };
+
+    let state_text = if let Some(streak) = snapshot.adaptive_backoff_streak.filter(|v| *v > 0) {
+        format!("{state} x{streak}")
+    } else {
+        state.to_string()
+    };
+    let state_text_color = if snapshot.adaptive_backoff_streak.unwrap_or(0) >= 5 {
+        ERROR_RED
+    } else {
+        state_color
+    };
+
+    let line1 = Line::from(vec![
+        Span::styled("Adaptive ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format!(
+                "batch {} blk  inflight {}  target {} tx  floor {}",
+                batch_blocks_text, inflight_text, target_text, floor_text,
+            ),
+            Style::default().fg(TERMINAL_DIM),
+        ),
+        Span::styled("  ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            state_text,
+            Style::default()
+                .fg(state_text_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+
+    if dense {
+        return vec![line1];
+    }
+
+    // Line 2: adjustment history + pipeline reset
     let cooldown_text = snapshot
         .adaptive_cooldown_steps
         .map(|v| v.to_string())
@@ -2032,36 +2145,31 @@ fn adaptive_control_line(snapshot: AdaptiveControlSnapshot<'_>) -> Line<'static>
         .unwrap_or_else(|| "-".to_string());
     let age_text = snapshot
         .adaptive_last_adjusted_age_secs
-        .map(|v| format!("{v}s"))
+        .map(|v| format!("{v}s ago"))
         .unwrap_or_else(|| "-".to_string());
-    let state_text = if let Some(streak) = snapshot.adaptive_backoff_streak.filter(|v| *v > 0) {
-        format!("{state}x{streak}")
-    } else {
-        state.to_string()
-    };
-    Line::from(vec![
-        Span::styled("Adaptive ", Style::default().fg(SLATE_500)),
+    let backoff_text = format!("x{}", snapshot.adaptive_backoff_streak.unwrap_or(0));
+
+    let mut line2_spans = vec![
+        Span::styled("          ", Style::default()), // indent to align under "Adaptive "
         Span::styled(
             format!(
-                "batch {} blk  inflight {}  tx target/min {}/{}  cd {}  chg #{} {}",
-                batch_blocks_text,
-                inflight_text,
-                target_text,
-                min_target_text,
-                cooldown_text,
-                seq_text,
-                age_text
+                "cooldown {}  adj #{} ({})  backoff {}",
+                cooldown_text, seq_text, age_text, backoff_text,
             ),
             Style::default().fg(TERMINAL_DIM),
         ),
-        Span::styled("  ", Style::default().fg(SLATE_500)),
-        Span::styled(
-            state_text,
-            Style::default()
-                .fg(state_color)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ])
+    ];
+
+    // Merge pipeline reset info if epoch > 0
+    if let Some(epoch) = pipeline_reset_epoch.filter(|e| *e > 0) {
+        let reason = pipeline_reset_reason.unwrap_or("-");
+        line2_spans.push(Span::styled(
+            format!("  reset #{} {}", epoch, reason),
+            Style::default().fg(AMBER),
+        ));
+    }
+
+    vec![line1, Line::from(line2_spans)]
 }
 
 fn adaptive_state_label(adaptive_last_reason: Option<&str>) -> (&'static str, Color) {
@@ -2076,62 +2184,40 @@ fn adaptive_state_label(adaptive_last_reason: Option<&str>) -> (&'static str, Co
     }
 }
 
-fn pipeline_reset_line(
-    pipeline_reset_epoch: Option<u64>,
-    pipeline_reset_reason: Option<&str>,
-) -> Line<'static> {
-    let epoch_text = pipeline_reset_epoch
-        .map(format_num_u64)
-        .unwrap_or_else(|| "-".to_string());
-    let reason_text = pipeline_reset_reason.unwrap_or("-");
-    let reason_color = if pipeline_reset_epoch.is_some() {
-        AMBER
-    } else {
-        SLATE_500
-    };
-    Line::from(vec![
-        Span::styled("Reset ", Style::default().fg(SLATE_500)),
-        Span::styled(
-            format!("#{} {}", epoch_text, reason_text),
-            Style::default().fg(reason_color),
-        ),
-    ])
-}
-
 fn dense_right_lines(
-    fetch_line: Line<'static>,
-    parse_line: Line<'static>,
-    write_line: Line<'static>,
-    commit_line: Line<'static>,
+    spark_fp_line: Line<'static>,
+    spark_wc_line: Line<'static>,
+    l0_line: Line<'static>,
+    wbm_line: Line<'static>,
+    pressure_line: Line<'static>,
     stability_line: Line<'static>,
-    io_line: Line<'static>,
 ) -> Vec<Line<'static>> {
     vec![
+        spark_fp_line,
+        spark_wc_line,
+        l0_line,
+        wbm_line,
+        pressure_line,
         stability_line,
-        fetch_line,
-        parse_line,
-        write_line,
-        commit_line,
-        io_line,
     ]
 }
 
 fn detail_right_lines(
-    fetch_line: Line<'static>,
-    parse_line: Line<'static>,
-    write_line: Line<'static>,
-    commit_line: Line<'static>,
+    spark_fp_line: Line<'static>,
+    spark_wc_line: Line<'static>,
+    l0_line: Line<'static>,
+    wbm_line: Line<'static>,
+    pressure_line: Line<'static>,
     stability_line: Line<'static>,
-    rate_line: Line<'static>,
     io_line: Line<'static>,
 ) -> Vec<Line<'static>> {
     vec![
+        spark_fp_line,
+        spark_wc_line,
+        l0_line,
+        wbm_line,
+        pressure_line,
         stability_line,
-        fetch_line,
-        parse_line,
-        write_line,
-        commit_line,
-        rate_line,
         io_line,
     ]
 }
@@ -3348,26 +3434,130 @@ fn delta_color(delta: Option<f64>) -> Color {
     }
 }
 
-fn stage_trend_line(
-    label: &'static str,
-    color: Color,
-    history: &VecDeque<f64>,
-    spark_width: usize,
-) -> Line<'static> {
-    let delta = trend_delta(history, 10);
+fn storage_pressure_l0_line(mem: &MemoryStatsData, gauge_width: usize) -> Line<'static> {
+    let ratio = if L0_GAUGE_MAX > 0 {
+        (mem.l0_files_max as f64 / L0_GAUGE_MAX as f64).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let filled = (ratio * gauge_width as f64).round() as usize;
+    let gauge = render_gauge(filled, gauge_width);
+    let (badge, badge_color) = if mem.l0_files_max >= 16 {
+        ("HOT", ERROR_RED)
+    } else if mem.l0_files_max >= 10 {
+        ("WARN", AMBER)
+    } else {
+        ("OK", TERMINAL_GREEN)
+    };
     Line::from(vec![
-        Span::styled(label, Style::default().fg(color)),
-        Span::styled(" ", Style::default().fg(SLATE_700)),
-        Span::styled(sparkline(history, spark_width), Style::default().fg(color)),
-        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled("L0 ", Style::default().fg(SLATE_500)),
         Span::styled(
-            format_delta(delta, "ms"),
-            Style::default().fg(delta_color(delta)),
+            format!("{}/{} ", mem.l0_files_max, L0_GAUGE_MAX),
+            Style::default().fg(FOREGROUND),
         ),
+        Span::styled(gauge, Style::default().fg(badge_color)),
+        Span::styled(format!(" [{}]", badge), Style::default().fg(badge_color)),
     ])
 }
 
-#[allow(dead_code)]
+fn storage_pressure_wbm_line(mem: &MemoryStatsData, gauge_width: usize) -> Line<'static> {
+    if mem.wbm_budget_bytes == 0 {
+        return Line::from(vec![
+            Span::styled("WBM ", Style::default().fg(SLATE_500)),
+            Span::styled("-", Style::default().fg(SLATE_500)),
+        ]);
+    }
+    let ratio = (mem.wbm_usage_bytes as f64 / mem.wbm_budget_bytes as f64).clamp(0.0, 1.0);
+    let pct = (ratio * 100.0) as u64;
+    let filled = (ratio * gauge_width as f64).round() as usize;
+    let gauge = render_gauge(filled, gauge_width);
+    let color = if pct > 90 {
+        ERROR_RED
+    } else if pct > 70 {
+        AMBER
+    } else {
+        TERMINAL_GREEN
+    };
+    Line::from(vec![
+        Span::styled("WBM ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format!(
+                "{}/{} ",
+                format_bytes(mem.wbm_usage_bytes),
+                format_bytes(mem.wbm_budget_bytes)
+            ),
+            Style::default().fg(FOREGROUND),
+        ),
+        Span::styled(gauge, Style::default().fg(color)),
+        Span::styled(format!(" {}%", pct), Style::default().fg(color)),
+    ])
+}
+
+fn storage_pressure_summary_line(mem: &MemoryStatsData) -> Line<'static> {
+    let worst = if mem.l0_worst_cf.is_empty() {
+        "-".to_string()
+    } else {
+        mem.l0_worst_cf.clone()
+    };
+    Line::from(vec![
+        Span::styled("Compact ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format_bytes(mem.compaction_pending_bytes),
+            Style::default().fg(FOREGROUND),
+        ),
+        Span::styled("  Imm ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format_num_u64(mem.immutable_memtables),
+            Style::default().fg(FOREGROUND),
+        ),
+        Span::styled("  worst ", Style::default().fg(SLATE_500)),
+        Span::styled(worst, Style::default().fg(AMBER)),
+    ])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn merged_sparkline_p95_line(
+    label_a: &'static str,
+    color_a: Color,
+    history_a: &VecDeque<f64>,
+    label_b: &'static str,
+    color_b: Color,
+    history_b: &VecDeque<f64>,
+    spark_width: usize,
+    show_p95: bool,
+) -> Line<'static> {
+    let half_spark = spark_width / 2;
+    let mut spans = vec![
+        Span::styled(label_a, Style::default().fg(color_a)),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            sparkline(history_a, half_spark),
+            Style::default().fg(color_a),
+        ),
+        Span::styled("  ", Style::default().fg(SLATE_700)),
+        Span::styled(label_b, Style::default().fg(color_b)),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            sparkline(history_b, half_spark),
+            Style::default().fg(color_b),
+        ),
+    ];
+    if show_p95 {
+        let p95_a = percentile_from_history(history_a, P95_WINDOW, 95.0);
+        let p95_b = percentile_from_history(history_b, P95_WINDOW, 95.0);
+        let p95_text = match (p95_a, p95_b) {
+            (Some(a), Some(b)) => format!("  p95 {:.0}/{:.0}ms", a, b),
+            (Some(a), None) => format!("  p95 {:.0}/-ms", a),
+            (None, Some(b)) => format!("  p95 -/{:.0}ms", b),
+            (None, None) => String::new(),
+        };
+        if !p95_text.is_empty() {
+            spans.push(Span::styled(p95_text, Style::default().fg(SLATE_500)));
+        }
+    }
+    Line::from(spans)
+}
+
 fn percentile_from_history(history: &VecDeque<f64>, window: usize, pct: f64) -> Option<f64> {
     if history.is_empty() {
         return None;
@@ -3378,7 +3568,6 @@ fn percentile_from_history(history: &VecDeque<f64>, window: usize, pct: f64) -> 
     Some(values[idx])
 }
 
-#[allow(dead_code)]
 fn render_gauge(filled: usize, total: usize) -> String {
     if total == 0 {
         return String::new();
@@ -3387,7 +3576,6 @@ fn render_gauge(filled: usize, total: usize) -> String {
     format!("{}{}", "█".repeat(filled), "░".repeat(total - filled))
 }
 
-#[allow(dead_code)]
 fn format_num_compact(value: u64) -> String {
     if value >= 1_000_000 {
         format!("{:.1}M", value as f64 / 1_000_000.0)
@@ -4021,22 +4209,23 @@ fn draw_system_params_compact(
 #[cfg(test)]
 mod tests {
     use super::{
-        adaptive_control_line, adaptive_state_label, api_health_state, chart_height_warning,
+        adaptive_control_lines, adaptive_state_label, api_health_state, chart_height_warning,
         compact_overview_layout, compact_sync_layout, consumed_cells_source_color,
         consumed_cells_source_label, dense_right_lines, detail_right_lines,
         diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label, footer_hint_line,
         footer_status_message, format_age_secs, format_num, format_num_commas, format_num_compact,
         format_rate_pair, format_signed_num_i128, format_stage_commit_gap_ms, header_right_line,
         header_title_line, heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop,
-        overview_log_min_height, overview_services_min_height, percentile_from_history,
-        pipeline_bottleneck, pipeline_flow_state, pipeline_reset_line, rate_jitter, render_gauge,
-        runtime_health_state, runtime_live_delta, service_log_tails_line, sparkline,
+        merged_sparkline_p95_line, overview_log_min_height, overview_services_min_height,
+        percentile_from_history, pipeline_bottleneck, pipeline_flow_state, rate_jitter,
+        render_gauge, runtime_health_state, runtime_live_delta, service_log_tails_line, sparkline,
         stack_sync_charts, stale_age_secs, stale_status, startup_phase_label,
-        storage_runtime_columns, supervisor_services_line, sync_bottleneck, sync_chart_specs,
-        sync_timing_lines, system_kv_line, system_store_path_lines, system_workdir_lines,
-        trend_delta, trim_for_panel, AdaptiveControlSnapshot, App, Color, CompactOverviewLayout,
-        CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck, SyncChartKind, CYAN,
-        STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
+        storage_pressure_l0_line, storage_pressure_wbm_line, storage_runtime_columns,
+        supervisor_services_line, sync_bottleneck, sync_chart_specs, sync_timing_lines,
+        system_kv_line, system_store_path_lines, system_workdir_lines, trend_delta, trim_for_panel,
+        AdaptiveControlSnapshot, App, Color, CompactOverviewLayout, CompactSyncLayout,
+        DiagnosticsViewMode, SyncBottleneck, SyncChartKind, AMBER, CYAN, STATUS_MESSAGE_TTL_SECS,
+        TERMINAL_DIM,
     };
     use crate::db::{
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
@@ -4330,27 +4519,88 @@ mod tests {
     }
 
     #[test]
-    fn test_adaptive_control_line_format() {
-        let line = adaptive_control_line(AdaptiveControlSnapshot {
-            last_batch_blocks: Some(512),
-            adaptive_inflight_batches: Some(2),
-            adaptive_target_batch_txs: Some(40_000),
-            adaptive_inflight_limit: Some(3),
-            adaptive_min_target_batch_txs: Some(10_000),
-            adaptive_cooldown_steps: Some(2),
-            adaptive_last_reason: Some("pressure_backoff"),
-            adaptive_adjustment_seq: Some(12),
-            adaptive_last_adjusted_age_secs: Some(7),
-            adaptive_backoff_streak: Some(3),
-        });
-        let text = line_text(&line);
+    fn test_adaptive_control_lines_dense() {
+        let lines = adaptive_control_lines(
+            AdaptiveControlSnapshot {
+                last_batch_blocks: Some(512),
+                adaptive_inflight_batches: Some(2),
+                adaptive_target_batch_txs: Some(40_000),
+                adaptive_inflight_limit: Some(3),
+                adaptive_min_target_batch_txs: Some(10_000),
+                adaptive_cooldown_steps: Some(2),
+                adaptive_last_reason: Some("pressure_backoff"),
+                adaptive_adjustment_seq: Some(12),
+                adaptive_last_adjusted_age_secs: Some(7),
+                adaptive_backoff_streak: Some(3),
+            },
+            true,
+            Some(5),
+            Some("batch mismatch"),
+        );
+        assert_eq!(lines.len(), 1, "dense mode should return 1 line");
+        let text = line_text(&lines[0]);
         assert!(text.contains("Adaptive"));
         assert!(text.contains("batch 512 blk"));
         assert!(text.contains("inflight 2/3"));
-        assert!(text.contains("tx target/min 40,000/10,000"));
-        assert!(text.contains("cd 2"));
-        assert!(text.contains("chg #12 7s"));
-        assert!(text.contains("BACKOFFx3"));
+        assert!(text.contains("target 40K tx"));
+        assert!(text.contains("floor 10K"));
+        assert!(text.contains("BACKOFF x3"));
+    }
+
+    #[test]
+    fn test_adaptive_control_lines_detail_with_reset() {
+        let lines = adaptive_control_lines(
+            AdaptiveControlSnapshot {
+                last_batch_blocks: Some(512),
+                adaptive_inflight_batches: Some(2),
+                adaptive_target_batch_txs: Some(40_000),
+                adaptive_inflight_limit: Some(3),
+                adaptive_min_target_batch_txs: Some(10_000),
+                adaptive_cooldown_steps: Some(2),
+                adaptive_last_reason: Some("pressure_backoff"),
+                adaptive_adjustment_seq: Some(12),
+                adaptive_last_adjusted_age_secs: Some(7),
+                adaptive_backoff_streak: Some(3),
+            },
+            false,
+            Some(5),
+            Some("batch mismatch"),
+        );
+        assert_eq!(lines.len(), 2, "detail mode should return 2 lines");
+        let text1 = line_text(&lines[0]);
+        assert!(text1.contains("Adaptive"));
+        assert!(text1.contains("batch 512 blk"));
+        assert!(text1.contains("target 40K tx"));
+        let text2 = line_text(&lines[1]);
+        assert!(text2.contains("cooldown 2"));
+        assert!(text2.contains("adj #12"));
+        assert!(text2.contains("7s ago"));
+        assert!(text2.contains("backoff x3"));
+        assert!(text2.contains("reset #5 batch mismatch"));
+    }
+
+    #[test]
+    fn test_adaptive_control_lines_detail_no_reset() {
+        let lines = adaptive_control_lines(
+            AdaptiveControlSnapshot {
+                last_batch_blocks: Some(100),
+                adaptive_inflight_batches: None,
+                adaptive_target_batch_txs: Some(5_000),
+                adaptive_inflight_limit: None,
+                adaptive_min_target_batch_txs: Some(1_000),
+                adaptive_cooldown_steps: None,
+                adaptive_last_reason: None,
+                adaptive_adjustment_seq: None,
+                adaptive_last_adjusted_age_secs: None,
+                adaptive_backoff_streak: None,
+            },
+            false,
+            Some(0),
+            None,
+        );
+        assert_eq!(lines.len(), 2);
+        let text2 = line_text(&lines[1]);
+        assert!(!text2.contains("reset"), "epoch 0 should not show reset");
     }
 
     #[test]
@@ -4370,41 +4620,38 @@ mod tests {
     }
 
     #[test]
-    fn test_pipeline_reset_line_format() {
-        let line = pipeline_reset_line(Some(7), Some("pipeline batch mismatch"));
-        let text = line_text(&line);
-        assert!(text.contains("Reset"));
-        assert!(text.contains("#7"));
-        assert!(text.contains("pipeline batch mismatch"));
-    }
-
-    #[test]
     fn test_dense_right_lines_order() {
         let lines = dense_right_lines(
-            Line::from("F"),
-            Line::from("P"),
-            Line::from("W"),
-            Line::from("C"),
+            Line::from("FP"),
+            Line::from("WC"),
+            Line::from("L0"),
+            Line::from("WBM"),
+            Line::from("Compact"),
             Line::from("Stability"),
-            Line::from("I/O"),
         );
         let labels: Vec<String> = lines.iter().map(line_text).collect();
-        assert_eq!(labels, vec!["Stability", "F", "P", "W", "C", "I/O"]);
+        assert_eq!(
+            labels,
+            vec!["FP", "WC", "L0", "WBM", "Compact", "Stability"]
+        );
     }
 
     #[test]
     fn test_detail_right_lines_order() {
         let lines = detail_right_lines(
-            Line::from("F"),
-            Line::from("P"),
-            Line::from("W"),
-            Line::from("C"),
+            Line::from("FP"),
+            Line::from("WC"),
+            Line::from("L0"),
+            Line::from("WBM"),
+            Line::from("Compact"),
             Line::from("Stability"),
-            Line::from("Rate"),
             Line::from("I/O"),
         );
         let labels: Vec<String> = lines.iter().map(line_text).collect();
-        assert_eq!(labels, vec!["Stability", "F", "P", "W", "C", "Rate", "I/O"]);
+        assert_eq!(
+            labels,
+            vec!["FP", "WC", "L0", "WBM", "Compact", "Stability", "I/O"]
+        );
     }
 
     #[test]
@@ -4946,5 +5193,45 @@ mod tests {
         assert_eq!(format_num_compact(1_000_000), "1.0M");
         assert_eq!(format_num_compact(1_500_000), "1.5M");
         assert_eq!(format_num_compact(12_300_000), "12.3M");
+    }
+
+    #[test]
+    fn test_storage_pressure_wbm_line_zero_budget() {
+        let mem = MemoryStatsData {
+            wbm_budget_bytes: 0,
+            wbm_usage_bytes: 0,
+            ..MemoryStatsData::new()
+        };
+        let line = storage_pressure_wbm_line(&mem, 10);
+        let text = line_text(&line);
+        assert!(text.contains("WBM"));
+        assert!(text.contains("-"));
+    }
+
+    #[test]
+    fn test_storage_pressure_l0_thresholds() {
+        let mut mem = MemoryStatsData::new();
+        mem.l0_files_max = 5;
+        let line = storage_pressure_l0_line(&mem, 10);
+        assert!(line_text(&line).contains("[OK]"));
+
+        mem.l0_files_max = 12;
+        let line = storage_pressure_l0_line(&mem, 10);
+        assert!(line_text(&line).contains("[WARN]"));
+
+        mem.l0_files_max = 18;
+        let line = storage_pressure_l0_line(&mem, 10);
+        assert!(line_text(&line).contains("[HOT]"));
+    }
+
+    #[test]
+    fn test_merged_sparkline_no_p95() {
+        let history: VecDeque<f64> = vec![1.0, 2.0, 3.0].into_iter().collect();
+        let line =
+            merged_sparkline_p95_line("F", TERMINAL_DIM, &history, "P", AMBER, &history, 8, false);
+        let text = line_text(&line);
+        assert!(text.contains("F"));
+        assert!(text.contains("P"));
+        assert!(!text.contains("p95"));
     }
 }
