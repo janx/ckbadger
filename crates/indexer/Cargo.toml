@@ -37,6 +37,7 @@ hex = { workspace = true }
 futures = { workspace = true }
 dashmap = "6.1"
 rayon = { workspace = true }
+rustc-hash = { workspace = true }
 async-trait = { workspace = true }
 
 # Configuration

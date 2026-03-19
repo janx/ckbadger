@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::hash::BuildHasher;
 use std::mem::size_of;
 
 use serde::Serialize;
@@ -11,11 +12,12 @@ pub(crate) fn bytes_vec_bytes(value: &Vec<u8>) -> u64 {
     size_of::<Vec<u8>>() as u64 + value.capacity() as u64
 }
 
-pub(crate) fn hash_map_bytes<K, V, F>(map: &HashMap<K, V>, entry_bytes: F) -> u64
+pub(crate) fn hash_map_bytes<K, V, S, F>(map: &HashMap<K, V, S>, entry_bytes: F) -> u64
 where
+    S: BuildHasher,
     F: Fn(&K, &V) -> u64,
 {
-    size_of::<HashMap<K, V>>() as u64
+    size_of::<HashMap<K, V, S>>() as u64
         + map.capacity() as u64 * size_of::<(K, V)>() as u64
         + map
             .iter()
@@ -23,21 +25,23 @@ where
             .sum::<u64>()
 }
 
-pub(crate) fn hash_map_serialized_bytes<K, V>(map: &HashMap<K, V>) -> u64
+pub(crate) fn hash_map_serialized_bytes<K, V, S>(map: &HashMap<K, V, S>) -> u64
 where
     K: Serialize,
     V: Serialize,
+    S: BuildHasher,
 {
     hash_map_bytes(map, |key, value| {
         serialized_bytes(key) + serialized_bytes(value)
     })
 }
 
-pub(crate) fn hash_set_serialized_bytes<T>(set: &HashSet<T>) -> u64
+pub(crate) fn hash_set_serialized_bytes<T, S>(set: &HashSet<T, S>) -> u64
 where
     T: Serialize,
+    S: BuildHasher,
 {
-    size_of::<HashSet<T>>() as u64
+    size_of::<HashSet<T, S>>() as u64
         + set.capacity() as u64 * size_of::<T>() as u64
         + set.iter().map(serialized_bytes).sum::<u64>()
 }

@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
+use rustc_hash::FxHashMap;
 use serde::Serialize;
-use std::collections::HashMap;
 
 use super::facts::{
     CellFacts, CellProtocolFacts, CellSemanticTag, DaoCellState, DaoCompensationArs, FactsArena,
@@ -11,7 +11,7 @@ use crate::sync::types::InternId;
 
 #[derive(Debug, Default)]
 pub(crate) struct LiveCellOwner {
-    live: HashMap<OutPointKey, LiveCellSlot>,
+    live: FxHashMap<OutPointKey, LiveCellSlot>,
 }
 
 impl LiveCellOwner {

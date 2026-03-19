@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::{AddressBalance, CkbadgerStore, CF_ADDR_BALANCE};
+use rustc_hash::FxHashMap;
 
 use super::{BulkReducer, ReducerContext};
 use crate::rpc::BlockResponseWithCycles;
@@ -21,11 +22,11 @@ pub(crate) struct AddressTxDelta {
 
 #[derive(Debug, Default)]
 pub(crate) struct AddressOwner {
-    balances: HashMap<Vec<u8>, AddressBalance>,
+    balances: FxHashMap<Vec<u8>, AddressBalance>,
 }
 
 impl AddressOwner {
-    pub(crate) fn balances(&self) -> &HashMap<Vec<u8>, AddressBalance> {
+    pub(crate) fn balances(&self) -> &FxHashMap<Vec<u8>, AddressBalance> {
         &self.balances
     }
 
@@ -40,7 +41,7 @@ impl AddressOwner {
         &mut self,
         tx: &ResolvedTxFacts<'_>,
         ctx: &ReducerContext<'_>,
-    ) -> Result<HashMap<Vec<u8>, AddressTxDelta>> {
+    ) -> Result<FxHashMap<Vec<u8>, AddressTxDelta>> {
         let deltas = collect_tx_deltas(tx, ctx)?;
         self.apply_tx_deltas(tx, &deltas)?;
         Ok(deltas)
@@ -49,7 +50,7 @@ impl AddressOwner {
     fn apply_tx_deltas(
         &mut self,
         tx: &ResolvedTxFacts<'_>,
-        deltas: &HashMap<Vec<u8>, AddressTxDelta>,
+        deltas: &FxHashMap<Vec<u8>, AddressTxDelta>,
     ) -> Result<()> {
         for (lock_hash, delta) in deltas {
             let existing = self.balances.get(lock_hash).cloned();
@@ -160,7 +161,7 @@ impl BulkReducer for AddressOwner {
 fn apply_input_deltas(
     input: &ResolvedInputFacts,
     ctx: &ReducerContext<'_>,
-    deltas: &mut HashMap<Vec<u8>, AddressTxDelta>,
+    deltas: &mut FxHashMap<Vec<u8>, AddressTxDelta>,
 ) -> Result<()> {
     let lock_hash = ctx.resolve_identity(input.lock_script_hash_id).to_vec();
     let delta = deltas.entry(lock_hash).or_default();
@@ -173,7 +174,7 @@ fn apply_input_deltas(
 fn apply_output_deltas(
     cell: &CellFacts,
     ctx: &ReducerContext<'_>,
-    deltas: &mut HashMap<Vec<u8>, AddressTxDelta>,
+    deltas: &mut FxHashMap<Vec<u8>, AddressTxDelta>,
 ) -> Result<()> {
     let lock_hash = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
     let delta = deltas.entry(lock_hash).or_default();
@@ -186,8 +187,8 @@ fn apply_output_deltas(
 fn collect_tx_deltas(
     tx: &ResolvedTxFacts<'_>,
     ctx: &ReducerContext<'_>,
-) -> Result<HashMap<Vec<u8>, AddressTxDelta>> {
-    let mut deltas = HashMap::new();
+) -> Result<FxHashMap<Vec<u8>, AddressTxDelta>> {
+    let mut deltas = FxHashMap::default();
 
     for input in &tx.resolved_inputs {
         apply_input_deltas(input, ctx, &mut deltas)?;

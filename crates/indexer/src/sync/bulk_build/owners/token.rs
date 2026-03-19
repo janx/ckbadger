@@ -7,6 +7,7 @@ use ckbadger_store::{
     CF_TOKENS, CF_TOKEN_HOLDERS, CF_TOKEN_HOLDERS_BY_BALANCE,
 };
 use rocksdb::IteratorMode;
+use rustc_hash::FxHashMap;
 use serde::Serialize;
 
 use super::{BulkReducer, ReducerContext};
@@ -22,9 +23,9 @@ use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 
 #[derive(Debug, Default)]
 pub(crate) struct TokenOwner {
-    tokens: HashMap<Vec<u8>, TokenAccum>,
+    tokens: FxHashMap<Vec<u8>, TokenAccum>,
     /// On-chain max_supply observations collected from omnilock supply info cells.
-    max_supply_observations: HashMap<Vec<u8>, i128>,
+    max_supply_observations: FxHashMap<Vec<u8>, i128>,
 }
 
 impl TokenOwner {
@@ -179,7 +180,7 @@ impl BulkReducer for TokenOwner {
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
         let store = materializer.domain_store();
         let all_type_hashes: Vec<Vec<u8>> = self.tokens.keys().cloned().collect();
-        let existing_tokens: HashMap<Vec<u8>, TokenInfo> = store
+        let existing_tokens: FxHashMap<Vec<u8>, TokenInfo> = store
             .get_tokens_batch(&all_type_hashes)?
             .into_iter()
             .filter_map(|(k, v)| v.map(|info| (k, info)))
@@ -267,10 +268,10 @@ struct TokenAccum {
     standard: &'static str,
     first_seen_block: i64,
     live_supply: i128,
-    holders: HashMap<Vec<u8>, i128>,
+    holders: FxHashMap<Vec<u8>, i128>,
     transfers_count: i64,
-    hourly_transfers: HashMap<i64, i64>,
-    daily_deltas: HashMap<u32, TokenDailyDelta>,
+    hourly_transfers: FxHashMap<i64, i64>,
+    daily_deltas: FxHashMap<u32, TokenDailyDelta>,
 }
 
 impl TokenAccum {
@@ -298,10 +299,10 @@ impl TokenAccum {
             standard: view.standard,
             first_seen_block,
             live_supply: 0,
-            holders: HashMap::new(),
+            holders: FxHashMap::default(),
             transfers_count: 0,
-            hourly_transfers: HashMap::new(),
-            daily_deltas: HashMap::new(),
+            hourly_transfers: FxHashMap::default(),
+            daily_deltas: FxHashMap::default(),
         }
     }
 

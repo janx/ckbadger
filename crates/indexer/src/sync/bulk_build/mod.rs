@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use rustc_hash::{FxHashMap, FxHashSet};
+
 use anyhow::Result;
 use anyhow::{anyhow, bail};
 use ckbadger_store::keys;
@@ -484,7 +486,7 @@ impl CoreOwners {
         &mut self,
         tx: &facts::ResolvedTxFacts<'_>,
         ctx: &owners::ReducerContext<'_>,
-    ) -> Result<HashMap<Vec<u8>, owners::address::AddressTxDelta>> {
+    ) -> Result<FxHashMap<Vec<u8>, owners::address::AddressTxDelta>> {
         let address_deltas = self.address.apply_tx_with_deltas(tx, ctx)?;
         self.script.apply_tx(tx, ctx)?;
         self.token.apply_tx(tx, ctx)?;
@@ -514,10 +516,10 @@ impl CoreOwners {
 
 #[derive(Default)]
 struct ActivityStatsAccumulator {
-    daily_stats: HashMap<String, DailyActivityStats>,
-    daily_addrs: HashMap<String, HashSet<[u8; 32]>>,
-    hourly_stats: HashMap<String, DailyActivityStats>,
-    hourly_addrs: HashMap<String, HashSet<[u8; 32]>>,
+    daily_stats: FxHashMap<String, DailyActivityStats>,
+    daily_addrs: FxHashMap<String, FxHashSet<[u8; 32]>>,
+    hourly_stats: FxHashMap<String, DailyActivityStats>,
+    hourly_addrs: FxHashMap<String, FxHashSet<[u8; 32]>>,
 }
 
 impl ActivityStatsAccumulator {
@@ -649,7 +651,7 @@ struct BulkBuildRuntimeState {
     activity_stats: ActivityStatsAccumulator,
     hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker,
     cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker,
-    hodl_live_cells_by_lock: HashMap<crate::sync::types::InternId, i32>,
+    hodl_live_cells_by_lock: FxHashMap<crate::sync::types::InternId, i32>,
 }
 
 impl Default for BulkBuildRuntimeState {
@@ -661,7 +663,7 @@ impl Default for BulkBuildRuntimeState {
             activity_stats: ActivityStatsAccumulator::default(),
             hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker::new(),
             cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker::new(),
-            hodl_live_cells_by_lock: HashMap::new(),
+            hodl_live_cells_by_lock: FxHashMap::default(),
         }
     }
 }
@@ -943,8 +945,8 @@ impl BulkBuildRuntimeState {
 
 fn apply_cell_dist_cohort_deltas(
     tracker: &mut crate::db::writer::cell_distribution::CellDistributionTracker,
-    balances: &HashMap<Vec<u8>, AddressBalance>,
-    deltas: &HashMap<Vec<u8>, owners::address::AddressTxDelta>,
+    balances: &FxHashMap<Vec<u8>, AddressBalance>,
+    deltas: &FxHashMap<Vec<u8>, owners::address::AddressTxDelta>,
     tx: &facts::ResolvedTxFacts<'_>,
 ) -> Result<()> {
     for (lock_hash, delta) in deltas {
@@ -981,7 +983,7 @@ fn apply_cell_dist_cohort_deltas(
 
 struct HistoryBuildResult {
     rows: Vec<materialize::MaterializedRow>,
-    identity_activity_count_deltas: HashMap<Vec<u8>, i64>,
+    identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
 }
 
 #[doc(hidden)]
@@ -1404,7 +1406,7 @@ fn build_history_rows(
     let mut rows = Vec::with_capacity(
         arena.blocks.len() * 2 + arena.txs.len() * 2 + arena.cells.len() * 2 + arena.txs.len(),
     );
-    let mut identity_activity_count_deltas = HashMap::new();
+    let mut identity_activity_count_deltas = FxHashMap::default();
 
     for block in &arena.blocks {
         let header = CachedBlockHeader {
@@ -1476,7 +1478,7 @@ fn build_history_rows(
             tx_location.to_vec(),
         ));
 
-        let mut touched_lock_hash_ids = HashSet::new();
+        let mut touched_lock_hash_ids = FxHashSet::default();
         for output in resolved_tx.cells.iter() {
             touched_lock_hash_ids.insert(output.lock_script_hash_id);
         }
@@ -1556,7 +1558,7 @@ fn build_history_rows(
 
 fn build_object_collection_activity_rows(
     resolved: &[facts::ResolvedTxFacts<'_>],
-    identity_activity_count_deltas: &mut HashMap<Vec<u8>, i64>,
+    identity_activity_count_deltas: &mut FxHashMap<Vec<u8>, i64>,
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let mut object_activity_acc =
         crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator::new();
@@ -1565,8 +1567,8 @@ fn build_object_collection_activity_rows(
     let mut rows = Vec::new();
 
     for tx in resolved {
-        let mut dotbit_created_account_ids = HashSet::new();
-        let mut dotbit_consumed_account_ids = HashSet::new();
+        let mut dotbit_created_account_ids = FxHashSet::default();
+        let mut dotbit_consumed_account_ids = FxHashSet::default();
 
         for input in &tx.resolved_inputs {
             let Some(protocol) = input.protocol_facts.as_ref() else {
@@ -1716,8 +1718,8 @@ fn build_token_info_cache_from_facts(
     resolved: &[facts::ResolvedTxFacts<'_>],
     interner: &interner::IdentityInterner,
     store: &CkbadgerStore,
-) -> Result<HashMap<Vec<u8>, (Option<String>, Option<u8>)>> {
-    let mut type_hash_set: HashSet<Vec<u8>> = HashSet::new();
+) -> Result<FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>> {
+    let mut type_hash_set: FxHashSet<Vec<u8>> = FxHashSet::default();
     for tx in resolved {
         for cell in tx.cells.iter() {
             if let Some(id) = cell.type_script_hash_id {
@@ -1732,11 +1734,11 @@ fn build_token_info_cache_from_facts(
     }
 
     if type_hash_set.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(FxHashMap::default());
     }
 
     let type_hashes: Vec<Vec<u8>> = type_hash_set.into_iter().collect();
-    let mut cache = HashMap::new();
+    let mut cache = FxHashMap::default();
     for (type_hash, maybe_info) in store.get_tokens_batch(&type_hashes)? {
         if let Some(info) = maybe_info {
             let display_name = info.symbol.or(info.name);
@@ -1868,7 +1870,7 @@ fn build_token_transfer_rows(
     interner: &interner::IdentityInterner,
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let mut rows = Vec::new();
-    let mut transfer_idx: HashMap<(Vec<u8>, i64), i32> = HashMap::new();
+    let mut transfer_idx: FxHashMap<(Vec<u8>, i64), i32> = FxHashMap::default();
 
     for tx in resolved {
         let input_udts = tx
@@ -4113,7 +4115,7 @@ mod tests {
             },
         ];
 
-        let mut identity_activity_count_deltas = HashMap::new();
+        let mut identity_activity_count_deltas = FxHashMap::default();
         let rows =
             build_object_collection_activity_rows(&resolved, &mut identity_activity_count_deltas)
                 .expect("dotbit collection activity rows");

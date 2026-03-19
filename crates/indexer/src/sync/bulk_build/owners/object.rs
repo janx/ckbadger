@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+use rustc_hash::FxHashMap;
+
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::keys;
 use ckbadger_store::store::{
@@ -313,7 +315,7 @@ impl ObjectOwner {
 
     pub(crate) fn apply_identity_activity_count_deltas(
         &mut self,
-        deltas: &HashMap<Vec<u8>, i64>,
+        deltas: &FxHashMap<Vec<u8>, i64>,
     ) -> Result<()> {
         for (collection_id, delta) in deltas {
             if *delta == 0 {
@@ -2991,7 +2993,7 @@ mod tests {
         owner.apply_tx(&tx1, &ctx).expect("apply transfer");
         owner.apply_tx(&tx2, &ctx).expect("apply consume");
         owner
-            .apply_identity_activity_count_deltas(&HashMap::from([(
+            .apply_identity_activity_count_deltas(&FxHashMap::from_iter([(
                 ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION.to_vec(),
                 1,
             )]))

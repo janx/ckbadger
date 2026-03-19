@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Result};
 use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher;
 use tracing::warn;
 
 use ckbadger_store::batch::StoreBatch;
@@ -126,10 +127,10 @@ pub(crate) fn das_action_to_asset_action(action: &str) -> Option<AssetAction> {
 /// neighbor suppression: for `confirm_proposal`, only new accounts (in
 /// outputs but NOT inputs) get Mint; for `recycle_expired_account`, only
 /// removed accounts (in inputs but NOT outputs) get Recycle.
-pub(crate) fn build_dotbit_tx_activity_entry(
+pub(crate) fn build_dotbit_tx_activity_entry<S: BuildHasher>(
     das_action: Option<&str>,
-    created_account_ids: &HashSet<Vec<u8>>,
-    consumed_account_ids: &HashSet<Vec<u8>>,
+    created_account_ids: &HashSet<Vec<u8>, S>,
+    consumed_account_ids: &HashSet<Vec<u8>, S>,
     tx_hash: &[u8],
     block_hash: &[u8],
     timestamp_ms: i64,
@@ -218,9 +219,9 @@ pub(crate) fn resolve_dotbit_tx_activity(
 }
 
 /// Generic fallback: same-account in both → Transfer, output-only → Mint, input-only → Burn.
-fn resolve_generic_dotbit_actions(
-    created: &HashSet<Vec<u8>>,
-    consumed: &HashSet<Vec<u8>>,
+fn resolve_generic_dotbit_actions<S: BuildHasher>(
+    created: &HashSet<Vec<u8>, S>,
+    consumed: &HashSet<Vec<u8>, S>,
 ) -> Vec<AssetAction> {
     let mut has_mint = false;
     let mut has_transfer = false;

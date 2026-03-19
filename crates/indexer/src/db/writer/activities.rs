@@ -2,6 +2,7 @@
 
 use anyhow::{anyhow, bail, Result};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::hash::BuildHasher;
 use std::sync::OnceLock;
 
 #[cfg(test)]
@@ -217,9 +218,9 @@ pub fn build_activity_bundles_for_block(
 }
 
 /// Build tx-scoped activity bundles with protocol detectors.
-pub fn build_activity_bundles_for_block_with_detectors(
+pub fn build_activity_bundles_for_block_with_detectors<S: BuildHasher>(
     txs: &[TxView<'_>],
-    token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
+    token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>), S>,
     detectors: &[Box<dyn ProtocolDetector>],
 ) -> Result<Vec<TxActivityBundle>> {
     let hashes = code_hashes();
@@ -341,10 +342,10 @@ fn record_owner_lock_script(
     Ok(())
 }
 
-fn build_tx_activity_bundle(
+fn build_tx_activity_bundle<S: BuildHasher>(
     tx: &TxView<'_>,
     hashes: &CodeHashes,
-    token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
+    token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>), S>,
     detectors: &[Box<dyn ProtocolDetector>],
 ) -> Result<TxActivityBundle> {
     let mut owners: HashMap<Vec<u8>, OwnerAccum> = HashMap::new();

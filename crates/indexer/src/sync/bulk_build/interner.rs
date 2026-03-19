@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::sync::types::InternId;
 
 #[derive(Debug, Default)]
 pub(crate) struct IdentityInterner {
-    by_value: HashMap<Vec<u8>, InternId>,
+    by_value: FxHashMap<Vec<u8>, InternId>,
     values: Vec<Vec<u8>>,
 }
 

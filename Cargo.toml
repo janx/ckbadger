@@ -54,6 +54,7 @@ uuid = { version = "1.11", features = ["v4", "serde"] }
 futures = "0.3"
 lru = "0.12"
 rayon = "1.10"
+rustc-hash = "2.1"
 
 # Configuration
 config = "0.14"

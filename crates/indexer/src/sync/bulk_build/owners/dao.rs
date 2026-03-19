@@ -8,6 +8,7 @@ use ckbadger_store::{
     CkbadgerStore, CF_DAO_BY_BLOCK, CF_DAO_BY_LOCK_BLOCK, CF_DAO_BY_STATUS_BLOCK,
     CF_DAO_BY_WITHDRAW_TX, CF_DAO_DEPOSITS, CF_STATS_DAO,
 };
+use rustc_hash::FxHashMap;
 
 use super::{BulkReducer, ReducerContext};
 use crate::db::writer::dao::calculate_dao_compensation_from_ar;
@@ -27,15 +28,15 @@ use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 
 #[derive(Debug, Default)]
 pub(crate) struct DaoOwner {
-    deposits: HashMap<OutPointKey, DaoDepositCacheEntry>,
-    request_outpoints: HashMap<OutPointKey, OutPointKey>,
+    deposits: FxHashMap<OutPointKey, DaoDepositCacheEntry>,
+    request_outpoints: FxHashMap<OutPointKey, OutPointKey>,
     snapshot_dates: BTreeSet<NaiveDate>,
-    daily_dao_fields: HashMap<NaiveDate, (i128, i128, i128)>,
-    daily_active_delta: HashMap<NaiveDate, i128>,
-    daily_gross_deposit_delta: HashMap<NaiveDate, i128>,
-    daily_new_deposits_delta: HashMap<NaiveDate, i64>,
-    daily_withdrawals_delta: HashMap<NaiveDate, i64>,
-    daily_secondary_non_miner_delta: HashMap<NaiveDate, i128>,
+    daily_dao_fields: FxHashMap<NaiveDate, (i128, i128, i128)>,
+    daily_active_delta: FxHashMap<NaiveDate, i128>,
+    daily_gross_deposit_delta: FxHashMap<NaiveDate, i128>,
+    daily_new_deposits_delta: FxHashMap<NaiveDate, i64>,
+    daily_withdrawals_delta: FxHashMap<NaiveDate, i64>,
+    daily_secondary_non_miner_delta: FxHashMap<NaiveDate, i128>,
     prev_dao_cs: Option<(i128, i128)>,
 }
 
@@ -624,7 +625,7 @@ impl DaoOwner {
     }
 
     fn bump_daily_i128(
-        target: &mut HashMap<NaiveDate, i128>,
+        target: &mut FxHashMap<NaiveDate, i128>,
         date: NaiveDate,
         delta: i128,
         metric: &str,
@@ -647,7 +648,7 @@ impl DaoOwner {
     }
 
     fn bump_daily_i64(
-        target: &mut HashMap<NaiveDate, i64>,
+        target: &mut FxHashMap<NaiveDate, i64>,
         date: NaiveDate,
         delta: i64,
         metric: &str,

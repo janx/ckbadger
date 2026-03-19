@@ -5,6 +5,7 @@ use ckbadger_store::keys;
 use ckbadger_store::{
     CkbadgerStore, ScriptDailyDelta, ScriptInfo, CF_SCRIPT_INFO, CF_STATS_SCRIPT,
 };
+use rustc_hash::FxHashMap;
 
 use super::{BulkReducer, ReducerContext};
 use crate::rpc::BlockResponseWithCycles;
@@ -16,13 +17,13 @@ use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 
 #[derive(Debug, Default)]
 pub(crate) struct ScriptOwner {
-    infos: HashMap<Vec<u8>, ScriptInfo>,
-    daily_deltas: HashMap<(Vec<u8>, bool, u32), ScriptDailyDelta>,
+    infos: FxHashMap<Vec<u8>, ScriptInfo>,
+    daily_deltas: FxHashMap<(Vec<u8>, bool, u32), ScriptDailyDelta>,
 }
 
 impl ScriptOwner {
     #[cfg(test)]
-    pub(crate) fn infos(&self) -> &HashMap<Vec<u8>, ScriptInfo> {
+    pub(crate) fn infos(&self) -> &FxHashMap<Vec<u8>, ScriptInfo> {
         &self.infos
     }
 
@@ -72,7 +73,7 @@ impl ScriptOwner {
 
 impl BulkReducer for ScriptOwner {
     fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
-        let mut deltas: HashMap<Vec<u8>, ScriptDelta> = HashMap::new();
+        let mut deltas: FxHashMap<Vec<u8>, ScriptDelta> = FxHashMap::default();
 
         for input in &tx.resolved_inputs {
             apply_input_deltas(input, ctx, &mut deltas, tx)?;
@@ -238,7 +239,7 @@ struct ScriptDelta {
 fn apply_input_deltas(
     input: &ResolvedInputFacts,
     ctx: &ReducerContext<'_>,
-    deltas: &mut HashMap<Vec<u8>, ScriptDelta>,
+    deltas: &mut FxHashMap<Vec<u8>, ScriptDelta>,
     tx: &ResolvedTxFacts<'_>,
 ) -> Result<()> {
     let lock_code_hash = input.lock_code_hash_id;
@@ -276,7 +277,7 @@ fn apply_input_deltas(
 fn apply_output_deltas(
     cell: &CellFacts,
     ctx: &ReducerContext<'_>,
-    deltas: &mut HashMap<Vec<u8>, ScriptDelta>,
+    deltas: &mut FxHashMap<Vec<u8>, ScriptDelta>,
     tx: &ResolvedTxFacts<'_>,
 ) -> Result<()> {
     let lock_delta = deltas
