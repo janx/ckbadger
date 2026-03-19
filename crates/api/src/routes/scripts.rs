@@ -539,6 +539,93 @@ fn checked_capacity_totals(
     Ok((capacity, used))
 }
 
+/// Resolve capacity totals for a script version by looking up ScriptInfo.
+///
+/// Tier 1: direct lookup by version_hash in the cache (works for data-ref scripts
+/// where version_hash == code_hash).
+/// Tier 2: name-based search in cached ScriptInfo (handles type-ref scripts where
+/// version_hash is a data_hash, not a code_hash).
+/// Tier 3: fall back to ScriptVersionInfo fields (zeros).
+#[allow(dead_code)] // used by get_script / lookup_scripts / get_script_usage after handler migration
+fn resolve_version_capacity(
+    version: &ckbadger_store::types::ScriptVersionInfo,
+    direct_script_info: Option<&ckbadger_store::ScriptInfo>,
+    script_infos_cache: &[(Vec<u8>, ckbadger_store::ScriptInfo)],
+) -> Result<(i64, i64, i128, i128, i128, i128), ApiRouteError> {
+    // Tier 1: use pre-fetched direct lookup (caller may have already loaded it)
+    let info = direct_script_info
+        .cloned()
+        .or_else(|| {
+            // Tier 1b: search cache by version_hash
+            script_infos_cache
+                .iter()
+                .find(|(code_hash, _)| code_hash == &version.version_hash)
+                .map(|(_, info)| info.clone())
+        })
+        .or_else(|| {
+            // Tier 2: name-based fallback for type-ref scripts
+            let name = version.name.as_deref()?;
+            script_infos_cache
+                .iter()
+                .find(|(_, info)| info.name.as_deref() == Some(name))
+                .map(|(_, info)| info.clone())
+        });
+
+    let Some(info) = info else {
+        // Tier 3: no ScriptInfo found
+        return Ok(version_totals(version));
+    };
+
+    // Compute all 6 return values
+    let cells = info.lock_cells_count + info.type_cells_count;
+    let live_cells = info.lock_live_cells_count + info.type_live_cells_count;
+    let cap = info.lock_capacity_sum + info.type_capacity_sum;
+    let live_cap = info.lock_live_capacity_sum + info.type_live_capacity_sum;
+    let used = info.lock_used_capacity_sum + info.type_used_capacity_sum;
+    let live_used = info.lock_live_used_capacity_sum + info.type_live_used_capacity_sum;
+
+    // Validate all capacity values (fail-fast, matches checked_capacity_totals pattern).
+    // Total (historical) values are also checked because get_script_usage casts i128→u128.
+    if cap < 0 {
+        return Err(ApiError::internal(format!(
+            "negative capacity in resolve_version_capacity: code_hash=0x{}, value={}",
+            hex::encode(&info.code_hash),
+            cap
+        )));
+    }
+    if used < 0 {
+        return Err(ApiError::internal(format!(
+            "negative used capacity in resolve_version_capacity: code_hash=0x{}, value={}",
+            hex::encode(&info.code_hash),
+            used
+        )));
+    }
+    if live_cap < 0 {
+        return Err(ApiError::internal(format!(
+            "negative live capacity in resolve_version_capacity: code_hash=0x{}, value={}",
+            hex::encode(&info.code_hash),
+            live_cap
+        )));
+    }
+    if live_used < 0 {
+        return Err(ApiError::internal(format!(
+            "negative live used capacity in resolve_version_capacity: code_hash=0x{}, value={}",
+            hex::encode(&info.code_hash),
+            live_used
+        )));
+    }
+    if live_used > live_cap {
+        return Err(ApiError::internal(format!(
+            "live used exceeds total in resolve_version_capacity: code_hash=0x{}, used={}, capacity={}",
+            hex::encode(&info.code_hash),
+            live_used,
+            live_cap
+        )));
+    }
+
+    Ok((cells, live_cells, cap, live_cap, used, live_used))
+}
+
 fn live_capacity_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
     info.lock_live_capacity_sum + info.type_live_capacity_sum
 }
@@ -1664,11 +1751,12 @@ mod tests {
     use super::{
         apply_script_chart_delta, checked_capacity_totals,
         latest_complete_script_chart_date_from_tip, resolve_code_cell,
-        resolve_script_capacity_chart_bounds, CodeCellQuery, ListParams,
+        resolve_script_capacity_chart_bounds, resolve_version_capacity, CodeCellQuery, ListParams,
     };
     use axum::extract::Query;
     use axum::http::StatusCode;
     use axum::http::Uri;
+    use ckbadger_store::types::ScriptVersionInfo;
     use ckbadger_store::ScriptInfo;
     use std::collections::BTreeMap;
 
@@ -1900,5 +1988,143 @@ mod tests {
             "should resolve consumed code cell via data_hash index"
         );
         assert_eq!(resolved_idx, Some(0));
+    }
+
+    #[test]
+    fn resolve_version_capacity_uses_direct_script_info_parameter() {
+        let version = ScriptVersionInfo {
+            version_hash: vec![0xAA; 32],
+            name: Some("test_script".to_string()),
+            ..Default::default()
+        };
+        let script_info = ScriptInfo {
+            code_hash: vec![0xAA; 32],
+            lock_live_capacity_sum: 100_00000000,
+            lock_live_used_capacity_sum: 61_00000000,
+            lock_cells_count: 5,
+            lock_live_cells_count: 3,
+            lock_capacity_sum: 200_00000000,
+            lock_used_capacity_sum: 122_00000000,
+            ..Default::default()
+        };
+        let cache: Vec<(Vec<u8>, ScriptInfo)> = vec![];
+        let (cells, live, cap, live_cap, used, live_used) =
+            resolve_version_capacity(&version, Some(&script_info), &cache).unwrap();
+        assert_eq!(cells, 5);
+        assert_eq!(live, 3);
+        assert_eq!(cap, 200_00000000);
+        assert_eq!(live_cap, 100_00000000);
+        assert_eq!(used, 122_00000000);
+        assert_eq!(live_used, 61_00000000);
+    }
+
+    #[test]
+    fn resolve_version_capacity_finds_by_version_hash_in_cache() {
+        let version = ScriptVersionInfo {
+            version_hash: vec![0xAA; 32],
+            name: Some("test_script".to_string()),
+            ..Default::default()
+        };
+        let script_info = ScriptInfo {
+            code_hash: vec![0xAA; 32],
+            lock_live_capacity_sum: 100_00000000,
+            lock_live_used_capacity_sum: 61_00000000,
+            lock_cells_count: 5,
+            lock_live_cells_count: 3,
+            lock_capacity_sum: 200_00000000,
+            lock_used_capacity_sum: 122_00000000,
+            ..Default::default()
+        };
+        let cache = vec![(vec![0xAA; 32], script_info)];
+        let (cells, live, cap, live_cap, used, live_used) =
+            resolve_version_capacity(&version, None, &cache).unwrap();
+        assert_eq!(cells, 5);
+        assert_eq!(live, 3);
+        assert_eq!(cap, 200_00000000);
+        assert_eq!(live_cap, 100_00000000);
+        assert_eq!(used, 122_00000000);
+        assert_eq!(live_used, 61_00000000);
+    }
+
+    #[test]
+    fn resolve_version_capacity_falls_back_to_name_match() {
+        let version = ScriptVersionInfo {
+            version_hash: vec![0xBB; 32],
+            name: Some("secp256k1_blake160".to_string()),
+            ..Default::default()
+        };
+        let script_info = ScriptInfo {
+            code_hash: vec![0xCC; 32],
+            name: Some("secp256k1_blake160".to_string()),
+            lock_live_capacity_sum: 500_00000000,
+            lock_live_used_capacity_sum: 200_00000000,
+            lock_cells_count: 10,
+            lock_live_cells_count: 8,
+            lock_capacity_sum: 800_00000000,
+            lock_used_capacity_sum: 400_00000000,
+            ..Default::default()
+        };
+        let cache = vec![(vec![0xCC; 32], script_info)];
+        let (cells, live, _cap, live_cap, _used, live_used) =
+            resolve_version_capacity(&version, None, &cache).unwrap();
+        assert_eq!(cells, 10);
+        assert_eq!(live, 8);
+        assert_eq!(live_cap, 500_00000000);
+        assert_eq!(live_used, 200_00000000);
+    }
+
+    #[test]
+    fn resolve_version_capacity_returns_zeros_when_no_script_info() {
+        let version = ScriptVersionInfo {
+            version_hash: vec![0xDD; 32],
+            name: Some("unknown_script".to_string()),
+            ..Default::default()
+        };
+        let cache: Vec<(Vec<u8>, ScriptInfo)> = vec![];
+        let (cells, live, cap, live_cap, used, live_used) =
+            resolve_version_capacity(&version, None, &cache).unwrap();
+        assert_eq!(cells, 0);
+        assert_eq!(live, 0);
+        assert_eq!(cap, 0);
+        assert_eq!(live_cap, 0);
+        assert_eq!(used, 0);
+        assert_eq!(live_used, 0);
+    }
+
+    #[test]
+    fn resolve_version_capacity_rejects_negative_live_capacity() {
+        let version = ScriptVersionInfo {
+            version_hash: vec![0xEE; 32],
+            name: Some("bad_script".to_string()),
+            ..Default::default()
+        };
+        let bad_info = ScriptInfo {
+            code_hash: vec![0xEE; 32],
+            lock_live_capacity_sum: -1,
+            ..Default::default()
+        };
+        let cache = vec![(vec![0xEE; 32], bad_info)];
+        let err = resolve_version_capacity(&version, None, &cache).unwrap_err();
+        assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(err.1 .0.message.contains("negative live capacity"));
+    }
+
+    #[test]
+    fn resolve_version_capacity_rejects_used_exceeds_total() {
+        let version = ScriptVersionInfo {
+            version_hash: vec![0xFF; 32],
+            name: Some("bad_script2".to_string()),
+            ..Default::default()
+        };
+        let bad_info = ScriptInfo {
+            code_hash: vec![0xFF; 32],
+            lock_live_capacity_sum: 100,
+            lock_live_used_capacity_sum: 101,
+            ..Default::default()
+        };
+        let cache = vec![(vec![0xFF; 32], bad_info)];
+        let err = resolve_version_capacity(&version, None, &cache).unwrap_err();
+        assert_eq!(err.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(err.1 .0.message.contains("live used exceeds total"));
     }
 }
