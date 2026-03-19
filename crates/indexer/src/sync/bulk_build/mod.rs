@@ -71,6 +71,14 @@ impl BulkBuildEngine {
             "Bulk build engine route selected; materializing bulk stage before pipeline handoff"
         );
         Self::run_bulk_stage_until_pipeline_handoff(indexer).await?;
+        let handoff_tip = i64::try_from(indexer.progress.current()).map_err(|_| {
+            anyhow!(
+                "bulk build handoff tip exceeds i64 range: current_block={}",
+                indexer.progress.current()
+            )
+        })?;
+        indexer.reconcile_hodl_tracker_with_tip(handoff_tip)?;
+        indexer.reconcile_cell_dist_tracker_with_tip(handoff_tip)?;
         info!(
             run_id = %indexer.run_id,
             current_block = indexer.progress.current(),
