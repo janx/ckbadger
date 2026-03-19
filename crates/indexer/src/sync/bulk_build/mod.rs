@@ -91,7 +91,7 @@ impl BulkBuildEngine {
             indexer.append_only_store.as_ref(),
         );
         let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(String::new());
-        let batch_block_span = u64::try_from(indexer.config.batch_size).map_err(|_| {
+        let mut batch_block_span = u64::try_from(indexer.config.batch_size).map_err(|_| {
             anyhow!(
                 "bulk build batch_size exceeds u64 range: batch_size={}",
                 indexer.config.batch_size
@@ -344,6 +344,26 @@ impl BulkBuildEngine {
                 prev_flush_ms = format!("{:.1}", prev_flush_ms),
                 "Bulk build materialized batch"
             );
+
+            // Adjust batch span for next iteration based on observed tx density.
+            // Target: ~40K txs per batch to balance per-batch overhead vs memory.
+            // Early blocks are sparse (~1 tx/block) so larger batches reduce overhead;
+            // late blocks are dense (~4+ tx/block) so 10K blocks is appropriate.
+            if batch_stats.block_count > 0 && batch_stats.tx_count > 0 {
+                let tx_density =
+                    batch_stats.tx_count as f64 / batch_stats.block_count.max(1) as f64;
+                let target_txs: f64 = 40_000.0;
+                let desired_f64 = target_txs / tx_density;
+                if !desired_f64.is_finite() || desired_f64 < 0.0 {
+                    bail!(
+                        "bulk build adaptive sizing produced invalid desired blocks: tx_density={} target_txs={} desired_f64={}",
+                        tx_density,
+                        target_txs,
+                        desired_f64
+                    );
+                }
+                batch_block_span = (desired_f64 as u64).clamp(10_000, 100_000);
+            }
 
             // Periodic memory summary every 10 batches
             if batch_count.is_multiple_of(10) {
