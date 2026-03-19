@@ -366,6 +366,7 @@ pub struct Indexer {
     pub(crate) udt_cell_cache: Arc<DashMap<([u8; 32], i16), CachedUdtCellInfo>>,
     pub(crate) perf: PerfStats,
     pub(crate) pipeline_perf: Arc<PipelinePerfStats>,
+    pub(crate) bulk_build_perf: Arc<BulkBuildPerfStats>,
     pub(crate) adaptive_batch_controller: Arc<AdaptiveBatchController>,
     pub(crate) cache_invalidator: CacheInvalidator,
     pub(crate) last_cache_invalidation: tokio::sync::Mutex<u64>,
@@ -473,6 +474,7 @@ impl Indexer {
             udt_cell_cache,
             perf: PerfStats::default(),
             pipeline_perf: Arc::new(PipelinePerfStats::default()),
+            bulk_build_perf: Arc::new(BulkBuildPerfStats::default()),
             adaptive_batch_controller,
             cache_invalidator,
             last_cache_invalidation: tokio::sync::Mutex::new(0),
@@ -930,6 +932,10 @@ impl Indexer {
 
     pub fn pipeline_progress_snapshot(&self) -> Option<PipelineProgressData> {
         self.pipeline_perf.snapshot()
+    }
+
+    pub fn bulk_build_progress_snapshot(&self) -> Option<ckbadger_common::BulkBuildProgressData> {
+        self.bulk_build_perf.snapshot()
     }
 
     pub fn adaptive_batch_snapshot(&self) -> Option<AdaptiveBatchProgressSnapshot> {

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Local, Utc};
-use ckbadger_common::MemoryStatsData;
+use ckbadger_common::{BulkBuildProgressData, MemoryStatsData};
 use ckbadger_store::{APPEND_CFS, DOMAIN_CFS};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -124,6 +124,8 @@ pub struct App {
     fetch_stage_history: VecDeque<f64>,
     parse_stage_history: VecDeque<f64>,
     write_stage_history: VecDeque<f64>,
+    bulk_build_ms_history: VecDeque<f64>,
+    bulk_fetch_ms_history: VecDeque<f64>,
     log_entries: VecDeque<LogEntry>,
     sync_event_entries: VecDeque<LogEntry>,
     log_scroll: usize,
@@ -186,6 +188,8 @@ impl App {
             fetch_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             parse_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             write_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            bulk_build_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            bulk_fetch_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             log_entries,
             sync_event_entries,
             log_scroll: 0,
@@ -398,6 +402,15 @@ impl App {
         push_history_sample(&mut self.fetch_stage_history, fetch_ms);
         push_history_sample(&mut self.parse_stage_history, parse_ms);
         push_history_sample(&mut self.write_stage_history, write_ms);
+
+        let (bulk_build_ms, bulk_fetch_ms) = self
+            .sync_status
+            .as_ref()
+            .and_then(|s| s.bulk_build.as_ref())
+            .map(|bb| (bb.build_ms.unwrap_or(0.0), bb.fetch_ms.unwrap_or(0.0)))
+            .unwrap_or((0.0, 0.0));
+        push_history_sample(&mut self.bulk_build_ms_history, bulk_build_ms);
+        push_history_sample(&mut self.bulk_fetch_ms_history, bulk_fetch_ms);
 
         let mut block_rate_alerted = false;
         if self.rate_history.len() >= 2 {
@@ -1387,6 +1400,11 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
+    let is_bulk_build = app
+        .sync_status
+        .as_ref()
+        .and_then(|s| s.bulk_build.as_ref())
+        .is_some();
     if stack_sync_charts(area) {
         let specs = sync_chart_specs(true);
         let rows = Layout::default()
@@ -1408,7 +1426,16 @@ fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
             sync_chart_data(app, specs[1].kind),
         );
     } else {
-        let specs = sync_chart_specs(false);
+        let base_specs = sync_chart_specs(false);
+        let third_spec = if is_bulk_build {
+            SyncChartSpec {
+                title: "Build Latency (ms)",
+                unit: "ms",
+                kind: SyncChartKind::BuildLatency,
+            }
+        } else {
+            base_specs[2]
+        };
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -1420,23 +1447,23 @@ fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
         draw_chart_panel(
             f,
             cols[0],
-            specs[0].title,
-            specs[0].unit,
-            sync_chart_data(app, specs[0].kind),
+            base_specs[0].title,
+            base_specs[0].unit,
+            sync_chart_data(app, base_specs[0].kind),
         );
         draw_chart_panel(
             f,
             cols[1],
-            specs[1].title,
-            specs[1].unit,
-            sync_chart_data(app, specs[1].kind),
+            base_specs[1].title,
+            base_specs[1].unit,
+            sync_chart_data(app, base_specs[1].kind),
         );
         draw_chart_panel(
             f,
             cols[2],
-            specs[2].title,
-            specs[2].unit,
-            sync_chart_data(app, specs[2].kind),
+            third_spec.title,
+            third_spec.unit,
+            sync_chart_data(app, third_spec.kind),
         );
     }
 }
@@ -1446,6 +1473,7 @@ enum SyncChartKind {
     BlockRate,
     TxRate,
     WriteLatency,
+    BuildLatency,
 }
 
 #[derive(Clone, Copy)]
@@ -1499,6 +1527,7 @@ fn sync_chart_data(app: &App, kind: SyncChartKind) -> &VecDeque<f64> {
         SyncChartKind::BlockRate => &app.rate_history,
         SyncChartKind::TxRate => &app.tx_rate_history,
         SyncChartKind::WriteLatency => &app.db_write_history,
+        SyncChartKind::BuildLatency => &app.bulk_build_ms_history,
     }
 }
 
@@ -1942,6 +1971,8 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
         };
 
         (left, right)
+    } else if let Some(bb) = sync.bulk_build.as_ref() {
+        build_bulk_build_diagnostics(bb, app, &cols, &rate_jitter_text, &eta_conf)
     } else {
         (
             {
@@ -2039,6 +2070,199 @@ fn io_fetch_write_jitter_line(
         Span::styled("  jitter ", Style::default().fg(SLATE_500)),
         Span::styled(rate_jitter_text.to_string(), Style::default().fg(AMBER)),
     ])
+}
+
+fn build_bulk_build_diagnostics(
+    bb: &BulkBuildProgressData,
+    app: &App,
+    cols: &[Rect],
+    rate_jitter_text: &str,
+    eta_conf: &(&'static str, Color),
+) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
+    // ── Left column: engine header + stage breakdown + volume ──
+    let batch_count_text = bb
+        .batch_count
+        .map(format_num_u64)
+        .unwrap_or_else(|| "-".to_string());
+    let span_text = bb
+        .batch_block_span
+        .map(|v| format!("{}k", v / 1000))
+        .unwrap_or_else(|| "-".to_string());
+
+    // Stage timing bars - find max for relative sizing
+    let stages: [(&str, Option<f64>, Color); 6] = [
+        ("Facts", bb.facts_ms, TERMINAL_GREEN),
+        ("Resolve", bb.resolve_ms, TERMINAL_DIM),
+        ("Reduce", bb.reduce_ms, AMBER),
+        ("History", bb.history_ms, CYAN),
+        ("Addr", bb.address_reduce_ms, SLATE_500),
+        ("Activity", bb.activity_stats_ms, SLATE_500),
+    ];
+    let max_stage_ms = stages
+        .iter()
+        .filter_map(|(_, ms, _)| *ms)
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+
+    let bar_width = (cols[0].width as usize).saturating_sub(22).clamp(8, 30);
+    let mut left = vec![Line::from(vec![
+        Span::styled("Engine ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            "[BULK BUILD]",
+            Style::default()
+                .fg(Color::Black)
+                .bg(AMBER)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  Batch #", Style::default().fg(SLATE_500)),
+        Span::styled(batch_count_text, Style::default().fg(FOREGROUND)),
+        Span::styled("  Span ", Style::default().fg(SLATE_500)),
+        Span::styled(span_text, Style::default().fg(FOREGROUND)),
+    ])];
+
+    for (name, ms_opt, color) in &stages {
+        let ms = ms_opt.unwrap_or(0.0);
+        let filled = ((ms / max_stage_ms) * bar_width as f64).round() as usize;
+        let filled = filled.min(bar_width);
+        let bar: String = "\u{2588}".repeat(filled);
+        let empty: String = "\u{2591}".repeat(bar_width - filled);
+        let pct = if bb.build_ms.unwrap_or(0.0) > 0.0 {
+            format!("{:3.0}%", ms / bb.build_ms.unwrap() * 100.0)
+        } else {
+            "  -".to_string()
+        };
+        left.push(Line::from(vec![
+            Span::styled(format!("{:<8}", name), Style::default().fg(SLATE_500)),
+            Span::styled(bar, Style::default().fg(*color)),
+            Span::styled(empty, Style::default().fg(SLATE_800)),
+            Span::styled(format!(" {:>6.1}ms", ms), Style::default().fg(FOREGROUND)),
+            Span::styled(format!(" {}", pct), Style::default().fg(SLATE_500)),
+        ]));
+    }
+
+    // Flush + I/O line
+    let flush_text = bb
+        .flush_ms
+        .map(|v| format!("{v:.1}ms"))
+        .unwrap_or_else(|| "-".to_string());
+    let fetch_text = bb
+        .fetch_ms
+        .map(|v| format!("{v:.1}ms"))
+        .unwrap_or_else(|| "-".to_string());
+    let build_text = bb
+        .build_ms
+        .map(|v| format!("{v:.1}ms"))
+        .unwrap_or_else(|| "-".to_string());
+    left.push(Line::from(vec![
+        Span::styled("I/O ", Style::default().fg(SLATE_500)),
+        Span::styled("Fetch ", Style::default().fg(SLATE_500)),
+        Span::styled(fetch_text, Style::default().fg(FOREGROUND)),
+        Span::styled("  Build ", Style::default().fg(SLATE_500)),
+        Span::styled(build_text, Style::default().fg(FOREGROUND)),
+        Span::styled("  Flush ", Style::default().fg(SLATE_500)),
+        Span::styled(flush_text, Style::default().fg(TERMINAL_DIM)),
+    ]));
+
+    // Volume line
+    let cells_created = bb
+        .cells_created
+        .map(|v| format!("+{}", format_num_u64(v)))
+        .unwrap_or_else(|| "-".to_string());
+    let cells_consumed = bb
+        .cells_consumed
+        .map(|v| format!("-{}", format_num_u64(v)))
+        .unwrap_or_else(|| "-".to_string());
+    let density_text = bb
+        .tx_density
+        .map(|v| format!("{v:.1}"))
+        .unwrap_or_else(|| "-".to_string());
+    left.push(Line::from(vec![
+        Span::styled("Volume ", Style::default().fg(SLATE_500)),
+        Span::styled("Cells ", Style::default().fg(SLATE_500)),
+        Span::styled(cells_created, Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(" ", Style::default()),
+        Span::styled(cells_consumed, Style::default().fg(AMBER)),
+        Span::styled("  Density ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format!("{} tx/blk", density_text),
+            Style::default().fg(FOREGROUND),
+        ),
+    ]));
+
+    // ── Right column: memory, materialization, pressure gauges, sparklines ──
+    let owner_mem_text = bb
+        .owner_memory_bytes
+        .map(format_bytes)
+        .unwrap_or_else(|| "-".to_string());
+    let live_cells_text = bb
+        .live_cell_count
+        .map(format_num_u64)
+        .unwrap_or_else(|| "-".to_string());
+    let hist_rows = bb
+        .cumulative_history_rows
+        .map(format_num_u64)
+        .unwrap_or_else(|| "-".to_string());
+    let sealed_rows = bb
+        .cumulative_sealed_rows
+        .map(format_num_u64)
+        .unwrap_or_else(|| "-".to_string());
+
+    let spark_width = cols[1].width.saturating_sub(14).clamp(8, 24) as usize;
+    let show_p95 = cols[1].width >= P95_MIN_WIDTH;
+    let gauge_width = (cols[1].width / 4).clamp(6, 12) as usize;
+
+    let spark_build_fetch = merged_sparkline_p95_line(
+        "B",
+        AMBER,
+        &app.bulk_build_ms_history,
+        "F",
+        TERMINAL_DIM,
+        &app.bulk_fetch_ms_history,
+        spark_width,
+        show_p95,
+    );
+
+    let (l0_line, wbm_line, pressure_line) = if let Some(mem) = &app.memory_stats {
+        (
+            storage_pressure_l0_line(mem, gauge_width),
+            storage_pressure_wbm_line(mem, gauge_width),
+            storage_pressure_summary_line(mem),
+        )
+    } else {
+        (
+            Line::from(Span::styled("L0 -", Style::default().fg(SLATE_500))),
+            Line::from(Span::styled("WBM -", Style::default().fg(SLATE_500))),
+            Line::from(Span::styled("Compact -", Style::default().fg(SLATE_500))),
+        )
+    };
+
+    let right = vec![
+        Line::from(vec![
+            Span::styled("Owner mem ", Style::default().fg(SLATE_500)),
+            Span::styled(owner_mem_text, Style::default().fg(FOREGROUND)),
+            Span::styled("  Live cells ", Style::default().fg(SLATE_500)),
+            Span::styled(live_cells_text, Style::default().fg(FOREGROUND)),
+        ]),
+        Line::from(vec![
+            Span::styled("Materialized ", Style::default().fg(SLATE_500)),
+            Span::styled("hist ", Style::default().fg(SLATE_500)),
+            Span::styled(hist_rows, Style::default().fg(FOREGROUND)),
+            Span::styled("  sealed ", Style::default().fg(SLATE_500)),
+            Span::styled(sealed_rows, Style::default().fg(FOREGROUND)),
+        ]),
+        spark_build_fetch,
+        l0_line,
+        wbm_line,
+        pressure_line,
+        Line::from(vec![
+            Span::styled("ETA ", Style::default().fg(SLATE_500)),
+            Span::styled(eta_conf.0, Style::default().fg(eta_conf.1)),
+            Span::styled("  jitter ", Style::default().fg(SLATE_500)),
+            Span::styled(rate_jitter_text.to_string(), Style::default().fg(AMBER)),
+        ]),
+    ];
+
+    (left, right)
 }
 
 fn format_stage_commit_gap_ms(stage_ms: Option<f64>, commit_ms: Option<f64>) -> String {

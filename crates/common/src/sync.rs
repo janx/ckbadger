@@ -169,6 +169,9 @@ pub struct SyncProgressData {
     /// Unix timestamp when adaptive controller last adjusted.
     #[serde(default)]
     pub adaptive_last_adjusted_at: Option<i64>,
+    /// Bulk-build engine internal metrics, when bulk-build engine is active.
+    #[serde(default)]
+    pub bulk_build: Option<BulkBuildProgressData>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -197,6 +200,67 @@ pub struct PipelineProgressData {
     pub writer_queue_depth: Option<u64>,
     /// Queue capacity observed by writer (parser -> writer channel).
     pub writer_queue_capacity: Option<u64>,
+}
+
+/// Bulk-build engine internal metrics published per batch.
+/// Only present when the bulk-build engine is the active sync mode.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkBuildProgressData {
+    /// Binary fact decoding time in ms.
+    #[serde(default)]
+    pub facts_ms: Option<f64>,
+    /// Reference resolution time in ms.
+    #[serde(default)]
+    pub resolve_ms: Option<f64>,
+    /// Owner reduction time in ms.
+    #[serde(default)]
+    pub reduce_ms: Option<f64>,
+    /// Historical aggregation (HODL/cell distribution) time in ms.
+    #[serde(default)]
+    pub history_ms: Option<f64>,
+    /// Address stat indexing time in ms.
+    #[serde(default)]
+    pub address_reduce_ms: Option<f64>,
+    /// Activity stats time in ms.
+    #[serde(default)]
+    pub activity_stats_ms: Option<f64>,
+    /// Background materialization flush time in ms.
+    #[serde(default)]
+    pub flush_ms: Option<f64>,
+    /// Total RPC/DB fetch time for the batch in ms.
+    #[serde(default)]
+    pub fetch_ms: Option<f64>,
+    /// Total build (CPU) time for the batch in ms.
+    #[serde(default)]
+    pub build_ms: Option<f64>,
+    /// Sum of all owner data structure memory in bytes.
+    #[serde(default)]
+    pub owner_memory_bytes: Option<u64>,
+    /// Number of live cells tracked by the in-memory sequencer.
+    #[serde(default)]
+    pub live_cell_count: Option<u64>,
+    /// Cells created in the most recent batch.
+    #[serde(default)]
+    pub cells_created: Option<u64>,
+    /// Cells consumed in the most recent batch.
+    #[serde(default)]
+    pub cells_consumed: Option<u64>,
+    /// Cumulative history rows flushed to RocksDB.
+    #[serde(default)]
+    pub cumulative_history_rows: Option<u64>,
+    /// Cumulative sealed aggregate rows flushed to RocksDB.
+    #[serde(default)]
+    pub cumulative_sealed_rows: Option<u64>,
+    /// Current adaptive batch block span.
+    #[serde(default)]
+    pub batch_block_span: Option<u64>,
+    /// Total batches completed in this bulk-build session.
+    #[serde(default)]
+    pub batch_count: Option<u64>,
+    /// Transaction density (txs per block) in the most recent batch.
+    #[serde(default)]
+    pub tx_density: Option<f64>,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {
@@ -542,6 +606,7 @@ mod tests {
             adaptive_adjustment_seq: Some(42),
             adaptive_backoff_streak: Some(3),
             adaptive_last_adjusted_at: Some(1_700_000_123),
+            bulk_build: None,
         };
 
         let json = serde_json::to_string(&progress).unwrap();
@@ -607,6 +672,7 @@ mod tests {
             adaptive_adjustment_seq: Some(1),
             adaptive_backoff_streak: Some(0),
             adaptive_last_adjusted_at: Some(1),
+            bulk_build: None,
         })
         .unwrap();
         if let Some(obj) = value.as_object_mut() {
@@ -639,5 +705,84 @@ mod tests {
         assert_eq!(parsed.adaptive_adjustment_seq, None);
         assert_eq!(parsed.adaptive_backoff_streak, None);
         assert_eq!(parsed.adaptive_last_adjusted_at, None);
+        assert_eq!(parsed.bulk_build, None);
+    }
+
+    #[test]
+    fn test_bulk_build_progress_serialization_round_trip() {
+        let bb = BulkBuildProgressData {
+            facts_ms: Some(45.2),
+            resolve_ms: Some(35.8),
+            reduce_ms: Some(28.1),
+            history_ms: Some(18.5),
+            address_reduce_ms: Some(8.3),
+            activity_stats_ms: Some(5.1),
+            flush_ms: Some(52.0),
+            fetch_ms: Some(120.5),
+            build_ms: Some(141.0),
+            owner_memory_bytes: Some(1_800_000_000),
+            live_cell_count: Some(12_345_678),
+            cells_created: Some(5_000),
+            cells_consumed: Some(3_000),
+            cumulative_history_rows: Some(45_230),
+            cumulative_sealed_rows: Some(12_890),
+            batch_block_span: Some(8_500),
+            batch_count: Some(156),
+            tx_density: Some(4.7),
+        };
+
+        let json = serde_json::to_string(&bb).unwrap();
+        let parsed: BulkBuildProgressData = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.facts_ms, Some(45.2));
+        assert_eq!(parsed.resolve_ms, Some(35.8));
+        assert_eq!(parsed.owner_memory_bytes, Some(1_800_000_000));
+        assert_eq!(parsed.live_cell_count, Some(12_345_678));
+        assert_eq!(parsed.batch_count, Some(156));
+        assert_eq!(parsed.tx_density, Some(4.7));
+    }
+
+    #[test]
+    fn test_sync_progress_deserialize_without_bulk_build_field() {
+        let mut value = serde_json::to_value(SyncProgressData {
+            current_block: 100,
+            target_block: 200,
+            last_batch_blocks: None,
+            blocks_per_second: 50.0,
+            ema_blocks_per_second: 45.0,
+            txs_per_second: None,
+            ema_txs_per_second: None,
+            eta_seconds: None,
+            eta_formatted: "".to_string(),
+            progress_percentage: 50.0,
+            updated_at: 1700000000,
+            startup_phase: None,
+            is_direct_db_read: false,
+            db_write_ms: None,
+            db_commit_ms: None,
+            rpc_fetch_ms: None,
+            pipeline: None,
+            pipeline_reset_epoch: None,
+            pipeline_reset_reason: None,
+            adaptive_target_batch_txs: None,
+            adaptive_inflight_limit: None,
+            adaptive_min_target_batch_txs: None,
+            adaptive_cooldown_steps: None,
+            adaptive_last_reason: None,
+            adaptive_adjustment_seq: None,
+            adaptive_backoff_streak: None,
+            adaptive_last_adjusted_at: None,
+            bulk_build: Some(BulkBuildProgressData {
+                facts_ms: Some(10.0),
+                ..Default::default()
+            }),
+        })
+        .unwrap();
+        if let Some(obj) = value.as_object_mut() {
+            obj.remove("bulkBuild");
+        }
+
+        let parsed: SyncProgressData = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.bulk_build, None);
     }
 }

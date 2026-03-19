@@ -197,6 +197,7 @@ mod tests {
             adaptive_adjustment_seq: None,
             adaptive_backoff_streak: None,
             adaptive_last_adjusted_at: None,
+            bulk_build: None,
         };
         invalidator.publish_sync_progress(&data).await;
 

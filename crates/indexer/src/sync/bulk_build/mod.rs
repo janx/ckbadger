@@ -310,6 +310,38 @@ impl BulkBuildEngine {
             sample.cumulative_history_rows = flush_row_totals.0 as u64;
             sample.cumulative_sealed_rows = flush_row_totals.1 as u64;
             sample.cumulative_snapshot_rows = 0; // snapshots are written at finalize
+
+            // Compute tx_density for both TUI publishing and adaptive sizing below.
+            let tx_density = if batch_stats.block_count > 0 && batch_stats.tx_count > 0 {
+                batch_stats.tx_count as f64 / batch_stats.block_count as f64
+            } else {
+                0.0
+            };
+
+            // Publish bulk-build metrics to shared atomics for progress monitor -> TUI.
+            // Must happen before record_bulk_sync_perf_batch_sample moves sample.
+            let owner_mem_total: u64 = sample.owner_memory_bytes.values().sum();
+            indexer.bulk_build_perf.record_batch(
+                build_timings.facts_ms,
+                build_timings.resolve_ms,
+                build_timings.reduce_ms,
+                build_timings.history_ms,
+                build_timings.address_reduce_ms,
+                build_timings.activity_stats_ms,
+                prev_flush_ms,
+                fetch_elapsed.as_secs_f64() * 1000.0,
+                build_elapsed.as_secs_f64() * 1000.0,
+                owner_mem_total,
+                sample.live_cell_count,
+                sample.cells,
+                sample.inputs,
+                flush_row_totals.0 as u64,
+                flush_row_totals.1 as u64,
+                batch_block_span,
+                batch_count + 1, // batch_count is incremented below
+                tx_density,
+            );
+
             indexer.record_bulk_sync_perf_batch_sample(sample);
 
             // Spawn background flush AFTER all fallible operations above.
@@ -358,8 +390,7 @@ impl BulkBuildEngine {
             // Target: ~40K txs per batch to balance per-batch overhead vs memory.
             // Early blocks are sparse (~1 tx/block) so larger batches reduce overhead;
             // late blocks are dense (~4+ tx/block) so 10K blocks is appropriate.
-            if batch_stats.block_count > 0 && batch_stats.tx_count > 0 {
-                let tx_density = batch_stats.tx_count as f64 / batch_stats.block_count as f64;
+            if tx_density > 0.0 {
                 let target_txs: f64 = 40_000.0;
                 let desired_f64 = target_txs / tx_density;
                 if !desired_f64.is_finite() || desired_f64 < 0.0 {

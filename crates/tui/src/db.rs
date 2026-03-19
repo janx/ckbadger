@@ -1,6 +1,7 @@
 use anyhow::Result;
 use ckbadger_common::{
-    format_duration_smart, MemoryStatsData, PipelineProgressData, SyncProgressData, SyncStatusData,
+    format_duration_smart, BulkBuildProgressData, MemoryStatsData, PipelineProgressData,
+    SyncProgressData, SyncStatusData,
 };
 use ckbadger_store::{
     secondary_store_path, CkbadgerStore, MemoryProfile, SecondaryStoreOwner, StoreRuntimeConfig,
@@ -69,6 +70,7 @@ pub struct SyncStatusRow {
     pub adaptive_backoff_streak: Option<u64>,
     pub adaptive_last_adjusted_age_secs: Option<i64>,
     pub startup_phase: Option<String>,
+    pub bulk_build: Option<BulkBuildProgressData>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -407,6 +409,7 @@ impl TuiDb {
                 .adaptive_last_adjusted_at
                 .map(|ts| (chrono::Utc::now().timestamp() - ts).max(0)),
             startup_phase: progress.startup_phase.clone(),
+            bulk_build: progress.bulk_build.clone(),
         }
     }
 
@@ -471,6 +474,7 @@ impl TuiDb {
             adaptive_backoff_streak: None,
             adaptive_last_adjusted_age_secs: None,
             startup_phase: None,
+            bulk_build: None,
         })
     }
 
@@ -715,6 +719,7 @@ mod tests {
             adaptive_adjustment_seq: None,
             adaptive_backoff_streak: None,
             adaptive_last_adjusted_at: None,
+            bulk_build: None,
         }
     }
 

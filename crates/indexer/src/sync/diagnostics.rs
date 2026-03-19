@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ckbadger_common::PipelineProgressData;
+use ckbadger_common::{BulkBuildProgressData, PipelineProgressData};
 use dashmap::DashMap;
 use serde::Serialize;
 use tracing::info;
@@ -275,6 +275,136 @@ impl PipelinePerfStats {
             },
         })
     }
+}
+
+// ── BulkBuildPerfStats ──────────────────────────────────────────────────
+
+/// Lock-free shared state for bulk-build engine metrics.
+/// Written by the bulk-build batch loop, read by the progress monitor thread.
+#[derive(Default)]
+pub(crate) struct BulkBuildPerfStats {
+    // Stage timings stored as microseconds (f64 ms * 1000 → u64 us)
+    last_facts_us: AtomicU64,
+    last_resolve_us: AtomicU64,
+    last_reduce_us: AtomicU64,
+    last_history_us: AtomicU64,
+    last_address_reduce_us: AtomicU64,
+    last_activity_stats_us: AtomicU64,
+    last_flush_us: AtomicU64,
+    last_fetch_us: AtomicU64,
+    last_build_us: AtomicU64,
+    // In-memory state
+    owner_memory_bytes: AtomicU64,
+    live_cell_count: AtomicU64,
+    // Per-batch volume
+    cells_created: AtomicU64,
+    cells_consumed: AtomicU64,
+    // Cumulative materialization
+    cumulative_history_rows: AtomicU64,
+    cumulative_sealed_rows: AtomicU64,
+    // Batch sizing
+    batch_block_span: AtomicU64,
+    batch_count: AtomicU64,
+    // tx_density stored as f64 bits
+    tx_density_bits: AtomicU64,
+}
+
+impl BulkBuildPerfStats {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_batch(
+        &self,
+        facts_ms: f64,
+        resolve_ms: f64,
+        reduce_ms: f64,
+        history_ms: f64,
+        address_reduce_ms: f64,
+        activity_stats_ms: f64,
+        flush_ms: f64,
+        fetch_ms: f64,
+        build_ms: f64,
+        owner_memory_bytes: u64,
+        live_cell_count: u64,
+        cells_created: u64,
+        cells_consumed: u64,
+        cumulative_history_rows: u64,
+        cumulative_sealed_rows: u64,
+        batch_block_span: u64,
+        batch_count: u64,
+        tx_density: f64,
+    ) {
+        self.last_facts_us
+            .store(ms_to_us(facts_ms), Ordering::Relaxed);
+        self.last_resolve_us
+            .store(ms_to_us(resolve_ms), Ordering::Relaxed);
+        self.last_reduce_us
+            .store(ms_to_us(reduce_ms), Ordering::Relaxed);
+        self.last_history_us
+            .store(ms_to_us(history_ms), Ordering::Relaxed);
+        self.last_address_reduce_us
+            .store(ms_to_us(address_reduce_ms), Ordering::Relaxed);
+        self.last_activity_stats_us
+            .store(ms_to_us(activity_stats_ms), Ordering::Relaxed);
+        self.last_flush_us
+            .store(ms_to_us(flush_ms), Ordering::Relaxed);
+        self.last_fetch_us
+            .store(ms_to_us(fetch_ms), Ordering::Relaxed);
+        self.last_build_us
+            .store(ms_to_us(build_ms), Ordering::Relaxed);
+        self.owner_memory_bytes
+            .store(owner_memory_bytes, Ordering::Relaxed);
+        self.live_cell_count
+            .store(live_cell_count, Ordering::Relaxed);
+        self.cells_created.store(cells_created, Ordering::Relaxed);
+        self.cells_consumed.store(cells_consumed, Ordering::Relaxed);
+        self.cumulative_history_rows
+            .store(cumulative_history_rows, Ordering::Relaxed);
+        self.cumulative_sealed_rows
+            .store(cumulative_sealed_rows, Ordering::Relaxed);
+        self.batch_block_span
+            .store(batch_block_span, Ordering::Relaxed);
+        self.batch_count.store(batch_count, Ordering::Relaxed);
+        self.tx_density_bits
+            .store(tx_density.to_bits(), Ordering::Relaxed);
+    }
+
+    pub(crate) fn snapshot(&self) -> Option<BulkBuildProgressData> {
+        let batch_count = self.batch_count.load(Ordering::Relaxed);
+        if batch_count == 0 {
+            return None;
+        }
+        Some(BulkBuildProgressData {
+            facts_ms: Some(us_to_ms(self.last_facts_us.load(Ordering::Relaxed))),
+            resolve_ms: Some(us_to_ms(self.last_resolve_us.load(Ordering::Relaxed))),
+            reduce_ms: Some(us_to_ms(self.last_reduce_us.load(Ordering::Relaxed))),
+            history_ms: Some(us_to_ms(self.last_history_us.load(Ordering::Relaxed))),
+            address_reduce_ms: Some(us_to_ms(
+                self.last_address_reduce_us.load(Ordering::Relaxed),
+            )),
+            activity_stats_ms: Some(us_to_ms(
+                self.last_activity_stats_us.load(Ordering::Relaxed),
+            )),
+            flush_ms: Some(us_to_ms(self.last_flush_us.load(Ordering::Relaxed))),
+            fetch_ms: Some(us_to_ms(self.last_fetch_us.load(Ordering::Relaxed))),
+            build_ms: Some(us_to_ms(self.last_build_us.load(Ordering::Relaxed))),
+            owner_memory_bytes: Some(self.owner_memory_bytes.load(Ordering::Relaxed)),
+            live_cell_count: Some(self.live_cell_count.load(Ordering::Relaxed)),
+            cells_created: Some(self.cells_created.load(Ordering::Relaxed)),
+            cells_consumed: Some(self.cells_consumed.load(Ordering::Relaxed)),
+            cumulative_history_rows: Some(self.cumulative_history_rows.load(Ordering::Relaxed)),
+            cumulative_sealed_rows: Some(self.cumulative_sealed_rows.load(Ordering::Relaxed)),
+            batch_block_span: Some(self.batch_block_span.load(Ordering::Relaxed)),
+            batch_count: Some(batch_count),
+            tx_density: Some(f64::from_bits(self.tx_density_bits.load(Ordering::Relaxed))),
+        })
+    }
+}
+
+fn ms_to_us(ms: f64) -> u64 {
+    (ms * 1000.0) as u64
+}
+
+fn us_to_ms(us: u64) -> f64 {
+    us as f64 / 1000.0
 }
 
 // ── RepeatedWarningTracker ──────────────────────────────────────────────
@@ -742,5 +872,56 @@ mod tests {
         assert!(tracker
             .record("pipeline_batch_mismatch", Duration::from_secs(60))
             .is_some());
+    }
+
+    #[test]
+    fn test_bulk_build_perf_snapshot_returns_none_when_empty() {
+        let perf = BulkBuildPerfStats::default();
+        assert!(perf.snapshot().is_none());
+    }
+
+    #[test]
+    fn test_bulk_build_perf_snapshot_returns_data_after_record() {
+        let perf = BulkBuildPerfStats::default();
+        perf.record_batch(
+            45.2,          // facts_ms
+            35.8,          // resolve_ms
+            28.1,          // reduce_ms
+            18.5,          // history_ms
+            8.3,           // address_reduce_ms
+            5.1,           // activity_stats_ms
+            52.0,          // flush_ms
+            120.5,         // fetch_ms
+            141.0,         // build_ms
+            1_800_000_000, // owner_memory_bytes
+            12_345_678,    // live_cell_count
+            5_000,         // cells_created
+            3_000,         // cells_consumed
+            45_230,        // cumulative_history_rows
+            12_890,        // cumulative_sealed_rows
+            8_500,         // batch_block_span
+            1,             // batch_count
+            4.7,           // tx_density
+        );
+
+        let snap = perf.snapshot().expect("should have data after record");
+        // us<->ms round-trip loses sub-microsecond precision; verify ≤0.001ms error
+        assert!((snap.facts_ms.unwrap() - 45.2).abs() < 0.01);
+        assert!((snap.resolve_ms.unwrap() - 35.8).abs() < 0.01);
+        assert!((snap.reduce_ms.unwrap() - 28.1).abs() < 0.01);
+        assert_eq!(snap.owner_memory_bytes, Some(1_800_000_000));
+        assert_eq!(snap.live_cell_count, Some(12_345_678));
+        assert_eq!(snap.cells_created, Some(5_000));
+        assert_eq!(snap.cells_consumed, Some(3_000));
+        assert_eq!(snap.batch_block_span, Some(8_500));
+        assert_eq!(snap.batch_count, Some(1));
+        assert!((snap.tx_density.unwrap() - 4.7).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_ms_to_us_and_back() {
+        assert_eq!(us_to_ms(ms_to_us(123.456)), 123.456);
+        assert_eq!(ms_to_us(0.0), 0);
+        assert_eq!(us_to_ms(0), 0.0);
     }
 }

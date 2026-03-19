@@ -396,6 +396,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                 adaptive_adjustment_seq: adaptive.as_ref().map(|s| s.adjustment_seq),
                 adaptive_backoff_streak: adaptive.as_ref().map(|s| s.backoff_streak),
                 adaptive_last_adjusted_at: adaptive.as_ref().and_then(|s| s.last_adjusted_at),
+                bulk_build: indexer_for_progress.bulk_build_progress_snapshot(),
             };
             indexer_for_progress
                 .cache_invalidator()
