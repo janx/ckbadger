@@ -1,4 +1,4 @@
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, Utc};
 use ckbadger_common::MemoryStatsData;
 use ckbadger_store::{APPEND_CFS, DOMAIN_CFS};
 use ratatui::{
@@ -864,6 +864,9 @@ fn draw_overview_tail(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
+    let is_bulk_sync = app.sync_status.as_ref().is_some_and(|s| s.is_bulk_sync);
+    let progress_height: u16 = if is_bulk_sync { 8 } else { 7 };
+
     match detect_layout_density(app, area) {
         LayoutDensity::Compact => match compact_sync_layout(area) {
             CompactSyncLayout::DiagnosticsOnly => {
@@ -871,7 +874,7 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
                     .direction(Direction::Vertical)
                     .constraints([
                         Constraint::Length(4),
-                        Constraint::Length(7),
+                        Constraint::Length(progress_height),
                         Constraint::Min(7),
                         Constraint::Min(3),
                     ])
@@ -888,7 +891,7 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
                     .direction(Direction::Vertical)
                     .constraints([
                         Constraint::Length(4),
-                        Constraint::Length(7),
+                        Constraint::Length(progress_height),
                         Constraint::Length(chart_height),
                         Constraint::Length(diagnostics_height),
                         Constraint::Min(3),
@@ -906,7 +909,7 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(4),
-                    Constraint::Length(7),
+                    Constraint::Length(progress_height),
                     Constraint::Length(10),
                     Constraint::Length(6),
                     Constraint::Min(3),
@@ -923,7 +926,7 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(4),
-                    Constraint::Length(7),
+                    Constraint::Length(progress_height),
                     Constraint::Length(10),
                     Constraint::Length(8),
                     Constraint::Min(3),
@@ -1340,10 +1343,44 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
 
     let right = sync_timing_lines(
         sync.eta.as_deref(),
+        sync.eta_seconds,
         sync.elapsed_time.as_deref(),
         sync.startup_phase.as_deref(),
+        sync.is_bulk_sync,
     );
     f.render_widget(Paragraph::new(right), cols[2]);
+
+    if sync.is_bulk_sync {
+        if let Some(mem) = &app.memory_stats {
+            let remaining_height = inner.height.saturating_sub(5);
+            if remaining_height >= 1 {
+                let synced_area = Rect {
+                    x: inner.x,
+                    y: inner.y + inner.height.saturating_sub(1),
+                    width: inner.width,
+                    height: 1,
+                };
+                let mut spans = vec![
+                    Span::styled("Synced ", Style::default().fg(SLATE_500)),
+                    Span::styled(
+                        format!(
+                            "Txs {}  Cells {}",
+                            format_num(mem.total_transactions),
+                            format_num(mem.total_cells)
+                        ),
+                        Style::default().fg(FOREGROUND),
+                    ),
+                ];
+                if mem.total_addresses > 0 {
+                    spans.push(Span::styled(
+                        format!("  Addrs {}", format_num(mem.total_addresses)),
+                        Style::default().fg(FOREGROUND),
+                    ));
+                }
+                f.render_widget(Paragraph::new(Line::from(spans)), synced_area);
+            }
+        }
+    }
 }
 
 fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
@@ -2101,8 +2138,10 @@ fn detail_right_lines(
 
 fn sync_timing_lines(
     eta: Option<&str>,
+    eta_seconds: Option<f64>,
     elapsed: Option<&str>,
     startup_phase: Option<&str>,
+    is_bulk_sync: bool,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -2116,6 +2155,19 @@ fn sync_timing_lines(
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
+    }
+
+    if is_bulk_sync {
+        if let Some(secs) = eta_seconds {
+            let done_at = Utc::now() + chrono::TimeDelta::seconds(secs as i64);
+            lines.push(Line::from(vec![
+                Span::styled("Est. done: ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    done_at.format("%H:%M UTC").to_string(),
+                    Style::default().fg(TERMINAL_GREEN),
+                ),
+            ]));
+        }
     }
 
     if let Some(elapsed) = elapsed {
@@ -4357,7 +4409,13 @@ mod tests {
 
     #[test]
     fn test_sync_timing_lines_do_not_show_data_source() {
-        let lines = sync_timing_lines(Some("2m 03s"), Some("17m 12s"), Some("bulk_sync"));
+        let lines = sync_timing_lines(
+            Some("2m 03s"),
+            None,
+            Some("17m 12s"),
+            Some("bulk_sync"),
+            false,
+        );
         let text = lines
             .iter()
             .map(line_text)
@@ -4373,7 +4431,7 @@ mod tests {
 
     #[test]
     fn test_sync_timing_lines_empty_shows_fallback() {
-        let lines = sync_timing_lines(None, None, None);
+        let lines = sync_timing_lines(None, None, None, None, false);
         assert_eq!(lines.len(), 1);
         assert_eq!(line_text(&lines[0]), "No timing data");
     }
