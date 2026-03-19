@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 const STATUS_RUNNING: &str = "running";
 const STATUS_COMPLETED: &str = "completed";
 const STATUS_FAILED: &str = "failed";
+const STALL_THRESHOLD_MULTIPLIER: f64 = 2.0;
 
 #[derive(Debug, Clone)]
 pub struct RocksDbConfig {
@@ -198,6 +199,8 @@ pub struct BulkSyncPerfMetrics {
     pub history_flushes: u64,
     pub sealed_aggregate_flushes: u64,
     pub final_snapshot_flushes: u64,
+    pub total_batch_seconds: f64,
+    pub stall_count: u64,
 }
 
 pub struct BulkSyncPerfRun {
@@ -303,23 +306,25 @@ impl BulkSyncPerfRun {
 
     pub fn finish_completed(&mut self) -> Result<()> {
         self.status = STATUS_COMPLETED.to_string();
-        self.finalize()?;
+        let metrics = self.finalize()?;
         self.update_latest()?;
+        self.append_trend_line(&metrics)?;
         Ok(())
     }
 
     pub fn finish_failed(&mut self) -> Result<()> {
         self.status = STATUS_FAILED.to_string();
-        self.finalize()
+        self.finalize()?;
+        Ok(())
     }
 
-    fn finalize(&self) -> Result<()> {
+    fn finalize(&self) -> Result<BulkSyncPerfMetrics> {
         let finished_at_utc = utc_now_string();
         let metrics = self.build_metrics(&self.status, Some(finished_at_utc.clone()));
         self.write_status(Some(&finished_at_utc))?;
         self.write_metrics_file(&metrics)?;
         self.write_report(&metrics)?;
-        Ok(())
+        Ok(metrics)
     }
 
     fn update_latest(&self) -> Result<()> {
@@ -435,6 +440,17 @@ impl BulkSyncPerfRun {
             .max()
             .unwrap_or(0);
         let materialization_report = self.materialization_report.clone().unwrap_or_default();
+        let total_batch_seconds = batch_seconds.iter().sum::<f64>();
+        let avg_for_stall = average(&batch_seconds);
+        let stall_threshold = avg_for_stall * STALL_THRESHOLD_MULTIPLIER;
+        let stall_count = if batches >= 3 {
+            batch_seconds
+                .iter()
+                .filter(|&&s| s > stall_threshold)
+                .count() as u64
+        } else {
+            0
+        };
 
         BulkSyncPerfMetrics {
             run_id: self.run_id.clone(),
@@ -471,6 +487,8 @@ impl BulkSyncPerfRun {
             history_flushes: materialization_report.history_flushes as u64,
             sealed_aggregate_flushes: materialization_report.sealed_aggregate_flushes as u64,
             final_snapshot_flushes: materialization_report.final_snapshot_flushes as u64,
+            total_batch_seconds,
+            stall_count,
         }
     }
 
@@ -521,7 +539,7 @@ impl BulkSyncPerfRun {
             content.push_str(&format!("finished_at_utc={}\n", finished_at_utc));
         }
         content.push_str(&format!(
-            "wall_clock_seconds={}\nbatches={}\nblocks={}\ntotal_txs={}\nblocks_per_sec_wall={}\ntxs_per_sec_wall={}\nblocks_per_batch={}\navg_batch_seconds={}\np95_batch_seconds={}\np99_batch_seconds={}\ntotal_commit_seconds={}\navg_commit_ms={}\np95_commit_ms={}\np99_commit_ms={}\nfinalize_seconds={}\nmax_compaction_pending_mb={}\nmax_l0_files={}\nmax_imm_memtables={}\navg_load_avg_1m={}\nmax_load_avg_1m={}\nmin_mem_available_mb={}\navg_disk_write_mb_per_batch={}\npeak_live_cell_count={}\nstreamed_history_rows={}\nsealed_aggregate_rows={}\nfinal_snapshot_rows={}\nhistory_flushes={}\nsealed_aggregate_flushes={}\nfinal_snapshot_flushes={}\n",
+            "wall_clock_seconds={}\nbatches={}\nblocks={}\ntotal_txs={}\nblocks_per_sec_wall={}\ntxs_per_sec_wall={}\nblocks_per_batch={}\navg_batch_seconds={}\np95_batch_seconds={}\np99_batch_seconds={}\ntotal_commit_seconds={}\navg_commit_ms={}\np95_commit_ms={}\np99_commit_ms={}\nfinalize_seconds={}\nmax_compaction_pending_mb={}\nmax_l0_files={}\nmax_imm_memtables={}\navg_load_avg_1m={}\nmax_load_avg_1m={}\nmin_mem_available_mb={}\navg_disk_write_mb_per_batch={}\npeak_live_cell_count={}\nstreamed_history_rows={}\nsealed_aggregate_rows={}\nfinal_snapshot_rows={}\nhistory_flushes={}\nsealed_aggregate_flushes={}\nfinal_snapshot_flushes={}\ntotal_batch_seconds={}\nstall_count={}\n",
             format_float(metrics.wall_clock_seconds),
             metrics.batches,
             metrics.blocks,
@@ -551,6 +569,8 @@ impl BulkSyncPerfRun {
             metrics.history_flushes,
             metrics.sealed_aggregate_flushes,
             metrics.final_snapshot_flushes,
+            format_float(metrics.total_batch_seconds),
+            metrics.stall_count,
         ));
         for (owner, bytes) in owner_memory_entries(&metrics.peak_owner_memory_bytes) {
             content.push_str(&format!("peak_owner_memory_bytes_{}={}\n", owner, bytes));
@@ -635,6 +655,9 @@ impl BulkSyncPerfRun {
             format_float(metrics.finalize_seconds)
         ));
         content.push('\n');
+
+        self.write_report_wall_clock_breakdown(&mut content, metrics);
+        self.write_report_stall_events(&mut content, metrics);
 
         content.push_str("## System Pressure\n\n");
         content.push_str("| Metric | Value |\n");
@@ -815,6 +838,214 @@ impl BulkSyncPerfRun {
         Ok(())
     }
 
+    fn write_report_wall_clock_breakdown(
+        &self,
+        content: &mut String,
+        metrics: &BulkSyncPerfMetrics,
+    ) {
+        if self.batch_samples.is_empty() {
+            return;
+        }
+
+        let sum_ms = |f: fn(&BatchSample) -> f64| -> f64 {
+            self.batch_samples.iter().map(&f).sum::<f64>() / 1000.0
+        };
+
+        let mut phases: Vec<(&str, f64)> = Vec::new();
+
+        // Bulk build phases
+        let fetch = sum_ms(|s| s.fetch_ms);
+        let facts = sum_ms(|s| s.facts_ms);
+        let resolve = sum_ms(|s| s.resolve_ms);
+        let reduce = sum_ms(|s| s.reduce_ms);
+        let addr_reduce = sum_ms(|s| s.address_reduce_ms);
+        let activity_stats = sum_ms(|s| s.activity_stats_ms);
+        let history = sum_ms(|s| s.history_ms);
+        let flush = sum_ms(|s| s.flush_ms);
+
+        // Pipeline phases
+        let parse = sum_ms(|s| s.parse_ms);
+        let precompute = sum_ms(|s| s.precompute_ms);
+        let write = sum_ms(|s| s.write_ms);
+        let prefetch = sum_ms(|s| s.prefetch_ms);
+        let finalize_batch = sum_ms(|s| s.finalize_ms);
+
+        // Common
+        let commit = metrics.total_commit_seconds;
+
+        if fetch > 0.01 {
+            phases.push(("fetch", fetch));
+        }
+        if facts > 0.01 || resolve > 0.01 {
+            phases.push(("facts+resolve", facts + resolve));
+        }
+        if reduce > 0.01 {
+            phases.push(("reduce", reduce));
+        }
+        if addr_reduce > 0.01 {
+            phases.push(("addr_reduce", addr_reduce));
+        }
+        if activity_stats > 0.01 {
+            phases.push(("activity_stats", activity_stats));
+        }
+        if history > 0.01 {
+            phases.push(("history", history));
+        }
+        if flush > 0.01 {
+            phases.push(("flush", flush));
+        }
+        if parse > 0.01 || precompute > 0.01 {
+            phases.push(("parse+precompute", parse + precompute));
+        }
+        if write > 0.01 {
+            phases.push(("write", write));
+        }
+        if prefetch > 0.01 {
+            phases.push(("prefetch", prefetch));
+        }
+        if finalize_batch > 0.01 {
+            phases.push(("batch_finalize", finalize_batch));
+        }
+        if commit > 0.01 {
+            phases.push(("commit", commit));
+        }
+
+        // Sort descending by time
+        phases.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+        let accounted: f64 = phases.iter().map(|(_, s)| *s).sum();
+        let total_batch = metrics.total_batch_seconds;
+        let unaccounted = total_batch - accounted;
+
+        content.push_str("## Wall Clock Breakdown\n\n");
+        content.push_str("| Phase | Total (s) | % Batch |\n");
+        content.push_str("| --- | ---: | ---: |\n");
+
+        for (name, seconds) in &phases {
+            let pct = if total_batch > 0.0 {
+                seconds / total_batch * 100.0
+            } else {
+                0.0
+            };
+            content.push_str(&format!(
+                "| {} | {} | {}% |\n",
+                name,
+                format_float(*seconds),
+                format_float(pct)
+            ));
+        }
+
+        if unaccounted > 0.01 {
+            let pct = if total_batch > 0.0 {
+                unaccounted / total_batch * 100.0
+            } else {
+                0.0
+            };
+            content.push_str(&format!(
+                "| _unaccounted_ | {} | {}% |\n",
+                format_float(unaccounted),
+                format_float(pct)
+            ));
+        }
+
+        content.push_str(&format!(
+            "| **batch total** | {} | 100.0% |\n",
+            format_float(total_batch)
+        ));
+
+        let overhead = metrics.wall_clock_seconds - total_batch - metrics.finalize_seconds;
+        if metrics.finalize_seconds > 0.01 {
+            content.push_str(&format!(
+                "| finalize | {} | |\n",
+                format_float(metrics.finalize_seconds)
+            ));
+        }
+        if overhead > 0.01 {
+            content.push_str(&format!("| _overhead_ | {} | |\n", format_float(overhead)));
+        }
+        content.push_str(&format!(
+            "| **wall clock** | {} | |\n",
+            format_float(metrics.wall_clock_seconds)
+        ));
+        content.push('\n');
+    }
+
+    fn write_report_stall_events(&self, content: &mut String, metrics: &BulkSyncPerfMetrics) {
+        if self.batch_samples.len() < 3 {
+            return;
+        }
+
+        let avg = metrics.avg_batch_seconds;
+        let threshold = avg * STALL_THRESHOLD_MULTIPLIER;
+
+        let stalls: Vec<(usize, &BatchSample)> = self
+            .batch_samples
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.batch_seconds > threshold)
+            .collect();
+
+        content.push_str(&format!(
+            "## Stall Events ({} detected, threshold: {:.1}x avg = {}s)\n\n",
+            stalls.len(),
+            STALL_THRESHOLD_MULTIPLIER,
+            format_float(threshold)
+        ));
+
+        if stalls.is_empty() {
+            content.push_str("No stalls detected.\n\n");
+            return;
+        }
+
+        content
+            .push_str("| Batch # | Duration (s) | Ratio | L0 Files | Compaction Pending (MB) |\n");
+        content.push_str("| ---: | ---: | ---: | ---: | ---: |\n");
+        for (idx, sample) in &stalls {
+            let ratio = if avg > 0.0 {
+                sample.batch_seconds / avg
+            } else {
+                0.0
+            };
+            content.push_str(&format!(
+                "| {} | {} | {:.1}x | {} | {} |\n",
+                idx + 1,
+                format_float(sample.batch_seconds),
+                ratio,
+                sample.l0_files,
+                sample.compaction_pending_mb
+            ));
+        }
+        content.push('\n');
+    }
+
+    fn append_trend_line(&self, metrics: &BulkSyncPerfMetrics) -> Result<()> {
+        let entry = TrendEntry {
+            run_id: &metrics.run_id,
+            build_version: &self.build_version,
+            status: &metrics.status,
+            started_at_utc: &metrics.started_at_utc,
+            finished_at_utc: metrics.finished_at_utc.as_deref(),
+            wall_clock_seconds: metrics.wall_clock_seconds,
+            blocks_per_sec_wall: metrics.blocks_per_sec_wall,
+            txs_per_sec_wall: metrics.txs_per_sec_wall,
+            batches: metrics.batches,
+            blocks: metrics.blocks,
+            total_txs: metrics.total_txs,
+            avg_batch_seconds: metrics.avg_batch_seconds,
+            total_commit_seconds: metrics.total_commit_seconds,
+            finalize_seconds: metrics.finalize_seconds,
+            stall_count: metrics.stall_count,
+        };
+
+        let json = serde_json::to_string(&entry)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.output_root.join("trend.jsonl"))?;
+        writeln!(file, "{json}")?;
+        Ok(())
+    }
+
     fn write_report_environment_section(&self, content: &mut String) -> Result<()> {
         let (env, config) = match (&self.environment, &self.rocksdb_config) {
             (Some(e), Some(c)) => (e, c),
@@ -932,6 +1163,26 @@ struct SampleRecord<'a, T> {
     sample: &'a T,
 }
 
+#[derive(Serialize)]
+struct TrendEntry<'a> {
+    run_id: &'a str,
+    build_version: &'a str,
+    status: &'a str,
+    started_at_utc: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finished_at_utc: Option<&'a str>,
+    wall_clock_seconds: f64,
+    blocks_per_sec_wall: f64,
+    txs_per_sec_wall: f64,
+    batches: u64,
+    blocks: u64,
+    total_txs: u64,
+    avg_batch_seconds: f64,
+    total_commit_seconds: f64,
+    finalize_seconds: f64,
+    stall_count: u64,
+}
+
 fn utc_now_string() -> String {
     Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
@@ -1047,6 +1298,8 @@ fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
         history_flushes: read_u64(&map, "history_flushes"),
         sealed_aggregate_flushes: read_u64(&map, "sealed_aggregate_flushes"),
         final_snapshot_flushes: read_u64(&map, "final_snapshot_flushes"),
+        total_batch_seconds: read_f64(&map, "total_batch_seconds"),
+        stall_count: read_u64(&map, "stall_count"),
     }))
 }
 
@@ -1623,5 +1876,250 @@ mod tests {
         assert_eq!(sample.flush_ms, 0.0);
         assert_eq!(sample.live_cell_count, 0);
         assert_eq!(sample.cumulative_history_rows, 0);
+    }
+
+    // ── Wall Clock Breakdown tests ──────────────────────────────────────
+
+    #[test]
+    fn test_report_includes_wall_clock_breakdown_with_bulk_build_phases() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        let mut sample = test_batch_sample(10, 2.0, 200.0, 100, 4, 1);
+        sample.engine = "bulk_build".to_string();
+        sample.fetch_ms = 300.0;
+        sample.facts_ms = 150.0;
+        sample.resolve_ms = 50.0;
+        sample.reduce_ms = 400.0;
+        sample.history_ms = 100.0;
+        sample.flush_ms = 500.0;
+        run.record_batch_sample(sample).unwrap();
+        run.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        assert!(report.contains("## Wall Clock Breakdown"));
+        assert!(report.contains("| fetch |"));
+        assert!(report.contains("| facts+resolve |"));
+        assert!(report.contains("| reduce |"));
+        assert!(report.contains("| history |"));
+        assert!(report.contains("| flush |"));
+        assert!(report.contains("| commit |"));
+        assert!(report.contains("| **batch total** |"));
+        assert!(report.contains("| **wall clock** |"));
+        assert!(report.contains("% Batch"));
+    }
+
+    #[test]
+    fn test_wall_clock_breakdown_omits_zero_phases() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        // Pipeline sample: only commit_ms is non-zero from common fields
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        assert!(report.contains("## Wall Clock Breakdown"));
+        assert!(report.contains("| commit |"));
+        // Bulk build phases should not appear for pipeline-only batches
+        assert!(!report.contains("| fetch |"));
+        assert!(!report.contains("| reduce |"));
+    }
+
+    #[test]
+    fn test_wall_clock_breakdown_phases_sorted_descending() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        let mut sample = test_batch_sample(10, 2.0, 100.0, 100, 4, 1);
+        sample.engine = "bulk_build".to_string();
+        sample.fetch_ms = 100.0; // 0.1s — smaller
+        sample.reduce_ms = 800.0; // 0.8s — larger
+        run.record_batch_sample(sample).unwrap();
+        run.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        let reduce_pos = report.find("| reduce |").unwrap();
+        let fetch_pos = report.find("| fetch |").unwrap();
+        assert!(
+            reduce_pos < fetch_pos,
+            "reduce (0.8s) should appear before fetch (0.1s)"
+        );
+    }
+
+    #[test]
+    fn test_metrics_include_total_batch_seconds_and_stall_count() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.record_batch_sample(test_batch_sample(20, 2.0, 80.0, 200, 7, 2))
+            .unwrap();
+        run.record_batch_sample(test_batch_sample(15, 1.5, 60.0, 150, 5, 1))
+            .unwrap();
+        run.finish_completed().unwrap();
+
+        let metrics = std::fs::read_to_string(dir.path().join("run-1/metrics.env")).unwrap();
+        assert!(metrics.contains("total_batch_seconds=4.500"));
+        assert!(metrics.contains("stall_count=0"));
+    }
+
+    // ── Stall Detection tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_stall_events_detected_when_batch_exceeds_threshold() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        // 3 normal batches at ~1s, then 1 stall at 5s (>2x avg of 1.0)
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.record_batch_sample(test_batch_sample(10, 5.0, 40.0, 500, 20, 3))
+            .unwrap();
+        run.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        assert!(report.contains("## Stall Events (1 detected"));
+        assert!(report.contains("| 4 |")); // Batch #4
+
+        let metrics = std::fs::read_to_string(dir.path().join("run-1/metrics.env")).unwrap();
+        assert!(metrics.contains("stall_count=1"));
+    }
+
+    #[test]
+    fn test_stall_events_no_stalls_message() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        // 3 uniform batches — no stalls
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        assert!(report.contains("## Stall Events (0 detected"));
+        assert!(report.contains("No stalls detected."));
+    }
+
+    #[test]
+    fn test_stall_events_skipped_with_fewer_than_3_batches() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.record_batch_sample(test_batch_sample(10, 5.0, 40.0, 500, 20, 3))
+            .unwrap();
+        run.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        // With <3 batches, stall section should not appear
+        assert!(!report.contains("## Stall Events"));
+        // And stall_count should be 0 in metrics
+        let metrics = std::fs::read_to_string(dir.path().join("run-1/metrics.env")).unwrap();
+        assert!(metrics.contains("stall_count=0"));
+    }
+
+    // ── Trend File tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_trend_jsonl_created_on_completed_run() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.finish_completed().unwrap();
+
+        let trend = std::fs::read_to_string(dir.path().join("trend.jsonl")).unwrap();
+        let lines: Vec<&str> = trend.lines().collect();
+        assert_eq!(lines.len(), 1);
+
+        let entry: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(entry["run_id"], "run-1");
+        assert_eq!(entry["build_version"], TEST_BUILD_VERSION);
+        assert_eq!(entry["status"], "completed");
+        assert_eq!(entry["blocks"], 10);
+        assert!(entry["wall_clock_seconds"].as_f64().is_some());
+        assert!(entry["blocks_per_sec_wall"].as_f64().is_some());
+        assert!(entry["stall_count"].as_u64().is_some());
+    }
+
+    #[test]
+    fn test_trend_jsonl_appends_across_multiple_runs() {
+        let dir = TempDir::new().unwrap();
+
+        let mut run1 =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        run1.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run1.finish_completed().unwrap();
+
+        let mut run2 =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-2", TEST_BUILD_VERSION).unwrap();
+        run2.record_batch_sample(test_batch_sample(20, 2.0, 80.0, 200, 7, 2))
+            .unwrap();
+        run2.finish_completed().unwrap();
+
+        let trend = std::fs::read_to_string(dir.path().join("trend.jsonl")).unwrap();
+        let lines: Vec<&str> = trend.lines().collect();
+        assert_eq!(lines.len(), 2);
+
+        let entry1: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        let entry2: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(entry1["run_id"], "run-1");
+        assert_eq!(entry2["run_id"], "run-2");
+        assert_eq!(entry1["blocks"], 10);
+        assert_eq!(entry2["blocks"], 20);
+    }
+
+    #[test]
+    fn test_trend_jsonl_not_created_on_failed_run() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.finish_failed().unwrap();
+
+        assert!(!dir.path().join("trend.jsonl").exists());
+    }
+
+    #[test]
+    fn test_trend_entry_includes_stall_count() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        // 3 normal + 1 stall
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.record_batch_sample(test_batch_sample(10, 5.0, 40.0, 500, 20, 3))
+            .unwrap();
+        run.finish_completed().unwrap();
+
+        let trend = std::fs::read_to_string(dir.path().join("trend.jsonl")).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(trend.lines().next().unwrap()).unwrap();
+        assert_eq!(entry["stall_count"], 1);
     }
 }
