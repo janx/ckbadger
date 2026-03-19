@@ -1358,6 +1358,8 @@ async fn get_script_usage(
     let mut total_used_cap: u128 = 0;
     let mut total_live_used_cap: u128 = 0;
 
+    let all_script_infos = load_script_infos_cached(&state)?;
+
     let by_deployment: Vec<DeploymentUsage> = matching
         .into_iter()
         .map(|(version_hash, info)| {
@@ -1368,7 +1370,7 @@ async fn get_script_usage(
                 live_capacity_sum,
                 used_capacity_sum,
                 live_used_capacity_sum,
-            ) = version_totals(&info);
+            ) = resolve_version_capacity(&info, None, &all_script_infos)?;
             let capacity_sum = capacity_sum as u128;
             let live_capacity_sum = live_capacity_sum as u128;
             let used_capacity_sum = used_capacity_sum as u128;
@@ -1381,7 +1383,7 @@ async fn get_script_usage(
             total_used_cap += used_capacity_sum;
             total_live_used_cap += live_used_capacity_sum;
 
-            DeploymentUsage {
+            Ok(DeploymentUsage {
                 code_hash: format!("0x{}", hex::encode(&version_hash)),
                 script_kind: version_script_kind(&info),
                 cells_count,
@@ -1390,9 +1392,9 @@ async fn get_script_usage(
                 live_capacity_sum: live_capacity_sum.to_string(),
                 used_capacity_sum: used_capacity_sum.to_string(),
                 live_used_capacity_sum: live_used_capacity_sum.to_string(),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     ok(ScriptUsageResponse {
         name,
