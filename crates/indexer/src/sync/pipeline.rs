@@ -291,13 +291,20 @@ fn parse_bulk_protocol_facts(
             ))
         }
         CellSemanticTag::Dotbit => {
-            let mut account = DotbitParser::parse_account_parsed_cell(cell).ok_or_else(|| {
-                anyhow!(
-                    "failed to parse DotBit cell semantics in bulk facts: tx=0x{}, output_index={}",
-                    hex::encode(tx_hash),
-                    output_index
-                )
-            })?;
+            let Some(mut account) = DotbitParser::parse_account_parsed_cell(cell) else {
+                // Some on-chain DotBit AccountCells have minimal/edge-case data
+                // (e.g. data < 52 bytes, all-zero account IDs) that the parser
+                // cannot extract a valid account from.  This is external data, not
+                // an invariant violation – skip the cell rather than crashing the
+                // entire bulk sync.
+                warn!(
+                    tx = hex::encode(tx_hash),
+                    output_index,
+                    data_len = cell.data.len(),
+                    "skipping unparseable DotBit AccountCell in bulk facts"
+                );
+                return Ok(None);
+            };
 
             if let Some(data) = witness_bundle.accounts.get(account.account_id.as_slice()) {
                 account.account = data.name.clone();
@@ -306,12 +313,15 @@ fn parse_bulk_protocol_facts(
             }
 
             if account.account.is_none() {
-                return Err(anyhow!(
-                    "dotbit account name missing in DAS witness for bulk facts: tx=0x{}, output_index={}, account_id=0x{}",
-                    hex::encode(tx_hash),
+                // DAS witness may lack account name for some historical or
+                // edge-case transactions.  Skip rather than crash bulk sync.
+                warn!(
+                    tx = hex::encode(tx_hash),
                     output_index,
-                    hex::encode(&account.account_id)
-                ));
+                    account_id = hex::encode(&account.account_id),
+                    "skipping DotBit cell: account name missing in DAS witness"
+                );
+                return Ok(None);
             }
 
             Ok(Some(CellProtocolFacts::Dotbit(DotbitProtocolFacts {
@@ -3391,5 +3401,72 @@ mod tests {
         let tx1_hash = [0xbb; 32];
         let err = super::parse_bulk_tx_cycles(&block, 1, 100, &tx1_hash).unwrap_err();
         assert!(err.to_string().contains("cycles length mismatch"));
+    }
+
+    #[test]
+    fn build_facts_arena_skips_unparseable_dotbit_cell_instead_of_crashing() {
+        // Regression: a DotBit AccountCell with data < 52 bytes caused a fatal
+        // bail! that crashed the entire bulk sync.  The fix returns Ok(None)
+        // so the cell is skipped with a warning instead.
+        let short_data_account_id = [0x51; 20];
+        let block = BlockResponseWithCycles {
+            block: BlockView {
+                header: HeaderView {
+                    version: "0x0".to_string(),
+                    compact_target: "0x1a08a97e".to_string(),
+                    timestamp: "0x18c7b3b2b88".to_string(),
+                    number: "0x4a3800".to_string(),
+                    epoch: "0x7080006000028".to_string(),
+                    parent_hash: format!("0x{}", "11".repeat(32)),
+                    transactions_root: format!("0x{}", "22".repeat(32)),
+                    proposals_hash: format!("0x{}", "33".repeat(32)),
+                    extra_hash: format!("0x{}", "44".repeat(32)),
+                    dao: format!("0x{}", "00".repeat(32)),
+                    nonce: "0x1".to_string(),
+                    hash: format!("0x{}", "66".repeat(32)),
+                },
+                uncles: vec![],
+                transactions: vec![TransactionView {
+                    hash: format!("0x{}", "a1".repeat(32)),
+                    version: "0x0".to_string(),
+                    cell_deps: vec![],
+                    header_deps: vec![],
+                    inputs: vec![CellInput {
+                        since: "0x0".to_string(),
+                        previous_output: OutPoint {
+                            tx_hash: format!("0x{}", "00".repeat(32)),
+                            index: "0xffffffff".to_string(),
+                        },
+                    }],
+                    outputs: vec![CellOutput {
+                        capacity: "0x174876e800".to_string(),
+                        lock: create_lock_script(),
+                        type_: Some(create_dotbit_account_cell_type_script(
+                            &short_data_account_id,
+                        )),
+                    }],
+                    // Only 10 bytes of data — far below the 52-byte minimum
+                    outputs_data: vec![format!("0x{}", hex::encode([0xffu8; 10]))],
+                    witnesses: vec!["0x".to_string()],
+                }],
+                proposals: vec![],
+            },
+            cycles: None,
+        };
+
+        let mut interner = IdentityInterner::default();
+        let arena =
+            build_bulk_facts_arena_from_blocks(&[block], &mut interner).expect("should not crash");
+
+        let dotbit_cell = arena
+            .cells
+            .iter()
+            .find(|cell| matches!(cell.semantic_tag, CellSemanticTag::Dotbit));
+        // Cell is tagged as Dotbit but protocol_facts is None (skipped)
+        let cell = dotbit_cell.expect("cell should exist with Dotbit tag");
+        assert!(
+            cell.protocol_facts.is_none(),
+            "unparseable DotBit cell should have no protocol facts"
+        );
     }
 }
