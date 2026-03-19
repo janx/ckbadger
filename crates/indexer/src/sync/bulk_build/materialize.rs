@@ -167,6 +167,7 @@ enum CounterKind {
 pub(crate) struct FlushResult {
     pub(crate) history_rows: usize,
     pub(crate) sealed_rows: usize,
+    pub(crate) flush_ms: f64,
 }
 
 /// Flush materialized rows to RocksDB. Designed for use in `spawn_blocking`
@@ -180,6 +181,7 @@ pub(crate) fn flush_rows_to_stores(
     history_rows: Vec<MaterializedRow>,
     sealed_rows: Vec<MaterializedRow>,
 ) -> Result<FlushResult> {
+    let flush_started = std::time::Instant::now();
     let mut domain_batch = StoreBatch::new(domain_store);
     let mut append_batch = StoreBatch::new(append_only_store);
 
@@ -220,6 +222,7 @@ pub(crate) fn flush_rows_to_stores(
     Ok(FlushResult {
         history_rows: history_rows.len(),
         sealed_rows: sealed_rows.len(),
+        flush_ms: flush_started.elapsed().as_secs_f64() * 1000.0,
     })
 }
 

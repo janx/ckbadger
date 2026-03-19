@@ -111,6 +111,7 @@ impl BulkBuildEngine {
             tokio::task::JoinHandle<anyhow::Result<materialize::FlushResult>>,
         > = None;
         let mut flush_row_totals = (0usize, 0usize);
+        let mut prev_flush_ms: f64 = 0.0;
 
         loop {
             ckb_store.refresh()?;
@@ -203,6 +204,7 @@ impl BulkBuildEngine {
                     .map_err(|e| anyhow!("bulk build flush panicked: {}", e))??;
                 flush_row_totals.0 += result.history_rows;
                 flush_row_totals.1 += result.sealed_rows;
+                prev_flush_ms = result.flush_ms;
             }
 
             let build_started = Instant::now();
@@ -292,7 +294,7 @@ impl BulkBuildEngine {
             sample.facts_ms = build_timings.facts_ms;
             sample.resolve_ms = build_timings.resolve_ms;
             sample.reduce_ms = build_timings.reduce_ms;
-            sample.flush_ms = build_timings.flush_ms;
+            sample.flush_ms = prev_flush_ms;
             sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
             // Cumulative row counts: flush_row_totals tracks completed async flushes.
@@ -323,7 +325,7 @@ impl BulkBuildEngine {
                 facts_ms = format!("{:.1}", build_timings.facts_ms),
                 resolve_ms = format!("{:.1}", build_timings.resolve_ms),
                 reduce_ms = format!("{:.1}", build_timings.reduce_ms),
-                flush_ms = format!("{:.1}", build_timings.flush_ms),
+                prev_flush_ms = format!("{:.1}", prev_flush_ms),
                 "Bulk build materialized batch"
             );
 
@@ -405,7 +407,6 @@ struct BatchBuildTimings {
     facts_ms: f64,
     resolve_ms: f64,
     reduce_ms: f64,
-    flush_ms: f64,
 }
 
 /// Rows produced by `apply_blocks` that need to be flushed to RocksDB.
@@ -969,7 +970,6 @@ impl BulkBuildRuntimeState {
             facts_ms: facts_elapsed.as_secs_f64() * 1000.0,
             resolve_ms: resolve_elapsed.as_secs_f64() * 1000.0,
             reduce_ms: reduce_elapsed.as_secs_f64() * 1000.0,
-            flush_ms: 0.0, // flush is now async, overlapped with next batch
         };
 
         Ok((BatchExecutionStats {

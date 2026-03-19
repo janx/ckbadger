@@ -38,6 +38,13 @@ impl IdentityInterner {
     }
 
     /// Create a frozen snapshot for zero-copy reads during reduce phase.
+    ///
+    /// # Precondition
+    ///
+    /// All concurrent `intern_bytes()` calls must have completed before calling
+    /// this method. Calling it while `intern_bytes()` is still active on another
+    /// thread may produce a snapshot with fewer entries than have been interned,
+    /// causing `FrozenIdentityView::resolve_bytes()` to panic on missing IDs.
     pub(crate) fn snapshot_for_reads(&self) -> FrozenIdentityView {
         let values = self.values.lock().unwrap();
         FrozenIdentityView {
@@ -107,6 +114,85 @@ mod tests {
         let frozen = interner.snapshot_for_reads();
 
         assert_eq!(frozen.resolve_bytes(id), &[0x11, 0x22, 0x33]);
+    }
+
+    #[test]
+    fn concurrent_intern_bytes_assigns_unique_ids() {
+        use std::collections::HashSet;
+        use std::sync::Arc;
+
+        let interner = Arc::new(IdentityInterner::default());
+        let num_threads = 8;
+        let values_per_thread = 500;
+        // Each thread interns both shared (overlapping) and unique values.
+        let shared_values: Vec<Vec<u8>> = (0u16..100).map(|i| i.to_le_bytes().to_vec()).collect();
+
+        std::thread::scope(|s| {
+            let handles: Vec<_> = (0..num_threads)
+                .map(|t| {
+                    let interner = Arc::clone(&interner);
+                    let shared = shared_values.clone();
+                    s.spawn(move || {
+                        let mut ids = Vec::new();
+                        // Intern shared values (all threads compete for these)
+                        for v in &shared {
+                            ids.push((v.clone(), interner.intern_bytes(v.clone())));
+                        }
+                        // Intern thread-unique values
+                        for i in 0..values_per_thread {
+                            let v = format!("thread-{}-val-{}", t, i).into_bytes();
+                            ids.push((v.clone(), interner.intern_bytes(v)));
+                        }
+                        ids
+                    })
+                })
+                .collect();
+
+            let all_results: Vec<Vec<(Vec<u8>, InternId)>> =
+                handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+            // Verify: same bytes always get the same ID across all threads.
+            let mut canonical: std::collections::HashMap<Vec<u8>, InternId> =
+                std::collections::HashMap::new();
+            for results in &all_results {
+                for (bytes, id) in results {
+                    if let Some(&expected) = canonical.get(bytes) {
+                        assert_eq!(
+                            *id,
+                            expected,
+                            "same bytes got different IDs: bytes=0x{}",
+                            hex::encode(bytes)
+                        );
+                    } else {
+                        canonical.insert(bytes.clone(), *id);
+                    }
+                }
+            }
+
+            // Verify: no two different byte sequences share the same ID.
+            let unique_ids: HashSet<u32> =
+                canonical.values().map(|id| id.as_usize() as u32).collect();
+            assert_eq!(
+                unique_ids.len(),
+                canonical.len(),
+                "duplicate IDs assigned to different byte sequences"
+            );
+
+            // Verify: snapshot resolves all interned values correctly.
+            let frozen = interner.snapshot_for_reads();
+            for (bytes, id) in &canonical {
+                assert_eq!(
+                    frozen.resolve_bytes(*id),
+                    bytes.as_slice(),
+                    "snapshot mismatch for id={}",
+                    id.as_usize()
+                );
+            }
+
+            // Verify: expected total count.
+            let expected_unique = shared_values.len() + num_threads * values_per_thread;
+            assert_eq!(canonical.len(), expected_unique);
+        });
     }
 
     #[cfg(target_pointer_width = "64")]
