@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::broadcast;
 
 pub use crate::response::SyncStatusResponse as SyncStatus;
 
@@ -60,12 +59,15 @@ pub struct WsMessage {
     pub lock_hash: Option<String>,
 }
 
+/// Maximum number of concurrent WebSocket connections.
+const MAX_WS_CONNECTIONS: usize = 1024;
+
 pub struct WsManager {
     block_sender: broadcast::Sender<BroadcastMessage>,
     tx_sender: broadcast::Sender<BroadcastMessage>,
     reorg_sender: broadcast::Sender<BroadcastMessage>,
     activity_sender: broadcast::Sender<BroadcastMessage>,
-    address_subscriptions: Arc<RwLock<HashMap<String, broadcast::Sender<BroadcastMessage>>>>,
+    active_connections: AtomicUsize,
 }
 
 impl WsManager {
@@ -80,7 +82,7 @@ impl WsManager {
             tx_sender,
             reorg_sender,
             activity_sender,
-            address_subscriptions: Arc::new(RwLock::new(HashMap::new())),
+            active_connections: AtomicUsize::new(0),
         }
     }
 
@@ -96,18 +98,33 @@ impl WsManager {
         self.reorg_sender.subscribe()
     }
 
-    pub async fn subscribe_address(
-        &self,
-        lock_hash: String,
-    ) -> broadcast::Receiver<BroadcastMessage> {
-        let mut subs = self.address_subscriptions.write().await;
-        if let Some(sender) = subs.get(&lock_hash) {
-            sender.subscribe()
-        } else {
-            let (sender, receiver) = broadcast::channel(256);
-            subs.insert(lock_hash, sender);
-            receiver
+    /// Try to acquire a connection slot. Returns `true` if accepted, `false` if at capacity.
+    pub fn try_acquire_connection(&self) -> bool {
+        let mut current = self.active_connections.load(Ordering::Relaxed);
+        loop {
+            if current >= MAX_WS_CONNECTIONS {
+                return false;
+            }
+            match self.active_connections.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
         }
+    }
+
+    /// Release a connection slot when a WebSocket disconnects.
+    pub fn release_connection(&self) {
+        self.active_connections.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    /// Current number of active WebSocket connections.
+    pub fn active_connection_count(&self) -> usize {
+        self.active_connections.load(Ordering::Relaxed)
     }
 
     pub fn broadcast_block(&self, msg: BroadcastMessage) {
@@ -134,5 +151,40 @@ impl WsManager {
 impl Default for WsManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_connection_limit_accepts_within_capacity() {
+        let mgr = WsManager::new();
+        assert!(mgr.try_acquire_connection());
+        assert_eq!(mgr.active_connection_count(), 1);
+    }
+
+    #[test]
+    fn test_connection_limit_rejects_at_capacity() {
+        let mgr = WsManager::new();
+        for _ in 0..MAX_WS_CONNECTIONS {
+            assert!(mgr.try_acquire_connection());
+        }
+        assert!(!mgr.try_acquire_connection());
+        assert_eq!(mgr.active_connection_count(), MAX_WS_CONNECTIONS);
+    }
+
+    #[test]
+    fn test_release_connection_frees_slot() {
+        let mgr = WsManager::new();
+        for _ in 0..MAX_WS_CONNECTIONS {
+            mgr.try_acquire_connection();
+        }
+        assert!(!mgr.try_acquire_connection());
+
+        mgr.release_connection();
+        assert_eq!(mgr.active_connection_count(), MAX_WS_CONNECTIONS - 1);
+        assert!(mgr.try_acquire_connection());
     }
 }

@@ -15,6 +15,12 @@ use super::manager::{BroadcastMessage, WsMessage};
 use crate::AppState;
 
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> Response {
+    if !state.ws_manager.try_acquire_connection() {
+        return Response::builder()
+            .status(axum::http::StatusCode::SERVICE_UNAVAILABLE)
+            .body(axum::body::Body::from("too many WebSocket connections"))
+            .unwrap();
+    }
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
@@ -151,5 +157,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
+    state.ws_manager.release_connection();
     info!("WebSocket client disconnected");
 }
