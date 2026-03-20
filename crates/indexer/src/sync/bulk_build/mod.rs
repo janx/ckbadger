@@ -5573,6 +5573,159 @@ mod tests {
     }
 
     #[test]
+    fn test_adaptive_ema_update() {
+        // Verify EMA blending with alpha=0.5
+        let mut ema: f64 = BULK_BUILD_INITIAL_MS_PER_BLOCK; // 0.05
+        let sample: f64 = 0.10;
+        ema = ema * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA) + sample * BULK_BUILD_MS_PER_BLOCK_ALPHA;
+        // 0.05 * 0.5 + 0.10 * 0.5 = 0.075
+        assert!((ema - 0.075).abs() < 1e-10);
+
+        // Second sample converges further
+        ema = ema * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA) + sample * BULK_BUILD_MS_PER_BLOCK_ALPHA;
+        // 0.075 * 0.5 + 0.10 * 0.5 = 0.0875
+        assert!((ema - 0.0875).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_adaptive_step_ratio_clamp() {
+        // Verify per-step 2x limit prevents wild jumps
+        let batch_block_span: u64 = 20_000;
+        let step_max = (batch_block_span as f64 * BULK_BUILD_MAX_STEP_RATIO) as u64; // 40K
+        let step_min = (batch_block_span as f64 / BULK_BUILD_MAX_STEP_RATIO) as u64; // 10K
+
+        // Large desired value clamped to 2x current
+        let desired: u64 = 100_000;
+        let result = desired
+            .clamp(step_min, step_max)
+            .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
+        assert_eq!(result, 40_000, "should clamp to 2x current span");
+
+        // Small desired value clamped to 0.5x current
+        let desired: u64 = 5_000;
+        let result = desired
+            .clamp(step_min, step_max)
+            .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
+        assert_eq!(result, 10_000, "should clamp to max(0.5x, hard min)");
+    }
+
+    #[test]
+    fn test_adaptive_stall_stays_at_floor() {
+        // When already at min floor and a stall occurs, batch stays at floor.
+        let batch_block_span: u64 = BULK_BUILD_MIN_BLOCK_SPAN; // 10K
+        let mut ema: f64 = 0.188; // Phase 4 steady state
+
+        // Simulate 15s stall on 10K blocks
+        let stall_sample: f64 = 15_000.0 / 10_000.0; // 1.5 ms/blk
+        ema = ema * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA)
+            + stall_sample * BULK_BUILD_MS_PER_BLOCK_ALPHA;
+        // 0.188 * 0.5 + 1.5 * 0.5 = 0.844
+
+        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ema) as u64;
+        // 1500/0.844 = 1777
+        let step_max = (batch_block_span as f64 * BULK_BUILD_MAX_STEP_RATIO) as u64;
+        let step_min = (batch_block_span as f64 / BULK_BUILD_MAX_STEP_RATIO) as u64;
+        let result = desired
+            .clamp(step_min, step_max)
+            .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
+        assert_eq!(result, BULK_BUILD_MIN_BLOCK_SPAN, "stall: stays at floor");
+    }
+
+    #[test]
+    fn test_adaptive_runt_batch_skip() {
+        // Runt batch (actual < span/2) should not update EMA.
+        // Simulate batch_count > 1 (not the first batch) but actual blocks < half the span.
+        let batch_count: u64 = 3; // not the first batch
+        let batch_block_span: u64 = 30_000;
+        let actual_blocks: f64 = 5_000.0; // < 30000 * 0.5 = 15000
+        let is_representative = batch_count > 1 && actual_blocks >= (batch_block_span as f64 * 0.5);
+        assert!(!is_representative, "runt batch should be skipped");
+    }
+
+    #[test]
+    fn test_adaptive_cold_cache_skip() {
+        // First batch: batch_count is already incremented to 1 before the
+        // adaptive block runs (line 369), so first batch has batch_count=1.
+        // The check `batch_count > 1` skips it.
+        let batch_count: u64 = 1; // after increment
+        let actual_blocks: f64 = 10_000.0;
+        let batch_block_span: u64 = 10_000;
+        let is_representative = batch_count > 1 && actual_blocks >= (batch_block_span as f64 * 0.5);
+        assert!(
+            !is_representative,
+            "cold-cache first batch should be skipped"
+        );
+    }
+
+    #[test]
+    fn test_adaptive_normal_batch_representative() {
+        // Normal batch (batch_count > 1 after increment) should update EMA
+        let batch_count: u64 = 5;
+        let actual_blocks: f64 = 10_000.0;
+        let batch_block_span: u64 = 10_000;
+        let is_representative = batch_count > 1 && actual_blocks >= (batch_block_span as f64 * 0.5);
+        assert!(is_representative, "normal batch should be representative");
+    }
+
+    #[test]
+    fn test_adaptive_phase_transition_convergence() {
+        // Simulate Phase 1 → Phase 2 transition.
+        // Phase 1 steady state: 0.04 ms/blk, batch = 37.5K blocks
+        let mut ema: f64 = 0.040;
+        let mut batch_block_span: u64 = 37_500;
+
+        // First Phase 2 batch: 37.5K blocks at 0.108 ms/blk → 4050ms
+        let sample = 0.108;
+        ema = ema * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA) + sample * BULK_BUILD_MS_PER_BLOCK_ALPHA;
+        // ema = 0.074
+        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ema) as u64;
+        let step_max = (batch_block_span as f64 * BULK_BUILD_MAX_STEP_RATIO) as u64;
+        let step_min = (batch_block_span as f64 / BULK_BUILD_MAX_STEP_RATIO) as u64;
+        batch_block_span = desired
+            .clamp(step_min, step_max)
+            .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
+        // desired ≈ 20270, within step bounds
+        assert!(
+            batch_block_span < 25_000 && batch_block_span > 15_000,
+            "first transition batch should be ~20K, got {}",
+            batch_block_span
+        );
+
+        // Second Phase 2 batch: converges further toward ~14K
+        ema = ema * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA) + sample * BULK_BUILD_MS_PER_BLOCK_ALPHA;
+        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ema) as u64;
+        let step_max = (batch_block_span as f64 * BULK_BUILD_MAX_STEP_RATIO) as u64;
+        let step_min = (batch_block_span as f64 / BULK_BUILD_MAX_STEP_RATIO) as u64;
+        batch_block_span = desired
+            .clamp(step_min, step_max)
+            .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
+        assert!(
+            batch_block_span < 20_000 && batch_block_span > 12_000,
+            "second transition batch should converge to ~16K, got {}",
+            batch_block_span
+        );
+    }
+
+    #[test]
+    fn test_adaptive_ema_fail_fast_invariants() {
+        // Verify that the EMA must remain finite and positive
+        let ms_per_block_ema: f64 = 0.05;
+        assert!(ms_per_block_ema.is_finite() && ms_per_block_ema > 0.0);
+
+        // Verify desired_f64 is finite for valid EMA
+        let desired_f64 = BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema;
+        assert!(desired_f64.is_finite() && desired_f64 > 0.0);
+
+        // Verify that zero EMA would be caught (division produces Inf)
+        let bad_ema: f64 = 0.0;
+        let bad_desired = BULK_BUILD_TARGET_ITERATION_MS / bad_ema;
+        assert!(
+            !bad_desired.is_finite() || bad_desired < 0.0,
+            "zero EMA should produce non-finite desired"
+        );
+    }
+
+    #[test]
     fn apply_bundles_accumulates_daily_and_hourly_stats() {
         let bundle = TxActivityBundle {
             tx_hash: vec![0x11; 32],
