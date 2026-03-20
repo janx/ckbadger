@@ -612,8 +612,8 @@ impl<'a> StoreBatch<'a> {
     }
 
     pub fn put_addr_tx(&mut self, lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
-        let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx, tx_hash);
-        self.put_cf(self.store.cf_addr_txs(), &key, []);
+        let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx);
+        self.put_cf(self.store.cf_addr_txs(), key, tx_hash);
     }
 
     pub fn put_reorg_undo_log_by_block(&mut self, block_num: i64, seq: u64, entry: &UndoLogEntry) {
@@ -1491,7 +1491,7 @@ mod tests {
     }
 
     #[test]
-    fn test_put_addr_tx_stores_empty_value() {
+    fn test_put_addr_tx_stores_tx_hash_as_value() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAD; 32];
@@ -1501,9 +1501,9 @@ mod tests {
         batch.put_addr_tx(&lock, 100, 0, &tx_hash);
         batch.commit().unwrap();
 
-        let key = keys::encode_addr_tx_key(&lock, 100, 0, &tx_hash);
+        let key = keys::encode_addr_tx_key(&lock, 100, 0);
         let value = store.get_cf(store.cf_addr_txs(), &key).unwrap().unwrap();
-        assert!(value.is_empty());
+        assert_eq!(&*value, &tx_hash);
     }
 
     #[test]

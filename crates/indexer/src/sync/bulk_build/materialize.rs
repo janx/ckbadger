@@ -221,11 +221,25 @@ pub(crate) fn flush_rows_to_stores(
         domain_batch.put_raw_cf_by_name(row.cf_name, &row.key, &row.value)?;
     }
 
-    if !append_batch.is_empty() {
-        append_batch.commit_no_wal()?;
-    }
-    if !domain_batch.is_empty() {
-        domain_batch.commit_no_wal()?;
+    let has_append = !append_batch.is_empty();
+    let has_domain = !domain_batch.is_empty();
+    match (has_append, has_domain) {
+        (true, true) => {
+            // Two separate RocksDB instances — no contention, safe to parallelize.
+            std::thread::scope(|s| {
+                let ah = s.spawn(|| append_batch.commit_no_wal());
+                domain_batch.commit_no_wal()?;
+                ah.join().expect("append flush panicked")?;
+                Ok::<_, anyhow::Error>(())
+            })?;
+        }
+        (true, false) => {
+            append_batch.commit_no_wal()?;
+        }
+        (false, true) => {
+            domain_batch.commit_no_wal()?;
+        }
+        (false, false) => {}
     }
 
     Ok(FlushResult {

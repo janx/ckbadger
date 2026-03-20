@@ -61,17 +61,17 @@ impl CkbadgerStore {
                 break;
             }
             if key.len() == crate::keys::ADDR_TX_KEY_SIZE {
-                let (_, block_num, tx_idx, tx_hash) = crate::keys::decode_addr_tx_key(&key);
-                if !value.is_empty() {
+                let (_, block_num, tx_idx) = crate::keys::decode_addr_tx_key(&key);
+                if value.len() != 32 {
                     anyhow::bail!(
-                        "addr_txs expects empty value in list_addr_txs_recent: lock_hash=0x{}, block_num={}, tx_idx={}, value_len={}",
+                        "addr_txs expects 32-byte tx_hash value in list_addr_txs_recent: lock_hash=0x{}, block_num={}, tx_idx={}, value_len={}",
                         bytes_to_hex(lock_hash),
                         block_num,
                         tx_idx,
                         value.len()
                     );
                 }
-                results.push((block_num, tx_idx, tx_hash));
+                results.push((block_num, tx_idx, value.to_vec()));
                 if results.len() >= limit {
                     break;
                 }
@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn test_list_addr_txs_recent_reads_tx_hash_from_key_with_empty_value() {
+    fn test_list_addr_txs_recent_reads_tx_hash_from_value() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAC; 32];
@@ -132,26 +132,30 @@ mod tests {
     }
 
     #[test]
-    fn test_list_addr_txs_recent_keeps_two_rows_same_position_different_tx_hash() {
+    fn test_list_addr_txs_recent_cursor_pagination_across_positions() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAB; 32];
 
         let mut batch = StoreBatch::new(&store);
         batch.put_addr_tx(&lock, 100, 1, &[0x10; 32]);
-        batch.put_addr_tx(&lock, 100, 1, &[0x20; 32]);
+        batch.put_addr_tx(&lock, 100, 0, &[0x20; 32]);
         batch.put_addr_tx(&lock, 99, 0, &[0x30; 32]);
         batch.commit().unwrap();
 
         let rows = store.list_addr_txs_recent(&lock, 10, None).unwrap();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0], (100, 1, vec![0x10; 32]));
-        assert_eq!(rows[1], (100, 1, vec![0x20; 32]));
+        assert_eq!(rows[1], (100, 0, vec![0x20; 32]));
         assert_eq!(rows[2], (99, 0, vec![0x30; 32]));
 
+        // Cursor after (100, 1) should skip it and return the rest
         let next = store
             .list_addr_txs_recent(&lock, 10, Some((100, 1)))
             .unwrap();
-        assert_eq!(next, vec![(99, 0, vec![0x30; 32])]);
+        assert_eq!(
+            next,
+            vec![(100, 0, vec![0x20; 32]), (99, 0, vec![0x30; 32])]
+        );
     }
 }

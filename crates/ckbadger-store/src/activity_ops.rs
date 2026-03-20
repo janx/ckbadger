@@ -445,20 +445,20 @@ mod tests {
     }
 
     #[test]
-    fn test_list_activities_keeps_two_rows_same_position_different_tx_hash() {
+    fn test_list_activities_cursor_pagination_across_positions() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAB; 32];
 
         let mut batch = StoreBatch::new(&store);
         let first = make_bundle_for_owner(&[0x10; 32], 100, 1, &lock);
-        let second = make_bundle_for_owner(&[0x20; 32], 100, 1, &lock);
+        let second = make_bundle_for_owner(&[0x20; 32], 100, 0, &lock);
         let third = make_bundle_for_owner(&[0x30; 32], 99, 3, &lock);
         batch.put_tx_activity_bundle(&first);
         batch.put_tx_activity_bundle(&second);
         batch.put_tx_activity_bundle(&third);
         batch.put_addr_tx(&lock, 100, 1, &first.tx_hash);
-        batch.put_addr_tx(&lock, 100, 1, &second.tx_hash);
+        batch.put_addr_tx(&lock, 100, 0, &second.tx_hash);
         batch.put_addr_tx(&lock, 99, 3, &third.tx_hash);
         batch.commit().unwrap();
 
@@ -468,7 +468,7 @@ mod tests {
         assert_eq!(rows[0].1, 1);
         assert_eq!(rows[0].2.tx_hash, vec![0x10; 32]);
         assert_eq!(rows[1].0, 100);
-        assert_eq!(rows[1].1, 1);
+        assert_eq!(rows[1].1, 0);
         assert_eq!(rows[1].2.tx_hash, vec![0x20; 32]);
         assert_eq!(rows[2].0, 99);
         assert_eq!(rows[2].1, 3);
@@ -476,10 +476,13 @@ mod tests {
         let next = store
             .list_activities(&lock, 10, Some((100, 1)), None)
             .unwrap();
-        assert_eq!(next.len(), 1);
-        assert_eq!(next[0].0, 99);
-        assert_eq!(next[0].1, 3);
-        assert_eq!(next[0].2.tx_hash, vec![0x30; 32]);
+        assert_eq!(next.len(), 2);
+        assert_eq!(next[0].0, 100);
+        assert_eq!(next[0].1, 0);
+        assert_eq!(next[0].2.tx_hash, vec![0x20; 32]);
+        assert_eq!(next[1].0, 99);
+        assert_eq!(next[1].1, 3);
+        assert_eq!(next[1].2.tx_hash, vec![0x30; 32]);
     }
 
     #[test]

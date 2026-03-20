@@ -473,7 +473,7 @@ mod tests {
         domain_batch.commit().unwrap();
 
         // Verify data was written
-        let key = keys::encode_addr_tx_key(&lock_hash, 100, 0, &[0xAA; 32]);
+        let key = keys::encode_addr_tx_key(&lock_hash, 100, 0);
         assert!(domain_store
             .get_cf(domain_store.cf_addr_txs(), &key)
             .unwrap()

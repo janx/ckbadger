@@ -1027,22 +1027,12 @@ impl CkbadgerStore {
         CF_IDENTITY_DATA,
     ];
 
-    /// Historical append-heavy CFs.
-    ///
-    /// These indexes are primarily append writes during sync and large range scans on reads.
-    /// Universal compaction reduces cross-level rewrite amplification for this write pattern.
-    const HISTORICAL_APPEND_CFS: &'static [&'static str] = &[CF_CELLS];
-
     fn is_mega_write_cf(name: &str) -> bool {
         Self::MEGA_WRITE_CFS.contains(&name)
     }
 
     fn is_high_write_cf(name: &str) -> bool {
         Self::HIGH_WRITE_CFS.contains(&name)
-    }
-
-    fn is_historical_append_cf(name: &str) -> bool {
-        Self::HISTORICAL_APPEND_CFS.contains(&name)
     }
 
     fn default_block_options(block_cache: &rocksdb::Cache) -> rocksdb::BlockBasedOptions {
@@ -1145,8 +1135,8 @@ impl CkbadgerStore {
         opts.set_level_zero_stop_writes_trigger(24);
         opts.set_max_bytes_for_level_base(profile.normal_max_bytes_for_level_base);
         opts.set_compression_type(DBCompressionType::Lz4);
-        if Self::is_historical_append_cf(name) {
-            // Prioritize write throughput for append-heavy history CFs.
+        if Self::is_mega_write_cf(name) {
+            // Prioritize write throughput for mega-write CFs.
             opts.set_compression_type(DBCompressionType::None);
             opts.set_compaction_style(DBCompactionStyle::Universal);
             let mut uco = UniversalCompactOptions::default();
@@ -1637,7 +1627,6 @@ impl CkbadgerStore {
             drain_pending_mb = p.drain_pending_bytes_threshold / (1024 * 1024),
             mega_write_cfs = Self::MEGA_WRITE_CFS.len(),
             high_write_cfs = Self::HIGH_WRITE_CFS.len(),
-            historical_append_cfs = Self::HISTORICAL_APPEND_CFS.len(),
             column_families = ALL_CFS.len(),
             "RocksDB configuration"
         );
@@ -1695,11 +1684,11 @@ impl CkbadgerStore {
                 // More write buffers = more memtable headroom before flush stall.
                 // With WBM controlling global budget, per-CF limits are a safety net.
                 let max_wb = if Self::is_mega_write_cf(cf_name) {
-                    "12"
+                    "24"
                 } else if Self::is_high_write_cf(cf_name) {
-                    "8"
+                    "12"
                 } else {
-                    "6"
+                    "8"
                 };
                 let result = self.db.set_options_cf(
                     cf,
@@ -1709,6 +1698,7 @@ impl CkbadgerStore {
                         ("max_write_buffer_number", max_wb),
                         ("max_bytes_for_level_base", &level_base_str),
                         ("target_file_size_base", &file_base_str),
+                        ("compression", "kNoCompression"),
                     ],
                 );
                 if result.is_ok() {
@@ -1755,7 +1745,7 @@ impl CkbadgerStore {
             wbm_budget_mb = p.wbm_bulk_sync_bytes / (1024 * 1024),
             block_cache_mb = p.block_cache_bulk_sync_bytes / (1024 * 1024),
             "Bulk sync compaction options set: l0_slowdown=128, l0_stop=256, \
-             write_buffers mega=12/high=8/low=6"
+             write_buffers mega=24/high=12/low=8, compression=none"
         );
     }
 
@@ -1814,6 +1804,7 @@ impl CkbadgerStore {
                         ("max_write_buffer_number", max_wb),
                         ("max_bytes_for_level_base", &level_base_str),
                         ("target_file_size_base", &file_base_str),
+                        ("compression", "kLZ4Compression"),
                     ],
                 );
             }
@@ -1821,7 +1812,7 @@ impl CkbadgerStore {
         info!(
             wbm_budget_mb = p.wbm_normal_bytes / (1024 * 1024),
             block_cache_mb = p.block_cache_normal_bytes / (1024 * 1024),
-            "Normal compaction options restored: l0_slowdown=12, l0_stop=24"
+            "Normal compaction options restored: l0_slowdown=12, l0_stop=24, compression=lz4"
         );
     }
 
@@ -2595,19 +2586,13 @@ mod tests {
     }
 
     #[test]
-    fn test_historical_append_cfs_expected_members() {
-        let expected = &[CF_CELLS];
-        for cf in expected {
-            assert!(
-                CkbadgerStore::is_historical_append_cf(cf),
-                "{cf} should be in HISTORICAL_APPEND_CFS"
-            );
-        }
-        assert_eq!(
-            CkbadgerStore::HISTORICAL_APPEND_CFS.len(),
-            expected.len(),
-            "HISTORICAL_APPEND_CFS length mismatch"
-        );
+    fn test_mega_write_cfs_use_universal_compaction() {
+        // All mega-write CFs should get universal compaction at cf_options time.
+        // This test verifies the classification function covers CF_CELLS (formerly
+        // the only HISTORICAL_APPEND_CF) plus all other mega-write CFs.
+        assert!(CkbadgerStore::is_mega_write_cf(CF_CELLS));
+        assert!(CkbadgerStore::is_mega_write_cf(CF_ACTIVITIES));
+        assert!(CkbadgerStore::is_mega_write_cf(CF_ADDR_TXS));
     }
 
     #[test]

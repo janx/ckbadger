@@ -129,8 +129,8 @@ impl BulkBuildEngine {
         let append_store_arc = indexer.append_only_store.clone();
         /// Maximum concurrent flush tasks. With unordered_write=true and WAL
         /// disabled, RocksDB safely handles concurrent WriteBatch writes.
-        /// Depth 3 absorbs stall spikes without excessive memory from queued rows.
-        const MAX_CONCURRENT_FLUSHES: usize = 3;
+        /// Depth 6 absorbs stall spikes (~60MB per slot = 360MB total).
+        const MAX_CONCURRENT_FLUSHES: usize = 6;
         let mut flush_handles: VecDeque<
             tokio::task::JoinHandle<anyhow::Result<materialize::FlushResult>>,
         > = VecDeque::new();
@@ -2477,9 +2477,9 @@ fn build_history_rows_for_block(
                     interner.resolve_bytes(lock_hash_id),
                     tx.block_number,
                     tx.tx_index,
-                    &tx.hash,
-                ),
-                Vec::new(),
+                )
+                .to_vec(),
+                tx.hash.to_vec(),
             ));
         }
 
@@ -4599,17 +4599,30 @@ mod tests {
                 .filter(|row| row.cf_name == CF_ADDR_TXS)
                 .collect();
 
-        let expected = [
-            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 0, &create_tx_hash),
-            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 1, &split_tx_hash),
-            keys::encode_addr_tx_key(&lock_b_hash, 14_000_888, 1, &split_tx_hash),
+        let expected_keys = [
+            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 0).to_vec(),
+            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 1).to_vec(),
+            keys::encode_addr_tx_key(&lock_b_hash, 14_000_888, 1).to_vec(),
         ];
 
-        assert_eq!(addr_rows.len(), expected.len());
+        assert_eq!(addr_rows.len(), expected_keys.len());
         let actual_keys: HashSet<Vec<u8>> = addr_rows.iter().map(|row| row.key.clone()).collect();
-        assert_eq!(actual_keys.len(), expected.len());
-        for key in expected {
-            assert!(actual_keys.contains(&key));
+        assert_eq!(actual_keys.len(), expected_keys.len());
+        for key in &expected_keys {
+            assert!(actual_keys.contains(key));
+        }
+        // tx_hash now stored as value (32 bytes)
+        for row in &addr_rows {
+            assert_eq!(
+                row.value.len(),
+                32,
+                "addr_tx value should be 32-byte tx_hash"
+            );
+            if row.key == expected_keys[0] {
+                assert_eq!(row.value, create_tx_hash);
+            } else {
+                assert_eq!(row.value, split_tx_hash);
+            }
         }
         let _ = std::fs::remove_dir_all(&test_root);
     }

@@ -1378,7 +1378,7 @@ impl CkbadgerStore {
             let mut stage = RollbackStageProgress::new("delete_addr_txs");
             let iter = self.iterator_cf(self.cf_addr_txs(), IteratorMode::Start);
             for item in iter {
-                let (key, _) = item.map_err(|e| {
+                let (key, value) = item.map_err(|e| {
                     anyhow::anyhow!(
                         "failed to iterate addr_txs in rollback_to_block cleanup: {}",
                         e
@@ -1387,7 +1387,8 @@ impl CkbadgerStore {
                 if key.len() != keys::ADDR_TX_KEY_SIZE {
                     continue;
                 }
-                let (lock_hash, block_num, _tx_idx, tx_hash) = keys::decode_addr_tx_key(&key);
+                let (lock_hash, block_num, _tx_idx) = keys::decode_addr_tx_key(&key);
+                let tx_hash = value.to_vec();
                 if block_num <= rollback_to {
                     // Track latest surviving entry per address (keys are desc by block_num,
                     // so first surviving entry per address is the latest)
