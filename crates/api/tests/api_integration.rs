@@ -4149,6 +4149,7 @@ async fn test_get_token_includes_maximum_supply() {
     let store = test_store();
     let type_hash = vec![0x77; 32];
     let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+    let holder_lock = [0x11; 32];
 
     store
         .put_token_direct(
@@ -4171,6 +4172,12 @@ async fn test_get_token_includes_maximum_supply() {
             },
         )
         .unwrap();
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&type_hash, &holder_lock, 500_00000000);
+    batch.put_token_holder_by_balance(&type_hash, &holder_lock, 500_00000000);
+    batch.put_addr_token_by_balance(&holder_lock, &type_hash, 500_00000000);
+    batch.commit().unwrap();
 
     let config = test_config(store);
     let app = create_router(config).await;
@@ -4196,6 +4203,7 @@ async fn test_get_token_returns_store_backed_detail_when_filtered_from_warmup_ca
     let store = test_store();
     let type_hash = vec![0x78; 32];
     let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+    let holder_lock = [0x12; 32];
 
     store
         .put_token_direct(
@@ -4219,6 +4227,12 @@ async fn test_get_token_returns_store_backed_detail_when_filtered_from_warmup_ca
         )
         .unwrap();
 
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&type_hash, &holder_lock, 500_00000000);
+    batch.put_token_holder_by_balance(&type_hash, &holder_lock, 500_00000000);
+    batch.put_addr_token_by_balance(&holder_lock, &type_hash, 500_00000000);
+    batch.commit().unwrap();
+
     let config = test_config(store);
     let app = create_router(config).await;
 
@@ -4235,6 +4249,91 @@ async fn test_get_token_returns_store_backed_detail_when_filtered_from_warmup_ca
     assert!(json["symbol"].is_null());
     assert_eq!(json["description"], "Store-backed token detail");
     assert_eq!(json["totalSupply"], "50000000000");
+}
+
+#[tokio::test]
+async fn test_get_token_derives_stats_from_holder_and_stats_cfs_when_token_row_is_placeholder() {
+    let store = test_store();
+    let type_hash = vec![0x7b; 32];
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+
+    store
+        .put_token_direct(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 2,
+                type_args: vec![0x66; 32],
+                standard: "xudt".to_string(),
+                name: Some("Placeholder Label".to_string()),
+                symbol: Some("PLH".to_string()),
+                decimals: Some(8),
+                total_supply: Some(0),
+                max_supply: None,
+                holders_count: 0,
+                first_seen_block: 0,
+                icon_url: Some("logo.png".to_string()),
+                description: Some("label metadata only".to_string()),
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&type_hash, &[0x01; 32], 200);
+    batch.put_token_holder(&type_hash, &[0x02; 32], 100);
+    batch.put_token_holder_by_balance(&type_hash, &[0x01; 32], 200);
+    batch.put_token_holder_by_balance(&type_hash, &[0x02; 32], 100);
+    batch.put_addr_token_by_balance(&[0x01; 32], &type_hash, 200);
+    batch.put_addr_token_by_balance(&[0x02; 32], &type_hash, 100);
+    batch.put_token_transfers_count(&type_hash, 7);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let detail_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/tokens/{type_hash_hex}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let detail_body = detail_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let detail_json: serde_json::Value = serde_json::from_slice(&detail_body).unwrap();
+    assert_eq!(detail_json["name"], "Placeholder Label");
+    assert_eq!(detail_json["totalSupply"], "300");
+    assert_eq!(detail_json["holdersCount"], 2);
+    assert_eq!(detail_json["transfersCount"], 7);
+
+    let holders_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/tokens/{type_hash_hex}/holders?limit=10"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(holders_response.status(), StatusCode::OK);
+    let holders_body = holders_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let holders_json: serde_json::Value = serde_json::from_slice(&holders_body).unwrap();
+    assert_eq!(holders_json["total"], 2);
+    assert_eq!(holders_json["data"].as_array().unwrap().len(), 2);
 }
 
 #[tokio::test]

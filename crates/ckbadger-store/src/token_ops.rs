@@ -739,6 +739,63 @@ impl CkbadgerStore {
         Ok(count)
     }
 
+    /// Aggregate live holder count and total live supply for a token from `token_holders`.
+    ///
+    /// This derives correctness-critical read data from the holder source of truth
+    /// instead of trusting any cached aggregate embedded in `TokenInfo`.
+    pub fn aggregate_token_holder_stats(&self, type_hash: &[u8]) -> anyhow::Result<(i64, i128)> {
+        let iter = self.prefix_iterator_cf(self.cf_token_holders(), type_hash);
+        let mut holders_count: i64 = 0;
+        let mut total_supply: i128 = 0;
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate token_holders in aggregate_token_holder_stats: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(type_hash) {
+                break;
+            }
+            if key.len() != 64 || value.len() != 16 {
+                continue;
+            }
+
+            let lock_hash = &key[32..64];
+            let balance = i128::from_le_bytes(value[..16].try_into().unwrap());
+            if balance < 0 {
+                anyhow::bail!(
+                    "negative token holder balance in aggregate_token_holder_stats: type_hash=0x{}, lock_hash=0x{}, balance={}",
+                    bytes_to_hex(type_hash),
+                    bytes_to_hex(lock_hash),
+                    balance
+                );
+            }
+            if balance == 0 {
+                continue;
+            }
+
+            holders_count = holders_count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "token holders_count overflow in aggregate_token_holder_stats: type_hash=0x{}",
+                    bytes_to_hex(type_hash)
+                )
+            })?;
+            total_supply = total_supply.checked_add(balance).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "token total_supply overflow in aggregate_token_holder_stats: type_hash=0x{}, lock_hash=0x{}, current_total={}, balance={}",
+                    bytes_to_hex(type_hash),
+                    bytes_to_hex(lock_hash),
+                    total_supply,
+                    balance
+                )
+            })?;
+        }
+
+        Ok((holders_count, total_supply))
+    }
+
     /// List holders for a token (prefix scan by type_hash).
     ///
     /// Returns `(lock_hash, balance)` pairs, limited to `limit` results.
@@ -1490,6 +1547,22 @@ mod tests {
 
         assert_eq!(store.count_token_holders(&type_a).unwrap(), 2);
         assert_eq!(store.count_token_holders(&type_b).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_aggregate_token_holder_stats_sums_positive_balances() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x21u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_holder(&type_hash, &[0x01; 32], 100);
+        batch.put_token_holder(&type_hash, &[0x02; 32], 250);
+        batch.put_token_holder(&type_hash, &[0x03; 32], 0);
+        batch.commit().unwrap();
+
+        let (holders_count, total_supply) = store.aggregate_token_holder_stats(&type_hash).unwrap();
+        assert_eq!(holders_count, 2);
+        assert_eq!(total_supply, 350);
     }
 
     #[test]

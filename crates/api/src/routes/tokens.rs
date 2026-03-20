@@ -116,14 +116,20 @@ pub struct TokenTransferResponse {
     pub timestamp: String,
 }
 
-/// Convert a store TokenInfo + key into an API TokenResponse.
-fn token_info_to_response(
-    type_hash: &[u8],
-    info: &ckbadger_store::TokenInfo,
+struct TokenDerivedStats {
+    total_supply: i128,
+    holders_count: i64,
     transfers_count: i64,
     transfers_24h: i64,
     owned_capacity: Option<i128>,
     owned_knowledge: Option<i128>,
+}
+
+/// Convert a store TokenInfo + key into an API TokenResponse.
+fn token_info_to_response(
+    type_hash: &[u8],
+    info: &ckbadger_store::TokenInfo,
+    derived: TokenDerivedStats,
 ) -> Result<TokenResponse, ApiRouteError> {
     let type_hash_type = hash_type_to_str(info.hash_type as i16)
         .ok_or_else(|| {
@@ -153,10 +159,7 @@ fn token_info_to_response(
         manager: None,
         email: None,
         operator_website: None,
-        total_supply: info
-            .total_supply
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "0".to_string()),
+        total_supply: derived.total_supply.to_string(),
         maximum_supply_status: max_supply_status(
             &info.standard,
             maximum_supply.as_deref(),
@@ -164,12 +167,12 @@ fn token_info_to_response(
         )
         .to_string(),
         maximum_supply,
-        holders_count: info.holders_count as i32,
-        transfers_count,
-        transfers_24h,
+        holders_count: derived.holders_count as i32,
+        transfers_count: derived.transfers_count,
+        transfers_24h: derived.transfers_24h,
         cells_count: None,
-        total_capacity: owned_capacity.map(|c| c.to_string()),
-        total_used_capacity: owned_knowledge.map(|c| c.to_string()),
+        total_capacity: derived.owned_capacity.map(|c| c.to_string()),
+        total_used_capacity: derived.owned_knowledge.map(|c| c.to_string()),
     })
 }
 
@@ -399,11 +402,19 @@ async fn get_token(
         let info = store.get_token(&hash_c)?;
         match info {
             Some(info) => {
-                let transfers_count = info.transfers_count;
+                let (holders_count, total_supply) = store.aggregate_token_holder_stats(&hash_c)?;
+                let transfers_count = store.get_token_transfers_count(&hash_c)?;
                 let transfers_24h = store
                     .get_token_24h_transfers(&hash_c, chrono::Utc::now().timestamp_millis())?;
                 let deltas = store.list_token_daily_deltas(&hash_c)?;
-                Ok(Some((info, transfers_count, transfers_24h, deltas)))
+                Ok(Some((
+                    info,
+                    total_supply,
+                    holders_count,
+                    transfers_count,
+                    transfers_24h,
+                    deltas,
+                )))
             }
             None => Ok(None),
         }
@@ -413,7 +424,7 @@ async fn get_token(
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
     match result {
-        Some((info, transfers_count, transfers_24h, deltas)) => {
+        Some((info, total_supply, holders_count, transfers_count, transfers_24h, deltas)) => {
             let (owned_capacity, owned_knowledge) = if deltas.is_empty() {
                 (None, None)
             } else {
@@ -434,10 +445,14 @@ async fn get_token(
             ok(token_info_to_response(
                 &hash,
                 &info,
-                transfers_count,
-                transfers_24h,
-                owned_capacity,
-                owned_knowledge,
+                TokenDerivedStats {
+                    total_supply,
+                    holders_count,
+                    transfers_count,
+                    transfers_24h,
+                    owned_capacity,
+                    owned_knowledge,
+                },
             )?)
         }
         None => Err(ApiError::not_found("Token not found")),
@@ -462,34 +477,36 @@ async fn get_token_holders(
 
     let store = state.store.clone();
     let hash_c = hash.clone();
-    let (token, mut page) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let token = store
-            .get_token(&hash_c)?
-            .ok_or_else(|| anyhow::anyhow!("not_found"))?;
-        let page = store.list_token_holders_by_balance(&hash_c, limit + 1, cursor)?;
-        Ok((token, page))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e: anyhow::Error| {
-        if e.to_string() == "not_found" {
-            ApiError::not_found("Token not found")
-        } else {
-            ApiError::internal(e.to_string())
-        }
-    })?;
-    if token.holders_count < 0 {
+    let (_token, holders_count, mut page) =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let token = store
+                .get_token(&hash_c)?
+                .ok_or_else(|| anyhow::anyhow!("not_found"))?;
+            let (holders_count, _) = store.aggregate_token_holder_stats(&hash_c)?;
+            let page = store.list_token_holders_by_balance(&hash_c, limit + 1, cursor)?;
+            Ok((token, holders_count, page))
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e: anyhow::Error| {
+            if e.to_string() == "not_found" {
+                ApiError::not_found("Token not found")
+            } else {
+                ApiError::internal(e.to_string())
+            }
+        })?;
+    if holders_count < 0 {
         return Err(ApiError::internal(format!(
             "invalid token holders_count: type_hash=0x{}, holders_count={}",
             hex::encode(&hash),
-            token.holders_count
+            holders_count
         )));
     }
-    if !has_cursor && token.holders_count > 0 && page.is_empty() {
+    if !has_cursor && holders_count > 0 && page.is_empty() {
         return Err(ApiError::internal(format!(
             "missing ranked token holder index entries: type_hash=0x{}, holders_count={}",
             hex::encode(&hash),
-            token.holders_count
+            holders_count
         )));
     }
     let has_more = page.len() > limit;
@@ -515,7 +532,7 @@ async fn get_token_holders(
 
     ok(CursorPaginatedResponse::new(
         holders,
-        token.holders_count,
+        holders_count,
         limit as i64,
         next_cursor,
     ))
