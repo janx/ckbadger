@@ -1168,6 +1168,51 @@ impl CkbadgerStore {
         opts
     }
 
+    /// Build per-CF `Options` suitable for `SstFileWriter`.
+    ///
+    /// Mirrors `cf_options()` for compression and table format so the produced
+    /// SST files are compatible with the target CF.  Excludes memtable / L0 /
+    /// write-buffer settings that are irrelevant for SST file creation.
+    pub fn cf_options_for_sst(cf_name: &str) -> Options {
+        // A small throwaway cache is needed for the block-based table factory.
+        // It's only used during SST file finalization, not for reads.
+        let cache = rocksdb::Cache::new_lru_cache(8 * 1024 * 1024);
+        let profile = MemoryProfile::for_primary();
+        Self::cf_options(cf_name, &cache, &profile)
+    }
+
+    /// Ingest pre-built SST files into the named column family.
+    ///
+    /// Uses `move_files=true` so the SST is renamed into the DB directory
+    /// (zero-copy on same filesystem).  Caller must ensure SST files are on
+    /// the same filesystem as this store's data directory.
+    ///
+    /// `allow_global_seqno=true` is set because during bulk sync from genesis
+    /// there are no existing sequence numbers to conflict with.
+    /// `snapshot_consistency=false` is safe because no concurrent readers take
+    /// snapshots during bulk sync.
+    ///
+    /// **Bulk-sync only.** Do not use during live-sync where concurrent readers
+    /// or snapshots may exist.
+    pub fn ingest_sst_files_cf(
+        &self,
+        cf_name: &str,
+        paths: Vec<std::path::PathBuf>,
+    ) -> anyhow::Result<()> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let cf = self.cf(cf_name);
+        let mut opts = rocksdb::IngestExternalFileOptions::default();
+        opts.set_move_files(true);
+        opts.set_allow_global_seqno(true);
+        opts.set_allow_blocking_flush(true);
+        opts.set_snapshot_consistency(false);
+        self.db
+            .ingest_external_file_cf_opts(cf, &opts, paths)
+            .map_err(|e| anyhow::anyhow!("ingest_sst_files_cf failed: cf={} error={}", cf_name, e))
+    }
+
     // ---- Column family accessors ----
 
     pub fn cf(&self, name: &str) -> &ColumnFamily {
@@ -2865,5 +2910,51 @@ mod tests {
     #[should_panic(expected = "unknown column family write policy")]
     fn test_cf_write_policy_panics_on_unknown_column_family() {
         cf_write_policy("missing_cf");
+    }
+
+    #[test]
+    fn cf_options_for_sst_returns_valid_options_for_all_cfs() {
+        for &cf_name in ALL_CFS {
+            let opts = CkbadgerStore::cf_options_for_sst(cf_name);
+            let writer = rocksdb::SstFileWriter::create(&opts);
+            drop(writer);
+        }
+    }
+
+    #[test]
+    fn ingest_sst_files_cf_ingests_single_sst() {
+        let root = tempfile::tempdir().unwrap();
+        let db_path = root.path().join("domain");
+        std::fs::create_dir_all(&db_path).unwrap();
+        let store = CkbadgerStore::open_domain(&db_path).unwrap();
+
+        let sst_dir = root.path().join("sst-tmp");
+        std::fs::create_dir_all(&sst_dir).unwrap();
+        let sst_path = sst_dir.join("test.sst");
+
+        let opts = CkbadgerStore::cf_options_for_sst(CF_BLOCK_HEADERS);
+        let mut writer = rocksdb::SstFileWriter::create(&opts);
+        writer.open(&sst_path).unwrap();
+        writer.put(b"key_aaa", b"val_aaa").unwrap();
+        writer.put(b"key_bbb", b"val_bbb").unwrap();
+        writer.finish().unwrap();
+
+        store
+            .ingest_sst_files_cf(CF_BLOCK_HEADERS, vec![sst_path.clone()])
+            .unwrap();
+
+        let val = store
+            .get_cf(store.cf(CF_BLOCK_HEADERS), b"key_aaa")
+            .unwrap();
+        assert_eq!(val.as_deref(), Some(b"val_aaa".as_slice()));
+        let val = store
+            .get_cf(store.cf(CF_BLOCK_HEADERS), b"key_bbb")
+            .unwrap();
+        assert_eq!(val.as_deref(), Some(b"val_bbb".as_slice()));
+
+        assert!(
+            !sst_path.exists(),
+            "SST file should have been moved by ingest"
+        );
     }
 }
