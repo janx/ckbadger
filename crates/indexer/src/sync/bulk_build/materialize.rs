@@ -1,9 +1,10 @@
 use anyhow::{anyhow, Result};
 use ckbadger_store::keys;
+use ckbadger_store::sst_ingest::SstIngestBatch;
 use ckbadger_store::types::{encode_live_cell_marker, CachedBlockHeader, LiveCellInfo};
 use ckbadger_store::{
-    cf_write_policy, is_append_only_cf_name, CfWritePolicy, CkbadgerStore, StoreBatch,
-    CF_BLOCK_HEADERS, CF_CELLS, CF_LIVE_CELLS,
+    cf_write_policy, is_append_only_cf_name, CfWritePolicy, CkbadgerStore, CF_BLOCK_HEADERS,
+    CF_CELLS, CF_LIVE_CELLS,
 };
 
 #[doc(hidden)]
@@ -38,17 +39,27 @@ pub(crate) struct Materializer<'a> {
     domain_store: &'a CkbadgerStore,
     append_only_store: &'a CkbadgerStore,
     report: MaterializationReport,
+    domain_sst_dir: std::path::PathBuf,
+    append_sst_dir: std::path::PathBuf,
+    /// Counter for unique SST filenames during finalize.
+    /// Starts at a high offset to avoid collisions with batch IDs (0..N).
+    finalize_sst_counter: u64,
 }
 
 impl<'a> Materializer<'a> {
     pub(crate) fn new(
         domain_store: &'a CkbadgerStore,
         append_only_store: &'a CkbadgerStore,
+        domain_sst_dir: std::path::PathBuf,
+        append_sst_dir: std::path::PathBuf,
     ) -> Self {
         Self {
             domain_store,
             append_only_store,
             report: MaterializationReport::default(),
+            domain_sst_dir,
+            append_sst_dir,
+            finalize_sst_counter: 1_000_000_000,
         }
     }
 
@@ -108,8 +119,8 @@ impl<'a> Materializer<'a> {
             return Ok(());
         }
 
-        let mut domain_batch = StoreBatch::new(self.domain_store);
-        let mut append_batch = StoreBatch::new(self.append_only_store);
+        let mut domain_batch = SstIngestBatch::with_capacity(rows.len());
+        let mut append_batch = SstIngestBatch::with_capacity(rows.len());
 
         for row in rows {
             if matches!(counter_kind, CounterKind::FinalSnapshot)
@@ -132,17 +143,24 @@ impl<'a> Materializer<'a> {
             }
 
             if is_append_only_cf_name(row.cf_name) {
-                append_batch.put_raw_cf_by_name(row.cf_name, &row.key, &row.value)?;
+                append_batch.push(row.cf_name, row.key.clone(), row.value.clone());
             } else {
-                domain_batch.put_raw_cf_by_name(row.cf_name, &row.key, &row.value)?;
+                domain_batch.push(row.cf_name, row.key.clone(), row.value.clone());
             }
         }
 
+        let batch_id = self.finalize_sst_counter;
+        self.finalize_sst_counter += 1;
+
         if !append_batch.is_empty() {
-            append_batch.commit_no_wal()?;
+            append_batch.write_and_ingest(
+                self.append_only_store,
+                &self.append_sst_dir,
+                batch_id,
+            )?;
         }
         if !domain_batch.is_empty() {
-            domain_batch.commit_no_wal()?;
+            domain_batch.write_and_ingest(self.domain_store, &self.domain_sst_dir, batch_id)?;
         }
 
         match counter_kind {
@@ -179,8 +197,8 @@ pub(crate) struct FlushResult {
     pub(crate) flush_ms: f64,
 }
 
-/// Flush materialized rows to RocksDB. Designed for use in `spawn_blocking`
-/// since it takes owned data (not borrowed references).
+/// Flush materialized rows to RocksDB via SST ingest. Designed for use in
+/// `spawn_blocking` since it takes owned data (not borrowed references).
 ///
 /// Replicates the `CfWritePolicy` validation from `Materializer::write_rows`
 /// to ensure store boundary invariants are enforced on the background path.
@@ -189,10 +207,14 @@ pub(crate) fn flush_rows_to_stores(
     append_only_store: &CkbadgerStore,
     history_rows: Vec<MaterializedRow>,
     sealed_rows: Vec<MaterializedRow>,
+    domain_sst_dir: &std::path::Path,
+    append_sst_dir: &std::path::Path,
+    batch_id: u64,
 ) -> Result<FlushResult> {
     let flush_started = std::time::Instant::now();
-    let mut domain_batch = StoreBatch::new(domain_store);
-    let mut append_batch = StoreBatch::new(append_only_store);
+    let total_rows = history_rows.len() + sealed_rows.len();
+    let mut domain_batch = SstIngestBatch::with_capacity(total_rows);
+    let mut append_batch = SstIngestBatch::with_capacity(total_rows);
 
     for row in &history_rows {
         let actual_policy = cf_write_policy(row.cf_name);
@@ -204,9 +226,9 @@ pub(crate) fn flush_rows_to_stores(
             ));
         }
         if is_append_only_cf_name(row.cf_name) {
-            append_batch.put_raw_cf_by_name(row.cf_name, &row.key, &row.value)?;
+            append_batch.push(row.cf_name, row.key.clone(), row.value.clone());
         } else {
-            domain_batch.put_raw_cf_by_name(row.cf_name, &row.key, &row.value)?;
+            domain_batch.push(row.cf_name, row.key.clone(), row.value.clone());
         }
     }
     for row in &sealed_rows {
@@ -218,14 +240,14 @@ pub(crate) fn flush_rows_to_stores(
                 actual_policy
             ));
         }
-        domain_batch.put_raw_cf_by_name(row.cf_name, &row.key, &row.value)?;
+        domain_batch.push(row.cf_name, row.key.clone(), row.value.clone());
     }
 
     if !append_batch.is_empty() {
-        append_batch.commit_no_wal()?;
+        append_batch.write_and_ingest(append_only_store, append_sst_dir, batch_id)?;
     }
     if !domain_batch.is_empty() {
-        domain_batch.commit_no_wal()?;
+        domain_batch.write_and_ingest(domain_store, domain_sst_dir, batch_id)?;
     }
 
     Ok(FlushResult {
@@ -246,7 +268,12 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
     let report = {
         let domain_store = CkbadgerStore::open_domain(&domain_path)?;
         let append_store = CkbadgerStore::open_append_only(&append_path)?;
-        let mut materializer = Materializer::new(&domain_store, &append_store);
+        let sst_domain = root.join("domain-sst-tmp");
+        let sst_append = root.join("append-sst-tmp");
+        std::fs::create_dir_all(&sst_domain)?;
+        std::fs::create_dir_all(&sst_append)?;
+        let mut materializer =
+            Materializer::new(&domain_store, &append_store, sst_domain, sst_append);
 
         let outpoint_key = keys::encode_outpoint(&[0x11; 32], 0);
         let cell_info = LiveCellInfo {
@@ -324,7 +351,12 @@ mod tests {
 
         let domain_store = CkbadgerStore::open_domain(&domain_path).unwrap();
         let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
-        let mut materializer = Materializer::new(&domain_store, &append_store);
+        let sst_domain = root.join("domain-sst-tmp");
+        let sst_append = root.join("append-sst-tmp");
+        std::fs::create_dir_all(&sst_domain).unwrap();
+        std::fs::create_dir_all(&sst_append).unwrap();
+        let mut materializer =
+            Materializer::new(&domain_store, &append_store, sst_domain, sst_append);
 
         let err = materializer
             .materialize_final_snapshot(&[MaterializedRow::new(
@@ -392,8 +424,21 @@ mod tests {
             ),
         ];
 
-        let result =
-            flush_rows_to_stores(&domain_store, &append_store, history_rows, vec![]).unwrap();
+        let domain_sst = root.join("domain-sst-tmp");
+        let append_sst = root.join("append-sst-tmp");
+        std::fs::create_dir_all(&domain_sst).unwrap();
+        std::fs::create_dir_all(&append_sst).unwrap();
+
+        let result = flush_rows_to_stores(
+            &domain_store,
+            &append_store,
+            history_rows,
+            vec![],
+            &domain_sst,
+            &append_sst,
+            0,
+        )
+        .unwrap();
         assert_eq!(result.history_rows, 2);
         assert_eq!(result.sealed_rows, 0);
 
@@ -432,7 +477,21 @@ mod tests {
             b"v1".to_vec(),
         )];
 
-        let err = flush_rows_to_stores(&domain_store, &append_store, bad_rows, vec![]).unwrap_err();
+        let domain_sst = root.join("domain-sst-tmp");
+        let append_sst = root.join("append-sst-tmp");
+        std::fs::create_dir_all(&domain_sst).unwrap();
+        std::fs::create_dir_all(&append_sst).unwrap();
+
+        let err = flush_rows_to_stores(
+            &domain_store,
+            &append_store,
+            bad_rows,
+            vec![],
+            &domain_sst,
+            &append_sst,
+            0,
+        )
+        .unwrap_err();
         assert!(
             err.to_string()
                 .contains("history row has wrong write policy"),
@@ -462,8 +521,21 @@ mod tests {
             b"v2".to_vec(),
         )];
 
-        let err =
-            flush_rows_to_stores(&domain_store, &append_store, vec![], bad_sealed).unwrap_err();
+        let domain_sst = root.join("domain-sst-tmp");
+        let append_sst = root.join("append-sst-tmp");
+        std::fs::create_dir_all(&domain_sst).unwrap();
+        std::fs::create_dir_all(&append_sst).unwrap();
+
+        let err = flush_rows_to_stores(
+            &domain_store,
+            &append_store,
+            vec![],
+            bad_sealed,
+            &domain_sst,
+            &append_sst,
+            0,
+        )
+        .unwrap_err();
         assert!(
             err.to_string()
                 .contains("sealed row has wrong write policy"),
@@ -485,7 +557,12 @@ mod tests {
 
         let domain_store = CkbadgerStore::open_domain(&domain_path).unwrap();
         let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
-        let mut materializer = Materializer::new(&domain_store, &append_store);
+        let sst_domain = root.join("domain-sst-tmp");
+        let sst_append = root.join("append-sst-tmp");
+        std::fs::create_dir_all(&sst_domain).unwrap();
+        std::fs::create_dir_all(&sst_append).unwrap();
+        let mut materializer =
+            Materializer::new(&domain_store, &append_store, sst_domain, sst_append);
 
         materializer.add_external_counts(100, 50, 3);
         materializer.add_external_counts(200, 75, 5);

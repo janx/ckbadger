@@ -103,9 +103,27 @@ impl BulkBuildEngine {
             .ok_or_else(|| anyhow!("bulk build requires direct CKB RocksDB reader"))?;
         let mut runtime = BulkBuildRuntimeState::default();
         let mut sync_totals = BulkBuildSyncTotals::default();
+        let domain_sst_dir = indexer.writer.store().domain_path().join("sst-tmp");
+        std::fs::create_dir_all(&domain_sst_dir).map_err(|e| {
+            anyhow!(
+                "bulk build: failed to create domain SST temp dir at {}: {}",
+                domain_sst_dir.display(),
+                e
+            )
+        })?;
+        let append_sst_dir = indexer.append_only_store.append_path().join("sst-tmp");
+        std::fs::create_dir_all(&append_sst_dir).map_err(|e| {
+            anyhow!(
+                "bulk build: failed to create append-only SST temp dir at {}: {}",
+                append_sst_dir.display(),
+                e
+            )
+        })?;
         let mut materializer = materialize::Materializer::new(
             indexer.writer.store().as_ref(),
             indexer.append_only_store.as_ref(),
+            domain_sst_dir.clone(),
+            append_sst_dir.clone(),
         );
         let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(String::new());
         let token_info_cache = preload_token_info_cache(indexer.writer.store().as_ref())?;
@@ -377,12 +395,18 @@ impl BulkBuildEngine {
             // loop body returns an error before the next iteration drains it.
             let ds = domain_store_arc.clone();
             let as_ = append_store_arc.clone();
+            let d_sst = domain_sst_dir.clone();
+            let a_sst = append_sst_dir.clone();
+            let bc = batch_count;
             pending_flush_handle = Some(tokio::task::spawn_blocking(move || {
                 materialize::flush_rows_to_stores(
                     &ds,
                     &as_,
                     pending_flush.history_rows,
                     pending_flush.sealed_rows,
+                    &d_sst,
+                    &a_sst,
+                    bc,
                 )
             }));
 
@@ -596,6 +620,8 @@ impl BulkBuildEngine {
         sync_totals.finalize_success(indexer.writer.store().as_ref(), false)?;
         indexer.writer.refresh_latest_dao_statistics()?;
         indexer.writer.store().clear_bulk_build_session_marker()?;
+        let _ = std::fs::remove_dir_all(&domain_sst_dir);
+        let _ = std::fs::remove_dir_all(&append_sst_dir);
 
         let finalize_elapsed = finalize_started.elapsed();
         indexer.bulk_build_perf.clear_finalize();
@@ -2057,8 +2083,16 @@ where
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path)?);
         domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
         start_bulk_build_session_marker(domain_store.as_ref(), "bulk-build-test-session", 0)?;
-        let mut materializer =
-            materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
+        let sst_domain = root.join("domain-sst-tmp");
+        let sst_append = root.join("append-sst-tmp");
+        std::fs::create_dir_all(&sst_domain)?;
+        std::fs::create_dir_all(&sst_append)?;
+        let mut materializer = materialize::Materializer::new(
+            domain_store.as_ref(),
+            append_store.as_ref(),
+            sst_domain,
+            sst_append,
+        );
         let mut current_block = 0u64;
         let mut processed_blocks = 0usize;
 
@@ -2186,8 +2220,16 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path)?);
         domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
         start_bulk_build_session_marker(domain_store.as_ref(), "bulk-build-test-session", 0)?;
-        let mut materializer =
-            materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
+        let sst_domain = root.join("domain-sst-tmp");
+        let sst_append = root.join("append-sst-tmp");
+        std::fs::create_dir_all(&sst_domain)?;
+        std::fs::create_dir_all(&sst_append)?;
+        let mut materializer = materialize::Materializer::new(
+            domain_store.as_ref(),
+            append_store.as_ref(),
+            sst_domain,
+            sst_append,
+        );
         for batch in block_batches {
             let (batch_stats, _timings, pending) =
                 runtime.apply_blocks_hex(batch, true, &FxHashMap::default())?;
@@ -4722,7 +4764,7 @@ mod tests {
     }
 
     #[test]
-    fn flush_bulk_build_materialized_state_flushes_domain_and_append_memtables() {
+    fn flush_bulk_build_materialized_state_writes_to_domain_and_append_stores() {
         let block = bulk_build_addr_tx_fixture();
         let interner = interner::IdentityInterner::default();
         let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
@@ -4744,25 +4786,24 @@ mod tests {
             CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
         let history = build_history_rows(&arena, &resolved, &frozen, true, &FxHashMap::default())
             .expect("history rows");
-        let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
+        let sst_domain = root.join("domain-sst-tmp");
+        let sst_append = root.join("append-sst-tmp");
+        std::fs::create_dir_all(&sst_domain).expect("create domain sst dir");
+        std::fs::create_dir_all(&sst_append).expect("create append sst dir");
+        let mut materializer =
+            materialize::Materializer::new(&domain_store, &append_store, sst_domain, sst_append);
         materializer
             .stream_history_rows(&history.rows)
             .expect("stream history rows");
 
-        let domain_stats_before = domain_store.memory_stats();
-        let append_stats_before = append_store.memory_stats();
+        // With SST ingest, data bypasses memtables and lands directly in SST
+        // files. Verify that both stores have readable data after streaming.
+        let domain_stats = domain_store.memory_stats();
+        let append_stats = append_store.memory_stats();
         assert!(
-            domain_stats_before.memtable_bytes > 0 || append_stats_before.memtable_bytes > 0,
-            "expected pending no-WAL memtable bytes before flush helper"
+            domain_stats.sst_files_size > 0 || append_stats.sst_files_size > 0,
+            "expected SST data in at least one store after streaming history rows"
         );
-
-        flush_bulk_build_materialized_state(&domain_store, &append_store)
-            .expect("flush bulk build state");
-
-        let domain_stats_after = domain_store.memory_stats();
-        let append_stats_after = append_store.memory_stats();
-        assert!(domain_stats_after.sst_files_size > domain_stats_before.sst_files_size);
-        assert!(append_stats_after.sst_files_size > append_stats_before.sst_files_size);
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -4961,7 +5002,12 @@ mod tests {
         }
         let append_store =
             CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
-        let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
+        let sst_domain = root.join("domain-sst-tmp");
+        let sst_append = root.join("append-sst-tmp");
+        std::fs::create_dir_all(&sst_domain).expect("create domain sst dir");
+        std::fs::create_dir_all(&sst_append).expect("create append sst dir");
+        let mut materializer =
+            materialize::Materializer::new(&domain_store, &append_store, sst_domain, sst_append);
         materializer
             .stream_history_rows(&history.rows)
             .expect("stream history rows");

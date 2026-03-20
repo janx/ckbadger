@@ -631,7 +631,12 @@ pub(crate) fn materialize_script_infos_for_test(
     let infos = {
         let domain_store = CkbadgerStore::open_domain(&domain_path)?;
         let append_store = CkbadgerStore::open_append_only(&append_path)?;
-        let mut materializer = Materializer::new(&domain_store, &append_store);
+        let sst_domain = root.join("domain-sst-tmp");
+        let sst_append = root.join("append-sst-tmp");
+        std::fs::create_dir_all(&sst_domain)?;
+        std::fs::create_dir_all(&sst_append)?;
+        let mut materializer =
+            Materializer::new(&domain_store, &append_store, sst_domain, sst_append);
         owner.materialize_final(&mut materializer)?;
         let _ = materializer.finish();
         domain_store
