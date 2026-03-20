@@ -49,6 +49,14 @@ pub(crate) mod sequencer;
 
 const BULK_BUILD_MIN_BLOCK_SPAN: u64 = 10_000;
 const BULK_BUILD_MAX_BLOCK_SPAN: u64 = 100_000;
+// EMA adaptive controller constants — used in the next commit.
+#[allow(dead_code)]
+const BULK_BUILD_TARGET_ITERATION_MS: f64 = 1500.0;
+#[allow(dead_code)]
+const BULK_BUILD_MS_PER_BLOCK_ALPHA: f64 = 0.5;
+const BULK_BUILD_INITIAL_MS_PER_BLOCK: f64 = 0.05;
+#[allow(dead_code)]
+const BULK_BUILD_MAX_STEP_RATIO: f64 = 2.0;
 
 #[derive(Default)]
 pub(crate) struct BulkBuildEngine;
@@ -111,6 +119,8 @@ impl BulkBuildEngine {
             )
         })?;
         let mut batch_block_span = configured_batch_size;
+        #[allow(unused_mut, unused_variables)]
+        let mut ms_per_block_ema: f64 = BULK_BUILD_INITIAL_MS_PER_BLOCK;
         let mut batch_count: u64 = 0;
         // Pre-fetched blocks from the previous iteration's background fetch.
         // None on first iteration; populated when the next batch is fetched
