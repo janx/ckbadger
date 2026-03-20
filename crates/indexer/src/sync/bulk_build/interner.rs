@@ -20,6 +20,14 @@ impl Default for IdentityInterner {
 }
 
 impl IdentityInterner {
+    /// Create an interner with pre-allocated capacity to reduce reallocations.
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self {
+            by_value: DashMap::with_capacity(capacity),
+            values: Mutex::new(Vec::with_capacity(capacity)),
+        }
+    }
+
     /// Intern a byte sequence. Thread-safe for concurrent callers.
     pub(crate) fn intern_bytes(&self, bytes: Vec<u8>) -> InternId {
         // Fast path: lock-free DashMap read
@@ -89,6 +97,14 @@ impl FrozenIdentityView {
 mod tests {
     use super::IdentityInterner;
     use crate::sync::types::InternId;
+
+    #[test]
+    fn interner_with_capacity_works() {
+        let interner = IdentityInterner::with_capacity(100);
+        let id = interner.intern_bytes(vec![1, 2, 3]);
+        let frozen = interner.snapshot_for_reads();
+        assert_eq!(frozen.resolve_bytes(id), &[1, 2, 3]);
+    }
 
     #[test]
     fn script_identity_interner_reuses_existing_id() {
