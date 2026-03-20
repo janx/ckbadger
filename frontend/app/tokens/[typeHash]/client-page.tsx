@@ -267,14 +267,13 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
         </div>
         <CapacityStatisticsSection
           className="mb-6"
-          description="Daily cumulative live CKB capacity usage for token cells."
           capacityRange={capacityRange}
           onCapacityRangeChange={setCapacityRange}
           capacityChart={capacityChart}
           isCapacityChartLoading={isCapacityChartLoading}
           totalCapacity={token.totalCapacity}
           commonKnowledgeSize={token.totalCommonKnowledgeSize}
-          totalCapacityLabel="Cells Capacity"
+          totalCapacityLabel="Owned Capacity"
         />
         <TerminalPanel>
           <Tabs value={activeTab} onValueChange={setActiveTab}>

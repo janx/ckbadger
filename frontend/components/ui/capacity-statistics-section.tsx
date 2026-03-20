@@ -12,7 +12,6 @@ import {
 } from '@/components/ui/terminal-panel';
 
 interface CapacityStatisticsSectionProps {
-  description: string;
   capacityRange: CapacityRangeKey;
   onCapacityRangeChange: (range: CapacityRangeKey) => void;
   capacityChart: StackedAreaChartResponse | undefined;
@@ -24,7 +23,6 @@ interface CapacityStatisticsSectionProps {
 }
 
 export function CapacityStatisticsSection({
-  description,
   capacityRange,
   onCapacityRangeChange,
   capacityChart,
@@ -38,21 +36,20 @@ export function CapacityStatisticsSection({
 
   return (
     <TerminalPanel className={className}>
-      <TerminalPanelHeader indicator="none">Capacity Statistics</TerminalPanelHeader>
+      <TerminalPanelHeader
+        indicator="none"
+        actions={<CapacityRangeSelector value={capacityRange} onChange={onCapacityRangeChange} />}
+      >
+        Capacity Statistics
+      </TerminalPanelHeader>
       <TerminalPanelContent>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="text-text-dim text-xs">{description}</div>
-          <CapacityRangeSelector value={capacityRange} onChange={onCapacityRangeChange} />
-        </div>
-
         {hasCapacityData && (
-          <div className="border-base-border bg-base-bg/50 mb-3 rounded border p-3">
-            <CapacityUtilization
-              totalCapacity={totalCapacity!}
-              commonKnowledgeSize={commonKnowledgeSize!}
-              totalLabel={totalCapacityLabel}
-            />
-          </div>
+          <CapacityUtilization
+            totalCapacity={totalCapacity!}
+            commonKnowledgeSize={commonKnowledgeSize!}
+            totalLabel={totalCapacityLabel}
+            className="mb-3"
+          />
         )}
 
         {isCapacityChartLoading ? (

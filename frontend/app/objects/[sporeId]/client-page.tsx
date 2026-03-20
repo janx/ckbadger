@@ -448,7 +448,6 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               </TerminalPanelContent>
             </TerminalPanel>
             <CapacityStatisticsSection
-              description="Daily cumulative live CKB capacity usage for this Object collection."
               capacityRange={capacityRange}
               onCapacityRangeChange={setCapacityRange}
               capacityChart={collectionCapacityChart}
@@ -1206,7 +1205,6 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               </TerminalPanel>
             )}
             <CapacityStatisticsSection
-              description="Daily cumulative live CKB capacity usage for this Object."
               capacityRange={capacityRange}
               onCapacityRangeChange={setCapacityRange}
               capacityChart={capacityChart}

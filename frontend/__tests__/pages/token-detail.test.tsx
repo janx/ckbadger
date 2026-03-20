@@ -107,7 +107,7 @@ describe('TokenDetailPage', () => {
     expect(screen.getByText('Maximum Supply')).toBeInTheDocument();
     expect(screen.getByText('Unknown')).toBeInTheDocument();
     expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
-    expect(screen.getByText('Cells Capacity')).toBeInTheDocument();
+    expect(screen.getByText('Owned Capacity')).toBeInTheDocument();
     expect(screen.getByText(/^Common Knowledge:/)).toBeInTheDocument();
     expect(screen.getByText(/^Free Capacity:/)).toBeInTheDocument();
     expect(screen.getAllByText('Cells').length).toBeGreaterThan(0);

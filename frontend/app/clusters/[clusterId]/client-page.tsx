@@ -488,7 +488,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
           </div>
           <div className="space-y-6 xl:col-span-3">
             <CapacityStatisticsSection
-              description="Daily cumulative live CKB capacity usage for this Spore collection."
               capacityRange={capacityRange}
               onCapacityRangeChange={setCapacityRange}
               capacityChart={capacityChart}
