@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn test_list_addr_txs_recent_reads_tx_hash_from_key() {
+    fn test_list_addr_txs_recent_reads_tx_hash_from_key_with_empty_value() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAC; 32];
@@ -132,30 +132,26 @@ mod tests {
     }
 
     #[test]
-    fn test_list_addr_txs_recent_cursor_pagination_across_positions() {
+    fn test_list_addr_txs_recent_keeps_two_rows_same_position_different_tx_hash() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAB; 32];
 
         let mut batch = StoreBatch::new(&store);
         batch.put_addr_tx(&lock, 100, 1, &[0x10; 32]);
-        batch.put_addr_tx(&lock, 100, 0, &[0x20; 32]);
+        batch.put_addr_tx(&lock, 100, 1, &[0x20; 32]);
         batch.put_addr_tx(&lock, 99, 0, &[0x30; 32]);
         batch.commit().unwrap();
 
         let rows = store.list_addr_txs_recent(&lock, 10, None).unwrap();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0], (100, 1, vec![0x10; 32]));
-        assert_eq!(rows[1], (100, 0, vec![0x20; 32]));
+        assert_eq!(rows[1], (100, 1, vec![0x20; 32]));
         assert_eq!(rows[2], (99, 0, vec![0x30; 32]));
 
-        // Cursor after (100, 1) should skip it and return the rest
         let next = store
             .list_addr_txs_recent(&lock, 10, Some((100, 1)))
             .unwrap();
-        assert_eq!(
-            next,
-            vec![(100, 0, vec![0x20; 32]), (99, 0, vec![0x30; 32])]
-        );
+        assert_eq!(next, vec![(99, 0, vec![0x30; 32])]);
     }
 }

@@ -1378,7 +1378,7 @@ impl CkbadgerStore {
             let mut stage = RollbackStageProgress::new("delete_addr_txs");
             let iter = self.iterator_cf(self.cf_addr_txs(), IteratorMode::Start);
             for item in iter {
-                let (key, _value) = item.map_err(|e| {
+                let (key, _) = item.map_err(|e| {
                     anyhow::anyhow!(
                         "failed to iterate addr_txs in rollback_to_block cleanup: {}",
                         e

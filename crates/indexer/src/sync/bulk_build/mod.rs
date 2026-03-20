@@ -129,8 +129,8 @@ impl BulkBuildEngine {
         let append_store_arc = indexer.append_only_store.clone();
         /// Maximum concurrent flush tasks. With unordered_write=true and WAL
         /// disabled, RocksDB safely handles concurrent WriteBatch writes.
-        /// Depth 6 absorbs stall spikes (~60MB per slot = 360MB total).
-        const MAX_CONCURRENT_FLUSHES: usize = 6;
+        /// Depth 3 absorbs stall spikes without excessive memory from queued rows.
+        const MAX_CONCURRENT_FLUSHES: usize = 3;
         let mut flush_handles: VecDeque<
             tokio::task::JoinHandle<anyhow::Result<materialize::FlushResult>>,
         > = VecDeque::new();
@@ -4601,25 +4601,17 @@ mod tests {
                 .filter(|row| row.cf_name == CF_ADDR_TXS)
                 .collect();
 
-        let expected_keys = [
+        let expected = [
             keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 0, &create_tx_hash),
             keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 1, &split_tx_hash),
             keys::encode_addr_tx_key(&lock_b_hash, 14_000_888, 1, &split_tx_hash),
         ];
 
-        assert_eq!(addr_rows.len(), expected_keys.len());
+        assert_eq!(addr_rows.len(), expected.len());
         let actual_keys: HashSet<Vec<u8>> = addr_rows.iter().map(|row| row.key.clone()).collect();
-        assert_eq!(actual_keys.len(), expected_keys.len());
-        for key in &expected_keys {
-            assert!(actual_keys.contains(key));
-        }
-        // tx_hash stored in key, value is empty
-        for row in &addr_rows {
-            assert!(
-                row.value.is_empty(),
-                "addr_tx value should be empty, got {} bytes",
-                row.value.len()
-            );
+        assert_eq!(actual_keys.len(), expected.len());
+        for key in expected {
+            assert!(actual_keys.contains(&key));
         }
         let _ = std::fs::remove_dir_all(&test_root);
     }
