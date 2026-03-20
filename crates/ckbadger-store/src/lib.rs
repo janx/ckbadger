@@ -22,6 +22,7 @@
 
 pub mod batch;
 pub mod keys;
+pub mod sst_ingest;
 pub mod store;
 pub mod types;
 
