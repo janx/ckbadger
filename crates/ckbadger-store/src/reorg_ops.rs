@@ -1661,10 +1661,39 @@ impl CkbadgerStore {
             } else if old_live == 0 && new_live > 0 {
                 holder_count_delta += 1;
             }
-            // total_cells_count and txs_count may underflow for legacy data that
-            // was indexed before these rollback deltas were tracked. Clamp to 0.
-            ab.total_cells_count = (ab.total_cells_count + total_cells_delta).max(0);
-            ab.txs_count = (ab.txs_count - txs_removed).max(0);
+            let next_total_cells_count = ab
+                .total_cells_count
+                .checked_add(total_cells_delta)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "addr_balance total_cells_count overflow during rollback: lock_hash=0x{}, total_cells_count={}, total_cells_delta={}",
+                        bytes_to_hex(lock_hash),
+                        ab.total_cells_count,
+                        total_cells_delta
+                    )
+                })?;
+            let next_txs_count = ab.txs_count.checked_sub(txs_removed).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "addr_balance txs_count overflow during rollback: lock_hash=0x{}, txs_count={}, txs_removed={}",
+                    bytes_to_hex(lock_hash),
+                    ab.txs_count,
+                    txs_removed
+                )
+            })?;
+            if next_total_cells_count < 0 || next_txs_count < 0 {
+                anyhow::bail!(
+                    "addr_balance total_cells_count underflow or txs_count underflow during rollback: lock_hash=0x{}, total_cells_count={}, total_cells_delta={}, next_total_cells_count={}, txs_count={}, txs_removed={}, next_txs_count={}",
+                    bytes_to_hex(lock_hash),
+                    ab.total_cells_count,
+                    total_cells_delta,
+                    next_total_cells_count,
+                    ab.txs_count,
+                    txs_removed,
+                    next_txs_count
+                );
+            }
+            ab.total_cells_count = next_total_cells_count;
+            ab.txs_count = next_txs_count;
             if ab.balance < 0 || ab.used_capacity < 0 || ab.live_cells_count < 0 {
                 anyhow::bail!(
                     "addr_balance underflow during rollback: lock_hash=0x{}, balance={}, used={}, live_cells={}",
@@ -3318,6 +3347,7 @@ mod tests {
                 balance: 200,
                 used_capacity: 200,
                 live_cells_count: 1,
+                total_cells_count: 1,
                 ..Default::default()
             },
         );
@@ -3441,6 +3471,7 @@ mod tests {
                 balance: 100,
                 used_capacity: 100,
                 live_cells_count: 1,
+                total_cells_count: 1,
                 ..Default::default()
             },
         );
@@ -3646,6 +3677,7 @@ mod tests {
                 balance: 200,
                 used_capacity: 200,
                 live_cells_count: 1,
+                total_cells_count: 1,
                 ..Default::default()
             },
         );
@@ -3655,6 +3687,7 @@ mod tests {
                 balance: 180,
                 used_capacity: 180,
                 live_cells_count: 1,
+                total_cells_count: 1,
                 ..Default::default()
             },
         );
@@ -3895,6 +3928,7 @@ mod tests {
                 balance: 100,
                 used_capacity: 100,
                 live_cells_count: 1,
+                total_cells_count: 1,
                 ..Default::default()
             },
         );
@@ -4013,6 +4047,7 @@ mod tests {
                 balance: 200,
                 used_capacity: 200,
                 live_cells_count: 1,
+                total_cells_count: 1,
                 ..Default::default()
             },
         );
@@ -4338,6 +4373,83 @@ mod tests {
             .to_string()
             .contains("missing rollback target block header while updating sync status tip"));
         assert!(err.to_string().contains("rollback_to=1"));
+    }
+
+    #[test]
+    fn test_rollback_to_block_errors_on_addr_balance_total_cells_and_txs_underflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let tx_hash = vec![0x21; 32];
+        let lock_hash = vec![0xAA; 32];
+        let lock_code_hash = vec![0x11; 32];
+        let cell = LiveCellInfo {
+            capacity: 100,
+            lock_script_hash: lock_hash.clone(),
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 100,
+            udt_amount: None,
+            data_hash: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        put_canonical_tx(&mut batch, 2, 0, &tx_hash);
+        batch.put_cell(&tx_hash, 0, &cell, 2);
+        batch.put_addr_tx(&lock_hash, 2, 0, &tx_hash);
+        batch.put_addr_balance(
+            &lock_hash,
+            &AddressBalance {
+                balance: 100,
+                used_capacity: 100,
+                live_cells_count: 1,
+                total_cells_count: 0,
+                txs_count: 0,
+                ..Default::default()
+            },
+        );
+        batch.put_script_info(
+            &lock_code_hash,
+            &ScriptInfo {
+                code_hash: lock_code_hash.clone(),
+                lock_live_cells_count: 1,
+                lock_owned_capacity_sum: 100,
+                lock_owned_knowledge_sum: 100,
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+        seed_sync_status(&store, 2, &header2.hash, 1, 1, 0);
+
+        let err = store.rollback_to_block(1).unwrap_err();
+        assert!(err.to_string().contains("total_cells_count underflow"));
+        assert!(err.to_string().contains("txs_count underflow"));
     }
 
     #[test]

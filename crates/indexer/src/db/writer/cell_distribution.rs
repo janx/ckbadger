@@ -37,7 +37,7 @@ fn size_bucket(occupied_capacity: i64) -> usize {
 }
 
 /// Tracks live cell capacity by size bucket for cell distribution chart computation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CellDistributionTracker {
     /// Cell count per size bucket (global totals).
     count_by_bucket: [i64; NUM_BUCKETS],

@@ -625,6 +625,33 @@ fn bulk_build_object_owner_materializes_spore_cluster_and_did_state_without_db_r
 }
 
 #[test]
+fn bulk_build_object_owner_materializes_spore_and_cluster_daily_deltas() {
+    let cluster_id = [0x11; 32];
+    let spore_id = [0x22; 32];
+
+    let snapshot: ObjectStateSnapshot =
+        materialize_object_state_for_test(&bulk_build_object_fixture()).expect("object snapshot");
+
+    let spore_daily = snapshot
+        .spore_daily_deltas
+        .get(spore_id.as_slice())
+        .expect("spore daily deltas exist");
+    assert_eq!(spore_daily.len(), 1);
+    let spore_delta = spore_daily.values().next().expect("single spore delta");
+    assert_eq!(spore_delta.owned_capacity_delta, 200_00000000);
+    assert!(spore_delta.owned_knowledge_delta > 0);
+
+    let cluster_daily = snapshot
+        .cluster_daily_deltas
+        .get(cluster_id.as_slice())
+        .expect("cluster daily deltas exist");
+    assert_eq!(cluster_daily.len(), 1);
+    let cluster_delta = cluster_daily.values().next().expect("single cluster delta");
+    assert_eq!(cluster_delta.owned_capacity_delta, 200_00000000);
+    assert!(cluster_delta.owned_knowledge_delta > 0);
+}
+
+#[test]
 fn bulk_build_object_owner_updates_cluster_cells_without_crashing() {
     let cluster_id = [0x44; 32];
 

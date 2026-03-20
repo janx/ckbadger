@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Result};
 use tracing::{error, info, warn};
 
+use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::types::AddressBalance;
 use ckbadger_store::types::PositionedCellInfo;
 
 use crate::cache::CacheInvalidator;
@@ -12,7 +14,7 @@ use crate::config::DEEP_FORK_DEPTH;
 use crate::rpc::CkbRpcClient;
 
 use super::checked_tx_count;
-use super::dao_helpers::{derive_pre_batch_live_cells, occupied_capacity_shannons_i64};
+use super::dao_helpers::occupied_capacity_shannons_i64;
 use super::helpers::*;
 use super::indexer::{
     mempool_short_tx_id, rebuild_cell_dist_tracker_from_state, rebuild_hodl_tracker_from_state,
@@ -30,29 +32,19 @@ impl Indexer {
         Ok(())
     }
 
-    /// Feed parsed block data into the HODL wave tracker and write snapshots at day boundaries.
-    pub(crate) fn update_hodl_wave(
+    /// Prepare HODL wave tracker updates into the provided domain batch.
+    pub(crate) fn prepare_hodl_wave_batch(
         &self,
         all_parsed_blocks: &[crate::parser::block::ParsedBlock],
         all_tx_data: &[TxData],
         input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         address_balance_changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
-    ) -> Result<()> {
-        let mut tracker = self.hodl_tracker.lock().unwrap();
-        let store = self.writer.store();
-        let mut batch = ckbadger_store::batch::StoreBatch::new(store);
+        prefetched_balances: &HashMap<Vec<u8>, Option<AddressBalance>>,
+        batch: &mut StoreBatch<'_>,
+    ) -> Result<crate::db::writer::hodl_wave::HodlWaveTracker> {
+        let mut tracker = self.hodl_tracker.lock().unwrap().clone();
 
-        // Phase 1: Update holder count from address balance changes BEFORE the
-        // block loop so that maybe_snapshot() sees the correct holder_count.
-        // (Previously this ran after the block loop, so cross-day batch snapshots
-        // used the stale pre-batch holder_count.)
-        let lock_hash_refs: Vec<&Vec<u8>> = address_balance_changes.keys().collect();
-        let balance_map = if lock_hash_refs.is_empty() {
-            HashMap::new()
-        } else {
-            self.writer.read_address_balances(&lock_hash_refs)?
-        };
         for (
             lock_hash,
             (
@@ -66,13 +58,31 @@ impl Indexer {
             ),
         ) in address_balance_changes
         {
-            let current_balance = balance_map.get(lock_hash).and_then(|o| o.as_ref());
-            let post_live = current_balance.map(|b| b.live_cells_count).unwrap_or(0);
-            let old_live = derive_pre_batch_live_cells(post_live, *live_delta)?;
-            tracker.update_holder_count(old_live, post_live)?;
+            let old_live = prefetched_balances
+                .get(lock_hash)
+                .and_then(|entry| entry.as_ref())
+                .map(|balance| balance.live_cells_count)
+                .unwrap_or(0);
+            let new_live = old_live.checked_add(*live_delta).ok_or_else(|| {
+                anyhow!(
+                    "holder_count live_cells overflow while preparing HODL tracker batch: lock_hash=0x{}, old_live={}, live_delta={}",
+                    hex::encode(lock_hash),
+                    old_live,
+                    live_delta
+                )
+            })?;
+            if new_live < 0 {
+                anyhow::bail!(
+                    "holder_count live_cells underflow while preparing HODL tracker batch: lock_hash=0x{}, old_live={}, live_delta={}, new_live={}",
+                    hex::encode(lock_hash),
+                    old_live,
+                    live_delta,
+                    new_live
+                );
+            }
+            tracker.update_holder_count(old_live, new_live)?;
         }
 
-        // Phase 2: Record block dates, cell creates/consumes, and write snapshots
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
@@ -114,11 +124,8 @@ impl Indexer {
             }
         }
 
-        // Phase 3: Persist tracker state atomically with snapshots
         batch.put_hodl_tracker_state(&tracker.to_state());
-        batch.commit()?;
-
-        Ok(())
+        Ok(tracker)
     }
 
     pub(crate) fn reconcile_cell_dist_tracker_with_tip(&self, tip_block: i64) -> Result<()> {
@@ -130,36 +137,25 @@ impl Indexer {
         Ok(())
     }
 
-    /// Feed parsed block data into the cell distribution tracker and write snapshots at day boundaries.
-    pub(crate) fn update_cell_distribution(
+    /// Prepare cell distribution tracker updates into the provided domain batch.
+    pub(crate) fn prepare_cell_distribution_batch(
         &self,
         all_parsed_blocks: &[crate::parser::block::ParsedBlock],
         all_tx_data: &[TxData],
         input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         address_balance_changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
-    ) -> Result<()> {
-        let mut tracker = self.cell_dist_tracker.lock().unwrap();
-        let store = self.writer.store();
-        let mut batch = ckbadger_store::batch::StoreBatch::new(store);
+        prefetched_balances: &HashMap<Vec<u8>, Option<AddressBalance>>,
+        batch: &mut StoreBatch<'_>,
+    ) -> Result<crate::db::writer::cell_distribution::CellDistributionTracker> {
+        let mut tracker = self.cell_dist_tracker.lock().unwrap().clone();
 
-        // Pre-pass: record all block dates so block_number_to_date() resolves
-        // correctly for new addresses first seen in this batch.
         for parsed in all_parsed_blocks {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
             tracker.record_block_date(parsed.number, block_date);
         }
 
-        // Read address balances for cohort delta computation (live sync path)
-        let lock_hash_refs: Vec<&Vec<u8>> = address_balance_changes.keys().collect();
-        let balance_map = if lock_hash_refs.is_empty() {
-            HashMap::new()
-        } else {
-            self.writer.read_address_balances(&lock_hash_refs)?
-        };
-
-        // Update cohort accumulator after block dates are recorded so snapshots are up-to-date
-        tracker.update_cohort_deltas(address_balance_changes, &balance_map);
+        tracker.update_cohort_deltas(address_balance_changes, prefetched_balances);
 
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
@@ -210,11 +206,8 @@ impl Indexer {
             }
         }
 
-        // Persist tracker state atomically with snapshots
         batch.put_cell_dist_tracker_state(&tracker.to_state());
-        batch.commit()?;
-
-        Ok(())
+        Ok(tracker)
     }
     // === get_chain_block_hash, get_chain_tip ===
 

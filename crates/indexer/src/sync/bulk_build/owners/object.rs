@@ -8,10 +8,11 @@ use ckbadger_store::store::{
     CF_IDENTITY_BY_COLLECTION, CF_OBJECT_BY_COLLECTION, CF_STATS_IDENTITY,
 };
 use ckbadger_store::types::{
-    ClusterAggregate, IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
-    ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry, ObjectExtra, ObjectStandard,
-    ObjectTypeIndex, SporeTypeIndex, StorageDependencyTier, DID_CKB_SENTINEL_COLLECTION,
-    DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    ClusterAggregate, ClusterDailyDelta, IdentityCollectionAggregate, IdentityEntry,
+    IdentityExtra, IdentityStandard, ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry,
+    ObjectExtra, ObjectStandard, ObjectTypeIndex, SporeDailyDelta, SporeTypeIndex,
+    StorageDependencyTier, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     CkbadgerStore, CF_CLUSTER_AGG, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_OBJECT_COLLECTION_AGG,
@@ -57,6 +58,8 @@ pub(crate) struct ObjectOwner {
     /// Daily capacity deltas keyed by (collection_id, date_yyyymmdd).
     /// Mirrors `object_daily_changes` in the live pipeline.
     object_daily_deltas: BTreeMap<(Vec<u8>, u32), (i128, i128)>,
+    spore_daily_deltas: BTreeMap<(Vec<u8>, u32), (i128, i128)>,
+    cluster_daily_deltas: BTreeMap<(Vec<u8>, u32), (i128, i128)>,
 }
 
 impl BulkReducer for ObjectOwner {
@@ -116,6 +119,38 @@ impl BulkReducer for ObjectOwner {
                 }),
         );
         sealed_rows.extend(
+            self.spore_daily_deltas
+                .iter()
+                .filter(|(_, (cap, know))| *cap != 0 || *know != 0)
+                .map(|((spore_id, date), (cap_delta, know_delta))| {
+                    MaterializedRow::new(
+                        CF_STATS_SPORE,
+                        keys::encode_spore_daily_key(spore_id, *date).to_vec(),
+                        bincode::serialize(&SporeDailyDelta {
+                            owned_capacity_delta: *cap_delta,
+                            owned_knowledge_delta: *know_delta,
+                        })
+                        .expect("serialize SporeDailyDelta"),
+                    )
+                }),
+        );
+        sealed_rows.extend(
+            self.cluster_daily_deltas
+                .iter()
+                .filter(|(_, (cap, know))| *cap != 0 || *know != 0)
+                .map(|((cluster_id, date), (cap_delta, know_delta))| {
+                    MaterializedRow::new(
+                        CF_STATS_SPORE,
+                        keys::encode_cluster_daily_key(cluster_id, *date).to_vec(),
+                        bincode::serialize(&ClusterDailyDelta {
+                            owned_capacity_delta: *cap_delta,
+                            owned_knowledge_delta: *know_delta,
+                        })
+                        .expect("serialize ClusterDailyDelta"),
+                    )
+                }),
+        );
+        sealed_rows.extend(
             self.mnft_owner_counts
                 .iter()
                 .filter(|(_, count)| **count > 0)
@@ -166,6 +201,17 @@ impl BulkReducer for ObjectOwner {
                 entry.0 -= i128::from(input.capacity);
                 entry.1 -= i128::from(input.occupied_capacity);
             }
+            if let Some(CellProtocolFacts::Spore(spore)) = input.protocol_facts.as_ref() {
+                if !spore.is_did {
+                    self.record_spore_daily_delta(
+                        spore.spore_id.as_slice(),
+                        spore.cluster_id.as_ref().map(|id| id.as_slice()),
+                        date_yyyymmdd,
+                        -i128::from(input.capacity),
+                        -i128::from(input.occupied_capacity),
+                    );
+                }
+            }
             self.apply_input(input)?;
         }
 
@@ -178,6 +224,17 @@ impl BulkReducer for ObjectOwner {
                     .or_insert((0, 0));
                 entry.0 += i128::from(cell.capacity);
                 entry.1 += i128::from(cell.occupied_capacity);
+            }
+            if let Some(CellProtocolFacts::Spore(spore)) = cell.protocol_facts.as_ref() {
+                if !spore.is_did {
+                    self.record_spore_daily_delta(
+                        spore.spore_id.as_slice(),
+                        spore.cluster_id.as_ref().map(|id| id.as_slice()),
+                        date_yyyymmdd,
+                        i128::from(cell.capacity),
+                        i128::from(cell.occupied_capacity),
+                    );
+                }
             }
             self.apply_output(
                 cell,
@@ -353,6 +410,12 @@ impl ObjectOwner {
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.object_daily_deltas,
             )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.spore_daily_deltas,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.cluster_daily_deltas,
+            )
     }
 
     pub(crate) fn apply_identity_activity_count_deltas(
@@ -458,6 +521,32 @@ impl ObjectOwner {
                     .map(Vec::as_slice),
             ),
         }
+    }
+
+    fn record_spore_daily_delta(
+        &mut self,
+        spore_id: &[u8],
+        cluster_id: Option<&[u8]>,
+        date_yyyymmdd: u32,
+        capacity_delta: i128,
+        occupied_delta: i128,
+    ) {
+        let spore_entry = self
+            .spore_daily_deltas
+            .entry((spore_id.to_vec(), date_yyyymmdd))
+            .or_insert((0, 0));
+        spore_entry.0 += capacity_delta;
+        spore_entry.1 += occupied_delta;
+
+        let effective_cluster_id = cluster_id
+            .map(|id| id.to_vec())
+            .unwrap_or_else(|| SOLE_SPORES_SENTINEL_COLLECTION.to_vec());
+        let cluster_entry = self
+            .cluster_daily_deltas
+            .entry((effective_cluster_id, date_yyyymmdd))
+            .or_insert((0, 0));
+        cluster_entry.0 += capacity_delta;
+        cluster_entry.1 += occupied_delta;
     }
 
     fn insert_cluster(
@@ -1933,6 +2022,8 @@ pub struct ObjectStateSnapshot {
     pub mnft_class_outpoints: HashMap<Vec<u8>, Vec<(Vec<u8>, i16)>>,
     pub mnft_token_outpoints: HashMap<Vec<u8>, Vec<(Vec<u8>, i16)>>,
     pub object_hourly_transfers: HashMap<Vec<u8>, HashMap<i64, i64>>,
+    pub spore_daily_deltas: HashMap<Vec<u8>, HashMap<u32, SporeDailyDelta>>,
+    pub cluster_daily_deltas: HashMap<Vec<u8>, HashMap<u32, ClusterDailyDelta>>,
 }
 
 #[doc(hidden)]
@@ -2096,6 +2187,38 @@ pub(crate) fn materialize_object_state_for_test(
             spore_outpoints.insert(spore_id.clone(), outpoints);
         }
 
+        let mut spore_daily_deltas = HashMap::new();
+        for (spore_id, entry) in &spores {
+            if entry.standard != ObjectStandard::Spore {
+                continue;
+            }
+            let rows = domain_store
+                .list_spore_daily_deltas(spore_id)?
+                .into_iter()
+                .collect::<HashMap<_, _>>();
+            if !rows.is_empty() {
+                spore_daily_deltas.insert(spore_id.clone(), rows);
+            }
+        }
+
+        let mut cluster_daily_deltas = HashMap::new();
+        let mut cluster_daily_ids = cluster_aggs.keys().cloned().collect::<Vec<_>>();
+        if spores
+            .values()
+            .any(|entry| entry.standard == ObjectStandard::Spore && entry.collection_id.is_none())
+        {
+            cluster_daily_ids.push(SOLE_SPORES_SENTINEL_COLLECTION.to_vec());
+        }
+        for cluster_id in cluster_daily_ids {
+            let rows = domain_store
+                .list_cluster_daily_deltas(&cluster_id)?
+                .into_iter()
+                .collect::<HashMap<_, _>>();
+            if !rows.is_empty() {
+                cluster_daily_deltas.insert(cluster_id, rows);
+            }
+        }
+
         let mut spore_type_indexes = HashMap::new();
         let mut object_type_indexes = HashMap::new();
         let mut mnft_class_outpoints: HashMap<Vec<u8>, Vec<(Vec<u8>, i16)>> = HashMap::new();
@@ -2195,6 +2318,8 @@ pub(crate) fn materialize_object_state_for_test(
             mnft_class_outpoints,
             mnft_token_outpoints,
             object_hourly_transfers,
+            spore_daily_deltas,
+            cluster_daily_deltas,
         }
     };
 

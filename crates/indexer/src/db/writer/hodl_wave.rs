@@ -11,7 +11,7 @@ use chrono::NaiveDate;
 use ckbadger_store::{DailyHodlWave, HodlTrackerState};
 
 /// Tracks live cell capacity by creation date for HODL wave chart computation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HodlWaveTracker {
     /// Total live capacity (shannons) per cell creation date.
     capacity_by_creation_date: HashMap<NaiveDate, i128>,

@@ -21,8 +21,8 @@ use crate::sync::bulk_build::interner::IdentityInterner;
 use crate::sync::bulk_build::materialize::{MaterializedRow, Materializer};
 use crate::sync::bulk_build::sequencer::BulkSequencer;
 use crate::sync::dao_helpers::{
-    derive_running_depositors, extract_dao_csu, resolve_non_miner_secondary_delta_for_snapshot,
-    split_secondary_issuance,
+    accumulate_secondary_issuance_deltas_from_csu, derive_running_depositors, extract_dao_csu,
+    resolve_non_miner_secondary_delta_for_snapshot, split_secondary_issuance, BatchStats,
 };
 use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 
@@ -36,7 +36,10 @@ pub(crate) struct DaoOwner {
     daily_gross_deposit_delta: FxHashMap<NaiveDate, i128>,
     daily_new_deposits_delta: FxHashMap<NaiveDate, i64>,
     daily_withdrawals_delta: FxHashMap<NaiveDate, i64>,
+    daily_unique_depositors_delta: FxHashMap<NaiveDate, i64>,
     daily_secondary_non_miner_delta: FxHashMap<NaiveDate, i128>,
+    active_deposit_counts_by_lock: FxHashMap<Vec<u8>, i64>,
+    claimed_compensation_by_block: FxHashMap<i64, i128>,
     prev_dao_cs: Option<(i128, i128)>,
 }
 
@@ -159,6 +162,14 @@ impl BulkReducer for DaoOwner {
                         tx_date,
                         -(entry.capacity as i128),
                         "dao daily active delta",
+                    )?;
+                    Self::bump_active_depositor_count(
+                        &mut self.active_deposit_counts_by_lock,
+                        &mut self.daily_unique_depositors_delta,
+                        tx_date,
+                        &entry.lock_script_hash,
+                        -1,
+                        "dao unique active depositor count",
                     )?;
                     entry.status = 1;
                     entry.withdraw_request_block = Some(tx.block_number);
@@ -289,6 +300,12 @@ impl BulkReducer for DaoOwner {
                     entry.withdraw_to_output_index = withdraw_to_output_index;
                     entry.compensation = Some(compensation);
                     self.request_outpoints.remove(&input_view.outpoint);
+                    Self::bump_daily_i128_for_block(
+                        &mut self.claimed_compensation_by_block,
+                        tx.block_number,
+                        compensation as i128,
+                        "dao claimed compensation by block",
+                    )?;
                     Self::bump_daily_i64(
                         &mut self.daily_withdrawals_delta,
                         tx_date,
@@ -319,7 +336,7 @@ impl BulkReducer for DaoOwner {
                 DaoDepositCacheEntry {
                     capacity: output.capacity,
                     deposit_block_number: tx.block_number,
-                    lock_script_hash: output.lock_hash,
+                    lock_script_hash: output.lock_hash.clone(),
                     deposit_ar: i64::try_from(tx.block_dao_ar).map_err(|_| {
                         anyhow!(
                             "DAO deposit AR exceeds i64 range in bulk reducer: block={}, tx=0x{}, tx_index={}, ar={}",
@@ -368,6 +385,14 @@ impl BulkReducer for DaoOwner {
                 1,
                 "dao daily new deposits delta",
             )?;
+            Self::bump_active_depositor_count(
+                &mut self.active_deposit_counts_by_lock,
+                &mut self.daily_unique_depositors_delta,
+                tx_date,
+                &output.lock_hash,
+                1,
+                "dao unique active depositor count",
+            )?;
         }
 
         Ok(())
@@ -378,11 +403,11 @@ impl BulkReducer for DaoOwner {
         let mut running_total_deposited = 0i128;
         let mut running_total_deposit_count = 0i64;
         let mut running_total_withdrawal_count = 0i64;
+        let mut running_total_depositors = 0i64;
         let mut running_cumulative_deposit_amount = 0i128;
         let mut running_cum_miner = 0i128;
         let mut running_cum_dao = 0i128;
         let mut running_cum_treasury = 0i128;
-        let mut prev_secondary_pool = 0i128;
 
         for date in &self.snapshot_dates {
             running_total_deposited = checked_next_i128_total(
@@ -424,8 +449,6 @@ impl BulkReducer for DaoOwner {
             let non_miner_secondary = resolve_non_miner_secondary_delta_for_snapshot(
                 *date,
                 self.daily_secondary_non_miner_delta.get(date).copied(),
-                secondary_pool,
-                prev_secondary_pool,
             )?;
             let (daily_miner, daily_dao_share, daily_treasury_share) =
                 if total_issuance > 0 && non_miner_secondary > 0 {
@@ -456,16 +479,19 @@ impl BulkReducer for DaoOwner {
                 "dao running cum_treasury",
                 *date,
             )?;
-            prev_secondary_pool = secondary_pool;
+            running_total_depositors = derive_running_depositors(
+                running_total_depositors,
+                self.daily_unique_depositors_delta
+                    .get(date)
+                    .copied()
+                    .unwrap_or(0),
+                *date,
+            )?;
 
             let snapshot = DaoDailySnapshot {
                 date: date.format("%Y-%m-%d").to_string(),
                 total_deposited: running_total_deposited,
-                depositors_count: derive_running_depositors(
-                    running_total_deposit_count,
-                    running_total_withdrawal_count,
-                    *date,
-                )?,
+                depositors_count: running_total_depositors,
                 new_deposits: running_total_deposit_count,
                 withdrawals: running_total_withdrawal_count,
                 compensation: running_cum_dao,
@@ -586,8 +612,14 @@ impl DaoOwner {
                 * std::mem::size_of::<(NaiveDate, i64)>() as u64
             + self.daily_withdrawals_delta.len() as u64
                 * std::mem::size_of::<(NaiveDate, i64)>() as u64
+            + self.daily_unique_depositors_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i64)>() as u64
             + self.daily_secondary_non_miner_delta.len() as u64
-                * std::mem::size_of::<(NaiveDate, i128)>() as u64;
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64
+            + self.active_deposit_counts_by_lock.len() as u64
+                * std::mem::size_of::<(Vec<u8>, i64)>() as u64
+            + self.claimed_compensation_by_block.len() as u64
+                * std::mem::size_of::<(i64, i128)>() as u64;
         std::mem::size_of::<Self>() as u64
             + deposits_bytes
             + request_bytes
@@ -607,20 +639,28 @@ impl DaoOwner {
             )
         })?;
         self.daily_dao_fields.insert(block_date, (c, s, u));
+        let claimed_compensation_in_block =
+            self.claimed_compensation_by_block.remove(&block.number).unwrap_or(0);
 
-        if let Some((prev_c, prev_s)) = self.prev_dao_cs {
-            let _c_delta = c - prev_c;
-            let s_delta = s - prev_s;
-            if s_delta > 0 {
-                Self::bump_daily_i128(
-                    &mut self.daily_secondary_non_miner_delta,
-                    block_date,
-                    s_delta,
-                    "dao daily secondary non-miner delta",
-                )?;
-            }
+        let mut stats = BatchStats::default();
+        accumulate_secondary_issuance_deltas_from_csu(
+            &mut stats,
+            block.number,
+            block_date,
+            c,
+            s,
+            u,
+            claimed_compensation_in_block,
+            &mut self.prev_dao_cs,
+        )?;
+        if let Some(delta) = stats.daily_secondary_non_miner_delta.get(&block_date) {
+            Self::bump_daily_i128(
+                &mut self.daily_secondary_non_miner_delta,
+                block_date,
+                *delta,
+                "dao daily secondary non-miner delta",
+            )?;
         }
-        self.prev_dao_cs = Some((c, s));
         Ok(())
     }
 
@@ -677,6 +717,84 @@ impl DaoOwner {
             );
         }
         target.insert(date, next);
+        Ok(())
+    }
+
+    fn bump_daily_i128_for_block(
+        target: &mut FxHashMap<i64, i128>,
+        block_number: i64,
+        delta: i128,
+        metric: &str,
+    ) -> Result<()> {
+        if delta == 0 {
+            return Ok(());
+        }
+        let current = target.get(&block_number).copied().unwrap_or(0);
+        let next = current.checked_add(delta).ok_or_else(|| {
+            anyhow!(
+                "{} overflow: block={} current={} delta={}",
+                metric,
+                block_number,
+                current,
+                delta
+            )
+        })?;
+        if next < 0 {
+            bail!(
+                "{} underflow: block={} current={} delta={} next={}",
+                metric,
+                block_number,
+                current,
+                delta,
+                next
+            );
+        }
+        target.insert(block_number, next);
+        Ok(())
+    }
+
+    fn bump_active_depositor_count(
+        active_deposit_counts_by_lock: &mut FxHashMap<Vec<u8>, i64>,
+        daily_unique_depositors_delta: &mut FxHashMap<NaiveDate, i64>,
+        date: NaiveDate,
+        lock_hash: &[u8],
+        delta: i64,
+        metric: &str,
+    ) -> Result<()> {
+        if delta == 0 {
+            return Ok(());
+        }
+        let current = active_deposit_counts_by_lock
+            .get(lock_hash)
+            .copied()
+            .unwrap_or(0);
+        let next = current.checked_add(delta).ok_or_else(|| {
+            anyhow!(
+                "{} overflow: date={} lock_hash=0x{} current={} delta={}",
+                metric,
+                date,
+                hex::encode(lock_hash),
+                current,
+                delta
+            )
+        })?;
+        if next < 0 {
+            bail!(
+                "{} underflow: date={} lock_hash=0x{} current={} delta={} next={}",
+                metric,
+                date,
+                hex::encode(lock_hash),
+                current,
+                delta,
+                next
+            );
+        }
+        if current == 0 && next > 0 {
+            *daily_unique_depositors_delta.entry(date).or_default() += 1;
+        } else if current > 0 && next == 0 {
+            *daily_unique_depositors_delta.entry(date).or_default() -= 1;
+        }
+        active_deposit_counts_by_lock.insert(lock_hash.to_vec(), next);
         Ok(())
     }
 }

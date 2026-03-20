@@ -228,6 +228,34 @@ fn dao_withdraw_outpoints_from_map(
         .collect()
 }
 
+fn tx_slice_claimed_dao_compensation(
+    tx_slice: &[TxData],
+    dao_compensations: &HashMap<(Vec<u8>, i16), i64>,
+) -> Result<i128> {
+    let mut claimed = 0i128;
+    for tx in tx_slice.iter().filter(|tx| !tx.is_cellbase) {
+        for input in &tx.inputs {
+            let key = (
+                input.previous_tx_hash.to_vec(),
+                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
+            );
+            if let Some(compensation) = dao_compensations.get(&key) {
+                claimed = claimed
+                    .checked_add(i128::from(*compensation))
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "claimed DAO compensation overflow while accumulating block totals: tx_hash=0x{}, prev_outpoint=0x{}:{}",
+                            hex::encode(tx.hash),
+                            hex::encode(input.previous_tx_hash),
+                            input.previous_output_index
+                        )
+                    })?;
+            }
+        }
+    }
+    Ok(claimed)
+}
+
 /// Pre-compute DAO compensation for each withdraw-complete outpoint.
 /// This allows the activity builder to include compensation in activities
 /// without duplicating the DAO processing logic.
@@ -2616,18 +2644,81 @@ impl Indexer {
             HashMap::new()
         };
         let mut same_batch_dao_for_stats: HashMap<(Vec<u8>, i16), i64> = HashMap::new();
+        let mut active_dao_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
+        {
+            let mut touched_lock_hashes: HashSet<Vec<u8>> = HashSet::new();
+            for tx_data in &all_tx_data {
+                for cell in &tx_data.cells {
+                    if cell
+                        .type_code_hash
+                        .as_ref()
+                        .is_some_and(|code_hash| code_hash.as_slice() == dao_code_hash_for_stats)
+                    {
+                        touched_lock_hashes.insert(cell.lock_script_hash.clone());
+                    }
+                }
+                if tx_data.is_cellbase {
+                    continue;
+                }
+                for input in &tx_data.inputs {
+                    let key = (
+                        input.previous_tx_hash.to_vec(),
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "sync_indexer",
+                        ),
+                    );
+                    if let Some(info) = input_cell_info
+                        .get(&key)
+                        .or_else(|| batch_cell_infos.get(&key))
+                        .filter(|info| {
+                            info.type_code_hash
+                                .as_ref()
+                                .is_some_and(|code_hash| {
+                                    code_hash.as_slice() == dao_code_hash_for_stats
+                                })
+                        })
+                    {
+                        touched_lock_hashes.insert(info.lock_script_hash.clone());
+                    }
+                }
+            }
+
+            for lock_hash in touched_lock_hashes {
+                let mut active_count = 0i64;
+                self.writer
+                    .store()
+                    .scan_dao_deposits_by_lock(&lock_hash, |_, entry| {
+                        if entry.status == 0 {
+                            active_count = active_count.checked_add(1).ok_or_else(|| {
+                                anyhow!(
+                                    "active DAO deposit count overflow while seeding unique depositor tracking: lock_hash=0x{}",
+                                    hex::encode(&lock_hash)
+                                )
+                            })?;
+                        }
+                        Ok(())
+                    })?;
+                active_dao_deposit_counts_by_lock.insert(lock_hash, active_count);
+            }
+        }
 
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
+            let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
+            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+            let claimed_compensation_in_block = tx_slice_claimed_dao_compensation(
+                tx_slice,
+                &dao_compensations,
+            )?;
             accumulate_secondary_issuance_deltas(
                 &mut batch_stats,
                 parsed,
                 block_date,
+                claimed_compensation_in_block,
                 &mut prev_dao_cs,
             )?;
-            let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
-            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
             block_tx_idx += tx_count_for_block;
 
             let cells_created: i32 = tx_slice
@@ -2796,6 +2887,10 @@ impl Indexer {
                 &dao_code_hash_for_stats,
                 &consumed_dao_for_stats,
                 &mut same_batch_dao_for_stats,
+                &input_cell_info,
+                &batch_cell_infos,
+                &mut active_dao_deposit_counts_by_lock,
+                &mut batch_stats.dao_daily_unique_depositors_delta,
                 &mut batch_stats.dao_daily_active_delta,
                 &mut batch_stats.dao_daily_gross_deposit_delta,
                 &mut batch_stats.dao_daily_new_deposits_delta,
@@ -2866,6 +2961,30 @@ impl Indexer {
             // that already holds all domain writes, then commit atomically.
             data_batch.merge_from(core_batch);
             data_batch.merge_from(stats_batch);
+            let lock_hash_refs: Vec<&Vec<u8>> = address_balance_changes.keys().collect();
+            let prefetched_address_balances = if lock_hash_refs.is_empty() {
+                HashMap::new()
+            } else {
+                self.writer.read_address_balances(&lock_hash_refs)?
+            };
+            let prepared_hodl_tracker = self.prepare_hodl_wave_batch(
+                all_parsed_blocks,
+                &all_tx_data,
+                &input_cell_info,
+                &batch_cell_infos,
+                &address_balance_changes,
+                &prefetched_address_balances,
+                &mut data_batch,
+            )?;
+            let prepared_cell_dist_tracker = self.prepare_cell_distribution_batch(
+                all_parsed_blocks,
+                &all_tx_data,
+                &input_cell_info,
+                &batch_cell_infos,
+                &address_balance_changes,
+                &prefetched_address_balances,
+                &mut data_batch,
+            )?;
             debug!(
                 phase = "domain_atomic_commit",
                 batch_start = first_block,
@@ -2900,22 +3019,15 @@ impl Indexer {
                     "Finalize commit done"
                 );
             }
+            {
+                let mut tracker = self.hodl_tracker.lock().unwrap();
+                *tracker = prepared_hodl_tracker;
+            }
+            {
+                let mut tracker = self.cell_dist_tracker.lock().unwrap();
+                *tracker = prepared_cell_dist_tracker;
+            }
         }
-
-        self.update_hodl_wave(
-            all_parsed_blocks,
-            &all_tx_data,
-            &input_cell_info,
-            &batch_cell_infos,
-            &address_balance_changes,
-        )?;
-        self.update_cell_distribution(
-            all_parsed_blocks,
-            &all_tx_data,
-            &input_cell_info,
-            &batch_cell_infos,
-            &address_balance_changes,
-        )?;
 
         // In-memory cache notification only — the DB sync_status update was
         // already committed atomically in the finalize batch above.
@@ -3129,9 +3241,9 @@ impl Indexer {
                     .as_ref()
                     .map(|s| s.cum_treasury)
                     .unwrap_or(0);
-                let mut prev_secondary_pool = latest_snapshot
+                let mut running_total_depositors = latest_snapshot
                     .as_ref()
-                    .map(|s| s.secondary_pool)
+                    .map(|s| s.depositors_count)
                     .unwrap_or(0);
 
                 for date in snapshot_dates {
@@ -3159,8 +3271,6 @@ impl Indexer {
                     let non_miner_secondary = resolve_non_miner_secondary_delta_for_snapshot(
                         *date,
                         stats.daily_secondary_non_miner_delta.get(date).copied(),
-                        secondary_pool,
-                        prev_secondary_pool,
                     )?;
                     let (daily_miner, daily_dao_share, daily_treasury_share) =
                         if total_issuance > 0 && non_miner_secondary > 0 {
@@ -3176,18 +3286,20 @@ impl Indexer {
                     running_cum_miner += daily_miner;
                     running_cum_dao += daily_dao_share;
                     running_cum_treasury += daily_treasury_share;
-                    prev_secondary_pool = secondary_pool;
-
-                    let running_depositors = derive_running_depositors(
-                        running_total_deposit_count,
-                        running_total_withdrawal_count,
+                    running_total_depositors = derive_running_depositors(
+                        running_total_depositors,
+                        stats
+                            .dao_daily_unique_depositors_delta
+                            .get(date)
+                            .copied()
+                            .unwrap_or(0),
                         *date,
                     )?;
                     let running_total_compensation = running_cum_dao;
 
                     let dao_snapshot = crate::db::writer::DaoSnapshotInput {
                         total_deposited: running_total_deposited,
-                        depositors_count: running_depositors,
+                        depositors_count: running_total_depositors,
                         total_deposit_count: running_total_deposit_count,
                         total_withdrawal_count: running_total_withdrawal_count,
                         total_compensation: running_total_compensation,

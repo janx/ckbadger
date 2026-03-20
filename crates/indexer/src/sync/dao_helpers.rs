@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, bail, Result};
 use chrono::NaiveDate;
 
-use ckbadger_store::types::AddressBalance;
+use ckbadger_store::types::{AddressBalance, PositionedCellInfo};
 
 pub(crate) use ckbadger_store::types::{DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION};
 
@@ -43,6 +43,7 @@ pub(crate) struct BatchStats {
     pub(crate) dao_daily_gross_deposit_delta: HashMap<NaiveDate, i128>,
     pub(crate) dao_daily_new_deposits_delta: HashMap<NaiveDate, i64>,
     pub(crate) dao_daily_withdrawals_delta: HashMap<NaiveDate, i64>,
+    pub(crate) dao_daily_unique_depositors_delta: HashMap<NaiveDate, i64>,
     pub(crate) daily_secondary_non_miner_delta: HashMap<NaiveDate, i128>,
     pub(crate) daily_secondary_miner_delta: HashMap<NaiveDate, i128>,
     /// Set to true after the DAO delta computation code path runs, even if no
@@ -123,6 +124,7 @@ pub(crate) fn classify_nft_collection_id(
 /// Address balances are written before HODL tracker updates, so reading `live_cells_count`
 /// from store returns post-batch state. We need pre-batch state to detect 0→>0 and >0→0
 /// holder transitions correctly.
+#[cfg(test)]
 pub(crate) fn derive_pre_batch_live_cells(post_live_cells: i32, live_delta: i32) -> Result<i32> {
     let pre = post_live_cells as i64 - live_delta as i64;
     if pre < 0 {
@@ -301,8 +303,6 @@ pub(crate) fn split_secondary_issuance(
 pub(crate) fn resolve_non_miner_secondary_delta_for_snapshot(
     date: NaiveDate,
     daily_non_miner_delta: Option<i128>,
-    secondary_pool: i128,
-    prev_secondary_pool: i128,
 ) -> Result<i128> {
     if let Some(delta) = daily_non_miner_delta {
         if delta < 0 {
@@ -315,14 +315,7 @@ pub(crate) fn resolve_non_miner_secondary_delta_for_snapshot(
         return Ok(delta);
     }
 
-    let delta = secondary_pool - prev_secondary_pool;
-    if delta < 0 {
-        // RFC-0023 S_i includes completed withdrawal compensation (I_i),
-        // so block/day-level S deltas can be negative. For issuance chart
-        // cumulatives we only accumulate positive non-miner growth.
-        return Ok(0);
-    }
-    Ok(delta)
+    Ok(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -377,29 +370,29 @@ pub(crate) fn checked_tx_fee(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn derive_running_depositors(
-    total_deposit_count: i64,
-    total_withdrawal_count: i64,
+    previous_depositors: i64,
+    daily_unique_depositors_delta: i64,
     date: NaiveDate,
 ) -> Result<i64> {
-    let diff = total_deposit_count
-        .checked_sub(total_withdrawal_count)
+    let next = previous_depositors
+        .checked_add(daily_unique_depositors_delta)
         .ok_or_else(|| {
             anyhow!(
-                "dao snapshot depositor overflow: date={}, total_deposits={}, total_withdrawals={}",
+                "dao snapshot depositor overflow: date={}, previous_depositors={}, daily_unique_depositors_delta={}",
                 date,
-                total_deposit_count,
-                total_withdrawal_count
+                previous_depositors,
+                daily_unique_depositors_delta
             )
         })?;
-    if diff < 0 {
+    if next < 0 {
         anyhow::bail!(
-            "dao snapshot depositor underflow: date={}, total_deposits={}, total_withdrawals={}",
+            "dao snapshot depositor underflow: date={}, previous_depositors={}, daily_unique_depositors_delta={}",
             date,
-            total_deposit_count,
-            total_withdrawal_count
+            previous_depositors,
+            daily_unique_depositors_delta
         );
     }
-    Ok(diff)
+    Ok(next)
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +406,10 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
     dao_code_hash: &[u8],
     consumed_dao_map: &DaoConsumedMap,
     same_batch_dao_map: &mut DaoSameBatchMap,
+    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    active_deposit_counts_by_lock: &mut HashMap<Vec<u8>, i64>,
+    daily_unique_depositors_delta: &mut HashMap<NaiveDate, i64>,
     daily_active_delta: &mut HashMap<NaiveDate, i128>,
     daily_gross_deposit_delta: &mut HashMap<NaiveDate, i128>,
     daily_new_deposits_delta: &mut HashMap<NaiveDate, i64>,
@@ -434,6 +431,15 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
                         *daily_gross_deposit_delta.entry(block_date).or_default() +=
                             cell.capacity as i128;
                         *daily_new_deposits_delta.entry(block_date).or_default() += 1;
+                        bump_unique_active_depositors(
+                            active_deposit_counts_by_lock,
+                            daily_unique_depositors_delta,
+                            block_date,
+                            &cell.lock_script_hash,
+                            1,
+                            &tx_data.hash,
+                            output_index_i16,
+                        )?;
                         same_batch_dao_map
                             .insert((tx_data.hash.to_vec(), output_index_i16), cell.capacity);
                     } else if let Some(data) = tx_data.outputs_data.get(output_index) {
@@ -491,6 +497,28 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
             }
             if let Some(capacity) = maybe_cap {
                 *daily_active_delta.entry(block_date).or_default() -= capacity as i128;
+                let lock_hash = input_cell_info
+                    .get(&outpoint)
+                    .or_else(|| batch_cell_infos.get(&outpoint))
+                    .map(|info| info.lock_script_hash.as_slice())
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "missing DAO input cell info while updating unique depositor count: block_date={}, tx_hash=0x{}, prev_outpoint=0x{}:{}",
+                            block_date,
+                            hex::encode(tx_data.hash),
+                            hex::encode(&outpoint.0),
+                            outpoint.1
+                        )
+                    })?;
+                bump_unique_active_depositors(
+                    active_deposit_counts_by_lock,
+                    daily_unique_depositors_delta,
+                    block_date,
+                    lock_hash,
+                    -1,
+                    &tx_data.hash,
+                    outpoint.1,
+                )?;
             }
         }
     }
@@ -501,36 +529,56 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
 // Secondary issuance delta accumulation (per-block)
 // ---------------------------------------------------------------------------
 
-pub(crate) fn accumulate_secondary_issuance_deltas(
+pub(crate) fn accumulate_secondary_issuance_deltas_from_csu(
     stats: &mut BatchStats,
-    parsed: &crate::parser::block::ParsedBlock,
+    block_number: i64,
     block_date: NaiveDate,
+    c: i128,
+    s: i128,
+    u: i128,
+    claimed_compensation_in_block: i128,
     prev_dao_cs: &mut Option<(i128, i128)>,
 ) -> Result<()> {
-    let (c, s, u) = extract_dao_csu(&parsed.dao).ok_or_else(|| {
-        anyhow!(
-            "invalid DAO field bytes while accumulating secondary issuance: block={}, date={}, dao_len={}",
-            parsed.number,
+    if claimed_compensation_in_block < 0 {
+        bail!(
+            "negative claimed DAO compensation while accumulating secondary issuance: block={}, date={}, claimed_compensation={}",
+            block_number,
             block_date,
-            parsed.dao.len()
-        )
-    })?;
+            claimed_compensation_in_block
+        );
+    }
 
     if let Some((prev_c, prev_s)) = *prev_dao_cs {
         let _c_delta = c - prev_c;
         let s_delta = s - prev_s;
+        let non_miner_delta = s_delta
+            .checked_add(claimed_compensation_in_block)
+            .ok_or_else(|| {
+                anyhow!(
+                    "secondary issuance delta overflow while adding claimed compensation: block={}, date={}, s_delta={}, claimed_compensation={}",
+                    block_number,
+                    block_date,
+                    s_delta,
+                    claimed_compensation_in_block
+                )
+            })?;
+        if non_miner_delta < 0 {
+            bail!(
+                "negative exact non-miner secondary issuance delta after adding claimed compensation: block={}, date={}, s_delta={}, claimed_compensation={}, exact_non_miner_delta={}",
+                block_number,
+                block_date,
+                s_delta,
+                claimed_compensation_in_block,
+                non_miner_delta
+            );
+        }
 
-        // RFC-0023: S_i can decrease when completed DAO withdrawals are
-        // larger than current non-miner secondary issuance in the same block.
-        // For issuance chart cumulatives we only track positive growth.
-        if s_delta > 0 {
+        if non_miner_delta > 0 {
             *stats
                 .daily_secondary_non_miner_delta
                 .entry(block_date)
-                .or_default() += s_delta;
-            // Derive miner share directly from C/U ratio to avoid compact-target
-            // and primary-issuance approximation drift.
-            let (miner, _, _) = split_secondary_issuance(c, u, 0, s_delta)?;
+                .or_default() += non_miner_delta;
+            let (miner, _, _) = split_secondary_issuance(c, u, 0, non_miner_delta)?;
             *stats
                 .daily_secondary_miner_delta
                 .entry(block_date)
@@ -542,6 +590,85 @@ pub(crate) fn accumulate_secondary_issuance_deltas(
     Ok(())
 }
 
+pub(crate) fn accumulate_secondary_issuance_deltas(
+    stats: &mut BatchStats,
+    parsed: &crate::parser::block::ParsedBlock,
+    block_date: NaiveDate,
+    claimed_compensation_in_block: i128,
+    prev_dao_cs: &mut Option<(i128, i128)>,
+) -> Result<()> {
+    let (c, s, u) = extract_dao_csu(&parsed.dao).ok_or_else(|| {
+        anyhow!(
+            "invalid DAO field bytes while accumulating secondary issuance: block={}, date={}, dao_len={}",
+            parsed.number,
+            block_date,
+            parsed.dao.len()
+        )
+    })?;
+
+    accumulate_secondary_issuance_deltas_from_csu(
+        stats,
+        parsed.number,
+        block_date,
+        c,
+        s,
+        u,
+        claimed_compensation_in_block,
+        prev_dao_cs,
+    )
+}
+
+fn bump_unique_active_depositors(
+    active_deposit_counts_by_lock: &mut HashMap<Vec<u8>, i64>,
+    daily_unique_depositors_delta: &mut HashMap<NaiveDate, i64>,
+    block_date: NaiveDate,
+    lock_hash: &[u8],
+    delta: i64,
+    tx_hash: &[u8; 32],
+    output_index: i16,
+) -> Result<()> {
+    if delta == 0 {
+        return Ok(());
+    }
+
+    let lock_key = lock_hash.to_vec();
+    let current = active_deposit_counts_by_lock
+        .get(&lock_key)
+        .copied()
+        .unwrap_or(0);
+    let next = current.checked_add(delta).ok_or_else(|| {
+        anyhow!(
+            "dao unique active depositor count overflow: date={}, lock_hash=0x{}, current={}, delta={}, tx_hash=0x{}, output_index={}",
+            block_date,
+            hex::encode(lock_hash),
+            current,
+            delta,
+            hex::encode(tx_hash),
+            output_index
+        )
+    })?;
+    if next < 0 {
+        bail!(
+            "dao unique active depositor count underflow: date={}, lock_hash=0x{}, current={}, delta={}, tx_hash=0x{}, output_index={}",
+            block_date,
+            hex::encode(lock_hash),
+            current,
+            delta,
+            hex::encode(tx_hash),
+            output_index
+        );
+    }
+
+    if current == 0 && next > 0 {
+        *daily_unique_depositors_delta.entry(block_date).or_default() += 1;
+    } else if current > 0 && next == 0 {
+        *daily_unique_depositors_delta.entry(block_date).or_default() -= 1;
+    }
+
+    active_deposit_counts_by_lock.insert(lock_key, next);
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -550,6 +677,7 @@ pub(crate) fn accumulate_secondary_issuance_deltas(
 mod tests {
     use super::*;
     use chrono::Utc;
+    use ckbadger_store::types::{LiveCellInfo, PositionedCellInfo};
     use std::collections::HashMap;
 
     // -- Test helpers -------------------------------------------------------
@@ -610,6 +738,43 @@ mod tests {
                 1u64.to_le_bytes().to_vec()
             },
         }
+    }
+
+    fn dummy_dao_cell_with_lock(
+        capacity: i64,
+        is_deposit: bool,
+        lock_script_hash: Vec<u8>,
+    ) -> crate::parser::cell::ParsedCell {
+        let mut cell = dummy_dao_cell(capacity, is_deposit);
+        cell.lock_script_hash = lock_script_hash;
+        cell
+    }
+
+    fn dummy_positioned_info(
+        capacity: i64,
+        created_at_block: i64,
+        lock_script_hash: Vec<u8>,
+    ) -> PositionedCellInfo {
+        PositionedCellInfo::new(
+            LiveCellInfo {
+                capacity,
+                lock_script_hash,
+                lock_code_hash: vec![],
+                lock_hash_type: 0,
+                lock_args: vec![],
+                type_script_hash: None,
+                type_code_hash: Some(crate::rpc::parse_hex_to_bytes(
+                    crate::parser::dao::DAO_CODE_HASH,
+                )),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 8,
+                occupied_capacity: capacity,
+                udt_amount: None,
+                data_hash: None,
+            },
+            created_at_block,
+        )
     }
 
     fn dummy_tx_data(
@@ -845,26 +1010,23 @@ mod tests {
     #[test]
     fn test_resolve_non_miner_secondary_delta_for_snapshot_prefers_precomputed_delta() {
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let resolved =
-            resolve_non_miner_secondary_delta_for_snapshot(date, Some(123), 10_000, 9_000).unwrap();
+        let resolved = resolve_non_miner_secondary_delta_for_snapshot(date, Some(123)).unwrap();
         assert_eq!(resolved, 123);
     }
 
     #[test]
     fn test_resolve_non_miner_secondary_delta_for_snapshot_errors_on_negative_precomputed_delta() {
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let err = resolve_non_miner_secondary_delta_for_snapshot(date, Some(-1), 10_000, 9_000)
-            .unwrap_err();
+        let err = resolve_non_miner_secondary_delta_for_snapshot(date, Some(-1)).unwrap_err();
         assert!(err
             .to_string()
             .contains("negative daily non-miner secondary issuance delta"));
     }
 
     #[test]
-    fn test_resolve_non_miner_secondary_delta_for_snapshot_ignores_negative_fallback_delta() {
+    fn test_resolve_non_miner_secondary_delta_for_snapshot_defaults_missing_delta_to_zero() {
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let delta =
-            resolve_non_miner_secondary_delta_for_snapshot(date, None, 8_999, 9_000).unwrap();
+        let delta = resolve_non_miner_secondary_delta_for_snapshot(date, None).unwrap();
         assert_eq!(delta, 0);
     }
 
@@ -873,13 +1035,13 @@ mod tests {
     #[test]
     fn test_derive_running_depositors() {
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        assert_eq!(derive_running_depositors(10, 3, date).unwrap(), 7);
+        assert_eq!(derive_running_depositors(10, -3, date).unwrap(), 7);
     }
 
     #[test]
     fn test_derive_running_depositors_underflow_errors() {
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let err = derive_running_depositors(3, 10, date).unwrap_err();
+        let err = derive_running_depositors(3, -10, date).unwrap_err();
         assert!(err.to_string().contains("dao snapshot depositor underflow"));
     }
 
@@ -899,7 +1061,7 @@ mod tests {
         let block = dummy_parsed_block(build_dao_field(c as u64, s as u64, u as u64), 0, 1000);
         let date = ckbadger_common::block_date(block.timestamp);
 
-        accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev).unwrap();
+        accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, &mut prev).unwrap();
 
         assert_eq!(stats.daily_secondary_non_miner_delta.get(&date), Some(&600));
         assert_eq!(
@@ -909,56 +1071,69 @@ mod tests {
     }
 
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_ignores_negative_adjustment() {
+    fn test_accumulate_secondary_issuance_deltas_adds_claimed_compensation_back_to_negative_s_delta()
+    {
         let mut stats = BatchStats::default();
         let mut prev = Some((20_000_000_000_000_i128, 8_000_i128));
+        let c = 20_000_000_000_500_i128;
+        let s = 7_900_i128;
+        let u = 1_000_i128;
+        let claimed_compensation = 150_i128;
         let block = dummy_parsed_block(
             build_dao_field(
-                (20_000_000_000_000_i128 + 500) as u64,
-                (8_000_i128 - 100) as u64,
-                0,
+                c as u64,
+                s as u64,
+                u as u64,
             ),
             0,
             1000,
         );
         let date = ckbadger_common::block_date(block.timestamp);
+        let expected_non_miner = 50_i128;
+        let expected_miner = expected_non_miner * u / (c - u);
 
-        accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev).unwrap();
-        assert!(
-            !stats.daily_secondary_non_miner_delta.contains_key(&date),
-            "negative S delta must not contribute to non-miner daily delta"
-        );
-        assert!(
-            !stats.daily_secondary_miner_delta.contains_key(&date),
-            "negative S delta must not contribute to miner daily delta"
+        accumulate_secondary_issuance_deltas(
+            &mut stats,
+            &block,
+            date,
+            claimed_compensation,
+            &mut prev,
+        )
+        .unwrap();
+        assert_eq!(
+            stats.daily_secondary_non_miner_delta.get(&date),
+            Some(&expected_non_miner)
         );
         assert_eq!(
-            prev,
-            Some((20_000_000_000_000_i128 + 500, 8_000_i128 - 100)),
+            stats.daily_secondary_miner_delta.get(&date),
+            Some(&expected_miner)
+        );
+        assert_eq!(
+            prev, Some((c, s)),
             "previous DAO C/S baseline must still advance to the latest block"
         );
     }
 
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_same_day_drop_then_growth_tracks_only_growth() {
+    fn test_accumulate_secondary_issuance_deltas_same_day_drop_then_growth_tracks_exact_total() {
         let mut stats = BatchStats::default();
         let mut prev = Some((30_000_000_000_000_i128, 10_000_i128));
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
 
-        // First block in the day has an S drop (protocol adjustment).
         let block_drop =
             dummy_parsed_block(build_dao_field(30_000_000_000_500, 9_950, 100), 0, 1000);
-        accumulate_secondary_issuance_deltas(&mut stats, &block_drop, date, &mut prev).unwrap();
+        accumulate_secondary_issuance_deltas(&mut stats, &block_drop, date, 120, &mut prev)
+            .unwrap();
 
-        // Next block rebounds above the dropped value; only positive growth is counted.
         let block_growth =
             dummy_parsed_block(build_dao_field(30_000_000_001_000, 10_020, 100), 1, 2000);
-        accumulate_secondary_issuance_deltas(&mut stats, &block_growth, date, &mut prev).unwrap();
+        accumulate_secondary_issuance_deltas(&mut stats, &block_growth, date, 0, &mut prev)
+            .unwrap();
 
         assert_eq!(
             stats.daily_secondary_non_miner_delta.get(&date),
-            Some(&70),
-            "daily delta should include only positive growth after the drop"
+            Some(&140),
+            "daily delta should include both block-level non-miner issuance contributions"
         );
         assert!(
             stats
@@ -979,9 +1154,11 @@ mod tests {
         // Test the underlying helper directly with a short slice to cover the error path.
         assert!(extract_dao_csu(&[0u8; 8]).is_none());
 
-        // Verify the happy path doesn't error with a valid all-zero 32-byte DAO field.
-        let block = dummy_parsed_block([0u8; 32], 0, 1000);
-        let result = accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev);
+        // Verify the happy path doesn't error with a valid progressing DAO field.
+        let block =
+            dummy_parsed_block(build_dao_field(30_000_000_000_100, 10_000, 0), 0, 1000);
+        let result =
+            accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, &mut prev);
         assert!(result.is_ok());
     }
 
@@ -1014,6 +1191,16 @@ mod tests {
         );
 
         let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
+        let input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        let lock_hash = vec![0x55; 32];
+        let mut batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        batch_cell_infos.insert(
+            (vec![0x11; 32], 0),
+            dummy_positioned_info(10_000_000_000, 0, lock_hash.clone()),
+        );
+        let mut active_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
+        active_deposit_counts_by_lock.insert(lock_hash, 1);
+        let mut daily_unique_depositors_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
@@ -1025,6 +1212,10 @@ mod tests {
             &dao_code_hash,
             &consumed_dao_map,
             &mut same_batch_dao_map,
+            &input_cell_info,
+            &batch_cell_infos,
+            &mut active_deposit_counts_by_lock,
+            &mut daily_unique_depositors_delta,
             &mut daily_active_delta,
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
@@ -1062,6 +1253,10 @@ mod tests {
         consumed_dao_map.insert((input_hash_vec, 0), (vec![], 0, "123".to_string(), 0, 1));
 
         let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
+        let input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        let batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        let mut active_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
+        let mut daily_unique_depositors_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
@@ -1073,6 +1268,10 @@ mod tests {
             &dao_code_hash,
             &consumed_dao_map,
             &mut same_batch_dao_map,
+            &input_cell_info,
+            &batch_cell_infos,
+            &mut active_deposit_counts_by_lock,
+            &mut daily_unique_depositors_delta,
             &mut daily_active_delta,
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
@@ -1110,6 +1309,10 @@ mod tests {
         consumed_dao_map.insert((input_hash_vec, 0), (vec![], 0, "123".to_string(), 0, 1));
 
         let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
+        let input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        let batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        let mut active_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
+        let mut daily_unique_depositors_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
@@ -1121,6 +1324,10 @@ mod tests {
             &dao_code_hash,
             &consumed_dao_map,
             &mut same_batch_dao_map,
+            &input_cell_info,
+            &batch_cell_infos,
+            &mut active_deposit_counts_by_lock,
+            &mut daily_unique_depositors_delta,
             &mut daily_active_delta,
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
@@ -1159,6 +1366,10 @@ mod tests {
         consumed_dao_map.insert((input_hash_vec, 0), (vec![], 0, "123".to_string(), 0, 1));
 
         let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
+        let input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        let batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        let mut active_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
+        let mut daily_unique_depositors_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
@@ -1170,6 +1381,10 @@ mod tests {
             &dao_code_hash,
             &consumed_dao_map,
             &mut same_batch_dao_map,
+            &input_cell_info,
+            &batch_cell_infos,
+            &mut active_deposit_counts_by_lock,
+            &mut daily_unique_depositors_delta,
             &mut daily_active_delta,
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
@@ -1207,6 +1422,10 @@ mod tests {
         );
 
         let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
+        let input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        let batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        let mut active_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
+        let mut daily_unique_depositors_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
@@ -1218,6 +1437,10 @@ mod tests {
             &dao_code_hash,
             &consumed_dao_map,
             &mut same_batch_dao_map,
+            &input_cell_info,
+            &batch_cell_infos,
+            &mut active_deposit_counts_by_lock,
+            &mut daily_unique_depositors_delta,
             &mut daily_active_delta,
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
@@ -1225,6 +1448,139 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("invalid DAO capacity string"));
+    }
+
+    #[test]
+    fn test_accumulate_dao_snapshot_deltas_tracks_unique_active_depositors() {
+        let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let deposit_tx_hash = [0x51; 32];
+        let lock_hash = vec![0x77; 32];
+
+        let deposit_tx = dummy_tx_data(
+            deposit_tx_hash,
+            false,
+            vec![],
+            vec![
+                dummy_dao_cell_with_lock(100_00000000, true, lock_hash.clone()),
+                dummy_dao_cell_with_lock(200_00000000, true, lock_hash.clone()),
+            ],
+            vec![],
+            vec![],
+        );
+
+        let phase1_first = dummy_tx_data(
+            [0x52; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: deposit_tx_hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![dummy_dao_cell(9_900_000_000, false)],
+            vec![],
+            vec!["0x0100000000000000".to_string()],
+        );
+
+        let phase1_second = dummy_tx_data(
+            [0x53; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: deposit_tx_hash,
+                previous_output_index: 1,
+                since: 0,
+            }],
+            vec![dummy_dao_cell(19_900_000_000, false)],
+            vec![],
+            vec!["0x0100000000000000".to_string()],
+        );
+
+        let consumed_dao_map: DaoConsumedMap = HashMap::new();
+        let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
+        let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+        let mut daily_withdrawals_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+        let mut active_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
+        let mut daily_unique_depositors_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+        let input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        let mut batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        batch_cell_infos.insert(
+            (deposit_tx_hash.to_vec(), 0),
+            dummy_positioned_info(100_00000000, 100, lock_hash.clone()),
+        );
+        batch_cell_infos.insert(
+            (deposit_tx_hash.to_vec(), 1),
+            dummy_positioned_info(200_00000000, 100, lock_hash.clone()),
+        );
+
+        accumulate_dao_snapshot_deltas_for_txs(
+            &[deposit_tx],
+            block_date,
+            &dao_code_hash,
+            &consumed_dao_map,
+            &mut same_batch_dao_map,
+            &input_cell_info,
+            &batch_cell_infos,
+            &mut active_deposit_counts_by_lock,
+            &mut daily_unique_depositors_delta,
+            &mut daily_active_delta,
+            &mut daily_gross_deposit_delta,
+            &mut daily_new_deposits_delta,
+            &mut daily_withdrawals_delta,
+        )
+        .unwrap();
+
+        assert_eq!(active_deposit_counts_by_lock.get(&lock_hash), Some(&2));
+        assert_eq!(daily_unique_depositors_delta.get(&block_date), Some(&1));
+
+        accumulate_dao_snapshot_deltas_for_txs(
+            &[phase1_first],
+            block_date,
+            &dao_code_hash,
+            &consumed_dao_map,
+            &mut same_batch_dao_map,
+            &input_cell_info,
+            &batch_cell_infos,
+            &mut active_deposit_counts_by_lock,
+            &mut daily_unique_depositors_delta,
+            &mut daily_active_delta,
+            &mut daily_gross_deposit_delta,
+            &mut daily_new_deposits_delta,
+            &mut daily_withdrawals_delta,
+        )
+        .unwrap();
+
+        assert_eq!(active_deposit_counts_by_lock.get(&lock_hash), Some(&1));
+        assert_eq!(
+            daily_unique_depositors_delta.get(&block_date),
+            Some(&1),
+            "removing one of multiple active deposits for the same lock must not change unique depositor count"
+        );
+
+        accumulate_dao_snapshot_deltas_for_txs(
+            &[phase1_second],
+            block_date,
+            &dao_code_hash,
+            &consumed_dao_map,
+            &mut same_batch_dao_map,
+            &input_cell_info,
+            &batch_cell_infos,
+            &mut active_deposit_counts_by_lock,
+            &mut daily_unique_depositors_delta,
+            &mut daily_active_delta,
+            &mut daily_gross_deposit_delta,
+            &mut daily_new_deposits_delta,
+            &mut daily_withdrawals_delta,
+        )
+        .unwrap();
+
+        assert_eq!(active_deposit_counts_by_lock.get(&lock_hash), Some(&0));
+        assert_eq!(
+            daily_unique_depositors_delta.get(&block_date),
+            Some(&0),
+            "unique depositor count should return to zero after the final active deposit is withdrawn"
+        );
     }
 
     // -- dao_deltas_computed flag -------------------------------------------

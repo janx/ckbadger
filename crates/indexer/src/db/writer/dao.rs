@@ -119,7 +119,12 @@ pub(crate) fn calculate_dao_compensation_from_ar(
     ar_withdraw: u64,
 ) -> Result<i64> {
     if ar_deposit == 0 {
-        return Ok(0);
+        bail!(
+            "invalid zero deposit AR while calculating DAO compensation: capacity={}, ar_deposit={}, ar_withdraw={}",
+            capacity,
+            ar_deposit,
+            ar_withdraw
+        );
     }
 
     let capacity_u128 = u128::try_from(capacity)
@@ -1084,6 +1089,12 @@ mod tests {
     fn test_calculate_dao_compensation_from_ar_errors_on_ar_underflow() {
         let err = calculate_dao_compensation_from_ar(200_00000000, 100, 90).unwrap_err();
         assert!(err.to_string().contains("underflow"));
+    }
+
+    #[test]
+    fn test_calculate_dao_compensation_from_ar_errors_on_zero_deposit_ar() {
+        let err = calculate_dao_compensation_from_ar(200_00000000, 0, 100).unwrap_err();
+        assert!(err.to_string().contains("zero deposit AR"));
     }
 
     #[test]
