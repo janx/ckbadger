@@ -7,14 +7,19 @@ use crate::sync::types::InternId;
 #[derive(Debug)]
 pub(crate) struct IdentityInterner {
     by_value: DashMap<Vec<u8>, InternId>,
-    values: Mutex<Vec<Arc<[u8]>>>,
+    /// Wrapped in `Arc` so `snapshot_for_reads()` is O(1) (single atomic
+    /// ref-count bump) instead of O(n) (cloning millions of Arc pointers).
+    /// `intern_bytes()` uses `Arc::make_mut` for COW semantics: when no
+    /// snapshot is alive the inner Vec is mutated in-place (no clone);
+    /// if a snapshot is still alive (refcount > 1) it clones first.
+    values: Mutex<Arc<Vec<Arc<[u8]>>>>,
 }
 
 impl Default for IdentityInterner {
     fn default() -> Self {
         Self {
             by_value: DashMap::new(),
-            values: Mutex::new(Vec::new()),
+            values: Mutex::new(Arc::new(Vec::new())),
         }
     }
 }
@@ -24,7 +29,7 @@ impl IdentityInterner {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
             by_value: DashMap::with_capacity(capacity),
-            values: Mutex::new(Vec::with_capacity(capacity)),
+            values: Mutex::new(Arc::new(Vec::with_capacity(capacity))),
         }
     }
 
@@ -39,16 +44,17 @@ impl IdentityInterner {
         if let Some(id) = self.by_value.get(&bytes) {
             return *id;
         }
-        let id = InternId::new(values.len());
-        values.push(Arc::from(bytes.as_slice()));
+        let vec = Arc::make_mut(&mut values);
+        let id = InternId::new(vec.len());
+        vec.push(Arc::from(bytes.as_slice()));
         self.by_value.insert(bytes, id);
         id
     }
 
     /// Create a frozen snapshot for read-only access during reduce phase.
     ///
-    /// Cloning the inner `Vec<Arc<[u8]>>` is cheap: it copies Arc pointers
-    /// and bumps reference counts, without deep-copying the byte data.
+    /// O(1): clones the outer `Arc` (single atomic increment), not the
+    /// millions of inner `Arc<[u8]>` pointers.
     ///
     /// # Precondition
     ///
@@ -59,7 +65,7 @@ impl IdentityInterner {
     pub(crate) fn snapshot_for_reads(&self) -> FrozenIdentityView {
         let values = self.values.lock().unwrap();
         FrozenIdentityView {
-            values: values.clone(),
+            values: Arc::clone(&values),
         }
     }
 
@@ -78,7 +84,7 @@ impl IdentityInterner {
 /// Frozen snapshot for lock-free reads. Send + Sync safe.
 #[derive(Debug)]
 pub(crate) struct FrozenIdentityView {
-    values: Vec<Arc<[u8]>>,
+    values: Arc<Vec<Arc<[u8]>>>,
 }
 
 impl FrozenIdentityView {
