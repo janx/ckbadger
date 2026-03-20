@@ -14,7 +14,7 @@ import {
 import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { Address } from '@/components/ui/address';
-import { Capacity } from '@/components/ui/capacity';
+import { CapacityUtilization } from '@/components/ui/capacity-utilization';
 import { ScriptView } from '@/components/ui/script-view';
 import { api, type GraphNode } from '@/lib/api';
 import {
@@ -473,47 +473,18 @@ export default function CellDetailPage() {
           <TerminalPanel className="mb-6">
             <TerminalPanelHeader indicator="active">Capacity</TerminalPanelHeader>
             <TerminalPanelContent>
-              <div className="grid gap-4 md:grid-cols-3">
-                <div className="border-base-border/70 bg-base-surface/60 rounded border p-3">
-                  <div className="text-text-dim mb-1 text-xs uppercase tracking-wide">
-                    Total Capacity
-                  </div>
-                  <Capacity
-                    value={capacityView.totalCapacity}
-                    className="text-text-bright text-lg"
-                    animate={false}
-                  />
-                </div>
-                <div className="border-base-border/70 bg-base-surface/60 rounded border p-3">
-                  <div className="text-text-dim mb-1 text-xs uppercase tracking-wide">
-                    Common Knowledge Size
-                  </div>
-                  {capacityView.used !== null ? (
-                    <Capacity
-                      value={capacityView.used}
-                      className="text-emphasis text-lg"
-                      animate={false}
-                    />
-                  ) : (
-                    <div className="text-text-dim font-mono text-lg">N/A</div>
-                  )}
-                </div>
-                <div className="border-base-border/60 bg-base-surface/60 rounded border p-3">
-                  <div className="text-text-dim mb-1 text-xs uppercase tracking-wide">
-                    Common Knowledge Share
-                  </div>
-                  <div className="text-text-bright font-mono text-xl">
-                    {capacityView.usedRatioPercent !== null
-                      ? `${Math.max(0, capacityView.usedRatioPercent).toFixed(2)}%`
-                      : 'N/A'}
-                  </div>
-                </div>
-              </div>
-              {capacityView.hasBreakdown ? (
-                <>
-                  <div className="mt-3">
+              <div className="space-y-3">
+                <CapacityUtilization
+                  totalCapacity={capacityView.totalCapacity.toString()}
+                  commonKnowledgeSize={
+                    capacityView.used !== null ? capacityView.used.toString() : '0'
+                  }
+                  totalLabel="Owned Capacity"
+                />
+                {capacityView.hasBreakdown ? (
+                  <>
                     <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
-                      <div className="text-text-dim text-xs uppercase tracking-wide">
+                      <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
                         Byte Composition ({capacityView.totalBytes.toLocaleString()} bytes)
                       </div>
                       {capacityView.formulaText && (
@@ -522,75 +493,73 @@ export default function CellDetailPage() {
                         </div>
                       )}
                     </div>
-                    <div className="border-base-border/80 bg-base-surface/80 overflow-hidden rounded border">
-                      <div className="flex h-3 w-full">
-                        {capacityView.segments.map((segment) =>
-                          segment.percent > 0 ? (
-                            <div
-                              key={segment.key}
-                              className={`${segment.colorClass} transition-all ${
+                    <div className="bg-base-elevated flex h-3 w-full overflow-hidden rounded-sm">
+                      {capacityView.segments.map((segment) =>
+                        segment.percent > 0 ? (
+                          <div
+                            key={segment.key}
+                            className={`${segment.colorClass} transition-all ${
+                              hoveredSegmentKey === null
+                                ? ''
+                                : hoveredSegmentKey === segment.key
+                                  ? 'brightness-110'
+                                  : 'opacity-45'
+                            }`}
+                            style={{ width: `${segment.percent}%` }}
+                            title={`${segment.label}: ${segment.bytes.toLocaleString()} bytes (${segment.percent.toFixed(2)}%)`}
+                            onMouseEnter={() => setHoveredSegmentKey(segment.key)}
+                            onMouseLeave={() => setHoveredSegmentKey(null)}
+                          />
+                        ) : null
+                      )}
+                    </div>
+                    <div data-testid="byte-composition-legend" className="relative z-0 mt-1.5">
+                      <div
+                        className="grid gap-1.5"
+                        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}
+                      >
+                        {capacityView.segments.map((segment) => (
+                          <button
+                            key={segment.key}
+                            type="button"
+                            className={`inline-flex min-w-0 items-center justify-between gap-1 rounded border px-2 py-1 text-xs transition-all ${
+                              hoveredSegmentKey === null
+                                ? 'border-base-border/50 bg-base-surface/60 text-text'
+                                : hoveredSegmentKey === segment.key
+                                  ? segment.legendActivePill
+                                  : 'border-base-border/60 bg-base-surface/40 text-text-dim'
+                            }`}
+                            onMouseEnter={() => setHoveredSegmentKey(segment.key)}
+                            onMouseLeave={() => setHoveredSegmentKey(null)}
+                          >
+                            <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                              <span
+                                className={`h-2 w-2 shrink-0 rounded-full ring-1 ring-black/25 ${segment.colorClass}`}
+                              />
+                              <span className="truncate">{segment.label}</span>
+                            </span>
+                            <span
+                              className={`shrink-0 font-mono text-[11px] ${
                                 hoveredSegmentKey === null
-                                  ? ''
+                                  ? 'text-text-dim'
                                   : hoveredSegmentKey === segment.key
-                                    ? 'brightness-110'
-                                    : 'opacity-45'
+                                    ? segment.legendValueText
+                                    : 'text-text-dim'
                               }`}
-                              style={{ width: `${segment.percent}%` }}
-                              title={`${segment.label}: ${segment.bytes.toLocaleString()} bytes (${segment.percent.toFixed(2)}%)`}
-                              onMouseEnter={() => setHoveredSegmentKey(segment.key)}
-                              onMouseLeave={() => setHoveredSegmentKey(null)}
-                            />
-                          ) : null
-                        )}
+                            >
+                              {segment.bytes.toLocaleString()}B · {segment.percent.toFixed(2)}%
+                            </span>
+                          </button>
+                        ))}
                       </div>
                     </div>
+                  </>
+                ) : (
+                  <div className="text-text-dim text-sm">
+                    Common knowledge breakdown is unavailable for this cell.
                   </div>
-                  <div data-testid="byte-composition-legend" className="relative z-0 mt-2">
-                    <div
-                      className="grid gap-1.5"
-                      style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}
-                    >
-                      {capacityView.segments.map((segment) => (
-                        <button
-                          key={segment.key}
-                          type="button"
-                          className={`inline-flex min-w-0 items-center justify-between gap-1 rounded border px-2 py-1 text-xs transition-all ${
-                            hoveredSegmentKey === null
-                              ? 'border-base-border/50 bg-base-surface/60 text-text'
-                              : hoveredSegmentKey === segment.key
-                                ? segment.legendActivePill
-                                : 'border-base-border/60 bg-base-surface/40 text-text-dim'
-                          }`}
-                          onMouseEnter={() => setHoveredSegmentKey(segment.key)}
-                          onMouseLeave={() => setHoveredSegmentKey(null)}
-                        >
-                          <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-                            <span
-                              className={`h-2 w-2 shrink-0 rounded-full ring-1 ring-black/25 ${segment.colorClass}`}
-                            />
-                            <span className="truncate">{segment.label}</span>
-                          </span>
-                          <span
-                            className={`shrink-0 font-mono text-[11px] ${
-                              hoveredSegmentKey === null
-                                ? 'text-text-dim'
-                                : hoveredSegmentKey === segment.key
-                                  ? segment.legendValueText
-                                  : 'text-text-dim'
-                            }`}
-                          >
-                            {segment.bytes.toLocaleString()}B · {segment.percent.toFixed(2)}%
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="text-text-dim mt-4 text-sm">
-                  Common knowledge breakdown is unavailable for this cell.
-                </div>
-              )}
+                )}
+              </div>
             </TerminalPanelContent>
           </TerminalPanel>
         )}
@@ -830,7 +799,7 @@ export default function CellDetailPage() {
                   <span>Lock Script</span>
                   {lockScriptInfo && (
                     <Link href={`/scripts/${encodeURIComponent(lockScriptInfo.name)}`}>
-                      <Badge variant="neutral">{lockScriptInfo.name}</Badge>
+                      <Badge variant="green">{lockScriptInfo.name}</Badge>
                     </Link>
                   )}
                 </div>
@@ -845,7 +814,7 @@ export default function CellDetailPage() {
                   <span>Type Script</span>
                   {typeScriptInfo && (
                     <Link href={`/scripts/${encodeURIComponent(typeScriptInfo.name)}`}>
-                      <Badge variant="neutral">{typeScriptInfo.name}</Badge>
+                      <Badge variant="blue">{typeScriptInfo.name}</Badge>
                     </Link>
                   )}
                 </div>
