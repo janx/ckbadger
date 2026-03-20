@@ -1,4 +1,4 @@
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local};
 use ckbadger_common::{BulkBuildProgressData, MemoryStatsData};
 use ckbadger_store::{APPEND_CFS, DOMAIN_CFS};
 use ratatui::{
@@ -2611,11 +2611,11 @@ fn sync_timing_lines(
 
     if is_bulk_sync {
         if let Some(secs) = eta_seconds {
-            let done_at = Utc::now() + chrono::TimeDelta::seconds(secs as i64);
+            let done_at = Local::now() + chrono::TimeDelta::seconds(secs as i64);
             lines.push(Line::from(vec![
                 Span::styled("Est. done: ", Style::default().fg(SLATE_500)),
                 Span::styled(
-                    done_at.format("%H:%M UTC").to_string(),
+                    done_at.format("%H:%M").to_string(),
                     Style::default().fg(TERMINAL_GREEN),
                 ),
             ]));
