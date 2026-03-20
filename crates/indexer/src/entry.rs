@@ -328,7 +328,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         let mut last_stall_warn_at: Option<Instant> = None;
         let mut suppressed_stall_warns: u64 = 0;
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
             let progress = indexer_for_progress.progress();
             let ema_rate = progress.ema_blocks_per_second();
