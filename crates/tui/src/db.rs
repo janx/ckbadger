@@ -70,6 +70,7 @@ pub struct SyncStatusRow {
     pub adaptive_backoff_streak: Option<u64>,
     pub adaptive_last_adjusted_age_secs: Option<i64>,
     pub startup_phase: Option<String>,
+    pub is_direct_db_read: bool,
     pub bulk_build: Option<BulkBuildProgressData>,
 }
 
@@ -409,6 +410,7 @@ impl TuiDb {
                 .adaptive_last_adjusted_at
                 .map(|ts| (chrono::Utc::now().timestamp() - ts).max(0)),
             startup_phase: progress.startup_phase.clone(),
+            is_direct_db_read: progress.is_direct_db_read,
             bulk_build: progress.bulk_build.clone(),
         }
     }
@@ -474,6 +476,7 @@ impl TuiDb {
             adaptive_backoff_streak: None,
             adaptive_last_adjusted_age_secs: None,
             startup_phase: None,
+            is_direct_db_read: false,
             bulk_build: None,
         })
     }

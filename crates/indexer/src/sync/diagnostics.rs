@@ -310,6 +310,10 @@ pub(crate) struct BulkBuildPerfStats {
     // Finalize progress: 0 = not finalizing, 1-13 = step (1-indexed).
     finalize_step: AtomicU8,
     finalize_elapsed_us: AtomicU64,
+    // Adaptive EMA controller state
+    ms_per_block_ema_bits: AtomicU64,
+    controllable_ms_us: AtomicU64,
+    target_iteration_ms_us: AtomicU64,
 }
 
 impl BulkBuildPerfStats {
@@ -334,6 +338,9 @@ impl BulkBuildPerfStats {
         batch_block_span: u64,
         batch_count: u64,
         tx_density: f64,
+        ms_per_block_ema: f64,
+        controllable_ms: f64,
+        target_iteration_ms: f64,
     ) {
         self.last_facts_us
             .store(ms_to_us(facts_ms), Ordering::Relaxed);
@@ -368,6 +375,12 @@ impl BulkBuildPerfStats {
         self.batch_count.store(batch_count, Ordering::Relaxed);
         self.tx_density_bits
             .store(tx_density.to_bits(), Ordering::Relaxed);
+        self.ms_per_block_ema_bits
+            .store(ms_per_block_ema.to_bits(), Ordering::Relaxed);
+        self.controllable_ms_us
+            .store(ms_to_us(controllable_ms), Ordering::Relaxed);
+        self.target_iteration_ms_us
+            .store(ms_to_us(target_iteration_ms), Ordering::Relaxed);
     }
 
     pub(crate) fn snapshot(&self) -> Option<BulkBuildProgressData> {
@@ -414,6 +427,13 @@ impl BulkBuildPerfStats {
             finalize_step,
             finalize_steps_total,
             finalize_elapsed_ms,
+            ms_per_block_ema: Some(f64::from_bits(
+                self.ms_per_block_ema_bits.load(Ordering::Relaxed),
+            )),
+            controllable_ms: Some(us_to_ms(self.controllable_ms_us.load(Ordering::Relaxed))),
+            target_iteration_ms: Some(us_to_ms(
+                self.target_iteration_ms_us.load(Ordering::Relaxed),
+            )),
         })
     }
 
@@ -956,6 +976,9 @@ mod tests {
             8_500,         // batch_block_span
             1,             // batch_count
             4.7,           // tx_density
+            0.042,         // ms_per_block_ema
+            1380.0,        // controllable_ms
+            1500.0,        // target_iteration_ms
         );
 
         let snap = perf.snapshot().expect("should have data after record");
@@ -970,6 +993,9 @@ mod tests {
         assert_eq!(snap.batch_block_span, Some(8_500));
         assert_eq!(snap.batch_count, Some(1));
         assert!((snap.tx_density.unwrap() - 4.7).abs() < f64::EPSILON);
+        assert!((snap.ms_per_block_ema.unwrap() - 0.042).abs() < f64::EPSILON);
+        assert!((snap.controllable_ms.unwrap() - 1380.0).abs() < 0.01);
+        assert!((snap.target_iteration_ms.unwrap() - 1500.0).abs() < 0.01);
     }
 
     #[test]

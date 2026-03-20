@@ -365,6 +365,9 @@ impl BulkBuildEngine {
                 batch_block_span,
                 batch_count + 1, // batch_count is incremented below
                 tx_density,
+                ms_per_block_ema,
+                controllable_ms,
+                BULK_BUILD_TARGET_ITERATION_MS,
             );
 
             indexer.record_bulk_sync_perf_batch_sample(sample);

@@ -36,6 +36,8 @@ const ERROR_RED: Color = Color::Rgb(239, 68, 68);
 const L0_GAUGE_MAX: u64 = 20;
 const P95_WINDOW: usize = 300;
 const P95_MIN_WIDTH: u16 = 40;
+const BULK_BUILD_MIN_SPAN_K: u64 = 10;
+const BULK_BUILD_MAX_SPAN_K: u64 = 100;
 
 #[derive(Debug, Clone)]
 pub struct LogEntry {
@@ -881,6 +883,11 @@ fn draw_overview_tail(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
     let is_bulk_sync = app.sync_status.as_ref().is_some_and(|s| s.is_bulk_sync);
+    let is_bulk_build = app
+        .sync_status
+        .as_ref()
+        .and_then(|s| s.bulk_build.as_ref())
+        .is_some();
     let progress_height: u16 = if is_bulk_sync { 8 } else { 7 };
 
     match detect_layout_density(app, area) {
@@ -921,13 +928,16 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
             }
         },
         LayoutDensity::Standard => {
+            // Bulk-build diagnostics has 10 lines (stages + I/O + volume + adaptive);
+            // allocate 12 (10 inner + 2 border) to avoid clipping.
+            let diag_height: u16 = if is_bulk_build { 12 } else { 6 };
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(4),
                     Constraint::Length(progress_height),
                     Constraint::Length(10),
-                    Constraint::Length(6),
+                    Constraint::Length(diag_height),
                     Constraint::Min(3),
                 ])
                 .split(area);
@@ -938,13 +948,14 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
             draw_sync_events(f, app, chunks[4]);
         }
         LayoutDensity::Wide => {
+            let diag_height: u16 = if is_bulk_build { 12 } else { 8 };
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(4),
                     Constraint::Length(progress_height),
                     Constraint::Length(10),
-                    Constraint::Length(8),
+                    Constraint::Length(diag_height),
                     Constraint::Min(3),
                 ])
                 .split(area);
@@ -991,7 +1002,7 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
         AMBER
     };
 
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled(heartbeat, Style::default().fg(heartbeat_color)),
         Span::styled("  Behind ", Style::default().fg(SLATE_500)),
         Span::styled(format_num(behind), Style::default().fg(FOREGROUND)),
@@ -1011,6 +1022,14 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled(" | phase ", Style::default().fg(SLATE_500)),
         Span::styled(phase_label, Style::default().fg(phase_color)),
+    ];
+    if sync.is_direct_db_read {
+        spans.push(Span::styled(
+            " [DB]",
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans.extend([
         Span::styled(" | Bottleneck ", Style::default().fg(SLATE_500)),
         Span::styled(
             bottleneck_label(bottleneck),
@@ -1024,6 +1043,7 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(" | stale ", Style::default().fg(SLATE_500)),
         Span::styled(stale_text, stale_style),
     ]);
+    let line = Line::from(spans);
     f.render_widget(Paragraph::new(line), inner);
 }
 
@@ -1391,6 +1411,12 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
                     spans.push(Span::styled(
                         format!("  Addrs {}", format_num(mem.total_addresses)),
                         Style::default().fg(FOREGROUND),
+                    ));
+                }
+                if mem.sst_files_size > 0 {
+                    spans.push(Span::styled(
+                        format!("  SST {}", format_bytes(mem.sst_files_size)),
+                        Style::default().fg(SLATE_500),
                     ));
                 }
                 f.render_widget(Paragraph::new(Line::from(spans)), synced_area);
@@ -2267,6 +2293,54 @@ fn build_batch_left_column(bb: &BulkBuildProgressData, cols: &[Rect]) -> Vec<Lin
         Span::styled(
             format!("{} tx/blk", density_text),
             Style::default().fg(FOREGROUND),
+        ),
+    ]));
+
+    // Adaptive EMA controller: cost model and budget utilization
+    let ema_text = bb
+        .ms_per_block_ema
+        .filter(|v| *v > 0.0 && v.is_finite())
+        .map(|v| format!("{v:.3}"))
+        .unwrap_or_else(|| "-".to_string());
+    let ctrl_ms = bb.controllable_ms.unwrap_or(0.0);
+    let target_ms = bb.target_iteration_ms.unwrap_or(0.0);
+    let ctrl_text = if ctrl_ms > 0.0 {
+        format!("{ctrl_ms:.0}")
+    } else {
+        "-".to_string()
+    };
+    let target_text = if target_ms > 0.0 {
+        format!("{target_ms:.0}")
+    } else {
+        "-".to_string()
+    };
+    let budget_color = if ctrl_ms > 0.0 && target_ms > 0.0 {
+        let ratio = ctrl_ms / target_ms;
+        if ratio <= 1.1 {
+            TERMINAL_GREEN
+        } else if ratio <= 1.5 {
+            AMBER
+        } else {
+            ERROR_RED
+        }
+    } else {
+        FOREGROUND
+    };
+    left.push(Line::from(vec![
+        Span::styled("Adaptive ", Style::default().fg(SLATE_500)),
+        Span::styled("EMA ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format!("{} ms/blk", ema_text),
+            Style::default().fg(TERMINAL_DIM),
+        ),
+        Span::styled("  Budget ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format!("{}/{} ms", ctrl_text, target_text),
+            Style::default().fg(budget_color),
+        ),
+        Span::styled(
+            format!("  [{}-{}k]", BULK_BUILD_MIN_SPAN_K, BULK_BUILD_MAX_SPAN_K),
+            Style::default().fg(SLATE_500),
         ),
     ]));
 
@@ -4575,18 +4649,18 @@ fn draw_system_params_compact(
 #[cfg(test)]
 mod tests {
     use super::{
-        adaptive_control_lines, adaptive_state_label, api_health_state, build_finalize_left_column,
-        chart_height_warning, compact_overview_layout, compact_sync_layout,
-        consumed_cells_source_color, consumed_cells_source_label, dense_right_lines,
-        detail_right_lines, diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label,
-        footer_hint_line, footer_status_message, format_age_secs, format_num, format_num_commas,
-        format_num_compact, format_rate_pair, format_signed_num_i128, format_stage_commit_gap_ms,
-        header_right_line, header_title_line, heartbeat_is_on, io_fetch_write_jitter_line,
-        is_rate_drop, merged_sparkline_p95_line, overview_log_min_height,
-        overview_services_min_height, percentile_from_history, pipeline_bottleneck,
-        pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state, runtime_live_delta,
-        service_log_tails_line, sparkline, stack_sync_charts, stale_age_secs, stale_status,
-        startup_phase_label, storage_pressure_l0_line, storage_pressure_wbm_line,
+        adaptive_control_lines, adaptive_state_label, api_health_state, build_batch_left_column,
+        build_finalize_left_column, chart_height_warning, compact_overview_layout,
+        compact_sync_layout, consumed_cells_source_color, consumed_cells_source_label,
+        dense_right_lines, detail_right_lines, diagnostics_dense_panel, direct_io_reads_label,
+        eta_confidence_label, footer_hint_line, footer_status_message, format_age_secs, format_num,
+        format_num_commas, format_num_compact, format_rate_pair, format_signed_num_i128,
+        format_stage_commit_gap_ms, header_right_line, header_title_line, heartbeat_is_on,
+        io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
+        overview_log_min_height, overview_services_min_height, percentile_from_history,
+        pipeline_bottleneck, pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state,
+        runtime_live_delta, service_log_tails_line, sparkline, stack_sync_charts, stale_age_secs,
+        stale_status, startup_phase_label, storage_pressure_l0_line, storage_pressure_wbm_line,
         storage_runtime_columns, supervisor_services_line, sync_bottleneck, sync_chart_specs,
         sync_timing_lines, system_kv_line, system_store_path_lines, system_workdir_lines,
         trend_delta, trim_for_panel, AdaptiveControlSnapshot, App, Color, CompactOverviewLayout,
@@ -4597,7 +4671,7 @@ mod tests {
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
     };
     use ckbadger_common::{BulkBuildProgressData, MemoryStatsData};
-    use ratatui::layout::Rect;
+    use ratatui::layout::{Constraint, Direction, Layout, Rect};
     use ratatui::text::Line;
     use std::collections::VecDeque;
     use std::time::Instant;
@@ -5694,6 +5768,68 @@ mod tests {
         assert!(
             all_text.contains("Metadata / Flush / Status"),
             "should group tail phases: {}",
+            all_text
+        );
+    }
+
+    #[test]
+    fn test_batch_left_column_shows_adaptive_ema() {
+        let bb = BulkBuildProgressData {
+            facts_ms: Some(10.0),
+            resolve_ms: Some(8.0),
+            reduce_ms: Some(6.0),
+            history_ms: Some(4.0),
+            address_reduce_ms: Some(2.0),
+            activity_stats_ms: Some(1.0),
+            flush_ms: Some(50.0),
+            fetch_ms: Some(100.0),
+            build_ms: Some(31.0),
+            batch_block_span: Some(30_000),
+            batch_count: Some(5),
+            tx_density: Some(3.5),
+            ms_per_block_ema: Some(0.042),
+            controllable_ms: Some(1380.0),
+            target_iteration_ms: Some(1500.0),
+            ..Default::default()
+        };
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(60), Constraint::Length(40)])
+            .split(Rect::new(0, 0, 100, 20));
+        let lines = build_batch_left_column(&bb, &cols);
+        let all_text: String = lines
+            .iter()
+            .map(|l| line_text(l))
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(
+            all_text.contains("Adaptive"),
+            "should show Adaptive line: {}",
+            all_text
+        );
+        assert!(
+            all_text.contains("EMA"),
+            "should show EMA label: {}",
+            all_text
+        );
+        assert!(
+            all_text.contains("ms/blk"),
+            "should show ms/blk unit: {}",
+            all_text
+        );
+        assert!(
+            all_text.contains("Budget"),
+            "should show Budget label: {}",
+            all_text
+        );
+        assert!(
+            all_text.contains("1380/1500 ms"),
+            "should show controllable/target: {}",
+            all_text
+        );
+        assert!(
+            all_text.contains("[10-100k]"),
+            "should show span bounds: {}",
             all_text
         );
     }

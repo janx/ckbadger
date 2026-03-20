@@ -274,6 +274,15 @@ pub struct BulkBuildProgressData {
     /// Milliseconds elapsed since finalize started.
     #[serde(default)]
     pub finalize_elapsed_ms: Option<f64>,
+    /// EMA cost model: milliseconds per block (adaptive batch sizing).
+    #[serde(default)]
+    pub ms_per_block_ema: Option<f64>,
+    /// Controllable wall-clock time of the last batch in ms (build + prefetch_collect, excludes flush).
+    #[serde(default)]
+    pub controllable_ms: Option<f64>,
+    /// Target wall-clock iteration budget in ms (constant: 1500ms).
+    #[serde(default)]
+    pub target_iteration_ms: Option<f64>,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {
@@ -746,6 +755,9 @@ mod tests {
             finalize_step: None,
             finalize_steps_total: None,
             finalize_elapsed_ms: None,
+            ms_per_block_ema: Some(0.042),
+            controllable_ms: Some(1380.0),
+            target_iteration_ms: Some(1500.0),
         };
 
         let json = serde_json::to_string(&bb).unwrap();
