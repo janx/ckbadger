@@ -31,7 +31,14 @@ export function SiteFooter() {
 
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-text-ghost hidden sm:inline">|</span>
-              <span className="text-text">{buildVersion}</span>
+              <a
+                href="https://github.com/janx/ckbadger"
+                target="_blank"
+                rel="noreferrer"
+                className="text-text hover:text-jade transition-colors"
+              >
+                {buildVersion}
+              </a>
               <span className="live-dot" />
               <span className="text-text-ghost">|</span>
               <Link
@@ -41,12 +48,12 @@ export function SiteFooter() {
                 Hardforks
               </Link>
               <a
-                href="https://github.com/janx/ckbadger"
+                href="https://dashboard.fiber.channel/"
                 target="_blank"
                 rel="noreferrer"
                 className="text-text hover:text-jade border-base-border hover:border-jade/30 rounded border px-1.5 py-0.5 transition-colors"
               >
-                Github
+                Fiber Dashboard
               </a>
               <span className="text-text-ghost">|</span>
               <span className="text-text">

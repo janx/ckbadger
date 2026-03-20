@@ -15,8 +15,12 @@ describe('SiteFooter', () => {
     const footer = screen.getByRole('contentinfo');
     const hardforksLink = within(footer).getByRole('link', { name: 'Hardforks' });
     expect(hardforksLink).toHaveAttribute('href', '/hardforks');
-    const githubLink = within(footer).getByRole('link', { name: 'Github' });
-    expect(githubLink).toHaveAttribute('href', 'https://github.com/janx/ckbadger');
+    const versionLink = within(footer).getByRole('link', {
+      name: '0.1.0+feature/foo@abcdef123456',
+    });
+    expect(versionLink).toHaveAttribute('href', 'https://github.com/janx/ckbadger');
+    const fiberLink = within(footer).getByRole('link', { name: 'Fiber Dashboard' });
+    expect(fiberLink).toHaveAttribute('href', 'https://dashboard.fiber.channel/');
     const shortcutHint = within(footer).getByText('keys');
     expect(shortcutHint).toBeInTheDocument();
     const profileLink = within(footer).getByRole('link', { name: '@busyforking' });
