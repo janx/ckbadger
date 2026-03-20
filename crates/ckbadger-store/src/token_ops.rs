@@ -17,8 +17,8 @@ use crate::bytes_to_hex;
 pub struct TokenDailyValidationError {
     pub type_hash: Vec<u8>,
     pub date_yyyymmdd: u32,
-    pub live_capacity: i128,
-    pub live_used_capacity: i128,
+    pub owned_capacity: i128,
+    pub owned_knowledge: i128,
     pub capacity_delta: i128,
     pub used_delta: i128,
 }
@@ -254,8 +254,8 @@ impl CkbadgerStore {
         );
 
         let mut current_type_hash: Option<Vec<u8>> = None;
-        let mut live_capacity: i128 = 0;
-        let mut live_used_capacity: i128 = 0;
+        let mut owned_capacity: i128 = 0;
+        let mut owned_knowledge: i128 = 0;
 
         for item in iter {
             let (key, value) = item.map_err(|e| {
@@ -287,41 +287,41 @@ impl CkbadgerStore {
 
             if current_type_hash.as_ref() != Some(&type_hash) {
                 current_type_hash = Some(type_hash.clone());
-                live_capacity = 0;
-                live_used_capacity = 0;
+                owned_capacity = 0;
+                owned_knowledge = 0;
             }
 
-            live_capacity = live_capacity
-                .checked_add(delta.live_capacity_delta)
+            owned_capacity = owned_capacity
+                .checked_add(delta.owned_capacity_delta)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "token daily validation overflow on capacity: type_hash=0x{}, date={}, current={}, delta={}",
                         bytes_to_hex(&type_hash),
                         date_yyyymmdd,
-                        live_capacity,
-                        delta.live_capacity_delta
+                        owned_capacity,
+                        delta.owned_capacity_delta
                     )
                 })?;
-            live_used_capacity = live_used_capacity
-                .checked_add(delta.live_used_capacity_delta)
+            owned_knowledge = owned_knowledge
+                .checked_add(delta.owned_knowledge_delta)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "token daily validation overflow on used capacity: type_hash=0x{}, date={}, current={}, delta={}",
                         bytes_to_hex(&type_hash),
                         date_yyyymmdd,
-                        live_used_capacity,
-                        delta.live_used_capacity_delta
+                        owned_knowledge,
+                        delta.owned_knowledge_delta
                     )
                 })?;
 
-            if live_capacity < 0 || live_used_capacity < 0 || live_used_capacity > live_capacity {
+            if owned_capacity < 0 || owned_knowledge < 0 || owned_knowledge > owned_capacity {
                 return Ok(Some(TokenDailyValidationError {
                     type_hash,
                     date_yyyymmdd,
-                    live_capacity,
-                    live_used_capacity,
-                    capacity_delta: delta.live_capacity_delta,
-                    used_delta: delta.live_used_capacity_delta,
+                    owned_capacity,
+                    owned_knowledge,
+                    capacity_delta: delta.owned_capacity_delta,
+                    used_delta: delta.owned_knowledge_delta,
                 }));
             }
         }
@@ -1052,8 +1052,8 @@ mod tests {
                 &type_hash,
                 20240115,
                 &TokenDailyDelta {
-                    live_capacity_delta: 1_000_000_000_000,
-                    live_used_capacity_delta: 610_000_000_000,
+                    owned_capacity_delta: 1_000_000_000_000,
+                    owned_knowledge_delta: 610_000_000_000,
                 },
             )
             .unwrap();
@@ -1062,8 +1062,8 @@ mod tests {
                 &type_hash,
                 20240116,
                 &TokenDailyDelta {
-                    live_capacity_delta: -200_000_000_000,
-                    live_used_capacity_delta: -150_000_000_000,
+                    owned_capacity_delta: -200_000_000_000,
+                    owned_knowledge_delta: -150_000_000_000,
                 },
             )
             .unwrap();
@@ -1072,8 +1072,8 @@ mod tests {
             .get_token_daily_delta(&type_hash, 20240115)
             .unwrap()
             .unwrap();
-        assert_eq!(day1.live_capacity_delta, 1_000_000_000_000);
-        assert_eq!(day1.live_used_capacity_delta, 610_000_000_000);
+        assert_eq!(day1.owned_capacity_delta, 1_000_000_000_000);
+        assert_eq!(day1.owned_knowledge_delta, 610_000_000_000);
 
         let listed = store.list_token_daily_deltas(&type_hash).unwrap();
         assert_eq!(listed.len(), 2);
@@ -1112,8 +1112,8 @@ mod tests {
                 &type_hash,
                 20240101,
                 &TokenDailyDelta {
-                    live_capacity_delta: 1_000,
-                    live_used_capacity_delta: 600,
+                    owned_capacity_delta: 1_000,
+                    owned_knowledge_delta: 600,
                 },
             )
             .unwrap();
@@ -1122,8 +1122,8 @@ mod tests {
                 &type_hash,
                 20240102,
                 &TokenDailyDelta {
-                    live_capacity_delta: -200,
-                    live_used_capacity_delta: -100,
+                    owned_capacity_delta: -200,
+                    owned_knowledge_delta: -100,
                 },
             )
             .unwrap();
@@ -1145,8 +1145,8 @@ mod tests {
                 &type_good,
                 20240101,
                 &TokenDailyDelta {
-                    live_capacity_delta: 500,
-                    live_used_capacity_delta: 300,
+                    owned_capacity_delta: 500,
+                    owned_knowledge_delta: 300,
                 },
             )
             .unwrap();
@@ -1155,8 +1155,8 @@ mod tests {
                 &type_bad,
                 20240101,
                 &TokenDailyDelta {
-                    live_capacity_delta: 100,
-                    live_used_capacity_delta: 120,
+                    owned_capacity_delta: 100,
+                    owned_knowledge_delta: 120,
                 },
             )
             .unwrap();
@@ -1167,8 +1167,8 @@ mod tests {
             .expect("expected invalid token daily delta");
         assert_eq!(invalid.type_hash, type_bad.to_vec());
         assert_eq!(invalid.date_yyyymmdd, 20240101);
-        assert_eq!(invalid.live_capacity, 100);
-        assert_eq!(invalid.live_used_capacity, 120);
+        assert_eq!(invalid.owned_capacity, 100);
+        assert_eq!(invalid.owned_knowledge, 120);
         assert_eq!(invalid.capacity_delta, 100);
         assert_eq!(invalid.used_delta, 120);
     }

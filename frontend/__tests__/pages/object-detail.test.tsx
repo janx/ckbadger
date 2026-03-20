@@ -49,8 +49,8 @@ const mockSpore = {
   ownerLockHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
   isLive: true,
   createdAtBlock: 123456,
-  liveCapacity: '100000000000',
-  liveCommonKnowledgeSize: '61000000000',
+  ownedCapacity: '100000000000',
+  ownedKnowledge: '61000000000',
 };
 
 const mockCollection = {
@@ -61,8 +61,8 @@ const mockCollection = {
   liveCount: 320,
   holdersCount: 42,
   activitiesCount: 150,
-  liveCapacity: '800000000000',
-  liveCommonKnowledgeSize: '510000000000',
+  ownedCapacity: '800000000000',
+  ownedKnowledge: '510000000000',
 };
 
 function encodeMoleculeBytes(value: Uint8Array): Uint8Array {
@@ -342,8 +342,8 @@ describe('SporeDetailPage', () => {
       ownerAddress: null,
       sporesCount: 42,
       createdAtBlock: 123,
-      liveCapacity: '0',
-      liveCommonKnowledgeSize: '0',
+      ownedCapacity: '0',
+      ownedKnowledge: '0',
     } as any);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);

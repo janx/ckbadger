@@ -13,7 +13,7 @@ use crate::response::{
     CursorPaginatedResponse,
 };
 use crate::utils::{
-    accumulate_live_capacity, apply_live_capacity_delta, date_keys_inclusive,
+    accumulate_owned_capacity, apply_owned_capacity_delta, date_keys_inclusive,
     parse_chart_date_range,
 };
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_TOKEN};
@@ -122,8 +122,8 @@ fn token_info_to_response(
     info: &ckbadger_store::TokenInfo,
     transfers_count: i64,
     transfers_24h: i64,
-    live_capacity: Option<i128>,
-    live_used_capacity: Option<i128>,
+    owned_capacity: Option<i128>,
+    owned_knowledge: Option<i128>,
 ) -> Result<TokenResponse, ApiRouteError> {
     let type_hash_type = hash_type_to_str(info.hash_type as i16)
         .ok_or_else(|| {
@@ -168,8 +168,8 @@ fn token_info_to_response(
         transfers_count,
         transfers_24h,
         cells_count: None,
-        total_capacity: live_capacity.map(|c| c.to_string()),
-        total_used_capacity: live_used_capacity.map(|c| c.to_string()),
+        total_capacity: owned_capacity.map(|c| c.to_string()),
+        total_used_capacity: owned_knowledge.map(|c| c.to_string()),
     })
 }
 
@@ -414,12 +414,12 @@ async fn get_token(
 
     match result {
         Some((info, transfers_count, transfers_24h, deltas)) => {
-            let (live_capacity, live_used_capacity) = if deltas.is_empty() {
+            let (owned_capacity, owned_knowledge) = if deltas.is_empty() {
                 (None, None)
             } else {
                 let (lc, luc) =
-                    accumulate_live_capacity(deltas.into_iter().map(|(_, delta)| {
-                        (delta.live_capacity_delta, delta.live_used_capacity_delta)
+                    accumulate_owned_capacity(deltas.into_iter().map(|(_, delta)| {
+                        (delta.owned_capacity_delta, delta.owned_knowledge_delta)
                     }))
                     .map_err(|e| {
                         ApiError::internal(format!(
@@ -436,8 +436,8 @@ async fn get_token(
                 &info,
                 transfers_count,
                 transfers_24h,
-                live_capacity,
-                live_used_capacity,
+                owned_capacity,
+                owned_knowledge,
             )?)
         }
         None => Err(ApiError::not_found("Token not found")),
@@ -766,11 +766,11 @@ async fn get_token_capacity_chart(
     let mut cumulative_capacity: i128 = 0;
     let mut cumulative_used: i128 = 0;
     for (_, delta) in baseline_deltas {
-        (cumulative_capacity, cumulative_used) = apply_live_capacity_delta(
+        (cumulative_capacity, cumulative_used) = apply_owned_capacity_delta(
             cumulative_capacity,
             cumulative_used,
-            delta.live_capacity_delta,
-            delta.live_used_capacity_delta,
+            delta.owned_capacity_delta,
+            delta.owned_knowledge_delta,
             "building token baseline capacity history chart",
         )
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -781,7 +781,7 @@ async fn get_token_capacity_chart(
         let entry = daily_deltas.entry(date).or_insert((0, 0));
         entry.0 = entry
             .0
-            .checked_add(delta.live_capacity_delta)
+            .checked_add(delta.owned_capacity_delta)
             .ok_or_else(|| {
                 ApiError::internal(format!(
                     "capacity delta overflow while building token capacity history chart: date={}",
@@ -790,7 +790,7 @@ async fn get_token_capacity_chart(
             })?;
         entry.1 = entry
             .1
-            .checked_add(delta.live_used_capacity_delta)
+            .checked_add(delta.owned_knowledge_delta)
             .ok_or_else(|| {
                 ApiError::internal(format!(
                     "used delta overflow while building token capacity history chart: date={}",
@@ -823,7 +823,7 @@ async fn get_token_capacity_chart(
     let mut data = Vec::with_capacity(dates.len());
     for date in dates {
         let (capacity_delta, used_delta) = daily_deltas.get(&date).copied().unwrap_or((0, 0));
-        (cumulative_capacity, cumulative_used) = apply_live_capacity_delta(
+        (cumulative_capacity, cumulative_used) = apply_owned_capacity_delta(
             cumulative_capacity,
             cumulative_used,
             capacity_delta,
@@ -935,8 +935,8 @@ mod tests {
                 content_size: None,
                 cluster_id: None,
                 cluster_name: None,
-                live_capacity: Some("1".to_string()),
-                live_used_capacity: Some("1".to_string()),
+                owned_capacity: Some("1".to_string()),
+                owned_knowledge: Some("1".to_string()),
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,
@@ -962,8 +962,8 @@ mod tests {
                 content_size: None,
                 cluster_id: None,
                 cluster_name: None,
-                live_capacity: Some("1".to_string()),
-                live_used_capacity: Some("1".to_string()),
+                owned_capacity: Some("1".to_string()),
+                owned_knowledge: Some("1".to_string()),
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,
@@ -989,8 +989,8 @@ mod tests {
                 content_size: None,
                 cluster_id: None,
                 cluster_name: None,
-                live_capacity: Some("1".to_string()),
-                live_used_capacity: Some("1".to_string()),
+                owned_capacity: Some("1".to_string()),
+                owned_knowledge: Some("1".to_string()),
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,
@@ -1016,8 +1016,8 @@ mod tests {
                 content_size: None,
                 cluster_id: None,
                 cluster_name: None,
-                live_capacity: Some("1".to_string()),
-                live_used_capacity: Some("1".to_string()),
+                owned_capacity: Some("1".to_string()),
+                owned_knowledge: Some("1".to_string()),
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,
@@ -1079,8 +1079,8 @@ mod tests {
                 content_size: None,
                 cluster_id: None,
                 cluster_name: None,
-                live_capacity: Some("1".to_string()),
-                live_used_capacity: Some("1".to_string()),
+                owned_capacity: Some("1".to_string()),
+                owned_knowledge: Some("1".to_string()),
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,
@@ -1106,8 +1106,8 @@ mod tests {
                 content_size: None,
                 cluster_id: None,
                 cluster_name: None,
-                live_capacity: Some("1".to_string()),
-                live_used_capacity: Some("1".to_string()),
+                owned_capacity: Some("1".to_string()),
+                owned_knowledge: Some("1".to_string()),
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,
@@ -1133,8 +1133,8 @@ mod tests {
                 content_size: None,
                 cluster_id: None,
                 cluster_name: None,
-                live_capacity: Some("1".to_string()),
-                live_used_capacity: Some("1".to_string()),
+                owned_capacity: Some("1".to_string()),
+                owned_knowledge: Some("1".to_string()),
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,

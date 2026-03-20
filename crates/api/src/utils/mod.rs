@@ -6,7 +6,7 @@ pub mod script_resolution;
 
 pub use address::{address_to_lock_script_hash, is_ckb_address, script_to_address};
 pub use assets::{
-    accumulate_live_capacity, apply_live_capacity_delta, resolve_collection_standard,
+    accumulate_owned_capacity, apply_owned_capacity_delta, resolve_collection_standard,
     resolve_dob_collection_name, resolve_nft_collection_name,
     resolve_nft_collection_storage_tier_override,
 };

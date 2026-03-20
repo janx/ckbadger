@@ -443,7 +443,7 @@ function AssetTable({
               className={`${capacityColumnClass} text-text hidden font-mono tabular-nums xl:block`}
             >
               {(() => {
-                const occupied = asset.liveCommonKnowledgeSize;
+                const occupied = asset.ownedKnowledge;
                 if (!occupied) {
                   return <span className="text-text-dim">-</span>;
                 }
@@ -453,7 +453,7 @@ function AssetTable({
             </div>
             <div className={`${capacityColumnClass} text-text font-mono tabular-nums`}>
               {(() => {
-                const capacity = asset.liveCapacity;
+                const capacity = asset.ownedCapacity;
                 if (!capacity) {
                   return <span className="text-text-dim">-</span>;
                 }
@@ -535,7 +535,7 @@ function AssetTable({
               <span>
                 Cap:{' '}
                 {(() => {
-                  const c = asset.liveCapacity;
+                  const c = asset.ownedCapacity;
                   return c ? formatCkbCompact(c).value : '-';
                 })()}
               </span>

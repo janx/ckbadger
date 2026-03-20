@@ -1523,8 +1523,8 @@ mod tests {
                 code_hash: vec![0x55; 32],
                 hash_type: 1,
                 lock_live_cells_count: 1,
-                lock_live_capacity_sum: 100_00000000,
-                lock_live_used_capacity_sum: 61_00000000,
+                lock_owned_capacity_sum: 100_00000000,
+                lock_owned_knowledge_sum: 61_00000000,
                 ..Default::default()
             },
         );

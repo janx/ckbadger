@@ -39,11 +39,11 @@ impl ScriptOwner {
         code_hash: &[u8],
         is_type: bool,
         date_yyyymmdd: u32,
-        live_capacity_delta: i128,
-        live_used_delta: i128,
+        owned_capacity_delta: i128,
+        owned_knowledge_delta: i128,
         tx: &ResolvedTxFacts<'_>,
     ) -> Result<()> {
-        if live_capacity_delta == 0 && live_used_delta == 0 {
+        if owned_capacity_delta == 0 && owned_knowledge_delta == 0 {
             return Ok(());
         }
 
@@ -51,20 +51,20 @@ impl ScriptOwner {
             .daily_deltas
             .entry((code_hash.to_vec(), is_type, date_yyyymmdd))
             .or_default();
-        entry.live_capacity_delta = checked_signed_i128(
+        entry.owned_capacity_delta = checked_signed_i128(
             code_hash,
             if is_type { "type" } else { "lock" },
-            "daily live_capacity_delta",
-            entry.live_capacity_delta,
-            live_capacity_delta,
+            "daily owned_capacity_delta",
+            entry.owned_capacity_delta,
+            owned_capacity_delta,
             tx,
         )?;
-        entry.live_used_capacity_delta = checked_signed_i128(
+        entry.owned_knowledge_delta = checked_signed_i128(
             code_hash,
             if is_type { "type" } else { "lock" },
-            "daily live_used_capacity_delta",
-            entry.live_used_capacity_delta,
-            live_used_delta,
+            "daily owned_knowledge_delta",
+            entry.owned_knowledge_delta,
+            owned_knowledge_delta,
             tx,
         )?;
         Ok(())
@@ -131,16 +131,16 @@ impl BulkReducer for ScriptOwner {
                 &code_hash,
                 false,
                 date_yyyymmdd,
-                delta.lock_live_capacity_delta,
-                delta.lock_live_used_capacity_delta,
+                delta.lock_owned_capacity_delta,
+                delta.lock_owned_knowledge_delta,
                 tx,
             )?;
             self.record_daily_delta(
                 &code_hash,
                 true,
                 date_yyyymmdd,
-                delta.type_live_capacity_delta,
-                delta.type_live_used_capacity_delta,
+                delta.type_owned_capacity_delta,
+                delta.type_owned_knowledge_delta,
                 tx,
             )?;
         }
@@ -159,7 +159,7 @@ impl BulkReducer for ScriptOwner {
                     .daily_deltas
                     .get(&(code_hash.clone(), *is_type, *date))
                     .expect("sorted script daily key must exist");
-                (delta.live_capacity_delta != 0 || delta.live_used_capacity_delta != 0).then_some(
+                (delta.owned_capacity_delta != 0 || delta.owned_knowledge_delta != 0).then_some(
                     MaterializedRow::new(
                         CF_STATS_SCRIPT,
                         keys::encode_script_daily_key(code_hash, *is_type, *date).to_vec(),
@@ -225,15 +225,15 @@ struct ScriptDelta {
     lock_cells_delta: i64,
     lock_live_cells_delta: i64,
     lock_capacity_delta: i128,
-    lock_live_capacity_delta: i128,
+    lock_owned_capacity_delta: i128,
     lock_used_capacity_delta: i128,
-    lock_live_used_capacity_delta: i128,
+    lock_owned_knowledge_delta: i128,
     type_cells_delta: i64,
     type_live_cells_delta: i64,
     type_capacity_delta: i128,
-    type_live_capacity_delta: i128,
+    type_owned_capacity_delta: i128,
     type_used_capacity_delta: i128,
-    type_live_used_capacity_delta: i128,
+    type_owned_knowledge_delta: i128,
 }
 
 fn apply_input_deltas(
@@ -248,8 +248,8 @@ fn apply_input_deltas(
         .or_default();
     set_or_confirm_hash_type(lock_delta, input.lock_hash_type, "lock", tx, lock_code_hash)?;
     lock_delta.lock_live_cells_delta -= 1;
-    lock_delta.lock_live_capacity_delta -= i128::from(input.capacity);
-    lock_delta.lock_live_used_capacity_delta -= i128::from(input.occupied_capacity);
+    lock_delta.lock_owned_capacity_delta -= i128::from(input.capacity);
+    lock_delta.lock_owned_knowledge_delta -= i128::from(input.occupied_capacity);
 
     if let Some(type_code_hash_id) = input.type_code_hash_id {
         let type_hash_type = input.type_hash_type.ok_or_else(|| {
@@ -267,8 +267,8 @@ fn apply_input_deltas(
             .or_default();
         set_or_confirm_hash_type(type_delta, type_hash_type, "type", tx, type_code_hash_id)?;
         type_delta.type_live_cells_delta -= 1;
-        type_delta.type_live_capacity_delta -= i128::from(input.capacity);
-        type_delta.type_live_used_capacity_delta -= i128::from(input.occupied_capacity);
+        type_delta.type_owned_capacity_delta -= i128::from(input.capacity);
+        type_delta.type_owned_knowledge_delta -= i128::from(input.occupied_capacity);
     }
 
     Ok(())
@@ -293,9 +293,9 @@ fn apply_output_deltas(
     lock_delta.lock_cells_delta += 1;
     lock_delta.lock_live_cells_delta += 1;
     lock_delta.lock_capacity_delta += i128::from(cell.capacity);
-    lock_delta.lock_live_capacity_delta += i128::from(cell.capacity);
+    lock_delta.lock_owned_capacity_delta += i128::from(cell.capacity);
     lock_delta.lock_used_capacity_delta += i128::from(cell.occupied_capacity);
-    lock_delta.lock_live_used_capacity_delta += i128::from(cell.occupied_capacity);
+    lock_delta.lock_owned_knowledge_delta += i128::from(cell.occupied_capacity);
 
     if let Some(type_code_hash_id) = cell.type_code_hash_id {
         let type_hash_type = cell.type_hash_type.ok_or_else(|| {
@@ -315,9 +315,9 @@ fn apply_output_deltas(
         type_delta.type_cells_delta += 1;
         type_delta.type_live_cells_delta += 1;
         type_delta.type_capacity_delta += i128::from(cell.capacity);
-        type_delta.type_live_capacity_delta += i128::from(cell.capacity);
+        type_delta.type_owned_capacity_delta += i128::from(cell.capacity);
         type_delta.type_used_capacity_delta += i128::from(cell.occupied_capacity);
-        type_delta.type_live_used_capacity_delta += i128::from(cell.occupied_capacity);
+        type_delta.type_owned_knowledge_delta += i128::from(cell.occupied_capacity);
     }
 
     Ok(())
@@ -353,12 +353,12 @@ fn apply_lock_delta(
         delta.lock_capacity_delta,
         tx,
     )?;
-    info.lock_live_capacity_sum = checked_next_i128(
+    info.lock_owned_capacity_sum = checked_next_i128(
         code_hash,
         "lock",
-        "live_capacity_sum",
-        info.lock_live_capacity_sum,
-        delta.lock_live_capacity_delta,
+        "owned_capacity_sum",
+        info.lock_owned_capacity_sum,
+        delta.lock_owned_capacity_delta,
         tx,
     )?;
     info.lock_used_capacity_sum = checked_next_i128(
@@ -369,12 +369,12 @@ fn apply_lock_delta(
         delta.lock_used_capacity_delta,
         tx,
     )?;
-    info.lock_live_used_capacity_sum = checked_next_i128(
+    info.lock_owned_knowledge_sum = checked_next_i128(
         code_hash,
         "lock",
-        "live_used_capacity_sum",
-        info.lock_live_used_capacity_sum,
-        delta.lock_live_used_capacity_delta,
+        "owned_knowledge_sum",
+        info.lock_owned_knowledge_sum,
+        delta.lock_owned_knowledge_delta,
         tx,
     )?;
 
@@ -386,12 +386,12 @@ fn apply_lock_delta(
             info.lock_capacity_sum
         );
     }
-    if info.lock_live_used_capacity_sum > info.lock_live_capacity_sum {
+    if info.lock_owned_knowledge_sum > info.lock_owned_capacity_sum {
         bail!(
-            "script lock live used capacity exceeds total: code_hash=0x{}, live_used_capacity_sum={}, live_capacity_sum={}",
+            "script lock owned knowledge exceeds total: code_hash=0x{}, owned_knowledge_sum={}, owned_capacity_sum={}",
             hex::encode(code_hash),
-            info.lock_live_used_capacity_sum,
-            info.lock_live_capacity_sum
+            info.lock_owned_knowledge_sum,
+            info.lock_owned_capacity_sum
         );
     }
 
@@ -428,12 +428,12 @@ fn apply_type_delta(
         delta.type_capacity_delta,
         tx,
     )?;
-    info.type_live_capacity_sum = checked_next_i128(
+    info.type_owned_capacity_sum = checked_next_i128(
         code_hash,
         "type",
-        "live_capacity_sum",
-        info.type_live_capacity_sum,
-        delta.type_live_capacity_delta,
+        "owned_capacity_sum",
+        info.type_owned_capacity_sum,
+        delta.type_owned_capacity_delta,
         tx,
     )?;
     info.type_used_capacity_sum = checked_next_i128(
@@ -444,12 +444,12 @@ fn apply_type_delta(
         delta.type_used_capacity_delta,
         tx,
     )?;
-    info.type_live_used_capacity_sum = checked_next_i128(
+    info.type_owned_knowledge_sum = checked_next_i128(
         code_hash,
         "type",
-        "live_used_capacity_sum",
-        info.type_live_used_capacity_sum,
-        delta.type_live_used_capacity_delta,
+        "owned_knowledge_sum",
+        info.type_owned_knowledge_sum,
+        delta.type_owned_knowledge_delta,
         tx,
     )?;
 
@@ -461,12 +461,12 @@ fn apply_type_delta(
             info.type_capacity_sum
         );
     }
-    if info.type_live_used_capacity_sum > info.type_live_capacity_sum {
+    if info.type_owned_knowledge_sum > info.type_owned_capacity_sum {
         bail!(
-            "script type live used capacity exceeds total: code_hash=0x{}, live_used_capacity_sum={}, live_capacity_sum={}",
+            "script type owned knowledge exceeds total: code_hash=0x{}, owned_knowledge_sum={}, owned_capacity_sum={}",
             hex::encode(code_hash),
-            info.type_live_used_capacity_sum,
-            info.type_live_capacity_sum
+            info.type_owned_knowledge_sum,
+            info.type_owned_capacity_sum
         );
     }
 
@@ -787,16 +787,16 @@ mod tests {
         assert_eq!(lock_info.lock_cells_count, 3);
         assert_eq!(lock_info.lock_live_cells_count, 2);
         assert_eq!(lock_info.lock_capacity_sum, 380_00000000);
-        assert_eq!(lock_info.lock_live_capacity_sum, 180_00000000);
+        assert_eq!(lock_info.lock_owned_capacity_sum, 180_00000000);
         assert_eq!(lock_info.lock_used_capacity_sum, 264_00000000);
-        assert_eq!(lock_info.lock_live_used_capacity_sum, 122_00000000);
+        assert_eq!(lock_info.lock_owned_knowledge_sum, 122_00000000);
 
         let type_info = owner.infos().get(&type_code_hash).expect("type info");
         assert_eq!(type_info.type_cells_count, 1);
         assert_eq!(type_info.type_live_cells_count, 0);
         assert_eq!(type_info.type_capacity_sum, 200_00000000);
-        assert_eq!(type_info.type_live_capacity_sum, 0);
+        assert_eq!(type_info.type_owned_capacity_sum, 0);
         assert_eq!(type_info.type_used_capacity_sum, 142_00000000);
-        assert_eq!(type_info.type_live_used_capacity_sum, 0);
+        assert_eq!(type_info.type_owned_knowledge_sum, 0);
     }
 }

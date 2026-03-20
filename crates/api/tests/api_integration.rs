@@ -2256,8 +2256,8 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
                 name: Some("Script A".to_string()),
                 lock_cells_count: 10,
                 lock_live_cells_count: 8,
-                lock_live_capacity_sum: 500,
-                lock_live_used_capacity_sum: 300,
+                lock_owned_capacity_sum: 500,
+                lock_owned_knowledge_sum: 300,
                 ..Default::default()
             },
         )
@@ -2270,8 +2270,8 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
                 name: Some("Script A".to_string()),
                 type_cells_count: 6,
                 type_live_cells_count: 5,
-                type_live_capacity_sum: 700,
-                type_live_used_capacity_sum: 500,
+                type_owned_capacity_sum: 700,
+                type_owned_knowledge_sum: 500,
                 ..Default::default()
             },
         )
@@ -2284,8 +2284,8 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
                 name: Some("Script B".to_string()),
                 lock_cells_count: 9,
                 lock_live_cells_count: 7,
-                lock_live_capacity_sum: 800,
-                lock_live_used_capacity_sum: 200,
+                lock_owned_capacity_sum: 800,
+                lock_owned_knowledge_sum: 200,
                 ..Default::default()
             },
         )
@@ -2298,8 +2298,8 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
                 name: None,
                 lock_cells_count: 4,
                 lock_live_cells_count: 4,
-                lock_live_capacity_sum: 600,
-                lock_live_used_capacity_sum: 550,
+                lock_owned_capacity_sum: 600,
+                lock_owned_knowledge_sum: 550,
                 ..Default::default()
             },
         )
@@ -2310,8 +2310,8 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
             false,
             20240101,
             &ScriptDailyDelta {
-                live_capacity_delta: 500,
-                live_used_capacity_delta: 300,
+                owned_capacity_delta: 500,
+                owned_knowledge_delta: 300,
             },
         )
         .unwrap();
@@ -2321,8 +2321,8 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
             true,
             20240101,
             &ScriptDailyDelta {
-                live_capacity_delta: 700,
-                live_used_capacity_delta: 500,
+                owned_capacity_delta: 700,
+                owned_knowledge_delta: 500,
             },
         )
         .unwrap();
@@ -2332,8 +2332,8 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
             false,
             20240101,
             &ScriptDailyDelta {
-                live_capacity_delta: 800,
-                live_used_capacity_delta: 200,
+                owned_capacity_delta: 800,
+                owned_knowledge_delta: 200,
             },
         )
         .unwrap();
@@ -2343,8 +2343,8 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
             false,
             20240101,
             &ScriptDailyDelta {
-                live_capacity_delta: 600,
-                live_used_capacity_delta: 550,
+                owned_capacity_delta: 600,
+                owned_knowledge_delta: 550,
             },
         )
         .unwrap();
@@ -2435,8 +2435,8 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
             &token_a,
             20240101,
             &TokenDailyDelta {
-                live_capacity_delta: 300,
-                live_used_capacity_delta: 250,
+                owned_capacity_delta: 300,
+                owned_knowledge_delta: 250,
             },
         )
         .unwrap();
@@ -2467,8 +2467,8 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
             &token_b,
             20240101,
             &TokenDailyDelta {
-                live_capacity_delta: 900,
-                live_used_capacity_delta: 100,
+                owned_capacity_delta: 900,
+                owned_knowledge_delta: 100,
             },
         )
         .unwrap();
@@ -2503,8 +2503,8 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
             &cluster_id,
             20240101,
             &ClusterDailyDelta {
-                live_capacity_delta: 500,
-                live_used_capacity_delta: 400,
+                owned_capacity_delta: 500,
+                owned_knowledge_delta: 400,
             },
         )
         .unwrap();
@@ -2513,8 +2513,8 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
             &nft_collection_id,
             20240101,
             &ObjectDailyDelta {
-                live_capacity_delta: 700,
-                live_used_capacity_delta: 600,
+                owned_capacity_delta: 700,
+                owned_knowledge_delta: 600,
             },
         )
         .unwrap();
@@ -2717,8 +2717,8 @@ async fn test_scripts_list_supports_cursor_pagination() {
     assert_eq!(page1.len(), 2);
     assert_eq!(page1[0]["name"], "A_SCRIPT");
     assert_eq!(page1[1]["name"], "B_SCRIPT");
-    assert_eq!(page1[0]["liveCapacitySum"], "0");
-    assert_eq!(page1[0]["liveCommonKnowledgeSizeSum"], "0");
+    assert_eq!(page1[0]["ownedCapacitySum"], "0");
+    assert_eq!(page1[0]["ownedKnowledgeSum"], "0");
     assert_eq!(json["total"], 3);
     assert_eq!(json["limit"], 2);
     assert_eq!(json["hasMore"], true);
@@ -2746,7 +2746,7 @@ async fn test_scripts_list_supports_cursor_pagination() {
 async fn test_scripts_list_sorts_before_cursor_pagination() {
     let store = test_store();
 
-    for (code_byte, name, live_capacity_sum) in [
+    for (code_byte, name, owned_capacity_sum) in [
         (0x01u8, "A_SCRIPT", 10i128),
         (0x02u8, "B_SCRIPT", 30i128),
         (0x03u8, "C_SCRIPT", 20i128),
@@ -2759,7 +2759,7 @@ async fn test_scripts_list_sorts_before_cursor_pagination() {
                     code_hash: code_hash.clone(),
                     hash_type: 1,
                     name: Some(name.to_string()),
-                    lock_live_capacity_sum: live_capacity_sum,
+                    lock_owned_capacity_sum: owned_capacity_sum,
                     ..Default::default()
                 },
             )
@@ -2782,8 +2782,8 @@ async fn test_scripts_list_sorts_before_cursor_pagination() {
     assert_eq!(page1.len(), 2);
     assert_eq!(page1[0]["name"], "B_SCRIPT");
     assert_eq!(page1[1]["name"], "C_SCRIPT");
-    assert_eq!(page1[0]["liveCapacitySum"], "30");
-    assert_eq!(page1[1]["liveCapacitySum"], "20");
+    assert_eq!(page1[0]["ownedCapacitySum"], "30");
+    assert_eq!(page1[1]["ownedCapacitySum"], "20");
     assert_eq!(json["nextCursor"], "2");
     assert_eq!(json["hasMore"], true);
 
@@ -2799,7 +2799,7 @@ async fn test_scripts_list_sorts_before_cursor_pagination() {
     let page2 = json["data"].as_array().unwrap();
     assert_eq!(page2.len(), 1);
     assert_eq!(page2[0]["name"], "A_SCRIPT");
-    assert_eq!(page2[0]["liveCapacitySum"], "10");
+    assert_eq!(page2[0]["ownedCapacitySum"], "10");
     assert_eq!(json["hasMore"], false);
     assert!(json["nextCursor"].is_null());
 }
@@ -2861,9 +2861,9 @@ async fn test_script_lookup_and_code_cell_resolve_data_reference() {
                 lock_cells_count: 10,
                 lock_live_cells_count: 10,
                 lock_capacity_sum: 1_000_000_000,
-                lock_live_capacity_sum: 1_000_000_000,
+                lock_owned_capacity_sum: 1_000_000_000,
                 lock_used_capacity_sum: 600_000_000,
-                lock_live_used_capacity_sum: 600_000_000,
+                lock_owned_knowledge_sum: 600_000_000,
                 ..Default::default()
             },
         )
@@ -2879,9 +2879,9 @@ async fn test_script_lookup_and_code_cell_resolve_data_reference() {
             lock_cells_count: 10,
             lock_live_cells_count: 10,
             lock_capacity_sum: 1_000_000_000,
-            lock_live_capacity_sum: 1_000_000_000,
+            lock_owned_capacity_sum: 1_000_000_000,
             lock_used_capacity_sum: 600_000_000,
-            lock_live_used_capacity_sum: 600_000_000,
+            lock_owned_knowledge_sum: 600_000_000,
             ..Default::default()
         },
     );
@@ -3055,9 +3055,9 @@ async fn test_script_lookup_and_code_cells_allow_unlabeled_resolved_type_referen
                 lock_cells_count: 4,
                 lock_live_cells_count: 2,
                 lock_capacity_sum: 900,
-                lock_live_capacity_sum: 500,
+                lock_owned_capacity_sum: 500,
                 lock_used_capacity_sum: 700,
-                lock_live_used_capacity_sum: 350,
+                lock_owned_knowledge_sum: 350,
                 ..Default::default()
             },
         )
@@ -3120,8 +3120,8 @@ async fn test_script_lookup_and_code_cells_allow_unlabeled_resolved_type_referen
     assert_eq!(json[&type_hash_hex]["deploymentDataHash"], version_hash_hex);
     assert_eq!(json[&type_hash_hex]["scriptKind"], "lock");
     assert_eq!(json[&type_hash_hex]["liveCellsCount"], 2);
-    assert_eq!(json[&type_hash_hex]["liveCapacitySum"], "500");
-    assert_eq!(json[&type_hash_hex]["liveCommonKnowledgeSizeSum"], "350");
+    assert_eq!(json[&type_hash_hex]["ownedCapacitySum"], "500");
+    assert_eq!(json[&type_hash_hex]["ownedKnowledgeSum"], "350");
     assert_eq!(
         json[&type_hash_hex]["codeCellTxHash"],
         code_cell_tx_hash_hex
@@ -3312,9 +3312,9 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
                 lock_cells_count: 3,
                 lock_live_cells_count: 1,
                 lock_capacity_sum: 500,
-                lock_live_capacity_sum: 200,
+                lock_owned_capacity_sum: 200,
                 lock_used_capacity_sum: 500,
-                lock_live_used_capacity_sum: 200,
+                lock_owned_knowledge_sum: 200,
                 ..Default::default()
             },
         )
@@ -3330,9 +3330,9 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
             lock_cells_count: 3,
             lock_live_cells_count: 1,
             lock_capacity_sum: 500,
-            lock_live_capacity_sum: 200,
+            lock_owned_capacity_sum: 200,
             lock_used_capacity_sum: 500,
-            lock_live_used_capacity_sum: 200,
+            lock_owned_knowledge_sum: 200,
             ..Default::default()
         },
     );
@@ -3921,8 +3921,8 @@ async fn test_script_capacity_chart_aggregates_deployments() {
             false,
             20240115,
             &ScriptDailyDelta {
-                live_capacity_delta: 100,
-                live_used_capacity_delta: 60,
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
             },
         )
         .unwrap();
@@ -3932,8 +3932,8 @@ async fn test_script_capacity_chart_aggregates_deployments() {
             false,
             20240117,
             &ScriptDailyDelta {
-                live_capacity_delta: -20,
-                live_used_capacity_delta: -10,
+                owned_capacity_delta: -20,
+                owned_knowledge_delta: -10,
             },
         )
         .unwrap();
@@ -3943,8 +3943,8 @@ async fn test_script_capacity_chart_aggregates_deployments() {
             false,
             20240115,
             &ScriptDailyDelta {
-                live_capacity_delta: 50,
-                live_used_capacity_delta: 30,
+                owned_capacity_delta: 50,
+                owned_knowledge_delta: 30,
             },
         )
         .unwrap();
@@ -3954,8 +3954,8 @@ async fn test_script_capacity_chart_aggregates_deployments() {
             false,
             20240117,
             &ScriptDailyDelta {
-                live_capacity_delta: 10,
-                live_used_capacity_delta: 5,
+                owned_capacity_delta: 10,
+                owned_knowledge_delta: 5,
             },
         )
         .unwrap();
@@ -4028,8 +4028,8 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
             false,
             20240115,
             &ScriptDailyDelta {
-                live_capacity_delta: 100,
-                live_used_capacity_delta: 40,
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 40,
             },
         )
         .unwrap();
@@ -4039,8 +4039,8 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
             true,
             20240115,
             &ScriptDailyDelta {
-                live_capacity_delta: 80,
-                live_used_capacity_delta: 60,
+                owned_capacity_delta: 80,
+                owned_knowledge_delta: 60,
             },
         )
         .unwrap();
@@ -4094,8 +4094,8 @@ async fn test_script_capacity_chart_by_code_hash_extends_to_latest_complete_ckb_
             false,
             20240115,
             &ScriptDailyDelta {
-                live_capacity_delta: 100,
-                live_used_capacity_delta: 40,
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 40,
             },
         )
         .unwrap();
@@ -4610,8 +4610,8 @@ async fn test_token_capacity_chart_returns_cumulative_series() {
             &type_hash,
             20240115,
             &TokenDailyDelta {
-                live_capacity_delta: 100,
-                live_used_capacity_delta: 60,
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
             },
         )
         .unwrap();
@@ -4620,8 +4620,8 @@ async fn test_token_capacity_chart_returns_cumulative_series() {
             &type_hash,
             20240117,
             &TokenDailyDelta {
-                live_capacity_delta: -20,
-                live_used_capacity_delta: -10,
+                owned_capacity_delta: -20,
+                owned_knowledge_delta: -10,
             },
         )
         .unwrap();
@@ -4707,8 +4707,8 @@ async fn test_token_capacity_chart_reads_daily_deltas_from_derived_store() {
             &type_hash,
             20240115,
             &TokenDailyDelta {
-                live_capacity_delta: 100,
-                live_used_capacity_delta: 60,
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
             },
         )
         .unwrap();
@@ -4817,8 +4817,8 @@ async fn test_cluster_capacity_chart_and_cluster_capacity_fields() {
             &cluster_id,
             20240115,
             &ClusterDailyDelta {
-                live_capacity_delta: 100,
-                live_used_capacity_delta: 60,
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
             },
         )
         .unwrap();
@@ -4827,8 +4827,8 @@ async fn test_cluster_capacity_chart_and_cluster_capacity_fields() {
             &cluster_id,
             20240117,
             &ClusterDailyDelta {
-                live_capacity_delta: -20,
-                live_used_capacity_delta: -10,
+                owned_capacity_delta: -20,
+                owned_knowledge_delta: -10,
             },
         )
         .unwrap();
@@ -4883,8 +4883,8 @@ async fn test_cluster_capacity_chart_and_cluster_capacity_fields() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["liveCapacity"], "80");
-    assert_eq!(json["liveCommonKnowledgeSize"], "50");
+    assert_eq!(json["ownedCapacity"], "80");
+    assert_eq!(json["ownedKnowledge"], "50");
     assert_eq!(json["storageProfile"]["tier"], "unknown");
 }
 
@@ -5184,8 +5184,8 @@ async fn test_spore_capacity_chart_and_spore_capacity_fields() {
             &spore_id,
             20240115,
             &SporeDailyDelta {
-                live_capacity_delta: 100,
-                live_used_capacity_delta: 61,
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 61,
             },
         )
         .unwrap();
@@ -5194,8 +5194,8 @@ async fn test_spore_capacity_chart_and_spore_capacity_fields() {
             &spore_id,
             20240117,
             &SporeDailyDelta {
-                live_capacity_delta: -20,
-                live_used_capacity_delta: -11,
+                owned_capacity_delta: -20,
+                owned_knowledge_delta: -11,
             },
         )
         .unwrap();
@@ -5248,8 +5248,8 @@ async fn test_spore_capacity_chart_and_spore_capacity_fields() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["liveCapacity"], "80");
-    assert_eq!(json["liveCommonKnowledgeSize"], "50");
+    assert_eq!(json["ownedCapacity"], "80");
+    assert_eq!(json["ownedKnowledge"], "50");
 }
 
 #[tokio::test]
@@ -5430,8 +5430,8 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
                 &type_hash,
                 20240115,
                 &TokenDailyDelta {
-                    live_capacity_delta: 100,
-                    live_used_capacity_delta: 50,
+                    owned_capacity_delta: 100,
+                    owned_knowledge_delta: 50,
                 },
             )
             .unwrap();
@@ -5740,8 +5740,8 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
             &token_a,
             20240115,
             &TokenDailyDelta {
-                live_capacity_delta: 100,
-                live_used_capacity_delta: 60,
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
             },
         )
         .unwrap();
@@ -5750,8 +5750,8 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
             &token_b,
             20240115,
             &TokenDailyDelta {
-                live_capacity_delta: 300,
-                live_used_capacity_delta: 120,
+                owned_capacity_delta: 300,
+                owned_knowledge_delta: 120,
             },
         )
         .unwrap();
@@ -5769,8 +5769,8 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"][0]["id"], format!("0x{}", hex::encode(token_b)));
-    assert_eq!(json["data"][0]["liveCapacity"], "300");
-    assert_eq!(json["data"][0]["liveCommonKnowledgeSize"], "120");
+    assert_eq!(json["data"][0]["ownedCapacity"], "300");
+    assert_eq!(json["data"][0]["ownedKnowledge"], "120");
 
     let next_cursor = json["nextCursor"].as_str().unwrap();
     let request = Request::builder()
@@ -5837,8 +5837,8 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
             &healthy_token,
             20240115,
             &TokenDailyDelta {
-                live_capacity_delta: 200,
-                live_used_capacity_delta: 100,
+                owned_capacity_delta: 200,
+                owned_knowledge_delta: 100,
             },
         )
         .unwrap();
@@ -5849,8 +5849,8 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
             &broken_token,
             20240115,
             &TokenDailyDelta {
-                live_capacity_delta: 100,
-                live_used_capacity_delta: 120,
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 120,
             },
         )
         .unwrap();
@@ -5899,8 +5899,8 @@ async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
             &collection_id,
             20240115,
             &ObjectDailyDelta {
-                live_capacity_delta: 100,
-                live_used_capacity_delta: 60,
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
             },
         )
         .unwrap();
@@ -5909,8 +5909,8 @@ async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
             &collection_id,
             20240117,
             &ObjectDailyDelta {
-                live_capacity_delta: -20,
-                live_used_capacity_delta: -10,
+                owned_capacity_delta: -20,
+                owned_knowledge_delta: -10,
             },
         )
         .unwrap();
@@ -5961,8 +5961,8 @@ async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["standard"], "m-nft");
-    assert_eq!(json["liveCapacity"], "80");
-    assert_eq!(json["liveCommonKnowledgeSize"], "50");
+    assert_eq!(json["ownedCapacity"], "80");
+    assert_eq!(json["ownedKnowledge"], "50");
 }
 
 #[tokio::test]
@@ -5989,8 +5989,8 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
             &collection_id,
             20240115,
             &ObjectDailyDelta {
-                live_capacity_delta: 100,
-                live_used_capacity_delta: 60,
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
             },
         )
         .unwrap();
@@ -6020,8 +6020,8 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["standard"], "dotbit");
     assert_eq!(json["name"], ".bit");
-    assert_eq!(json["liveCapacity"], "100");
-    assert_eq!(json["liveCommonKnowledgeSize"], "60");
+    assert_eq!(json["ownedCapacity"], "100");
+    assert_eq!(json["ownedKnowledge"], "60");
 
     let request = Request::builder()
         .uri("/api/v1/assets/objects/DOTBIT/charts/capacity-history")
@@ -6114,8 +6114,8 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
             &collection_id,
             20240115,
             &ObjectDailyDelta {
-                live_capacity_delta: 120,
-                live_used_capacity_delta: 70,
+                owned_capacity_delta: 120,
+                owned_knowledge_delta: 70,
             },
         )
         .unwrap();
@@ -9102,8 +9102,8 @@ async fn test_asset_ecosystem_returns_expected_structure() {
             &[0xAA; 32],
             20240101,
             &TokenDailyDelta {
-                live_capacity_delta: 500_00000000,
-                live_used_capacity_delta: 300_00000000,
+                owned_capacity_delta: 500_00000000,
+                owned_knowledge_delta: 300_00000000,
             },
         )
         .unwrap();

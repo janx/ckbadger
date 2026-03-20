@@ -22,6 +22,7 @@ use crate::cache::InMemoryCache;
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
+use crate::utils::accumulate_owned_capacity;
 use crate::AppState;
 
 /// Decode an identity collection ID from a URL path segment.
@@ -59,6 +60,8 @@ pub struct IdentityCollectionDetailResponse {
     pub live_count: i64,
     pub holders_count: i64,
     pub activities_count: i64,
+    pub owned_capacity: String,
+    pub owned_knowledge: String,
 }
 
 async fn get_identity_collection(
@@ -89,6 +92,20 @@ async fn get_identity_collection(
     let name = agg.name;
     let activities_count = agg.activities_count;
 
+    let store2 = state.store.clone();
+    let collection_id_bytes_c2 = collection_id_bytes.clone();
+    let (owned_capacity, owned_knowledge) = tokio::task::spawn_blocking(move || {
+        let daily = store2.list_object_daily_deltas(&collection_id_bytes_c2)?;
+        accumulate_owned_capacity(
+            daily
+                .into_iter()
+                .map(|(_, delta)| (delta.owned_capacity_delta, delta.owned_knowledge_delta)),
+        )
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
     ok(IdentityCollectionDetailResponse {
         collection_id: format!("0x{}", hex::encode(&collection_id_bytes)),
         standard,
@@ -97,6 +114,8 @@ async fn get_identity_collection(
         live_count: agg.live_count,
         holders_count: agg.holders_count,
         activities_count,
+        owned_capacity: owned_capacity.to_string(),
+        owned_knowledge: owned_knowledge.to_string(),
     })
 }
 

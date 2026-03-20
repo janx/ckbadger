@@ -145,7 +145,7 @@ fn populate_derived_cfs(store: &CkbadgerStore, lock_hash: &[u8], block_count: i6
         code_hash: lock_code_hash.clone(),
         hash_type: 1,
         lock_live_cells_count: block_count,
-        lock_live_capacity_sum: block_count as i128 * cap_per_cell,
+        lock_owned_capacity_sum: block_count as i128 * cap_per_cell,
         ..Default::default()
     };
     batch.put_script_info(&lock_code_hash, &lock_si);
@@ -549,8 +549,8 @@ fn test_rollback_updates_derived_cfs_inline() {
         code_hash: lock_code_hash.clone(),
         hash_type: 1,
         lock_live_cells_count: 6,
-        lock_live_capacity_sum: 4 * reg_cap + 2 * udt_cap,
-        lock_live_used_capacity_sum: 2 * udt_cap,
+        lock_owned_capacity_sum: 4 * reg_cap + 2 * udt_cap,
+        lock_owned_knowledge_sum: 2 * udt_cap,
         ..Default::default()
     };
     batch.put_script_info(&lock_code_hash, &lock_si);
@@ -560,8 +560,8 @@ fn test_rollback_updates_derived_cfs_inline() {
         code_hash: type_code_hash.clone(),
         hash_type: 1,
         type_live_cells_count: 2,
-        type_live_capacity_sum: 2 * udt_cap,
-        type_live_used_capacity_sum: 2 * udt_cap,
+        type_owned_capacity_sum: 2 * udt_cap,
+        type_owned_knowledge_sum: 2 * udt_cap,
         ..Default::default()
     };
     batch.put_script_info(&type_code_hash, &type_si);
@@ -626,7 +626,7 @@ fn test_rollback_updates_derived_cfs_inline() {
         "lock script_info: 6 - 4 = 2 live cells"
     );
     assert_eq!(
-        lock_si.lock_live_capacity_sum,
+        lock_si.lock_owned_capacity_sum,
         2 * reg_cap,
         "lock script_info: capacity of 2 regular cells"
     );
@@ -638,7 +638,7 @@ fn test_rollback_updates_derived_cfs_inline() {
         "type script_info: 2 - 2 = 0 live cells"
     );
     assert_eq!(
-        type_si.type_live_capacity_sum, 0,
+        type_si.type_owned_capacity_sum, 0,
         "type script_info: capacity 0 after all UDT cells removed"
     );
 

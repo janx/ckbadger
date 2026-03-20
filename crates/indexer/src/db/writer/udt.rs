@@ -62,14 +62,14 @@ impl BatchWriter {
         }
 
         let mut keyed_changes: Vec<(Vec<u8>, i128, i128)> = Vec::with_capacity(changes.len());
-        for ((type_hash, date_yyyymmdd), (live_cap_delta, live_used_delta)) in changes {
-            if *live_cap_delta == 0 && *live_used_delta == 0 {
+        for ((type_hash, date_yyyymmdd), (owned_cap_delta, owned_knowledge_delta)) in changes {
+            if *owned_cap_delta == 0 && *owned_knowledge_delta == 0 {
                 continue;
             }
             keyed_changes.push((
                 ckbadger_store::keys::encode_token_daily_key(type_hash, *date_yyyymmdd).to_vec(),
-                *live_cap_delta,
-                *live_used_delta,
+                *owned_cap_delta,
+                *owned_knowledge_delta,
             ));
         }
 
@@ -86,7 +86,7 @@ impl BatchWriter {
             .collect::<Result<Vec<_>>>()?;
         let existing_results = self.store.multi_get_cf(cf_keys);
 
-        for ((key, live_cap_delta, live_used_delta), existing_res) in
+        for ((key, owned_cap_delta, owned_knowledge_delta), existing_res) in
             keyed_changes.into_iter().zip(existing_results.into_iter())
         {
             let mut existing: TokenDailyDelta = match existing_res {
@@ -106,29 +106,29 @@ impl BatchWriter {
                     );
                 }
             };
-            existing.live_capacity_delta = existing
-                .live_capacity_delta
-                .checked_add(live_cap_delta)
+            existing.owned_capacity_delta = existing
+                .owned_capacity_delta
+                .checked_add(owned_cap_delta)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "token daily capacity delta overflow: key=0x{}, current={}, delta={}",
                         hex::encode(&key),
-                        existing.live_capacity_delta,
-                        live_cap_delta
+                        existing.owned_capacity_delta,
+                        owned_cap_delta
                     )
                 })?;
-            existing.live_used_capacity_delta = existing
-                .live_used_capacity_delta
-                .checked_add(live_used_delta)
+            existing.owned_knowledge_delta = existing
+                .owned_knowledge_delta
+                .checked_add(owned_knowledge_delta)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "token daily used delta overflow: key=0x{}, current={}, delta={}",
                         hex::encode(&key),
-                        existing.live_used_capacity_delta,
-                        live_used_delta
+                        existing.owned_knowledge_delta,
+                        owned_knowledge_delta
                     )
                 })?;
-            if existing.live_capacity_delta == 0 && existing.live_used_capacity_delta == 0 {
+            if existing.owned_capacity_delta == 0 && existing.owned_knowledge_delta == 0 {
                 batch.delete_stats(&key);
             } else {
                 let value = bincode::serialize(&existing)?;
@@ -604,8 +604,8 @@ mod tests {
             .get_token_daily_delta(&type_hash, 20240115)
             .unwrap()
             .unwrap();
-        assert_eq!(delta.live_capacity_delta, 80);
-        assert_eq!(delta.live_used_capacity_delta, 50);
+        assert_eq!(delta.owned_capacity_delta, 80);
+        assert_eq!(delta.owned_knowledge_delta, 50);
 
         let mut third = HashMap::new();
         third.insert((type_hash.clone(), 20240115u32), (-80i128, -50i128));

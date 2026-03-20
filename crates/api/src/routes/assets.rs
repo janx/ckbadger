@@ -22,7 +22,7 @@ use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
 use crate::utils::{
-    apply_live_capacity_delta, date_keys_inclusive, parse_chart_date_range,
+    apply_owned_capacity_delta, date_keys_inclusive, parse_chart_date_range,
     resolve_collection_standard, resolve_nft_collection_name,
 };
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN};
@@ -224,9 +224,8 @@ pub struct AssetResponse {
     pub content_size: Option<i32>,
     pub cluster_id: Option<String>,
     pub cluster_name: Option<String>,
-    pub live_capacity: Option<String>,
-    #[serde(rename = "liveCommonKnowledgeSize")]
-    pub live_used_capacity: Option<String>,
+    pub owned_capacity: Option<String>,
+    pub owned_knowledge: Option<String>,
     pub storage_tier: Option<String>,
     pub fully_onchain_ratio: Option<String>,
     pub fully_onchain_count: Option<i64>,
@@ -254,9 +253,8 @@ pub struct NftCollectionDetailResponse {
     pub live_count: i64,
     pub holders_count: i64,
     pub activities_count: i64,
-    pub live_capacity: String,
-    #[serde(rename = "liveCommonKnowledgeSize")]
-    pub live_used_capacity: String,
+    pub owned_capacity: String,
+    pub owned_knowledge: String,
     pub storage_profile: CollectionStorageProfileResponse,
 }
 
@@ -701,7 +699,7 @@ fn asset_display_name(entry: &CachedAssetEntry) -> String {
 }
 
 fn compute_h_multiplier(entry: &CachedAssetEntry) -> f64 {
-    match (&entry.live_capacity, &entry.live_used_capacity) {
+    match (&entry.owned_capacity, &entry.owned_knowledge) {
         (Some(cap_str), Some(occ_str)) => {
             let cap: f64 = cap_str.parse().unwrap_or(0.0);
             let occ: f64 = occ_str.parse().unwrap_or(0.0);
@@ -742,13 +740,13 @@ fn compare_asset_entries(
             apply_direction(left.transfers_count.cmp(&right.transfers_count), direction)
         }
         AssetSortKey::Used => compare_optional_i128(
-            parse_i128_opt(left.live_used_capacity.as_deref()),
-            parse_i128_opt(right.live_used_capacity.as_deref()),
+            parse_i128_opt(left.owned_knowledge.as_deref()),
+            parse_i128_opt(right.owned_knowledge.as_deref()),
             direction,
         ),
         AssetSortKey::Capacity => compare_optional_i128(
-            parse_i128_opt(left.live_capacity.as_deref()),
-            parse_i128_opt(right.live_capacity.as_deref()),
+            parse_i128_opt(left.owned_capacity.as_deref()),
+            parse_i128_opt(right.owned_capacity.as_deref()),
             direction,
         ),
         AssetSortKey::OnchainRatio => compare_optional_i64(
@@ -1213,7 +1211,7 @@ fn build_capacity_history_chart_with_initial(
 
     for date in dates {
         let (cap_delta, used_delta) = daily_deltas.get(&date).copied().unwrap_or((0, 0));
-        (cumulative_capacity, cumulative_used) = apply_live_capacity_delta(
+        (cumulative_capacity, cumulative_used) = apply_owned_capacity_delta(
             cumulative_capacity,
             cumulative_used,
             cap_delta,
@@ -1686,15 +1684,15 @@ async fn get_object_collection(
             .map(|(date, delta)| {
                 (
                     date,
-                    delta.live_capacity_delta,
-                    delta.live_used_capacity_delta,
+                    delta.owned_capacity_delta,
+                    delta.owned_knowledge_delta,
                 )
             })
             .collect(),
         "NFT Collection Capacity History".to_string(),
     )
     .map_err(|e| ApiError::internal(e.to_string()))?;
-    let (live_capacity, live_used_capacity) = latest_capacity_from_chart(&chart);
+    let (owned_capacity, owned_knowledge) = latest_capacity_from_chart(&chart);
 
     let raw_standard = agg.standard.asset_standard().to_string();
     let standard = resolve_collection_standard(&collection_id_bytes, &raw_standard);
@@ -1733,8 +1731,8 @@ async fn get_object_collection(
         live_count: agg.live_count,
         holders_count,
         activities_count,
-        live_capacity,
-        live_used_capacity,
+        owned_capacity,
+        owned_knowledge,
         storage_profile,
     })
 }
@@ -2493,11 +2491,11 @@ async fn get_object_collection_capacity_chart(
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
-            (base_capacity, base_used) = apply_live_capacity_delta(
+            (base_capacity, base_used) = apply_owned_capacity_delta(
                 base_capacity,
                 base_used,
-                delta.live_capacity_delta,
-                delta.live_used_capacity_delta,
+                delta.owned_capacity_delta,
+                delta.owned_knowledge_delta,
                 "building NFT baseline capacity history chart",
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -2517,8 +2515,8 @@ async fn get_object_collection_capacity_chart(
             .map(|(date, delta)| {
                 (
                     date,
-                    delta.live_capacity_delta,
-                    delta.live_used_capacity_delta,
+                    delta.owned_capacity_delta,
+                    delta.owned_knowledge_delta,
                 )
             })
             .collect(),

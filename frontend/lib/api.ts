@@ -771,8 +771,8 @@ interface Asset {
   contentSize: number | null;
   clusterId: string | null;
   clusterName: string | null;
-  liveCapacity: string | null;
-  liveCommonKnowledgeSize: string | null;
+  ownedCapacity: string | null;
+  ownedKnowledge: string | null;
   storageTier?:
     | 'fully_onchain'
     | 'offchain_dependent'
@@ -944,8 +944,8 @@ interface SporeCluster {
   holdersCount: number;
   activitiesCount: number;
   createdAtBlock: number;
-  liveCapacity?: string | null;
-  liveCommonKnowledgeSize?: string | null;
+  ownedCapacity?: string | null;
+  ownedKnowledge?: string | null;
   storageProfile?: {
     tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
     fullyOnchainCount: number;
@@ -967,8 +967,8 @@ interface SporeNft {
   ownerAddress?: string;
   isLive: boolean;
   createdAtBlock: number;
-  liveCapacity?: string | null;
-  liveCommonKnowledgeSize?: string | null;
+  ownedCapacity?: string | null;
+  ownedKnowledge?: string | null;
   mediaProfile?: {
     tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
     sources: Array<{
@@ -1008,8 +1008,8 @@ interface ObjectCollection {
   liveCount: number;
   holdersCount: number;
   activitiesCount: number;
-  liveCapacity: string;
-  liveCommonKnowledgeSize: string;
+  ownedCapacity: string;
+  ownedKnowledge: string;
   storageProfile?: {
     tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
     fullyOnchainCount: number;
@@ -1028,6 +1028,8 @@ export interface IdentityCollection {
   liveCount: number;
   holdersCount: number;
   activitiesCount: number;
+  ownedCapacity: string;
+  ownedKnowledge: string;
 }
 
 interface CollectionItem {
@@ -1203,8 +1205,8 @@ interface KnownScript {
   codeCellTxHash: string | null;
   codeCellOutputIndex: number | null;
   deployedAt?: number | null;
-  liveCapacitySum?: string;
-  liveCommonKnowledgeSizeSum?: string;
+  ownedCapacitySum?: string;
+  ownedKnowledgeSum?: string;
   liveCellsCount?: number;
   cellsCount?: number;
   codeCellsLiveCount?: number;
@@ -1217,9 +1219,9 @@ interface DeploymentUsage {
   cellsCount: number;
   liveCellsCount: number;
   capacitySum: string;
-  liveCapacitySum: string;
+  ownedCapacitySum: string;
   commonKnowledgeSizeSum: string;
-  liveCommonKnowledgeSizeSum: string;
+  ownedKnowledgeSum: string;
 }
 
 interface ScriptUsage {
@@ -1227,9 +1229,9 @@ interface ScriptUsage {
   cellsCount: number;
   liveCellsCount: number;
   capacitySum: string;
-  liveCapacitySum: string;
+  ownedCapacitySum: string;
   commonKnowledgeSizeSum: string;
-  liveCommonKnowledgeSizeSum: string;
+  ownedKnowledgeSum: string;
   byDeployment: DeploymentUsage[];
 }
 
@@ -1268,8 +1270,8 @@ interface ScriptLookupInfo {
   codeCellTxHash: string | null;
   codeCellOutputIndex: number | null;
   liveCellsCount: number;
-  liveCapacitySum: string;
-  liveCommonKnowledgeSizeSum: string;
+  ownedCapacitySum: string;
+  ownedKnowledgeSum: string;
   codeCellsLiveCount: number;
   codeCellsTotal: number;
   resolutionState?: 'resolved' | 'ambiguous';

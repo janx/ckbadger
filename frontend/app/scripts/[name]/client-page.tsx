@@ -51,8 +51,8 @@ interface VersionUsageStats {
   codeHash: string;
   scriptKind: string | null;
   liveCellsCount: number;
-  liveCapacitySum: string;
-  liveCommonKnowledgeSizeSum: string;
+  ownedCapacitySum: string;
+  ownedKnowledgeSum: string;
 }
 
 const UNKNOWN_SCRIPT_NAME = 'unknown';
@@ -375,8 +375,8 @@ export default function ScriptDetailPage({
       codeCellTxHash: codeHashLookup.codeCellTxHash,
       codeCellOutputIndex: codeHashLookup.codeCellOutputIndex,
       deployedAt: null,
-      liveCapacitySum: codeHashLookup.liveCapacitySum,
-      liveCommonKnowledgeSizeSum: codeHashLookup.liveCommonKnowledgeSizeSum,
+      ownedCapacitySum: codeHashLookup.ownedCapacitySum,
+      ownedKnowledgeSum: codeHashLookup.ownedKnowledgeSum,
       liveCellsCount: codeHashLookup.liveCellsCount,
       codeCellsLiveCount: codeHashLookup.codeCellsLiveCount,
       codeCellsTotal: codeHashLookup.codeCellsTotal,
@@ -415,8 +415,8 @@ export default function ScriptDetailPage({
           codeHash: codeHashLookup.codeHash,
           scriptKind: codeHashLookup.scriptKind,
           liveCellsCount: codeHashLookup.liveCellsCount,
-          liveCapacitySum: codeHashLookup.liveCapacitySum,
-          liveCommonKnowledgeSizeSum: codeHashLookup.liveCommonKnowledgeSizeSum,
+          ownedCapacitySum: codeHashLookup.ownedCapacitySum,
+          ownedKnowledgeSum: codeHashLookup.ownedKnowledgeSum,
         },
       ];
     }
@@ -426,8 +426,8 @@ export default function ScriptDetailPage({
         codeHash: deployment.codeHash,
         scriptKind: deployment.scriptKind,
         liveCellsCount: deployment.liveCellsCount,
-        liveCapacitySum: deployment.liveCapacitySum,
-        liveCommonKnowledgeSizeSum: deployment.liveCommonKnowledgeSizeSum,
+        ownedCapacitySum: deployment.ownedCapacitySum,
+        ownedKnowledgeSum: deployment.ownedKnowledgeSum,
       })) ?? []
     );
   }, [codeHashLookup, isCodeHashMode, usage?.byDeployment]);
@@ -851,7 +851,7 @@ export default function ScriptDetailPage({
         : undefined,
       deploymentsCount: group.deployments.length,
       liveCellsCount: stats?.liveCellsCount ?? 0,
-      liveCapacitySum: stats?.liveCapacitySum ?? '0',
+      ownedCapacitySum: stats?.ownedCapacitySum ?? '0',
       scriptKind:
         (stats?.scriptKind as 'lock' | 'type' | undefined) ??
         (group.primaryDeployment.scriptKind as 'lock' | 'type' | undefined),
@@ -1229,7 +1229,7 @@ export default function ScriptDetailPage({
               <div data-testid="script-versions-compact">
                 {versionRows.map((versionRow) => {
                   const selected = isSelected(versionRow);
-                  const compactCapacity = formatCkbCompact(versionRow.liveCapacitySum);
+                  const compactCapacity = formatCkbCompact(versionRow.ownedCapacitySum);
 
                   return (
                     <TerminalRow
@@ -1280,7 +1280,7 @@ export default function ScriptDetailPage({
                               Capacity using it
                             </div>
                             <div className="text-text pt-1 font-mono tabular-nums">
-                              {versionRow.liveCapacitySum !== '0'
+                              {versionRow.ownedCapacitySum !== '0'
                                 ? `${compactCapacity.value} CKB`
                                 : '-'}
                             </div>
@@ -1310,8 +1310,8 @@ export default function ScriptDetailPage({
                             Capacity using it
                           </div>
                           <div className="text-emphasis font-mono tabular-nums">
-                            <span title={`${formatCkbCompact(usage.liveCapacitySum).full} CKB`}>
-                              {formatCkbCompact(usage.liveCapacitySum).value} CKB
+                            <span title={`${formatCkbCompact(usage.ownedCapacitySum).full} CKB`}>
+                              {formatCkbCompact(usage.ownedCapacitySum).value} CKB
                             </span>
                           </div>
                         </div>
@@ -1331,7 +1331,7 @@ export default function ScriptDetailPage({
                 </div>
                 {versionRows.map((versionRow) => {
                   const selected = isSelected(versionRow);
-                  const compactCapacity = formatCkbCompact(versionRow.liveCapacitySum);
+                  const compactCapacity = formatCkbCompact(versionRow.ownedCapacitySum);
 
                   return (
                     <TerminalRow
@@ -1361,7 +1361,7 @@ export default function ScriptDetailPage({
                           )}
                         </div>
                         <div className="text-text py-0.5 text-right font-mono tabular-nums">
-                          {versionRow.liveCapacitySum !== '0' ? (
+                          {versionRow.ownedCapacitySum !== '0' ? (
                             <span title={`${compactCapacity.full} CKB`}>
                               {compactCapacity.value} CKB
                             </span>
@@ -1384,8 +1384,8 @@ export default function ScriptDetailPage({
                       </span>
                     </div>
                     <div className="text-emphasis text-right font-mono tabular-nums">
-                      <span title={`${formatCkbCompact(usage.liveCapacitySum).full} CKB`}>
-                        {formatCkbCompact(usage.liveCapacitySum).value} CKB
+                      <span title={`${formatCkbCompact(usage.ownedCapacitySum).full} CKB`}>
+                        {formatCkbCompact(usage.ownedCapacitySum).value} CKB
                       </span>
                     </div>
                   </div>
@@ -1403,7 +1403,7 @@ export default function ScriptDetailPage({
                 </div>
                 {versionRows.map((versionRow) => {
                   const selected = isSelected(versionRow);
-                  const compactCapacity = formatCkbCompact(versionRow.liveCapacitySum);
+                  const compactCapacity = formatCkbCompact(versionRow.ownedCapacitySum);
 
                   return (
                     <React.Fragment key={versionRow.codeHash}>
@@ -1435,7 +1435,7 @@ export default function ScriptDetailPage({
                             )}
                           </div>
                           <div className="text-text py-0.5 text-right font-mono tabular-nums">
-                            {versionRow.liveCapacitySum !== '0' ? (
+                            {versionRow.ownedCapacitySum !== '0' ? (
                               <span title={`${compactCapacity.full} CKB`}>
                                 {compactCapacity.value} CKB
                               </span>
@@ -1460,8 +1460,8 @@ export default function ScriptDetailPage({
                       </span>
                     </div>
                     <div className="text-emphasis w-44 shrink-0 text-right font-mono tabular-nums">
-                      <span title={`${formatCkbCompact(usage.liveCapacitySum).full} CKB`}>
-                        {formatCkbCompact(usage.liveCapacitySum).value} CKB
+                      <span title={`${formatCkbCompact(usage.ownedCapacitySum).full} CKB`}>
+                        {formatCkbCompact(usage.ownedCapacitySum).value} CKB
                       </span>
                     </div>
                   </div>
@@ -1741,8 +1741,8 @@ export default function ScriptDetailPage({
                 {selectedVersionUsage && (
                   <div className="border-base-border border-b px-4 py-4">
                     <HMultiplier
-                      totalCapacity={selectedVersionUsage.liveCapacitySum}
-                      commonKnowledgeSize={selectedVersionUsage.liveCommonKnowledgeSizeSum}
+                      totalCapacity={selectedVersionUsage.ownedCapacitySum}
+                      commonKnowledgeSize={selectedVersionUsage.ownedKnowledgeSum}
                     />
                   </div>
                 )}

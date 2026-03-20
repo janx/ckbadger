@@ -19,7 +19,7 @@ use crate::response::{
     chart_response_has_data, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint, ChartResponse,
     SyncStatusResponse as SyncStatus,
 };
-use crate::utils::{apply_live_capacity_delta, format_duration};
+use crate::utils::{apply_owned_capacity_delta, format_duration};
 use crate::warmup::{
     CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN, CACHE_KEY_SCRIPTS_ALL,
 };
@@ -567,7 +567,7 @@ fn apply_capacity_delta_i128(
     used_delta: i128,
     context: &str,
 ) -> Result<(i128, i128), ApiRouteError> {
-    apply_live_capacity_delta(
+    apply_owned_capacity_delta(
         total_cells_capacity,
         used_capacity,
         capacity_delta,
@@ -585,7 +585,7 @@ where
     let mut used_capacity: i128 = 0;
 
     for (idx, (capacity_delta, used_delta)) in deltas.into_iter().enumerate() {
-        (total_cells_capacity, used_capacity) = apply_live_capacity_delta(
+        (total_cells_capacity, used_capacity) = apply_owned_capacity_delta(
             total_cells_capacity,
             used_capacity,
             capacity_delta,
@@ -640,7 +640,7 @@ fn build_most_utilized_share_chart(
                 let old_capacity = state.total_cells_capacity;
                 let old_used = state.used_capacity;
 
-                let (new_capacity, new_used) = apply_live_capacity_delta(
+                let (new_capacity, new_used) = apply_owned_capacity_delta(
                     old_capacity,
                     old_used,
                     *capacity_delta,
@@ -744,9 +744,9 @@ async fn get_most_utilized_scripts_chart(
         };
         labels_by_key.insert(key.clone(), label);
 
-        let final_total_cells_capacity = info.lock_live_capacity_sum + info.type_live_capacity_sum;
-        let final_used_capacity =
-            info.lock_live_used_capacity_sum + info.type_live_used_capacity_sum;
+        let final_total_cells_capacity =
+            info.lock_owned_capacity_sum + info.type_owned_capacity_sum;
+        let final_used_capacity = info.lock_owned_knowledge_sum + info.type_owned_knowledge_sum;
         if final_total_cells_capacity < 0 {
             return Err(ApiError::internal(format!(
                 "negative script total capacity for key {}: {}",
@@ -777,8 +777,8 @@ async fn get_most_utilized_scripts_chart(
             for (date, delta) in deltas {
                 deltas_by_date.entry(date).or_default().push((
                     key.clone(),
-                    delta.live_capacity_delta,
-                    delta.live_used_capacity_delta,
+                    delta.owned_capacity_delta,
+                    delta.owned_knowledge_delta,
                 ));
             }
         }
@@ -902,7 +902,7 @@ async fn get_most_utilized_assets_chart(
         let (total_cells_capacity, used_cap) = accumulate_capacity_deltas(
             deltas
                 .iter()
-                .map(|(_, delta)| (delta.live_capacity_delta, delta.live_used_capacity_delta)),
+                .map(|(_, delta)| (delta.owned_capacity_delta, delta.owned_knowledge_delta)),
         )?;
         if total_cells_capacity <= 0 && used_cap <= 0 {
             continue;
@@ -929,8 +929,8 @@ async fn get_most_utilized_assets_chart(
         for (date, delta) in deltas {
             deltas_by_date.entry(date).or_default().push((
                 entity_key.clone(),
-                delta.live_capacity_delta,
-                delta.live_used_capacity_delta,
+                delta.owned_capacity_delta,
+                delta.owned_knowledge_delta,
             ));
         }
     }
@@ -955,10 +955,11 @@ async fn get_most_utilized_assets_chart(
                 .store
                 .list_cluster_daily_deltas(&cluster_bytes)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
-            let (total_cells_capacity, used_cap) =
-                accumulate_capacity_deltas(deltas.iter().map(|(_, delta)| {
-                    (delta.live_capacity_delta, delta.live_used_capacity_delta)
-                }))?;
+            let (total_cells_capacity, used_cap) = accumulate_capacity_deltas(
+                deltas
+                    .iter()
+                    .map(|(_, delta)| (delta.owned_capacity_delta, delta.owned_knowledge_delta)),
+            )?;
             if total_cells_capacity <= 0 && used_cap <= 0 {
                 continue;
             }
@@ -979,8 +980,8 @@ async fn get_most_utilized_assets_chart(
             for (date, delta) in deltas {
                 deltas_by_date.entry(date).or_default().push((
                     entity_key.clone(),
-                    delta.live_capacity_delta,
-                    delta.live_used_capacity_delta,
+                    delta.owned_capacity_delta,
+                    delta.owned_knowledge_delta,
                 ));
             }
             continue;
@@ -1007,7 +1008,7 @@ async fn get_most_utilized_assets_chart(
         let (total_cells_capacity, used_cap) = accumulate_capacity_deltas(
             deltas
                 .iter()
-                .map(|(_, delta)| (delta.live_capacity_delta, delta.live_used_capacity_delta)),
+                .map(|(_, delta)| (delta.owned_capacity_delta, delta.owned_knowledge_delta)),
         )?;
         if total_cells_capacity <= 0 && used_cap <= 0 {
             continue;
@@ -1029,8 +1030,8 @@ async fn get_most_utilized_assets_chart(
         for (date, delta) in deltas {
             deltas_by_date.entry(date).or_default().push((
                 entity_key.clone(),
-                delta.live_capacity_delta,
-                delta.live_used_capacity_delta,
+                delta.owned_capacity_delta,
+                delta.owned_knowledge_delta,
             ));
         }
     }
@@ -1382,7 +1383,7 @@ async fn get_common_knowledge_composition_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
         for (date, delta) in deltas {
-            let used_delta = delta.live_used_capacity_delta;
+            let used_delta = delta.owned_knowledge_delta;
             *type_daily_delta.entry(date).or_insert(0) += used_delta;
 
             if dao_hashes.contains(&code_hash) {
@@ -3227,7 +3228,7 @@ async fn get_asset_ecosystem(
         .take(5)
         .map(|t| {
             let capacity_shannon: i128 = t
-                .live_capacity
+                .owned_capacity
                 .as_deref()
                 .and_then(|s| s.parse::<i128>().ok())
                 .unwrap_or(0);
@@ -3245,7 +3246,7 @@ async fn get_asset_ecosystem(
     let total_token_capacity: i128 = token_assets
         .iter()
         .filter_map(|t| {
-            t.live_capacity
+            t.owned_capacity
                 .as_deref()
                 .and_then(|s| s.parse::<i128>().ok())
         })
@@ -3262,7 +3263,7 @@ async fn get_asset_ecosystem(
     let total_object_capacity: i128 = nft_assets
         .iter()
         .filter_map(|n| {
-            n.live_capacity
+            n.owned_capacity
                 .as_deref()
                 .and_then(|s| s.parse::<i128>().ok())
         })

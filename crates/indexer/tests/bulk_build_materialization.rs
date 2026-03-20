@@ -1248,12 +1248,12 @@ fn bulk_build_materializes_script_daily_deltas_from_same_block_recreate() {
         .get(&lock_code_hash)
         .expect("lock script info");
     assert_eq!(
-        lock_daily.live_capacity_delta,
-        lock_info.lock_live_capacity_sum
+        lock_daily.owned_capacity_delta,
+        lock_info.lock_owned_capacity_sum
     );
     assert_eq!(
-        lock_daily.live_used_capacity_delta,
-        lock_info.lock_live_used_capacity_sum
+        lock_daily.owned_knowledge_delta,
+        lock_info.lock_owned_knowledge_sum
     );
 
     let type_daily = snapshot
@@ -1267,12 +1267,12 @@ fn bulk_build_materializes_script_daily_deltas_from_same_block_recreate() {
         .get(&type_code_hash)
         .expect("type script info");
     assert_eq!(
-        type_daily.live_capacity_delta,
-        type_info.type_live_capacity_sum
+        type_daily.owned_capacity_delta,
+        type_info.type_owned_capacity_sum
     );
     assert_eq!(
-        type_daily.live_used_capacity_delta,
-        type_info.type_live_used_capacity_sum
+        type_daily.owned_knowledge_delta,
+        type_info.type_owned_knowledge_sum
     );
 }
 

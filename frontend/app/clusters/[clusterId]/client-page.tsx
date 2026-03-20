@@ -404,8 +404,8 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
         <ObjectCollectionStatCards
           totalCount={cluster.sporesCount}
           totalLabel="Total Spores"
-          liveCapacity={cluster.liveCapacity}
-          liveCommonKnowledgeSize={cluster.liveCommonKnowledgeSize}
+          ownedCapacity={cluster.ownedCapacity}
+          ownedKnowledge={cluster.ownedKnowledge}
           createdAtBlock={cluster.createdAtBlock}
           storageTier={cluster.storageProfile?.tier}
           storageOnchainRatio={cluster.storageProfile?.fullyOnchainRatio}
@@ -493,8 +493,8 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
               onCapacityRangeChange={setCapacityRange}
               capacityChart={capacityChart}
               isCapacityChartLoading={isCapacityChartLoading}
-              totalCapacity={cluster.liveCapacity}
-              commonKnowledgeSize={cluster.liveCommonKnowledgeSize}
+              totalCapacity={cluster.ownedCapacity}
+              commonKnowledgeSize={cluster.ownedKnowledge}
             />
             <TerminalPanel>
               <Tabs

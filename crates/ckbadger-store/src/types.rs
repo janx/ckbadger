@@ -641,19 +641,19 @@ pub struct ScriptInfo {
     pub lock_cells_count: i64,
     pub lock_live_cells_count: i64,
     pub lock_capacity_sum: i128,
-    pub lock_live_capacity_sum: i128,
+    pub lock_owned_capacity_sum: i128,
     #[serde(default)]
     pub lock_used_capacity_sum: i128,
     #[serde(default)]
-    pub lock_live_used_capacity_sum: i128,
+    pub lock_owned_knowledge_sum: i128,
     pub type_cells_count: i64,
     pub type_live_cells_count: i64,
     pub type_capacity_sum: i128,
-    pub type_live_capacity_sum: i128,
+    pub type_owned_capacity_sum: i128,
     #[serde(default)]
     pub type_used_capacity_sum: i128,
     #[serde(default)]
-    pub type_live_used_capacity_sum: i128,
+    pub type_owned_knowledge_sum: i128,
     /// type_script_hash of the deployment cell (from label data).
     /// Used to find the code cell for hash_type="data"/"data1"/"data2" scripts.
     #[serde(default)]
@@ -681,51 +681,51 @@ pub struct ScriptVersionInfo {
     pub lock_cells_count: i64,
     pub lock_live_cells_count: i64,
     pub lock_capacity_sum: i128,
-    pub lock_live_capacity_sum: i128,
+    pub lock_owned_capacity_sum: i128,
     #[serde(default)]
     pub lock_used_capacity_sum: i128,
     #[serde(default)]
-    pub lock_live_used_capacity_sum: i128,
+    pub lock_owned_knowledge_sum: i128,
     pub type_cells_count: i64,
     pub type_live_cells_count: i64,
     pub type_capacity_sum: i128,
-    pub type_live_capacity_sum: i128,
+    pub type_owned_capacity_sum: i128,
     #[serde(default)]
     pub type_used_capacity_sum: i128,
     #[serde(default)]
-    pub type_live_used_capacity_sum: i128,
+    pub type_owned_knowledge_sum: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScriptDailyDelta {
     /// Net live capacity change in shannons for this script deployment + kind + day.
-    pub live_capacity_delta: i128,
+    pub owned_capacity_delta: i128,
     /// Net live used capacity change in shannons for this script deployment + kind + day.
-    pub live_used_capacity_delta: i128,
+    pub owned_knowledge_delta: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TokenDailyDelta {
     /// Net live capacity change in shannons for this token's cells on a day.
-    pub live_capacity_delta: i128,
+    pub owned_capacity_delta: i128,
     /// Net live used capacity change in shannons for this token's cells on a day.
-    pub live_used_capacity_delta: i128,
+    pub owned_knowledge_delta: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClusterDailyDelta {
     /// Net live capacity change in shannons for this cluster's spores on a day.
-    pub live_capacity_delta: i128,
+    pub owned_capacity_delta: i128,
     /// Net live used capacity change in shannons for this cluster's spores on a day.
-    pub live_used_capacity_delta: i128,
+    pub owned_knowledge_delta: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SporeDailyDelta {
     /// Net live capacity change in shannons for this spore on a day.
-    pub live_capacity_delta: i128,
+    pub owned_capacity_delta: i128,
     /// Net live used capacity change in shannons for this spore on a day.
-    pub live_used_capacity_delta: i128,
+    pub owned_knowledge_delta: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -737,9 +737,9 @@ pub struct SporeTypeIndex {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ObjectDailyDelta {
     /// Net live capacity change in shannons for this Object collection on a day.
-    pub live_capacity_delta: i128,
+    pub owned_capacity_delta: i128,
     /// Net live used capacity change in shannons for this Object collection on a day.
-    pub live_used_capacity_delta: i128,
+    pub owned_knowledge_delta: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1431,20 +1431,20 @@ mod tests {
     #[test]
     fn test_script_daily_delta_roundtrip() {
         let delta = ScriptDailyDelta {
-            live_capacity_delta: 123_000_000_000,
-            live_used_capacity_delta: -45_000_000_000,
+            owned_capacity_delta: 123_000_000_000,
+            owned_knowledge_delta: -45_000_000_000,
         };
         let bytes = bincode::serialize(&delta).unwrap();
         let decoded: ScriptDailyDelta = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.live_capacity_delta, 123_000_000_000);
-        assert_eq!(decoded.live_used_capacity_delta, -45_000_000_000);
+        assert_eq!(decoded.owned_capacity_delta, 123_000_000_000);
+        assert_eq!(decoded.owned_knowledge_delta, -45_000_000_000);
     }
 
     #[test]
     fn test_script_daily_delta_default() {
         let delta = ScriptDailyDelta::default();
-        assert_eq!(delta.live_capacity_delta, 0);
-        assert_eq!(delta.live_used_capacity_delta, 0);
+        assert_eq!(delta.owned_capacity_delta, 0);
+        assert_eq!(delta.owned_knowledge_delta, 0);
     }
 
     // ---- TokenDailyDelta ----
@@ -1452,20 +1452,20 @@ mod tests {
     #[test]
     fn test_token_daily_delta_roundtrip() {
         let delta = TokenDailyDelta {
-            live_capacity_delta: 890_000_000_000,
-            live_used_capacity_delta: -120_000_000_000,
+            owned_capacity_delta: 890_000_000_000,
+            owned_knowledge_delta: -120_000_000_000,
         };
         let bytes = bincode::serialize(&delta).unwrap();
         let decoded: TokenDailyDelta = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.live_capacity_delta, 890_000_000_000);
-        assert_eq!(decoded.live_used_capacity_delta, -120_000_000_000);
+        assert_eq!(decoded.owned_capacity_delta, 890_000_000_000);
+        assert_eq!(decoded.owned_knowledge_delta, -120_000_000_000);
     }
 
     #[test]
     fn test_token_daily_delta_default() {
         let delta = TokenDailyDelta::default();
-        assert_eq!(delta.live_capacity_delta, 0);
-        assert_eq!(delta.live_used_capacity_delta, 0);
+        assert_eq!(delta.owned_capacity_delta, 0);
+        assert_eq!(delta.owned_knowledge_delta, 0);
     }
 
     // ---- ClusterDailyDelta ----
@@ -1473,20 +1473,20 @@ mod tests {
     #[test]
     fn test_cluster_daily_delta_roundtrip() {
         let delta = ClusterDailyDelta {
-            live_capacity_delta: 321_000_000_000,
-            live_used_capacity_delta: -90_000_000_000,
+            owned_capacity_delta: 321_000_000_000,
+            owned_knowledge_delta: -90_000_000_000,
         };
         let bytes = bincode::serialize(&delta).unwrap();
         let decoded: ClusterDailyDelta = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.live_capacity_delta, 321_000_000_000);
-        assert_eq!(decoded.live_used_capacity_delta, -90_000_000_000);
+        assert_eq!(decoded.owned_capacity_delta, 321_000_000_000);
+        assert_eq!(decoded.owned_knowledge_delta, -90_000_000_000);
     }
 
     #[test]
     fn test_cluster_daily_delta_default() {
         let delta = ClusterDailyDelta::default();
-        assert_eq!(delta.live_capacity_delta, 0);
-        assert_eq!(delta.live_used_capacity_delta, 0);
+        assert_eq!(delta.owned_capacity_delta, 0);
+        assert_eq!(delta.owned_knowledge_delta, 0);
     }
 
     // ---- SporeDailyDelta ----
@@ -1494,20 +1494,20 @@ mod tests {
     #[test]
     fn test_spore_daily_delta_roundtrip() {
         let delta = SporeDailyDelta {
-            live_capacity_delta: 111_000_000_000,
-            live_used_capacity_delta: -22_000_000_000,
+            owned_capacity_delta: 111_000_000_000,
+            owned_knowledge_delta: -22_000_000_000,
         };
         let bytes = bincode::serialize(&delta).unwrap();
         let decoded: SporeDailyDelta = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.live_capacity_delta, 111_000_000_000);
-        assert_eq!(decoded.live_used_capacity_delta, -22_000_000_000);
+        assert_eq!(decoded.owned_capacity_delta, 111_000_000_000);
+        assert_eq!(decoded.owned_knowledge_delta, -22_000_000_000);
     }
 
     #[test]
     fn test_spore_daily_delta_default() {
         let delta = SporeDailyDelta::default();
-        assert_eq!(delta.live_capacity_delta, 0);
-        assert_eq!(delta.live_used_capacity_delta, 0);
+        assert_eq!(delta.owned_capacity_delta, 0);
+        assert_eq!(delta.owned_knowledge_delta, 0);
     }
 
     // ---- SporeTypeIndex ----
@@ -1536,20 +1536,20 @@ mod tests {
     #[test]
     fn test_object_daily_delta_roundtrip() {
         let delta = ObjectDailyDelta {
-            live_capacity_delta: 222_000_000_000,
-            live_used_capacity_delta: -33_000_000_000,
+            owned_capacity_delta: 222_000_000_000,
+            owned_knowledge_delta: -33_000_000_000,
         };
         let bytes = bincode::serialize(&delta).unwrap();
         let decoded: ObjectDailyDelta = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.live_capacity_delta, 222_000_000_000);
-        assert_eq!(decoded.live_used_capacity_delta, -33_000_000_000);
+        assert_eq!(decoded.owned_capacity_delta, 222_000_000_000);
+        assert_eq!(decoded.owned_knowledge_delta, -33_000_000_000);
     }
 
     #[test]
     fn test_object_daily_delta_default() {
         let delta = ObjectDailyDelta::default();
-        assert_eq!(delta.live_capacity_delta, 0);
-        assert_eq!(delta.live_used_capacity_delta, 0);
+        assert_eq!(delta.owned_capacity_delta, 0);
+        assert_eq!(delta.owned_knowledge_delta, 0);
     }
 
     // ---- ObjectTypeIndex ----

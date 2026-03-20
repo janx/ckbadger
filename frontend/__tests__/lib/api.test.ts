@@ -414,15 +414,15 @@ describe('api', () => {
             liveCount: 7,
             holdersCount: 5,
             activitiesCount: 20,
-            liveCapacity: '1000',
-            liveCommonKnowledgeSize: '600',
+            ownedCapacity: '1000',
+            ownedKnowledge: '600',
           });
         })
       );
 
       const collection = await api.getObjectCollection('0xcollection');
       expect(collection.collectionId).toBe('0xcollection');
-      expect(collection.liveCommonKnowledgeSize).toBe('600');
+      expect(collection.ownedKnowledge).toBe('600');
     });
 
     it('fetches dotbit identity collection detail', async () => {

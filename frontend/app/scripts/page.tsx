@@ -292,7 +292,7 @@ export default function ScriptsPage() {
                       </div>
                       <div className="text-text w-28 shrink-0 text-right font-mono">
                         {(() => {
-                          const occupied = script.liveCommonKnowledgeSizeSum;
+                          const occupied = script.ownedKnowledgeSum;
                           if (!occupied) {
                             return <span className="text-text-dim">-</span>;
                           }
@@ -302,7 +302,7 @@ export default function ScriptsPage() {
                       </div>
                       <div className="text-text w-28 shrink-0 text-right font-mono">
                         {(() => {
-                          const capacity = script.liveCapacitySum;
+                          const capacity = script.ownedCapacitySum;
                           if (!capacity) {
                             return <span className="text-text-dim">-</span>;
                           }
@@ -345,14 +345,14 @@ export default function ScriptsPage() {
                         <span>
                           Common Knowledge:{' '}
                           {(() => {
-                            const o = script.liveCommonKnowledgeSizeSum;
+                            const o = script.ownedKnowledgeSum;
                             return o ? formatCkbCompact(o).value : '-';
                           })()}
                         </span>
                         <span>
                           Capacity:{' '}
                           {(() => {
-                            const c = script.liveCapacitySum;
+                            const c = script.ownedCapacitySum;
                             return c ? formatCkbCompact(c).value : '-';
                           })()}
                         </span>

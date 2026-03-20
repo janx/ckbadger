@@ -1709,34 +1709,34 @@ impl CkbadgerStore {
             })?;
             if *is_type {
                 si.type_live_cells_count += live_delta;
-                si.type_live_capacity_sum += live_cap_delta;
-                si.type_live_used_capacity_sum += live_occ_delta;
+                si.type_owned_capacity_sum += live_cap_delta;
+                si.type_owned_knowledge_sum += live_occ_delta;
                 if si.type_live_cells_count < 0
-                    || si.type_live_capacity_sum < 0
-                    || si.type_live_used_capacity_sum < 0
+                    || si.type_owned_capacity_sum < 0
+                    || si.type_owned_knowledge_sum < 0
                 {
                     anyhow::bail!(
                         "script_info type underflow during rollback: code_hash=0x{}, live={}, cap={}, occ={}",
                         bytes_to_hex(code_hash),
                         si.type_live_cells_count,
-                        si.type_live_capacity_sum,
-                        si.type_live_used_capacity_sum
+                        si.type_owned_capacity_sum,
+                        si.type_owned_knowledge_sum
                     );
                 }
             } else {
                 si.lock_live_cells_count += live_delta;
-                si.lock_live_capacity_sum += live_cap_delta;
-                si.lock_live_used_capacity_sum += live_occ_delta;
+                si.lock_owned_capacity_sum += live_cap_delta;
+                si.lock_owned_knowledge_sum += live_occ_delta;
                 if si.lock_live_cells_count < 0
-                    || si.lock_live_capacity_sum < 0
-                    || si.lock_live_used_capacity_sum < 0
+                    || si.lock_owned_capacity_sum < 0
+                    || si.lock_owned_knowledge_sum < 0
                 {
                     anyhow::bail!(
                         "script_info lock underflow during rollback: code_hash=0x{}, live={}, cap={}, occ={}",
                         bytes_to_hex(code_hash),
                         si.lock_live_cells_count,
-                        si.lock_live_capacity_sum,
-                        si.lock_live_used_capacity_sum
+                        si.lock_owned_capacity_sum,
+                        si.lock_owned_knowledge_sum
                     );
                 }
             }
@@ -3326,8 +3326,8 @@ mod tests {
             &ScriptInfo {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 1,
-                lock_live_capacity_sum: 200,
-                lock_live_used_capacity_sum: 200,
+                lock_owned_capacity_sum: 200,
+                lock_owned_knowledge_sum: 200,
                 ..Default::default()
             },
         );
@@ -3449,8 +3449,8 @@ mod tests {
             &ScriptInfo {
                 code_hash: lock_code_hash.clone(),
                 lock_live_cells_count: 1,
-                lock_live_capacity_sum: 100,
-                lock_live_used_capacity_sum: 100,
+                lock_owned_capacity_sum: 100,
+                lock_owned_knowledge_sum: 100,
                 ..Default::default()
             },
         );
@@ -3459,8 +3459,8 @@ mod tests {
             &ScriptInfo {
                 code_hash: type_code_hash.clone(),
                 type_live_cells_count: 1,
-                type_live_capacity_sum: 100,
-                type_live_used_capacity_sum: 100,
+                type_owned_capacity_sum: 100,
+                type_owned_knowledge_sum: 100,
                 ..Default::default()
             },
         );
@@ -3663,8 +3663,8 @@ mod tests {
             &ScriptInfo {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 2,
-                lock_live_capacity_sum: 380,
-                lock_live_used_capacity_sum: 380,
+                lock_owned_capacity_sum: 380,
+                lock_owned_knowledge_sum: 380,
                 ..Default::default()
             },
         );
@@ -3903,8 +3903,8 @@ mod tests {
             &ScriptInfo {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 1,
-                lock_live_capacity_sum: 100,
-                lock_live_used_capacity_sum: 100,
+                lock_owned_capacity_sum: 100,
+                lock_owned_knowledge_sum: 100,
                 ..Default::default()
             },
         );
@@ -4022,8 +4022,8 @@ mod tests {
             &ScriptInfo {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 2,
-                lock_live_capacity_sum: 300,
-                lock_live_used_capacity_sum: 300,
+                lock_owned_capacity_sum: 300,
+                lock_owned_knowledge_sum: 300,
                 ..Default::default()
             },
         );

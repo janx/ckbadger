@@ -16,7 +16,7 @@ use crate::response::{
     ApiRouteError, CursorPaginatedResponse,
 };
 use crate::utils::{
-    apply_live_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
+    apply_owned_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
     hash_type_to_string, is_known_script_name, list_version_code_cells,
     merge_script_info_for_reference, parse_chart_date_range, related_code_hashes_for_reference,
     resolve_script_by_hash, CurrentScriptVersionResolution, VersionCodeCell,
@@ -136,9 +136,8 @@ pub struct ScriptResponse {
     pub deployed_at: Option<i64>,
     pub live_cells_count: i64,
     pub cells_count: i64,
-    pub live_capacity_sum: String,
-    #[serde(rename = "liveCommonKnowledgeSizeSum")]
-    pub live_used_capacity_sum: String,
+    pub owned_capacity_sum: String,
+    pub owned_knowledge_sum: String,
     pub code_cells_live_count: i64,
     pub code_cells_total: i64,
 }
@@ -150,11 +149,10 @@ pub struct ScriptUsageResponse {
     pub cells_count: i64,
     pub live_cells_count: i64,
     pub capacity_sum: String,
-    pub live_capacity_sum: String,
+    pub owned_capacity_sum: String,
     #[serde(rename = "commonKnowledgeSizeSum")]
     pub used_capacity_sum: String,
-    #[serde(rename = "liveCommonKnowledgeSizeSum")]
-    pub live_used_capacity_sum: String,
+    pub owned_knowledge_sum: String,
     pub by_deployment: Vec<DeploymentUsage>,
 }
 
@@ -166,11 +164,10 @@ pub struct DeploymentUsage {
     pub cells_count: i64,
     pub live_cells_count: i64,
     pub capacity_sum: String,
-    pub live_capacity_sum: String,
+    pub owned_capacity_sum: String,
     #[serde(rename = "commonKnowledgeSizeSum")]
     pub used_capacity_sum: String,
-    #[serde(rename = "liveCommonKnowledgeSizeSum")]
-    pub live_used_capacity_sum: String,
+    pub owned_knowledge_sum: String,
 }
 
 /// Request body for bulk script lookup by code_hash
@@ -196,9 +193,8 @@ pub struct ScriptLookupInfo {
     pub code_cell_tx_hash: Option<String>,
     pub code_cell_output_index: Option<i32>,
     pub live_cells_count: i64,
-    pub live_capacity_sum: String,
-    #[serde(rename = "liveCommonKnowledgeSizeSum")]
-    pub live_used_capacity_sum: String,
+    pub owned_capacity_sum: String,
+    pub owned_knowledge_sum: String,
     pub code_cells_live_count: i64,
     pub code_cells_total: i64,
     pub resolution_state: String,
@@ -359,9 +355,9 @@ fn version_totals(
         version.lock_cells_count + version.type_cells_count,
         version.lock_live_cells_count + version.type_live_cells_count,
         version.lock_capacity_sum + version.type_capacity_sum,
-        version.lock_live_capacity_sum + version.type_live_capacity_sum,
+        version.lock_owned_capacity_sum + version.type_owned_capacity_sum,
         version.lock_used_capacity_sum + version.type_used_capacity_sum,
-        version.lock_live_used_capacity_sum + version.type_live_used_capacity_sum,
+        version.lock_owned_knowledge_sum + version.type_owned_knowledge_sum,
     )
 }
 
@@ -438,15 +434,15 @@ fn fallback_script_version_info(
         lock_cells_count: fallback.lock_cells_count,
         lock_live_cells_count: fallback.lock_live_cells_count,
         lock_capacity_sum: fallback.lock_capacity_sum,
-        lock_live_capacity_sum: fallback.lock_live_capacity_sum,
+        lock_owned_capacity_sum: fallback.lock_owned_capacity_sum,
         lock_used_capacity_sum: fallback.lock_used_capacity_sum,
-        lock_live_used_capacity_sum: fallback.lock_live_used_capacity_sum,
+        lock_owned_knowledge_sum: fallback.lock_owned_knowledge_sum,
         type_cells_count: fallback.type_cells_count,
         type_live_cells_count: fallback.type_live_cells_count,
         type_capacity_sum: fallback.type_capacity_sum,
-        type_live_capacity_sum: fallback.type_live_capacity_sum,
+        type_owned_capacity_sum: fallback.type_owned_capacity_sum,
         type_used_capacity_sum: fallback.type_used_capacity_sum,
-        type_live_used_capacity_sum: fallback.type_live_used_capacity_sum,
+        type_owned_knowledge_sum: fallback.type_owned_knowledge_sum,
     })
 }
 
@@ -509,8 +505,8 @@ fn checked_capacity_totals(
     info: &ckbadger_store::ScriptInfo,
     context: &str,
 ) -> Result<(i128, i128), ApiRouteError> {
-    let capacity = info.lock_live_capacity_sum + info.type_live_capacity_sum;
-    let used = info.lock_live_used_capacity_sum + info.type_live_used_capacity_sum;
+    let capacity = info.lock_owned_capacity_sum + info.type_owned_capacity_sum;
+    let used = info.lock_owned_knowledge_sum + info.type_owned_knowledge_sum;
     if capacity < 0 {
         return Err(ApiError::internal(format!(
             "negative live capacity in {}: code_hash=0x{}, capacity={}",
@@ -579,9 +575,9 @@ fn resolve_version_capacity(
     let cells = info.lock_cells_count + info.type_cells_count;
     let live_cells = info.lock_live_cells_count + info.type_live_cells_count;
     let cap = info.lock_capacity_sum + info.type_capacity_sum;
-    let live_cap = info.lock_live_capacity_sum + info.type_live_capacity_sum;
+    let live_cap = info.lock_owned_capacity_sum + info.type_owned_capacity_sum;
     let used = info.lock_used_capacity_sum + info.type_used_capacity_sum;
-    let live_used = info.lock_live_used_capacity_sum + info.type_live_used_capacity_sum;
+    let live_used = info.lock_owned_knowledge_sum + info.type_owned_knowledge_sum;
 
     // Validate all capacity values (fail-fast, matches checked_capacity_totals pattern).
     // Total (historical) values are also checked because get_script_usage casts i128→u128.
@@ -625,20 +621,20 @@ fn resolve_version_capacity(
     Ok((cells, live_cells, cap, live_cap, used, live_used))
 }
 
-fn live_capacity_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
-    info.lock_live_capacity_sum + info.type_live_capacity_sum
+fn owned_capacity_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
+    info.lock_owned_capacity_sum + info.type_owned_capacity_sum
 }
 
-fn live_used_capacity_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
-    info.lock_live_used_capacity_sum + info.type_live_used_capacity_sum
+fn owned_knowledge_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
+    info.lock_owned_knowledge_sum + info.type_owned_knowledge_sum
 }
 
 fn used_ratio_for_sort(info: &ckbadger_store::ScriptInfo) -> Option<(i128, i128)> {
-    let capacity = live_capacity_sum_for_sort(info);
+    let capacity = owned_capacity_sum_for_sort(info);
     if capacity <= 0 {
         return None;
     }
-    Some((live_used_capacity_sum_for_sort(info), capacity))
+    Some((owned_knowledge_sum_for_sort(info), capacity))
 }
 
 fn apply_direction(ordering: Ordering, direction: SortDirection) -> Ordering {
@@ -689,12 +685,11 @@ fn compare_script_entries(
             direction,
         ),
         ScriptSortKey::Used => apply_direction(
-            live_used_capacity_sum_for_sort(&left.1)
-                .cmp(&live_used_capacity_sum_for_sort(&right.1)),
+            owned_knowledge_sum_for_sort(&left.1).cmp(&owned_knowledge_sum_for_sort(&right.1)),
             direction,
         ),
         ScriptSortKey::Capacity => apply_direction(
-            live_capacity_sum_for_sort(&left.1).cmp(&live_capacity_sum_for_sort(&right.1)),
+            owned_capacity_sum_for_sort(&left.1).cmp(&owned_capacity_sum_for_sort(&right.1)),
             direction,
         ),
         ScriptSortKey::UsedRatio => compare_used_ratio(
@@ -757,9 +752,9 @@ fn script_info_to_response(
         code_cell_tx_hash.as_deref(),
         code_cell_output_index,
     );
-    let (live_capacity, live_used) = checked_capacity_totals(info, "script response")?;
-    let live_used_capacity_sum = live_used.to_string();
-    let live_capacity_sum = live_capacity.to_string();
+    let (owned_capacity, owned_knowledge) = checked_capacity_totals(info, "script response")?;
+    let owned_knowledge_sum = owned_knowledge.to_string();
+    let owned_capacity_sum = owned_capacity.to_string();
     let (deployment_type_hash, deployment_data_hash) = deployment_reference_hashes(info);
     let (code_cells_live_count, code_cells_total) =
         count_code_cells(info, &state.store, &state.append_only_store)?;
@@ -789,8 +784,8 @@ fn script_info_to_response(
         deployed_at,
         live_cells_count: info.lock_live_cells_count + info.type_live_cells_count,
         cells_count: info.lock_cells_count + info.type_cells_count,
-        live_capacity_sum,
-        live_used_capacity_sum,
+        owned_capacity_sum,
+        owned_knowledge_sum,
         code_cells_live_count,
         code_cells_total,
     })
@@ -837,9 +832,9 @@ async fn lookup_scripts(
                     _cells_count,
                     live_cells_count,
                     _capacity_sum,
-                    live_capacity_sum,
+                    owned_capacity_sum,
                     _used_sum,
-                    live_used_sum,
+                    owned_knowledge,
                 ) = resolve_version_capacity(
                     &version_info,
                     script_info.as_ref(),
@@ -883,8 +878,8 @@ async fn lookup_scripts(
                         code_cell_output_index: code_cell
                             .map(|(_, output_index, _, _)| i32::from(*output_index)),
                         live_cells_count,
-                        live_capacity_sum: live_capacity_sum.to_string(),
-                        live_used_capacity_sum: live_used_sum.to_string(),
+                        owned_capacity_sum: owned_capacity_sum.to_string(),
+                        owned_knowledge_sum: owned_knowledge.to_string(),
                         code_cells_live_count: code_cells
                             .iter()
                             .filter(|(_, _, _, is_live)| *is_live)
@@ -911,8 +906,8 @@ async fn lookup_scripts(
                         code_cell_tx_hash: None,
                         code_cell_output_index: None,
                         live_cells_count: 0,
-                        live_capacity_sum: "0".to_string(),
-                        live_used_capacity_sum: "0".to_string(),
+                        owned_capacity_sum: "0".to_string(),
+                        owned_knowledge_sum: "0".to_string(),
                         code_cells_live_count: 0,
                         code_cells_total: 0,
                         resolution_state: "ambiguous".to_string(),
@@ -1223,9 +1218,9 @@ async fn get_script(
             cells_count,
             live_cells_count,
             _capacity_sum,
-            live_capacity_sum,
+            owned_capacity_sum,
             _used_sum,
-            live_used_sum,
+            owned_knowledge,
         ) = resolve_version_capacity(&version_info, script_info.as_ref(), &all_script_infos)?;
         let code_cells_live_count = code_cells
             .iter()
@@ -1273,8 +1268,8 @@ async fn get_script(
                 deployed_at: None,
                 live_cells_count,
                 cells_count,
-                live_capacity_sum: live_capacity_sum.to_string(),
-                live_used_capacity_sum: live_used_sum.to_string(),
+                owned_capacity_sum: owned_capacity_sum.to_string(),
+                owned_knowledge_sum: owned_knowledge.to_string(),
                 code_cells_live_count,
                 code_cells_total,
             });
@@ -1311,8 +1306,8 @@ async fn get_script(
                 deployed_at,
                 live_cells_count,
                 cells_count,
-                live_capacity_sum: live_capacity_sum.to_string(),
-                live_used_capacity_sum: live_used_sum.to_string(),
+                owned_capacity_sum: owned_capacity_sum.to_string(),
+                owned_knowledge_sum: owned_knowledge.to_string(),
                 code_cells_live_count,
                 code_cells_total,
             });
@@ -1344,9 +1339,9 @@ async fn get_script_usage(
             cells_count: 0,
             live_cells_count: 0,
             capacity_sum: "0".to_string(),
-            live_capacity_sum: "0".to_string(),
+            owned_capacity_sum: "0".to_string(),
             used_capacity_sum: "0".to_string(),
-            live_used_capacity_sum: "0".to_string(),
+            owned_knowledge_sum: "0".to_string(),
             by_deployment: vec![],
         });
     }
@@ -1356,7 +1351,7 @@ async fn get_script_usage(
     let mut total_cap: u128 = 0;
     let mut total_live_cap: u128 = 0;
     let mut total_used_cap: u128 = 0;
-    let mut total_live_used_cap: u128 = 0;
+    let mut total_owned_knowledge: u128 = 0;
 
     let all_script_infos = load_script_infos_cached(&state)?;
 
@@ -1367,21 +1362,21 @@ async fn get_script_usage(
                 cells_count,
                 live_cells_count,
                 capacity_sum,
-                live_capacity_sum,
+                owned_capacity_sum,
                 used_capacity_sum,
-                live_used_capacity_sum,
+                owned_knowledge_sum,
             ) = resolve_version_capacity(&info, None, &all_script_infos)?;
             let capacity_sum = capacity_sum as u128;
-            let live_capacity_sum = live_capacity_sum as u128;
+            let owned_capacity_sum = owned_capacity_sum as u128;
             let used_capacity_sum = used_capacity_sum as u128;
-            let live_used_capacity_sum = live_used_capacity_sum as u128;
+            let owned_knowledge_sum = owned_knowledge_sum as u128;
 
             total_cells += cells_count;
             total_live += live_cells_count;
             total_cap += capacity_sum;
-            total_live_cap += live_capacity_sum;
+            total_live_cap += owned_capacity_sum;
             total_used_cap += used_capacity_sum;
-            total_live_used_cap += live_used_capacity_sum;
+            total_owned_knowledge += owned_knowledge_sum;
 
             Ok(DeploymentUsage {
                 code_hash: format!("0x{}", hex::encode(&version_hash)),
@@ -1389,9 +1384,9 @@ async fn get_script_usage(
                 cells_count,
                 live_cells_count,
                 capacity_sum: capacity_sum.to_string(),
-                live_capacity_sum: live_capacity_sum.to_string(),
+                owned_capacity_sum: owned_capacity_sum.to_string(),
                 used_capacity_sum: used_capacity_sum.to_string(),
-                live_used_capacity_sum: live_used_capacity_sum.to_string(),
+                owned_knowledge_sum: owned_knowledge_sum.to_string(),
             })
         })
         .collect::<Result<Vec<_>, ApiRouteError>>()?;
@@ -1401,9 +1396,9 @@ async fn get_script_usage(
         cells_count: total_cells,
         live_cells_count: total_live,
         capacity_sum: total_cap.to_string(),
-        live_capacity_sum: total_live_cap.to_string(),
+        owned_capacity_sum: total_live_cap.to_string(),
         used_capacity_sum: total_used_cap.to_string(),
-        live_used_capacity_sum: total_live_used_cap.to_string(),
+        owned_knowledge_sum: total_owned_knowledge.to_string(),
         by_deployment,
     })
 }
@@ -1441,7 +1436,7 @@ fn apply_script_chart_delta(
     used_delta: i128,
     context: &str,
 ) -> Result<(i128, i128), ApiRouteError> {
-    apply_live_capacity_delta(
+    apply_owned_capacity_delta(
         cumulative_capacity,
         cumulative_used,
         cap_delta,
@@ -1562,8 +1557,8 @@ fn build_script_capacity_history_chart(
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             for (date, delta) in baseline {
                 let entry = baseline_daily.entry(date).or_insert((0, 0));
-                entry.0 += delta.live_capacity_delta;
-                entry.1 += delta.live_used_capacity_delta;
+                entry.0 += delta.owned_capacity_delta;
+                entry.1 += delta.owned_knowledge_delta;
             }
         }
         for (_, (cap_delta, used_delta)) in baseline_daily {
@@ -1585,8 +1580,8 @@ fn build_script_capacity_history_chart(
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (date, delta) in deltas {
             let entry = daily_deltas.entry(date).or_insert((0, 0));
-            entry.0 += delta.live_capacity_delta;
-            entry.1 += delta.live_used_capacity_delta;
+            entry.0 += delta.owned_capacity_delta;
+            entry.1 += delta.owned_knowledge_delta;
         }
     }
 
@@ -1784,7 +1779,7 @@ mod tests {
     fn checked_capacity_totals_errors_on_negative_capacity() {
         let info = ScriptInfo {
             code_hash: vec![0xAA; 32],
-            lock_live_capacity_sum: -1,
+            lock_owned_capacity_sum: -1,
             ..Default::default()
         };
         let err = checked_capacity_totals(&info, "test").unwrap_err();
@@ -1796,8 +1791,8 @@ mod tests {
     fn checked_capacity_totals_errors_when_occupied_exceeds_capacity() {
         let info = ScriptInfo {
             code_hash: vec![0xBB; 32],
-            lock_live_capacity_sum: 100,
-            lock_live_used_capacity_sum: 101,
+            lock_owned_capacity_sum: 100,
+            lock_owned_knowledge_sum: 101,
             ..Default::default()
         };
         let err = checked_capacity_totals(&info, "test").unwrap_err();
@@ -2000,8 +1995,8 @@ mod tests {
         };
         let script_info = ScriptInfo {
             code_hash: vec![0xAA; 32],
-            lock_live_capacity_sum: 100_00000000,
-            lock_live_used_capacity_sum: 61_00000000,
+            lock_owned_capacity_sum: 100_00000000,
+            lock_owned_knowledge_sum: 61_00000000,
             lock_cells_count: 5,
             lock_live_cells_count: 3,
             lock_capacity_sum: 200_00000000,
@@ -2028,8 +2023,8 @@ mod tests {
         };
         let script_info = ScriptInfo {
             code_hash: vec![0xAA; 32],
-            lock_live_capacity_sum: 100_00000000,
-            lock_live_used_capacity_sum: 61_00000000,
+            lock_owned_capacity_sum: 100_00000000,
+            lock_owned_knowledge_sum: 61_00000000,
             lock_cells_count: 5,
             lock_live_cells_count: 3,
             lock_capacity_sum: 200_00000000,
@@ -2057,8 +2052,8 @@ mod tests {
         let script_info = ScriptInfo {
             code_hash: vec![0xCC; 32],
             name: Some("secp256k1_blake160".to_string()),
-            lock_live_capacity_sum: 500_00000000,
-            lock_live_used_capacity_sum: 200_00000000,
+            lock_owned_capacity_sum: 500_00000000,
+            lock_owned_knowledge_sum: 200_00000000,
             lock_cells_count: 10,
             lock_live_cells_count: 8,
             lock_capacity_sum: 800_00000000,
@@ -2093,7 +2088,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_version_capacity_rejects_negative_live_capacity() {
+    fn resolve_version_capacity_rejects_negative_owned_capacity() {
         let version = ScriptVersionInfo {
             version_hash: vec![0xEE; 32],
             name: Some("bad_script".to_string()),
@@ -2101,7 +2096,7 @@ mod tests {
         };
         let bad_info = ScriptInfo {
             code_hash: vec![0xEE; 32],
-            lock_live_capacity_sum: -1,
+            lock_owned_capacity_sum: -1,
             ..Default::default()
         };
         let cache = vec![(vec![0xEE; 32], bad_info)];
@@ -2119,8 +2114,8 @@ mod tests {
         };
         let bad_info = ScriptInfo {
             code_hash: vec![0xFF; 32],
-            lock_live_capacity_sum: 100,
-            lock_live_used_capacity_sum: 101,
+            lock_owned_capacity_sum: 100,
+            lock_owned_knowledge_sum: 101,
             ..Default::default()
         };
         let cache = vec![(vec![0xFF; 32], bad_info)];

@@ -159,7 +159,7 @@ impl BulkReducer for TokenOwner {
             let mut daily_dates = token.daily_deltas.iter().collect::<Vec<_>>();
             daily_dates.sort_by_key(|(date, _)| *date);
             for (date, delta) in daily_dates {
-                if delta.live_capacity_delta == 0 && delta.live_used_capacity_delta == 0 {
+                if delta.owned_capacity_delta == 0 && delta.owned_knowledge_delta == 0 {
                     continue;
                 }
                 rows.push(MaterializedRow::new(
@@ -398,27 +398,27 @@ impl TokenAccum {
     fn record_daily_delta(
         &mut self,
         date_yyyymmdd: u32,
-        live_capacity_delta: i128,
-        live_used_delta: i128,
+        owned_capacity_delta: i128,
+        owned_knowledge_delta: i128,
         type_hash: &[u8],
         tx: &ResolvedTxFacts<'_>,
     ) -> Result<()> {
-        if live_capacity_delta == 0 && live_used_delta == 0 {
+        if owned_capacity_delta == 0 && owned_knowledge_delta == 0 {
             return Ok(());
         }
 
         let entry = self.daily_deltas.entry(date_yyyymmdd).or_default();
-        entry.live_capacity_delta = checked_signed_i128(
-            entry.live_capacity_delta,
-            live_capacity_delta,
-            "token daily live_capacity_delta",
+        entry.owned_capacity_delta = checked_signed_i128(
+            entry.owned_capacity_delta,
+            owned_capacity_delta,
+            "token daily owned_capacity_delta",
             type_hash,
             tx,
         )?;
-        entry.live_used_capacity_delta = checked_signed_i128(
-            entry.live_used_capacity_delta,
-            live_used_delta,
-            "token daily live_used_capacity_delta",
+        entry.owned_knowledge_delta = checked_signed_i128(
+            entry.owned_knowledge_delta,
+            owned_knowledge_delta,
+            "token daily owned_knowledge_delta",
             type_hash,
             tx,
         )?;

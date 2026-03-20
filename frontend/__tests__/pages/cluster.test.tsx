@@ -41,8 +41,8 @@ const mockCluster = {
   holdersCount: 3,
   activitiesCount: 10,
   createdAtBlock: 1000000,
-  liveCapacity: '100000000000',
-  liveCommonKnowledgeSize: '61000000000',
+  ownedCapacity: '100000000000',
+  ownedKnowledge: '61000000000',
 };
 
 const mockSpores = {

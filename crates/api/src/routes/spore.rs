@@ -15,7 +15,7 @@ use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedA
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
-use crate::utils::{apply_live_capacity_delta, date_keys_inclusive, parse_chart_date_range};
+use crate::utils::{apply_owned_capacity_delta, date_keys_inclusive, parse_chart_date_range};
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_SPORES_ALL};
 use crate::AppState;
 use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
@@ -195,9 +195,8 @@ pub struct ClusterResponse {
     pub holders_count: i64,
     pub activities_count: i64,
     pub created_at_block: i64,
-    pub live_capacity: Option<String>,
-    #[serde(rename = "liveCommonKnowledgeSize")]
-    pub live_used_capacity: Option<String>,
+    pub owned_capacity: Option<String>,
+    pub owned_knowledge: Option<String>,
     pub storage_profile: ClusterStorageProfileResponse,
 }
 
@@ -233,9 +232,8 @@ pub struct SporeResponse {
     pub owner_address: Option<String>,
     pub is_live: bool,
     pub created_at_block: i64,
-    pub live_capacity: Option<String>,
-    #[serde(rename = "liveCommonKnowledgeSize")]
-    pub live_used_capacity: Option<String>,
+    pub owned_capacity: Option<String>,
+    pub owned_knowledge: Option<String>,
     pub media_profile: Option<SporeMediaProfileResponse>,
 }
 
@@ -279,8 +277,8 @@ pub struct SporeDobDecodeResponse {
 fn spore_to_response(
     spore_id: &[u8],
     entry: &ckbadger_store::ObjectEntry,
-    live_capacity: Option<i128>,
-    live_used_capacity: Option<i128>,
+    owned_capacity: Option<i128>,
+    owned_knowledge: Option<i128>,
 ) -> SporeResponse {
     let (content_type, content_size, media_profile) = match &entry.extra {
         ckbadger_store::ObjectExtra::Spore {
@@ -327,8 +325,8 @@ fn spore_to_response(
         owner_address: None,
         is_live: entry.is_live,
         created_at_block: entry.created_at_block,
-        live_capacity: live_capacity.map(|v| v.to_string()),
-        live_used_capacity: live_used_capacity.map(|v| v.to_string()),
+        owned_capacity: owned_capacity.map(|v| v.to_string()),
+        owned_knowledge: owned_knowledge.map(|v| v.to_string()),
         media_profile,
     }
 }
@@ -973,7 +971,7 @@ fn build_capacity_history_chart_with_initial(
 
     for date in dates {
         let (capacity_delta, used_delta) = daily_deltas.get(&date).copied().unwrap_or((0, 0));
-        (running_capacity, running_used) = apply_live_capacity_delta(
+        (running_capacity, running_used) = apply_owned_capacity_delta(
             running_capacity,
             running_used,
             capacity_delta,
@@ -1214,8 +1212,8 @@ fn build_cluster_responses_from_cached_entries(
             holders_count: cluster_aggregate.map(|a| a.owner_count).unwrap_or(0),
             activities_count: 0,
             created_at_block,
-            live_capacity: None,
-            live_used_capacity: None,
+            owned_capacity: None,
+            owned_knowledge: None,
             storage_profile: cluster_storage_profile_from_aggregate(
                 cluster_aggregate,
                 entry.transfers_count,
@@ -1534,8 +1532,8 @@ async fn get_cluster(
             .map(|(date, delta)| {
                 (
                     date,
-                    delta.live_capacity_delta,
-                    delta.live_used_capacity_delta,
+                    delta.owned_capacity_delta,
+                    delta.owned_knowledge_delta,
                 )
             })
             .collect(),
@@ -1545,7 +1543,7 @@ async fn get_cluster(
         ),
     )
     .map_err(|e| ApiError::internal(e.to_string()))?;
-    let (live_capacity, live_used_capacity) = latest_capacity_from_chart(&chart);
+    let (owned_capacity, owned_knowledge) = latest_capacity_from_chart(&chart);
 
     ok(ClusterResponse {
         cluster_id: format!("0x{}", hex::encode(&id)),
@@ -1560,8 +1558,8 @@ async fn get_cluster(
         holders_count,
         activities_count,
         created_at_block,
-        live_capacity,
-        live_used_capacity,
+        owned_capacity,
+        owned_knowledge,
         storage_profile: cluster_storage_profile_from_aggregate(
             cluster_aggregate.as_ref(),
             spores_count,
@@ -1628,17 +1626,17 @@ async fn get_spore(
                     .map(|(date, delta)| {
                         (
                             date,
-                            delta.live_capacity_delta,
-                            delta.live_used_capacity_delta,
+                            delta.owned_capacity_delta,
+                            delta.owned_knowledge_delta,
                         )
                     })
                     .collect(),
                 "Spore Capacity History".to_string(),
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
-            let (live_capacity, live_used_capacity) = latest_capacity_from_chart(&chart);
-            let cap = live_capacity.and_then(|v| v.parse::<i128>().ok());
-            let occ = live_used_capacity.and_then(|v| v.parse::<i128>().ok());
+            let (owned_capacity, owned_knowledge) = latest_capacity_from_chart(&chart);
+            let cap = owned_capacity.and_then(|v| v.parse::<i128>().ok());
+            let occ = owned_knowledge.and_then(|v| v.parse::<i128>().ok());
             ok(spore_to_response(&id, &entry, cap, occ))
         }
         None => Err(ApiError::not_found("Spore not found")),
@@ -1763,11 +1761,11 @@ async fn get_cluster_capacity_chart(
             .list_cluster_daily_deltas_in_range(&id, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
-            (base_capacity, base_used) = apply_live_capacity_delta(
+            (base_capacity, base_used) = apply_owned_capacity_delta(
                 base_capacity,
                 base_used,
-                delta.live_capacity_delta,
-                delta.live_used_capacity_delta,
+                delta.owned_capacity_delta,
+                delta.owned_knowledge_delta,
                 "building cluster baseline capacity history chart",
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -1783,8 +1781,8 @@ async fn get_cluster_capacity_chart(
             .map(|(date, delta)| {
                 (
                     date,
-                    delta.live_capacity_delta,
-                    delta.live_used_capacity_delta,
+                    delta.owned_capacity_delta,
+                    delta.owned_knowledge_delta,
                 )
             })
             .collect(),
@@ -1834,11 +1832,11 @@ async fn get_spore_capacity_chart(
             .list_spore_daily_deltas_in_range(&id, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
-            (base_capacity, base_used) = apply_live_capacity_delta(
+            (base_capacity, base_used) = apply_owned_capacity_delta(
                 base_capacity,
                 base_used,
-                delta.live_capacity_delta,
-                delta.live_used_capacity_delta,
+                delta.owned_capacity_delta,
+                delta.owned_knowledge_delta,
                 "building spore baseline capacity history chart",
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -1854,8 +1852,8 @@ async fn get_spore_capacity_chart(
             .map(|(date, delta)| {
                 (
                     date,
-                    delta.live_capacity_delta,
-                    delta.live_used_capacity_delta,
+                    delta.owned_capacity_delta,
+                    delta.owned_knowledge_delta,
                 )
             })
             .collect(),
@@ -2019,8 +2017,8 @@ mod tests {
                 content_size: None,
                 cluster_id: None,
                 cluster_name: None,
-                live_capacity: None,
-                live_used_capacity: None,
+                owned_capacity: None,
+                owned_knowledge: None,
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,
@@ -2046,8 +2044,8 @@ mod tests {
                 content_size: None,
                 cluster_id: None,
                 cluster_name: None,
-                live_capacity: None,
-                live_used_capacity: None,
+                owned_capacity: None,
+                owned_knowledge: None,
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,

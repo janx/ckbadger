@@ -439,9 +439,9 @@ fn test_script_usage_cell_creation() {
     assert_eq!(info.lock_cells_count, 1);
     assert_eq!(info.lock_live_cells_count, 1);
     assert_eq!(info.lock_capacity_sum, 100_00000000);
-    assert_eq!(info.lock_live_capacity_sum, 100_00000000);
+    assert_eq!(info.lock_owned_capacity_sum, 100_00000000);
     assert_eq!(info.lock_used_capacity_sum, 61_00000000);
-    assert_eq!(info.lock_live_used_capacity_sum, 61_00000000);
+    assert_eq!(info.lock_owned_knowledge_sum, 61_00000000);
 }
 
 #[test]
@@ -478,9 +478,9 @@ fn test_script_usage_cell_consumption() {
     assert_eq!(info.lock_cells_count, 1);
     assert_eq!(info.lock_live_cells_count, 0);
     assert_eq!(info.lock_capacity_sum, 100_00000000);
-    assert_eq!(info.lock_live_capacity_sum, 0);
+    assert_eq!(info.lock_owned_capacity_sum, 0);
     assert_eq!(info.lock_used_capacity_sum, 61_00000000);
-    assert_eq!(info.lock_live_used_capacity_sum, 0);
+    assert_eq!(info.lock_owned_knowledge_sum, 0);
 }
 
 #[test]

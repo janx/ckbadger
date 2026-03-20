@@ -8,8 +8,8 @@ interface ObjectCollectionStatCardsProps {
   totalCount: number;
   totalLabel?: string;
   liveCount?: number;
-  liveCapacity: string | null | undefined;
-  liveCommonKnowledgeSize: string | null | undefined;
+  ownedCapacity: string | null | undefined;
+  ownedKnowledge: string | null | undefined;
   createdAtBlock?: number;
   storageTier?: string;
   storageOnchainRatio?: string;
@@ -28,14 +28,14 @@ export function ObjectCollectionStatCards({
   totalCount,
   totalLabel = 'Total Objects',
   liveCount,
-  liveCapacity,
-  liveCommonKnowledgeSize,
+  ownedCapacity,
+  ownedKnowledge,
   createdAtBlock,
   storageTier,
   storageOnchainRatio,
 }: ObjectCollectionStatCardsProps) {
-  const capacity = parseShannons(liveCapacity);
-  const used = parseShannons(liveCommonKnowledgeSize);
+  const capacity = parseShannons(ownedCapacity);
+  const used = parseShannons(ownedKnowledge);
   const usedPercent =
     capacity && used && capacity > BigInt(0)
       ? (Number((used * BigInt(10000)) / capacity) / 100).toFixed(2)
@@ -93,10 +93,10 @@ export function ObjectCollectionStatCards({
       <TerminalPanel variant="inset">
         <TerminalPanelContent className="space-y-2">
           <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
-            Live Capacity
+            Owned Capacity
           </div>
           <div className="text-text-bright font-mono text-lg">{compactCapacity}</div>
-          <div className="text-text-dim font-mono text-xs">Total live CKB in this collection</div>
+          <div className="text-text-dim font-mono text-xs">Total owned CKB in this collection</div>
         </TerminalPanelContent>
       </TerminalPanel>
 

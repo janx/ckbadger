@@ -766,8 +766,8 @@ mod tests {
                 &collection_id,
                 20260219,
                 &ObjectDailyDelta {
-                    live_capacity_delta: 500,
-                    live_used_capacity_delta: 320,
+                    owned_capacity_delta: 500,
+                    owned_knowledge_delta: 320,
                 },
             )
             .unwrap();
@@ -775,8 +775,8 @@ mod tests {
             .get_object_daily_delta(&collection_id, 20260219)
             .unwrap()
             .unwrap();
-        assert_eq!(loaded_daily.live_capacity_delta, 500);
-        assert_eq!(loaded_daily.live_used_capacity_delta, 320);
+        assert_eq!(loaded_daily.owned_capacity_delta, 500);
+        assert_eq!(loaded_daily.owned_knowledge_delta, 320);
 
         let list = store.list_object_daily_deltas(&collection_id).unwrap();
         assert_eq!(list.len(), 1);

@@ -5,7 +5,7 @@ use crate::routes::statistics::{
     build_address_cohort_response, build_block_time_distribution_response, build_cell_size_response,
 };
 use crate::utils::{
-    accumulate_live_capacity, hash_type_to_string, resolve_collection_standard,
+    accumulate_owned_capacity, hash_type_to_string, resolve_collection_standard,
     resolve_dob_collection_name, resolve_nft_collection_name,
     resolve_nft_collection_storage_tier_override,
 };
@@ -51,8 +51,8 @@ pub struct CachedAssetEntry {
     pub content_size: Option<i32>,
     pub cluster_id: Option<String>,
     pub cluster_name: Option<String>,
-    pub live_capacity: Option<String>,
-    pub live_used_capacity: Option<String>,
+    pub owned_capacity: Option<String>,
+    pub owned_knowledge: Option<String>,
     pub storage_tier: Option<String>,
     pub fully_onchain_ratio: Option<String>,
     pub fully_onchain_count: Option<i64>,
@@ -144,13 +144,13 @@ impl CachedAssetEntry {
             content_size: self.content_size,
             cluster_id: self.cluster_id.clone(),
             cluster_name: self.cluster_name.clone(),
-            live_capacity: self.live_capacity.clone(),
-            live_used_capacity: self.live_used_capacity.clone(),
+            owned_capacity: self.owned_capacity.clone(),
+            owned_knowledge: self.owned_knowledge.clone(),
             storage_tier: self.storage_tier.clone(),
             fully_onchain_ratio: self.fully_onchain_ratio.clone(),
             fully_onchain_count: self.fully_onchain_count,
             h_multiplier: {
-                match (&self.live_capacity, &self.live_used_capacity) {
+                match (&self.owned_capacity, &self.owned_knowledge) {
                     (Some(cap_str), Some(occ_str)) => {
                         let cap: f64 = cap_str.parse().unwrap_or(0.0);
                         let occ: f64 = occ_str.parse().unwrap_or(0.0);
@@ -427,10 +427,10 @@ fn build_asset_caches_sync(
 
         let transfers_24h = transfers_24h_map.get(hash.as_slice()).copied().unwrap_or(0);
         let token_daily = state.store.list_token_daily_deltas(hash)?;
-        let (live_capacity, live_used_capacity) = accumulate_live_capacity(
+        let (owned_capacity, owned_knowledge) = accumulate_owned_capacity(
             token_daily
                 .into_iter()
-                .map(|(_, delta)| (delta.live_capacity_delta, delta.live_used_capacity_delta)),
+                .map(|(_, delta)| (delta.owned_capacity_delta, delta.owned_knowledge_delta)),
         )
         .map_err(|err| {
             anyhow::anyhow!(
@@ -457,8 +457,8 @@ fn build_asset_caches_sync(
             content_size: None,
             cluster_id: None,
             cluster_name: None,
-            live_capacity: Some(live_capacity.to_string()),
-            live_used_capacity: Some(live_used_capacity.to_string()),
+            owned_capacity: Some(owned_capacity.to_string()),
+            owned_knowledge: Some(owned_knowledge.to_string()),
             storage_tier: None,
             fully_onchain_ratio: None,
             fully_onchain_count: None,
@@ -498,10 +498,10 @@ fn build_asset_caches_sync(
             .copied()
             .unwrap_or(0);
         let cluster_daily = state.store.list_cluster_daily_deltas(cluster_id_bytes)?;
-        let (live_capacity, live_used_capacity) = accumulate_live_capacity(
+        let (owned_capacity, owned_knowledge) = accumulate_owned_capacity(
             cluster_daily
                 .into_iter()
-                .map(|(_, delta)| (delta.live_capacity_delta, delta.live_used_capacity_delta)),
+                .map(|(_, delta)| (delta.owned_capacity_delta, delta.owned_knowledge_delta)),
         )
         .map_err(|e| {
             anyhow::anyhow!(
@@ -535,8 +535,8 @@ fn build_asset_caches_sync(
             content_size: None,
             cluster_id: Some(cluster_hex),
             cluster_name: display_name,
-            live_capacity: Some(live_capacity.to_string()),
-            live_used_capacity: Some(live_used_capacity.to_string()),
+            owned_capacity: Some(owned_capacity.to_string()),
+            owned_knowledge: Some(owned_knowledge.to_string()),
             storage_tier: Some(storage_tier),
             fully_onchain_ratio: Some(fully_onchain_ratio),
             fully_onchain_count: Some(agg.fully_onchain_count),
@@ -579,10 +579,10 @@ fn build_asset_caches_sync(
         };
         let fully_onchain_ratio = format_ratio_4(fully_onchain_count, agg.live_count);
         let nft_daily = state.store.list_object_daily_deltas(collection_id_bytes)?;
-        let (live_capacity, live_used_capacity) = accumulate_live_capacity(
+        let (owned_capacity, owned_knowledge) = accumulate_owned_capacity(
             nft_daily
                 .into_iter()
-                .map(|(_, delta)| (delta.live_capacity_delta, delta.live_used_capacity_delta)),
+                .map(|(_, delta)| (delta.owned_capacity_delta, delta.owned_knowledge_delta)),
         )
         .map_err(|e| {
             anyhow::anyhow!(
@@ -609,8 +609,8 @@ fn build_asset_caches_sync(
             content_size: None,
             cluster_id: Some(collection_hex.clone()),
             cluster_name: display_name,
-            live_capacity: Some(live_capacity.to_string()),
-            live_used_capacity: Some(live_used_capacity.to_string()),
+            owned_capacity: Some(owned_capacity.to_string()),
+            owned_knowledge: Some(owned_knowledge.to_string()),
             storage_tier: Some(storage_tier),
             fully_onchain_ratio: Some(fully_onchain_ratio),
             fully_onchain_count: Some(fully_onchain_count),
@@ -647,10 +647,10 @@ fn build_asset_caches_sync(
         };
         let fully_onchain_ratio = format_ratio_4(fully_onchain_count, agg.live_count);
         let id_daily = state.store.list_object_daily_deltas(collection_id_bytes)?;
-        let (live_capacity, live_used_capacity) = accumulate_live_capacity(
+        let (owned_capacity, owned_knowledge) = accumulate_owned_capacity(
             id_daily
                 .into_iter()
-                .map(|(_, delta)| (delta.live_capacity_delta, delta.live_used_capacity_delta)),
+                .map(|(_, delta)| (delta.owned_capacity_delta, delta.owned_knowledge_delta)),
         )
         .map_err(|e| {
             anyhow::anyhow!(
@@ -677,8 +677,8 @@ fn build_asset_caches_sync(
             content_size: None,
             cluster_id: Some(collection_hex.clone()),
             cluster_name: display_name,
-            live_capacity: Some(live_capacity.to_string()),
-            live_used_capacity: Some(live_used_capacity.to_string()),
+            owned_capacity: Some(owned_capacity.to_string()),
+            owned_knowledge: Some(owned_knowledge.to_string()),
             storage_tier: Some(storage_tier),
             fully_onchain_ratio: Some(fully_onchain_ratio),
             fully_onchain_count: Some(fully_onchain_count),

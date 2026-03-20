@@ -1054,12 +1054,12 @@ mod tests {
         let code_hash = vec![0xAB; 32];
 
         let d1 = ScriptDailyDelta {
-            live_capacity_delta: 1_000_000_000_000,
-            live_used_capacity_delta: 700_000_000_000,
+            owned_capacity_delta: 1_000_000_000_000,
+            owned_knowledge_delta: 700_000_000_000,
         };
         let d2 = ScriptDailyDelta {
-            live_capacity_delta: -200_000_000_000,
-            live_used_capacity_delta: -120_000_000_000,
+            owned_capacity_delta: -200_000_000_000,
+            owned_knowledge_delta: -120_000_000_000,
         };
         store
             .put_script_daily_delta(&code_hash, false, 20240115, &d1)
@@ -1072,8 +1072,8 @@ mod tests {
             .get_script_daily_delta(&code_hash, false, 20240115)
             .unwrap()
             .unwrap();
-        assert_eq!(loaded.live_capacity_delta, d1.live_capacity_delta);
-        assert_eq!(loaded.live_used_capacity_delta, d1.live_used_capacity_delta);
+        assert_eq!(loaded.owned_capacity_delta, d1.owned_capacity_delta);
+        assert_eq!(loaded.owned_knowledge_delta, d1.owned_knowledge_delta);
 
         let listed = store.list_script_daily_deltas(&code_hash, false).unwrap();
         assert_eq!(listed.len(), 2);
@@ -1118,9 +1118,9 @@ mod tests {
             type_cells_count: 4,
             type_live_cells_count: 2,
             type_capacity_sum: 800,
-            type_live_capacity_sum: 400,
+            type_owned_capacity_sum: 400,
             type_used_capacity_sum: 500,
-            type_live_used_capacity_sum: 220,
+            type_owned_knowledge_sum: 220,
             ..Default::default()
         };
 

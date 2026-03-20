@@ -39,6 +39,8 @@ const mockIdentityCollection = {
   liveCount: 320,
   holdersCount: 42,
   activitiesCount: 150,
+  ownedCapacity: '0',
+  ownedKnowledge: '0',
 };
 
 describe('IdentityCollectionPage', () => {

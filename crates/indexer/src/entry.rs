@@ -846,19 +846,19 @@ fn reconcile_token_daily_deltas_on_startup(store: &CkbadgerStore) -> Result<()> 
     warn!(
         type_hash = %type_hash_hex,
         date = invalid.date_yyyymmdd,
-        live_capacity = invalid.live_capacity,
-        live_used_capacity = invalid.live_used_capacity,
+        owned_capacity = invalid.owned_capacity,
+        owned_knowledge = invalid.owned_knowledge,
         capacity_delta = invalid.capacity_delta,
         used_delta = invalid.used_delta,
         "Detected invalid token daily deltas at startup; fail-fast without automatic rebuild"
     );
 
     anyhow::bail!(
-        "invalid token daily deltas detected at startup: type_hash=0x{}, date={}, live_capacity={}, live_used_capacity={}, capacity_delta={}, used_delta={}; automatic rebuild is disabled, delete RocksDB and re-sync from genesis",
+        "invalid token daily deltas detected at startup: type_hash=0x{}, date={}, owned_capacity={}, owned_knowledge={}, capacity_delta={}, used_delta={}; automatic rebuild is disabled, delete RocksDB and re-sync from genesis",
         type_hash_hex,
         invalid.date_yyyymmdd,
-        invalid.live_capacity,
-        invalid.live_used_capacity,
+        invalid.owned_capacity,
+        invalid.owned_knowledge,
         invalid.capacity_delta,
         invalid.used_delta
     );
@@ -1202,8 +1202,8 @@ mod tests {
                 &type_hash,
                 day1,
                 &TokenDailyDelta {
-                    live_capacity_delta: 100,
-                    live_used_capacity_delta: 200,
+                    owned_capacity_delta: 100,
+                    owned_knowledge_delta: 200,
                 },
             )
             .unwrap();
@@ -1212,8 +1212,8 @@ mod tests {
                 &type_hash,
                 day2,
                 &TokenDailyDelta {
-                    live_capacity_delta: 50,
-                    live_used_capacity_delta: 50,
+                    owned_capacity_delta: 50,
+                    owned_knowledge_delta: 50,
                 },
             )
             .unwrap();
@@ -1235,10 +1235,10 @@ mod tests {
             .get_token_daily_delta(&type_hash, day2)
             .unwrap()
             .expect("missing day2 delta");
-        assert_eq!(day1_delta.live_capacity_delta, 100);
-        assert_eq!(day1_delta.live_used_capacity_delta, 200);
-        assert_eq!(day2_delta.live_capacity_delta, 50);
-        assert_eq!(day2_delta.live_used_capacity_delta, 50);
+        assert_eq!(day1_delta.owned_capacity_delta, 100);
+        assert_eq!(day1_delta.owned_knowledge_delta, 200);
+        assert_eq!(day2_delta.owned_capacity_delta, 50);
+        assert_eq!(day2_delta.owned_knowledge_delta, 50);
         assert!(store
             .find_first_invalid_token_daily_delta()
             .unwrap()

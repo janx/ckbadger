@@ -1134,8 +1134,8 @@ export async function renderMarkdownPage(
             ['ownerAddress', obj.ownerAddress ?? '-'],
             ['isLive', obj.isLive],
             ['createdAtBlock', obj.createdAtBlock],
-            ['liveCapacity', obj.liveCapacity ?? '-'],
-            ['liveCommonKnowledgeSize', obj.liveCommonKnowledgeSize ?? '-'],
+            ['ownedCapacity', obj.ownedCapacity ?? '-'],
+            ['ownedKnowledge', obj.ownedKnowledge ?? '-'],
           ]
         ),
       ]);
@@ -1353,8 +1353,8 @@ export async function renderMarkdownPage(
             ['ownerAddress', cluster.ownerAddress ?? '-'],
             ['sporesCount', cluster.sporesCount],
             ['createdAtBlock', cluster.createdAtBlock],
-            ['liveCapacity', cluster.liveCapacity ?? '-'],
-            ['liveCommonKnowledgeSize', cluster.liveCommonKnowledgeSize ?? '-'],
+            ['ownedCapacity', cluster.ownedCapacity ?? '-'],
+            ['ownedKnowledge', cluster.ownedKnowledge ?? '-'],
           ]
         ),
         '',
@@ -1416,22 +1416,22 @@ export async function renderMarkdownPage(
             ['cellsCount', usage.cellsCount],
             ['liveCellsCount', usage.liveCellsCount],
             ['capacitySum', usage.capacitySum],
-            ['liveCapacitySum', usage.liveCapacitySum],
+            ['ownedCapacitySum', usage.ownedCapacitySum],
             ['commonKnowledgeSizeSum', usage.commonKnowledgeSizeSum],
-            ['liveCommonKnowledgeSizeSum', usage.liveCommonKnowledgeSizeSum],
+            ['ownedKnowledgeSum', usage.ownedKnowledgeSum],
           ]
         ),
         '',
         '## Deployments',
         '',
         markdownTable(
-          ['codeHash', 'scriptKind', 'cellsCount', 'liveCellsCount', 'liveCommonKnowledgeSizeSum'],
+          ['codeHash', 'scriptKind', 'cellsCount', 'liveCellsCount', 'ownedKnowledgeSum'],
           usage.byDeployment.map((deployment) => [
             hashShort(deployment.codeHash),
             deployment.scriptKind ?? '-',
             deployment.cellsCount,
             deployment.liveCellsCount,
-            deployment.liveCommonKnowledgeSizeSum,
+            deployment.ownedKnowledgeSum,
           ])
         ),
         '',
@@ -1470,8 +1470,8 @@ export async function renderMarkdownPage(
             ['knownScriptKind', matched?.scriptKind ?? '-'],
             ['knownHashType', matched?.hashType ?? '-'],
             ['knownLiveCellsCount', matched?.liveCellsCount ?? '-'],
-            ['knownLiveCapacitySum', matched?.liveCapacitySum ?? '-'],
-            ['knownLiveCommonKnowledgeSizeSum', matched?.liveCommonKnowledgeSizeSum ?? '-'],
+            ['knownOwnedCapacitySum', matched?.ownedCapacitySum ?? '-'],
+            ['knownOwnedKnowledgeSum', matched?.ownedKnowledgeSum ?? '-'],
             ['codeCellTxHash', codeCell.txHash],
             ['codeCellOutputIndex', codeCell.outputIndex],
           ]

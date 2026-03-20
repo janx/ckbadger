@@ -116,10 +116,10 @@ fn make_script_info_lock(
     cells_count: i64,
     live_cells_count: i64,
     capacity_sum: i128,
-    live_capacity_sum: i128,
+    owned_capacity_sum: i128,
 ) -> ScriptInfo {
     let used_capacity_sum = capacity_sum / 2;
-    let live_used_capacity_sum = live_capacity_sum / 2;
+    let owned_knowledge_sum = owned_capacity_sum / 2;
     ScriptInfo {
         code_hash: vec![code_hash_byte; 32],
         hash_type: 0,
@@ -132,15 +132,15 @@ fn make_script_info_lock(
         lock_cells_count: cells_count,
         lock_live_cells_count: live_cells_count,
         lock_capacity_sum: capacity_sum,
-        lock_live_capacity_sum: live_capacity_sum,
+        lock_owned_capacity_sum: owned_capacity_sum,
         lock_used_capacity_sum: used_capacity_sum,
-        lock_live_used_capacity_sum: live_used_capacity_sum,
+        lock_owned_knowledge_sum: owned_knowledge_sum,
         type_cells_count: 0,
         type_live_cells_count: 0,
         type_capacity_sum: 0,
-        type_live_capacity_sum: 0,
+        type_owned_capacity_sum: 0,
         type_used_capacity_sum: 0,
-        type_live_used_capacity_sum: 0,
+        type_owned_knowledge_sum: 0,
         dep_type_hash: None,
         dep_data_hash: None,
         code_cell_tx_hash: None,
@@ -153,10 +153,10 @@ fn make_script_info_type(
     cells_count: i64,
     live_cells_count: i64,
     capacity_sum: i128,
-    live_capacity_sum: i128,
+    owned_capacity_sum: i128,
 ) -> ScriptInfo {
     let used_capacity_sum = capacity_sum / 2;
-    let live_used_capacity_sum = live_capacity_sum / 2;
+    let owned_knowledge_sum = owned_capacity_sum / 2;
     ScriptInfo {
         code_hash: vec![code_hash_byte; 32],
         hash_type: 1,
@@ -169,15 +169,15 @@ fn make_script_info_type(
         lock_cells_count: 0,
         lock_live_cells_count: 0,
         lock_capacity_sum: 0,
-        lock_live_capacity_sum: 0,
+        lock_owned_capacity_sum: 0,
         lock_used_capacity_sum: 0,
-        lock_live_used_capacity_sum: 0,
+        lock_owned_knowledge_sum: 0,
         type_cells_count: cells_count,
         type_live_cells_count: live_cells_count,
         type_capacity_sum: capacity_sum,
-        type_live_capacity_sum: live_capacity_sum,
+        type_owned_capacity_sum: owned_capacity_sum,
         type_used_capacity_sum: used_capacity_sum,
-        type_live_used_capacity_sum: live_used_capacity_sum,
+        type_owned_knowledge_sum: owned_knowledge_sum,
         dep_type_hash: None,
         dep_data_hash: None,
         code_cell_tx_hash: None,
@@ -211,16 +211,16 @@ fn test_lock_script_usage_creation() {
     assert_eq!(retrieved.lock_cells_count, 5);
     assert_eq!(retrieved.lock_live_cells_count, 3);
     assert_eq!(retrieved.lock_capacity_sum, 500_00000000);
-    assert_eq!(retrieved.lock_live_capacity_sum, 300_00000000);
+    assert_eq!(retrieved.lock_owned_capacity_sum, 300_00000000);
     assert_eq!(retrieved.lock_used_capacity_sum, 250_00000000);
-    assert_eq!(retrieved.lock_live_used_capacity_sum, 150_00000000);
+    assert_eq!(retrieved.lock_owned_knowledge_sum, 150_00000000);
     // Type fields should be zero
     assert_eq!(retrieved.type_cells_count, 0);
     assert_eq!(retrieved.type_live_cells_count, 0);
     assert_eq!(retrieved.type_capacity_sum, 0);
-    assert_eq!(retrieved.type_live_capacity_sum, 0);
+    assert_eq!(retrieved.type_owned_capacity_sum, 0);
     assert_eq!(retrieved.type_used_capacity_sum, 0);
-    assert_eq!(retrieved.type_live_used_capacity_sum, 0);
+    assert_eq!(retrieved.type_owned_knowledge_sum, 0);
 }
 
 #[test]
@@ -246,16 +246,16 @@ fn test_type_script_usage_creation() {
     assert_eq!(retrieved.type_cells_count, 10);
     assert_eq!(retrieved.type_live_cells_count, 8);
     assert_eq!(retrieved.type_capacity_sum, 1000_00000000);
-    assert_eq!(retrieved.type_live_capacity_sum, 800_00000000);
+    assert_eq!(retrieved.type_owned_capacity_sum, 800_00000000);
     assert_eq!(retrieved.type_used_capacity_sum, 500_00000000);
-    assert_eq!(retrieved.type_live_used_capacity_sum, 400_00000000);
+    assert_eq!(retrieved.type_owned_knowledge_sum, 400_00000000);
     // Lock fields should be zero
     assert_eq!(retrieved.lock_cells_count, 0);
     assert_eq!(retrieved.lock_live_cells_count, 0);
     assert_eq!(retrieved.lock_capacity_sum, 0);
-    assert_eq!(retrieved.lock_live_capacity_sum, 0);
+    assert_eq!(retrieved.lock_owned_capacity_sum, 0);
     assert_eq!(retrieved.lock_used_capacity_sum, 0);
-    assert_eq!(retrieved.lock_live_used_capacity_sum, 0);
+    assert_eq!(retrieved.lock_owned_knowledge_sum, 0);
 }
 
 #[test]
@@ -274,10 +274,10 @@ fn test_consume_cells_adjusts_stats() {
     assert_eq!(r1.lock_cells_count, 5);
     assert_eq!(r1.lock_live_cells_count, 5);
     assert_eq!(r1.lock_capacity_sum, 500_00000000);
-    assert_eq!(r1.lock_live_capacity_sum, 500_00000000);
+    assert_eq!(r1.lock_owned_capacity_sum, 500_00000000);
 
     // Simulate consuming 2 cells (200 CKB capacity):
-    // total stays 5, live drops to 3, total capacity stays, live capacity drops
+    // total stays 5, live drops to 3, total capacity stays, owned capacity drops
     let after_consume = ScriptInfo {
         code_hash: vec![0x33u8; 32],
         hash_type: 0,
@@ -290,15 +290,15 @@ fn test_consume_cells_adjusts_stats() {
         lock_cells_count: 5,
         lock_live_cells_count: 3,
         lock_capacity_sum: 500_00000000,
-        lock_live_capacity_sum: 300_00000000,
+        lock_owned_capacity_sum: 300_00000000,
         lock_used_capacity_sum: 250_00000000,
-        lock_live_used_capacity_sum: 150_00000000,
+        lock_owned_knowledge_sum: 150_00000000,
         type_cells_count: 0,
         type_live_cells_count: 0,
         type_capacity_sum: 0,
-        type_live_capacity_sum: 0,
+        type_owned_capacity_sum: 0,
         type_used_capacity_sum: 0,
-        type_live_used_capacity_sum: 0,
+        type_owned_knowledge_sum: 0,
         dep_type_hash: None,
         dep_data_hash: None,
         code_cell_tx_hash: None,
@@ -320,8 +320,8 @@ fn test_consume_cells_adjusts_stats() {
         "total capacity should remain unchanged"
     );
     assert_eq!(
-        r2.lock_live_capacity_sum, 300_00000000,
-        "live capacity should decrease by consumed amount"
+        r2.lock_owned_capacity_sum, 300_00000000,
+        "owned capacity should decrease by consumed amount"
     );
 
     // Simulate adding 1 new cell (150 CKB) on top of consumed state
@@ -337,15 +337,15 @@ fn test_consume_cells_adjusts_stats() {
         lock_cells_count: 6,
         lock_live_cells_count: 4,
         lock_capacity_sum: 650_00000000,
-        lock_live_capacity_sum: 450_00000000,
+        lock_owned_capacity_sum: 450_00000000,
         lock_used_capacity_sum: 325_00000000,
-        lock_live_used_capacity_sum: 225_00000000,
+        lock_owned_knowledge_sum: 225_00000000,
         type_cells_count: 0,
         type_live_cells_count: 0,
         type_capacity_sum: 0,
-        type_live_capacity_sum: 0,
+        type_owned_capacity_sum: 0,
         type_used_capacity_sum: 0,
-        type_live_used_capacity_sum: 0,
+        type_owned_knowledge_sum: 0,
         dep_type_hash: None,
         dep_data_hash: None,
         code_cell_tx_hash: None,
@@ -360,7 +360,7 @@ fn test_consume_cells_adjusts_stats() {
     assert_eq!(r3.lock_cells_count, 6);
     assert_eq!(r3.lock_live_cells_count, 4);
     assert_eq!(r3.lock_capacity_sum, 650_00000000);
-    assert_eq!(r3.lock_live_capacity_sum, 450_00000000);
+    assert_eq!(r3.lock_owned_capacity_sum, 450_00000000);
 }
 
 #[test]
@@ -433,16 +433,16 @@ fn bulk_build_script_owner_materializes_lock_and_type_usage_without_db_reads() {
     assert_eq!(lock_info.lock_cells_count, 3);
     assert_eq!(lock_info.lock_live_cells_count, 2);
     assert_eq!(lock_info.lock_capacity_sum, 380_00000000);
-    assert_eq!(lock_info.lock_live_capacity_sum, 180_00000000);
+    assert_eq!(lock_info.lock_owned_capacity_sum, 180_00000000);
     assert_eq!(lock_info.lock_used_capacity_sum, 264_00000000);
-    assert_eq!(lock_info.lock_live_used_capacity_sum, 122_00000000);
+    assert_eq!(lock_info.lock_owned_knowledge_sum, 122_00000000);
 
     let type_info = infos.get(&type_code_hash).expect("type script info");
     assert_eq!(type_info.hash_type, 1);
     assert_eq!(type_info.type_cells_count, 1);
     assert_eq!(type_info.type_live_cells_count, 0);
     assert_eq!(type_info.type_capacity_sum, 200_00000000);
-    assert_eq!(type_info.type_live_capacity_sum, 0);
+    assert_eq!(type_info.type_owned_capacity_sum, 0);
     assert_eq!(type_info.type_used_capacity_sum, 142_00000000);
-    assert_eq!(type_info.type_live_used_capacity_sum, 0);
+    assert_eq!(type_info.type_owned_knowledge_sum, 0);
 }
