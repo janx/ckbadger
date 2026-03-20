@@ -64,4 +64,12 @@ describe('ObjectCollectionStatCards', () => {
     expect(screen.queryByText('Storage Integrity')).not.toBeInTheDocument();
     expect(screen.queryByText('Created At')).not.toBeInTheDocument();
   });
+
+  it('renders zero capacity as 0.00 CKB instead of --', () => {
+    render(<ObjectCollectionStatCards totalCount={10} ownedCapacity="0" ownedKnowledge="0" />);
+
+    const ckbValues = screen.getAllByText('0.00 CKB');
+    expect(ckbValues.length).toBe(2);
+    expect(screen.queryByText('--')).not.toBeInTheDocument();
+  });
 });

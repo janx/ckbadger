@@ -9,9 +9,9 @@ use ckbadger_store::store::{
 };
 use ckbadger_store::types::{
     ClusterAggregate, IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
-    ObjectCollectionAggregate, ObjectEntry, ObjectExtra, ObjectStandard, ObjectTypeIndex,
-    SporeTypeIndex, StorageDependencyTier, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
-    SOLE_SPORES_SENTINEL_COLLECTION,
+    ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry, ObjectExtra, ObjectStandard,
+    ObjectTypeIndex, SporeTypeIndex, StorageDependencyTier, DID_CKB_SENTINEL_COLLECTION,
+    DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     CkbadgerStore, CF_CLUSTER_AGG, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_OBJECT_COLLECTION_AGG,
@@ -54,6 +54,9 @@ pub(crate) struct ObjectOwner {
     dotbit_outpoints_by_account: BTreeSet<Vec<u8>>,
     dotbit_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     cluster_owner_counts: BTreeMap<(Vec<u8>, Vec<u8>), i64>,
+    /// Daily capacity deltas keyed by (collection_id, date_yyyymmdd).
+    /// Mirrors `object_daily_changes` in the live pipeline.
+    object_daily_deltas: BTreeMap<(Vec<u8>, u32), (i128, i128)>,
 }
 
 impl BulkReducer for ObjectOwner {
@@ -97,6 +100,22 @@ impl BulkReducer for ObjectOwner {
             MaterializedRow::new(CF_STATS_OBJECT, key.clone(), count.to_le_bytes().to_vec())
         }));
         sealed_rows.extend(
+            self.object_daily_deltas
+                .iter()
+                .filter(|(_, (cap, know))| *cap != 0 || *know != 0)
+                .map(|((collection_id, date), (cap_delta, know_delta))| {
+                    MaterializedRow::new(
+                        CF_STATS_OBJECT,
+                        keys::encode_nft_daily_key(collection_id, *date).to_vec(),
+                        bincode::serialize(&ObjectDailyDelta {
+                            owned_capacity_delta: *cap_delta,
+                            owned_knowledge_delta: *know_delta,
+                        })
+                        .expect("serialize ObjectDailyDelta"),
+                    )
+                }),
+        );
+        sealed_rows.extend(
             self.mnft_owner_counts
                 .iter()
                 .filter(|(_, count)| **count > 0)
@@ -115,6 +134,7 @@ impl BulkReducer for ObjectOwner {
     }
 
     fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
+        let date_yyyymmdd = keys::timestamp_ms_to_date(tx.timestamp_ms);
         let mnft_tokens_consumed_in_tx = tx
             .resolved_inputs
             .iter()
@@ -136,10 +156,29 @@ impl BulkReducer for ObjectOwner {
             .collect::<BTreeMap<_, _>>();
 
         for input in &tx.resolved_inputs {
+            if let Some(collection_id) =
+                classify_nft_collection_from_protocol(&input.protocol_facts)
+            {
+                let entry = self
+                    .object_daily_deltas
+                    .entry((collection_id, date_yyyymmdd))
+                    .or_insert((0, 0));
+                entry.0 -= i128::from(input.capacity);
+                entry.1 -= i128::from(input.occupied_capacity);
+            }
             self.apply_input(input)?;
         }
 
         for cell in tx.cells.iter() {
+            if let Some(collection_id) = classify_nft_collection_from_protocol(&cell.protocol_facts)
+            {
+                let entry = self
+                    .object_daily_deltas
+                    .entry((collection_id, date_yyyymmdd))
+                    .or_insert((0, 0));
+                entry.0 += i128::from(cell.capacity);
+                entry.1 += i128::from(cell.occupied_capacity);
+            }
             self.apply_output(
                 cell,
                 ctx,
@@ -310,6 +349,9 @@ impl ObjectOwner {
             )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.cluster_owner_counts,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.object_daily_deltas,
             )
     }
 
@@ -1821,6 +1863,22 @@ impl ObjectOwner {
         }
         *slot = next;
         Ok(())
+    }
+}
+
+/// Classify a cell's protocol facts into an NFT collection ID for daily delta tracking.
+/// Mirrors `classify_nft_collection_id` from `dao_helpers.rs` but operates on parsed protocol
+/// facts rather than raw code_hash/type_args.
+fn classify_nft_collection_from_protocol(
+    protocol_facts: &Option<CellProtocolFacts>,
+) -> Option<Vec<u8>> {
+    match protocol_facts.as_ref()? {
+        CellProtocolFacts::MnftToken(token) => Some(token.class_id.clone()),
+        CellProtocolFacts::Dotbit(_) => Some(DOTBIT_SENTINEL_COLLECTION.to_vec()),
+        CellProtocolFacts::Spore(spore) if spore.is_did => {
+            Some(DID_CKB_SENTINEL_COLLECTION.to_vec())
+        }
+        _ => None,
     }
 }
 

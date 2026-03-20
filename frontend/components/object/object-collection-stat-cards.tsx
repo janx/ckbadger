@@ -40,8 +40,8 @@ export function ObjectCollectionStatCards({
     capacity && used && capacity > BigInt(0)
       ? (Number((used * BigInt(10000)) / capacity) / 100).toFixed(2)
       : null;
-  const compactCapacity = capacity ? `${formatCkbCompact(capacity).value} CKB` : '--';
-  const compactUsed = used ? `${formatCkbCompact(used).value} CKB` : '--';
+  const compactCapacity = capacity !== null ? `${formatCkbCompact(capacity).value} CKB` : '--';
+  const compactUsed = used !== null ? `${formatCkbCompact(used).value} CKB` : '--';
   const showLiveCount = liveCount !== undefined && liveCount !== totalCount;
 
   return (
