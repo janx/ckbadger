@@ -438,7 +438,15 @@ impl BulkBuildEngine {
             }
         }
 
-        // Drain all remaining in-flight flushes before finalization.
+        // ── Finalize: decomposed into 13 sub-phases with progress reporting ──
+        // The progress monitor (entry.rs, 10s polling) reads these atomics and
+        // publishes to RocksDB so the TUI can display a finalize checklist.
+        let finalize_started = Instant::now();
+
+        // Phase 0: drain multi-flush pipeline
+        indexer
+            .bulk_build_perf
+            .record_finalize_step(1, finalize_started.elapsed());
         while let Some(handle) = flush_handles.pop_front() {
             let result = handle
                 .await
@@ -449,16 +457,110 @@ impl BulkBuildEngine {
         }
         materializer.add_external_counts(flush_row_totals.0, flush_row_totals.1, flush_count);
 
-        let finalize_started = Instant::now();
-        runtime.finalize(indexer.writer.store().as_ref(), &mut materializer)?;
+        // Destructure runtime to get owned fields for explicit sub-phase control.
+        let BulkBuildRuntimeState {
+            interner,
+            sequencer,
+            owners,
+            activity_stats,
+            chain_stats,
+            hodl_tracker,
+            cell_dist_tracker,
+            ..
+        } = runtime;
+
+        // Phase 1: activity stats (daily + hourly aggregates)
+        indexer
+            .bulk_build_perf
+            .record_finalize_step(2, finalize_started.elapsed());
+        let sealed_rows = activity_stats.build_rows()?;
+        materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
+
+        // Phase 2: chain stats (hash rate, difficulty, uncle rate, epoch time, etc.)
+        indexer
+            .bulk_build_perf
+            .record_finalize_step(3, finalize_started.elapsed());
+        let chain_sealed_rows = chain_stats.build_rows()?;
+        materializer.stream_sealed_aggregate_rows(&chain_sealed_rows)?;
+
+        // Phase 3: final snapshot (live cell markers + index CFs)
+        indexer
+            .bulk_build_perf
+            .record_finalize_step(4, finalize_started.elapsed());
+        let frozen = interner.snapshot_for_reads();
+        let final_snapshot_rows = build_final_snapshot_rows(&sequencer, &frozen)?;
+        materializer.materialize_final_snapshot(&final_snapshot_rows)?;
+
+        // Phases 4-9: owners (flush_sealed + materialize_final per owner)
+        let mut owners = owners;
+
+        indexer
+            .bulk_build_perf
+            .record_finalize_step(5, finalize_started.elapsed());
+        owners.address.flush_sealed(&mut materializer)?;
+        owners.address.materialize_final(&mut materializer)?;
+
+        indexer
+            .bulk_build_perf
+            .record_finalize_step(6, finalize_started.elapsed());
+        owners.script.flush_sealed(&mut materializer)?;
+        owners.script.materialize_final(&mut materializer)?;
+
+        indexer
+            .bulk_build_perf
+            .record_finalize_step(7, finalize_started.elapsed());
+        owners.token.flush_sealed(&mut materializer)?;
+        owners.token.materialize_final(&mut materializer)?;
+
+        indexer
+            .bulk_build_perf
+            .record_finalize_step(8, finalize_started.elapsed());
+        owners.dao.flush_sealed(&mut materializer)?;
+        owners.dao.materialize_final(&mut materializer)?;
+
+        indexer
+            .bulk_build_perf
+            .record_finalize_step(9, finalize_started.elapsed());
+        owners.fiber.flush_sealed(&mut materializer)?;
+        owners.fiber.materialize_final(&mut materializer)?;
+
+        indexer
+            .bulk_build_perf
+            .record_finalize_step(10, finalize_started.elapsed());
+        owners.object.flush_sealed(&mut materializer)?;
+        owners.object.materialize_final(&mut materializer)?;
+
+        // Phase 10: metadata (HODL + cell distribution tracker state)
+        indexer
+            .bulk_build_perf
+            .record_finalize_step(11, finalize_started.elapsed());
+        let mut meta_batch =
+            ckbadger_store::batch::StoreBatch::new(indexer.writer.store().as_ref());
+        meta_batch.put_hodl_tracker_state(&hodl_tracker.to_state());
+        meta_batch.put_cell_dist_tracker_state(&cell_dist_tracker.to_state());
+        if !meta_batch.is_empty() {
+            meta_batch.commit()?;
+        }
+
+        // Phase 11: memtable flush
+        indexer
+            .bulk_build_perf
+            .record_finalize_step(12, finalize_started.elapsed());
         flush_bulk_build_materialized_state(
             indexer.writer.store().as_ref(),
             indexer.writer.append_only_store(),
         )?;
+
+        // Phase 12: sync status + cleanup
+        indexer
+            .bulk_build_perf
+            .record_finalize_step(13, finalize_started.elapsed());
         sync_totals.finalize_success(indexer.writer.store().as_ref(), false)?;
         indexer.writer.refresh_latest_dao_statistics()?;
         indexer.writer.store().clear_bulk_build_session_marker()?;
+
         let finalize_elapsed = finalize_started.elapsed();
+        indexer.bulk_build_perf.clear_finalize();
         info!(
             run_id = %indexer.run_id,
             finalize_ms = format!("{:.1}", finalize_elapsed.as_secs_f64() * 1000.0),
@@ -1579,6 +1681,10 @@ impl BulkBuildRuntimeState {
         ))
     }
 
+    /// Finalize all in-memory state to RocksDB. Used by test helpers.
+    /// Production code uses the decomposed sub-phase sequence in
+    /// `run_bulk_stage_until_pipeline_handoff` which reports finalize
+    /// progress via `BulkBuildPerfStats` atomics.
     fn finalize(
         self,
         domain_store: &CkbadgerStore,

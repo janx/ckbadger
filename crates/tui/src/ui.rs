@@ -2079,115 +2079,12 @@ fn build_bulk_build_diagnostics(
     rate_jitter_text: &str,
     eta_conf: &(&'static str, Color),
 ) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
-    // ── Left column: engine header + stage breakdown + volume ──
-    let batch_count_text = bb
-        .batch_count
-        .map(format_num_u64)
-        .unwrap_or_else(|| "-".to_string());
-    let span_text = bb
-        .batch_block_span
-        .map(|v| format!("{}k", v / 1000))
-        .unwrap_or_else(|| "-".to_string());
-
-    // Stage timing bars - find max for relative sizing
-    let stages: [(&str, Option<f64>, Color); 6] = [
-        ("Facts", bb.facts_ms, TERMINAL_GREEN),
-        ("Resolve", bb.resolve_ms, TERMINAL_DIM),
-        ("Reduce", bb.reduce_ms, AMBER),
-        ("History", bb.history_ms, CYAN),
-        ("Addr", bb.address_reduce_ms, SLATE_500),
-        ("Activity", bb.activity_stats_ms, SLATE_500),
-    ];
-    let max_stage_ms = stages
-        .iter()
-        .filter_map(|(_, ms, _)| *ms)
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
-
-    let bar_width = (cols[0].width as usize).saturating_sub(22).clamp(8, 30);
-    let mut left = vec![Line::from(vec![
-        Span::styled("Engine ", Style::default().fg(SLATE_500)),
-        Span::styled(
-            "[BULK BUILD]",
-            Style::default()
-                .fg(Color::Black)
-                .bg(AMBER)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled("  Batch #", Style::default().fg(SLATE_500)),
-        Span::styled(batch_count_text, Style::default().fg(FOREGROUND)),
-        Span::styled("  Span ", Style::default().fg(SLATE_500)),
-        Span::styled(span_text, Style::default().fg(FOREGROUND)),
-    ])];
-
-    for (name, ms_opt, color) in &stages {
-        let ms = ms_opt.unwrap_or(0.0);
-        let filled = ((ms / max_stage_ms) * bar_width as f64).round() as usize;
-        let filled = filled.min(bar_width);
-        let bar: String = "\u{2588}".repeat(filled);
-        let empty: String = "\u{2591}".repeat(bar_width - filled);
-        let pct = if bb.build_ms.unwrap_or(0.0) > 0.0 {
-            format!("{:3.0}%", ms / bb.build_ms.unwrap() * 100.0)
-        } else {
-            "  -".to_string()
-        };
-        left.push(Line::from(vec![
-            Span::styled(format!("{:<8}", name), Style::default().fg(SLATE_500)),
-            Span::styled(bar, Style::default().fg(*color)),
-            Span::styled(empty, Style::default().fg(SLATE_800)),
-            Span::styled(format!(" {:>6.1}ms", ms), Style::default().fg(FOREGROUND)),
-            Span::styled(format!(" {}", pct), Style::default().fg(SLATE_500)),
-        ]));
-    }
-
-    // Flush + I/O line
-    let flush_text = bb
-        .flush_ms
-        .map(|v| format!("{v:.1}ms"))
-        .unwrap_or_else(|| "-".to_string());
-    let fetch_text = bb
-        .fetch_ms
-        .map(|v| format!("{v:.1}ms"))
-        .unwrap_or_else(|| "-".to_string());
-    let build_text = bb
-        .build_ms
-        .map(|v| format!("{v:.1}ms"))
-        .unwrap_or_else(|| "-".to_string());
-    left.push(Line::from(vec![
-        Span::styled("I/O ", Style::default().fg(SLATE_500)),
-        Span::styled("Fetch ", Style::default().fg(SLATE_500)),
-        Span::styled(fetch_text, Style::default().fg(FOREGROUND)),
-        Span::styled("  Build ", Style::default().fg(SLATE_500)),
-        Span::styled(build_text, Style::default().fg(FOREGROUND)),
-        Span::styled("  Flush ", Style::default().fg(SLATE_500)),
-        Span::styled(flush_text, Style::default().fg(TERMINAL_DIM)),
-    ]));
-
-    // Volume line
-    let cells_created = bb
-        .cells_created
-        .map(|v| format!("+{}", format_num_u64(v)))
-        .unwrap_or_else(|| "-".to_string());
-    let cells_consumed = bb
-        .cells_consumed
-        .map(|v| format!("-{}", format_num_u64(v)))
-        .unwrap_or_else(|| "-".to_string());
-    let density_text = bb
-        .tx_density
-        .map(|v| format!("{v:.1}"))
-        .unwrap_or_else(|| "-".to_string());
-    left.push(Line::from(vec![
-        Span::styled("Volume ", Style::default().fg(SLATE_500)),
-        Span::styled("Cells ", Style::default().fg(SLATE_500)),
-        Span::styled(cells_created, Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" ", Style::default()),
-        Span::styled(cells_consumed, Style::default().fg(AMBER)),
-        Span::styled("  Density ", Style::default().fg(SLATE_500)),
-        Span::styled(
-            format!("{} tx/blk", density_text),
-            Style::default().fg(FOREGROUND),
-        ),
-    ]));
+    // ── Left column: finalize checklist OR engine header + stage breakdown ──
+    let left = if bb.finalize_phase.is_some() {
+        build_finalize_left_column(bb, cols[0].height as usize)
+    } else {
+        build_batch_left_column(bb, cols)
+    };
 
     // ── Right column: memory, materialization, pressure gauges, sparklines ──
     let owner_mem_text = bb
@@ -2263,6 +2160,251 @@ fn build_bulk_build_diagnostics(
     ];
 
     (left, right)
+}
+
+/// Build the left column for normal per-batch bulk-build diagnostics.
+fn build_batch_left_column(bb: &BulkBuildProgressData, cols: &[Rect]) -> Vec<Line<'static>> {
+    let batch_count_text = bb
+        .batch_count
+        .map(format_num_u64)
+        .unwrap_or_else(|| "-".to_string());
+    let span_text = bb
+        .batch_block_span
+        .map(|v| format!("{}k", v / 1000))
+        .unwrap_or_else(|| "-".to_string());
+
+    let stages: [(&str, Option<f64>, Color); 6] = [
+        ("Facts", bb.facts_ms, TERMINAL_GREEN),
+        ("Resolve", bb.resolve_ms, TERMINAL_DIM),
+        ("Reduce", bb.reduce_ms, AMBER),
+        ("History", bb.history_ms, CYAN),
+        ("Addr", bb.address_reduce_ms, SLATE_500),
+        ("Activity", bb.activity_stats_ms, SLATE_500),
+    ];
+    let max_stage_ms = stages
+        .iter()
+        .filter_map(|(_, ms, _)| *ms)
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+
+    let bar_width = (cols[0].width as usize).saturating_sub(22).clamp(8, 30);
+    let mut left = vec![Line::from(vec![
+        Span::styled("Engine ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            "[BULK BUILD]",
+            Style::default()
+                .fg(Color::Black)
+                .bg(AMBER)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  Batch #", Style::default().fg(SLATE_500)),
+        Span::styled(batch_count_text, Style::default().fg(FOREGROUND)),
+        Span::styled("  Span ", Style::default().fg(SLATE_500)),
+        Span::styled(span_text, Style::default().fg(FOREGROUND)),
+    ])];
+
+    for (name, ms_opt, color) in &stages {
+        let ms = ms_opt.unwrap_or(0.0);
+        let filled = ((ms / max_stage_ms) * bar_width as f64).round() as usize;
+        let filled = filled.min(bar_width);
+        let bar: String = "\u{2588}".repeat(filled);
+        let empty: String = "\u{2591}".repeat(bar_width - filled);
+        let pct = if bb.build_ms.unwrap_or(0.0) > 0.0 {
+            format!("{:3.0}%", ms / bb.build_ms.unwrap() * 100.0)
+        } else {
+            "  -".to_string()
+        };
+        left.push(Line::from(vec![
+            Span::styled(format!("{:<8}", name), Style::default().fg(SLATE_500)),
+            Span::styled(bar, Style::default().fg(*color)),
+            Span::styled(empty, Style::default().fg(SLATE_800)),
+            Span::styled(format!(" {:>6.1}ms", ms), Style::default().fg(FOREGROUND)),
+            Span::styled(format!(" {}", pct), Style::default().fg(SLATE_500)),
+        ]));
+    }
+
+    let flush_text = bb
+        .flush_ms
+        .map(|v| format!("{v:.1}ms"))
+        .unwrap_or_else(|| "-".to_string());
+    let fetch_text = bb
+        .fetch_ms
+        .map(|v| format!("{v:.1}ms"))
+        .unwrap_or_else(|| "-".to_string());
+    let build_text = bb
+        .build_ms
+        .map(|v| format!("{v:.1}ms"))
+        .unwrap_or_else(|| "-".to_string());
+    left.push(Line::from(vec![
+        Span::styled("I/O ", Style::default().fg(SLATE_500)),
+        Span::styled("Fetch ", Style::default().fg(SLATE_500)),
+        Span::styled(fetch_text, Style::default().fg(FOREGROUND)),
+        Span::styled("  Build ", Style::default().fg(SLATE_500)),
+        Span::styled(build_text, Style::default().fg(FOREGROUND)),
+        Span::styled("  Flush ", Style::default().fg(SLATE_500)),
+        Span::styled(flush_text, Style::default().fg(TERMINAL_DIM)),
+    ]));
+
+    let cells_created = bb
+        .cells_created
+        .map(|v| format!("+{}", format_num_u64(v)))
+        .unwrap_or_else(|| "-".to_string());
+    let cells_consumed = bb
+        .cells_consumed
+        .map(|v| format!("-{}", format_num_u64(v)))
+        .unwrap_or_else(|| "-".to_string());
+    let density_text = bb
+        .tx_density
+        .map(|v| format!("{v:.1}"))
+        .unwrap_or_else(|| "-".to_string());
+    left.push(Line::from(vec![
+        Span::styled("Volume ", Style::default().fg(SLATE_500)),
+        Span::styled("Cells ", Style::default().fg(SLATE_500)),
+        Span::styled(cells_created, Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(" ", Style::default()),
+        Span::styled(cells_consumed, Style::default().fg(AMBER)),
+        Span::styled("  Density ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format!("{} tx/blk", density_text),
+            Style::default().fg(FOREGROUND),
+        ),
+    ]));
+
+    left
+}
+
+/// Finalize phase labels in execution order.
+const FINALIZE_PHASES: &[&str] = &[
+    "Drain flush",
+    "Activity stats",
+    "Chain stats",
+    "Final snapshot",
+    "Owner: address",
+    "Owner: script",
+    "Owner: token",
+    "Owner: dao",
+    "Owner: fiber",
+    "Owner: object",
+    "Metadata",
+    "Memtable flush",
+    "Sync status",
+];
+
+/// Build the left column for finalize-mode diagnostics (checklist).
+fn build_finalize_left_column(
+    bb: &BulkBuildProgressData,
+    available_height: usize,
+) -> Vec<Line<'static>> {
+    let step = bb.finalize_step.unwrap_or(0);
+    let total = bb
+        .finalize_steps_total
+        .unwrap_or(FINALIZE_PHASES.len() as u8);
+    let elapsed_s = bb.finalize_elapsed_ms.unwrap_or(0.0) / 1000.0;
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled("Engine ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            "[FINALIZING]",
+            Style::default()
+                .fg(Color::Black)
+                .bg(AMBER)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  step {}/{}", step + 1, total),
+            Style::default().fg(FOREGROUND),
+        ),
+        Span::styled(
+            format!("  {:.1}s", elapsed_s),
+            Style::default().fg(SLATE_500),
+        ),
+    ])];
+
+    // Compact: if very little space, show only header + current phase
+    if available_height < 6 {
+        let label = FINALIZE_PHASES.get(step as usize).unwrap_or(&"...");
+        lines.push(Line::from(vec![
+            Span::styled("\u{25b8} ", Style::default().fg(AMBER)),
+            Span::styled(label.to_string(), Style::default().fg(AMBER)),
+        ]));
+        return lines;
+    }
+
+    // Medium: group small trailing phases to fit
+    // Full: show all 13 individually
+    let group_tail = available_height < 14;
+
+    // Main phases to show individually (first 7: drain through owner:token)
+    let individual_end = if group_tail { 7 } else { FINALIZE_PHASES.len() };
+
+    for (i, label) in FINALIZE_PHASES.iter().enumerate().take(individual_end) {
+        let i = i as u8;
+        let (marker, color) = if i < step {
+            ("\u{2713}", TERMINAL_GREEN) // ✓
+        } else if i == step {
+            ("\u{25b8}", AMBER) // ►
+        } else {
+            (" ", SLATE_500)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {} ", marker), Style::default().fg(color)),
+            Span::styled(label.to_string(), Style::default().fg(color)),
+        ]));
+    }
+
+    if group_tail {
+        // Group remaining owners (dao/fiber/object) on one line
+        let group1_phases: &[usize] = &[7, 8, 9]; // dao, fiber, object
+        let group1_label = "Owner: dao / fiber / object";
+        let group1_color = if group1_phases.iter().all(|&i| (i as u8) < step) {
+            TERMINAL_GREEN
+        } else if group1_phases.iter().any(|&i| (i as u8) == step) {
+            AMBER
+        } else {
+            SLATE_500
+        };
+        let group1_marker = if group1_phases.iter().all(|&i| (i as u8) < step) {
+            "\u{2713}"
+        } else if group1_phases.iter().any(|&i| (i as u8) == step) {
+            "\u{25b8}"
+        } else {
+            " "
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {} ", group1_marker),
+                Style::default().fg(group1_color),
+            ),
+            Span::styled(group1_label.to_string(), Style::default().fg(group1_color)),
+        ]));
+
+        // Group tail phases (metadata/memtable/sync) on one line
+        let group2_phases: &[usize] = &[10, 11, 12]; // metadata, memtable, sync
+        let group2_label = "Metadata / Flush / Status";
+        let group2_color = if group2_phases.iter().all(|&i| (i as u8) < step) {
+            TERMINAL_GREEN
+        } else if group2_phases.iter().any(|&i| (i as u8) == step) {
+            AMBER
+        } else {
+            SLATE_500
+        };
+        let group2_marker = if group2_phases.iter().all(|&i| (i as u8) < step) {
+            "\u{2713}"
+        } else if group2_phases.iter().any(|&i| (i as u8) == step) {
+            "\u{25b8}"
+        } else {
+            " "
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {} ", group2_marker),
+                Style::default().fg(group2_color),
+            ),
+            Span::styled(group2_label.to_string(), Style::default().fg(group2_color)),
+        ]));
+    }
+
+    lines
 }
 
 fn format_stage_commit_gap_ms(stage_ms: Option<f64>, commit_ms: Option<f64>) -> String {
@@ -4433,28 +4575,28 @@ fn draw_system_params_compact(
 #[cfg(test)]
 mod tests {
     use super::{
-        adaptive_control_lines, adaptive_state_label, api_health_state, chart_height_warning,
-        compact_overview_layout, compact_sync_layout, consumed_cells_source_color,
-        consumed_cells_source_label, dense_right_lines, detail_right_lines,
-        diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label, footer_hint_line,
-        footer_status_message, format_age_secs, format_num, format_num_commas, format_num_compact,
-        format_rate_pair, format_signed_num_i128, format_stage_commit_gap_ms, header_right_line,
-        header_title_line, heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop,
-        merged_sparkline_p95_line, overview_log_min_height, overview_services_min_height,
-        percentile_from_history, pipeline_bottleneck, pipeline_flow_state, rate_jitter,
-        render_gauge, runtime_health_state, runtime_live_delta, service_log_tails_line, sparkline,
-        stack_sync_charts, stale_age_secs, stale_status, startup_phase_label,
-        storage_pressure_l0_line, storage_pressure_wbm_line, storage_runtime_columns,
-        supervisor_services_line, sync_bottleneck, sync_chart_specs, sync_timing_lines,
-        system_kv_line, system_store_path_lines, system_workdir_lines, trend_delta, trim_for_panel,
-        AdaptiveControlSnapshot, App, Color, CompactOverviewLayout, CompactSyncLayout,
-        DiagnosticsViewMode, SyncBottleneck, SyncChartKind, AMBER, CYAN, STATUS_MESSAGE_TTL_SECS,
-        TERMINAL_DIM,
+        adaptive_control_lines, adaptive_state_label, api_health_state, build_finalize_left_column,
+        chart_height_warning, compact_overview_layout, compact_sync_layout,
+        consumed_cells_source_color, consumed_cells_source_label, dense_right_lines,
+        detail_right_lines, diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label,
+        footer_hint_line, footer_status_message, format_age_secs, format_num, format_num_commas,
+        format_num_compact, format_rate_pair, format_signed_num_i128, format_stage_commit_gap_ms,
+        header_right_line, header_title_line, heartbeat_is_on, io_fetch_write_jitter_line,
+        is_rate_drop, merged_sparkline_p95_line, overview_log_min_height,
+        overview_services_min_height, percentile_from_history, pipeline_bottleneck,
+        pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state, runtime_live_delta,
+        service_log_tails_line, sparkline, stack_sync_charts, stale_age_secs, stale_status,
+        startup_phase_label, storage_pressure_l0_line, storage_pressure_wbm_line,
+        storage_runtime_columns, supervisor_services_line, sync_bottleneck, sync_chart_specs,
+        sync_timing_lines, system_kv_line, system_store_path_lines, system_workdir_lines,
+        trend_delta, trim_for_panel, AdaptiveControlSnapshot, App, Color, CompactOverviewLayout,
+        CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck, SyncChartKind, AMBER, CYAN,
+        STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
     use crate::db::{
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
     };
-    use ckbadger_common::MemoryStatsData;
+    use ckbadger_common::{BulkBuildProgressData, MemoryStatsData};
     use ratatui::layout::Rect;
     use ratatui::text::Line;
     use std::collections::VecDeque;
@@ -5457,5 +5599,102 @@ mod tests {
         assert!(text.contains("F"));
         assert!(text.contains("P"));
         assert!(!text.contains("p95"));
+    }
+
+    #[test]
+    fn test_finalize_checklist_first_phase() {
+        let bb = BulkBuildProgressData {
+            finalize_phase: Some("drain_flush".to_string()),
+            finalize_step: Some(0),
+            finalize_steps_total: Some(13),
+            finalize_elapsed_ms: Some(500.0),
+            ..Default::default()
+        };
+        let lines = build_finalize_left_column(&bb, 20);
+        let header = line_text(&lines[0]);
+        assert!(header.contains("FINALIZING"));
+        assert!(header.contains("step 1/13"));
+        // First phase should have the active marker (►)
+        let first_phase = line_text(&lines[1]);
+        assert!(first_phase.contains("Drain flush"));
+        // Second phase should not have the check marker
+        let second_phase = line_text(&lines[2]);
+        assert!(second_phase.contains("Activity stats"));
+    }
+
+    #[test]
+    fn test_finalize_checklist_mid_owner() {
+        let bb = BulkBuildProgressData {
+            finalize_phase: Some("owner:script".to_string()),
+            finalize_step: Some(5),
+            finalize_steps_total: Some(13),
+            finalize_elapsed_ms: Some(12400.0),
+            ..Default::default()
+        };
+        let lines = build_finalize_left_column(&bb, 20);
+        let header = line_text(&lines[0]);
+        assert!(header.contains("step 6/13"));
+        // Phases 0-4 (indices 1-5) should be completed (✓)
+        for (idx, line) in lines[1..=5].iter().enumerate() {
+            let text = line_text(line);
+            assert!(
+                text.contains('\u{2713}'),
+                "phase {} should be ✓: {}",
+                idx + 1,
+                text
+            );
+        }
+        // Phase 5 (index 6) should be active (►)
+        let active = line_text(&lines[6]);
+        assert!(
+            active.contains('\u{25b8}'),
+            "phase 5 should be ►: {}",
+            active
+        );
+        assert!(active.contains("Owner: script"));
+    }
+
+    #[test]
+    fn test_finalize_checklist_compact_mode() {
+        let bb = BulkBuildProgressData {
+            finalize_phase: Some("owner:address".to_string()),
+            finalize_step: Some(4),
+            finalize_steps_total: Some(13),
+            finalize_elapsed_ms: Some(8000.0),
+            ..Default::default()
+        };
+        // Compact: available_height < 6 → only header + current phase
+        let lines = build_finalize_left_column(&bb, 4);
+        assert_eq!(lines.len(), 2);
+        let current = line_text(&lines[1]);
+        assert!(current.contains("Owner: address"));
+    }
+
+    #[test]
+    fn test_finalize_checklist_grouped_mode() {
+        let bb = BulkBuildProgressData {
+            finalize_phase: Some("owner:dao".to_string()),
+            finalize_step: Some(7),
+            finalize_steps_total: Some(13),
+            finalize_elapsed_ms: Some(20000.0),
+            ..Default::default()
+        };
+        // Medium height: groups tail phases
+        let lines = build_finalize_left_column(&bb, 12);
+        let all_text: String = lines
+            .iter()
+            .map(|l| line_text(l))
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(
+            all_text.contains("dao / fiber / object"),
+            "should group tail owners: {}",
+            all_text
+        );
+        assert!(
+            all_text.contains("Metadata / Flush / Status"),
+            "should group tail phases: {}",
+            all_text
+        );
     }
 }

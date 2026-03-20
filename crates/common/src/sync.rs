@@ -261,6 +261,19 @@ pub struct BulkBuildProgressData {
     /// Transaction density (txs per block) in the most recent batch.
     #[serde(default)]
     pub tx_density: Option<f64>,
+    /// Finalize phase identifier. `None` during normal batch processing.
+    /// Set to the current sub-phase label during finalization.
+    #[serde(default)]
+    pub finalize_phase: Option<String>,
+    /// Ordinal index of current finalize phase (0-based). Enables progress display.
+    #[serde(default)]
+    pub finalize_step: Option<u8>,
+    /// Total finalize steps. Stable constant, included for TUI convenience.
+    #[serde(default)]
+    pub finalize_steps_total: Option<u8>,
+    /// Milliseconds elapsed since finalize started.
+    #[serde(default)]
+    pub finalize_elapsed_ms: Option<f64>,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {
@@ -729,6 +742,10 @@ mod tests {
             batch_block_span: Some(8_500),
             batch_count: Some(156),
             tx_density: Some(4.7),
+            finalize_phase: None,
+            finalize_step: None,
+            finalize_steps_total: None,
+            finalize_elapsed_ms: None,
         };
 
         let json = serde_json::to_string(&bb).unwrap();

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -307,6 +307,9 @@ pub(crate) struct BulkBuildPerfStats {
     batch_count: AtomicU64,
     // tx_density stored as f64 bits
     tx_density_bits: AtomicU64,
+    // Finalize progress: 0 = not finalizing, 1-13 = step (1-indexed).
+    finalize_step: AtomicU8,
+    finalize_elapsed_us: AtomicU64,
 }
 
 impl BulkBuildPerfStats {
@@ -372,6 +375,18 @@ impl BulkBuildPerfStats {
         if batch_count == 0 {
             return None;
         }
+        let finalize_step_raw = self.finalize_step.load(Ordering::Relaxed);
+        let (finalize_phase, finalize_step, finalize_steps_total, finalize_elapsed_ms) =
+            if finalize_step_raw > 0 {
+                (
+                    Some(finalize_step_label(finalize_step_raw)),
+                    Some(finalize_step_raw - 1), // 0-indexed for TUI
+                    Some(FINALIZE_TOTAL_STEPS),
+                    Some(us_to_ms(self.finalize_elapsed_us.load(Ordering::Relaxed))),
+                )
+            } else {
+                (None, None, None, None)
+            };
         Some(BulkBuildProgressData {
             facts_ms: Some(us_to_ms(self.last_facts_us.load(Ordering::Relaxed))),
             resolve_ms: Some(us_to_ms(self.last_resolve_us.load(Ordering::Relaxed))),
@@ -395,8 +410,47 @@ impl BulkBuildPerfStats {
             batch_block_span: Some(self.batch_block_span.load(Ordering::Relaxed)),
             batch_count: Some(batch_count),
             tx_density: Some(f64::from_bits(self.tx_density_bits.load(Ordering::Relaxed))),
+            finalize_phase,
+            finalize_step,
+            finalize_steps_total,
+            finalize_elapsed_ms,
         })
     }
+
+    pub(crate) fn record_finalize_step(&self, step: u8, elapsed: std::time::Duration) {
+        self.finalize_step.store(step, Ordering::Relaxed);
+        self.finalize_elapsed_us.store(
+            (elapsed.as_secs_f64() * 1_000_000.0) as u64,
+            Ordering::Relaxed,
+        );
+    }
+
+    pub(crate) fn clear_finalize(&self) {
+        self.finalize_step.store(0, Ordering::Relaxed);
+        self.finalize_elapsed_us.store(0, Ordering::Relaxed);
+    }
+}
+
+const FINALIZE_TOTAL_STEPS: u8 = 13;
+
+fn finalize_step_label(step: u8) -> String {
+    match step {
+        1 => "drain_flush",
+        2 => "activity_stats",
+        3 => "chain_stats",
+        4 => "final_snapshot",
+        5 => "owner:address",
+        6 => "owner:script",
+        7 => "owner:token",
+        8 => "owner:dao",
+        9 => "owner:fiber",
+        10 => "owner:object",
+        11 => "metadata",
+        12 => "memtable_flush",
+        13 => "sync_status",
+        _ => "unknown",
+    }
+    .to_string()
 }
 
 fn ms_to_us(ms: f64) -> u64 {
@@ -923,5 +977,63 @@ mod tests {
         assert_eq!(us_to_ms(ms_to_us(123.456)), 123.456);
         assert_eq!(ms_to_us(0.0), 0);
         assert_eq!(us_to_ms(0), 0.0);
+    }
+
+    #[test]
+    fn test_finalize_step_label_covers_all_steps() {
+        assert_eq!(finalize_step_label(1), "drain_flush");
+        assert_eq!(finalize_step_label(3), "chain_stats");
+        assert_eq!(finalize_step_label(5), "owner:address");
+        assert_eq!(finalize_step_label(13), "sync_status");
+        assert_eq!(finalize_step_label(0), "unknown");
+        assert_eq!(finalize_step_label(14), "unknown");
+    }
+
+    #[test]
+    fn test_finalize_total_steps_constant() {
+        assert_eq!(FINALIZE_TOTAL_STEPS, 13);
+    }
+
+    #[test]
+    fn test_record_finalize_step_updates_atomics() {
+        let stats = BulkBuildPerfStats::default();
+        let elapsed = std::time::Duration::from_millis(1500);
+        stats.record_finalize_step(4, elapsed);
+        assert_eq!(stats.finalize_step.load(Ordering::Relaxed), 4);
+        let stored_us = stats.finalize_elapsed_us.load(Ordering::Relaxed);
+        assert!((us_to_ms(stored_us) - 1500.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_clear_finalize_resets_atomics() {
+        let stats = BulkBuildPerfStats::default();
+        stats.record_finalize_step(7, std::time::Duration::from_secs(10));
+        stats.clear_finalize();
+        assert_eq!(stats.finalize_step.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.finalize_elapsed_us.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_snapshot_includes_finalize_fields_when_active() {
+        let stats = BulkBuildPerfStats::default();
+        // Must have batch_count > 0 for snapshot to return Some.
+        stats.batch_count.store(1, Ordering::Relaxed);
+        stats.record_finalize_step(5, std::time::Duration::from_millis(2500));
+        let snap = stats.snapshot().unwrap();
+        assert_eq!(snap.finalize_phase.as_deref(), Some("owner:address"));
+        assert_eq!(snap.finalize_step, Some(4)); // 0-indexed
+        assert_eq!(snap.finalize_steps_total, Some(13));
+        assert!((snap.finalize_elapsed_ms.unwrap() - 2500.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_snapshot_finalize_fields_none_when_not_finalizing() {
+        let stats = BulkBuildPerfStats::default();
+        stats.batch_count.store(1, Ordering::Relaxed);
+        let snap = stats.snapshot().unwrap();
+        assert!(snap.finalize_phase.is_none());
+        assert!(snap.finalize_step.is_none());
+        assert!(snap.finalize_steps_total.is_none());
+        assert!(snap.finalize_elapsed_ms.is_none());
     }
 }
