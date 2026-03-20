@@ -231,6 +231,7 @@ impl BulkBuildEngine {
             let build_elapsed = build_started.elapsed();
 
             // Collect prefetched next batch (typically already done since build >> fetch).
+            let collect_started = Instant::now();
             if let Some(handle) = prefetch_handle {
                 prefetched_blocks = Some(
                     handle
@@ -238,6 +239,13 @@ impl BulkBuildEngine {
                         .map_err(|e| anyhow!("bulk build prefetch task panicked: {}", e))??,
                 );
             }
+            let prefetch_collect_elapsed = collect_started.elapsed();
+
+            // controllable_ms: build + prefetch_collect. Excludes flush_wait because
+            // flush depends on RocksDB compaction, not batch size. Including flush_wait
+            // would create a positive feedback loop (slow flush → shrink batch → faster
+            // build → longer flush wait → shrink more → drives to minimum floor).
+            let controllable_ms = (build_elapsed + prefetch_collect_elapsed).as_secs_f64() * 1000.0;
 
             // Await previous flush AFTER apply_blocks. Since apply_blocks no
             // longer reads from the domain store (token info is pre-cached),
@@ -387,6 +395,7 @@ impl BulkBuildEngine {
                 progress_pct = format!("{:.1}%", progress_pct),
                 fetch_ms = format!("{:.1}", fetch_elapsed.as_secs_f64() * 1000.0),
                 build_ms = format!("{:.1}", build_elapsed.as_secs_f64() * 1000.0),
+                controllable_ms = format!("{:.1}", controllable_ms),
                 facts_ms = format!("{:.1}", build_timings.facts_ms),
                 resolve_ms = format!("{:.1}", build_timings.resolve_ms),
                 reduce_ms = format!("{:.1}", build_timings.reduce_ms),
