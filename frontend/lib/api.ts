@@ -2075,6 +2075,19 @@ export const api = {
     return fetchApi(`/assets/identities/${collectionId}/activities${suffix ? `?${suffix}` : ''}`);
   },
 
+  getIdentityCollectionCapacityChart: (
+    collectionId: string,
+    range: CapacityChartRangeParams = {}
+  ): Promise<StackedAreaChartResponse> => {
+    const query = new URLSearchParams();
+    if (range.from) query.set('from', range.from);
+    if (range.to) query.set('to', range.to);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/objects/${collectionId}/charts/capacity-history${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
   getDotbitItemDetail: (nftId: string): Promise<CollectionItem> => {
     return fetchApi(`/assets/identities/dotbit/items/${encodeURIComponent(nftId)}`);
   },

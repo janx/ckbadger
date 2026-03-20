@@ -404,11 +404,18 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
         <ObjectCollectionStatCards
           totalCount={cluster.sporesCount}
           totalLabel="Total Spores"
-          ownedCapacity={cluster.ownedCapacity}
-          ownedKnowledge={cluster.ownedKnowledge}
           createdAtBlock={cluster.createdAtBlock}
           storageTier={cluster.storageProfile?.tier}
           storageOnchainRatio={cluster.storageProfile?.fullyOnchainRatio}
+        />
+        <CapacityStatisticsSection
+          className="mb-6"
+          capacityRange={capacityRange}
+          onCapacityRangeChange={setCapacityRange}
+          capacityChart={capacityChart}
+          isCapacityChartLoading={isCapacityChartLoading}
+          totalCapacity={cluster.ownedCapacity}
+          commonKnowledgeSize={cluster.ownedKnowledge}
         />
         <div className="grid gap-6 xl:grid-cols-5">
           <div className="space-y-6 xl:col-span-2">
@@ -487,14 +494,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
             </TerminalPanel>
           </div>
           <div className="space-y-6 xl:col-span-3">
-            <CapacityStatisticsSection
-              capacityRange={capacityRange}
-              onCapacityRangeChange={setCapacityRange}
-              capacityChart={capacityChart}
-              isCapacityChartLoading={isCapacityChartLoading}
-              totalCapacity={cluster.ownedCapacity}
-              commonKnowledgeSize={cluster.ownedKnowledge}
-            />
             <TerminalPanel>
               <Tabs
                 value={activeCollectionTab}

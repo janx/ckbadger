@@ -5,28 +5,17 @@ import { ObjectCollectionStatCards } from '@/components/object/object-collection
 import { render } from '../utils/test-utils';
 
 describe('ObjectCollectionStatCards', () => {
-  it('renders default count and capacity cards', () => {
-    render(
-      <ObjectCollectionStatCards
-        totalCount={500}
-        ownedCapacity="100000000000"
-        ownedKnowledge="61000000000"
-      />
-    );
+  it('renders default count card', () => {
+    render(<ObjectCollectionStatCards totalCount={500} />);
 
     expect(screen.getByText('Total Objects')).toBeInTheDocument();
     expect(screen.getByText('500')).toBeInTheDocument();
-    expect(screen.getByText('Owned Capacity')).toBeInTheDocument();
-    expect(screen.getByText('Common Knowledge Size')).toBeInTheDocument();
-    expect(screen.getByText(/Common Knowledge Share: 61\.00%/)).toBeInTheDocument();
   });
 
   it('renders storage tier when provided', () => {
     render(
       <ObjectCollectionStatCards
         totalCount={10}
-        ownedCapacity={null}
-        ownedKnowledge={null}
         storageTier="fully_onchain"
         storageOnchainRatio="0.95"
       />
@@ -42,8 +31,6 @@ describe('ObjectCollectionStatCards', () => {
       <ObjectCollectionStatCards
         totalCount={42}
         totalLabel="Total Spores"
-        ownedCapacity={null}
-        ownedKnowledge={null}
         createdAtBlock={1000000}
       />
     );
@@ -54,22 +41,23 @@ describe('ObjectCollectionStatCards', () => {
     expect(blockLink).toHaveAttribute('href', '/blocks/1000000');
   });
 
-  it('shows fallback values and hides optional cards when optional props are missing', () => {
-    render(
-      <ObjectCollectionStatCards totalCount={10} ownedCapacity={null} ownedKnowledge={null} />
-    );
+  it('hides optional cards when optional props are missing', () => {
+    render(<ObjectCollectionStatCards totalCount={10} />);
 
-    const dashes = screen.getAllByText('--');
-    expect(dashes.length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByText('Storage Integrity')).not.toBeInTheDocument();
     expect(screen.queryByText('Created At')).not.toBeInTheDocument();
   });
 
-  it('renders zero capacity as 0.00 CKB instead of --', () => {
-    render(<ObjectCollectionStatCards totalCount={10} ownedCapacity="0" ownedKnowledge="0" />);
+  it('shows live count when different from total', () => {
+    render(<ObjectCollectionStatCards totalCount={100} liveCount={80} />);
 
-    const ckbValues = screen.getAllByText('0.00 CKB');
-    expect(ckbValues.length).toBe(2);
-    expect(screen.queryByText('--')).not.toBeInTheDocument();
+    expect(screen.getByText('Live Items')).toBeInTheDocument();
+    expect(screen.getByText('80')).toBeInTheDocument();
+  });
+
+  it('hides live count when equal to total', () => {
+    render(<ObjectCollectionStatCards totalCount={100} liveCount={100} />);
+
+    expect(screen.queryByText('Live Items')).not.toBeInTheDocument();
   });
 });

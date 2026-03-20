@@ -19,11 +19,13 @@ import {
 import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { CapacityStatisticsSection } from '@/components/ui/capacity-statistics-section';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { ObjectActivityCard } from '@/components/object/object-activity-card';
 import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 
 function isDotbitAlias(assetId: string): boolean {
@@ -44,6 +46,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const tabFromQuery = searchParams.get('tab');
+  const [capacityRange, setCapacityRange] = useState<CapacityRangeKey>('all');
   const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [statusFilter, setStatusFilter] = useState<ItemStatusFilter>('all');
@@ -56,6 +59,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
   const { reset: resetItemsPagination } = itemsPagination;
   const { reset: resetHoldersPagination } = holdersPagination;
   const { reset: resetActivitiesPagination } = activitiesPagination;
+  const capacityRangeParams = getCapacityRangeParams(capacityRange);
   // Debounced search (250ms)
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -128,6 +132,14 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
       }),
     enabled: !!collection && activeTab === 'activities',
     placeholderData: keepPreviousData,
+  });
+  const { data: capacityChart, isLoading: isCapacityChartLoading } = useQuery({
+    queryKey: ['identity-collection-capacity-chart', collectionId, capacityRange],
+    queryFn: () =>
+      capacityRangeParams
+        ? api.getIdentityCollectionCapacityChart(collectionId, capacityRangeParams)
+        : api.getIdentityCollectionCapacityChart(collectionId),
+    enabled: !!collection,
   });
   // Reset items pagination when search/filter changes
   useEffect(() => {
@@ -209,10 +221,17 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
           totalCount={collection.totalCount}
           totalLabel="Total Identities"
           liveCount={collection.liveCount}
-          ownedCapacity={collection.ownedCapacity}
-          ownedKnowledge={collection.ownedKnowledge}
         />
         <div className="space-y-6">
+          <CapacityStatisticsSection
+            capacityRange={capacityRange}
+            onCapacityRangeChange={setCapacityRange}
+            capacityChart={capacityChart}
+            isCapacityChartLoading={isCapacityChartLoading}
+            totalCapacity={collection.ownedCapacity}
+            commonKnowledgeSize={collection.ownedKnowledge}
+            totalCapacityLabel="Owned Capacity"
+          />
           <TerminalPanel>
             <TerminalPanelHeader indicator="active">Collection ID</TerminalPanelHeader>
             <TerminalPanelContent>

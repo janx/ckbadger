@@ -435,18 +435,10 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
           <ObjectCollectionStatCards
             totalCount={collection.totalCount}
             liveCount={collection.liveCount}
-            ownedCapacity={collection.ownedCapacity}
-            ownedKnowledge={collection.ownedKnowledge}
             storageTier={collection.storageProfile?.tier}
             storageOnchainRatio={collection.storageProfile?.fullyOnchainRatio}
           />
           <div className="space-y-6">
-            <TerminalPanel>
-              <TerminalPanelHeader indicator="active">Collection ID</TerminalPanelHeader>
-              <TerminalPanelContent>
-                <HexDisplay value={collection.collectionId} truncate={false} />
-              </TerminalPanelContent>
-            </TerminalPanel>
             <CapacityStatisticsSection
               capacityRange={capacityRange}
               onCapacityRangeChange={setCapacityRange}
@@ -454,7 +446,14 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               isCapacityChartLoading={isCollectionCapacityChartLoading}
               totalCapacity={collection.ownedCapacity}
               commonKnowledgeSize={collection.ownedKnowledge}
+              totalCapacityLabel="Owned Capacity"
             />
+            <TerminalPanel>
+              <TerminalPanelHeader indicator="active">Collection ID</TerminalPanelHeader>
+              <TerminalPanelContent>
+                <HexDisplay value={collection.collectionId} truncate={false} />
+              </TerminalPanelContent>
+            </TerminalPanel>
             <TerminalPanel>
               <Tabs value={activeCollectionTab} onValueChange={handleCollectionTabChange}>
                 <TerminalPanelHeader

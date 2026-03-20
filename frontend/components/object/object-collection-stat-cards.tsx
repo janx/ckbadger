@@ -1,47 +1,26 @@
 import Link from '@/components/ui/link';
 
 import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
-import { formatCkbCompact, formatNumber } from '@/lib/utils';
+import { formatNumber } from '@/lib/utils';
 import { formatStorageTier } from '@/lib/asset-utils';
 
 interface ObjectCollectionStatCardsProps {
   totalCount: number;
   totalLabel?: string;
   liveCount?: number;
-  ownedCapacity: string | null | undefined;
-  ownedKnowledge: string | null | undefined;
   createdAtBlock?: number;
   storageTier?: string;
   storageOnchainRatio?: string;
-}
-
-function parseShannons(value: string | null | undefined): bigint | null {
-  if (!value) return null;
-  try {
-    return BigInt(value);
-  } catch {
-    return null;
-  }
 }
 
 export function ObjectCollectionStatCards({
   totalCount,
   totalLabel = 'Total Objects',
   liveCount,
-  ownedCapacity,
-  ownedKnowledge,
   createdAtBlock,
   storageTier,
   storageOnchainRatio,
 }: ObjectCollectionStatCardsProps) {
-  const capacity = parseShannons(ownedCapacity);
-  const used = parseShannons(ownedKnowledge);
-  const usedPercent =
-    capacity && used && capacity > BigInt(0)
-      ? (Number((used * BigInt(10000)) / capacity) / 100).toFixed(2)
-      : null;
-  const compactCapacity = capacity !== null ? `${formatCkbCompact(capacity).value} CKB` : '--';
-  const compactUsed = used !== null ? `${formatCkbCompact(used).value} CKB` : '--';
   const showLiveCount = liveCount !== undefined && liveCount !== totalCount;
 
   return (
@@ -89,28 +68,6 @@ export function ObjectCollectionStatCards({
           </TerminalPanelContent>
         </TerminalPanel>
       )}
-
-      <TerminalPanel variant="inset">
-        <TerminalPanelContent className="space-y-2">
-          <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
-            Owned Capacity
-          </div>
-          <div className="text-text-bright font-mono text-lg">{compactCapacity}</div>
-          <div className="text-text-dim font-mono text-xs">Total owned CKB in this collection</div>
-        </TerminalPanelContent>
-      </TerminalPanel>
-
-      <TerminalPanel variant="inset">
-        <TerminalPanelContent className="space-y-2">
-          <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
-            Common Knowledge Size
-          </div>
-          <div className="text-text-bright font-mono text-lg">{compactUsed}</div>
-          <div className="text-text-dim font-mono text-xs">
-            Common Knowledge Share: {usedPercent ? `${usedPercent}%` : '--'}
-          </div>
-        </TerminalPanelContent>
-      </TerminalPanel>
 
       {createdAtBlock !== undefined && (
         <TerminalPanel variant="inset">
