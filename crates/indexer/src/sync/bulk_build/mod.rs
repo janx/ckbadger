@@ -49,13 +49,10 @@ pub(crate) mod sequencer;
 
 const BULK_BUILD_MIN_BLOCK_SPAN: u64 = 10_000;
 const BULK_BUILD_MAX_BLOCK_SPAN: u64 = 100_000;
-// EMA adaptive controller constants — used in the next commit.
-#[allow(dead_code)]
+// EMA adaptive controller constants
 const BULK_BUILD_TARGET_ITERATION_MS: f64 = 1500.0;
-#[allow(dead_code)]
 const BULK_BUILD_MS_PER_BLOCK_ALPHA: f64 = 0.5;
 const BULK_BUILD_INITIAL_MS_PER_BLOCK: f64 = 0.05;
-#[allow(dead_code)]
 const BULK_BUILD_MAX_STEP_RATIO: f64 = 2.0;
 
 #[derive(Default)]
@@ -119,7 +116,6 @@ impl BulkBuildEngine {
             )
         })?;
         let mut batch_block_span = configured_batch_size;
-        #[allow(unused_mut, unused_variables)]
         let mut ms_per_block_ema: f64 = BULK_BUILD_INITIAL_MS_PER_BLOCK;
         let mut batch_count: u64 = 0;
         // Pre-fetched blocks from the previous iteration's background fetch.
@@ -416,22 +412,51 @@ impl BulkBuildEngine {
                 "Bulk build materialized batch"
             );
 
-            // Adjust batch span for next iteration based on observed tx density.
-            // Target: ~40K txs per batch to balance per-batch overhead vs memory.
-            // Early blocks are sparse (~1 tx/block) so larger batches reduce overhead;
-            // late blocks are dense (~4+ tx/block) so 10K blocks is appropriate.
-            if tx_density > 0.0 {
-                let target_txs: f64 = 40_000.0;
-                let desired_f64 = target_txs / tx_density;
-                if !desired_f64.is_finite() || desired_f64 < 0.0 {
+            // Adaptive batch sizing: target a fixed wall-clock budget per iteration
+            // using EMA of ms-per-block as the cost model. Excludes flush_wait
+            // (captured in controllable_ms above) to avoid flush-driven shrinkage.
+            //
+            // Skip EMA update when the sample would be unrepresentative:
+            // - batch_count <= 1: first batch has cold-cache inflated read times
+            //   (batch_count is incremented before this block runs, so first batch = 1)
+            // - actual_blocks < batch_block_span/2: runt batch truncated by handoff_target
+            let actual_blocks = batch_stats.block_count as f64;
+            let is_representative =
+                batch_count > 1 && actual_blocks >= (batch_block_span as f64 * 0.5);
+
+            if is_representative && actual_blocks > 0.0 && controllable_ms > 0.0 {
+                let sample = controllable_ms / actual_blocks;
+                ms_per_block_ema = ms_per_block_ema * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA)
+                    + sample * BULK_BUILD_MS_PER_BLOCK_ALPHA;
+
+                if !ms_per_block_ema.is_finite() || ms_per_block_ema <= 0.0 {
                     bail!(
-                        "bulk build adaptive sizing produced invalid desired blocks: tx_density={} target_txs={} desired_f64={}",
-                        tx_density,
-                        target_txs,
-                        desired_f64
+                        "bulk build adaptive sizing: ms_per_block_ema became invalid: \
+                         ms_per_block_ema={} sample={} controllable_ms={} actual_blocks={}",
+                        ms_per_block_ema,
+                        sample,
+                        controllable_ms,
+                        actual_blocks
                     );
                 }
-                batch_block_span = (desired_f64 as u64)
+
+                let desired_f64 = BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema;
+                if !desired_f64.is_finite() || desired_f64 < 0.0 {
+                    bail!(
+                        "bulk build adaptive sizing: desired blocks is invalid: \
+                         desired_f64={} ms_per_block_ema={} target_ms={}",
+                        desired_f64,
+                        ms_per_block_ema,
+                        BULK_BUILD_TARGET_ITERATION_MS
+                    );
+                }
+                let desired = desired_f64 as u64;
+
+                let step_max = (batch_block_span as f64 * BULK_BUILD_MAX_STEP_RATIO) as u64;
+                let step_min = (batch_block_span as f64 / BULK_BUILD_MAX_STEP_RATIO) as u64;
+
+                batch_block_span = desired
+                    .clamp(step_min, step_max)
                     .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
             }
 
@@ -5495,54 +5520,56 @@ mod tests {
 
     #[test]
     fn test_adaptive_batch_sizing_sparse_blocks() {
-        // Sparse blocks (~1 tx/block): should expand batch to 40K blocks.
-        let tx_count: u64 = 1000;
-        let block_count: u64 = 1000;
-        let tx_density = tx_count as f64 / block_count as f64; // 1.0
-        let target_txs: f64 = 40_000.0;
-        let desired = (target_txs / tx_density) as u64;
-        let clamped = desired.clamp(10_000, 100_000);
-        assert_eq!(clamped, 40_000);
+        // Sparse blocks: ms_per_block is low, controller should expand batch.
+        // Phase 1 reality: 10K blocks, 466ms controllable → 0.047 ms/blk
+        let ms_per_block_ema: f64 = 0.047;
+        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema) as u64;
+        // desired = 1500/0.047 ≈ 31914
+        let clamped = desired.clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
+        assert!(
+            clamped > 30_000 && clamped < 35_000,
+            "sparse blocks should expand to ~32K, got {clamped}"
+        );
     }
 
     #[test]
     fn test_adaptive_batch_sizing_dense_blocks() {
-        // Dense blocks (~10 tx/block): should shrink to 4K but clamp to 10K.
-        let tx_count: u64 = 100_000;
-        let block_count: u64 = 10_000;
-        let tx_density = tx_count as f64 / block_count as f64; // 10.0
-        let target_txs: f64 = 40_000.0;
-        let desired = (target_txs / tx_density) as u64;
-        let clamped = desired.clamp(10_000, 100_000);
-        assert_eq!(clamped, 10_000); // clamped at minimum
+        // Dense blocks: ms_per_block is high, controller should shrink to floor.
+        // Phase 4 reality: 10K blocks, 1880ms controllable → 0.188 ms/blk
+        let ms_per_block_ema: f64 = 0.188;
+        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema) as u64;
+        // desired = 1500/0.188 = 7978
+        let clamped = desired.clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
+        assert_eq!(clamped, BULK_BUILD_MIN_BLOCK_SPAN); // clamped at floor
     }
 
     #[test]
     fn test_adaptive_batch_sizing_very_sparse() {
-        // Very sparse (~0.1 tx/block): should want 400K but clamp to 100K.
-        let tx_count: u64 = 100;
-        let block_count: u64 = 1000;
-        let tx_density = tx_count as f64 / block_count as f64; // 0.1
-        let target_txs: f64 = 40_000.0;
-        let desired = (target_txs / tx_density) as u64;
-        let clamped = desired.clamp(10_000, 100_000);
-        assert_eq!(clamped, 100_000); // clamped at maximum
+        // Very sparse: ms_per_block is very low, should clamp at ceiling.
+        // Hypothetical: 0.01 ms/blk → desired = 150K → clamp to 100K
+        let ms_per_block_ema: f64 = 0.01;
+        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema) as u64;
+        let clamped = desired.clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
+        assert_eq!(clamped, BULK_BUILD_MAX_BLOCK_SPAN); // clamped at ceiling
     }
 
     #[test]
     fn test_adaptive_batch_sizing_at_clamp_boundaries() {
-        // Exactly at lower boundary: 4 tx/block -> 10K blocks.
-        let tx_density: f64 = 4.0;
-        let target_txs: f64 = 40_000.0;
-        let desired = (target_txs / tx_density) as u64;
-        let clamped = desired.clamp(10_000, 100_000);
-        assert_eq!(clamped, 10_000);
+        // Exactly at lower boundary: 0.15 ms/blk → 10000 blocks
+        let ms_per_block_ema: f64 = BULK_BUILD_TARGET_ITERATION_MS / 10_000.0;
+        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema) as u64;
+        assert_eq!(
+            desired.clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN),
+            BULK_BUILD_MIN_BLOCK_SPAN,
+        );
 
-        // Exactly at upper boundary: 0.4 tx/block -> 100K blocks.
-        let tx_density: f64 = 0.4;
-        let desired = (target_txs / tx_density) as u64;
-        let clamped = desired.clamp(10_000, 100_000);
-        assert_eq!(clamped, 100_000);
+        // Exactly at upper boundary: 0.015 ms/blk → 100000 blocks
+        let ms_per_block_ema: f64 = BULK_BUILD_TARGET_ITERATION_MS / 100_000.0;
+        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema) as u64;
+        assert_eq!(
+            desired.clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN),
+            BULK_BUILD_MAX_BLOCK_SPAN,
+        );
     }
 
     #[test]
