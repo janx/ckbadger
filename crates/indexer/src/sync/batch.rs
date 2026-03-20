@@ -1346,12 +1346,7 @@ impl Indexer {
 
         let precompute_ms = t_precompute.elapsed().as_secs_f64() * 1000.0;
 
-        // DAO, UDT, NFT processing flags
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
-        let skip_token = false;
-        let skip_spore = false;
-
-        let prefetch_ms = 0.0;
         let mut batch_new_addresses = 0i64;
 
         let t_write = Instant::now();
@@ -1361,8 +1356,6 @@ impl Indexer {
         let mut daily_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
         let mut hourly_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
         let mut hourly_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
-        let deferred_identity_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
-        let deferred_object_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         let mut data_batch = StoreBatch::new(self.writer.store());
         // Live sync: serial writes in a single batch
         let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
@@ -1837,7 +1830,7 @@ impl Indexer {
                 (Vec<u8>, i16),
                 (Vec<u8>, Vec<u8>, i16, Vec<u8>, Vec<u8>, u128, String),
             > = HashMap::new();
-            if !skip_token && !all_input_outpoints_udt.is_empty() {
+            if !all_input_outpoints_udt.is_empty() {
                 input_udt_info = resolve_input_udt_info_from_live_cells(
                     &self.writer,
                     &self.udt_cell_cache,
@@ -1861,7 +1854,7 @@ impl Indexer {
                 }
             }
 
-            if !skip_token && !udt_tx_contexts.is_empty() {
+            if !udt_tx_contexts.is_empty() {
                 let max_supply_observations = collect_token_max_supply_observations(&all_tx_data);
                 let mut all_transfers: Vec<(crate::parser::ParsedUdtTransfer, Vec<u8>, i64)> =
                     Vec::new();
@@ -1952,68 +1945,66 @@ impl Indexer {
                     let tx_global_index = block_tx_idx + tx_idx;
                     let dotbit_create_order = dotbit_create_event_order(tx_global_index)?;
                     let tx = &block_response.block.transactions[tx_idx];
-                    if !skip_spore {
-                        for cluster in SporeParser::parse_clusters(tx) {
-                            self.writer.insert_spore_cluster(
-                                &cluster,
+                    for cluster in SporeParser::parse_clusters(tx) {
+                        self.writer.insert_spore_cluster(
+                            &cluster,
+                            parsed.number,
+                            &tx_data.hash,
+                            &mut data_batch,
+                            &mut spore_state,
+                        )?;
+                    }
+                    for (output_index, ref spore) in
+                        SporeParser::parse_spores_with_output_indices(tx)
+                    {
+                        let output_index_i16 = checked_usize_to_i16(
+                            output_index,
+                            "spore output index while processing grouped blocks",
+                        )
+                        .map_err(|e| {
+                            anyhow!(
+                                "{}: block={}, tx_hash=0x{}",
+                                e,
                                 parsed.number,
-                                &tx_data.hash,
-                                &mut data_batch,
-                                &mut spore_state,
-                            )?;
-                        }
-                        for (output_index, ref spore) in
-                            SporeParser::parse_spores_with_output_indices(tx)
-                        {
-                            let output_index_i16 = checked_usize_to_i16(
-                                output_index,
-                                "spore output index while processing grouped blocks",
+                                hex::encode(tx_data.hash)
                             )
-                            .map_err(|e| {
-                                anyhow!(
-                                    "{}: block={}, tx_hash=0x{}",
-                                    e,
-                                    parsed.number,
-                                    hex::encode(tx_data.hash)
-                                )
-                            })?;
-                            batch_spore_ids.insert(spore.spore_id.clone());
-                            self.writer.insert_spore_cell(
-                                spore,
+                        })?;
+                        batch_spore_ids.insert(spore.spore_id.clone());
+                        self.writer.insert_spore_cell(
+                            spore,
+                            &tx_data.hash,
+                            output_index_i16,
+                            parsed.number,
+                            ts_ms,
+                            &mut data_batch,
+                            &mut spore_state,
+                        )?;
+                        if spore.is_did {
+                            identity_activity_acc.record(
+                                &DID_CKB_SENTINEL_COLLECTION,
                                 &tx_data.hash,
-                                output_index_i16,
+                                &spore.spore_id,
+                                &parsed.hash,
                                 parsed.number,
+                                checked_usize_to_i32(tx_idx, "tx_idx"),
                                 ts_ms,
-                                &mut data_batch,
-                                &mut spore_state,
-                            )?;
-                            if spore.is_did {
-                                identity_activity_acc.record(
-                                    &DID_CKB_SENTINEL_COLLECTION,
-                                    &tx_data.hash,
-                                    &spore.spore_id,
-                                    &parsed.hash,
-                                    parsed.number,
-                                    checked_usize_to_i32(tx_idx, "tx_idx"),
-                                    ts_ms,
-                                    true,
-                                );
-                            } else {
-                                let cid = spore
-                                    .cluster_id
-                                    .as_deref()
-                                    .unwrap_or(&SOLE_SPORES_SENTINEL_COLLECTION);
-                                object_activity_acc.record(
-                                    cid,
-                                    &tx_data.hash,
-                                    &spore.spore_id,
-                                    &parsed.hash,
-                                    parsed.number,
-                                    checked_usize_to_i32(tx_idx, "tx_idx"),
-                                    ts_ms,
-                                    true,
-                                );
-                            }
+                                true,
+                            );
+                        } else {
+                            let cid = spore
+                                .cluster_id
+                                .as_deref()
+                                .unwrap_or(&SOLE_SPORES_SENTINEL_COLLECTION);
+                            object_activity_acc.record(
+                                cid,
+                                &tx_data.hash,
+                                &spore.spore_id,
+                                &parsed.hash,
+                                parsed.number,
+                                checked_usize_to_i32(tx_idx, "tx_idx"),
+                                ts_ms,
+                                true,
+                            );
                         }
                     }
                     for (output_index, issuer) in MnftParser::parse_issuers_with_output_indices(tx)
@@ -2870,29 +2861,6 @@ impl Indexer {
                 );
             }
 
-            // Apply deferred activity count deltas atomically with finalize.
-            // In bulk mode, T6a/T6b worker threads commit aggregates independently
-            // before finalize. Applying deltas here (instead of as a separate commit)
-            // ensures a crash between worker commits and finalize cannot leave
-            // aggregate counters incremented without corresponding block headers.
-            if !deferred_identity_deltas.is_empty() || !deferred_object_deltas.is_empty() {
-                let empty_identity_aggs = HashMap::new();
-                apply_identity_collection_activity_count_deltas(
-                    self.writer.store(),
-                    &mut core_batch,
-                    deferred_identity_deltas,
-                    &empty_identity_aggs,
-                )?;
-                let empty_object_aggs = HashMap::new();
-                apply_object_collection_activity_count_deltas_with_pending(
-                    self.writer.store(),
-                    &mut core_batch,
-                    deferred_object_deltas,
-                    &empty_object_aggs,
-                    &HashSet::new(),
-                )?;
-            }
-
             let commit_started = Instant::now();
             // Live sync: merge headers and stats into the single data_batch
             // that already holds all domain writes, then commit atomically.
@@ -2990,7 +2958,6 @@ impl Indexer {
             .sum();
         info!(
             precompute_ms = format!("{:.1}", precompute_ms),
-            prefetch_ms = format!("{:.1}", prefetch_ms),
             write_ms = format!("{:.1}", write_ms),
             write_commit_ms = format!("{:.1}", write_commit_ms),
             finalize_ms = format!("{:.1}", finalize_ms),
@@ -3003,7 +2970,7 @@ impl Indexer {
         Ok(BatchWriteMetrics {
             commit_ms: write_commit_ms,
             write_ms,
-            prefetch_ms,
+            prefetch_ms: 0.0,
             finalize_ms,
             txs: u64::try_from(batch_tx_count).expect("parsed batch tx count exceeds u64"),
             cells: u64::try_from(batch_cell_count).expect("parsed batch cell count exceeds u64"),

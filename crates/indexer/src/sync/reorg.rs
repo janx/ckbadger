@@ -43,7 +43,36 @@ impl Indexer {
         let store = self.writer.store();
         let mut batch = ckbadger_store::batch::StoreBatch::new(store);
 
-        // Phase 1: Record block dates and cell creates/consumes
+        // Phase 1: Update holder count from address balance changes BEFORE the
+        // block loop so that maybe_snapshot() sees the correct holder_count.
+        // (Previously this ran after the block loop, so cross-day batch snapshots
+        // used the stale pre-batch holder_count.)
+        let lock_hash_refs: Vec<&Vec<u8>> = address_balance_changes.keys().collect();
+        let balance_map = if lock_hash_refs.is_empty() {
+            HashMap::new()
+        } else {
+            self.writer.read_address_balances(&lock_hash_refs)?
+        };
+        for (
+            lock_hash,
+            (
+                _balance_delta,
+                live_delta,
+                _total_delta,
+                _tx_delta,
+                _block_num,
+                _tx_hash,
+                _used_delta,
+            ),
+        ) in address_balance_changes
+        {
+            let current_balance = balance_map.get(lock_hash).and_then(|o| o.as_ref());
+            let post_live = current_balance.map(|b| b.live_cells_count).unwrap_or(0);
+            let old_live = derive_pre_batch_live_cells(post_live, *live_delta)?;
+            tracker.update_holder_count(old_live, post_live)?;
+        }
+
+        // Phase 2: Record block dates, cell creates/consumes, and write snapshots
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
@@ -85,34 +114,6 @@ impl Indexer {
             }
         }
 
-        // Phase 2: Update holder count from address balance changes
-        // Each entry: (balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash, used_delta)
-        // Batch-read all address balances in a single multi_get_cf call
-        let lock_hash_refs: Vec<&Vec<u8>> = address_balance_changes.keys().collect();
-        let balance_map = if lock_hash_refs.is_empty() {
-            HashMap::new()
-        } else {
-            self.writer.read_address_balances(&lock_hash_refs)?
-        };
-        for (
-            lock_hash,
-            (
-                _balance_delta,
-                live_delta,
-                _total_delta,
-                _tx_delta,
-                _block_num,
-                _tx_hash,
-                _used_delta,
-            ),
-        ) in address_balance_changes
-        {
-            let current_balance = balance_map.get(lock_hash).and_then(|o| o.as_ref());
-            let post_live = current_balance.map(|b| b.live_cells_count).unwrap_or(0);
-            let old_live = derive_pre_batch_live_cells(post_live, *live_delta)?;
-            tracker.update_holder_count(old_live, post_live)?;
-        }
-
         // Phase 3: Persist tracker state atomically with snapshots
         batch.put_hodl_tracker_state(&tracker.to_state());
         batch.commit()?;
@@ -142,6 +143,13 @@ impl Indexer {
         let store = self.writer.store();
         let mut batch = ckbadger_store::batch::StoreBatch::new(store);
 
+        // Pre-pass: record all block dates so block_number_to_date() resolves
+        // correctly for new addresses first seen in this batch.
+        for parsed in all_parsed_blocks {
+            let block_date = ckbadger_common::block_date(parsed.timestamp);
+            tracker.record_block_date(parsed.number, block_date);
+        }
+
         // Read address balances for cohort delta computation (live sync path)
         let lock_hash_refs: Vec<&Vec<u8>> = address_balance_changes.keys().collect();
         let balance_map = if lock_hash_refs.is_empty() {
@@ -150,13 +158,12 @@ impl Indexer {
             self.writer.read_address_balances(&lock_hash_refs)?
         };
 
-        // Update cohort accumulator before the block loop so snapshots are up-to-date
+        // Update cohort accumulator after block dates are recorded so snapshots are up-to-date
         tracker.update_cohort_deltas(address_balance_changes, &balance_map);
 
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
-            tracker.record_block_date(parsed.number, block_date);
 
             let tx_count = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
