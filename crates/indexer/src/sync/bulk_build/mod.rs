@@ -1258,7 +1258,7 @@ struct BulkBuildRuntimeState {
 impl Default for BulkBuildRuntimeState {
     fn default() -> Self {
         Self {
-            interner: interner::IdentityInterner::default(),
+            interner: interner::IdentityInterner::with_capacity(8192),
             sequencer: sequencer::BulkSequencer::default(),
             owners: CoreOwners::default(),
             activity_stats: ActivityStatsAccumulator::default(),

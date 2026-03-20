@@ -6,6 +6,9 @@
 //!
 //! The output is byte-identical to `parse_single_block()` in `pipeline.rs`.
 
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
 use anyhow::{anyhow, Result};
 use ckb_types::prelude::*;
 use tracing::warn;
@@ -16,7 +19,7 @@ use crate::parser::dotbit::{DotbitParser, DotbitWitnessBundle};
 use crate::parser::mnft::MnftParser;
 use crate::parser::script::ScriptParser;
 use crate::parser::spore::SporeParser;
-use crate::parser::udt::{UdtParser, UdtStandard};
+use crate::parser::udt::UdtParser;
 use crate::sync::dao_helpers::occupied_capacity_shannons_i64;
 
 use super::facts::{
@@ -27,7 +30,6 @@ use super::facts::{
 use super::interner::IdentityInterner;
 
 use crate::sync::helpers::checked_usize_to_i16;
-use crate::sync::token_helpers::parse_parsed_cell_udt_amount;
 
 // ---------------------------------------------------------------------------
 // Public container
@@ -283,26 +285,10 @@ pub(crate) fn parse_block_to_facts(
                 )
             })?;
 
-            // -- Build ParsedCell for classification/protocol parsing ---------
+            // -- Semantic tag (O(1) lookup from raw code_hash bytes) -----------
 
-            let parsed_cell = ParsedCell {
-                capacity,
-                lock_code_hash: lock_code_hash_bytes.to_vec(),
-                lock_hash_type,
-                lock_args: lock_args_bytes.clone(),
-                lock_script_hash: lock_script_hash.to_vec(),
-                type_code_hash: type_code_hash_bytes.map(|b| b.to_vec()),
-                type_hash_type,
-                type_args: type_args_bytes.clone(),
-                type_script_hash: type_script_hash.map(|b| b.to_vec()),
-                data_hash,
-                data_size,
-                data: data.clone(),
-            };
-
-            // -- Semantic tag ------------------------------------------------
-
-            let semantic_tag = classify_bulk_cell_semantic_tag(&parsed_cell);
+            let semantic_tag =
+                classify_semantic_tag_from_code_hash(type_code_hash_bytes.as_ref(), type_hash_type);
 
             // -- Occupied capacity -------------------------------------------
 
@@ -312,7 +298,83 @@ pub(crate) fn parse_block_to_facts(
                 data_size,
             );
 
-            // -- Interned identities -----------------------------------------
+            // -- UDT amount (directly from raw data bytes) -------------------
+
+            let udt_amount =
+                parse_binary_udt_amount(semantic_tag, &data, &tx_hash, output_index_i16)?;
+
+            // -- DAO state (inlined from raw data bytes) ---------------------
+
+            let dao_state = if matches!(semantic_tag, CellSemanticTag::Dao) {
+                let state = DaoParser::parse_dao_state(&data).ok_or_else(|| {
+                    anyhow!(
+                        "invalid DAO cell data in binary facts: tx=0x{}, output_index={}, data_len={}",
+                        hex::encode(tx_hash),
+                        output_index_i16,
+                        data.len()
+                    )
+                })?;
+                Some(match state {
+                    DaoState::Deposit => DaoCellState::Deposit,
+                    DaoState::WithdrawRequest => {
+                        let deposit_block_number =
+                            DaoParser::parse_deposit_block_number(&data).ok_or_else(|| {
+                                anyhow!(
+                                    "missing DAO deposit block number in withdraw request: tx=0x{}, output_index={}, data_len={}",
+                                    hex::encode(tx_hash),
+                                    output_index_i16,
+                                    data.len()
+                                )
+                            })?;
+                        DaoCellState::WithdrawRequest {
+                            deposit_block_number: i64::try_from(deposit_block_number).map_err(|_| {
+                                anyhow!(
+                                    "DAO deposit block number exceeds i64 range in binary facts: tx=0x{}, output_index={}, deposit_block_number={}",
+                                    hex::encode(tx_hash),
+                                    output_index_i16,
+                                    deposit_block_number
+                                )
+                            })?,
+                        }
+                    }
+                })
+            } else {
+                None
+            };
+
+            // -- Protocol facts (ParsedCell only for protocol cells) ---------
+
+            let protocol_facts = match semantic_tag {
+                CellSemanticTag::Spore
+                | CellSemanticTag::Cluster
+                | CellSemanticTag::Mnft
+                | CellSemanticTag::Dotbit => {
+                    let parsed_cell = ParsedCell {
+                        capacity,
+                        lock_code_hash: lock_code_hash_bytes.to_vec(),
+                        lock_hash_type,
+                        lock_args: lock_args_bytes.clone(),
+                        lock_script_hash: lock_script_hash.to_vec(),
+                        type_code_hash: type_code_hash_bytes.map(|b| b.to_vec()),
+                        type_hash_type,
+                        type_args: type_args_bytes.clone(),
+                        type_script_hash: type_script_hash.map(|b| b.to_vec()),
+                        data_hash,
+                        data_size,
+                        data: data.clone(),
+                    };
+                    parse_binary_protocol_facts(
+                        &parsed_cell,
+                        semantic_tag,
+                        &witness_bundle,
+                        &tx_hash,
+                        output_index_i16,
+                    )?
+                }
+                _ => None,
+            };
+
+            // -- Interned identities (after protocol_facts to avoid ownership conflict) --
 
             let lock_script_hash_id = interner.intern_bytes(lock_script_hash.to_vec());
             let lock_code_hash_id = interner.intern_bytes(lock_code_hash_bytes.to_vec());
@@ -320,30 +382,6 @@ pub(crate) fn parse_block_to_facts(
             let type_script_hash_id = type_script_hash.map(|v| interner.intern_bytes(v.to_vec()));
             let type_code_hash_id = type_code_hash_bytes.map(|v| interner.intern_bytes(v.to_vec()));
             let type_args_id = type_args_bytes.map(|v| interner.intern_bytes(v));
-
-            // -- UDT amount --------------------------------------------------
-
-            let udt_amount =
-                parse_parsed_cell_udt_amount(&parsed_cell, &tx_hash, output_index_i16, None)?;
-
-            // -- DAO state ---------------------------------------------------
-
-            let dao_state = parse_binary_dao_cell_state(
-                &parsed_cell,
-                semantic_tag,
-                &tx_hash,
-                output_index_i16,
-            )?;
-
-            // -- Protocol facts ----------------------------------------------
-
-            let protocol_facts = parse_binary_protocol_facts(
-                &parsed_cell,
-                semantic_tag,
-                &witness_bundle,
-                &tx_hash,
-                output_index_i16,
-            )?;
 
             local_cells.push(CellFacts {
                 outpoint: OutPointKey::new(
@@ -520,96 +558,160 @@ fn parse_binary_dotbit_witnesses(witnesses: &ckb_types::packed::BytesVec) -> Dot
 }
 
 // ---------------------------------------------------------------------------
-// Cell semantic classification (identical to pipeline.rs classify_bulk_cell_semantic_tag)
+// O(1) semantic tag lookup table
 // ---------------------------------------------------------------------------
 
-fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemanticTag {
-    let Some(type_code_hash) = cell.type_code_hash.as_deref() else {
+/// Raw code_hash tag before hash_type refinement.
+#[derive(Debug, Clone, Copy)]
+enum CodeHashTag {
+    Dao,
+    Sudt,      // requires hash_type == 1
+    XudtData1, // requires hash_type == 2
+    XudtType,  // requires hash_type == 1
+    Dotbit,
+    MnftIssuer,
+    MnftClass,
+    MnftToken,
+    SporeNft,
+    SporeDid,
+    Cluster,
+}
+
+fn parse_code_hash_32(hex_str: &str) -> [u8; 32] {
+    let bytes = crate::rpc::parse_hex_to_bytes(hex_str);
+    bytes.try_into().expect("code hash must be 32 bytes")
+}
+
+static CODE_HASH_TAG_MAP: LazyLock<HashMap<[u8; 32], CodeHashTag>> = LazyLock::new(|| {
+    use crate::parser::dao::DAO_CODE_HASH;
+    use crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID;
+    use crate::parser::mnft::{MNFT_CLASS_CODE_HASH, MNFT_ISSUER_CODE_HASH, MNFT_TOKEN_CODE_HASH};
+    use crate::parser::spore::{
+        CLUSTER_CODE_HASH_MAINNET_V2, CLUSTER_CODE_HASH_TESTNET_V1, CLUSTER_CODE_HASH_TESTNET_V2,
+        SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_TESTNET_V1,
+        SPORE_CODE_HASH_TESTNET_V2,
+    };
+    use crate::parser::udt::{SUDT_CODE_HASH, XUDT_CODE_HASH_DATA1, XUDT_CODE_HASH_TYPE};
+
+    let mut m = HashMap::with_capacity(16);
+    m.insert(parse_code_hash_32(DAO_CODE_HASH), CodeHashTag::Dao);
+    m.insert(parse_code_hash_32(SUDT_CODE_HASH), CodeHashTag::Sudt);
+    m.insert(
+        parse_code_hash_32(XUDT_CODE_HASH_DATA1),
+        CodeHashTag::XudtData1,
+    );
+    m.insert(
+        parse_code_hash_32(XUDT_CODE_HASH_TYPE),
+        CodeHashTag::XudtType,
+    );
+    m.insert(
+        parse_code_hash_32(DOTBIT_ACCOUNT_CELL_TYPE_ID),
+        CodeHashTag::Dotbit,
+    );
+    m.insert(
+        parse_code_hash_32(MNFT_ISSUER_CODE_HASH),
+        CodeHashTag::MnftIssuer,
+    );
+    m.insert(
+        parse_code_hash_32(MNFT_CLASS_CODE_HASH),
+        CodeHashTag::MnftClass,
+    );
+    m.insert(
+        parse_code_hash_32(MNFT_TOKEN_CODE_HASH),
+        CodeHashTag::MnftToken,
+    );
+    m.insert(
+        parse_code_hash_32(SPORE_CODE_HASH_MAINNET_V2),
+        CodeHashTag::SporeNft,
+    );
+    m.insert(
+        parse_code_hash_32(SPORE_CODE_HASH_MAINNET_DID),
+        CodeHashTag::SporeDid,
+    );
+    m.insert(
+        parse_code_hash_32(SPORE_CODE_HASH_TESTNET_V2),
+        CodeHashTag::SporeNft,
+    );
+    m.insert(
+        parse_code_hash_32(SPORE_CODE_HASH_TESTNET_V1),
+        CodeHashTag::SporeNft,
+    );
+    m.insert(
+        parse_code_hash_32(CLUSTER_CODE_HASH_MAINNET_V2),
+        CodeHashTag::Cluster,
+    );
+    m.insert(
+        parse_code_hash_32(CLUSTER_CODE_HASH_TESTNET_V2),
+        CodeHashTag::Cluster,
+    );
+    m.insert(
+        parse_code_hash_32(CLUSTER_CODE_HASH_TESTNET_V1),
+        CodeHashTag::Cluster,
+    );
+    m
+});
+
+/// Classify a cell's semantic tag from raw code_hash bytes and hash_type.
+/// O(1) HashMap lookup replaces the sequential if-chain.
+fn classify_semantic_tag_from_code_hash(
+    type_code_hash: Option<&[u8; 32]>,
+    type_hash_type: Option<i16>,
+) -> CellSemanticTag {
+    let Some(code_hash) = type_code_hash else {
         return CellSemanticTag::Plain;
     };
-
-    if DaoParser::is_dao_code_hash(type_code_hash) {
-        return CellSemanticTag::Dao;
-    }
-
-    if let Some(hash_type) = cell.type_hash_type {
-        if let Some(standard) = UdtParser::is_udt_code_hash_bytes(type_code_hash, hash_type) {
-            return match standard {
-                UdtStandard::Sudt => CellSemanticTag::Sudt,
-                UdtStandard::Xudt => CellSemanticTag::Xudt,
-            };
+    let Some(&raw_tag) = CODE_HASH_TAG_MAP.get(code_hash) else {
+        return CellSemanticTag::Plain;
+    };
+    let hash_type = type_hash_type.unwrap_or(-1);
+    match raw_tag {
+        // DAO does not enforce hash_type — matches existing behavior in classify_bulk_cell_semantic_tag
+        CodeHashTag::Dao => CellSemanticTag::Dao,
+        CodeHashTag::Sudt if hash_type == 1 => CellSemanticTag::Sudt,
+        CodeHashTag::XudtData1 if hash_type == 2 => CellSemanticTag::Xudt,
+        CodeHashTag::XudtType if hash_type == 1 => CellSemanticTag::Xudt,
+        CodeHashTag::Dotbit => CellSemanticTag::Dotbit,
+        CodeHashTag::MnftIssuer | CodeHashTag::MnftClass | CodeHashTag::MnftToken => {
+            CellSemanticTag::Mnft
         }
+        CodeHashTag::SporeNft | CodeHashTag::SporeDid => CellSemanticTag::Spore,
+        CodeHashTag::Cluster => CellSemanticTag::Cluster,
+        // hash_type mismatch for UDT entries
+        _ => CellSemanticTag::Plain,
     }
-
-    if DotbitParser::is_account_cell_type_script(type_code_hash) {
-        return CellSemanticTag::Dotbit;
-    }
-
-    if MnftParser::is_issuer_type_script(type_code_hash)
-        || MnftParser::is_class_type_script(type_code_hash)
-        || MnftParser::is_token_type_script(type_code_hash)
-    {
-        return CellSemanticTag::Mnft;
-    }
-
-    if SporeParser::is_cluster_type_script(type_code_hash) {
-        return CellSemanticTag::Cluster;
-    }
-
-    if SporeParser::is_spore_type_script(type_code_hash) {
-        return CellSemanticTag::Spore;
-    }
-
-    CellSemanticTag::Plain
 }
 
 // ---------------------------------------------------------------------------
-// DAO cell state (identical to pipeline.rs parse_bulk_dao_cell_state)
+// UDT amount extraction (directly from raw data bytes)
 // ---------------------------------------------------------------------------
 
-fn parse_binary_dao_cell_state(
-    cell: &ParsedCell,
+/// Extract UDT amount directly from raw cell data bytes,
+/// using the already-determined semantic tag to avoid rebuilding ParsedCell.
+///
+/// Note: The existing `parse_parsed_cell_udt_amount` in token_helpers.rs accepts a
+/// `standard_hint: Option<&str>` parameter. In the binary_facts call path, this is
+/// always `None`, so we intentionally omit it here.
+fn parse_binary_udt_amount(
     semantic_tag: CellSemanticTag,
+    data: &[u8],
     tx_hash: &[u8; 32],
     output_index: i16,
-) -> Result<Option<DaoCellState>> {
-    if !matches!(semantic_tag, CellSemanticTag::Dao) {
-        return Ok(None);
-    }
-
-    let state = DaoParser::parse_dao_state(&cell.data).ok_or_else(|| {
-        anyhow!(
-            "invalid DAO cell data in binary facts: tx=0x{}, output_index={}, data_len={}",
-            hex::encode(tx_hash),
-            output_index,
-            cell.data.len()
-        )
-    })?;
-
-    Ok(Some(match state {
-        DaoState::Deposit => DaoCellState::Deposit,
-        DaoState::WithdrawRequest => {
-            let deposit_block_number =
-                DaoParser::parse_deposit_block_number(&cell.data).ok_or_else(|| {
-                    anyhow!(
-                        "missing DAO deposit block number in withdraw request: tx=0x{}, output_index={}, data_len={}",
-                        hex::encode(tx_hash),
-                        output_index,
-                        cell.data.len()
-                    )
-                })?;
-            DaoCellState::WithdrawRequest {
-                deposit_block_number: i64::try_from(deposit_block_number).map_err(|_| {
-                    anyhow!(
-                        "DAO deposit block number exceeds i64 range in binary facts: tx=0x{}, output_index={}, deposit_block_number={}",
-                        hex::encode(tx_hash),
-                        output_index,
-                        deposit_block_number
-                    )
-                })?,
-            }
+) -> Result<Option<u128>> {
+    match semantic_tag {
+        CellSemanticTag::Sudt => {
+            let amount = UdtParser::parse_amount(data).ok_or_else(|| {
+                anyhow!(
+                    "failed to parse sUDT amount in binary facts: tx=0x{}, output_index={}, data_len={}",
+                    hex::encode(tx_hash),
+                    output_index,
+                    data.len()
+                )
+            })?;
+            Ok(Some(amount))
         }
-    }))
+        CellSemanticTag::Xudt => Ok(UdtParser::parse_amount(data)),
+        _ => Ok(None),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -884,22 +986,8 @@ mod tests {
 
     #[test]
     fn classify_plain_cell_without_type_script() {
-        let cell = ParsedCell {
-            capacity: 100_00000000,
-            lock_code_hash: vec![0; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0; 20],
-            lock_script_hash: vec![1; 32],
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            type_script_hash: None,
-            data_hash: [0; 32],
-            data_size: 0,
-            data: vec![],
-        };
         assert_eq!(
-            classify_bulk_cell_semantic_tag(&cell),
+            classify_semantic_tag_from_code_hash(None, None),
             CellSemanticTag::Plain
         );
     }
@@ -909,98 +997,75 @@ mod tests {
         let dao_code_hash =
             hex::decode("82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e")
                 .unwrap();
-        let cell = ParsedCell {
-            capacity: 102_00000000,
-            lock_code_hash: vec![0; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0; 20],
-            lock_script_hash: vec![1; 32],
-            type_code_hash: Some(dao_code_hash),
-            type_hash_type: Some(1),
-            type_args: Some(vec![]),
-            type_script_hash: Some(vec![2; 32]),
-            data_hash: [0; 32],
-            data_size: 8,
-            data: vec![0; 8],
-        };
-        assert_eq!(classify_bulk_cell_semantic_tag(&cell), CellSemanticTag::Dao);
-    }
-
-    #[test]
-    fn parse_binary_dao_cell_state_recognizes_deposit() {
-        let dao_code_hash =
-            hex::decode("82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e")
-                .unwrap();
-        let cell = ParsedCell {
-            capacity: 102_00000000,
-            lock_code_hash: vec![0; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0; 20],
-            lock_script_hash: vec![1; 32],
-            type_code_hash: Some(dao_code_hash),
-            type_hash_type: Some(1),
-            type_args: Some(vec![]),
-            type_script_hash: Some(vec![2; 32]),
-            data_hash: [0; 32],
-            data_size: 8,
-            data: vec![0; 8],
-        };
-
-        let state =
-            parse_binary_dao_cell_state(&cell, CellSemanticTag::Dao, &[0xaa; 32], 0).unwrap();
-        assert_eq!(state, Some(DaoCellState::Deposit));
-    }
-
-    #[test]
-    fn parse_binary_dao_cell_state_recognizes_withdraw_request() {
-        let dao_code_hash =
-            hex::decode("82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e")
-                .unwrap();
-        let cell = ParsedCell {
-            capacity: 102_00000000,
-            lock_code_hash: vec![0; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0; 20],
-            lock_script_hash: vec![1; 32],
-            type_code_hash: Some(dao_code_hash),
-            type_hash_type: Some(1),
-            type_args: Some(vec![]),
-            type_script_hash: Some(vec![2; 32]),
-            data_hash: [0; 32],
-            data_size: 8,
-            data: 123u64.to_le_bytes().to_vec(),
-        };
-
-        let state =
-            parse_binary_dao_cell_state(&cell, CellSemanticTag::Dao, &[0xaa; 32], 0).unwrap();
+        let hash: [u8; 32] = dao_code_hash.try_into().unwrap();
         assert_eq!(
-            state,
-            Some(DaoCellState::WithdrawRequest {
-                deposit_block_number: 123
-            })
+            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
+            CellSemanticTag::Dao
         );
     }
 
-    #[test]
-    fn parse_binary_dao_cell_state_skips_non_dao() {
-        let cell = ParsedCell {
-            capacity: 100_00000000,
-            lock_code_hash: vec![0; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0; 20],
-            lock_script_hash: vec![1; 32],
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            type_script_hash: None,
-            data_hash: [0; 32],
-            data_size: 0,
-            data: vec![],
-        };
+    // -----------------------------------------------------------------------
+    // parse_binary_udt_amount tests
+    // -----------------------------------------------------------------------
 
-        let state =
-            parse_binary_dao_cell_state(&cell, CellSemanticTag::Plain, &[0xaa; 32], 0).unwrap();
-        assert_eq!(state, None);
+    #[test]
+    fn parse_binary_udt_amount_sudt_valid() {
+        let data = 42u128.to_le_bytes().to_vec();
+        let result = parse_binary_udt_amount(CellSemanticTag::Sudt, &data, &[0xAA; 32], 0).unwrap();
+        assert_eq!(result, Some(42));
+    }
+
+    #[test]
+    fn parse_binary_udt_amount_xudt_valid() {
+        let data = 99u128.to_le_bytes().to_vec();
+        let result = parse_binary_udt_amount(CellSemanticTag::Xudt, &data, &[0xAA; 32], 0).unwrap();
+        assert_eq!(result, Some(99));
+    }
+
+    #[test]
+    fn parse_binary_udt_amount_xudt_short_data_returns_none() {
+        let data = vec![0u8; 8];
+        let result = parse_binary_udt_amount(CellSemanticTag::Xudt, &data, &[0xAA; 32], 0).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn parse_binary_udt_amount_sudt_short_data_errors() {
+        let data = vec![0u8; 8];
+        let result = parse_binary_udt_amount(CellSemanticTag::Sudt, &data, &[0xAA; 32], 0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_binary_udt_amount_plain_returns_none() {
+        let result = parse_binary_udt_amount(CellSemanticTag::Plain, &[], &[0xAA; 32], 0).unwrap();
+        assert_eq!(result, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // DAO state mapping tests (DaoParser → DaoCellState)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn dao_deposit_data_maps_to_deposit_state() {
+        let data = vec![0u8; 8];
+        let state = DaoParser::parse_dao_state(&data).unwrap();
+        assert_eq!(state, DaoState::Deposit);
+    }
+
+    #[test]
+    fn dao_withdraw_request_data_maps_to_withdraw_state() {
+        let data = 123u64.to_le_bytes().to_vec();
+        let state = DaoParser::parse_dao_state(&data).unwrap();
+        assert_eq!(state, DaoState::WithdrawRequest);
+        let block_num = DaoParser::parse_deposit_block_number(&data).unwrap();
+        assert_eq!(block_num, 123);
+    }
+
+    #[test]
+    fn dao_invalid_data_length_returns_none() {
+        let data = vec![0u8; 4];
+        assert!(DaoParser::parse_dao_state(&data).is_none());
     }
 
     #[test]
@@ -1029,5 +1094,125 @@ mod tests {
         let result =
             parse_optional_fixed_protocol_id::<20>(Some(&bytes), "test_id", &[0; 32], 0).unwrap();
         assert_eq!(result, Some([0xCD; 20]));
+    }
+
+    // -----------------------------------------------------------------------
+    // classify_semantic_tag_from_code_hash tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn classify_from_code_hash_plain_without_type() {
+        assert_eq!(
+            classify_semantic_tag_from_code_hash(None, None),
+            CellSemanticTag::Plain,
+        );
+    }
+
+    #[test]
+    fn classify_from_code_hash_dao() {
+        let hash = parse_code_hash_32(crate::parser::dao::DAO_CODE_HASH);
+        assert_eq!(
+            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
+            CellSemanticTag::Dao,
+        );
+    }
+
+    #[test]
+    fn classify_from_code_hash_sudt() {
+        let hash = parse_code_hash_32(crate::parser::udt::SUDT_CODE_HASH);
+        // hash_type 1 → Sudt
+        assert_eq!(
+            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
+            CellSemanticTag::Sudt,
+        );
+        // hash_type 0 → Plain (mismatch)
+        assert_eq!(
+            classify_semantic_tag_from_code_hash(Some(&hash), Some(0)),
+            CellSemanticTag::Plain,
+        );
+    }
+
+    #[test]
+    fn classify_from_code_hash_xudt_data1() {
+        let hash = parse_code_hash_32(crate::parser::udt::XUDT_CODE_HASH_DATA1);
+        // hash_type 2 → Xudt
+        assert_eq!(
+            classify_semantic_tag_from_code_hash(Some(&hash), Some(2)),
+            CellSemanticTag::Xudt,
+        );
+        // hash_type 1 → Plain (mismatch)
+        assert_eq!(
+            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
+            CellSemanticTag::Plain,
+        );
+    }
+
+    #[test]
+    fn classify_from_code_hash_xudt_type() {
+        let hash = parse_code_hash_32(crate::parser::udt::XUDT_CODE_HASH_TYPE);
+        assert_eq!(
+            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
+            CellSemanticTag::Xudt,
+        );
+    }
+
+    #[test]
+    fn classify_from_code_hash_spore_mainnet_v2() {
+        let hash = parse_code_hash_32(crate::parser::spore::SPORE_CODE_HASH_MAINNET_V2);
+        assert_eq!(
+            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
+            CellSemanticTag::Spore,
+        );
+    }
+
+    #[test]
+    fn classify_from_code_hash_spore_did() {
+        let hash = parse_code_hash_32(
+            "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
+        );
+        assert_eq!(
+            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
+            CellSemanticTag::Spore,
+        );
+    }
+
+    #[test]
+    fn classify_from_code_hash_cluster() {
+        let hash = parse_code_hash_32(crate::parser::spore::CLUSTER_CODE_HASH_MAINNET_V2);
+        assert_eq!(
+            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
+            CellSemanticTag::Cluster,
+        );
+    }
+
+    #[test]
+    fn classify_from_code_hash_dotbit() {
+        let hash = parse_code_hash_32(
+            "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918",
+        );
+        assert_eq!(
+            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
+            CellSemanticTag::Dotbit,
+        );
+    }
+
+    #[test]
+    fn classify_from_code_hash_mnft_issuer() {
+        let hash = parse_code_hash_32(
+            "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81",
+        );
+        assert_eq!(
+            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
+            CellSemanticTag::Mnft,
+        );
+    }
+
+    #[test]
+    fn classify_from_code_hash_unknown_type_is_plain() {
+        let hash = [0xFF; 32];
+        assert_eq!(
+            classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
+            CellSemanticTag::Plain,
+        );
     }
 }
