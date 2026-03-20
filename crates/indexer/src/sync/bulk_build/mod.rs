@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -117,23 +117,16 @@ impl BulkBuildEngine {
             std::time::Duration,
             u64,
         )> = None;
-        // Multi-flush pipeline: overlap RocksDB writes with subsequent compute.
-        // Up to MAX_CONCURRENT_FLUSHES flush tasks run concurrently via
-        // spawn_blocking. Since apply_blocks no longer reads from the domain
-        // store (token info is pre-cached), there is no data dependency between
-        // flush(N) and build(N+k). RocksDB with unordered_write=true and WAL
-        // disabled supports concurrent WriteBatch writes safely.
+        // Async flush: overlap RocksDB writes with the next batch's prefetch.
+        // The flush handle runs in spawn_blocking; we await it before starting
+        // the next apply_blocks so batch compute always sees committed state.
         // Spawned at the end of each iteration (after all fallible ops) to
         // prevent orphaned flush tasks.
         let domain_store_arc = indexer.writer.store().clone();
         let append_store_arc = indexer.append_only_store.clone();
-        /// Maximum concurrent flush tasks. With unordered_write=true and WAL
-        /// disabled, RocksDB safely handles concurrent WriteBatch writes.
-        /// Depth 3 absorbs stall spikes without excessive memory from queued rows.
-        const MAX_CONCURRENT_FLUSHES: usize = 3;
-        let mut flush_handles: VecDeque<
+        let mut pending_flush_handle: Option<
             tokio::task::JoinHandle<anyhow::Result<materialize::FlushResult>>,
-        > = VecDeque::new();
+        > = None;
         let mut flush_row_totals = (0usize, 0usize);
         let mut flush_count: usize = 0;
         let mut prev_flush_ms: f64 = 0.0;
@@ -243,14 +236,12 @@ impl BulkBuildEngine {
                 );
             }
 
-            // Drain oldest flushes to maintain bounded concurrency.
-            // With unordered_write=true and WAL disabled, concurrent flushes are safe.
-            // We only block when the queue is full, allowing compute to run ahead of
-            // flush when flushes are slow (stalls, compaction pressure).
-            while flush_handles.len() >= MAX_CONCURRENT_FLUSHES {
-                let handle = flush_handles
-                    .pop_front()
-                    .expect("flush_handles non-empty after len check");
+            // Await previous flush AFTER apply_blocks. Since apply_blocks no
+            // longer reads from the domain store (token info is pre-cached),
+            // there is no data dependency between flush(N-1) and build(N).
+            // The await still happens before spawning flush(N) to maintain
+            // at-most-one-flush-in-flight invariant.
+            if let Some(handle) = pending_flush_handle.take() {
                 let result = handle
                     .await
                     .map_err(|e| anyhow!("bulk build flush panicked: {}", e))??;
@@ -366,7 +357,7 @@ impl BulkBuildEngine {
             // loop body returns an error before the next iteration drains it.
             let ds = domain_store_arc.clone();
             let as_ = append_store_arc.clone();
-            flush_handles.push_back(tokio::task::spawn_blocking(move || {
+            pending_flush_handle = Some(tokio::task::spawn_blocking(move || {
                 materialize::flush_rows_to_stores(
                     &ds,
                     &as_,
@@ -443,11 +434,11 @@ impl BulkBuildEngine {
         // publishes to RocksDB so the TUI can display a finalize checklist.
         let finalize_started = Instant::now();
 
-        // Phase 0: drain multi-flush pipeline
+        // Phase 0: drain last in-flight flush
         indexer
             .bulk_build_perf
             .record_finalize_step(1, finalize_started.elapsed());
-        while let Some(handle) = flush_handles.pop_front() {
+        if let Some(handle) = pending_flush_handle.take() {
             let result = handle
                 .await
                 .map_err(|e| anyhow!("bulk build final flush panicked: {}", e))??;
