@@ -612,8 +612,8 @@ impl<'a> StoreBatch<'a> {
     }
 
     pub fn put_addr_tx(&mut self, lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
-        let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx);
-        self.put_cf(self.store.cf_addr_txs(), key, tx_hash);
+        let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx, tx_hash);
+        self.put_cf(self.store.cf_addr_txs(), &key, []);
     }
 
     pub fn put_reorg_undo_log_by_block(&mut self, block_num: i64, seq: u64, entry: &UndoLogEntry) {
@@ -1501,9 +1501,9 @@ mod tests {
         batch.put_addr_tx(&lock, 100, 0, &tx_hash);
         batch.commit().unwrap();
 
-        let key = keys::encode_addr_tx_key(&lock, 100, 0);
+        let key = keys::encode_addr_tx_key(&lock, 100, 0, &tx_hash);
         let value = store.get_cf(store.cf_addr_txs(), &key).unwrap().unwrap();
-        assert_eq!(&*value, &tx_hash);
+        assert!(value.is_empty(), "addr_tx value should be empty");
     }
 
     #[test]

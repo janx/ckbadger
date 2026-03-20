@@ -2477,9 +2477,9 @@ fn build_history_rows_for_block(
                     interner.resolve_bytes(lock_hash_id),
                     tx.block_number,
                     tx.tx_index,
-                )
-                .to_vec(),
-                tx.hash.to_vec(),
+                    &tx.hash,
+                ),
+                Vec::new(),
             ));
         }
 
@@ -4600,9 +4600,9 @@ mod tests {
                 .collect();
 
         let expected_keys = [
-            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 0).to_vec(),
-            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 1).to_vec(),
-            keys::encode_addr_tx_key(&lock_b_hash, 14_000_888, 1).to_vec(),
+            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 0, &create_tx_hash),
+            keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 1, &split_tx_hash),
+            keys::encode_addr_tx_key(&lock_b_hash, 14_000_888, 1, &split_tx_hash),
         ];
 
         assert_eq!(addr_rows.len(), expected_keys.len());
@@ -4611,18 +4611,13 @@ mod tests {
         for key in &expected_keys {
             assert!(actual_keys.contains(key));
         }
-        // tx_hash now stored as value (32 bytes)
+        // tx_hash stored in key, value is empty
         for row in &addr_rows {
-            assert_eq!(
-                row.value.len(),
-                32,
-                "addr_tx value should be 32-byte tx_hash"
+            assert!(
+                row.value.is_empty(),
+                "addr_tx value should be empty, got {} bytes",
+                row.value.len()
             );
-            if row.key == expected_keys[0] {
-                assert_eq!(row.value, create_tx_hash);
-            } else {
-                assert_eq!(row.value, split_tx_hash);
-            }
         }
         let _ = std::fs::remove_dir_all(&test_root);
     }

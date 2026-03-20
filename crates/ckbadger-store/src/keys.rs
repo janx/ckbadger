@@ -231,20 +231,31 @@ pub fn encode_cell_index_key(
     key
 }
 
-/// Address-tx key: lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 44 bytes.
-/// tx_hash is stored as the 32-byte value.
-pub const ADDR_TX_KEY_SIZE: usize = 44;
+/// Address-tx key: lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B) = 76 bytes.
+/// Value is empty.
+pub const ADDR_TX_KEY_SIZE: usize = 76;
 
-pub fn encode_addr_tx_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> [u8; ADDR_TX_KEY_SIZE] {
+pub fn encode_addr_tx_key(
+    lock_hash: &[u8],
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash: &[u8],
+) -> Vec<u8> {
     assert!(
         lock_hash.len() >= 32,
         "encode_addr_tx_key: lock_hash must be >= 32 bytes, got {}",
         lock_hash.len()
     );
-    let mut key = [0u8; ADDR_TX_KEY_SIZE];
-    key[..32].copy_from_slice(&lock_hash[..32]);
-    key[32..40].copy_from_slice(&encode_desc_block_num(block_num));
-    key[40..44].copy_from_slice(&encode_desc_tx_idx(tx_idx));
+    assert!(
+        tx_hash.len() >= 32,
+        "encode_addr_tx_key: tx_hash must be >= 32 bytes, got {}",
+        tx_hash.len()
+    );
+    let mut key = Vec::with_capacity(ADDR_TX_KEY_SIZE);
+    key.extend_from_slice(&lock_hash[..32]);
+    key.extend_from_slice(&encode_desc_block_num(block_num));
+    key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
+    key.extend_from_slice(&tx_hash[..32]);
     key
 }
 
@@ -254,14 +265,18 @@ pub fn encode_addr_tx_seek_after_key(lock_hash: &[u8], block_num: i64, tx_idx: i
         "encode_addr_tx_seek_after_key: lock_hash must be >= 32 bytes, got {}",
         lock_hash.len()
     );
-    let key = encode_addr_tx_key(lock_hash, block_num, tx_idx);
+    // Seek past all tx_hashes for this (lock_hash, block_num, tx_idx) by appending 0xFF
     let mut seek = Vec::with_capacity(ADDR_TX_KEY_SIZE + 1);
-    seek.extend_from_slice(&key);
+    seek.extend_from_slice(&lock_hash[..32]);
+    seek.extend_from_slice(&encode_desc_block_num(block_num));
+    seek.extend_from_slice(&encode_desc_tx_idx(tx_idx));
+    // Fill tx_hash with 0xFF to seek past all entries at this position
+    seek.extend_from_slice(&[0xFF; 32]);
     seek.push(0xFF);
     seek
 }
 
-pub fn decode_addr_tx_key(key: &[u8]) -> (Vec<u8>, i64, i32) {
+pub fn decode_addr_tx_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>) {
     assert!(
         key.len() == ADDR_TX_KEY_SIZE,
         "decode_addr_tx_key: expected {} bytes, got {}",
@@ -271,7 +286,8 @@ pub fn decode_addr_tx_key(key: &[u8]) -> (Vec<u8>, i64, i32) {
     let lock_hash = key[..32].to_vec();
     let block_num = decode_desc_block_num(&key[32..40]);
     let tx_idx = decode_desc_tx_idx(&key[40..44]);
-    (lock_hash, block_num, tx_idx)
+    let tx_hash = key[44..76].to_vec();
+    (lock_hash, block_num, tx_idx, tx_hash)
 }
 
 /// Encode a token_holders key: type_hash(32B) + lock_hash(32B) = 64 bytes
@@ -1951,14 +1967,18 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_addr_tx_key_compact() {
+    fn test_encode_addr_tx_key_roundtrip() {
         let lock_hash = [0x11u8; 32];
-        let key = encode_addr_tx_key(&lock_hash, 100, 3);
-        assert_eq!(key.len(), 44);
-        let (decoded_lock_hash, decoded_block, decoded_idx) = decode_addr_tx_key(&key);
+        let tx_hash = [0x22u8; 32];
+        let key = encode_addr_tx_key(&lock_hash, 100, 3, &tx_hash);
+        assert_eq!(key.len(), ADDR_TX_KEY_SIZE);
+        assert_eq!(key.len(), 76);
+        let (decoded_lock_hash, decoded_block, decoded_idx, decoded_tx_hash) =
+            decode_addr_tx_key(&key);
         assert_eq!(decoded_lock_hash, lock_hash.to_vec());
         assert_eq!(decoded_block, 100);
         assert_eq!(decoded_idx, 3);
+        assert_eq!(decoded_tx_hash, tx_hash.to_vec());
     }
 
     #[test]

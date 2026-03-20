@@ -61,17 +61,17 @@ impl CkbadgerStore {
                 break;
             }
             if key.len() == crate::keys::ADDR_TX_KEY_SIZE {
-                let (_, block_num, tx_idx) = crate::keys::decode_addr_tx_key(&key);
-                if value.len() != 32 {
+                let (_, block_num, tx_idx, tx_hash) = crate::keys::decode_addr_tx_key(&key);
+                if !value.is_empty() {
                     anyhow::bail!(
-                        "addr_txs expects 32-byte tx_hash value in list_addr_txs_recent: lock_hash=0x{}, block_num={}, tx_idx={}, value_len={}",
+                        "addr_txs expects empty value in list_addr_txs_recent: lock_hash=0x{}, block_num={}, tx_idx={}, value_len={}",
                         bytes_to_hex(lock_hash),
                         block_num,
                         tx_idx,
                         value.len()
                     );
                 }
-                results.push((block_num, tx_idx, value.to_vec()));
+                results.push((block_num, tx_idx, tx_hash));
                 if results.len() >= limit {
                     break;
                 }
@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn test_list_addr_txs_recent_reads_tx_hash_from_value() {
+    fn test_list_addr_txs_recent_reads_tx_hash_from_key() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAC; 32];
