@@ -2162,6 +2162,11 @@ impl Indexer {
                     // detect a reorg that replaced blocks above db_tip while this
                     // batch was in the parse queue. Comparing parent_hash catches
                     // stale-fork batches without an extra RPC round-trip.
+                    //
+                    // When a mismatch is found, we immediately run reorg handling
+                    // instead of just resetting the pipeline. Without this, the
+                    // fetcher re-fetches the same blocks, the parser re-parses them,
+                    // and the writer detects the same mismatch — an infinite loop.
                     if let Some(ref stored_hash) = db_tip_hash {
                         if let Some(first_parsed) = all_parsed_blocks.first() {
                             if first_parsed.parent_hash != *stored_hash {
@@ -2172,8 +2177,101 @@ impl Indexer {
                                     start_block,
                                     expected_parent = %hex::encode(stored_hash),
                                     actual_parent = %hex::encode(&first_parsed.parent_hash),
-                                    "Stale fork batch detected: first block parent_hash does not match db_tip hash"
+                                    "Stale fork batch detected: first block parent_hash does not match db_tip hash, triggering reorg check"
                                 );
+
+                                // The parent_hash mismatch is direct proof of a reorg.
+                                // Immediately check and handle it, bypassing the
+                                // blocks-behind lag gate which would skip reorg handling
+                                // during bulk sync catch-up.
+                                if db_tip > 0 {
+                                    let db_tip_u64 = require_non_negative_block_number(
+                                        db_tip,
+                                        "stale fork reorg tip",
+                                    )?;
+                                    match self
+                                        .check_and_handle_reorg(db_tip_u64, stored_hash)
+                                        .await?
+                                    {
+                                        Some(ReorgAction::Handled) => {
+                                            self.cell_cache.clear();
+                                            self.udt_cell_cache.clear();
+                                            let (reorg_tip, _) = self.repo.get_sync_tip().await?;
+                                            committed_tip_for_cache_for_writer.store(
+                                                parser_cache_committed_tip_from_sync_tip(reorg_tip),
+                                                Ordering::SeqCst,
+                                            );
+                                            self.reconcile_hodl_tracker_with_tip(reorg_tip)?;
+                                            self.reconcile_cell_dist_tracker_with_tip(reorg_tip)?;
+                                            let current_epoch =
+                                                self.pipeline_reset_epoch.load(Ordering::SeqCst);
+                                            info!(
+                                                run_id = %self.run_id,
+                                                pipeline_epoch = current_epoch,
+                                                db_tip,
+                                                chain_tip,
+                                                reorg_tip,
+                                                "Stale fork reorg handled, caches cleared, trackers reconciled, draining stale parsed batches"
+                                            );
+                                            self.request_pipeline_reset(
+                                                "stale fork reorg handled",
+                                                None,
+                                                None,
+                                                None,
+                                            );
+                                            let drained = Self::drain_channel(&mut parse_rx).await;
+                                            parse_tx_pending_txs_for_writer
+                                                .store(0, Ordering::Relaxed);
+                                            info!(
+                                                run_id = %self.run_id,
+                                                pipeline_epoch = current_epoch,
+                                                drained,
+                                                "Stale fork reorg drain completed"
+                                            );
+                                            continue;
+                                        }
+                                        Some(ReorgAction::DeepForkPaused) => {
+                                            let current_epoch =
+                                                self.pipeline_reset_epoch.load(Ordering::SeqCst);
+                                            warn!(
+                                                run_id = %self.run_id,
+                                                pipeline_epoch = current_epoch,
+                                                db_tip,
+                                                chain_tip,
+                                                "Stale fork triggered deep fork detection, sync paused"
+                                            );
+                                            self.request_pipeline_reset(
+                                                "stale fork deep fork paused",
+                                                None,
+                                                None,
+                                                None,
+                                            );
+                                            let drained = Self::drain_channel(&mut parse_rx).await;
+                                            parse_tx_pending_txs_for_writer
+                                                .store(0, Ordering::Relaxed);
+                                            info!(
+                                                run_id = %self.run_id,
+                                                pipeline_epoch = current_epoch,
+                                                drained,
+                                                "Stale fork deep fork pause drain completed"
+                                            );
+                                            sleep(Duration::from_secs(30)).await;
+                                            continue;
+                                        }
+                                        None => {
+                                            // check_and_handle_reorg returned None: the chain
+                                            // hash at db_tip matches our stored hash (possible
+                                            // RPC race). Pipeline reset and retry.
+                                            info!(
+                                                run_id = %self.run_id,
+                                                pipeline_epoch = current_epoch,
+                                                db_tip,
+                                                "Stale fork detected but reorg check found no divergence (RPC race), resetting pipeline"
+                                            );
+                                        }
+                                    }
+                                }
+
                                 self.request_pipeline_reset(
                                     "stale fork batch (parent_hash mismatch)",
                                     Some(expected_start),
