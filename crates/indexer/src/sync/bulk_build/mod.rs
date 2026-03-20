@@ -47,6 +47,9 @@ pub(crate) mod materialize;
 pub(crate) mod owners;
 pub(crate) mod sequencer;
 
+const BULK_BUILD_MIN_BLOCK_SPAN: u64 = 10_000;
+const BULK_BUILD_MAX_BLOCK_SPAN: u64 = 100_000;
+
 #[derive(Default)]
 pub(crate) struct BulkBuildEngine;
 
@@ -409,11 +412,8 @@ impl BulkBuildEngine {
                         desired_f64
                     );
                 }
-                // Respect configured batch_size as upper bound so operators can
-                // limit memory by lowering batch_size. When batch_size < 10K the
-                // minimum equals batch_size (no silent override).
-                let adaptive_min = std::cmp::min(10_000, configured_batch_size);
-                batch_block_span = (desired_f64 as u64).clamp(adaptive_min, configured_batch_size);
+                batch_block_span = (desired_f64 as u64)
+                    .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
             }
 
             // Periodic memory summary every 10 batches
