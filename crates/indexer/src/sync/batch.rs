@@ -2672,11 +2672,9 @@ impl Indexer {
                         .get(&key)
                         .or_else(|| batch_cell_infos.get(&key))
                         .filter(|info| {
-                            info.type_code_hash
-                                .as_ref()
-                                .is_some_and(|code_hash| {
-                                    code_hash.as_slice() == dao_code_hash_for_stats
-                                })
+                            info.type_code_hash.as_ref().is_some_and(|code_hash| {
+                                code_hash.as_slice() == dao_code_hash_for_stats
+                            })
                         })
                     {
                         touched_lock_hashes.insert(info.lock_script_hash.clone());
@@ -2708,10 +2706,8 @@ impl Indexer {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
             let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-            let claimed_compensation_in_block = tx_slice_claimed_dao_compensation(
-                tx_slice,
-                &dao_compensations,
-            )?;
+            let claimed_compensation_in_block =
+                tx_slice_claimed_dao_compensation(tx_slice, &dao_compensations)?;
             accumulate_secondary_issuance_deltas(
                 &mut batch_stats,
                 parsed,

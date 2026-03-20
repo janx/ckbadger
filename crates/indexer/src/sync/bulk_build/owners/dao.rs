@@ -639,8 +639,10 @@ impl DaoOwner {
             )
         })?;
         self.daily_dao_fields.insert(block_date, (c, s, u));
-        let claimed_compensation_in_block =
-            self.claimed_compensation_by_block.remove(&block.number).unwrap_or(0);
+        let claimed_compensation_in_block = self
+            .claimed_compensation_by_block
+            .remove(&block.number)
+            .unwrap_or(0);
 
         let mut stats = BatchStats::default();
         accumulate_secondary_issuance_deltas_from_csu(

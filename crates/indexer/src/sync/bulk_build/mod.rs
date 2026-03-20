@@ -1467,10 +1467,12 @@ impl BulkBuildRuntimeState {
                     },
                     || -> Result<()> {
                         for block in &arena.blocks {
-                            dao.record_block(block)?;
+                            // apply_tx first so claimed_compensation_by_block is
+                            // populated before record_block reads it.
                             for tx in &resolved[block.tx_range.clone()] {
                                 dao.apply_tx(tx, &ctx)?;
                             }
+                            dao.record_block(block)?;
                         }
                         let (r_fiber, r_object) = rayon::join(
                             || -> Result<()> {
@@ -1638,7 +1640,7 @@ impl BulkBuildRuntimeState {
                 let CoreOwners { address: _, ref mut script, ref mut token, ref mut dao, ref mut fiber, ref mut object } = *owners;
                 let (r_left, r_right) = rayon::join(
                     || -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { script.apply_tx(tx, &ctx)?; } } for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { token.apply_tx(tx, &ctx)?; } } Ok(()) },
-                    || -> Result<()> { for block in &arena.blocks { dao.record_block(block)?; for tx in &resolved[block.tx_range.clone()] { dao.apply_tx(tx, &ctx)?; } } let (r_fiber, r_object) = rayon::join(|| -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { fiber.apply_tx(tx, &ctx)?; } } Ok(()) }, || -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { object.apply_tx(tx, &ctx)?; } } Ok(()) }); r_fiber?; r_object?; Ok(()) },
+                    || -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { dao.apply_tx(tx, &ctx)?; } dao.record_block(block)?; } let (r_fiber, r_object) = rayon::join(|| -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { fiber.apply_tx(tx, &ctx)?; } } Ok(()) }, || -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { object.apply_tx(tx, &ctx)?; } } Ok(()) }); r_fiber?; r_object?; Ok(()) },
                 );
                 r_left?; r_right?;
                 Ok((hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed))

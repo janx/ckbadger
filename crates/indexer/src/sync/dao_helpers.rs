@@ -529,6 +529,7 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
 // Secondary issuance delta accumulation (per-block)
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn accumulate_secondary_issuance_deltas_from_csu(
     stats: &mut BatchStats,
     block_number: i64,
@@ -562,17 +563,9 @@ pub(crate) fn accumulate_secondary_issuance_deltas_from_csu(
                     claimed_compensation_in_block
                 )
             })?;
-        if non_miner_delta < 0 {
-            bail!(
-                "negative exact non-miner secondary issuance delta after adding claimed compensation: block={}, date={}, s_delta={}, claimed_compensation={}, exact_non_miner_delta={}",
-                block_number,
-                block_date,
-                s_delta,
-                claimed_compensation_in_block,
-                non_miner_delta
-            );
-        }
-
+        // CKB's on-chain S field can physically decrease at protocol upgrade
+        // boundaries (see POSTMORTEM DAO-018). Skip negative deltas — only
+        // accumulate positive non-miner secondary issuance growth.
         if non_miner_delta > 0 {
             *stats
                 .daily_secondary_non_miner_delta
@@ -1071,23 +1064,15 @@ mod tests {
     }
 
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_adds_claimed_compensation_back_to_negative_s_delta()
-    {
+    fn test_accumulate_secondary_issuance_deltas_adds_claimed_compensation_back_to_negative_s_delta(
+    ) {
         let mut stats = BatchStats::default();
         let mut prev = Some((20_000_000_000_000_i128, 8_000_i128));
         let c = 20_000_000_000_500_i128;
         let s = 7_900_i128;
         let u = 1_000_i128;
         let claimed_compensation = 150_i128;
-        let block = dummy_parsed_block(
-            build_dao_field(
-                c as u64,
-                s as u64,
-                u as u64,
-            ),
-            0,
-            1000,
-        );
+        let block = dummy_parsed_block(build_dao_field(c as u64, s as u64, u as u64), 0, 1000);
         let date = ckbadger_common::block_date(block.timestamp);
         let expected_non_miner = 50_i128;
         let expected_miner = expected_non_miner * u / (c - u);
@@ -1109,7 +1094,8 @@ mod tests {
             Some(&expected_miner)
         );
         assert_eq!(
-            prev, Some((c, s)),
+            prev,
+            Some((c, s)),
             "previous DAO C/S baseline must still advance to the latest block"
         );
     }
@@ -1155,11 +1141,31 @@ mod tests {
         assert!(extract_dao_csu(&[0u8; 8]).is_none());
 
         // Verify the happy path doesn't error with a valid progressing DAO field.
-        let block =
-            dummy_parsed_block(build_dao_field(30_000_000_000_100, 10_000, 0), 0, 1000);
-        let result =
-            accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, &mut prev);
+        let block = dummy_parsed_block(build_dao_field(30_000_000_000_100, 10_000, 0), 0, 1000);
+        let result = accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, &mut prev);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_accumulate_secondary_issuance_deltas_protocol_upgrade_s_drop_skipped() {
+        // CKB's S field can physically decrease at protocol upgrade boundaries.
+        // Verify we skip (not crash) when non_miner_delta < 0.
+        let mut stats = BatchStats::default();
+        let mut prev = Some((20_000_000_000_000_i128, 10_000_i128));
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+
+        // S drops from 10_000 to 9_000 — simulates protocol upgrade boundary.
+        let block = dummy_parsed_block(build_dao_field(20_000_000_000_500, 9_000, 100), 0, 1000);
+        let result = accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, &mut prev);
+        assert!(
+            result.is_ok(),
+            "negative S delta should not crash: {result:?}"
+        );
+        // Negative delta should NOT be accumulated.
+        assert_eq!(stats.daily_secondary_non_miner_delta.get(&date), None);
+        assert_eq!(stats.daily_secondary_miner_delta.get(&date), None);
+        // prev_dao_cs must still advance to the current block's values.
+        assert_eq!(prev, Some((20_000_000_000_500, 9_000)));
     }
 
     // -- accumulate_dao_snapshot_deltas_for_txs -----------------------------

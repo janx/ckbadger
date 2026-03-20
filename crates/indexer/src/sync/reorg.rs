@@ -33,6 +33,7 @@ impl Indexer {
     }
 
     /// Prepare HODL wave tracker updates into the provided domain batch.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_hodl_wave_batch(
         &self,
         all_parsed_blocks: &[crate::parser::block::ParsedBlock],
@@ -138,6 +139,7 @@ impl Indexer {
     }
 
     /// Prepare cell distribution tracker updates into the provided domain batch.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_cell_distribution_batch(
         &self,
         all_parsed_blocks: &[crate::parser::block::ParsedBlock],

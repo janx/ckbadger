@@ -8,11 +8,10 @@ use ckbadger_store::store::{
     CF_IDENTITY_BY_COLLECTION, CF_OBJECT_BY_COLLECTION, CF_STATS_IDENTITY,
 };
 use ckbadger_store::types::{
-    ClusterAggregate, ClusterDailyDelta, IdentityCollectionAggregate, IdentityEntry,
-    IdentityExtra, IdentityStandard, ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry,
-    ObjectExtra, ObjectStandard, ObjectTypeIndex, SporeDailyDelta, SporeTypeIndex,
-    StorageDependencyTier, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
-    SOLE_SPORES_SENTINEL_COLLECTION,
+    ClusterAggregate, ClusterDailyDelta, IdentityCollectionAggregate, IdentityEntry, IdentityExtra,
+    IdentityStandard, ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry, ObjectExtra,
+    ObjectStandard, ObjectTypeIndex, SporeDailyDelta, SporeTypeIndex, StorageDependencyTier,
+    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     CkbadgerStore, CF_CLUSTER_AGG, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_OBJECT_COLLECTION_AGG,
