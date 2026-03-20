@@ -1704,6 +1704,12 @@ impl CkbadgerStore {
         self.runtime_config
     }
 
+    /// NOTE: With SST bulk ingest (2026-03-20), bulk-build batch flushes bypass
+    /// memtables entirely via SstFileWriter + IngestExternalFile. These memtable
+    /// tuning parameters now primarily affect the finalize phase and any edge
+    /// cases that still use WriteBatch. The aggressive L0 thresholds still help
+    /// because ingested SST files land in L0 and trigger background compaction.
+    ///
     /// Set relaxed L0 thresholds and larger write buffers for bulk sync.
     ///
     /// During bulk sync, parallel writer threads each commit large WriteBatches.
