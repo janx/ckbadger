@@ -443,6 +443,7 @@ fn fallback_script_version_info(
         type_owned_capacity_sum: fallback.type_owned_capacity_sum,
         type_used_capacity_sum: fallback.type_used_capacity_sum,
         type_owned_knowledge_sum: fallback.type_owned_knowledge_sum,
+        associated_code_hash: None,
     })
 }
 
@@ -537,10 +538,9 @@ fn checked_capacity_totals(
 
 /// Resolve capacity totals for a script version by looking up ScriptInfo.
 ///
-/// Tier 1: direct lookup by version_hash in the cache (works for data-ref scripts
-/// where version_hash == code_hash).
-/// Tier 2: name-based search in cached ScriptInfo (handles type-ref scripts where
-/// version_hash is a data_hash, not a code_hash).
+/// Tier 1: direct lookup (caller pre-fetched or version_hash == code_hash).
+/// Tier 2: lookup by associated_code_hash from label data (type-ref scripts
+/// where version_hash is a data_hash, not a code_hash).
 /// Tier 3: fall back to ScriptVersionInfo fields (zeros).
 fn resolve_version_capacity(
     version: &ckbadger_store::types::ScriptVersionInfo,
@@ -551,18 +551,18 @@ fn resolve_version_capacity(
     let info = direct_script_info
         .cloned()
         .or_else(|| {
-            // Tier 1b: search cache by version_hash
+            // Tier 1b: search cache by version_hash (works when version_hash == code_hash)
             script_infos_cache
                 .iter()
                 .find(|(code_hash, _)| code_hash == &version.version_hash)
                 .map(|(_, info)| info.clone())
         })
         .or_else(|| {
-            // Tier 2: name-based fallback for type-ref scripts
-            let name = version.name.as_deref()?;
+            // Tier 2: lookup by associated_code_hash from label data
+            let assoc = version.associated_code_hash.as_ref()?;
             script_infos_cache
                 .iter()
-                .find(|(_, info)| info.name.as_deref() == Some(name))
+                .find(|(code_hash, _)| code_hash == assoc)
                 .map(|(_, info)| info.clone())
         });
 
@@ -1212,8 +1212,18 @@ async fn get_script(
                 .map_err(|e| ApiError::internal(e.to_string()))?;
         sort_code_cells(&mut code_cells);
 
-        // Derive hash_type, type_hash, data_hash from ScriptInfo if available
-        let script_info = state.store.get_script_info(&version_hash).ok().flatten();
+        // Derive hash_type, type_hash, data_hash from ScriptInfo if available.
+        // For type-hash scripts, version_hash is a data_hash (not the code_hash that
+        // keys ScriptInfo), so fall back to associated_code_hash from label data.
+        let script_info = state
+            .store
+            .get_script_info(&version_hash)
+            .ok()
+            .flatten()
+            .or_else(|| {
+                let assoc = version_info.associated_code_hash.as_ref()?;
+                state.store.get_script_info(assoc).ok().flatten()
+            });
         let (
             cells_count,
             live_cells_count,
@@ -1688,7 +1698,11 @@ async fn get_script_capacity_history_chart_by_code_hash(
 
     match resolve_script_identifier(&state, &code_hash)? {
         ScriptIdentifierResolution::Resolved(resolved) => {
-            let ResolvedScriptIdentifier { version_hash, .. } = *resolved;
+            let ResolvedScriptIdentifier {
+                version_hash,
+                version_info,
+                ..
+            } = *resolved;
             // Use version_hash and look up related code hashes from ScriptInfo
             let all_script_infos: Vec<ckbadger_store::ScriptInfo> =
                 load_script_infos_cached(&state)?
@@ -1698,7 +1712,14 @@ async fn get_script_capacity_history_chart_by_code_hash(
             let related_hashes =
                 related_code_hashes_for_reference(&all_script_infos, &version_hash);
             let target_hashes = if related_hashes.is_empty() {
-                vec![version_hash]
+                // For type-hash scripts: version_hash is a data_hash, not a code_hash.
+                // Use associated_code_hash from label data to find the correct ScriptInfo
+                // whose code_hash is used to key daily deltas.
+                if let Some(assoc) = version_info.associated_code_hash.as_ref() {
+                    vec![assoc.clone()]
+                } else {
+                    vec![version_hash]
+                }
             } else {
                 related_hashes
             };
@@ -2043,14 +2064,19 @@ mod tests {
     }
 
     #[test]
-    fn resolve_version_capacity_falls_back_to_name_match() {
+    fn resolve_version_capacity_uses_associated_code_hash_for_type_hash_scripts() {
+        // Type-hash script: version_hash (data_hash) differs from code_hash.
+        // associated_code_hash bridges the gap.
+        let code_hash = vec![0xCC; 32];
+        let data_hash = vec![0xBB; 32]; // different from code_hash
         let version = ScriptVersionInfo {
-            version_hash: vec![0xBB; 32],
+            version_hash: data_hash,
             name: Some("secp256k1_blake160".to_string()),
+            associated_code_hash: Some(code_hash.clone()),
             ..Default::default()
         };
         let script_info = ScriptInfo {
-            code_hash: vec![0xCC; 32],
+            code_hash: code_hash.clone(),
             name: Some("secp256k1_blake160".to_string()),
             lock_owned_capacity_sum: 500_00000000,
             lock_owned_knowledge_sum: 200_00000000,
@@ -2060,13 +2086,70 @@ mod tests {
             lock_used_capacity_sum: 400_00000000,
             ..Default::default()
         };
-        let cache = vec![(vec![0xCC; 32], script_info)];
+        let cache = vec![(code_hash, script_info)];
         let (cells, live, _cap, live_cap, _used, live_used) =
             resolve_version_capacity(&version, None, &cache).unwrap();
         assert_eq!(cells, 10);
         assert_eq!(live, 8);
         assert_eq!(live_cap, 500_00000000);
         assert_eq!(live_used, 200_00000000);
+    }
+
+    #[test]
+    fn resolve_version_capacity_multi_version_uses_correct_per_version_stats() {
+        // Simulates a multi-version script where each version has different stats.
+        // This is the exact bug scenario: without associated_code_hash, all versions
+        // would return the same stats.
+        let code_hash_v1 = vec![0xA1; 32];
+        let data_hash_v1 = vec![0xD1; 32];
+        let code_hash_v2 = vec![0xA2; 32];
+        let data_hash_v2 = vec![0xD2; 32];
+
+        let version_v1 = ScriptVersionInfo {
+            version_hash: data_hash_v1,
+            name: Some("Multisig".to_string()),
+            associated_code_hash: Some(code_hash_v1.clone()),
+            ..Default::default()
+        };
+        let version_v2 = ScriptVersionInfo {
+            version_hash: data_hash_v2,
+            name: Some("Multisig".to_string()),
+            associated_code_hash: Some(code_hash_v2.clone()),
+            ..Default::default()
+        };
+        let cache = vec![
+            (
+                code_hash_v1.clone(),
+                ScriptInfo {
+                    code_hash: code_hash_v1,
+                    name: Some("Multisig".to_string()),
+                    lock_live_cells_count: 100,
+                    lock_owned_capacity_sum: 1000,
+                    ..Default::default()
+                },
+            ),
+            (
+                code_hash_v2.clone(),
+                ScriptInfo {
+                    code_hash: code_hash_v2,
+                    name: Some("Multisig".to_string()),
+                    lock_live_cells_count: 5,
+                    lock_owned_capacity_sum: 50,
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        let (_, live_v1, _, live_cap_v1, _, _) =
+            resolve_version_capacity(&version_v1, None, &cache).unwrap();
+        let (_, live_v2, _, live_cap_v2, _, _) =
+            resolve_version_capacity(&version_v2, None, &cache).unwrap();
+
+        assert_eq!(live_v1, 100);
+        assert_eq!(live_cap_v1, 1000);
+        assert_eq!(live_v2, 5);
+        assert_eq!(live_cap_v2, 50);
+        assert_ne!(live_v1, live_v2, "each version must have distinct stats");
     }
 
     #[test]

@@ -630,6 +630,7 @@ fn import_single_deployment(
     version_info.category = script.decoder_type.clone();
     version_info.description = Some(script.description.clone());
     version_info.website = Some(script.website.clone());
+    version_info.associated_code_hash = Some(code_hash.clone());
     store.put_script_version(&version_hash, &version_info)?;
     store.insert_script_version_by_label(&script.name, &version_hash)?;
     Ok(())

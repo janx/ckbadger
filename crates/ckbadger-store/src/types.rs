@@ -694,6 +694,12 @@ pub struct ScriptVersionInfo {
     pub type_used_capacity_sum: i128,
     #[serde(default)]
     pub type_owned_knowledge_sum: i128,
+    /// The code_hash from the label data (CKB script code_hash).
+    /// For hash_type="data"/"data1"/"data2" scripts, this equals version_hash.
+    /// For hash_type="type" scripts, this differs from version_hash (which is the data_hash).
+    /// Used to look up the correct ScriptInfo for per-version stats.
+    #[serde(default)]
+    pub associated_code_hash: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
