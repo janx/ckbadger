@@ -150,7 +150,7 @@ let actual_blocks = batch_stats.block_count as f64;
 // Skip EMA update when sample would be unrepresentative:
 // - batch_count == 0: first batch has cold-cache inflated read times
 // - actual_blocks < batch_block_span/2: runt batch (truncated by handoff_target)
-let is_representative = batch_count > 0
+let is_representative = batch_count > 1
     && actual_blocks >= (batch_block_span as f64 * 0.5);
 
 if is_representative && actual_blocks > 0.0 && controllable_ms > 0.0 {
@@ -224,7 +224,7 @@ if is_representative && actual_blocks > 0.0 && controllable_ms > 0.0 {
 
 ### Edge cases
 
-- **Cold-cache first batch:** The first batch (batch_count == 0) has inflated read times from a cold CKB RocksDB page cache. EMA update is skipped for batch 0; the initial ms_per_block value (0.05) is used for batch 1's sizing, and real adaptation begins from batch 2's sample.
+- **Cold-cache first batch:** The first batch has inflated read times from a cold CKB RocksDB page cache. Since `batch_count` is incremented (line 369) before the adaptive block runs (line 397), the first batch has `batch_count=1`. The check `batch_count > 1` skips it. The initial ms_per_block value (0.05) is used for batch 2's sizing, and real adaptation begins from batch 3's sample.
 - **Runt batch near handoff:** When `blocks_remaining < batch_block_span`, the batch is truncated to fewer blocks than requested. This produces a distorted ms_per_block sample (low total time, normal per-block cost). EMA update is skipped when `actual_blocks < batch_block_span * 0.5` to avoid corrupting the EMA near the end of sync.
 - **EMA invariant:** `ms_per_block_ema` and `desired_f64` are explicitly checked for finite/positive values. If either becomes invalid (denormal, NaN, Inf), the loop fails fast with actionable context per project coding principles.
 
