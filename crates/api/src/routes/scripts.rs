@@ -1772,7 +1772,7 @@ mod tests {
             .1
              .0
             .message
-            .contains("live common knowledge size exceeds live capacity"));
+            .contains("owned knowledge exceeds owned capacity"));
     }
 
     #[test]
