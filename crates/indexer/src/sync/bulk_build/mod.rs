@@ -604,14 +604,19 @@ impl BulkBuildEngine {
             meta_batch.commit()?;
         }
 
-        // Phase 11: memtable flush
+        // Phase 11: (no-op) memtable flush removed
+        //
+        // All bulk-build data (Phases 1-9) is written via SST ingest, which
+        // bypasses memtables entirely — data lands directly in SST files and
+        // is immediately durable. The only memtable write in finalize is
+        // Phase 10's meta_batch (HODL + cell-dist tracker state), which uses
+        // WAL-enabled commit() and is therefore already durable.
+        //
+        // Phase 12's status writes (sync status, DAO stats, session marker)
+        // also use WAL-enabled paths and do not require an explicit flush.
         indexer
             .bulk_build_perf
             .record_finalize_step(12, finalize_started.elapsed());
-        flush_bulk_build_materialized_state(
-            indexer.writer.store().as_ref(),
-            indexer.writer.append_only_store(),
-        )?;
 
         // Phase 12: sync status + cleanup
         indexer
