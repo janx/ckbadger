@@ -323,6 +323,9 @@ pub(crate) struct BulkBuildPerfStats {
     last_facts_intern_slow_path_count: AtomicU64,
     last_facts_intern_total_count: AtomicU64,
     last_facts_cell_count: AtomicU64,
+    // Flush channel pipeline state
+    flush_channel_pending: AtomicU64,
+    flush_channel_capacity: AtomicU64,
 }
 
 impl BulkBuildPerfStats {
@@ -358,6 +361,8 @@ impl BulkBuildPerfStats {
         facts_cell_count: u64,
         flush_wait_ms: f64,
         prefetch_collect_ms: f64,
+        flush_channel_pending: u64,
+        flush_channel_capacity: u64,
     ) {
         self.last_facts_us
             .store(ms_to_us(facts_ms), Ordering::Relaxed);
@@ -414,6 +419,10 @@ impl BulkBuildPerfStats {
             .store(ms_to_us(flush_wait_ms), Ordering::Relaxed);
         self.last_prefetch_collect_us
             .store(ms_to_us(prefetch_collect_ms), Ordering::Relaxed);
+        self.flush_channel_pending
+            .store(flush_channel_pending, Ordering::Relaxed);
+        self.flush_channel_capacity
+            .store(flush_channel_capacity, Ordering::Relaxed);
     }
 
     pub(crate) fn snapshot(&self) -> Option<BulkBuildProgressData> {
@@ -486,6 +495,8 @@ impl BulkBuildPerfStats {
                 self.last_facts_intern_total_count.load(Ordering::Relaxed),
             ),
             facts_cell_count: Some(self.last_facts_cell_count.load(Ordering::Relaxed)),
+            flush_channel_pending: Some(self.flush_channel_pending.load(Ordering::Relaxed)),
+            flush_channel_capacity: Some(self.flush_channel_capacity.load(Ordering::Relaxed)),
         })
     }
 
@@ -1039,6 +1050,8 @@ mod tests {
             0,             // facts_cell_count
             0.0,           // flush_wait_ms
             0.0,           // prefetch_collect_ms
+            1,             // flush_channel_pending
+            4,             // flush_channel_capacity
         );
 
         let snap = perf.snapshot().expect("should have data after record");
@@ -1092,6 +1105,8 @@ mod tests {
             28_000, // facts_cell_count
             0.0,    // flush_wait_ms
             0.0,    // prefetch_collect_ms
+            2,      // flush_channel_pending
+            4,      // flush_channel_capacity
         );
         let snap = perf.snapshot().unwrap();
         assert!((snap.facts_par_iter_ms.unwrap() - 40.0).abs() < 0.01);
@@ -1119,6 +1134,7 @@ mod tests {
             8.0, 2.0, 40.0, // facts_par_iter, facts_merge, facts_serial_equiv
             5, 100, 200, // facts_intern_slow, facts_intern_total, facts_cell_count
             15.0, 3.5, // flush_wait_ms, prefetch_collect_ms
+            3, 4, // flush_channel_pending, flush_channel_capacity
         );
 
         let snap = stats

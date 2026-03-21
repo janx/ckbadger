@@ -285,6 +285,7 @@ impl BulkBuildEngine {
             let flush_wait_started = Instant::now();
             flush_channel.send(pending_flush).await?;
             let flush_wait_elapsed = flush_wait_started.elapsed();
+            let flush_channel_pending = flush_channel.pending() as u64;
 
             cumulative_history_rows += pending_flush_row_count.0;
             cumulative_sealed_rows += pending_flush_row_count.1;
@@ -359,6 +360,7 @@ impl BulkBuildEngine {
             sample.flush_ms = prev_flush_ms;
             sample.flush_wait_ms = flush_wait_elapsed.as_secs_f64() * 1000.0;
             sample.flush_channel_depth = FLUSH_CHANNEL_DEPTH as u64;
+            sample.flush_channel_pending = flush_channel_pending;
             sample.prefetch_collect_ms = prefetch_collect_elapsed.as_secs_f64() * 1000.0;
             sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
@@ -407,6 +409,8 @@ impl BulkBuildEngine {
                 build_timings.facts_breakdown.cell_count,
                 flush_wait_elapsed.as_secs_f64() * 1000.0,
                 prefetch_collect_elapsed.as_secs_f64() * 1000.0,
+                flush_channel_pending,
+                FLUSH_CHANNEL_DEPTH as u64,
             );
 
             indexer.record_bulk_sync_perf_batch_sample(sample);

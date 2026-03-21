@@ -309,6 +309,12 @@ pub struct BulkBuildProgressData {
     /// Facts phase: total cells parsed in the batch.
     #[serde(default)]
     pub facts_cell_count: Option<u64>,
+    /// Number of batches currently pending in the flush channel (0..=capacity).
+    #[serde(default)]
+    pub flush_channel_pending: Option<u64>,
+    /// Maximum capacity of the flush channel.
+    #[serde(default)]
+    pub flush_channel_capacity: Option<u64>,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {
@@ -792,6 +798,8 @@ mod tests {
             facts_intern_slow_path_count: None,
             facts_intern_total_count: None,
             facts_cell_count: None,
+            flush_channel_pending: Some(2),
+            flush_channel_capacity: Some(4),
         };
 
         let json = serde_json::to_string(&bb).unwrap();

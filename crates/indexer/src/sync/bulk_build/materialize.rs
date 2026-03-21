@@ -385,6 +385,11 @@ impl FlushChannelHandle {
     pub(crate) fn last_flush_ms(&self) -> f64 {
         *self.flush_ms_rx.borrow()
     }
+
+    /// Number of batches currently pending in the flush channel (0..=capacity).
+    pub(crate) fn pending(&self) -> usize {
+        self.tx.max_capacity() - self.tx.capacity()
+    }
 }
 
 #[cfg(test)]

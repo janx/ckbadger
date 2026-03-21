@@ -1290,19 +1290,19 @@ fn draw_status_text_column(f: &mut Frame, app: &App, area: Rect) {
         ),
     ]));
 
-    // Line 3: Block rate (cur / avg)
-    let block_rate_text = format_rate_pair(sync.rate_realtime, sync.rate_ema, "blk/s");
-    lines.push(Line::from(vec![
-        Span::styled("Rate  ", Style::default().fg(SLATE_500)),
-        Span::styled(block_rate_text, Style::default().fg(TERMINAL_GREEN)),
-    ]));
+    // Line 3: Block rate — realtime + EMA shown separately
+    lines.push(Line::from(format_rate_expanded(
+        "Blk/s ",
+        sync.rate_realtime,
+        sync.rate_ema,
+    )));
 
-    // Line 4: TX rate (cur / avg)
-    let tx_rate_text = format_rate_pair(sync.tx_rate_realtime, sync.tx_rate_ema, "tx/s");
-    lines.push(Line::from(vec![
-        Span::styled("TxR   ", Style::default().fg(SLATE_500)),
-        Span::styled(tx_rate_text, Style::default().fg(TERMINAL_GREEN)),
-    ]));
+    // Line 4: TX rate — realtime + EMA shown separately
+    lines.push(Line::from(format_rate_expanded(
+        "Tx/s  ",
+        sync.tx_rate_realtime,
+        sync.tx_rate_ema,
+    )));
 
     // Line 5: ETA + elapsed
     let eta_text = sync.eta.clone().unwrap_or_else(|| "-".to_string());
@@ -2208,7 +2208,17 @@ fn overlap_sparkline_line(
     Line::from(spans)
 }
 
-/// Renders the pipeline overlap column: Gantt timeline + overlap sparklines.
+/// Renders the pipeline overlap column: dual-lane timeline + queue + sparklines.
+///
+/// Dual-lane view puts CPU and I/O on the same time axis so overlap is physical:
+///   CPU row: █ = build (productive), ░ = blocking waits (pipeline stall)
+///   I/O row: ▓ = fetch (green, left) + flush (cyan, right)
+///
+/// Wherever I/O sits directly below CPU █, that I/O was hidden behind CPU work.
+/// The ░ gap in CPU = pipeline stall. Efficiency % = build_ms / iteration_ms.
+///
+/// With show_build_subphases, the CPU row becomes multi-colored (one segment
+/// per sub-phase) but stays on a single line — no extra vertical space.
 fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, area: Rect) {
     let build_ms = bb.build_ms.unwrap_or(0.0);
     let prefetch_collect_ms = bb.prefetch_collect_ms.unwrap_or(0.0);
@@ -2217,101 +2227,181 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
     let flush_ms = bb.flush_ms.unwrap_or(0.0);
     let batch_count = bb.batch_count.unwrap_or(0);
     let iteration_ms = build_ms + prefetch_collect_ms + flush_wait_ms;
+    let wait_ms = prefetch_collect_ms + flush_wait_ms;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // -- Gantt timeline --
+    // -- Dual-lane timeline --
     if iteration_ms > 0.0 && build_ms > 0.0 {
-        let visible_ms = iteration_ms + flush_ms;
-        if visible_ms > 0.0 {
-            let label_width = 7usize; // "ACTVTY " = 6 chars + space
-            let bar_width = (area.width as usize).saturating_sub(label_width + 8); // 8 for "  NNNms"
+        let label_width = 5usize; // "CPU  " or "I/O  "
+        let bar_width = (area.width as usize).saturating_sub(label_width + 12);
+
+        if bar_width > 2 {
+            let col = |ms: f64| -> usize {
+                ((ms / iteration_ms * bar_width as f64).round() as usize).min(bar_width)
+            };
+
+            // Efficiency
+            let eff = (build_ms / iteration_ms * 100.0).min(100.0);
+            let eff_color = if eff >= 90.0 {
+                TERMINAL_GREEN
+            } else if eff >= 70.0 {
+                AMBER
+            } else {
+                ERROR_RED
+            };
 
             // Header
-            lines.push(Line::from(Span::styled(
-                format!("Batch #{:<4} ({:.0}ms)", batch_count, iteration_ms),
-                Style::default().fg(FOREGROUND),
-            )));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("Batch #{} ", batch_count),
+                    Style::default().fg(FOREGROUND),
+                ),
+                Span::styled(
+                    format!("{:.0}ms ", iteration_ms),
+                    Style::default().fg(SLATE_500),
+                ),
+                Span::styled(format!("eff {eff:.0}%"), Style::default().fg(eff_color)),
+            ]));
 
-            // Helper: map ms to column count
-            let col = |ms: f64| -> usize {
-                ((ms / visible_ms * bar_width as f64).round() as usize).min(bar_width)
+            // ── CPU row ──
+            let cpu_annotation = if wait_ms > 0.5 {
+                format!(" {:.0}+{:.0}ms", build_ms, wait_ms)
+            } else {
+                format!(" {:.0}ms", build_ms)
             };
 
             if app.show_build_subphases {
-                let facts_ms = bb.facts_ms.unwrap_or(0.0);
-                let resolve_ms = bb.resolve_ms.unwrap_or(0.0);
-                let reduce_ms = bb.reduce_ms.unwrap_or(0.0);
-                let history_ms = bb.history_ms.unwrap_or(0.0);
-                let addr_ms = bb.address_reduce_ms.unwrap_or(0.0);
-                let actvty_ms = bb.activity_stats_ms.unwrap_or(0.0);
-
-                let sub_phases: &[(&str, f64, Color)] = &[
-                    ("FACTS", facts_ms, AMBER),
-                    ("RESOLV", resolve_ms, Color::Magenta),
-                    ("REDUCE", reduce_ms, Color::Blue),
-                    ("HIST", history_ms, TERMINAL_GREEN),
-                    ("ADDR", addr_ms, CYAN),
-                    ("ACTVTY", actvty_ms, FOREGROUND),
+                // Multi-colored sub-phase segments on a single line
+                let sub_phases: &[(f64, Color)] = &[
+                    (bb.facts_ms.unwrap_or(0.0), AMBER),
+                    (bb.resolve_ms.unwrap_or(0.0), Color::Magenta),
+                    (bb.reduce_ms.unwrap_or(0.0), Color::Blue),
+                    (bb.history_ms.unwrap_or(0.0), TERMINAL_GREEN),
+                    (bb.address_reduce_ms.unwrap_or(0.0), CYAN),
+                    (bb.activity_stats_ms.unwrap_or(0.0), FOREGROUND),
                 ];
-
-                // FETCH bar
-                let fetch_end = col(build_ms + prefetch_collect_ms);
-                let fetch_start = col((build_ms + prefetch_collect_ms - fetch_ms).max(0.0));
-                lines.push(gantt_bar_line(
-                    "FETCH",
-                    TERMINAL_GREEN,
-                    fetch_start,
-                    fetch_end,
-                    bar_width,
-                    fetch_ms,
-                ));
-
-                // Sub-phase bars
+                let mut spans = vec![Span::styled("CPU  ", Style::default().fg(AMBER))];
                 let mut offset = 0.0;
-                for (label, dur, color) in sub_phases {
+                for &(dur, color) in sub_phases {
                     let s = col(offset);
                     let e = col(offset + dur);
-                    lines.push(gantt_bar_line(label, *color, s, e, bar_width, *dur));
+                    let len = e.saturating_sub(s);
+                    if len > 0 {
+                        spans.push(Span::styled(
+                            "\u{2588}".repeat(len),
+                            Style::default().fg(color),
+                        ));
+                    }
                     offset += dur;
                 }
-
-                // FLUSH bar
-                if flush_ms > 0.0 {
-                    let s = col(iteration_ms);
-                    let e = col(iteration_ms + flush_ms);
-                    lines.push(gantt_bar_line("FLUSH", CYAN, s, e, bar_width, flush_ms));
-                }
-            } else {
-                // Collapsed: FETCH, BUILD, FLUSH
-                let fetch_end = col(build_ms + prefetch_collect_ms);
-                let fetch_start = col((build_ms + prefetch_collect_ms - fetch_ms).max(0.0));
-                lines.push(gantt_bar_line(
-                    "FETCH",
-                    TERMINAL_GREEN,
-                    fetch_start,
-                    fetch_end,
-                    bar_width,
-                    fetch_ms,
-                ));
-                lines.push(gantt_bar_line(
-                    "BUILD",
-                    AMBER,
-                    col(0.0),
-                    col(build_ms),
-                    bar_width,
-                    build_ms,
-                ));
-                if flush_ms > 0.0 {
-                    lines.push(gantt_bar_line(
-                        "FLUSH",
-                        CYAN,
-                        col(iteration_ms),
-                        col(iteration_ms + flush_ms),
-                        bar_width,
-                        flush_ms,
+                // Wait tail
+                let wait_cols = col(iteration_ms).saturating_sub(col(build_ms));
+                if wait_cols > 0 {
+                    spans.push(Span::styled(
+                        "\u{2591}".repeat(wait_cols),
+                        Style::default().fg(SLATE_500),
                     ));
                 }
+                spans.push(Span::styled(cpu_annotation, Style::default().fg(SLATE_500)));
+                lines.push(Line::from(spans));
+            } else {
+                // Collapsed: solid build + dim wait
+                let build_cols = col(build_ms).max(1);
+                let wait_cols = col(iteration_ms).saturating_sub(build_cols);
+                let mut spans = vec![
+                    Span::styled("CPU  ", Style::default().fg(AMBER)),
+                    Span::styled("\u{2588}".repeat(build_cols), Style::default().fg(AMBER)),
+                ];
+                if wait_cols > 0 {
+                    spans.push(Span::styled(
+                        "\u{2591}".repeat(wait_cols),
+                        Style::default().fg(SLATE_500),
+                    ));
+                }
+                spans.push(Span::styled(cpu_annotation, Style::default().fg(SLATE_500)));
+                lines.push(Line::from(spans));
+            }
+
+            // ── I/O row: fetch (green, left-aligned) + flush (cyan, right-aligned) ──
+            {
+                let fetch_cols = col(fetch_ms.min(iteration_ms));
+
+                // Position flush: right-aligned within build if hidden, extending
+                // to iteration_ms if exposed (flush_wait > 0).
+                let (flush_start, flush_end) = if flush_wait_ms > 0.5 {
+                    (col((iteration_ms - flush_ms).max(0.0)), col(iteration_ms))
+                } else if flush_ms > 0.0 {
+                    let end = col(build_ms.min(iteration_ms));
+                    (col((build_ms - flush_ms).max(0.0)), end)
+                } else {
+                    (0, 0)
+                };
+                // Prevent fetch/flush overlap — push flush after fetch if needed
+                let flush_start = flush_start.max(fetch_cols);
+                let flush_len = flush_end.saturating_sub(flush_start);
+
+                let mut spans = vec![Span::styled("I/O  ", Style::default().fg(SLATE_500))];
+
+                if fetch_cols > 0 {
+                    spans.push(Span::styled(
+                        "\u{2593}".repeat(fetch_cols),
+                        Style::default().fg(TERMINAL_GREEN),
+                    ));
+                }
+                let gap = flush_start.saturating_sub(fetch_cols);
+                if gap > 0 {
+                    spans.push(Span::raw(" ".repeat(gap)));
+                }
+                if flush_len > 0 {
+                    spans.push(Span::styled(
+                        "\u{2593}".repeat(flush_len),
+                        Style::default().fg(CYAN),
+                    ));
+                }
+
+                // Annotation with colored numbers matching bar colors
+                spans.push(Span::styled(
+                    format!(" {:.0}", fetch_ms),
+                    Style::default().fg(TERMINAL_GREEN),
+                ));
+                if flush_ms > 0.0 {
+                    spans.push(Span::styled(
+                        format!("+{:.0}ms", flush_ms),
+                        Style::default().fg(CYAN),
+                    ));
+                } else {
+                    spans.push(Span::styled("ms", Style::default().fg(SLATE_500)));
+                }
+                lines.push(Line::from(spans));
+            }
+
+            // ── Queue indicator (flush channel occupancy) ──
+            if let (Some(pending), Some(capacity)) =
+                (bb.flush_channel_pending, bb.flush_channel_capacity)
+            {
+                let filled = (pending as usize).min(capacity as usize);
+                let empty = (capacity as usize).saturating_sub(filled);
+                let indicator = format!(
+                    "[{}{}]",
+                    "\u{25A0}".repeat(filled),
+                    "\u{2591}".repeat(empty)
+                );
+                let q_color = if filled == capacity as usize {
+                    ERROR_RED
+                } else if filled as u64 >= capacity / 2 {
+                    AMBER
+                } else {
+                    TERMINAL_GREEN
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("     ", Style::default()),
+                    Span::styled(indicator, Style::default().fg(q_color)),
+                    Span::styled(
+                        format!(" {}/{}", pending, capacity),
+                        Style::default().fg(SLATE_500),
+                    ),
+                ]));
             }
         }
     }
@@ -2338,42 +2428,6 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
     ));
 
     f.render_widget(Paragraph::new(lines), area);
-}
-
-/// Build a single Gantt bar as a Line (for use in Paragraph-based rendering).
-fn gantt_bar_line(
-    label: &str,
-    color: Color,
-    start: usize,
-    end: usize,
-    max_width: usize,
-    duration_ms: f64,
-) -> Line<'static> {
-    let label_text = format!("{:<6} ", label);
-    let bar_start = start.min(max_width);
-    let bar_len = end.saturating_sub(start).max(1).min(max_width - bar_start);
-
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    spans.push(Span::styled(label_text, Style::default().fg(color)));
-
-    // Pad before bar
-    if bar_start > 0 {
-        spans.push(Span::raw(" ".repeat(bar_start)));
-    }
-
-    // Bar
-    spans.push(Span::styled(
-        "\u{2588}".repeat(bar_len),
-        Style::default().fg(color),
-    ));
-
-    // Duration annotation
-    spans.push(Span::styled(
-        format!(" {:.0}ms", duration_ms),
-        Style::default().fg(SLATE_500),
-    ));
-
-    Line::from(spans)
 }
 
 fn build_bulk_build_diagnostics(
@@ -2870,14 +2924,20 @@ fn format_stage_commit_gap_ms(stage_ms: Option<f64>, commit_ms: Option<f64>) -> 
     }
 }
 
-fn format_rate_pair(now: Option<f64>, ema: Option<f64>, unit: &str) -> String {
+fn format_rate_expanded<'a>(label: &'a str, now: Option<f64>, ema: Option<f64>) -> Vec<Span<'a>> {
     let now_text = now
         .map(|v| format!("{v:.0}"))
         .unwrap_or_else(|| "-".to_string());
     let ema_text = ema
         .map(|v| format!("{v:.0}"))
         .unwrap_or_else(|| "-".to_string());
-    format!("{now_text}/{ema_text} {unit}")
+    vec![
+        Span::styled(label, Style::default().fg(SLATE_500)),
+        Span::styled("now ", Style::default().fg(SLATE_500)),
+        Span::styled(now_text, Style::default().fg(TERMINAL_GREEN)),
+        Span::styled("  ema ", Style::default().fg(SLATE_500)),
+        Span::styled(ema_text, Style::default().fg(TERMINAL_GREEN)),
+    ]
 }
 
 #[derive(Clone, Copy)]
@@ -4980,17 +5040,17 @@ mod tests {
         consumed_cells_source_color, consumed_cells_source_label, dense_right_lines,
         detail_right_lines, diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label,
         footer_hint_line, footer_status_message, format_age_secs, format_num, format_num_commas,
-        format_num_compact, format_rate_pair, format_signed_num_i128, format_stage_commit_gap_ms,
-        header_right_line, header_title_line, heartbeat_is_on, io_fetch_write_jitter_line,
-        is_rate_drop, merged_sparkline_p95_line, overview_log_min_height,
-        overview_services_min_height, percentile_from_history, pipeline_bottleneck,
-        pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state, runtime_live_delta,
-        service_log_tails_line, sparkline, stale_age_secs, stale_status, startup_phase_label,
-        storage_pressure_l0_line, storage_pressure_wbm_line, storage_runtime_columns,
-        supervisor_services_line, sync_bottleneck, system_kv_line, system_store_path_lines,
-        system_workdir_lines, trend_delta, trim_for_panel, AdaptiveControlSnapshot, App, Color,
-        CompactOverviewLayout, DiagnosticsViewMode, SyncBottleneck, AMBER, CYAN,
-        STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
+        format_num_compact, format_rate_expanded, format_signed_num_i128,
+        format_stage_commit_gap_ms, header_right_line, header_title_line, heartbeat_is_on,
+        io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
+        overview_log_min_height, overview_services_min_height, percentile_from_history,
+        pipeline_bottleneck, pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state,
+        runtime_live_delta, service_log_tails_line, sparkline, stale_age_secs, stale_status,
+        startup_phase_label, storage_pressure_l0_line, storage_pressure_wbm_line,
+        storage_runtime_columns, supervisor_services_line, sync_bottleneck, system_kv_line,
+        system_store_path_lines, system_workdir_lines, trend_delta, trim_for_panel,
+        AdaptiveControlSnapshot, App, Color, CompactOverviewLayout, DiagnosticsViewMode,
+        SyncBottleneck, AMBER, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
     use crate::db::{
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
@@ -5250,13 +5310,22 @@ mod tests {
     }
 
     #[test]
-    fn test_format_rate_pair() {
-        assert_eq!(
-            format_rate_pair(Some(123.6), Some(100.2), "blk/s"),
-            "124/100 blk/s"
-        );
-        assert_eq!(format_rate_pair(None, Some(5.0), "tx/s"), "-/5 tx/s");
-        assert_eq!(format_rate_pair(Some(5.0), None, "tx/s"), "5/- tx/s");
+    fn test_format_rate_expanded() {
+        let spans = format_rate_expanded("Blk/s ", Some(123.6), Some(100.2));
+        assert_eq!(spans.len(), 5);
+        assert_eq!(spans[0].content, "Blk/s ");
+        assert_eq!(spans[1].content, "now ");
+        assert_eq!(spans[2].content, "124");
+        assert_eq!(spans[3].content, "  ema ");
+        assert_eq!(spans[4].content, "100");
+
+        let spans = format_rate_expanded("Tx/s  ", None, Some(5.0));
+        assert_eq!(spans[2].content, "-");
+        assert_eq!(spans[4].content, "5");
+
+        let spans = format_rate_expanded("Tx/s  ", Some(5.0), None);
+        assert_eq!(spans[2].content, "5");
+        assert_eq!(spans[4].content, "-");
     }
 
     #[test]
