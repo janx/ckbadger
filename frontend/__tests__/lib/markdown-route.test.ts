@@ -28,6 +28,7 @@ function sampleDynamicPath(routePath: string): string {
   return routePath
     .replace('[addr]', 'ckt1qyq9sampleaddress')
     .replace('[outpoint]', `0x${'a'.repeat(64)}-0`)
+    .replace('[classId]', `0x${'a'.repeat(56)}`)
     .replace('[collectionId]', 'dotbit')
     .replace('[clusterId]', `0x${'b'.repeat(64)}`)
     .replace('[sporeId]', `0x${'c'.repeat(64)}`)

@@ -1333,6 +1333,28 @@ export async function renderMarkdownPage(
       ]);
       return { status: 200, body };
     }
+    case 'classes_detail': {
+      const collection = await api.getObjectCollection(page.classId);
+      const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+        `# Class ${collection.name ?? hashShort(collection.collectionId)}`,
+        '',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['collectionId', collection.collectionId],
+            ['name', collection.name ?? '-'],
+            ['standard', collection.standard],
+            ['totalCount', collection.totalCount],
+            ['liveCount', collection.liveCount],
+            ['holdersCount', collection.holdersCount],
+            ['activitiesCount', collection.activitiesCount],
+            ['ownedCapacity', collection.ownedCapacity ?? '-'],
+            ['ownedKnowledge', collection.ownedKnowledge ?? '-'],
+          ]
+        ),
+      ]);
+      return { status: 200, body };
+    }
     case 'clusters_detail': {
       const limit = parseLimit(searchParams);
       const cursor = searchParams.get('cursor') ?? undefined;

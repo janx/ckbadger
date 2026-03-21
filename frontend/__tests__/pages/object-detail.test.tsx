@@ -55,7 +55,7 @@ const mockSpore = {
 
 const mockCollection = {
   collectionId: '0x1234567890abcdef1234567890abcdef1234567890abcdef',
-  standard: 'm-nft',
+  standard: 'spore',
   name: 'Test Collection',
   totalCount: 500,
   liveCount: 320,
@@ -200,7 +200,7 @@ describe('SporeDetailPage', () => {
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
+      expect(screen.getByText('Spore Overview')).toBeInTheDocument();
     });
 
     expect(screen.getByRole('link', { name: '← Back to Objects' })).toHaveAttribute(
@@ -208,10 +208,7 @@ describe('SporeDetailPage', () => {
       '/assets?type=object'
     );
     expect(screen.getByText('Spore Asset (0x1234...cdef)')).toBeInTheDocument();
-    expect(screen.getByText('Spore Content Preview')).toBeInTheDocument();
-    expect(screen.getByText('Spore Details')).toBeInTheDocument();
-    expect(screen.getByText('Rendering Pipeline')).toBeInTheDocument();
-    expect(screen.queryByText('How To Read This Spore')).not.toBeInTheDocument();
+    expect(screen.getByText('Spore Overview')).toBeInTheDocument();
   });
 
   it('renders media source analysis from API profile', async () => {
@@ -287,7 +284,7 @@ describe('SporeDetailPage', () => {
     });
   });
 
-  it('renders payload text view for text spores', async () => {
+  it('renders text content in preview for text spores', async () => {
     const encoded = encodeSporeData('text/plain', 'hello from payload text panel');
     vi.mocked(api.getSporeObject).mockResolvedValue({
       ...mockSpore,
@@ -314,16 +311,20 @@ describe('SporeDetailPage', () => {
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
+    // Text content is shown directly in the preview (no separate Payload Text View for text/*)
     await waitFor(() => {
-      expect(screen.getByText('Payload Text View')).toBeInTheDocument();
       expect(screen.getAllByText('hello from payload text panel').length).toBeGreaterThan(0);
     });
 
+    // Verify it renders in a <pre> element in the preview
     const payloadTextNodes = screen.getAllByText('hello from payload text panel');
     const payloadPreElements = payloadTextNodes
       .map((node) => node.closest('pre'))
       .filter((element): element is HTMLPreElement => element !== null);
     expect(payloadPreElements.length).toBeGreaterThan(0);
+
+    // Payload Text View should NOT appear for text/* (preview already shows it)
+    expect(screen.queryByText('Payload Text View')).not.toBeInTheDocument();
   });
 
   it('renders cluster metadata from JSON description', async () => {
@@ -358,7 +359,8 @@ describe('SporeDetailPage', () => {
       }
     );
 
-    expect(screen.getByText('Cluster Context')).toBeInTheDocument();
+    // Cluster context is inline in overview panel
+    expect(screen.getByText('Genesis Cluster')).toBeInTheDocument();
     const versionLabel = screen.getByText('Version');
     expect(versionLabel).toBeInTheDocument();
     expect(versionLabel.parentElement?.textContent).toContain('3');
@@ -391,13 +393,11 @@ describe('SporeDetailPage', () => {
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Collection ID')).toBeInTheDocument();
+      expect(screen.getByText('Collection Overview')).toBeInTheDocument();
     });
 
     expect(screen.getByText('Test Collection')).toBeInTheDocument();
-    expect(screen.getByText('Total Objects')).toBeInTheDocument();
-    expect(screen.getByText(/Common Knowledge:/)).toBeInTheDocument();
-    expect(screen.getByText(/% share/)).toBeInTheDocument();
+    expect(screen.getByText('Supply')).toBeInTheDocument();
     expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Activities \(150\)$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Objects \(500\)$/ })).toBeInTheDocument();

@@ -38,6 +38,7 @@ export type ParsedMarkdownPage =
   | { kind: 'cell_detail'; pathname: string; outpoint: string }
   | { kind: 'charts_overview'; pathname: '/charts' }
   | { kind: 'chart_detail'; pathname: string; slug: string }
+  | { kind: 'classes_detail'; pathname: string; classId: string }
   | { kind: 'clusters_detail'; pathname: string; clusterId: string }
   | { kind: 'dao_overview'; pathname: '/dao' }
   | { kind: 'dao_charts'; pathname: '/dao/charts' }
@@ -71,6 +72,7 @@ export const MARKDOWN_ROUTE_PATTERNS = [
   '/cell/{outpoint}',
   '/charts',
   '/charts/{slug}',
+  '/classes/{classId}',
   '/clusters/{clusterId}',
   '/dao',
   '/dao/charts',
@@ -169,6 +171,15 @@ export function parseMarkdownSourcePath(pathname: string): ParsedMarkdownPage {
       kind: 'chart_detail',
       pathname: normalized,
       slug: decodeParam(chartMatch[1]),
+    };
+  }
+
+  const classMatch = normalized.match(/^\/classes\/([^/]+)$/);
+  if (classMatch) {
+    return {
+      kind: 'classes_detail',
+      pathname: normalized,
+      classId: decodeParam(classMatch[1]),
     };
   }
 

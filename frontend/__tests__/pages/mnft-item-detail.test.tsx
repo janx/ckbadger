@@ -105,7 +105,7 @@ describe('MnftItemDetailPage', () => {
 
     expect(screen.getByRole('link', { name: /Back to Class/ })).toHaveAttribute(
       'href',
-      '/objects/0xclass'
+      '/classes/0xclass'
     );
     expect(screen.getByRole('link', { name: /Back to Objects/ })).toHaveAttribute(
       'href',
@@ -123,7 +123,7 @@ describe('MnftItemDetailPage', () => {
       screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/cell/0xtx-4')
     ).toBe(true);
     expect(
-      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/objects/0xclass')
+      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/classes/0xclass')
     ).toBe(true);
   });
 
