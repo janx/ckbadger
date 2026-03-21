@@ -54,6 +54,7 @@ const BULK_BUILD_TARGET_ITERATION_MS: f64 = 1500.0;
 const BULK_BUILD_MS_PER_BLOCK_ALPHA: f64 = 0.5;
 const BULK_BUILD_INITIAL_MS_PER_BLOCK: f64 = 0.05;
 const BULK_BUILD_MAX_STEP_RATIO: f64 = 2.0;
+const FLUSH_CHANNEL_DEPTH: usize = 4;
 
 #[derive(Default)]
 pub(crate) struct BulkBuildEngine;
@@ -133,19 +134,22 @@ impl BulkBuildEngine {
             std::time::Duration,
             u64,
         )> = None;
-        // Async flush: overlap RocksDB writes with the next batch's prefetch.
-        // The flush handle runs in spawn_blocking; we await it before starting
-        // the next apply_blocks so batch compute always sees committed state.
-        // Spawned at the end of each iteration (after all fallible ops) to
-        // prevent orphaned flush tasks.
-        let domain_store_arc = indexer.writer.store().clone();
-        let append_store_arc = indexer.append_only_store.clone();
-        let mut pending_flush_handle: Option<
-            tokio::task::JoinHandle<anyhow::Result<materialize::FlushResult>>,
-        > = None;
-        let mut flush_row_totals = (0usize, 0usize);
-        let mut flush_count: usize = 0;
+        // Bounded flush channel: the build loop sends PendingFlush into
+        // a channel. A dedicated worker drains it serially, committing
+        // each batch to RocksDB. Build only blocks when the channel is
+        // full, eliminating the flush bubble when flush_ms > build_ms.
+        let flush_channel = materialize::FlushChannelHandle::new(
+            FLUSH_CHANNEL_DEPTH,
+            indexer.writer.store().clone(),
+            indexer.append_only_store.clone(),
+        );
+        // Initial 0.0 is semantically correct (no flush yet) but always
+        // overwritten by flush_channel.last_flush_ms() before first read.
+        #[allow(unused_assignments)]
         let mut prev_flush_ms: f64 = 0.0;
+        let mut cumulative_history_rows: usize = 0;
+        let mut cumulative_sealed_rows: usize = 0;
+        let mut _flush_send_count: usize = 0;
 
         loop {
             ckb_store.refresh()?;
@@ -266,22 +270,25 @@ impl BulkBuildEngine {
             // build → longer flush wait → shrink more → drives to minimum floor).
             let controllable_ms = (build_elapsed + prefetch_collect_elapsed).as_secs_f64() * 1000.0;
 
-            // Await previous flush AFTER apply_blocks. Since apply_blocks no
-            // longer reads from the domain store (token info is pre-cached),
-            // there is no data dependency between flush(N-1) and build(N).
-            // The await still happens before spawning flush(N) to maintain
-            // at-most-one-flush-in-flight invariant.
+            // Read the most recent flush_ms from the worker (non-blocking).
+            prev_flush_ms = flush_channel.last_flush_ms();
+
+            // Capture row counts before send() moves the data.
+            let pending_flush_row_count = (
+                pending_flush.history_rows.len(),
+                pending_flush.sealed_rows.len(),
+            );
+
+            // Send to flush channel. Only blocks when the channel is full
+            // (backpressure). flush_wait_ms now measures channel backpressure
+            // time, not flush completion wait.
             let flush_wait_started = Instant::now();
-            if let Some(handle) = pending_flush_handle.take() {
-                let result = handle
-                    .await
-                    .map_err(|e| anyhow!("bulk build flush panicked: {}", e))??;
-                flush_row_totals.0 += result.history_rows;
-                flush_row_totals.1 += result.sealed_rows;
-                flush_count += 1;
-                prev_flush_ms = result.flush_ms;
-            }
+            flush_channel.send(pending_flush).await?;
             let flush_wait_elapsed = flush_wait_started.elapsed();
+
+            cumulative_history_rows += pending_flush_row_count.0;
+            cumulative_sealed_rows += pending_flush_row_count.1;
+            _flush_send_count += 1;
             sync_totals.record_batch(&batch_stats)?;
 
             let last_block_number = batch_stats.last_block_number.ok_or_else(|| {
@@ -354,10 +361,9 @@ impl BulkBuildEngine {
             sample.prefetch_collect_ms = prefetch_collect_elapsed.as_secs_f64() * 1000.0;
             sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
-            // Cumulative row counts: flush_row_totals tracks completed async flushes.
-            // The in-flight flush (if any) is not yet counted.
-            sample.cumulative_history_rows = flush_row_totals.0 as u64;
-            sample.cumulative_sealed_rows = flush_row_totals.1 as u64;
+            // Cumulative row counts: tracks rows sent to flush channel.
+            sample.cumulative_history_rows = cumulative_history_rows as u64;
+            sample.cumulative_sealed_rows = cumulative_sealed_rows as u64;
             sample.cumulative_snapshot_rows = 0; // snapshots are written at finalize
 
             // Compute tx_density for both TUI publishing and adaptive sizing below.
@@ -384,8 +390,8 @@ impl BulkBuildEngine {
                 sample.live_cell_count,
                 sample.cells,
                 sample.inputs,
-                flush_row_totals.0 as u64,
-                flush_row_totals.1 as u64,
+                cumulative_history_rows as u64,
+                cumulative_sealed_rows as u64,
                 batch_block_span,
                 batch_count + 1, // batch_count is incremented below
                 tx_density,
@@ -403,20 +409,6 @@ impl BulkBuildEngine {
             );
 
             indexer.record_bulk_sync_perf_batch_sample(sample);
-
-            // Spawn background flush AFTER all fallible operations above.
-            // This ensures no orphaned flush task can mutate RocksDB if the
-            // loop body returns an error before the next iteration drains it.
-            let ds = domain_store_arc.clone();
-            let as_ = append_store_arc.clone();
-            pending_flush_handle = Some(tokio::task::spawn_blocking(move || {
-                materialize::flush_rows_to_stores(
-                    &ds,
-                    &as_,
-                    pending_flush.history_rows,
-                    pending_flush.sealed_rows,
-                )
-            }));
 
             batch_count += 1;
             let progress_pct = if chain_tip > 0 {
@@ -513,19 +505,16 @@ impl BulkBuildEngine {
         // publishes to RocksDB so the TUI can display a finalize checklist.
         let finalize_started = Instant::now();
 
-        // Phase 0: drain last in-flight flush
+        // Phase 0: close channel and drain all queued flushes.
         indexer
             .bulk_build_perf
             .record_finalize_step(1, finalize_started.elapsed());
-        if let Some(handle) = pending_flush_handle.take() {
-            let result = handle
-                .await
-                .map_err(|e| anyhow!("bulk build final flush panicked: {}", e))??;
-            flush_row_totals.0 += result.history_rows;
-            flush_row_totals.1 += result.sealed_rows;
-            flush_count += 1;
-        }
-        materializer.add_external_counts(flush_row_totals.0, flush_row_totals.1, flush_count);
+        let flush_stats = flush_channel.close_and_wait().await?;
+        materializer.add_external_counts(
+            flush_stats.total_history_rows,
+            flush_stats.total_sealed_rows,
+            flush_stats.flush_count,
+        );
 
         // Destructure runtime to get owned fields for explicit sub-phase control.
         let BulkBuildRuntimeState {
@@ -684,9 +673,9 @@ struct BatchBuildTimings {
 
 /// Rows produced by `apply_blocks` that need to be flushed to RocksDB.
 /// Designed to be `Send` so it can be moved into `spawn_blocking`.
-pub(super) struct PendingFlush {
-    pub(super) history_rows: Vec<materialize::MaterializedRow>,
-    pub(super) sealed_rows: Vec<materialize::MaterializedRow>,
+pub(crate) struct PendingFlush {
+    pub(crate) history_rows: Vec<materialize::MaterializedRow>,
+    pub(crate) sealed_rows: Vec<materialize::MaterializedRow>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

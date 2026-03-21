@@ -314,7 +314,6 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
 }
 
 #[derive(Debug, Default)]
-#[allow(dead_code)] // Wired in Task 5
 pub(crate) struct FlushChannelStats {
     pub(crate) total_history_rows: usize,
     pub(crate) total_sealed_rows: usize,
@@ -322,14 +321,12 @@ pub(crate) struct FlushChannelStats {
     pub(crate) last_flush_ms: f64,
 }
 
-#[allow(dead_code)] // Wired in Task 5
 pub(crate) struct FlushChannelHandle {
     tx: tokio::sync::mpsc::Sender<PendingFlush>,
     worker_handle: tokio::task::JoinHandle<Result<FlushChannelStats>>,
     flush_ms_rx: tokio::sync::watch::Receiver<f64>,
 }
 
-#[allow(dead_code, private_interfaces)] // Wired in Task 5
 impl FlushChannelHandle {
     pub(crate) fn new(
         depth: usize,
