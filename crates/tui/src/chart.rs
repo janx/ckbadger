@@ -219,6 +219,113 @@ pub fn render_bar_chart(
     BarChartResult { rows }
 }
 
+/// Stacked bar chart: three series rendered as stacked bars on a shared canvas.
+/// Series are ordered bottom-to-top. Each row is colored by the band it falls in,
+/// determined by the average proportions across visible data.
+pub fn render_stacked_bar_chart(
+    series: [&VecDeque<f64>; 3],
+    colors: [Color; 3],
+    char_width: usize,
+    char_height: usize,
+) -> BarChartResult {
+    let len = series[0].len().min(series[1].len()).min(series[2].len());
+    if len == 0 || char_width < Y_AXIS_WIDTH + 2 || char_height < 1 {
+        return BarChartResult {
+            rows: vec![
+                ChartRow {
+                    content: " ".repeat(char_width),
+                    color: Color::Rgb(90, 106, 127),
+                };
+                char_height
+            ],
+        };
+    }
+
+    let chart_width = char_width.saturating_sub(Y_AXIS_WIDTH);
+    let mut canvas = BrailleCanvas::new(chart_width, char_height);
+    let pixel_width = chart_width * 2;
+    let pixel_height = char_height * 4;
+
+    let visible_start = len.saturating_sub(pixel_width);
+    let visible_len = len.saturating_sub(visible_start);
+
+    // Compute combined totals for visible range and find max.
+    let mut visible_max = 0.0_f64;
+    let mut sum_s0 = 0.0_f64;
+    let mut sum_s1 = 0.0_f64;
+    let mut sum_s2 = 0.0_f64;
+    for ((&s0, &s1), &s2) in series[0]
+        .iter()
+        .zip(series[1].iter())
+        .zip(series[2].iter())
+        .skip(visible_start)
+        .take(visible_len)
+    {
+        let total = s0 + s1 + s2;
+        visible_max = visible_max.max(total);
+        sum_s0 += s0;
+        sum_s1 += s1;
+        sum_s2 += s2;
+    }
+
+    let max_val = visible_max.max(1.0) * 1.05;
+    let start_x = pixel_width.saturating_sub(visible_len);
+
+    for i in 0..visible_len {
+        let idx = visible_start + i;
+        let total = series[0][idx] + series[1][idx] + series[2][idx];
+        let bar_height = if max_val > 0.0 {
+            ((total / max_val) * pixel_height as f64).round() as usize
+        } else {
+            0
+        };
+        if bar_height > 0 {
+            let x = start_x + i;
+            let top_y = pixel_height.saturating_sub(bar_height);
+            let bottom_y = pixel_height.saturating_sub(1);
+            canvas.fill_column(x, top_y, bottom_y);
+        }
+    }
+
+    let chart_lines = canvas.render();
+
+    // Compute color bands from average proportions across visible data.
+    let grand_total = sum_s0 + sum_s1 + sum_s2;
+    let (band0_frac, band1_frac) = if grand_total > 0.0 {
+        (sum_s0 / grand_total, (sum_s0 + sum_s1) / grand_total)
+    } else {
+        (0.33, 0.66)
+    };
+
+    let mut rows = Vec::with_capacity(char_height);
+    for (i, chart_line) in chart_lines.iter().enumerate() {
+        // position 0.0 = top, 1.0 = bottom; bands are bottom-up: s0 at bottom
+        let position = 1.0 - (i as f64 / (char_height.max(1) - 1).max(1) as f64);
+        let color = if position < band0_frac {
+            colors[0] // bottom band (series 0)
+        } else if position < band1_frac {
+            colors[1] // middle band (series 1)
+        } else {
+            colors[2] // top band (series 2)
+        };
+
+        let y_label = if i == 0 {
+            format!("{:>5}│", format_axis_value(max_val))
+        } else if i == char_height / 2 {
+            format!("{:>5}│", format_axis_value(max_val / 2.0))
+        } else if i == char_height - 1 {
+            format!("{:>5}│", "0")
+        } else {
+            "     │".to_string()
+        };
+
+        let content = format!("{}{}", y_label, chart_line);
+        rows.push(ChartRow { content, color });
+    }
+
+    BarChartResult { rows }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,6 +394,42 @@ mod tests {
             Color::Rgb(r, _, _) => assert_eq!(r, 0),
             _ => panic!("Expected RGB color"),
         }
+    }
+
+    #[test]
+    fn test_stacked_bar_chart() {
+        let mut s0 = VecDeque::new();
+        let mut s1 = VecDeque::new();
+        let mut s2 = VecDeque::new();
+        for i in 0..50 {
+            s0.push_back((i as f64) * 5.0 + 100.0); // build: dominant
+            s1.push_back((i as f64) * 0.5 + 10.0); // fetch_wait: small
+            s2.push_back((i as f64) * 0.2 + 5.0); // flush_wait: smallest
+        }
+        let colors = [
+            Color::Rgb(0, 255, 65),
+            Color::Rgb(255, 176, 0),
+            Color::Rgb(255, 80, 80),
+        ];
+        let result = render_stacked_bar_chart([&s0, &s1, &s2], colors, 40, 6);
+        assert_eq!(result.rows.len(), 6);
+        assert!(result.rows[0].content.len() >= 40);
+        // Bottom rows should be green (build dominates ~85%)
+        assert_eq!(result.rows[5].color, colors[0]);
+    }
+
+    #[test]
+    fn test_stacked_bar_chart_empty() {
+        let s0 = VecDeque::new();
+        let s1 = VecDeque::new();
+        let s2 = VecDeque::new();
+        let colors = [
+            Color::Rgb(0, 255, 65),
+            Color::Rgb(255, 176, 0),
+            Color::Rgb(255, 80, 80),
+        ];
+        let result = render_stacked_bar_chart([&s0, &s1, &s2], colors, 40, 6);
+        assert_eq!(result.rows.len(), 6);
     }
 
     #[test]

@@ -11,7 +11,7 @@ use ratatui::{
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use crate::chart::{render_bar_chart, ChartStats};
+use crate::chart::{render_bar_chart, render_stacked_bar_chart, ChartStats};
 use crate::db::{
     ApiServiceInfo, ChainInfoData, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData,
     SyncStatusRow, TuiDb,
@@ -122,9 +122,9 @@ pub struct App {
     write_stage_history: VecDeque<f64>,
     bulk_build_ms_history: VecDeque<f64>,
     bulk_fetch_ms_history: VecDeque<f64>,
-    fetch_overlap_history: VecDeque<f64>,
-    flush_overlap_history: VecDeque<f64>,
-    idle_ratio_history: VecDeque<f64>,
+    build_cpu_ms_history: VecDeque<f64>,
+    fetch_wait_ms_history: VecDeque<f64>,
+    flush_wait_ms_history: VecDeque<f64>,
     l0_files_history: VecDeque<f64>,
     last_overlap_batch_count: u64,
     show_build_subphases: bool,
@@ -192,9 +192,9 @@ impl App {
             write_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             bulk_build_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             bulk_fetch_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
-            fetch_overlap_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
-            flush_overlap_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
-            idle_ratio_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            build_cpu_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            fetch_wait_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            flush_wait_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             l0_files_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             last_overlap_batch_count: 0,
             show_build_subphases: false,
@@ -424,7 +424,7 @@ impl App {
         push_history_sample(&mut self.bulk_build_ms_history, bulk_build_ms);
         push_history_sample(&mut self.bulk_fetch_ms_history, bulk_fetch_ms);
 
-        // Sample overlap ratios (deduped per batch).
+        // Sample iteration budget (deduped per batch).
         if let Some(bb) = self
             .sync_status
             .as_ref()
@@ -432,32 +432,13 @@ impl App {
         {
             let batch_count = bb.batch_count.unwrap_or(0);
             if batch_count > 0 && batch_count != self.last_overlap_batch_count {
-                let fetch_ms = bb.fetch_ms.unwrap_or(0.0);
-                let prefetch_collect_ms = bb.prefetch_collect_ms.unwrap_or(0.0);
-                let flush_ms = bb.flush_ms.unwrap_or(0.0);
-                let flush_wait_ms = bb.flush_wait_ms.unwrap_or(0.0);
                 let build_ms = bb.build_ms.unwrap_or(0.0);
+                let prefetch_collect_ms = bb.prefetch_collect_ms.unwrap_or(0.0);
+                let flush_wait_ms = bb.flush_wait_ms.unwrap_or(0.0);
 
-                let fetch_overlap = if fetch_ms > 0.0 {
-                    (1.0 - prefetch_collect_ms / fetch_ms).clamp(0.0, 1.0)
-                } else {
-                    1.0
-                };
-                let flush_overlap = if flush_ms > 0.0 {
-                    (1.0 - flush_wait_ms / flush_ms).clamp(0.0, 1.0)
-                } else {
-                    1.0
-                };
-                let iteration_ms = build_ms + prefetch_collect_ms + flush_wait_ms;
-                let idle_ratio = if iteration_ms > 0.0 {
-                    (prefetch_collect_ms + flush_wait_ms) / iteration_ms
-                } else {
-                    0.0
-                };
-
-                push_history_sample(&mut self.fetch_overlap_history, fetch_overlap);
-                push_history_sample(&mut self.flush_overlap_history, flush_overlap);
-                push_history_sample(&mut self.idle_ratio_history, idle_ratio);
+                push_history_sample(&mut self.build_cpu_ms_history, build_ms);
+                push_history_sample(&mut self.fetch_wait_ms_history, prefetch_collect_ms);
+                push_history_sample(&mut self.flush_wait_ms_history, flush_wait_ms);
                 self.last_overlap_batch_count = batch_count;
             }
         }
@@ -1383,7 +1364,7 @@ fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
                 sync_chart_data(app, chart_a_kind),
             );
             if is_bulk_build {
-                draw_overlap_chart_panel(f, cols[1], app);
+                draw_iteration_budget_panel(f, cols[1], app);
             } else {
                 draw_chart_panel(
                     f,
@@ -1411,7 +1392,14 @@ fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
                 sync_chart_data(app, chart_a_kind),
             );
             if is_bulk_build {
-                draw_overlap_chart_panel(f, cols[1], app);
+                draw_chart_panel(
+                    f,
+                    cols[1],
+                    "Storage Pressure (L0)",
+                    "files",
+                    sync_chart_data(app, SyncChartKind::StoragePressure),
+                );
+                draw_iteration_budget_panel(f, cols[2], app);
             } else {
                 draw_chart_panel(
                     f,
@@ -1420,14 +1408,14 @@ fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
                     "ms",
                     sync_chart_data(app, SyncChartKind::WriteLatency),
                 );
+                draw_chart_panel(
+                    f,
+                    cols[2],
+                    "Storage Pressure (L0)",
+                    "files",
+                    sync_chart_data(app, SyncChartKind::StoragePressure),
+                );
             }
-            draw_chart_panel(
-                f,
-                cols[2],
-                "Storage Pressure (L0)",
-                "files",
-                sync_chart_data(app, SyncChartKind::StoragePressure),
-            );
         }
     }
 }
@@ -1520,14 +1508,18 @@ fn draw_chart_panel(f: &mut Frame, area: Rect, title: &str, unit: &str, data: &V
     );
 }
 
-/// Renders a pipeline overlap chart showing fetch overlap % as the primary series.
-/// Stats line shows both fetch and flush current + average values.
-fn draw_overlap_chart_panel(f: &mut Frame, area: Rect, app: &App) {
+const BUDGET_BUILD_COLOR: Color = TERMINAL_GREEN;
+const BUDGET_FETCH_WAIT_COLOR: Color = AMBER;
+const BUDGET_FLUSH_WAIT_COLOR: Color = Color::Rgb(255, 80, 80);
+
+/// Renders an iteration budget chart showing build_ms / fetch_wait / flush_wait
+/// as a stacked bar chart. Color bands show where iteration time goes.
+fn draw_iteration_budget_panel(f: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(SLATE_800))
         .title(Span::styled(
-            "Pipeline Overlap (%)",
+            "Iteration Budget (ms)",
             Style::default().fg(FOREGROUND),
         ));
     let inner = block.inner(area);
@@ -1550,59 +1542,52 @@ fn draw_overlap_chart_panel(f: &mut Frame, area: Rect, app: &App) {
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(inner);
 
-    // Stats line: both series
-    let fetch_cur = app.fetch_overlap_history.back().copied().unwrap_or(1.0);
-    let flush_cur = app.flush_overlap_history.back().copied().unwrap_or(1.0);
-    let fetch_avg = if app.fetch_overlap_history.is_empty() {
-        1.0
-    } else {
-        app.fetch_overlap_history.iter().sum::<f64>() / app.fetch_overlap_history.len() as f64
-    };
-    let flush_avg = if app.flush_overlap_history.is_empty() {
-        1.0
-    } else {
-        app.flush_overlap_history.iter().sum::<f64>() / app.flush_overlap_history.len() as f64
-    };
+    // Stats line: current values for each component
+    let build_cur = app.build_cpu_ms_history.back().copied().unwrap_or(0.0);
+    let fetch_wait_cur = app.fetch_wait_ms_history.back().copied().unwrap_or(0.0);
+    let flush_wait_cur = app.flush_wait_ms_history.back().copied().unwrap_or(0.0);
+
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("fetch ", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled("build ", Style::default().fg(BUDGET_BUILD_COLOR)),
             Span::styled(
-                format!("{:.0}%", fetch_cur * 100.0),
-                Style::default().fg(TERMINAL_GREEN),
+                format!("{:.0}", build_cur),
+                Style::default().fg(BUDGET_BUILD_COLOR),
             ),
+            Span::styled(" fetch ", Style::default().fg(BUDGET_FETCH_WAIT_COLOR)),
             Span::styled(
-                format!(" avg {:.0}%", fetch_avg * 100.0),
-                Style::default().fg(TERMINAL_DIM),
+                format!("{:.0}", fetch_wait_cur),
+                Style::default().fg(BUDGET_FETCH_WAIT_COLOR),
             ),
-            Span::styled(" | flush ", Style::default().fg(CYAN)),
+            Span::styled(" flush ", Style::default().fg(BUDGET_FLUSH_WAIT_COLOR)),
             Span::styled(
-                format!("{:.0}%", flush_cur * 100.0),
-                Style::default().fg(CYAN),
-            ),
-            Span::styled(
-                format!(" avg {:.0}%", flush_avg * 100.0),
-                Style::default().fg(TERMINAL_DIM),
+                format!("{:.0}", flush_wait_cur),
+                Style::default().fg(BUDGET_FLUSH_WAIT_COLOR),
             ),
         ])),
         rows[0],
     );
 
-    // Chart: render fetch overlap as main series using existing bar chart
+    // Stacked bar chart: build (bottom/green) + fetch_wait (mid/amber) + flush_wait (top/red)
     if rows[1].height > 0 && rows[1].width > 0 {
-        let chart_result = render_bar_chart(
-            &app.fetch_overlap_history,
+        let chart_result = render_stacked_bar_chart(
+            [
+                &app.build_cpu_ms_history,
+                &app.fetch_wait_ms_history,
+                &app.flush_wait_ms_history,
+            ],
+            [
+                BUDGET_BUILD_COLOR,
+                BUDGET_FETCH_WAIT_COLOR,
+                BUDGET_FLUSH_WAIT_COLOR,
+            ],
             rows[1].width as usize,
             rows[1].height as usize,
         );
         let chart_lines: Vec<Line> = chart_result
             .rows
             .into_iter()
-            .map(|row| {
-                Line::from(Span::styled(
-                    row.content,
-                    Style::default().fg(TERMINAL_GREEN),
-                ))
-            })
+            .map(|row| Line::from(Span::styled(row.content, Style::default().fg(row.color))))
             .collect();
         f.render_widget(
             Paragraph::new(chart_lines).wrap(Wrap { trim: false }),
@@ -2121,12 +2106,13 @@ fn io_fetch_write_jitter_line(
     ])
 }
 
-/// Build a single overlap sparkline line for the diagnostics right column.
-fn overlap_sparkline_line(
+/// Build a single budget sparkline line for the diagnostics right column.
+/// Shows ms values with auto-scaled sparkline bars.
+fn budget_sparkline_line(
     label: &str,
     history: &VecDeque<f64>,
     spark_width: usize,
-    inverted: bool,
+    color: Color,
 ) -> Line<'static> {
     let sparkline_chars: [char; 8] = [
         '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}', '\u{2587}',
@@ -2157,52 +2143,27 @@ fn overlap_sparkline_line(
         spans.push(Span::raw(" ".repeat(pad)));
     }
 
+    // Auto-scale sparkline to visible max
+    let vis_max = visible.iter().fold(0.0_f64, |m, &v| m.max(v)).max(1.0);
+
     // Sparkline chars
     for &val in &visible {
-        let idx = ((val * 7.0).round() as usize).min(7);
+        let normalized = (val / vis_max).clamp(0.0, 1.0);
+        let idx = ((normalized * 7.0).round() as usize).min(7);
         let ch = sparkline_chars[idx];
-        let color = if inverted {
-            if val < 0.2 {
-                TERMINAL_GREEN
-            } else if val < 0.5 {
-                AMBER
-            } else {
-                ERROR_RED
-            }
-        } else if val > 0.8 {
-            TERMINAL_GREEN
-        } else if val > 0.5 {
-            AMBER
-        } else {
-            ERROR_RED
-        };
         spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
     }
 
-    // Stats
-    let current = visible
-        .last()
-        .copied()
-        .unwrap_or(if inverted { 0.0 } else { 1.0 });
+    // Stats: current ms + avg ms
+    let current = visible.last().copied().unwrap_or(0.0);
     let avg = if visible.is_empty() {
         0.0
     } else {
         visible.iter().sum::<f64>() / visible.len() as f64
     };
-    let stats_color = if inverted {
-        if current < 0.2 {
-            TERMINAL_GREEN
-        } else {
-            AMBER
-        }
-    } else if current > 0.8 {
-        TERMINAL_GREEN
-    } else {
-        AMBER
-    };
     spans.push(Span::styled(
-        format!(" {:>3.0}% {:>3.0}%", current * 100.0, avg * 100.0),
-        Style::default().fg(stats_color),
+        format!(" {:.0} {:.0}ms", current, avg),
+        Style::default().fg(color),
     ));
 
     Line::from(spans)
@@ -2406,25 +2367,25 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
         }
     }
 
-    // -- Overlap sparklines --
+    // -- Budget sparklines --
     let spark_width = (area.width as usize).saturating_sub(20).clamp(4, 30);
-    lines.push(overlap_sparkline_line(
+    lines.push(budget_sparkline_line(
+        "Build",
+        &app.build_cpu_ms_history,
+        spark_width,
+        BUDGET_BUILD_COLOR,
+    ));
+    lines.push(budget_sparkline_line(
         "Fetch",
-        &app.fetch_overlap_history,
+        &app.fetch_wait_ms_history,
         spark_width,
-        false,
+        BUDGET_FETCH_WAIT_COLOR,
     ));
-    lines.push(overlap_sparkline_line(
+    lines.push(budget_sparkline_line(
         "Flush",
-        &app.flush_overlap_history,
+        &app.flush_wait_ms_history,
         spark_width,
-        false,
-    ));
-    lines.push(overlap_sparkline_line(
-        "Idle",
-        &app.idle_ratio_history,
-        spark_width,
-        true,
+        BUDGET_FLUSH_WAIT_COLOR,
     ));
 
     f.render_widget(Paragraph::new(lines), area);
@@ -6155,45 +6116,14 @@ mod tests {
     }
 
     #[test]
-    fn test_overlap_ratio_fully_hidden() {
-        let fetch_ms = 200.0_f64;
-        let prefetch_collect_ms = 0.0_f64;
-        let fetch_overlap = (1.0 - prefetch_collect_ms / fetch_ms).clamp(0.0, 1.0);
-        assert!((fetch_overlap - 1.0).abs() < f64::EPSILON);
-
-        let flush_ms = 50.0_f64;
-        let flush_wait_ms = 0.0_f64;
-        let flush_overlap = (1.0 - flush_wait_ms / flush_ms).clamp(0.0, 1.0);
-        assert!((flush_overlap - 1.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn test_overlap_ratio_partially_hidden() {
-        let fetch_ms = 200.0_f64;
-        let prefetch_collect_ms = 50.0_f64;
-        let fetch_overlap = (1.0 - prefetch_collect_ms / fetch_ms).clamp(0.0, 1.0);
-        assert!((fetch_overlap - 0.75).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_overlap_ratio_zero_duration() {
-        let fetch_ms = 0.0_f64;
-        let fetch_overlap = if fetch_ms > 0.0 {
-            (1.0 - 0.0 / fetch_ms).clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-        assert!((fetch_overlap - 1.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn test_idle_ratio() {
+    fn test_iteration_budget_components() {
+        // Iteration budget: build dominates, wait times are small fractions.
         let build_ms = 3000.0_f64;
         let prefetch_collect_ms = 50.0_f64;
         let flush_wait_ms = 100.0_f64;
-        let iteration_ms = build_ms + prefetch_collect_ms + flush_wait_ms;
-        let idle_ratio = (prefetch_collect_ms + flush_wait_ms) / iteration_ms;
-        assert!((idle_ratio - 150.0 / 3150.0).abs() < 0.001);
+        let total = build_ms + prefetch_collect_ms + flush_wait_ms;
+        assert!((total - 3150.0).abs() < f64::EPSILON);
+        assert!(build_ms / total > 0.9, "build should dominate");
     }
 
     #[test]
