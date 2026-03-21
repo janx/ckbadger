@@ -437,6 +437,8 @@ impl BulkBuildPerfStats {
                 self.last_activity_stats_us.load(Ordering::Relaxed),
             )),
             flush_ms: Some(us_to_ms(self.last_flush_us.load(Ordering::Relaxed))),
+            flush_wait_ms: None,
+            prefetch_collect_ms: None,
             fetch_ms: Some(us_to_ms(self.last_fetch_us.load(Ordering::Relaxed))),
             build_ms: Some(us_to_ms(self.last_build_us.load(Ordering::Relaxed))),
             owner_memory_bytes: Some(self.owner_memory_bytes.load(Ordering::Relaxed)),
