@@ -617,7 +617,7 @@ describe('AssetsPage', () => {
     await waitFor(() => {
       // Dual-render: text appears in both table and card layouts
       expect(screen.getAllByText('MNFT Without Icon').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('OFFCHAIN DEPENDENT').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Offchain Dependent').length).toBeGreaterThanOrEqual(1);
     });
   });
 

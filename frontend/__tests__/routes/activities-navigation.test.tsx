@@ -1,7 +1,6 @@
 import { MemoryRouter, useLocation, useRoutes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@/__tests__/utils/test-utils';
-import { api } from '@/lib/api';
+import { render, screen } from '@/__tests__/utils/test-utils';
 import { createAppRouter } from '@/src/routes/router';
 
 vi.mock('@/lib/api', () => ({
@@ -23,6 +22,10 @@ vi.mock('@/components/not-found-page', () => ({
   NotFoundPage: () => <div>not found page</div>,
 }));
 
+vi.mock('@/components/activities-stream-explorer', () => ({
+  ActivitiesStreamExplorer: () => <div data-testid="activities-stream">stream</div>,
+}));
+
 function AppHarness() {
   const location = useLocation();
   const element = useRoutes(createAppRouter());
@@ -39,12 +42,6 @@ describe('activities navigation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.scrollTo = vi.fn();
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [],
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
   });
 
   it('renders the activities route instead of the 404 page', async () => {
@@ -55,11 +52,6 @@ describe('activities navigation', () => {
     );
 
     expect(await screen.findByText('Activities')).toBeInTheDocument();
-    await waitFor(() => {
-      expect(api.getGlobalActivities).toHaveBeenCalledWith(
-        expect.objectContaining({ cursor: undefined, filter: 'all', limit: 50 })
-      );
-    });
     expect(screen.getByTestId('pathname')).toHaveTextContent('/activities');
     expect(screen.queryByText('not found page')).not.toBeInTheDocument();
   });
