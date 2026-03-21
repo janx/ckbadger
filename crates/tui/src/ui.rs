@@ -128,6 +128,11 @@ pub struct App {
     write_stage_history: VecDeque<f64>,
     bulk_build_ms_history: VecDeque<f64>,
     bulk_fetch_ms_history: VecDeque<f64>,
+    fetch_overlap_history: VecDeque<f64>,
+    flush_overlap_history: VecDeque<f64>,
+    idle_ratio_history: VecDeque<f64>,
+    last_overlap_batch_count: u64,
+    show_build_subphases: bool,
     log_entries: VecDeque<LogEntry>,
     sync_event_entries: VecDeque<LogEntry>,
     log_scroll: usize,
@@ -192,6 +197,11 @@ impl App {
             write_stage_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             bulk_build_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             bulk_fetch_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            fetch_overlap_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            flush_overlap_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            idle_ratio_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            last_overlap_batch_count: 0,
+            show_build_subphases: false,
             log_entries,
             sync_event_entries,
             log_scroll: 0,
@@ -267,6 +277,10 @@ impl App {
             ),
             Instant::now(),
         ));
+    }
+
+    pub fn toggle_build_subphases(&mut self) {
+        self.show_build_subphases = !self.show_build_subphases;
     }
 
     pub fn scroll_log_up(&mut self) {
@@ -413,6 +427,44 @@ impl App {
             .unwrap_or((0.0, 0.0));
         push_history_sample(&mut self.bulk_build_ms_history, bulk_build_ms);
         push_history_sample(&mut self.bulk_fetch_ms_history, bulk_fetch_ms);
+
+        // Sample overlap ratios (deduped per batch).
+        if let Some(bb) = self
+            .sync_status
+            .as_ref()
+            .and_then(|s| s.bulk_build.as_ref())
+        {
+            let batch_count = bb.batch_count.unwrap_or(0);
+            if batch_count > 0 && batch_count != self.last_overlap_batch_count {
+                let fetch_ms = bb.fetch_ms.unwrap_or(0.0);
+                let prefetch_collect_ms = bb.prefetch_collect_ms.unwrap_or(0.0);
+                let flush_ms = bb.flush_ms.unwrap_or(0.0);
+                let flush_wait_ms = bb.flush_wait_ms.unwrap_or(0.0);
+                let build_ms = bb.build_ms.unwrap_or(0.0);
+
+                let fetch_overlap = if fetch_ms > 0.0 {
+                    (1.0 - prefetch_collect_ms / fetch_ms).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                let flush_overlap = if flush_ms > 0.0 {
+                    (1.0 - flush_wait_ms / flush_ms).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                };
+                let iteration_ms = build_ms + prefetch_collect_ms + flush_wait_ms;
+                let idle_ratio = if iteration_ms > 0.0 {
+                    (prefetch_collect_ms + flush_wait_ms) / iteration_ms
+                } else {
+                    0.0
+                };
+
+                push_history_sample(&mut self.fetch_overlap_history, fetch_overlap);
+                push_history_sample(&mut self.flush_overlap_history, flush_overlap);
+                push_history_sample(&mut self.idle_ratio_history, idle_ratio);
+                self.last_overlap_batch_count = batch_count;
+            }
+        }
 
         let mut block_rate_alerted = false;
         if self.rate_history.len() >= 2 {
