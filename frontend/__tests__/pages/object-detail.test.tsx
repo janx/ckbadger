@@ -278,13 +278,13 @@ describe('SporeDetailPage', () => {
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Decoded Traits')).toBeInTheDocument();
+      expect(screen.getByText('DOB/0 Details')).toBeInTheDocument();
       expect(screen.getAllByText('Background').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Blue').length).toBeGreaterThan(0);
     });
   });
 
-  it('renders text content in preview for text spores', async () => {
+  it('renders payload hex+ASCII viewer for text spores', async () => {
     const encoded = encodeSporeData('text/plain', 'hello from payload text panel');
     vi.mocked(api.getSporeObject).mockResolvedValue({
       ...mockSpore,
@@ -311,20 +311,13 @@ describe('SporeDetailPage', () => {
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
-    // Text content is shown directly in the preview (no separate Payload Text View for text/*)
+    // Payload Data hex+ASCII viewer should appear
     await waitFor(() => {
-      expect(screen.getAllByText('hello from payload text panel').length).toBeGreaterThan(0);
+      expect(screen.getByText(/Payload Data/)).toBeInTheDocument();
     });
 
-    // Verify it renders in a <pre> element in the preview
-    const payloadTextNodes = screen.getAllByText('hello from payload text panel');
-    const payloadPreElements = payloadTextNodes
-      .map((node) => node.closest('pre'))
-      .filter((element): element is HTMLPreElement => element !== null);
-    expect(payloadPreElements.length).toBeGreaterThan(0);
-
-    // Payload Text View should NOT appear for text/* (preview already shows it)
-    expect(screen.queryByText('Payload Text View')).not.toBeInTheDocument();
+    // Should show hex offset column
+    expect(screen.getByText('0x0000:')).toBeInTheDocument();
   });
 
   it('renders cluster metadata from JSON description', async () => {
@@ -349,22 +342,15 @@ describe('SporeDetailPage', () => {
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
+    // Cluster shown as stat card with name and link
     await waitFor(
       () => {
         expect(api.getSporeCluster).toHaveBeenCalledWith('0xcluster');
-        expect(screen.getByText('Metadata-rich cluster')).toBeInTheDocument();
+        expect(screen.getByText('Cluster')).toBeInTheDocument();
+        expect(screen.getByText('Genesis Cluster')).toBeInTheDocument();
       },
-      {
-        timeout: 3000,
-      }
+      { timeout: 3000 }
     );
-
-    // Cluster context is inline in overview panel
-    expect(screen.getByText('Genesis Cluster')).toBeInTheDocument();
-    const versionLabel = screen.getByText('Version');
-    expect(versionLabel).toBeInTheDocument();
-    expect(versionLabel.parentElement?.textContent).toContain('3');
-    expect(screen.getByText('View Raw Cluster Metadata JSON')).toBeInTheDocument();
   });
 
   it('falls back to object collection detail when spore lookup returns 404', async () => {

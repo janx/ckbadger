@@ -1,7 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import Image from '@/components/ui/image';
 import Link from '@/components/ui/link';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
@@ -22,6 +21,7 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { Address } from '@/components/ui/address';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CapacityStatisticsSection } from '@/components/ui/capacity-statistics-section';
+import { CapacityUtilization } from '@/components/ui/capacity-utilization';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { ObjectActivityCard } from '@/components/object/object-activity-card';
@@ -51,7 +51,6 @@ import { formatNumber, truncateHash } from '@/lib/utils';
 import { formatActivityTimestamp, formatStorageTier } from '@/lib/asset-utils';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { decodeDobContent, extractSporePayload } from '@/lib/dob-render';
-import { ClusterDescription } from '@/components/spore/cluster-description';
 type CollectionSectionTab = 'activities' | 'objects' | 'holders';
 function isCollectionSectionTab(value: string | null): value is CollectionSectionTab {
   return value === 'activities' || value === 'objects' || value === 'holders';
@@ -69,6 +68,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const rawAssetId = sporeId;
   const tabFromQuery = searchParams.get('tab');
   const [capacityRange, setCapacityRange] = useState<CapacityRangeKey>('all');
+  const [hoveredByteOffset, setHoveredByteOffset] = useState<number | null>(null);
   const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [collectionStatusSelection, setCollectionStatusSelection] =
@@ -76,7 +76,6 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const [activeCollectionTab, setActiveCollectionTab] = useState<CollectionSectionTab>(() =>
     isCollectionSectionTab(tabFromQuery) ? tabFromQuery : 'activities'
   );
-  const [externalPreviewFailed, setExternalPreviewFailed] = useState(false);
   const collectionItemsPagination = useCursorPagination();
   const collectionHoldersPagination = useCursorPagination();
   const collectionActivitiesPagination = useCursorPagination();
@@ -178,19 +177,11 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     }
     return fallback;
   }, [spore, sporeTxDetail]);
-  const { data: sporeCell, isLoading: isSporeCellLoading } = useQuery({
+  const { data: sporeCell } = useQuery({
     queryKey: ['spore-cell-preview', spore?.txHash, resolvedSporeOutputIndex],
     queryFn: () => api.getCell(spore!.txHash, resolvedSporeOutputIndex!),
     enabled: !!spore?.txHash && resolvedSporeOutputIndex !== null && resolvedSporeOutputIndex >= 0,
     retry: false,
-  });
-  const { data: capacityChart, isLoading: isCapacityChartLoading } = useQuery({
-    queryKey: ['spore-capacity-chart', assetId, capacityRange],
-    queryFn: () =>
-      capacityRangeParams
-        ? api.getSporeObjectCapacityChart(assetId, capacityRangeParams)
-        : api.getSporeObjectCapacityChart(assetId),
-    enabled: !!spore,
   });
   const { data: collectionCapacityChart, isLoading: isCollectionCapacityChartLoading } = useQuery({
     queryKey: ['object-collection-capacity-chart', collectionAssetId, capacityRange],
@@ -284,20 +275,6 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
       }
     });
   };
-  const getContentTypeIcon = (contentType: string) => {
-    if (contentType.startsWith('image/') || contentType.startsWith('ipfs/image')) return '🖼️';
-    if (contentType.startsWith('video/') || contentType.startsWith('ipfs/video')) return '🎬';
-    if (contentType.startsWith('audio/') || contentType.startsWith('ipfs/audio')) return '🎵';
-    if (contentType.startsWith('text/')) return '📄';
-    return '📦';
-  };
-  const shortenHex = (value: string, start: number = 16, end: number = 12) => {
-    const normalized = value.startsWith('0x') ? value : `0x${value}`;
-    if (normalized.length <= start + end + 3) {
-      return normalized;
-    }
-    return `${normalized.slice(0, start)}...${normalized.slice(-end)}`;
-  };
   const sporePayload = useMemo(() => extractSporePayload(sporeCell), [sporeCell]);
   const dobContent = useMemo(() => {
     if (decodedDobByApi) {
@@ -317,71 +294,6 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
       clusterDescription: cluster?.description,
     });
   }, [cluster?.description, decodedDobByApi, spore, sporePayload?.textContent]);
-  const mediaPreviewUrl = useMemo(() => {
-    if (!sporePayload?.contentType || !sporePayload.contentHex) {
-      return null;
-    }
-    const normalized = sporePayload.contentType.toLowerCase();
-    if (
-      !normalized.startsWith('image/') &&
-      !normalized.startsWith('video/') &&
-      !normalized.startsWith('audio/')
-    ) {
-      return null;
-    }
-    const safeBytes = Uint8Array.from(sporePayload.contentBytes);
-    const blob = new Blob([safeBytes.buffer], { type: sporePayload.contentType });
-    return URL.createObjectURL(blob);
-  }, [sporePayload?.contentHex, sporePayload?.contentType, sporePayload?.contentBytes]);
-  useEffect(() => {
-    return () => {
-      if (mediaPreviewUrl) {
-        URL.revokeObjectURL(mediaPreviewUrl);
-      }
-    };
-  }, [mediaPreviewUrl]);
-  const dobSvgDataUrl = useMemo(() => {
-    if (!dobContent?.svgMarkup) {
-      return null;
-    }
-    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(dobContent.svgMarkup)}`;
-  }, [dobContent?.svgMarkup]);
-  const externalImagePreviewUrl = useMemo(() => {
-    const sources = spore?.mediaProfile?.sources ?? [];
-    const firstImageSource = sources.find((source) => {
-      const uri = source.uri.toLowerCase();
-      return (
-        uri.startsWith('https://') ||
-        uri.startsWith('http://') ||
-        uri.startsWith('data:image/') ||
-        uri.startsWith('ipfs://') ||
-        uri.startsWith('ar://') ||
-        uri.endsWith('.png') ||
-        uri.endsWith('.jpg') ||
-        uri.endsWith('.jpeg') ||
-        uri.endsWith('.gif') ||
-        uri.endsWith('.webp') ||
-        uri.endsWith('.svg') ||
-        uri.endsWith('.avif')
-      );
-    });
-    if (!firstImageSource) {
-      return null;
-    }
-    const uri = firstImageSource.uri;
-    if (uri.startsWith('ipfs://')) {
-      const cidPath = uri.replace('ipfs://', '');
-      return `https://ipfs.io/ipfs/${cidPath}`;
-    }
-    if (uri.startsWith('ar://')) {
-      const id = uri.replace('ar://', '');
-      return `https://arweave.net/${id}`;
-    }
-    return uri;
-  }, [spore?.mediaProfile?.sources]);
-  useEffect(() => {
-    setExternalPreviewFailed(false);
-  }, [externalImagePreviewUrl]);
   useEffect(() => {
     if (isMnftCollection && collection) {
       router.replace(`/classes/${collection.collectionId}`);
@@ -890,139 +802,14 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   }
   const resolvedOwnerAddress = spore.ownerAddress || ownerAddressRecord?.address || null;
   const previewContentType = sporePayload?.contentType || spore.contentType;
-  const normalizedPreviewContentType = previewContentType.toLowerCase();
   const previewBytes = sporePayload?.contentBytes.length ?? spore.contentSize;
-  const previewText = sporePayload?.textContent?.trim() ?? '';
-  const previewTextTruncated = previewText.length > 600;
-  const previewTextSnippet = previewTextTruncated ? `${previewText.slice(0, 600)}...` : previewText;
   const hasDecodedTraits = (dobContent?.traits.length ?? 0) > 0;
-  const shouldShowPayloadTextPanel =
-    !!previewTextSnippet &&
-    (normalizedPreviewContentType.startsWith('text/') ||
-      normalizedPreviewContentType.includes('json') ||
-      normalizedPreviewContentType.startsWith('dob/'));
+  const shouldShowPayloadHexPanel = !!sporePayload?.contentHex;
   const sporeOutputIndex =
     resolvedSporeOutputIndex !== null && resolvedSporeOutputIndex >= 0
       ? resolvedSporeOutputIndex
       : spore.outputIndex;
   const hasCellLink = Number.isInteger(sporeOutputIndex);
-  const renderPipeline = dobSvgDataUrl
-    ? 'DOB decoder generated SVG preview from cluster metadata and DNA bytes.'
-    : mediaPreviewUrl
-      ? 'Bytes were decoded into a media blob using the on-chain contentType.'
-      : externalImagePreviewUrl && !externalPreviewFailed
-        ? 'Resolved an image URI from media metadata and rendered via direct fetch.'
-        : previewTextSnippet
-          ? 'Bytes were decoded as UTF-8 text for direct inspection.'
-          : 'Payload is shown as a generic binary asset because no richer decoder matched.';
-  const renderSporePreview = () => {
-    if (isSporeCellLoading) {
-      return (
-        <div className="text-text-dim flex h-64 items-center justify-center px-4 text-center font-mono text-xs">
-          Loading on-chain payload...
-        </div>
-      );
-    }
-    if (dobSvgDataUrl) {
-      return (
-        <div className="bg-base-bg/60 h-64 p-3">
-          <div className="relative h-full w-full">
-            <Image
-              src={dobSvgDataUrl}
-              alt="DOB rendered preview"
-              fill
-              unoptimized
-              sizes="(max-width: 768px) 100vw, 50vw"
-              className="border-base-border rounded border object-contain"
-            />
-          </div>
-        </div>
-      );
-    }
-    if (mediaPreviewUrl && previewContentType.startsWith('image/')) {
-      return (
-        <div className="bg-base-bg/60 h-64 p-3">
-          <div className="relative h-full w-full">
-            <Image
-              src={mediaPreviewUrl}
-              alt="Spore content preview"
-              fill
-              unoptimized
-              sizes="(max-width: 768px) 100vw, 50vw"
-              className="border-base-border rounded border object-contain"
-            />
-          </div>
-        </div>
-      );
-    }
-    if (externalImagePreviewUrl && !externalPreviewFailed) {
-      return (
-        <div className="bg-base-bg/60 h-64 p-3">
-          <div className="relative h-full w-full">
-            <Image
-              src={externalImagePreviewUrl}
-              alt="Spore external media preview"
-              fill
-              unoptimized
-              sizes="(max-width: 768px) 100vw, 50vw"
-              className="border-base-border rounded border object-contain"
-              onError={() => setExternalPreviewFailed(true)}
-            />
-          </div>
-        </div>
-      );
-    }
-    if (mediaPreviewUrl && previewContentType.startsWith('video/')) {
-      return (
-        <div className="bg-base-bg/60 h-64 p-3">
-          <video
-            src={mediaPreviewUrl}
-            controls
-            className="border-base-border h-full w-full rounded border"
-          />
-        </div>
-      );
-    }
-    if (mediaPreviewUrl && previewContentType.startsWith('audio/')) {
-      return (
-        <div className="bg-base-bg/60 flex h-64 flex-col items-center justify-center gap-3 p-3">
-          <div className="text-text-dim font-mono text-xs tracking-[0.2em]">AUDIO</div>
-          <audio src={mediaPreviewUrl} controls className="w-full max-w-xs" />
-        </div>
-      );
-    }
-    if (dobContent?.traits.length) {
-      return (
-        <div className="bg-base-bg/60 h-64 overflow-y-auto p-3">
-          <div className="space-y-2 font-mono text-xs">
-            {dobContent.traits.map((trait) => (
-              <div
-                key={`${trait.name}-${trait.value}`}
-                className="border-base-border bg-base-surface/70 rounded border p-2"
-              >
-                <div className="text-text-dim">{trait.name}</div>
-                <div className="text-text-bright break-all">{trait.value}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      );
-    }
-    if (previewTextSnippet) {
-      return (
-        <div className="bg-base-bg/60 h-64 overflow-y-auto p-3">
-          <pre className="text-text-bright max-w-full whitespace-pre-wrap break-all font-mono text-xs">
-            {previewTextSnippet}
-          </pre>
-        </div>
-      );
-    }
-    return (
-      <div className="bg-base-bg/60 flex h-64 items-center justify-center text-6xl">
-        {getContentTypeIcon(previewContentType)}
-      </div>
-    );
-  };
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -1040,62 +827,58 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
         <TerminalPanel className="mb-6">
           <TerminalPanelHeader indicator="active">Spore Overview</TerminalPanelHeader>
           <TerminalPanelContent>
-            {/* Hero layout: preview + identity */}
-            <div className="flex flex-col gap-6 lg:flex-row">
-              {/* Preview — larger, hero-style */}
-              <div className="w-full shrink-0 lg:w-80">
-                <div className="border-base-border overflow-hidden rounded border">
-                  {renderSporePreview()}
-                </div>
+            {/* Identity section */}
+            <div>
+              {/* Name + badge */}
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-text-bright font-mono text-2xl font-bold">
+                  {cluster?.name
+                    ? `${cluster.name} (${truncateHash(spore.sporeId, 6, 4)})`
+                    : `Spore Asset (${truncateHash(spore.sporeId, 6, 4)})`}
+                </h1>
+                {spore.isLive ? (
+                  <Badge variant="green">Live</Badge>
+                ) : (
+                  <Badge variant="red">Burned</Badge>
+                )}
               </div>
 
-              {/* Identity section */}
-              <div className="min-w-0 flex-1">
-                {/* Name + badge */}
-                <div className="flex flex-wrap items-center gap-3">
-                  <h1 className="text-text-bright font-mono text-2xl font-bold">
-                    {cluster?.name
-                      ? `${cluster.name} (${truncateHash(spore.sporeId, 6, 4)})`
-                      : `Spore Asset (${truncateHash(spore.sporeId, 6, 4)})`}
-                  </h1>
-                  {spore.isLive ? (
-                    <Badge variant="green">Live</Badge>
-                  ) : (
-                    <Badge variant="red">Burned</Badge>
-                  )}
-                </div>
+              {/* Spore ID */}
+              <div className="mt-3 flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                <span className="text-text-dim text-xs uppercase tracking-wider">spore id</span>
+                <HexDisplay value={spore.sporeId} truncate={false} size="sm" />
+              </div>
 
-                {/* Spore ID */}
-                <div className="mt-3 flex flex-wrap items-baseline gap-2 font-mono text-sm">
-                  <span className="text-text-dim text-xs uppercase tracking-wider">spore id</span>
-                  <HexDisplay value={spore.sporeId} truncate={false} size="sm" />
-                </div>
-
-                {/* Owner */}
+              {/* Cell */}
+              {hasCellLink && (
                 <div className="mt-1.5 flex flex-wrap items-baseline gap-2 font-mono text-sm">
-                  <span className="text-text-dim text-xs uppercase tracking-wider">owner</span>
-                  {resolvedOwnerAddress ? (
-                    <Address address={resolvedOwnerAddress} truncate={false} />
-                  ) : (
-                    <span className="text-text-dim">unavailable</span>
-                  )}
-                </div>
-
-                {/* Owner Lock Hash */}
-                <div className="mt-1.5 flex flex-wrap items-baseline gap-2 font-mono text-sm">
-                  <span className="text-text-dim text-xs uppercase tracking-wider">lock hash</span>
-                  <Link href={`/address/${spore.ownerLockHash}`} className="hover:underline">
-                    <HexDisplay
-                      value={spore.ownerLockHash}
-                      size="sm"
-                      startChars={14}
-                      endChars={10}
-                    />
+                  <span className="text-text-dim text-xs uppercase tracking-wider">cell</span>
+                  <Link
+                    href={`/cell/${spore.txHash}-${sporeOutputIndex}`}
+                    className="hover:underline"
+                  >
+                    <HexDisplay value={spore.txHash} size="sm" startChars={14} endChars={10} />
+                    <span className="text-text-dim">-{sporeOutputIndex}</span>
                   </Link>
                 </div>
+              )}
 
-                {/* Rendering pipeline */}
-                <div className="text-text-dim mt-3 text-xs">{renderPipeline}</div>
+              {/* Owner */}
+              <div className="mt-1.5 flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                <span className="text-text-dim text-xs uppercase tracking-wider">owner</span>
+                {resolvedOwnerAddress ? (
+                  <Address address={resolvedOwnerAddress} truncate={false} />
+                ) : (
+                  <span className="text-text-dim">unavailable</span>
+                )}
+              </div>
+
+              {/* Owner Lock Hash */}
+              <div className="mt-1.5 flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                <span className="text-text-dim text-xs uppercase tracking-wider">lock hash</span>
+                <Link href={`/address/${spore.ownerLockHash}`} className="hover:underline">
+                  <HexDisplay value={spore.ownerLockHash} size="sm" startChars={14} endChars={10} />
+                </Link>
               </div>
             </div>
 
@@ -1127,6 +910,24 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                   );
                 })()}
 
+              {/* Cluster card */}
+              {cluster && (
+                <div className="border-base-border rounded border p-3">
+                  <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+                    Cluster
+                  </div>
+                  <Link
+                    href={`/clusters/${cluster.clusterId}`}
+                    className="text-text-bright font-mono text-sm font-semibold hover:underline"
+                  >
+                    {cluster.name || 'Unnamed'}
+                  </Link>
+                  <div className="text-text-dim font-mono text-xs">
+                    {formatNumber(cluster.sporesCount)} spores
+                  </div>
+                </div>
+              )}
+
               {/* Content card */}
               <div className="border-base-border rounded border p-3">
                 <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
@@ -1138,23 +939,6 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                 <div className="text-text-dim font-mono text-xs">
                   {formatNumber(previewBytes)} bytes
                 </div>
-              </div>
-
-              {/* Origin Cell card */}
-              <div className="border-base-border rounded border p-3">
-                <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
-                  Origin Cell
-                </div>
-                {hasCellLink ? (
-                  <Link
-                    href={`/cell/${spore.txHash}-${sporeOutputIndex}`}
-                    className="text-text-bright font-mono text-sm font-semibold hover:underline"
-                  >
-                    <HexDisplay value={spore.txHash} size="sm" />-{sporeOutputIndex}
-                  </Link>
-                ) : (
-                  <span className="text-text-dim font-mono text-sm">Unavailable</span>
-                )}
               </div>
 
               {/* Created card */}
@@ -1171,51 +955,33 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               </div>
             </div>
 
-            {/* DOB DNA (inline in overview) */}
-            {dobContent?.dnaHex && (
-              <div className="border-info/30 bg-info/10 mt-3 rounded border px-3 py-2">
-                <div className="text-info font-mono text-[10px] uppercase tracking-wider">
-                  DOB DNA
-                </div>
-                <div className="text-info-dim mt-1 font-mono text-xs">
-                  {shortenHex(dobContent.dnaHex, 18, 14)}
-                </div>
-              </div>
-            )}
-
-            {/* Cluster context */}
-            {cluster && (
-              <div className="border-base-border mt-3 border-t pt-3">
-                <div className="flex flex-wrap items-baseline gap-2 font-mono text-sm">
-                  <span className="text-text-dim text-xs uppercase tracking-wider">cluster</span>
-                  <Link
-                    href={`/clusters/${cluster.clusterId}`}
-                    className="text-emphasis hover:underline"
-                  >
-                    {cluster.name || 'Unnamed Collection'}
-                  </Link>
-                  <span className="text-text-dim text-xs">
-                    ({formatNumber(cluster.sporesCount)} spores)
-                  </span>
-                </div>
-                {cluster.description && (
-                  <div className="mt-2">
-                    <ClusterDescription description={cluster.description} />
-                  </div>
-                )}
-              </div>
-            )}
+            {/* Owned Capacity bar */}
+            <CapacityUtilization
+              totalCapacity={spore.ownedCapacity ?? '0'}
+              commonKnowledgeSize={spore.ownedKnowledge ?? '0'}
+              totalLabel="Owned Capacity"
+              className="mt-4"
+            />
           </TerminalPanelContent>
         </TerminalPanel>
 
-        {/* Decoded Traits */}
+        {/* DOB Details */}
         {hasDecodedTraits && (
           <TerminalPanel className="mb-6">
-            <TerminalPanelHeader indicator="active">Decoded Traits</TerminalPanelHeader>
+            <TerminalPanelHeader indicator="active">
+              {previewContentType.toUpperCase()} Details
+            </TerminalPanelHeader>
             <TerminalPanelContent>
-              <div className="text-text-dim mb-3 text-sm">
-                Traits derived from DOB metadata and on-chain DNA bytes.
-              </div>
+              {dobContent?.dnaHex && (
+                <div className="border-info/30 bg-info/10 mb-3 rounded border px-3 py-2">
+                  <div className="text-info font-mono text-[10px] uppercase tracking-wider">
+                    DNA
+                  </div>
+                  <div className="text-info-dim mt-1 break-all font-mono text-xs">
+                    {dobContent.dnaHex}
+                  </div>
+                </div>
+              )}
               <div className="grid gap-2 sm:grid-cols-2">
                 {dobContent!.traits.map((trait) => (
                   <div
@@ -1235,19 +1001,145 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
           </TerminalPanel>
         )}
 
-        {/* Payload Text View */}
-        {shouldShowPayloadTextPanel && (
+        {/* Spore Content */}
+        {sporePayload && (
           <TerminalPanel className="mb-6">
-            <TerminalPanelHeader indicator="active">Payload Text View</TerminalPanelHeader>
+            <TerminalPanelHeader indicator="active">Spore Content</TerminalPanelHeader>
             <TerminalPanelContent>
-              <pre className="border-base-border bg-base-bg/40 text-text-bright max-h-80 max-w-full overflow-x-auto overflow-y-auto whitespace-pre-wrap break-all rounded border p-3 font-mono text-xs">
-                {previewTextSnippet}
-              </pre>
-              {previewTextTruncated && (
-                <div className="text-text-dim mt-2 text-xs">
-                  Showing first 600 characters from on-chain payload text.
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
+                  <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                    Content Type
+                  </div>
+                  <div className="text-text-bright mt-1 break-all font-mono text-xs">
+                    {sporePayload.contentType}
+                  </div>
                 </div>
-              )}
+                <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
+                  <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                    Content Size
+                  </div>
+                  <div className="text-text-bright mt-1 font-mono text-xs">
+                    {formatNumber(sporePayload.contentBytes.length)} bytes
+                  </div>
+                </div>
+                {spore.clusterId && (
+                  <div className="border-base-border bg-base-surface/50 rounded border p-2.5 sm:col-span-2">
+                    <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                      Cluster ID
+                    </div>
+                    <div className="mt-1">
+                      <Link
+                        href={`/clusters/${spore.clusterId}`}
+                        className="text-text-bright font-mono text-xs hover:underline"
+                      >
+                        <HexDisplay value={spore.clusterId} truncate={false} size="sm" />
+                      </Link>
+                    </div>
+                  </div>
+                )}
+                {sporePayload.textContent && (
+                  <div className="border-base-border bg-base-surface/50 rounded border p-2.5 sm:col-span-2">
+                    <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                      Content (Text)
+                    </div>
+                    <pre className="text-text-bright mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">
+                      {sporePayload.textContent.length > 600
+                        ? `${sporePayload.textContent.slice(0, 600)}...`
+                        : sporePayload.textContent}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </TerminalPanelContent>
+          </TerminalPanel>
+        )}
+
+        {/* Payload Hex View */}
+        {shouldShowPayloadHexPanel && (
+          <TerminalPanel className="mb-6">
+            <TerminalPanelHeader indicator="active">
+              Payload Data ({formatNumber(sporePayload!.contentBytes.length)} bytes)
+            </TerminalPanelHeader>
+            <TerminalPanelContent>
+              <div className="border-base-border bg-base-bg overflow-x-auto rounded-md border p-4 font-mono text-xs">
+                <div className="min-w-max" onMouseLeave={() => setHoveredByteOffset(null)}>
+                  {(() => {
+                    const hex = sporePayload!.contentHex;
+                    const bytes = sporePayload!.contentBytes;
+                    const BYTES_PER_ROW = 16;
+                    const MAX_BYTES = 512;
+                    const totalBytes = bytes.length;
+                    const displayBytes = Math.min(totalBytes, MAX_BYTES);
+                    const rows = [];
+                    for (let r = 0; r < displayBytes; r += BYTES_PER_ROW) {
+                      const end = Math.min(r + BYTES_PER_ROW, displayBytes);
+                      const rowBytes: { hex: string; ascii: string; offset: number }[] = [];
+                      for (let i = r; i < end; i++) {
+                        const h = hex.slice(i * 2, i * 2 + 2);
+                        const code = bytes[i];
+                        const ch = code >= 32 && code <= 126 ? String.fromCharCode(code) : '.';
+                        rowBytes.push({ hex: h, ascii: ch, offset: i });
+                      }
+                      rows.push({ offset: r, bytes: rowBytes });
+                    }
+                    return (
+                      <>
+                        {rows.map((row) => {
+                          const padCount = BYTES_PER_ROW - row.bytes.length;
+                          return (
+                            <div key={row.offset} className="hover:bg-base-elevated/50 flex py-0.5">
+                              <span className="text-text-dim mr-4 select-none">
+                                0x{row.offset.toString(16).padStart(4, '0')}:
+                              </span>
+                              <div className="text-emphasis-dim mr-6 flex gap-1.5">
+                                {row.bytes.map((b) => (
+                                  <span
+                                    key={b.offset}
+                                    className={
+                                      hoveredByteOffset === b.offset
+                                        ? 'bg-emphasis/25 text-emphasis ring-emphasis/70 rounded ring-1'
+                                        : 'bg-base-elevated/70 text-text rounded'
+                                    }
+                                    onMouseEnter={() => setHoveredByteOffset(b.offset)}
+                                  >
+                                    {b.hex}
+                                  </span>
+                                ))}
+                                {Array.from({ length: padCount }).map((_, i) => (
+                                  <span key={`pad-${i}`} className="opacity-0">
+                                    00
+                                  </span>
+                                ))}
+                              </div>
+                              <div className="border-base-border text-text-dim border-l pl-4">
+                                {row.bytes.map((b) => (
+                                  <span
+                                    key={`a-${b.offset}`}
+                                    className={`inline-flex w-2.5 justify-center ${
+                                      hoveredByteOffset === b.offset
+                                        ? 'bg-emphasis/20 text-emphasis rounded-sm'
+                                        : ''
+                                    }`}
+                                    onMouseEnter={() => setHoveredByteOffset(b.offset)}
+                                  >
+                                    {b.ascii}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {totalBytes > MAX_BYTES && (
+                          <div className="text-text-dim mt-2 select-none italic">
+                            ... {(totalBytes - MAX_BYTES).toLocaleString()} more bytes
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
             </TerminalPanelContent>
           </TerminalPanel>
         )}
@@ -1266,21 +1158,8 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                       key={`${source.uri}-${index}`}
                       className="border-base-border bg-base-surface/40 rounded border p-2"
                     >
-                      <div className="mb-1 flex items-center gap-2">
-                        <Badge
-                          variant={
-                            source.dependencyTier === 'fully_on_ckb_and_btc'
-                              ? 'green'
-                              : source.dependencyTier === 'centralized_dependent'
-                                ? 'red'
-                                : 'neutral'
-                          }
-                        >
-                          {formatStorageTier(source.dependencyTier)}
-                        </Badge>
-                        <span className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                          {source.sourceLocation}
-                        </span>
+                      <div className="text-text-dim mb-1 font-mono text-[10px] uppercase tracking-wider">
+                        {source.sourceLocation}
                       </div>
                       <div className="text-text-bright break-all font-mono text-xs">
                         {source.uri}
@@ -1299,16 +1178,6 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
             </TerminalPanelContent>
           </TerminalPanel>
         )}
-
-        {/* Capacity Statistics */}
-        <CapacityStatisticsSection
-          capacityRange={capacityRange}
-          onCapacityRangeChange={setCapacityRange}
-          capacityChart={capacityChart}
-          isCapacityChartLoading={isCapacityChartLoading}
-          totalCapacity={spore.ownedCapacity}
-          commonKnowledgeSize={spore.ownedKnowledge}
-        />
       </main>
     </div>
   );
