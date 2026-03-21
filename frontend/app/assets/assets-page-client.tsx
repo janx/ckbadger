@@ -21,6 +21,7 @@ import { api, Asset } from '@/lib/api';
 import {
   getClusterDetailHref,
   getIdentityCollectionHref,
+  getMnftClassDetailHref,
   getObjectDetailHref,
   getTokenDetailHref,
 } from '@/lib/detail-routes';
@@ -214,6 +215,7 @@ function AssetTable({
       return getClusterDetailHref(asset.clusterId || asset.id);
     }
     if (asset.assetType === 'identity') return getIdentityCollectionHref(asset.standard, asset.id);
+    if (asset.standard === 'm-nft') return getMnftClassDetailHref(asset.id);
     return getObjectDetailHref(asset.id);
   };
   const getAssetName = (asset: Asset) => {

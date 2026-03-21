@@ -29,6 +29,10 @@ export function getObjectDetailHref(assetId: string): string {
   return `/objects/${encodeURIComponent(assetId)}`;
 }
 
+export function getMnftClassDetailHref(classId: string): string {
+  return `/classes/${encodeURIComponent(classId)}`;
+}
+
 export function getIdentityCollectionHref(standard: string, collectionId: string): string {
   if (standard === 'dotbit') return '/identities/dotbit';
   if (standard === 'did_ckb' || standard === 'did:ckb') return '/identities/did:ckb';

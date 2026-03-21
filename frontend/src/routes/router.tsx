@@ -150,6 +150,12 @@ const DidCkbItemDetailRoute = lazyParamPage(
     identityId: params.identityId ?? '',
   })
 );
+const MnftClassDetailRoute = lazyParamPage(
+  () => import('@/app/classes/[classId]/client-page'),
+  (params) => ({
+    classId: params.classId ?? '',
+  })
+);
 const IdentityCollectionRoute = lazyParamPage(
   () => import('@/app/identities/[collectionId]/client-page'),
   (params) => ({
@@ -367,6 +373,10 @@ export function createAppRouter(): RouteObject[] {
         {
           path: 'identities/:collectionId',
           element: <IdentityCollectionRoute />,
+        },
+        {
+          path: 'classes/:classId',
+          element: <MnftClassDetailRoute />,
         },
         {
           path: 'objects/:sporeId',
