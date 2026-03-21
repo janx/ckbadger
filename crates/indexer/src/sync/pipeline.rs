@@ -30,9 +30,7 @@ use rayon::prelude::*;
 use super::adaptive::*;
 use super::batch::*;
 use super::bulk_build::facts::{
-    BlockFacts, CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts, DaoCellState,
-    DotbitProtocolFacts, FactsArena, MnftClassProtocolFacts, MnftIssuerProtocolFacts,
-    MnftTokenProtocolFacts, OutPointKey, SporeProtocolFacts, TxFacts,
+    BlockFacts, CellFacts, CellSemanticTag, DaoCellState, FactsArena, OutPointKey, TxFacts,
 };
 use super::bulk_build::interner::IdentityInterner;
 use super::dao_helpers::*;
@@ -151,200 +149,7 @@ fn parse_bulk_dao_cell_state(
     }))
 }
 
-fn parse_fixed_protocol_id<const N: usize>(
-    bytes: &[u8],
-    label: &str,
-    tx_hash: &[u8; 32],
-    output_index: i16,
-) -> Result<[u8; N]> {
-    bytes.try_into().map_err(|_| {
-        anyhow!(
-            "invalid {} length in bulk facts: tx=0x{}, output_index={}, expected={}, actual={}",
-            label,
-            hex::encode(tx_hash),
-            output_index,
-            N,
-            bytes.len()
-        )
-    })
-}
-
-fn parse_optional_fixed_protocol_id<const N: usize>(
-    bytes: Option<&Vec<u8>>,
-    label: &str,
-    tx_hash: &[u8; 32],
-    output_index: i16,
-) -> Result<Option<[u8; N]>> {
-    bytes
-        .map(|value| parse_fixed_protocol_id::<N>(value, label, tx_hash, output_index))
-        .transpose()
-}
-
-fn parse_bulk_protocol_facts(
-    cell: &ParsedCell,
-    semantic_tag: CellSemanticTag,
-    witness_bundle: &DotbitWitnessBundle,
-    tx_hash: &[u8; 32],
-    output_index: i16,
-) -> Result<Option<CellProtocolFacts>> {
-    match semantic_tag {
-        CellSemanticTag::Plain
-        | CellSemanticTag::Dao
-        | CellSemanticTag::Sudt
-        | CellSemanticTag::Xudt => Ok(None),
-        CellSemanticTag::Spore => {
-            let spore = SporeParser::parse_spore_parsed_cell(cell).ok_or_else(|| {
-                anyhow!(
-                    "failed to parse Spore cell semantics in bulk facts: tx=0x{}, output_index={}",
-                    hex::encode(tx_hash),
-                    output_index
-                )
-            })?;
-            Ok(Some(CellProtocolFacts::Spore(SporeProtocolFacts {
-                spore_id: parse_fixed_protocol_id::<32>(
-                    &spore.spore_id,
-                    "spore_id",
-                    tx_hash,
-                    output_index,
-                )?,
-                is_did: spore.is_did,
-                content_type: spore.content_type,
-                content: spore.content,
-                cluster_id: parse_optional_fixed_protocol_id::<32>(
-                    spore.cluster_id.as_ref(),
-                    "spore cluster_id",
-                    tx_hash,
-                    output_index,
-                )?,
-            })))
-        }
-        CellSemanticTag::Cluster => {
-            let cluster = SporeParser::parse_cluster_parsed_cell(cell).ok_or_else(|| {
-                anyhow!(
-                    "failed to parse Cluster cell semantics in bulk facts: tx=0x{}, output_index={}",
-                    hex::encode(tx_hash),
-                    output_index
-                )
-            })?;
-            Ok(Some(CellProtocolFacts::Cluster(ClusterProtocolFacts {
-                cluster_id: parse_fixed_protocol_id::<32>(
-                    &cluster.cluster_id,
-                    "cluster_id",
-                    tx_hash,
-                    output_index,
-                )?,
-                name: cluster.name,
-                description: cluster.description,
-            })))
-        }
-        CellSemanticTag::Mnft => {
-            if let Some(issuer) = MnftParser::parse_issuer_parsed_cell(cell) {
-                return Ok(Some(CellProtocolFacts::MnftIssuer(
-                    MnftIssuerProtocolFacts {
-                        issuer_id: parse_fixed_protocol_id::<20>(
-                            &issuer.issuer_id,
-                            "mnft issuer_id",
-                            tx_hash,
-                            output_index,
-                        )?,
-                        name: issuer.name,
-                        info: issuer.info,
-                        class_count: issuer.class_count,
-                        set_count: issuer.set_count,
-                    },
-                )));
-            }
-
-            if let Some(class) = MnftParser::parse_class_parsed_cell(cell) {
-                return Ok(Some(CellProtocolFacts::MnftClass(MnftClassProtocolFacts {
-                    class_id: class.class_id,
-                    issuer_id: parse_fixed_protocol_id::<20>(
-                        &class.issuer_id,
-                        "mnft class issuer_id",
-                        tx_hash,
-                        output_index,
-                    )?,
-                    name: class.name,
-                    description: class.description,
-                    renderer: class.renderer,
-                    total: class.total,
-                    issued: class.issued,
-                    configure: class.configure,
-                })));
-            }
-
-            if let Some(token) = MnftParser::parse_token_parsed_cell(cell) {
-                return Ok(Some(CellProtocolFacts::MnftToken(MnftTokenProtocolFacts {
-                    token_id: token.token_id,
-                    class_id: token.class_id,
-                    token_index: token.token_index,
-                    characteristic: token.characteristic,
-                    configure: token.configure,
-                    state: token.state,
-                })));
-            }
-
-            Err(anyhow!(
-                "failed to parse mNFT cell semantics in bulk facts: tx=0x{}, output_index={}",
-                hex::encode(tx_hash),
-                output_index
-            ))
-        }
-        CellSemanticTag::Dotbit => {
-            let Some(mut account) = DotbitParser::parse_account_parsed_cell(cell) else {
-                // Some on-chain DotBit AccountCells have minimal/edge-case data
-                // (e.g. data < 52 bytes, all-zero account IDs) that the parser
-                // cannot extract a valid account from.  This is external data, not
-                // an invariant violation – skip the cell rather than crashing the
-                // entire bulk sync.
-                warn!(
-                    tx = hex::encode(tx_hash),
-                    output_index,
-                    data_len = cell.data.len(),
-                    "skipping unparseable DotBit AccountCell in bulk facts"
-                );
-                return Ok(None);
-            };
-
-            if let Some(data) = witness_bundle.accounts.get(account.account_id.as_slice()) {
-                account.account = data.name.clone();
-                account.registered_at = data.registered_at;
-                account.status = data.status;
-            }
-
-            if account.account.is_none() {
-                // DAS witness may lack account name for some historical or
-                // edge-case transactions.  Skip rather than crash bulk sync.
-                warn!(
-                    tx = hex::encode(tx_hash),
-                    output_index,
-                    account_id = hex::encode(&account.account_id),
-                    "skipping DotBit cell: account name missing in DAS witness"
-                );
-                return Ok(None);
-            }
-
-            Ok(Some(CellProtocolFacts::Dotbit(DotbitProtocolFacts {
-                account_id: parse_fixed_protocol_id::<20>(
-                    &account.account_id,
-                    "dotbit account_id",
-                    tx_hash,
-                    output_index,
-                )?,
-                account: account.account,
-                next_account_id: parse_optional_fixed_protocol_id::<20>(
-                    account.next_account_id.as_ref(),
-                    "dotbit next_account_id",
-                    tx_hash,
-                    output_index,
-                )?,
-                expired_at: account.expired_at,
-                registered_at: account.registered_at,
-                status: account.status,
-            })))
-        }
-    }
-}
+use super::bulk_build::facts::{parse_fixed_protocol_id, parse_protocol_facts};
 
 pub(crate) fn build_bulk_facts_arena_from_blocks(
     blocks: &[BlockResponseWithCycles],
@@ -627,7 +432,7 @@ fn parse_single_block(
                     &parsed_tx.hash,
                     output_index_i16,
                 )?,
-                protocol_facts: parse_bulk_protocol_facts(
+                protocol_facts: parse_protocol_facts(
                     cell,
                     semantic_tag,
                     &witness_bundle,

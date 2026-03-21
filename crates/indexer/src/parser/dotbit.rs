@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use anyhow::{anyhow, Result};
+use tracing::warn;
 
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
@@ -203,8 +204,6 @@ impl DotbitParser {
         }
         let witness_bundle = parse_dotbit_witness_bundle(&tx.witnesses);
         let mut accounts = Vec::new();
-        let mut missing_name_count = 0usize;
-        let mut missing_name_samples: Vec<String> = Vec::new();
 
         for (output_index, (output, data_hex)) in
             tx.outputs.iter().zip(tx.outputs_data.iter()).enumerate()
@@ -226,24 +225,21 @@ impl DotbitParser {
                 account.status = wd.status;
             }
             if account.account.is_none() {
-                missing_name_count += 1;
-                if missing_name_samples.len() < 5 {
-                    missing_name_samples.push(format!("0x{}", hex::encode(&account.account_id)));
-                }
+                // DAS witness may lack account name for some historical or
+                // edge-case transactions. Skip rather than crash sync,
+                // matching the bulk-path behavior.
+                warn!(
+                    tx_hash = %tx.hash,
+                    output_index,
+                    account_id = hex::encode(&account.account_id),
+                    "skipping DotBit account: name missing in DAS witness"
+                );
+                continue;
             }
             accounts.push(ParsedDotbitAccountOutput {
                 output_index,
                 account,
             });
-        }
-
-        if missing_name_count > 0 {
-            return Err(anyhow!(
-                "dotbit account name missing in DAS witness: tx_hash={}, missing_account_name_count={}, missing_account_name_samples={}",
-                tx.hash,
-                missing_name_count,
-                missing_name_samples.join(",")
-            ));
         }
 
         Ok(accounts)
@@ -914,15 +910,16 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_accounts_fails_when_witness_name_missing() {
+    fn test_parse_accounts_skips_when_witness_name_missing() {
         let account_id = [0x22u8; 20];
         let tx = create_dotbit_tx(&account_id, false);
 
-        let err = DotbitParser::parse_accounts(&tx).expect_err("missing name must fail");
-        let msg = err.to_string();
-        assert!(msg.contains("dotbit account name missing in DAS witness"));
-        assert!(msg.contains(&tx.hash));
-        assert!(msg.contains(&format!("0x{}", hex::encode(account_id))));
+        let accounts =
+            DotbitParser::parse_accounts(&tx).expect("missing name should skip, not error");
+        assert!(
+            accounts.is_empty(),
+            "accounts with missing names should be skipped"
+        );
     }
 
     #[test]

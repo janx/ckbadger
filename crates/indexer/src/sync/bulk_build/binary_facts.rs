@@ -11,22 +11,15 @@ use std::sync::LazyLock;
 
 use anyhow::{anyhow, Result};
 use ckb_types::prelude::*;
-use tracing::warn;
 
 use crate::parser::cell::ParsedCell;
 use crate::parser::dao::{DaoParser, DaoState};
-use crate::parser::dotbit::{DotbitParser, DotbitWitnessBundle};
-use crate::parser::mnft::MnftParser;
+use crate::parser::dotbit::DotbitWitnessBundle;
 use crate::parser::script::ScriptParser;
-use crate::parser::spore::SporeParser;
 use crate::parser::udt::UdtParser;
 use crate::sync::dao_helpers::occupied_capacity_shannons_i64;
 
-use super::facts::{
-    BlockFacts, CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts, DaoCellState,
-    DotbitProtocolFacts, MnftClassProtocolFacts, MnftIssuerProtocolFacts, MnftTokenProtocolFacts,
-    OutPointKey, SporeProtocolFacts, TxFacts,
-};
+use super::facts::{BlockFacts, CellFacts, CellSemanticTag, DaoCellState, OutPointKey, TxFacts};
 use super::interner::IdentityInterner;
 
 use crate::sync::helpers::checked_usize_to_i16;
@@ -386,7 +379,7 @@ pub(crate) fn parse_block_to_facts(
                         data_size,
                         data: data.clone(),
                     };
-                    parse_binary_protocol_facts(
+                    parse_protocol_facts(
                         &parsed_cell,
                         semantic_tag,
                         &witness_bundle,
@@ -737,208 +730,7 @@ fn parse_binary_udt_amount(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Protocol ID helpers (identical to pipeline.rs)
-// ---------------------------------------------------------------------------
-
-fn parse_fixed_protocol_id<const N: usize>(
-    bytes: &[u8],
-    label: &str,
-    tx_hash: &[u8; 32],
-    output_index: i16,
-) -> Result<[u8; N]> {
-    bytes.try_into().map_err(|_| {
-        anyhow!(
-            "invalid {} length in binary facts: tx=0x{}, output_index={}, expected={}, actual={}",
-            label,
-            hex::encode(tx_hash),
-            output_index,
-            N,
-            bytes.len()
-        )
-    })
-}
-
-fn parse_optional_fixed_protocol_id<const N: usize>(
-    bytes: Option<&Vec<u8>>,
-    label: &str,
-    tx_hash: &[u8; 32],
-    output_index: i16,
-) -> Result<Option<[u8; N]>> {
-    bytes
-        .map(|value| parse_fixed_protocol_id::<N>(value, label, tx_hash, output_index))
-        .transpose()
-}
-
-// ---------------------------------------------------------------------------
-// Protocol facts (identical to pipeline.rs parse_bulk_protocol_facts)
-// ---------------------------------------------------------------------------
-
-fn parse_binary_protocol_facts(
-    cell: &ParsedCell,
-    semantic_tag: CellSemanticTag,
-    witness_bundle: &DotbitWitnessBundle,
-    tx_hash: &[u8; 32],
-    output_index: i16,
-) -> Result<Option<CellProtocolFacts>> {
-    match semantic_tag {
-        CellSemanticTag::Plain
-        | CellSemanticTag::Dao
-        | CellSemanticTag::Sudt
-        | CellSemanticTag::Xudt => Ok(None),
-        CellSemanticTag::Spore => {
-            let spore = SporeParser::parse_spore_parsed_cell(cell).ok_or_else(|| {
-                anyhow!(
-                    "failed to parse Spore cell semantics in binary facts: tx=0x{}, output_index={}",
-                    hex::encode(tx_hash),
-                    output_index
-                )
-            })?;
-            Ok(Some(CellProtocolFacts::Spore(SporeProtocolFacts {
-                spore_id: parse_fixed_protocol_id::<32>(
-                    &spore.spore_id,
-                    "spore_id",
-                    tx_hash,
-                    output_index,
-                )?,
-                is_did: spore.is_did,
-                content_type: spore.content_type,
-                content: spore.content,
-                cluster_id: parse_optional_fixed_protocol_id::<32>(
-                    spore.cluster_id.as_ref(),
-                    "spore cluster_id",
-                    tx_hash,
-                    output_index,
-                )?,
-            })))
-        }
-        CellSemanticTag::Cluster => {
-            let cluster = SporeParser::parse_cluster_parsed_cell(cell).ok_or_else(|| {
-                anyhow!(
-                    "failed to parse Cluster cell semantics in binary facts: tx=0x{}, output_index={}",
-                    hex::encode(tx_hash),
-                    output_index
-                )
-            })?;
-            Ok(Some(CellProtocolFacts::Cluster(ClusterProtocolFacts {
-                cluster_id: parse_fixed_protocol_id::<32>(
-                    &cluster.cluster_id,
-                    "cluster_id",
-                    tx_hash,
-                    output_index,
-                )?,
-                name: cluster.name,
-                description: cluster.description,
-            })))
-        }
-        CellSemanticTag::Mnft => {
-            if let Some(issuer) = MnftParser::parse_issuer_parsed_cell(cell) {
-                return Ok(Some(CellProtocolFacts::MnftIssuer(
-                    MnftIssuerProtocolFacts {
-                        issuer_id: parse_fixed_protocol_id::<20>(
-                            &issuer.issuer_id,
-                            "mnft issuer_id",
-                            tx_hash,
-                            output_index,
-                        )?,
-                        name: issuer.name,
-                        info: issuer.info,
-                        class_count: issuer.class_count,
-                        set_count: issuer.set_count,
-                    },
-                )));
-            }
-
-            if let Some(class) = MnftParser::parse_class_parsed_cell(cell) {
-                return Ok(Some(CellProtocolFacts::MnftClass(MnftClassProtocolFacts {
-                    class_id: class.class_id,
-                    issuer_id: parse_fixed_protocol_id::<20>(
-                        &class.issuer_id,
-                        "mnft class issuer_id",
-                        tx_hash,
-                        output_index,
-                    )?,
-                    name: class.name,
-                    description: class.description,
-                    renderer: class.renderer,
-                    total: class.total,
-                    issued: class.issued,
-                    configure: class.configure,
-                })));
-            }
-
-            if let Some(token) = MnftParser::parse_token_parsed_cell(cell) {
-                return Ok(Some(CellProtocolFacts::MnftToken(MnftTokenProtocolFacts {
-                    token_id: token.token_id,
-                    class_id: token.class_id,
-                    token_index: token.token_index,
-                    characteristic: token.characteristic,
-                    configure: token.configure,
-                    state: token.state,
-                })));
-            }
-
-            Err(anyhow!(
-                "failed to parse mNFT cell semantics in binary facts: tx=0x{}, output_index={}",
-                hex::encode(tx_hash),
-                output_index
-            ))
-        }
-        CellSemanticTag::Dotbit => {
-            let Some(mut account) = DotbitParser::parse_account_parsed_cell(cell) else {
-                // Some on-chain DotBit AccountCells have minimal/edge-case data
-                // (e.g. data < 52 bytes, all-zero account IDs) that the parser
-                // cannot extract a valid account from. This is external data, not
-                // an invariant violation -- skip the cell rather than crashing the
-                // entire bulk sync.
-                warn!(
-                    tx = hex::encode(tx_hash),
-                    output_index,
-                    data_len = cell.data.len(),
-                    "skipping unparseable DotBit AccountCell in binary facts"
-                );
-                return Ok(None);
-            };
-
-            if let Some(data) = witness_bundle.accounts.get(account.account_id.as_slice()) {
-                account.account = data.name.clone();
-                account.registered_at = data.registered_at;
-                account.status = data.status;
-            }
-
-            if account.account.is_none() {
-                // DAS witness may lack account name for some historical or
-                // edge-case transactions. Skip rather than crash bulk sync.
-                warn!(
-                    tx = hex::encode(tx_hash),
-                    output_index,
-                    account_id = hex::encode(&account.account_id),
-                    "skipping DotBit cell: account name missing in DAS witness"
-                );
-                return Ok(None);
-            }
-
-            Ok(Some(CellProtocolFacts::Dotbit(DotbitProtocolFacts {
-                account_id: parse_fixed_protocol_id::<20>(
-                    &account.account_id,
-                    "dotbit account_id",
-                    tx_hash,
-                    output_index,
-                )?,
-                account: account.account,
-                next_account_id: parse_optional_fixed_protocol_id::<20>(
-                    account.next_account_id.as_ref(),
-                    "dotbit next_account_id",
-                    tx_hash,
-                    output_index,
-                )?,
-                expired_at: account.expired_at,
-                registered_at: account.registered_at,
-                status: account.status,
-            })))
-        }
-    }
-}
+use super::facts::parse_protocol_facts;
 
 // ---------------------------------------------------------------------------
 // Arena builder
@@ -1290,6 +1082,7 @@ mod tests {
 
     #[test]
     fn parse_fixed_protocol_id_correct_length() {
+        use crate::sync::bulk_build::facts::parse_fixed_protocol_id;
         let bytes = [0xAB; 32];
         let result: [u8; 32] = parse_fixed_protocol_id(&bytes, "test_id", &[0; 32], 0).unwrap();
         assert_eq!(result, bytes);
@@ -1297,6 +1090,7 @@ mod tests {
 
     #[test]
     fn parse_fixed_protocol_id_wrong_length_fails() {
+        use crate::sync::bulk_build::facts::parse_fixed_protocol_id;
         let bytes = [0xAB; 16];
         let result = parse_fixed_protocol_id::<32>(&bytes, "test_id", &[0; 32], 0);
         assert!(result.is_err());
@@ -1304,12 +1098,14 @@ mod tests {
 
     #[test]
     fn parse_optional_fixed_protocol_id_none() {
+        use crate::sync::bulk_build::facts::parse_optional_fixed_protocol_id;
         let result = parse_optional_fixed_protocol_id::<32>(None, "test_id", &[0; 32], 0).unwrap();
         assert_eq!(result, None);
     }
 
     #[test]
     fn parse_optional_fixed_protocol_id_some_correct() {
+        use crate::sync::bulk_build::facts::parse_optional_fixed_protocol_id;
         let bytes = vec![0xCD; 20];
         let result =
             parse_optional_fixed_protocol_id::<20>(Some(&bytes), "test_id", &[0; 32], 0).unwrap();

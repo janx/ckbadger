@@ -318,10 +318,18 @@ fn pre_compute_dao_compensations(
                 })?;
             match entry.withdraw_request_block {
                 Some(b) => b,
-                None => continue, // shouldn't happen for status==1, skip
+                None => bail!(
+                    "withdraw_request_block missing for status=1 deposit in compensation pre-compute: outpoint=0x{}:{}",
+                    hex::encode(orig_tx_hash),
+                    orig_output_index,
+                ),
             }
         } else {
-            continue; // deposit not found in store, skip
+            bail!(
+                "DAO deposit entry not found in store during compensation pre-compute: outpoint=0x{}:{}",
+                hex::encode(orig_tx_hash),
+                orig_output_index,
+            );
         };
 
         blocks_needed.insert(*deposit_block);
@@ -336,28 +344,51 @@ fn pre_compute_dao_compensations(
     // Compute compensations
     let mut compensations = HashMap::new();
     for (withdraw_key, capacity, deposit_block, request_block) in entries_with_request_block {
-        let deposit_dao = match dao_fields.get(&deposit_block) {
-            Some(d) => d,
-            None => continue,
-        };
-        let withdraw_dao = match dao_fields.get(&request_block) {
-            Some(d) => d,
-            None => continue,
-        };
-        let ar_deposit = match extract_ar_from_dao(deposit_dao) {
-            Some(ar) => ar,
-            None => continue,
-        };
-        let ar_withdraw = match extract_ar_from_dao(withdraw_dao) {
-            Some(ar) => ar,
-            None => continue,
-        };
-        match calculate_dao_compensation_from_ar(capacity, ar_deposit, ar_withdraw) {
-            Ok(compensation) => {
-                compensations.insert(withdraw_key.clone(), compensation);
-            }
-            Err(_) => continue,
-        }
+        let deposit_dao = dao_fields.get(&deposit_block).ok_or_else(|| {
+            anyhow!(
+                "DAO field missing for deposit block in compensation pre-compute: block={}, outpoint=0x{}:{}",
+                deposit_block,
+                hex::encode(&withdraw_key.0),
+                withdraw_key.1,
+            )
+        })?;
+        let withdraw_dao = dao_fields.get(&request_block).ok_or_else(|| {
+            anyhow!(
+                "DAO field missing for request block in compensation pre-compute: block={}, outpoint=0x{}:{}",
+                request_block,
+                hex::encode(&withdraw_key.0),
+                withdraw_key.1,
+            )
+        })?;
+        let ar_deposit = extract_ar_from_dao(deposit_dao).ok_or_else(|| {
+            anyhow!(
+                "failed to extract AR from deposit block DAO field in compensation pre-compute: block={}, outpoint=0x{}:{}",
+                deposit_block,
+                hex::encode(&withdraw_key.0),
+                withdraw_key.1,
+            )
+        })?;
+        let ar_withdraw = extract_ar_from_dao(withdraw_dao).ok_or_else(|| {
+            anyhow!(
+                "failed to extract AR from request block DAO field in compensation pre-compute: block={}, outpoint=0x{}:{}",
+                request_block,
+                hex::encode(&withdraw_key.0),
+                withdraw_key.1,
+            )
+        })?;
+        let compensation = calculate_dao_compensation_from_ar(capacity, ar_deposit, ar_withdraw)
+            .map_err(|e| {
+                anyhow!(
+                    "DAO compensation calculation failed in pre-compute: outpoint=0x{}:{}, capacity={}, ar_deposit={}, ar_withdraw={}, error={}",
+                    hex::encode(&withdraw_key.0),
+                    withdraw_key.1,
+                    capacity,
+                    ar_deposit,
+                    ar_withdraw,
+                    e,
+                )
+            })?;
+        compensations.insert(withdraw_key.clone(), compensation);
     }
 
     Ok(compensations)
@@ -1772,7 +1803,7 @@ impl Indexer {
                     self.writer.process_dao_withdrawals_batch(
                         &withdrawal_contexts,
                         &mut data_batch,
-                        &pending_dao_entries,
+                        &mut pending_dao_entries,
                     )?;
                 }
             }

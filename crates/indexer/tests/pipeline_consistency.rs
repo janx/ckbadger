@@ -201,20 +201,19 @@ fn insert_cells_for_test(
 fn test_cell_info_lookup_returns_all_fields() {
     let (store, writer) = setup_store();
     let tx_hash = vec![0x01u8; 32];
-    let cell = make_cell(100_00000000, 256, 0xAA);
+    let cell = make_cell(500_00000000, 256, 0xAA);
 
     insert_cells_for_test(&store, &writer, &[(&tx_hash, 0, &cell, 1000)], false);
 
-    let result = writer.get_cells_info_batch(&[(&tx_hash, 0)]).unwrap();
+    let result = writer.get_full_cells_info_batch(&[(&tx_hash, 0)]).unwrap();
 
     assert_eq!(result.len(), 1);
-    let (capacity, created_at_block, lock_script_hash, data_size) =
-        result.get(&(tx_hash.clone(), 0)).unwrap();
+    let info = result.get(&(tx_hash.clone(), 0)).unwrap();
 
-    assert_eq!(*capacity, 100_00000000);
-    assert_eq!(*created_at_block, 1000);
-    assert_eq!(*lock_script_hash, vec![0xAAu8; 32]);
-    assert_eq!(*data_size, 256);
+    assert_eq!(info.capacity, 500_00000000);
+    assert_eq!(info.created_at_block, 1000);
+    assert_eq!(info.lock_script_hash, vec![0xAAu8; 32]);
+    assert_eq!(info.data_size, 256);
 }
 
 #[test]
@@ -225,9 +224,9 @@ fn test_cell_info_batch_lookup_multiple_cells() {
     let tx2 = vec![0x02u8; 32];
     let tx3 = vec![0x03u8; 32];
 
-    let cell1 = make_cell(100_00000000, 100, 0xAA);
-    let cell2 = make_cell(200_00000000, 200, 0xBB);
-    let cell3 = make_cell(300_00000000, 300, 0xCC);
+    let cell1 = make_cell(300_00000000, 100, 0xAA);
+    let cell2 = make_cell(400_00000000, 200, 0xBB);
+    let cell3 = make_cell(500_00000000, 300, 0xCC);
 
     insert_cells_for_test(
         &store,
@@ -241,25 +240,25 @@ fn test_cell_info_batch_lookup_multiple_cells() {
     );
 
     let result = writer
-        .get_cells_info_batch(&[(&tx1, 0), (&tx2, 0), (&tx3, 0)])
+        .get_full_cells_info_batch(&[(&tx1, 0), (&tx2, 0), (&tx3, 0)])
         .unwrap();
 
     assert_eq!(result.len(), 3);
 
-    let (cap1, block1, _, size1) = result.get(&(tx1.clone(), 0)).unwrap();
-    assert_eq!(*cap1, 100_00000000);
-    assert_eq!(*block1, 1000);
-    assert_eq!(*size1, 100);
+    let info1 = result.get(&(tx1.clone(), 0)).unwrap();
+    assert_eq!(info1.capacity, 300_00000000);
+    assert_eq!(info1.created_at_block, 1000);
+    assert_eq!(info1.data_size, 100);
 
-    let (cap2, block2, _, size2) = result.get(&(tx2.clone(), 0)).unwrap();
-    assert_eq!(*cap2, 200_00000000);
-    assert_eq!(*block2, 2000);
-    assert_eq!(*size2, 200);
+    let info2 = result.get(&(tx2.clone(), 0)).unwrap();
+    assert_eq!(info2.capacity, 400_00000000);
+    assert_eq!(info2.created_at_block, 2000);
+    assert_eq!(info2.data_size, 200);
 
-    let (cap3, block3, _, size3) = result.get(&(tx3.clone(), 0)).unwrap();
-    assert_eq!(*cap3, 300_00000000);
-    assert_eq!(*block3, 3000);
-    assert_eq!(*size3, 300);
+    let info3 = result.get(&(tx3.clone(), 0)).unwrap();
+    assert_eq!(info3.capacity, 500_00000000);
+    assert_eq!(info3.created_at_block, 3000);
+    assert_eq!(info3.data_size, 300);
 }
 
 #[test]
@@ -386,33 +385,6 @@ fn test_full_cells_info_errors_when_typed_cell_lacks_type_args_and_occupied_miss
         .get_full_cells_info_batch(&[(&tx_hash, 0)])
         .unwrap_err();
     assert!(err.to_string().contains("missing type_args"));
-}
-
-#[test]
-fn test_same_batch_cell_consumption() {
-    let (store, writer) = setup_store();
-    let creating_tx = vec![0x01u8; 32];
-    let consuming_tx = vec![0x02u8; 32];
-    let cell = make_cell(100_00000000, 100, 0xAA);
-
-    // Insert cell
-    insert_cells_for_test(&store, &writer, &[(&creating_tx, 0, &cell, 1000)], false);
-
-    // Consume cell
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .consume_cells_batch(
-            &[(&creating_tx, 0, 1000, &consuming_tx, 1000, 0)],
-            &mut batch,
-        )
-        .unwrap();
-    batch.commit().unwrap();
-
-    // Cell should no longer be in live cells
-    let result = writer.get_cells_info_batch(&[(&creating_tx, 0)]).unwrap();
-
-    // get_cells_info_batch also checks consumed_cells, so it should still find it
-    assert_eq!(result.len(), 1);
 }
 
 #[test]
@@ -629,9 +601,9 @@ fn test_address_balance_used_underflow_errors() {
 fn test_multiple_outputs_same_tx() {
     let (store, writer) = setup_store();
     let tx_hash = vec![0x01u8; 32];
-    let cell0 = make_cell(100_00000000, 100, 0xAA);
-    let cell1 = make_cell(200_00000000, 200, 0xBB);
-    let cell2 = make_cell(300_00000000, 300, 0xCC);
+    let cell0 = make_cell(300_00000000, 100, 0xAA);
+    let cell1 = make_cell(400_00000000, 200, 0xBB);
+    let cell2 = make_cell(500_00000000, 300, 0xCC);
 
     insert_cells_for_test(
         &store,
@@ -645,40 +617,19 @@ fn test_multiple_outputs_same_tx() {
     );
 
     let result = writer
-        .get_cells_info_batch(&[(&tx_hash, 0), (&tx_hash, 1), (&tx_hash, 2)])
+        .get_full_cells_info_batch(&[(&tx_hash, 0), (&tx_hash, 1), (&tx_hash, 2)])
         .unwrap();
 
     assert_eq!(result.len(), 3);
 
-    let (cap0, _, _, _) = result.get(&(tx_hash.clone(), 0)).unwrap();
-    assert_eq!(*cap0, 100_00000000);
+    let info0 = result.get(&(tx_hash.clone(), 0)).unwrap();
+    assert_eq!(info0.capacity, 300_00000000);
 
-    let (cap1, _, _, _) = result.get(&(tx_hash.clone(), 1)).unwrap();
-    assert_eq!(*cap1, 200_00000000);
+    let info1 = result.get(&(tx_hash.clone(), 1)).unwrap();
+    assert_eq!(info1.capacity, 400_00000000);
 
-    let (cap2, _, _, _) = result.get(&(tx_hash.clone(), 2)).unwrap();
-    assert_eq!(*cap2, 300_00000000);
-}
-
-#[test]
-fn test_consumed_cell_not_in_live_cells() {
-    let (store, writer) = setup_store();
-    let tx_hash = vec![0x01u8; 32];
-    let consuming_tx = vec![0x02u8; 32];
-    let cell = make_cell(100_00000000, 100, 0xAA);
-
-    insert_cells_for_test(&store, &writer, &[(&tx_hash, 0, &cell, 1000)], false);
-
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .consume_cells_batch(&[(&tx_hash, 0, 1000, &consuming_tx, 2000, 0)], &mut batch)
-        .unwrap();
-    batch.commit().unwrap();
-
-    // get_cells_info_batch checks both live and consumed, so consumed cell is still found
-    let result = writer.get_cells_info_batch(&[(&tx_hash, 0)]).unwrap();
-    // Should find it in consumed cells
-    assert_eq!(result.len(), 1);
+    let info2 = result.get(&(tx_hash.clone(), 2)).unwrap();
+    assert_eq!(info2.capacity, 500_00000000);
 }
 
 #[test]
@@ -686,7 +637,7 @@ fn test_cell_lookup_across_height_ranges() {
     let (store, writer) = setup_store();
     let tx_low_height = vec![0x01u8; 32];
     let tx_high_height = vec![0x02u8; 32];
-    let cell = make_cell(100_00000000, 100, 0xAA);
+    let cell = make_cell(300_00000000, 100, 0xAA);
 
     insert_cells_for_test(
         &store,
@@ -699,16 +650,16 @@ fn test_cell_lookup_across_height_ranges() {
     );
 
     let result = writer
-        .get_cells_info_batch(&[(&tx_low_height, 0), (&tx_high_height, 0)])
+        .get_full_cells_info_batch(&[(&tx_low_height, 0), (&tx_high_height, 0)])
         .unwrap();
 
     assert_eq!(result.len(), 2);
 
-    let (_, block0, _, _) = result.get(&(tx_low_height.clone(), 0)).unwrap();
-    assert_eq!(*block0, 1_000_000);
+    let info0 = result.get(&(tx_low_height.clone(), 0)).unwrap();
+    assert_eq!(info0.created_at_block, 1_000_000);
 
-    let (_, block1, _, _) = result.get(&(tx_high_height.clone(), 0)).unwrap();
-    assert_eq!(*block1, 6_000_000);
+    let info1 = result.get(&(tx_high_height.clone(), 0)).unwrap();
+    assert_eq!(info1.created_at_block, 6_000_000);
 }
 
 // --- Tests for skip_cell_indices ---
