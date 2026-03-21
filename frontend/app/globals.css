@@ -717,3 +717,15 @@ body::before {
   filter: drop-shadow(0 -1px 0 rgba(255, 230, 140, 0.25))
     drop-shadow(0 0 8px rgba(80, 220, 180, 0.25));
 }
+
+/* Accessibility: reduce motion for users who prefer it */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -198,7 +198,7 @@ function getAssetEventParts(change: ActivityAssetChange): EventParts {
       const label = symbol || truncateHash(change.typeScriptHash, 8, 6);
       return {
         badge: (
-          <span className="font-mono text-xs text-[#ff66aa]">
+          <span className="text-token font-mono text-xs">
             {'\u25CF'} {label} Transfer
           </span>
         ),

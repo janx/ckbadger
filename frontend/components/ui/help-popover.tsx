@@ -206,8 +206,9 @@ export function HelpPopover({
         aria-controls={panelId}
         className={cn(
           'text-text-dim border-base-border/70 hover:border-emphasis/40 hover:text-emphasis',
-          'inline-flex h-5 w-5 items-center justify-center rounded-full border',
-          'bg-base-elevated/70 font-mono text-[10px] transition-colors'
+          'relative inline-flex h-5 w-5 items-center justify-center rounded-full border',
+          'bg-base-elevated/70 font-mono text-[10px] transition-colors',
+          'before:absolute before:-inset-3 before:content-[""]'
         )}
         onClick={(event) => {
           event.preventDefault();

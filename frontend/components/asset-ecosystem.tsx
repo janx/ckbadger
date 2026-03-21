@@ -8,13 +8,7 @@ import {
   TerminalPanelHeader,
   TerminalPanelContent,
 } from '@/components/ui/terminal-panel';
-
-const CATEGORY_COLORS: Record<string, string> = {
-  dao: '#44ee77',
-  tokens: '#ff66aa',
-  objects: '#bb88ff',
-  other: '#666677',
-};
+import { ASSET_CATEGORY_COLORS } from '@/lib/chart-colors';
 
 const CATEGORY_LABELS: Record<string, string> = {
   dao: 'DAO',
@@ -91,7 +85,7 @@ export function AssetEcosystem() {
                     key={cat.category}
                     style={{
                       width: `${Math.max(parseFloat(cat.percentage), 1)}%`,
-                      backgroundColor: CATEGORY_COLORS[cat.category] ?? '#666',
+                      backgroundColor: ASSET_CATEGORY_COLORS[cat.category] ?? '#666',
                     }}
                     title={`${CATEGORY_LABELS[cat.category] ?? cat.category}: ${parseFloat(cat.percentage).toFixed(1)}%`}
                   />
@@ -104,7 +98,7 @@ export function AssetEcosystem() {
                   <span key={cat.category} className="flex items-center gap-1.5">
                     <span
                       className="inline-block h-2 w-2 rounded-full"
-                      style={{ backgroundColor: CATEGORY_COLORS[cat.category] ?? '#666' }}
+                      style={{ backgroundColor: ASSET_CATEGORY_COLORS[cat.category] ?? '#666' }}
                     />
                     <span className="text-text-dim font-mono text-xs">
                       {CATEGORY_LABELS[cat.category] ?? cat.category}

@@ -170,7 +170,7 @@ export function HexDisplay({
           className
         )}
       >
-        <span className="text-jade animate-subtle-bounce">Copied</span>
+        <span className="text-jade animate-confirm-fade">Copied</span>
       </span>
     );
   }

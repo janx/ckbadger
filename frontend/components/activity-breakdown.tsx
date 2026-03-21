@@ -9,49 +9,35 @@ import {
   TerminalPanelContent,
 } from '@/components/ui/terminal-panel';
 import { formatCkbCompact } from '@/lib/utils';
+import { ACTIVITY_TYPE_COLORS, SCRIPT_CHART_COLORS } from '@/lib/chart-colors';
 
 interface ActivityBreakdownProps {
   isRealtime?: boolean;
 }
 
-const ACTIVITY_COLORS: Record<string, string> = {
-  Transfer: '#00ffaa',
-  'DAO Deposit': '#44ee77',
-  'DAO Withdraw': '#2daa55',
-  Token: '#ff66aa',
-  Object: '#bb88ff',
-  Identity: '#44bbff',
-  'Script Call': '#ff8800',
-};
-
 function buildChartData(stats: ActivitySummary24h) {
   return [
-    { label: 'Transfer', value: stats.transferCount, color: ACTIVITY_COLORS.Transfer },
-    { label: 'DAO Deposit', value: stats.daoDepositCount, color: ACTIVITY_COLORS['DAO Deposit'] },
+    { label: 'Transfer', value: stats.transferCount, color: ACTIVITY_TYPE_COLORS.Transfer },
+    {
+      label: 'DAO Deposit',
+      value: stats.daoDepositCount,
+      color: ACTIVITY_TYPE_COLORS['DAO Deposit'],
+    },
     {
       label: 'DAO Withdraw',
       value: stats.daoWithdrawRequestCount + stats.daoWithdrawCompleteCount,
-      color: ACTIVITY_COLORS['DAO Withdraw'],
+      color: ACTIVITY_TYPE_COLORS['DAO Withdraw'],
     },
-    { label: 'Token', value: stats.tokenCount, color: ACTIVITY_COLORS.Token },
-    { label: 'Object', value: stats.objectCount, color: ACTIVITY_COLORS.Object },
-    { label: 'Identity', value: stats.identityCount, color: ACTIVITY_COLORS.Identity },
-    { label: 'Script Call', value: stats.scriptCallCount, color: ACTIVITY_COLORS['Script Call'] },
+    { label: 'Token', value: stats.tokenCount, color: ACTIVITY_TYPE_COLORS.Token },
+    { label: 'Object', value: stats.objectCount, color: ACTIVITY_TYPE_COLORS.Object },
+    { label: 'Identity', value: stats.identityCount, color: ACTIVITY_TYPE_COLORS.Identity },
+    {
+      label: 'Script Call',
+      value: stats.scriptCallCount,
+      color: ACTIVITY_TYPE_COLORS['Script Call'],
+    },
   ].filter((s) => s.value > 0);
 }
-
-const SCRIPT_COLORS = [
-  '#44ee77',
-  '#ff66aa',
-  '#44bbff',
-  '#00ffaa',
-  '#bb88ff',
-  '#66ff99',
-  '#ff6699',
-  '#66ddff',
-  '#44ffcc',
-  '#ccaaff',
-];
 
 function buildScriptChartData(stats: ActivitySummary24h) {
   return stats.scriptCounts
@@ -60,7 +46,7 @@ function buildScriptChartData(stats: ActivitySummary24h) {
     .map((s, i) => ({
       label: s.name || `${s.codeHash.slice(0, 10)}...`,
       value: s.count,
-      color: SCRIPT_COLORS[i % SCRIPT_COLORS.length],
+      color: SCRIPT_CHART_COLORS[i % SCRIPT_CHART_COLORS.length],
     }));
 }
 

@@ -30,3 +30,36 @@ export function getChartPaletteColor(index: number): string {
   const normalizedIndex = ((index % paletteLength) + paletteLength) % paletteLength;
   return CHART_PALETTE[normalizedIndex];
 }
+
+// Activity type colors — shared by activity card, activity breakdown, and pie charts
+export const ACTIVITY_TYPE_COLORS: Record<string, string> = {
+  Transfer: '#00ffaa',
+  'DAO Deposit': '#44ee77',
+  'DAO Withdraw': '#2daa55',
+  Token: '#ff66aa',
+  Object: '#bb88ff',
+  Identity: '#44bbff',
+  'Script Call': '#ff8800',
+};
+
+// Asset category colors — keyed by category slug
+export const ASSET_CATEGORY_COLORS: Record<string, string> = {
+  dao: ACTIVITY_TYPE_COLORS['DAO Deposit'],
+  tokens: ACTIVITY_TYPE_COLORS.Token,
+  objects: ACTIVITY_TYPE_COLORS.Object,
+  other: '#666677',
+};
+
+// Rotating palette for per-script charts
+export const SCRIPT_CHART_COLORS = [
+  '#44ee77',
+  '#ff66aa',
+  '#44bbff',
+  '#00ffaa',
+  '#bb88ff',
+  '#66ff99',
+  '#ff6699',
+  '#66ddff',
+  '#44ffcc',
+  '#ccaaff',
+] as const;

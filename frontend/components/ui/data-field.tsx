@@ -39,7 +39,10 @@ export function DataField({
         <div className={cn('flex items-center gap-2', labelClassName)}>
           <span className="text-text-dim font-mono text-xs uppercase tracking-wider">{label}</span>
           {helpText && (
-            <span className="text-text-dim hover:text-text cursor-help" title={helpText}>
+            <span
+              className="text-text-dim hover:text-text relative cursor-help before:absolute before:-inset-3 before:content-['']"
+              title={helpText}
+            >
               <HelpIcon className="h-3.5 w-3.5" />
             </span>
           )}
@@ -68,7 +71,10 @@ export function DataField({
       <div className={cn('flex shrink-0 items-center gap-2', labelClassName)}>
         <span className="text-text-dim text-sm">{label}</span>
         {helpText && (
-          <span className="text-text-dim hover:text-text cursor-help" title={helpText}>
+          <span
+            className="text-text-dim hover:text-text relative cursor-help before:absolute before:-inset-3 before:content-['']"
+            title={helpText}
+          >
             <HelpIcon className="h-4 w-4" />
           </span>
         )}

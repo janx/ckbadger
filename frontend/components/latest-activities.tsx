@@ -83,9 +83,9 @@ function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
       const change = primaryAssetChange;
       if (change && change.type === 'token') {
         const label = change.symbol ?? truncateHash(change.typeScriptHash, 8, 6);
-        return { icon: '\u25CE', label: `${label} Transfer`, colorClass: 'text-[#ff66aa]' };
+        return { icon: '\u25CE', label: `${label} Transfer`, colorClass: 'text-token' };
       }
-      return { icon: '\u25CE', label: 'Token Transfer', colorClass: 'text-[#ff66aa]' };
+      return { icon: '\u25CE', label: 'Token Transfer', colorClass: 'text-token' };
     }
     case 'object': {
       const change = primaryAssetChange;
@@ -284,13 +284,13 @@ function StreamItemToken({ classified }: { classified: ClassifiedActivity }) {
         {typeScriptHash ? (
           <Link
             href={getTokenDetailHref(typeScriptHash)}
-            className="font-mono text-xs tabular-nums text-[#ff66aa] transition-colors hover:text-[#ff88bb]"
+            className="text-token hover:text-token-bright font-mono text-xs tabular-nums transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
             {tokenDelta}
           </Link>
         ) : (
-          <span className="font-mono text-xs tabular-nums text-[#ff66aa]">{tokenDelta}</span>
+          <span className="text-token font-mono text-xs tabular-nums">{tokenDelta}</span>
         )}
       </div>
       {showCkbDelta && (
@@ -448,7 +448,7 @@ function StreamItemProtocolAction({ classified }: { classified: ClassifiedActivi
     const sign = delta > BigInt(0) ? '+' : '';
     const symbol = primaryAssetChange.symbol;
     assetDetail = (
-      <span className="font-mono text-[10px] tabular-nums text-[#ff66aa]">
+      <span className="text-token font-mono text-[10px] tabular-nums">
         {sign}
         {primaryAssetChange.delta}
         {symbol ? ` ${symbol}` : ''}

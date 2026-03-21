@@ -11,7 +11,11 @@ import {
 } from '@/components/ui/terminal-panel';
 import { formatCkbCompact, cn } from '@/lib/utils';
 import { PieChart } from '@/components/ui/pie-chart';
-import { CHART_PRIMARY_COLOR, getChartPaletteColor } from '@/lib/chart-colors';
+import {
+  ACTIVITY_TYPE_COLORS,
+  CHART_PRIMARY_COLOR,
+  getChartPaletteColor,
+} from '@/lib/chart-colors';
 import Link from '@/components/ui/link';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 
@@ -21,29 +25,27 @@ function formatCompact(n: number): string {
   return n.toString();
 }
 
-const ACTIVITY_COLORS: Record<string, string> = {
-  Transfer: '#00ffaa',
-  'DAO Deposit': '#44ee77',
-  'DAO Withdraw': '#2daa55',
-  Token: '#ff66aa',
-  Object: '#bb88ff',
-  Identity: '#44bbff',
-  'Script Call': '#ff8800',
-};
-
 function buildPieData(stats: ActivitySummary24h) {
   return [
-    { label: 'Transfer', value: stats.transferCount, color: ACTIVITY_COLORS.Transfer },
-    { label: 'DAO Deposit', value: stats.daoDepositCount, color: ACTIVITY_COLORS['DAO Deposit'] },
+    { label: 'Transfer', value: stats.transferCount, color: ACTIVITY_TYPE_COLORS.Transfer },
+    {
+      label: 'DAO Deposit',
+      value: stats.daoDepositCount,
+      color: ACTIVITY_TYPE_COLORS['DAO Deposit'],
+    },
     {
       label: 'DAO Withdraw',
       value: stats.daoWithdrawRequestCount + stats.daoWithdrawCompleteCount,
-      color: ACTIVITY_COLORS['DAO Withdraw'],
+      color: ACTIVITY_TYPE_COLORS['DAO Withdraw'],
     },
-    { label: 'Token', value: stats.tokenCount, color: ACTIVITY_COLORS.Token },
-    { label: 'Object', value: stats.objectCount, color: ACTIVITY_COLORS.Object },
-    { label: 'Identity', value: stats.identityCount, color: ACTIVITY_COLORS.Identity },
-    { label: 'Script Call', value: stats.scriptCallCount, color: ACTIVITY_COLORS['Script Call'] },
+    { label: 'Token', value: stats.tokenCount, color: ACTIVITY_TYPE_COLORS.Token },
+    { label: 'Object', value: stats.objectCount, color: ACTIVITY_TYPE_COLORS.Object },
+    { label: 'Identity', value: stats.identityCount, color: ACTIVITY_TYPE_COLORS.Identity },
+    {
+      label: 'Script Call',
+      value: stats.scriptCallCount,
+      color: ACTIVITY_TYPE_COLORS['Script Call'],
+    },
   ]
     .filter((s) => s.value > 0)
     .sort((a, b) => b.value - a.value);

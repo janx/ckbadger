@@ -218,7 +218,7 @@ function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
     case 'daoWithdrawComplete':
       return { icon: '\u25C6', label: 'DAO', colorClass: 'text-gold' };
     case 'token':
-      return { icon: '\u25CE', label: 'Token', colorClass: 'text-[#ff66aa]' };
+      return { icon: '\u25CE', label: 'Token', colorClass: 'text-token' };
     case 'object':
       return { icon: '\u2B21', label: 'Object', colorClass: 'text-lavender' };
     case 'identity':
@@ -549,7 +549,7 @@ function renderSubjectLine(classified: ClassifiedActivity) {
         <>
           <Link
             href={getTokenDetailHref(primaryAssetChange.typeScriptHash)}
-            className="font-mono text-xs text-[#ff66aa]/85 transition-colors hover:text-[#ff66aa]"
+            className="text-token/85 hover:text-token font-mono text-xs transition-colors"
           >
             {primaryAssetChange.symbol ?? truncateHash(primaryAssetChange.typeScriptHash, 8, 6)}
           </Link>
@@ -610,7 +610,7 @@ function renderSubjectLine(classified: ClassifiedActivity) {
           <Link
             key="token"
             href={getTokenDetailHref(primaryAssetChange.typeScriptHash)}
-            className="font-mono text-xs text-[#ff66aa]/85 transition-colors hover:text-[#ff66aa]"
+            className="text-token/85 hover:text-token font-mono text-xs transition-colors"
           >
             {label}
           </Link>

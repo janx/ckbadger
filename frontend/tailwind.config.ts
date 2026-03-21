@@ -87,6 +87,11 @@ export default {
           DEFAULT: '#d4883a',
           dim: '#b07028',
         },
+        // Activity type semantic colors
+        token: {
+          DEFAULT: '#ff66aa',
+          bright: '#ff88bb',
+        },
         // Chart accent palette (12 colors)
         'accent-1': '#2edba3',
         'accent-2': '#e8555a',
@@ -127,7 +132,7 @@ export default {
         'text-reveal': 'text-reveal 0.5s ease-out forwards',
         // Micro-interactions
         'glow-pulse': 'glow-pulse 1.5s ease-in-out infinite',
-        'subtle-bounce': 'subtle-bounce 0.4s ease-out',
+        'confirm-fade': 'confirm-fade 0.3s cubic-bezier(0.25, 1, 0.5, 1)',
         glitch: 'glitch 0.3s ease-out',
       },
       keyframes: {
@@ -142,7 +147,6 @@ export default {
         },
         'digit-tick': {
           '0%': { transform: 'translateY(-100%)', opacity: '0' },
-          '50%': { transform: 'translateY(10%)', opacity: '1' },
           '100%': { transform: 'translateY(0)', opacity: '1' },
         },
         'scan-line': {
@@ -158,10 +162,9 @@ export default {
           '0%, 100%': { opacity: '0.5' },
           '50%': { opacity: '1' },
         },
-        'subtle-bounce': {
-          '0%': { transform: 'scale(1)' },
-          '50%': { transform: 'scale(1.05)' },
-          '100%': { transform: 'scale(1)' },
+        'confirm-fade': {
+          '0%': { opacity: '0', transform: 'translateY(2px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
         },
         glitch: {
           '0%': { transform: 'translate(0)', opacity: '1' },
