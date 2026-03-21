@@ -81,16 +81,12 @@ describe('formatStorageTier', () => {
     expect(formatStorageTier('fully_on_ckb_and_btc')).toBe('Fully on BTC+CKB');
   });
 
-  it('formats decentralized_external as merged offchain label', () => {
-    expect(formatStorageTier('decentralized_external')).toBe('Offchain Dependent');
+  it('formats decentralized_dependent', () => {
+    expect(formatStorageTier('decentralized_dependent')).toBe('Decentralized Dependent');
   });
 
-  it('formats centralized_dependent as merged offchain label', () => {
-    expect(formatStorageTier('centralized_dependent')).toBe('Offchain Dependent');
-  });
-
-  it('formats offchain_dependent', () => {
-    expect(formatStorageTier('offchain_dependent')).toBe('Offchain Dependent');
+  it('formats centralized_dependent', () => {
+    expect(formatStorageTier('centralized_dependent')).toBe('Centralized Dependent');
   });
 
   it('returns Unknown for unrecognized tier', () => {

@@ -1015,7 +1015,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                               ? 'green'
                               : spore.mediaProfile.tier === 'centralized_dependent'
                                 ? 'red'
-                                : spore.mediaProfile.tier === 'decentralized_external'
+                                : spore.mediaProfile.tier === 'decentralized_dependent'
                                   ? 'neutral'
                                   : 'neutral'
                           }

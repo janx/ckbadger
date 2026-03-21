@@ -62,7 +62,7 @@ const STORAGE_TIER_DESCRIPTIONS: Record<string, string> = {
     'All content is stored directly on the CKB blockchain (on-chain data or ckbfs://). Fully verifiable and permanent.',
   fully_on_ckb_and_btc:
     'Content is stored across both CKB (on-chain data or ckbfs://) and Bitcoin (btcfs://). Fully verifiable and permanent.',
-  decentralized_external:
+  decentralized_dependent:
     'Some content references external decentralized storage (e.g. IPFS, Arweave). Data persists as long as the external network hosts it.',
   centralized_dependent:
     'Some content depends on centralized servers (http/https). Data availability relies on the server operator.',

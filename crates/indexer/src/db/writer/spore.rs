@@ -382,7 +382,7 @@ impl BatchWriter {
         let slot = match tier {
             StorageDependencyTier::FullyOnCkb => &mut agg.fully_on_ckb_count,
             StorageDependencyTier::FullyOnCkbAndBtc => &mut agg.fully_on_ckb_and_btc_count,
-            StorageDependencyTier::DecentralizedExternal => &mut agg.decentralized_external_count,
+            StorageDependencyTier::DecentralizedDependent => &mut agg.decentralized_dependent_count,
             StorageDependencyTier::CentralizedDependent => &mut agg.centralized_dependent_count,
             StorageDependencyTier::Unknown => &mut agg.unknown_count,
         };

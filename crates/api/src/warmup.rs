@@ -183,15 +183,15 @@ fn format_ratio_4(numerator: i64, denominator: i64) -> String {
 fn resolve_storage_tier(
     fully_on_ckb_and_btc: i64,
     fully_on_ckb: i64,
-    decentralized_external: i64,
+    decentralized_dependent: i64,
     centralized_dependent: i64,
     unknown: i64,
 ) -> String {
     if centralized_dependent > 0 {
         return "centralized_dependent".to_string();
     }
-    if decentralized_external > 0 {
-        return "decentralized_external".to_string();
+    if decentralized_dependent > 0 {
+        return "decentralized_dependent".to_string();
     }
     let total_onchain = fully_on_ckb_and_btc + fully_on_ckb;
     if total_onchain > 0 && unknown == 0 {
@@ -517,7 +517,7 @@ fn build_asset_caches_sync(
         let storage_tier = resolve_storage_tier(
             agg.fully_on_ckb_and_btc_count,
             agg.fully_on_ckb_count,
-            agg.decentralized_external_count,
+            agg.decentralized_dependent_count,
             agg.centralized_dependent_count,
             agg.unknown_count,
         );

@@ -29,7 +29,12 @@ import { formatCkbCompact } from '@/lib/utils';
 import { formatStorageTier } from '@/lib/asset-utils';
 type AssetTab = 'token' | 'object' | 'identity';
 type SortDirection = 'asc' | 'desc';
-type StorageTierFilter = 'all' | 'fully_onchain' | 'offchain_dependent' | 'unknown';
+type StorageTierFilter =
+  | 'all'
+  | 'fully_onchain'
+  | 'decentralized_dependent'
+  | 'centralized_dependent'
+  | 'unknown';
 type AssetSortKey =
   | 'name'
   | 'type'
@@ -47,7 +52,8 @@ const IDENTITY_STANDARD_OPTIONS = ['dotbit', 'did:ckb'];
 const STORAGE_TIER_OPTIONS: StorageTierFilter[] = [
   'all',
   'fully_onchain',
-  'offchain_dependent',
+  'decentralized_dependent',
+  'centralized_dependent',
   'unknown',
 ];
 function normalizeAssetTab(value: string | null): AssetTab {
@@ -72,16 +78,15 @@ function normalizeStorageTier(value: string | null): StorageTierFilter {
     return 'all';
   }
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'decentralized_external' || normalized === 'centralized_dependent') {
-    return 'offchain_dependent';
-  }
   switch (normalized) {
     case 'all':
       return 'all';
     case 'fully_onchain':
       return 'fully_onchain';
-    case 'offchain_dependent':
-      return 'offchain_dependent';
+    case 'decentralized_dependent':
+      return 'decentralized_dependent';
+    case 'centralized_dependent':
+      return 'centralized_dependent';
     case 'unknown':
       return 'unknown';
     default:
@@ -92,8 +97,10 @@ function formatStorageTierLabel(value: StorageTierFilter): string {
   switch (value) {
     case 'fully_onchain':
       return 'Fully On-chain';
-    case 'offchain_dependent':
-      return 'Offchain Dependent';
+    case 'decentralized_dependent':
+      return 'Decentralized Dependent';
+    case 'centralized_dependent':
+      return 'Centralized Dependent';
     case 'unknown':
       return 'Unknown';
     default:

@@ -33,7 +33,7 @@ static NFT_STORAGE_TIER_OVERRIDES: LazyLock<HashMap<String, String>> =
 const VALID_TIERS: &[&str] = &[
     "fully_on_ckb_and_btc",
     "fully_on_ckb",
-    "decentralized_external",
+    "decentralized_dependent",
     "centralized_dependent",
     "unknown",
 ];

@@ -5629,7 +5629,7 @@ async fn test_assets_list_supports_storage_tier_filter_and_onchain_ratio_sort() 
             owner_count: 2,
             fully_on_ckb_and_btc_count: 0,
             fully_on_ckb_count: 5,
-            decentralized_external_count: 0,
+            decentralized_dependent_count: 0,
             centralized_dependent_count: 0,
             unknown_count: 0,
         },
@@ -5644,7 +5644,7 @@ async fn test_assets_list_supports_storage_tier_filter_and_onchain_ratio_sort() 
             owner_count: 2,
             fully_on_ckb_and_btc_count: 0,
             fully_on_ckb_count: 0,
-            decentralized_external_count: 0,
+            decentralized_dependent_count: 0,
             centralized_dependent_count: 4,
             unknown_count: 0,
         },
@@ -5668,7 +5668,7 @@ async fn test_assets_list_supports_storage_tier_filter_and_onchain_ratio_sort() 
     assert_eq!(rows[0]["storageTier"], "fully_on_ckb");
 
     let request = Request::builder()
-        .uri("/api/v1/assets?type=nft&storage_tier=offchain_dependent")
+        .uri("/api/v1/assets?type=nft&storage_tier=centralized_dependent")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();

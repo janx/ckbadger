@@ -776,8 +776,7 @@ interface Asset {
   storageTier?:
     | 'fully_on_ckb_and_btc'
     | 'fully_on_ckb'
-    | 'offchain_dependent'
-    | 'decentralized_external'
+    | 'decentralized_dependent'
     | 'centralized_dependent'
     | 'unknown';
   fullyOnchainRatio?: string | null;
@@ -807,8 +806,7 @@ interface AssetQueryParams {
     | 'fully_onchain'
     | 'fully_on_ckb_and_btc'
     | 'fully_on_ckb'
-    | 'offchain_dependent'
-    | 'decentralized_external'
+    | 'decentralized_dependent'
     | 'centralized_dependent'
     | 'unknown';
 }
@@ -953,12 +951,12 @@ interface SporeCluster {
     tier:
       | 'fully_on_ckb_and_btc'
       | 'fully_on_ckb'
-      | 'decentralized_external'
+      | 'decentralized_dependent'
       | 'centralized_dependent'
       | 'unknown';
     fullyOnchainCount: number;
     fullyOnCkbCount: number;
-    decentralizedExternalCount: number;
+    decentralizedDependentCount: number;
     centralizedDependentCount: number;
     unknownCount: number;
     fullyOnchainRatio: string;
@@ -982,7 +980,7 @@ interface SporeNft {
     tier:
       | 'fully_on_ckb_and_btc'
       | 'fully_on_ckb'
-      | 'decentralized_external'
+      | 'decentralized_dependent'
       | 'centralized_dependent'
       | 'unknown';
     sources: Array<{
@@ -992,7 +990,7 @@ interface SporeNft {
       dependencyTier:
         | 'fully_on_ckb_and_btc'
         | 'fully_on_ckb'
-        | 'decentralized_external'
+        | 'decentralized_dependent'
         | 'centralized_dependent'
         | 'unknown';
     }>;
@@ -1029,12 +1027,12 @@ interface ObjectCollection {
     tier:
       | 'fully_on_ckb_and_btc'
       | 'fully_on_ckb'
-      | 'decentralized_external'
+      | 'decentralized_dependent'
       | 'centralized_dependent'
       | 'unknown';
     fullyOnchainCount: number;
     fullyOnCkbCount: number;
-    decentralizedExternalCount: number;
+    decentralizedDependentCount: number;
     centralizedDependentCount: number;
     unknownCount: number;
     fullyOnchainRatio: string;

@@ -238,7 +238,7 @@ pub struct CollectionStorageProfileResponse {
     pub tier: String,
     pub fully_onchain_count: i64,
     pub fully_on_ckb_count: i64,
-    pub decentralized_external_count: i64,
+    pub decentralized_dependent_count: i64,
     pub centralized_dependent_count: i64,
     pub unknown_count: i64,
     pub fully_onchain_ratio: String,
@@ -498,12 +498,6 @@ fn fetch_assets_cached(
             let Some(tier) = entry.storage_tier.as_deref() else {
                 return false;
             };
-            if storage_tier_filter == "offchain_dependent" {
-                return matches!(
-                    tier,
-                    "offchain_dependent" | "decentralized_external" | "centralized_dependent"
-                );
-            }
             if storage_tier_filter == "fully_onchain" {
                 return matches!(tier, "fully_on_ckb_and_btc" | "fully_on_ckb");
             }
@@ -582,12 +576,11 @@ fn normalize_assets_storage_tier(
     match normalized.as_str() {
         "fully_onchain" | "fully_on_ckb_and_btc" => Ok(Some("fully_onchain".to_string())),
         "fully_on_ckb"
-        | "offchain_dependent"
-        | "decentralized_external"
+        | "decentralized_dependent"
         | "centralized_dependent"
         | "unknown" => Ok(Some(normalized)),
         _ => Err(ApiError::bad_request(
-            "Invalid storage_tier. Expected one of: fully_onchain, fully_on_ckb_and_btc, fully_on_ckb, offchain_dependent, decentralized_external, centralized_dependent, unknown",
+            "Invalid storage_tier. Expected one of: fully_onchain, fully_on_ckb_and_btc, fully_on_ckb, decentralized_dependent, centralized_dependent, unknown",
         )),
     }
 }
@@ -1706,7 +1699,7 @@ async fn get_object_collection(
         tier: "unknown".to_string(),
         fully_onchain_count: 0,
         fully_on_ckb_count: 0,
-        decentralized_external_count: 0,
+        decentralized_dependent_count: 0,
         centralized_dependent_count: 0,
         unknown_count: agg.live_count,
         fully_onchain_ratio: format_ratio_4(0, agg.live_count),

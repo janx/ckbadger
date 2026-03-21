@@ -45,20 +45,15 @@ export function formatStorageTier(
   tier:
     | 'fully_on_ckb_and_btc'
     | 'fully_on_ckb'
-    | 'decentralized_external'
+    | 'decentralized_dependent'
     | 'centralized_dependent'
-    | 'offchain_dependent'
     | 'unknown'
     | string
 ): string {
   if (tier === 'fully_on_ckb') return 'Fully on CKB';
   if (tier === 'fully_on_ckb_and_btc') return 'Fully on BTC+CKB';
-  if (
-    tier === 'decentralized_external' ||
-    tier === 'centralized_dependent' ||
-    tier === 'offchain_dependent'
-  )
-    return 'Offchain Dependent';
+  if (tier === 'decentralized_dependent') return 'Decentralized Dependent';
+  if (tier === 'centralized_dependent') return 'Centralized Dependent';
   return 'Unknown';
 }
 

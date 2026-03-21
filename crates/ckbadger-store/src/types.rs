@@ -303,7 +303,7 @@ pub enum StorageDependencyTier {
     /// Content depends on both Bitcoin (btcfs://) and CKB storage.
     /// Objects are always CKB cells, so btcfs:// content is never "fully on Bitcoin" alone.
     FullyOnCkbAndBtc,
-    DecentralizedExternal,
+    DecentralizedDependent,
     CentralizedDependent,
     #[default]
     Unknown,
@@ -314,7 +314,7 @@ impl StorageDependencyTier {
         match self {
             StorageDependencyTier::FullyOnCkb => "fully_on_ckb",
             StorageDependencyTier::FullyOnCkbAndBtc => "fully_on_ckb_and_btc",
-            StorageDependencyTier::DecentralizedExternal => "decentralized_external",
+            StorageDependencyTier::DecentralizedDependent => "decentralized_dependent",
             StorageDependencyTier::CentralizedDependent => "centralized_dependent",
             StorageDependencyTier::Unknown => "unknown",
         }
@@ -551,7 +551,7 @@ pub struct ClusterAggregate {
     #[serde(default)]
     pub fully_on_ckb_count: i64,
     #[serde(default)]
-    pub decentralized_external_count: i64,
+    pub decentralized_dependent_count: i64,
     #[serde(default)]
     pub centralized_dependent_count: i64,
     #[serde(default)]

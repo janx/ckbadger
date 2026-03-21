@@ -80,7 +80,7 @@ pub fn analyze_spore_media_profile(
                     uri: format!("ipfs://{trimmed}"),
                     scheme: "ipfs".to_string(),
                     source_location: "payload_cid".to_string(),
-                    dependency_tier: StorageDependencyTier::DecentralizedExternal,
+                    dependency_tier: StorageDependencyTier::DecentralizedDependent,
                 });
                 if normalized_type.contains("image") {
                     has_renderable_image = true;
@@ -112,9 +112,9 @@ fn resolve_tier(sources: &[SporeMediaSource]) -> StorageDependencyTier {
     }
     if sources
         .iter()
-        .any(|source| source.dependency_tier == StorageDependencyTier::DecentralizedExternal)
+        .any(|source| source.dependency_tier == StorageDependencyTier::DecentralizedDependent)
     {
-        return StorageDependencyTier::DecentralizedExternal;
+        return StorageDependencyTier::DecentralizedDependent;
     }
 
     let has_ckb = sources
@@ -250,7 +250,7 @@ fn extract_content_type_external_refs(content_type: &str) -> Option<Vec<SporeMed
                         uri: format!("ipfs://{value}"),
                         scheme: "ipfs".to_string(),
                         source_location: "content_type_param".to_string(),
-                        dependency_tier: StorageDependencyTier::DecentralizedExternal,
+                        dependency_tier: StorageDependencyTier::DecentralizedDependent,
                     });
                 }
                 "ar" | "arweave" => {
@@ -258,7 +258,7 @@ fn extract_content_type_external_refs(content_type: &str) -> Option<Vec<SporeMed
                         uri: format!("ar://{value}"),
                         scheme: "ar".to_string(),
                         source_location: "content_type_param".to_string(),
-                        dependency_tier: StorageDependencyTier::DecentralizedExternal,
+                        dependency_tier: StorageDependencyTier::DecentralizedDependent,
                     });
                 }
                 _ => {}
@@ -275,7 +275,7 @@ fn extract_content_type_external_refs(content_type: &str) -> Option<Vec<SporeMed
 fn classify_dependency_tier(scheme: &str) -> StorageDependencyTier {
     match scheme {
         "http" | "https" => StorageDependencyTier::CentralizedDependent,
-        "ipfs" | "ar" => StorageDependencyTier::DecentralizedExternal,
+        "ipfs" | "ar" => StorageDependencyTier::DecentralizedDependent,
         "btcfs" => StorageDependencyTier::FullyOnCkbAndBtc,
         "ckbfs" | "data" => StorageDependencyTier::FullyOnCkb,
         _ => StorageDependencyTier::Unknown,
@@ -776,10 +776,10 @@ mod tests {
     }
 
     #[test]
-    fn classifies_ipfs_as_decentralized_external() {
+    fn classifies_ipfs_as_decentralized_dependent() {
         let profile =
             analyze_spore_media_profile("text/plain", b"ipfs://QmHashValue1234567890", None);
-        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedExternal);
+        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
     }
 
     #[test]
@@ -839,7 +839,7 @@ mod tests {
             b"QmTndjp4f6Z9vnM59AgYGHjep841FVE98EXEeWvWjETmSL",
             None,
         );
-        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedExternal);
+        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
         assert!(profile.has_renderable_image);
         assert!(profile.sources.iter().any(|s| s.scheme == "ipfs"
             && s.uri
@@ -853,8 +853,8 @@ mod tests {
             b"\x89PNG\r\n\x1a\n",
             None,
         );
-        // Has IPFS source so tier is DecentralizedExternal (even though binary is on-chain)
-        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedExternal);
+        // Has IPFS source so tier is DecentralizedDependent (even though binary is on-chain)
+        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
         assert!(profile.has_renderable_image);
         assert!(profile.sources.iter().any(|s| s.scheme == "ipfs"
             && s.uri
@@ -864,7 +864,7 @@ mod tests {
     #[test]
     fn ipfs_cid_content_type_without_param_extracts_from_payload() {
         let profile = analyze_spore_media_profile("ipfs/cid", b"QmHashValue1234567890abcdef", None);
-        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedExternal);
+        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
         assert!(profile
             .sources
             .iter()
@@ -909,7 +909,7 @@ mod tests {
     }
 
     #[test]
-    fn dob0_only_ipfs_trait_classifies_as_decentralized_external() {
+    fn dob0_only_ipfs_trait_classifies_as_decentralized_dependent() {
         let metadata = serde_json::json!({
             "dob": {
                 "ver": 0,
@@ -923,7 +923,7 @@ mod tests {
         .to_string();
 
         let profile = analyze_spore_media_profile("dob/0", b"00", Some(&metadata));
-        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedExternal);
+        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
         assert!(profile.sources.iter().any(|s| s.scheme == "ipfs"));
     }
 

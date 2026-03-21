@@ -178,7 +178,7 @@ pub struct ClusterStorageProfileResponse {
     pub tier: String,
     pub fully_onchain_count: i64,
     pub fully_on_ckb_count: i64,
-    pub decentralized_external_count: i64,
+    pub decentralized_dependent_count: i64,
     pub centralized_dependent_count: i64,
     pub unknown_count: i64,
     pub fully_onchain_ratio: String,
@@ -1042,15 +1042,15 @@ fn format_ratio_4(numerator: i64, denominator: i64) -> String {
 fn resolve_storage_tier(
     fully_on_ckb_and_btc: i64,
     fully_on_ckb: i64,
-    decentralized_external: i64,
+    decentralized_dependent: i64,
     centralized_dependent: i64,
     unknown: i64,
 ) -> String {
     if centralized_dependent > 0 {
         return "centralized_dependent".to_string();
     }
-    if decentralized_external > 0 {
-        return "decentralized_external".to_string();
+    if decentralized_dependent > 0 {
+        return "decentralized_dependent".to_string();
     }
     let total_onchain = fully_on_ckb_and_btc + fully_on_ckb;
     if total_onchain > 0 && unknown == 0 {
@@ -1068,8 +1068,8 @@ fn cluster_storage_profile_from_aggregate(
 ) -> ClusterStorageProfileResponse {
     let fully_on_ckb_and_btc_count = aggregate.map(|a| a.fully_on_ckb_and_btc_count).unwrap_or(0);
     let fully_on_ckb_count = aggregate.map(|a| a.fully_on_ckb_count).unwrap_or(0);
-    let decentralized_external_count = aggregate
-        .map(|a| a.decentralized_external_count)
+    let decentralized_dependent_count = aggregate
+        .map(|a| a.decentralized_dependent_count)
         .unwrap_or(0);
     let centralized_dependent_count = aggregate
         .map(|a| a.centralized_dependent_count)
@@ -1082,13 +1082,13 @@ fn cluster_storage_profile_from_aggregate(
         tier: resolve_storage_tier(
             fully_on_ckb_and_btc_count,
             fully_on_ckb_count,
-            decentralized_external_count,
+            decentralized_dependent_count,
             centralized_dependent_count,
             unknown_count,
         ),
         fully_onchain_count: total_onchain,
         fully_on_ckb_count,
-        decentralized_external_count,
+        decentralized_dependent_count,
         centralized_dependent_count,
         unknown_count,
         fully_onchain_ratio: format_ratio_4(total_onchain, spores_count),

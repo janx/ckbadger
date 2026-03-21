@@ -472,14 +472,14 @@ describe('AssetsPage', () => {
     });
 
     fireEvent.change(screen.getByLabelText('Filter by storage tier'), {
-      target: { value: 'offchain_dependent' },
+      target: { value: 'centralized_dependent' },
     });
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
-        expect.objectContaining({ type: 'object', storageTier: 'offchain_dependent' })
+        expect.objectContaining({ type: 'object', storageTier: 'centralized_dependent' })
       );
-      expect(window.location.search).toContain('storageTier=offchain_dependent');
+      expect(window.location.search).toContain('storageTier=centralized_dependent');
     });
   });
 
@@ -617,7 +617,7 @@ describe('AssetsPage', () => {
     await waitFor(() => {
       // Dual-render: text appears in both table and card layouts
       expect(screen.getAllByText('MNFT Without Icon').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('Offchain Dependent').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Centralized Dependent').length).toBeGreaterThanOrEqual(1);
     });
   });
 
