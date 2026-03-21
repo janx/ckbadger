@@ -52,6 +52,43 @@ export function storageTierCardStyle(tier: string): {
   };
 }
 
+/**
+ * Returns panel-level CSS classes for the content preview TerminalPanel,
+ * applying the storage tier visual language to the panel border and header.
+ */
+export function previewPanelStyle(tier: string | undefined): {
+  panel: string;
+  header: string;
+  headerText: string;
+} {
+  if (tier === 'fully_on_ckb_and_btc') {
+    return {
+      panel: 'border-[#4a6838]',
+      header: 'border-[#4a6838] from-[#4a3a12]/50',
+      headerText: 'text-[#a0b880]',
+    };
+  }
+  if (tier === 'fully_on_ckb' || tier === 'fully_onchain') {
+    return {
+      panel: 'border-[#1a6050]',
+      header: 'border-[#1a6050] from-[#0e3830]/50',
+      headerText: 'text-[#5abfa0]',
+    };
+  }
+  if (tier === 'centralized_dependent') {
+    return {
+      panel: 'border-[#5a2020]',
+      header: 'border-[#5a2020]',
+      headerText: 'text-rouge-dim',
+    };
+  }
+  return {
+    panel: '',
+    header: '',
+    headerText: '',
+  };
+}
+
 export function StorageTierTooltip({
   tier,
   buttonClassName,

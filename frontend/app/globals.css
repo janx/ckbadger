@@ -718,6 +718,22 @@ body::before {
     drop-shadow(0 0 8px rgba(80, 220, 180, 0.25));
 }
 
+/* Ambient glow breathing animation for on-chain preview */
+.preview-ambient-glow {
+  animation: preview-breathe 4s ease-in-out infinite;
+}
+@keyframes preview-breathe {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
 /* Accessibility: reduce motion for users who prefer it */
 @media (prefers-reduced-motion: reduce) {
   *,

@@ -25,7 +25,11 @@ import { CapacityUtilization } from '@/components/ui/capacity-utilization';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { ObjectActivityCard } from '@/components/object/object-activity-card';
-import { storageTierCardStyle, StorageTierTooltip } from '@/components/object/storage-tier';
+import {
+  storageTierCardStyle,
+  StorageTierTooltip,
+  previewPanelStyle,
+} from '@/components/object/storage-tier';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
@@ -50,7 +54,9 @@ function normalizeObjectAssetId(assetId: string): string {
 import { formatNumber, truncateHash } from '@/lib/utils';
 import { formatActivityTimestamp, formatStorageTier } from '@/lib/asset-utils';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
-import { decodeDobContent, extractSporePayload } from '@/lib/dob-render';
+import { decodeDobContent, extractSporePayload, type SporePayload } from '@/lib/dob-render';
+import { detectPreview } from '@/lib/preview-utils';
+import { SporePreview, type PreviewPhysicality } from '@/components/object/spore-preview';
 type CollectionSectionTab = 'activities' | 'objects' | 'holders';
 function isCollectionSectionTab(value: string | null): value is CollectionSectionTab {
   return value === 'activities' || value === 'objects' || value === 'holders';
@@ -294,6 +300,11 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
       clusterDescription: cluster?.description,
     });
   }, [cluster?.description, decodedDobByApi, spore, sporePayload?.textContent]);
+  const preview = useMemo(
+    () =>
+      detectPreview(spore?.contentType ?? '', sporePayload?.contentBytes, dobContent?.svgMarkup),
+    [spore?.contentType, sporePayload?.contentBytes, dobContent?.svgMarkup]
+  );
   useEffect(() => {
     if (isMnftCollection && collection) {
       router.replace(`/classes/${collection.collectionId}`);
@@ -810,6 +821,75 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
       ? resolvedSporeOutputIndex
       : spore.outputIndex;
   const hasCellLink = Number.isInteger(sporeOutputIndex);
+  const previewStyle = previewPanelStyle(spore.mediaProfile?.tier);
+  const previewPhysicality: PreviewPhysicality = (() => {
+    const tier = spore.mediaProfile?.tier;
+    if (tier === 'fully_on_ckb') return 'onchain';
+    if (tier === 'fully_on_ckb_and_btc') return 'onchain-btc';
+    return 'default';
+  })();
+
+  const SporeContentPanel = ({
+    sporePayload: payload,
+    clusterId,
+    className,
+  }: {
+    sporePayload: SporePayload;
+    clusterId?: string | null;
+    className?: string;
+  }) => (
+    <TerminalPanel className={className}>
+      <TerminalPanelHeader indicator="active">Spore Content</TerminalPanelHeader>
+      <TerminalPanelContent>
+        <div className="space-y-2">
+          <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
+            <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+              Content Type
+            </div>
+            <div className="text-text-bright mt-1 break-all font-mono text-xs">
+              {payload.contentType}
+            </div>
+          </div>
+          <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
+            <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+              Content Size
+            </div>
+            <div className="text-text-bright mt-1 font-mono text-xs">
+              {formatNumber(payload.contentBytes.length)} bytes
+            </div>
+          </div>
+          {clusterId && (
+            <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
+              <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                Cluster ID
+              </div>
+              <div className="mt-1">
+                <Link
+                  href={`/clusters/${clusterId}`}
+                  className="text-text-bright font-mono text-xs hover:underline"
+                >
+                  <HexDisplay value={clusterId} truncate={false} size="sm" />
+                </Link>
+              </div>
+            </div>
+          )}
+          {payload.textContent && (
+            <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
+              <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                Content (Text)
+              </div>
+              <pre className="text-text-bright mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">
+                {payload.textContent.length > 600
+                  ? `${payload.textContent.slice(0, 600)}...`
+                  : payload.textContent}
+              </pre>
+            </div>
+          )}
+        </div>
+      </TerminalPanelContent>
+    </TerminalPanel>
+  );
+
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -965,8 +1045,70 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
           </TerminalPanelContent>
         </TerminalPanel>
 
-        {/* DOB Details */}
-        {hasDecodedTraits && (
+        {/* Side-by-side row: Preview paired with DOB Details or Spore Content */}
+        {preview && (hasDecodedTraits || sporePayload) && (
+          <div className="mb-6 grid gap-6 lg:grid-cols-2">
+            <TerminalPanel className={previewStyle.panel}>
+              <TerminalPanelHeader indicator="active" className={previewStyle.header}>
+                <span className={previewStyle.headerText || undefined}>Content Preview</span>
+              </TerminalPanelHeader>
+              <TerminalPanelContent>
+                <SporePreview preview={preview} physicality={previewPhysicality} />
+              </TerminalPanelContent>
+            </TerminalPanel>
+            {hasDecodedTraits ? (
+              <TerminalPanel>
+                <TerminalPanelHeader indicator="active">
+                  {previewContentType.toUpperCase()} Details
+                </TerminalPanelHeader>
+                <TerminalPanelContent>
+                  {dobContent?.dnaHex && (
+                    <div className="border-info/30 bg-info/10 mb-3 rounded border px-3 py-2">
+                      <div className="text-info font-mono text-[10px] uppercase tracking-wider">
+                        DNA
+                      </div>
+                      <div className="text-info-dim mt-1 break-all font-mono text-xs">
+                        {dobContent.dnaHex}
+                      </div>
+                    </div>
+                  )}
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {dobContent!.traits.map((trait) => (
+                      <div
+                        key={`${trait.name}-${trait.value}`}
+                        className="border-base-border bg-base-surface/50 rounded border p-2.5"
+                      >
+                        <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                          {trait.name}
+                        </div>
+                        <div className="text-text-bright mt-1 break-all font-mono text-xs">
+                          {trait.value}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </TerminalPanelContent>
+              </TerminalPanel>
+            ) : (
+              <SporeContentPanel sporePayload={sporePayload!} clusterId={spore.clusterId} />
+            )}
+          </div>
+        )}
+
+        {/* Preview only (no companion panel) */}
+        {preview && !hasDecodedTraits && !sporePayload && (
+          <TerminalPanel className={`mb-6 ${previewStyle.panel}`}>
+            <TerminalPanelHeader indicator="active" className={previewStyle.header}>
+              <span className={previewStyle.headerText || undefined}>Content Preview</span>
+            </TerminalPanelHeader>
+            <TerminalPanelContent>
+              <SporePreview preview={preview} physicality={previewPhysicality} />
+            </TerminalPanelContent>
+          </TerminalPanel>
+        )}
+
+        {/* DOB Details standalone (no preview available) */}
+        {!preview && hasDecodedTraits && (
           <TerminalPanel className="mb-6">
             <TerminalPanelHeader indicator="active">
               {previewContentType.toUpperCase()} Details
@@ -1001,58 +1143,13 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
           </TerminalPanel>
         )}
 
-        {/* Spore Content */}
-        {sporePayload && (
-          <TerminalPanel className="mb-6">
-            <TerminalPanelHeader indicator="active">Spore Content</TerminalPanelHeader>
-            <TerminalPanelContent>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
-                  <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                    Content Type
-                  </div>
-                  <div className="text-text-bright mt-1 break-all font-mono text-xs">
-                    {sporePayload.contentType}
-                  </div>
-                </div>
-                <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
-                  <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                    Content Size
-                  </div>
-                  <div className="text-text-bright mt-1 font-mono text-xs">
-                    {formatNumber(sporePayload.contentBytes.length)} bytes
-                  </div>
-                </div>
-                {spore.clusterId && (
-                  <div className="border-base-border bg-base-surface/50 rounded border p-2.5 sm:col-span-2">
-                    <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                      Cluster ID
-                    </div>
-                    <div className="mt-1">
-                      <Link
-                        href={`/clusters/${spore.clusterId}`}
-                        className="text-text-bright font-mono text-xs hover:underline"
-                      >
-                        <HexDisplay value={spore.clusterId} truncate={false} size="sm" />
-                      </Link>
-                    </div>
-                  </div>
-                )}
-                {sporePayload.textContent && (
-                  <div className="border-base-border bg-base-surface/50 rounded border p-2.5 sm:col-span-2">
-                    <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                      Content (Text)
-                    </div>
-                    <pre className="text-text-bright mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">
-                      {sporePayload.textContent.length > 600
-                        ? `${sporePayload.textContent.slice(0, 600)}...`
-                        : sporePayload.textContent}
-                    </pre>
-                  </div>
-                )}
-              </div>
-            </TerminalPanelContent>
-          </TerminalPanel>
+        {/* Spore Content standalone (when not already paired in side-by-side with preview) */}
+        {sporePayload && !(preview && !hasDecodedTraits) && (
+          <SporeContentPanel
+            sporePayload={sporePayload}
+            clusterId={spore.clusterId}
+            className="mb-6"
+          />
         )}
 
         {/* Payload Hex View */}
