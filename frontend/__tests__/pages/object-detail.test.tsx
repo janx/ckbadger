@@ -218,7 +218,7 @@ describe('SporeDetailPage', () => {
     vi.mocked(api.getSporeObject).mockResolvedValue({
       ...mockSpore,
       mediaProfile: {
-        tier: 'fully_on_btc',
+        tier: 'fully_on_ckb_and_btc',
         hasRenderableImage: true,
         issues: [],
         sources: [
@@ -226,7 +226,7 @@ describe('SporeDetailPage', () => {
             uri: 'btcfs://abcdi0',
             scheme: 'btcfs',
             sourceLocation: 'dob_svg',
-            dependencyTier: 'fully_on_btc',
+            dependencyTier: 'fully_on_ckb_and_btc',
           },
         ],
       },
@@ -237,7 +237,7 @@ describe('SporeDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Media Sources')).toBeInTheDocument();
       expect(screen.getByText('btcfs://abcdi0')).toBeInTheDocument();
-      expect(screen.getAllByText('Fully on Bitcoin').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Fully on BTC+CKB').length).toBeGreaterThan(0);
     });
   });
 

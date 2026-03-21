@@ -122,23 +122,15 @@ fn resolve_tier(sources: &[SporeMediaSource]) -> StorageDependencyTier {
         .any(|source| source.dependency_tier == StorageDependencyTier::FullyOnCkb);
     let has_btc = sources
         .iter()
-        .any(|source| source.dependency_tier == StorageDependencyTier::FullyOnBtc);
-    // Legacy FullyOnchain sources are always CKB-native (btcfs differentiation
-    // did not exist before this change). Treat them as CKB.
-    let has_legacy = sources
-        .iter()
         .any(|source| source.dependency_tier == StorageDependencyTier::FullyOnCkbAndBtc);
 
-    let ckb_side = has_ckb || has_legacy;
-    if ckb_side && has_btc {
-        // Mixed CKB + BTC sources — not "fully on" either chain
+    if has_btc {
+        // Any btcfs:// source means content spans both Bitcoin and CKB.
+        // Objects are CKB cells, so btcfs content is never "fully on Bitcoin" alone.
         return StorageDependencyTier::FullyOnCkbAndBtc;
     }
-    if ckb_side {
+    if has_ckb {
         return StorageDependencyTier::FullyOnCkb;
-    }
-    if has_btc {
-        return StorageDependencyTier::FullyOnBtc;
     }
     // No external dependencies — content is stored entirely in the CKB cell.
     StorageDependencyTier::FullyOnCkb
@@ -284,7 +276,7 @@ fn classify_dependency_tier(scheme: &str) -> StorageDependencyTier {
     match scheme {
         "http" | "https" => StorageDependencyTier::CentralizedDependent,
         "ipfs" | "ar" => StorageDependencyTier::DecentralizedExternal,
-        "btcfs" => StorageDependencyTier::FullyOnBtc,
+        "btcfs" => StorageDependencyTier::FullyOnCkbAndBtc,
         "ckbfs" | "data" => StorageDependencyTier::FullyOnCkb,
         _ => StorageDependencyTier::Unknown,
     }
@@ -772,13 +764,13 @@ mod tests {
     }
 
     #[test]
-    fn classifies_btcfs_svg_as_fully_on_btc() {
+    fn classifies_btcfs_svg_as_fully_on_ckb_and_btc() {
         let profile = analyze_spore_media_profile(
             "image/svg+xml",
             br#"<svg><image href="btcfs://abcd1234i0" /></svg>"#,
             None,
         );
-        assert_eq!(profile.tier, StorageDependencyTier::FullyOnBtc);
+        assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkbAndBtc);
         assert!(profile.has_renderable_image);
         assert!(profile.sources.iter().any(|s| s.scheme == "btcfs"));
     }
@@ -814,7 +806,7 @@ mod tests {
         .to_string();
 
         let profile = analyze_spore_media_profile("dob/0", b"01", Some(&metadata));
-        assert_eq!(profile.tier, StorageDependencyTier::FullyOnBtc);
+        assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkbAndBtc);
         assert!(profile
             .sources
             .iter()
@@ -893,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn dob0_only_btcfs_trait_classifies_as_fully_on_btc() {
+    fn dob0_only_btcfs_trait_classifies_as_fully_on_ckb_and_btc() {
         // DOB0-only cluster (no DOB1 decoders): btcfs:// URIs in trait options
         // should be detected even without DOB1 SVG rendering.
         let metadata = serde_json::json!({
@@ -912,7 +904,7 @@ mod tests {
         .to_string();
 
         let profile = analyze_spore_media_profile("dob/0", b"aabbcc", Some(&metadata));
-        assert_eq!(profile.tier, StorageDependencyTier::FullyOnBtc);
+        assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkbAndBtc);
         assert!(profile.sources.iter().any(|s| s.scheme == "btcfs"));
     }
 

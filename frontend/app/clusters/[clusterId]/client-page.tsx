@@ -60,8 +60,6 @@ function getSortIndicator(direction: 'asc' | 'desc' | null): string {
 const STORAGE_TIER_DESCRIPTIONS: Record<string, string> = {
   fully_on_ckb:
     'All content is stored directly on the CKB blockchain (on-chain data or ckbfs://). Fully verifiable and permanent.',
-  fully_on_btc:
-    'Content is inscribed on Bitcoin via btcfs:// and bridged to CKB. Data permanence depends on Bitcoin.',
   fully_on_ckb_and_btc:
     'Content is stored across both CKB (on-chain data or ckbfs://) and Bitcoin (btcfs://). Fully verifiable and permanent.',
   decentralized_external:
@@ -81,14 +79,6 @@ function storageTierCardStyle(tier: string): {
   text: string;
   tooltipButton?: string;
 } {
-  if (tier === 'fully_on_btc') {
-    return {
-      card: 'storage-card-no-crt storage-card-btc rounded border border-[#8b6914] bg-[#4a3a12] p-3',
-      label: 'text-[#c8a84a]',
-      text: 'storage-text-engraved',
-      tooltipButton: `${TOOLTIP_BTN_BASE} text-[#c8a84a] border-[#8b6914] hover:text-[#f0d060] hover:border-[#c8a84a]`,
-    };
-  }
   if (tier === 'fully_on_ckb_and_btc') {
     return {
       card: 'storage-card-no-crt storage-card-both rounded border border-[#4a6838] bg-gradient-to-br from-[#4a3a12] to-[#0e3830] p-3',

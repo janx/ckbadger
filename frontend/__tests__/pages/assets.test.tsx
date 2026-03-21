@@ -378,7 +378,7 @@ describe('AssetsPage', () => {
     await waitFor(() => {
       expect(screen.getAllByText('Test Collection').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('SPORE').length).toBeGreaterThan(0);
-      expect(screen.getAllByText('Fully on Bitcoin+CKB').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Fully on BTC+CKB').length).toBeGreaterThanOrEqual(1);
       const links = screen.getAllByRole('link', { name: /Test Collection/i });
       expect(
         links.some(

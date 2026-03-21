@@ -78,7 +78,7 @@ describe('normalizeActivityAction', () => {
 
 describe('formatStorageTier', () => {
   it('formats fully_on_ckb_and_btc', () => {
-    expect(formatStorageTier('fully_on_ckb_and_btc')).toBe('Fully on Bitcoin+CKB');
+    expect(formatStorageTier('fully_on_ckb_and_btc')).toBe('Fully on BTC+CKB');
   });
 
   it('formats decentralized_external as merged offchain label', () => {

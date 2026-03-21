@@ -300,9 +300,8 @@ pub struct TokenTransferRecord {
 pub enum StorageDependencyTier {
     /// Content stored natively on CKB (inline cell data, ckbfs://, data: URIs).
     FullyOnCkb,
-    /// Content inscribed on Bitcoin and bridged to CKB via btcfs://.
-    FullyOnBtc,
-    /// Content depends on both Bitcoin (btcfs://) and CKB (ckbfs://, inline) storage.
+    /// Content depends on both Bitcoin (btcfs://) and CKB storage.
+    /// Objects are always CKB cells, so btcfs:// content is never "fully on Bitcoin" alone.
     FullyOnCkbAndBtc,
     DecentralizedExternal,
     CentralizedDependent,
@@ -314,7 +313,6 @@ impl StorageDependencyTier {
     pub fn as_str(&self) -> &'static str {
         match self {
             StorageDependencyTier::FullyOnCkb => "fully_on_ckb",
-            StorageDependencyTier::FullyOnBtc => "fully_on_btc",
             StorageDependencyTier::FullyOnCkbAndBtc => "fully_on_ckb_and_btc",
             StorageDependencyTier::DecentralizedExternal => "decentralized_external",
             StorageDependencyTier::CentralizedDependent => "centralized_dependent",
@@ -326,9 +324,7 @@ impl StorageDependencyTier {
     pub fn is_fully_onchain(&self) -> bool {
         matches!(
             self,
-            StorageDependencyTier::FullyOnCkb
-                | StorageDependencyTier::FullyOnBtc
-                | StorageDependencyTier::FullyOnCkbAndBtc
+            StorageDependencyTier::FullyOnCkb | StorageDependencyTier::FullyOnCkbAndBtc
         )
     }
 }
@@ -554,8 +550,6 @@ pub struct ClusterAggregate {
     pub fully_on_ckb_and_btc_count: i64,
     #[serde(default)]
     pub fully_on_ckb_count: i64,
-    #[serde(default)]
-    pub fully_on_btc_count: i64,
     #[serde(default)]
     pub decentralized_external_count: i64,
     #[serde(default)]

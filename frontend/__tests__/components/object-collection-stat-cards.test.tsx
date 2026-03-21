@@ -22,7 +22,7 @@ describe('ObjectCollectionStatCards', () => {
     );
 
     expect(screen.getByText('Storage Integrity')).toBeInTheDocument();
-    expect(screen.getByText('Fully on Bitcoin+CKB')).toBeInTheDocument();
+    expect(screen.getByText('Fully on BTC+CKB')).toBeInTheDocument();
     expect(screen.getByText(/On-chain ratio: 95\.00%/)).toBeInTheDocument();
   });
 

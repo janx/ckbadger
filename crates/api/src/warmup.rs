@@ -183,7 +183,6 @@ fn format_ratio_4(numerator: i64, denominator: i64) -> String {
 fn resolve_storage_tier(
     fully_on_ckb_and_btc: i64,
     fully_on_ckb: i64,
-    fully_on_btc: i64,
     decentralized_external: i64,
     centralized_dependent: i64,
     unknown: i64,
@@ -194,17 +193,12 @@ fn resolve_storage_tier(
     if decentralized_external > 0 {
         return "decentralized_external".to_string();
     }
-    let total_onchain = fully_on_ckb_and_btc + fully_on_ckb + fully_on_btc;
+    let total_onchain = fully_on_ckb_and_btc + fully_on_ckb;
     if total_onchain > 0 && unknown == 0 {
-        let has_ckb = fully_on_ckb > 0 || fully_on_ckb_and_btc > 0;
-        let has_btc = fully_on_btc > 0 || fully_on_ckb_and_btc > 0;
-        if has_ckb && !has_btc {
-            return "fully_on_ckb".to_string();
+        if fully_on_ckb_and_btc > 0 {
+            return "fully_on_ckb_and_btc".to_string();
         }
-        if has_btc && !has_ckb {
-            return "fully_on_btc".to_string();
-        }
-        return "fully_on_ckb_and_btc".to_string();
+        return "fully_on_ckb".to_string();
     }
     "unknown".to_string()
 }
@@ -518,13 +512,11 @@ fn build_asset_caches_sync(
                 e
             )
         })?;
-        let total_onchain =
-            agg.fully_on_ckb_and_btc_count + agg.fully_on_ckb_count + agg.fully_on_btc_count;
+        let total_onchain = agg.fully_on_ckb_and_btc_count + agg.fully_on_ckb_count;
         let fully_onchain_ratio = format_ratio_4(total_onchain, agg.live_count);
         let storage_tier = resolve_storage_tier(
             agg.fully_on_ckb_and_btc_count,
             agg.fully_on_ckb_count,
-            agg.fully_on_btc_count,
             agg.decentralized_external_count,
             agg.centralized_dependent_count,
             agg.unknown_count,
@@ -586,7 +578,7 @@ fn build_asset_caches_sync(
             .to_string();
         let fully_onchain_count = if matches!(
             storage_tier.as_str(),
-            "fully_on_ckb_and_btc" | "fully_on_ckb" | "fully_on_btc"
+            "fully_on_ckb_and_btc" | "fully_on_ckb"
         ) {
             agg.live_count
         } else {
@@ -657,7 +649,7 @@ fn build_asset_caches_sync(
             .to_string();
         let fully_onchain_count = if matches!(
             storage_tier.as_str(),
-            "fully_on_ckb_and_btc" | "fully_on_ckb" | "fully_on_btc"
+            "fully_on_ckb_and_btc" | "fully_on_ckb"
         ) {
             agg.live_count
         } else {

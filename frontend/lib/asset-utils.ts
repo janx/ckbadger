@@ -45,7 +45,6 @@ export function formatStorageTier(
   tier:
     | 'fully_on_ckb_and_btc'
     | 'fully_on_ckb'
-    | 'fully_on_btc'
     | 'decentralized_external'
     | 'centralized_dependent'
     | 'offchain_dependent'
@@ -53,8 +52,7 @@ export function formatStorageTier(
     | string
 ): string {
   if (tier === 'fully_on_ckb') return 'Fully on CKB';
-  if (tier === 'fully_on_btc') return 'Fully on Bitcoin';
-  if (tier === 'fully_on_ckb_and_btc') return 'Fully on Bitcoin+CKB';
+  if (tier === 'fully_on_ckb_and_btc') return 'Fully on BTC+CKB';
   if (
     tier === 'decentralized_external' ||
     tier === 'centralized_dependent' ||
