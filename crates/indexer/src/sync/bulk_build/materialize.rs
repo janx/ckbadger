@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{anyhow, Result};
 use ckbadger_store::keys;
 use ckbadger_store::types::{encode_live_cell_marker, CachedBlockHeader, LiveCellInfo};
@@ -5,6 +7,8 @@ use ckbadger_store::{
     cf_write_policy, is_append_only_cf_name, CfWritePolicy, CkbadgerStore, StoreBatch,
     CF_BLOCK_HEADERS, CF_CELLS, CF_LIVE_CELLS,
 };
+
+use super::PendingFlush;
 
 #[doc(hidden)]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -307,6 +311,83 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
 
     let _ = std::fs::remove_dir_all(&root);
     Ok(report)
+}
+
+#[derive(Debug, Default)]
+#[allow(dead_code)] // Wired in Task 5
+pub(crate) struct FlushChannelStats {
+    pub(crate) total_history_rows: usize,
+    pub(crate) total_sealed_rows: usize,
+    pub(crate) flush_count: usize,
+    pub(crate) last_flush_ms: f64,
+}
+
+#[allow(dead_code)] // Wired in Task 5
+pub(crate) struct FlushChannelHandle {
+    tx: tokio::sync::mpsc::Sender<PendingFlush>,
+    worker_handle: tokio::task::JoinHandle<Result<FlushChannelStats>>,
+    flush_ms_rx: tokio::sync::watch::Receiver<f64>,
+}
+
+#[allow(dead_code, private_interfaces)] // Wired in Task 5
+impl FlushChannelHandle {
+    pub(crate) fn new(
+        depth: usize,
+        domain_store: Arc<CkbadgerStore>,
+        append_only_store: Arc<CkbadgerStore>,
+    ) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::channel::<PendingFlush>(depth);
+        let (flush_ms_tx, flush_ms_rx) = tokio::sync::watch::channel(0.0_f64);
+        let worker_handle = tokio::task::spawn_blocking(move || {
+            Self::flush_worker(rx, &domain_store, &append_only_store, flush_ms_tx)
+        });
+        Self {
+            tx,
+            worker_handle,
+            flush_ms_rx,
+        }
+    }
+
+    fn flush_worker(
+        mut rx: tokio::sync::mpsc::Receiver<PendingFlush>,
+        domain_store: &CkbadgerStore,
+        append_only_store: &CkbadgerStore,
+        flush_ms_tx: tokio::sync::watch::Sender<f64>,
+    ) -> Result<FlushChannelStats> {
+        let mut stats = FlushChannelStats::default();
+        while let Some(pending) = rx.blocking_recv() {
+            let result = flush_rows_to_stores(
+                domain_store,
+                append_only_store,
+                pending.history_rows,
+                pending.sealed_rows,
+            )?;
+            stats.total_history_rows += result.history_rows;
+            stats.total_sealed_rows += result.sealed_rows;
+            stats.flush_count += 1;
+            stats.last_flush_ms = result.flush_ms;
+            let _ = flush_ms_tx.send(result.flush_ms);
+        }
+        Ok(stats)
+    }
+
+    pub(crate) async fn send(&self, pending: PendingFlush) -> Result<()> {
+        self.tx
+            .send(pending)
+            .await
+            .map_err(|_| anyhow!("flush channel worker has terminated unexpectedly"))
+    }
+
+    pub(crate) async fn close_and_wait(self) -> Result<FlushChannelStats> {
+        drop(self.tx);
+        self.worker_handle
+            .await
+            .map_err(|e| anyhow!("flush channel worker panicked: {}", e))?
+    }
+
+    pub(crate) fn last_flush_ms(&self) -> f64 {
+        *self.flush_ms_rx.borrow()
+    }
 }
 
 #[cfg(test)]
