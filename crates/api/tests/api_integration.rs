@@ -5667,7 +5667,7 @@ async fn test_assets_list_supports_storage_tier_filter_and_onchain_ratio_sort() 
     let rows = json["data"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["name"], "Onchain Cluster");
-    assert_eq!(rows[0]["storageTier"], "fully_onchain");
+    assert_eq!(rows[0]["storageTier"], "fully_on_ckb");
 
     let request = Request::builder()
         .uri("/api/v1/assets?type=nft&storage_tier=offchain_dependent")

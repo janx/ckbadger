@@ -95,10 +95,10 @@
     }
   ],
   "nft_storage_tier_overrides": {
-    ".bit": "fully_onchain",
-    "dotbit": "fully_onchain",
-    "did:ckb": "fully_onchain",
-    "did_ckb": "fully_onchain"
+    ".bit": "fully_on_ckb",
+    "dotbit": "fully_on_ckb",
+    "did:ckb": "fully_on_ckb",
+    "did_ckb": "fully_on_ckb"
   },
   "deprecated": [
     "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81",
