@@ -6182,6 +6182,130 @@ async fn test_assets_nft_collection_detail_uses_preaggregated_counts() {
 }
 
 #[tokio::test]
+async fn test_assets_nft_collection_detail_enriches_mnft_class_metadata() {
+    let store = test_store();
+    let issuer_id = [0x21u8; 20];
+    let class_id = [0x31u8; 24];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+
+    // Insert issuer ObjectEntry with MnftIssuer extra
+    batch.put_object(
+        &issuer_id,
+        &ObjectEntry {
+            standard: ObjectStandard::MnftIssuer,
+            collection_id: None,
+            token_id: None,
+            owner_lock_hash: Some(vec![0x01; 32]),
+            name: Some("Issuer-A".to_string()),
+            description: None,
+            is_live: true,
+            created_at_block: 90,
+            created_at_tx: vec![],
+            extra: ObjectExtra::MnftIssuer {
+                class_count: 2,
+                set_count: 3,
+                info: Some(br#"{"name":"Issuer-A"}"#.to_vec()),
+            },
+        },
+    );
+
+    // Insert class ObjectEntry with MnftClass extra
+    batch.put_object(
+        &class_id,
+        &ObjectEntry {
+            standard: ObjectStandard::MnftClass,
+            collection_id: Some(issuer_id.to_vec()),
+            token_id: None,
+            owner_lock_hash: Some(vec![0x02; 32]),
+            name: Some("Class-A".to_string()),
+            description: None,
+            is_live: true,
+            created_at_block: 95,
+            created_at_tx: vec![],
+            extra: ObjectExtra::MnftClass {
+                description: Some("Class description".to_string()),
+                renderer: Some("renderer:v1".to_string()),
+                total: 500,
+                issued: 128,
+                configure: 9,
+                storage_tier: StorageDependencyTier::FullyOnCkb,
+            },
+        },
+    );
+
+    // Insert ObjectCollectionAggregate (required for get_object_collection to find it)
+    batch.put_object_collection_aggregate(
+        &class_id,
+        &ObjectCollectionAggregate {
+            name: Some("Class-A".to_string()),
+            standard: ObjectStandard::MnftClass,
+            total_count: 50,
+            live_count: 40,
+            holders_count: 12,
+            activities_count: 30,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+
+    // Hit the endpoint
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/objects/0x{}",
+            hex::encode(class_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Verify base collection fields
+    assert_eq!(json["standard"], "m-nft");
+    assert_eq!(json["name"], "Class-A");
+    assert_eq!(json["totalCount"], 50);
+    assert_eq!(json["liveCount"], 40);
+    assert_eq!(json["holdersCount"], 12);
+    assert_eq!(json["activitiesCount"], 30);
+
+    // Verify enriched class metadata
+    assert_eq!(json["classDetail"]["name"], "Class-A");
+    assert_eq!(json["classDetail"]["description"], "Class description");
+    assert_eq!(json["classDetail"]["renderer"], "renderer:v1");
+    assert_eq!(json["classDetail"]["total"], 500);
+    assert_eq!(json["classDetail"]["issued"], 128);
+    assert_eq!(json["classDetail"]["configure"], 9);
+    assert_eq!(
+        json["classDetail"]["classId"],
+        format!("0x{}", hex::encode(class_id))
+    );
+    assert_eq!(
+        json["classDetail"]["issuerId"],
+        format!("0x{}", hex::encode(issuer_id))
+    );
+
+    // Verify enriched issuer metadata
+    assert_eq!(json["issuerDetail"]["name"], "Issuer-A");
+    assert_eq!(json["issuerDetail"]["classCount"], 2);
+    assert_eq!(json["issuerDetail"]["setCount"], 3);
+    assert_eq!(
+        json["issuerDetail"]["issuerId"],
+        format!("0x{}", hex::encode(issuer_id))
+    );
+
+    // Verify created_at_block and owner_lock_hash
+    assert_eq!(json["createdAtBlock"], 95);
+    let owner_hash = json["ownerLockHash"].as_str().unwrap();
+    assert!(owner_hash.starts_with("0x"));
+    assert_eq!(owner_hash, format!("0x{}", hex::encode(vec![0x02u8; 32])));
+}
+
+#[tokio::test]
 async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
     let store = test_store();
     let collection_id = b"did_ckb_collection______________".to_vec();
