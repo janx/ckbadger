@@ -123,14 +123,28 @@ fn resolve_tier(
     {
         return StorageDependencyTier::DecentralizedExternal;
     }
-    if sources
+
+    let has_ckb = sources
         .iter()
-        .any(|source| source.dependency_tier == StorageDependencyTier::FullyOnchain)
-    {
-        return StorageDependencyTier::FullyOnchain;
+        .any(|source| source.dependency_tier == StorageDependencyTier::FullyOnCkb);
+    let has_btc = sources
+        .iter()
+        .any(|source| source.dependency_tier == StorageDependencyTier::FullyOnBtc);
+    // Legacy FullyOnchain sources are always CKB-native (btcfs differentiation
+    // did not exist before this change). Treat them as CKB.
+    let has_legacy = sources
+        .iter()
+        .any(|source| source.dependency_tier == StorageDependencyTier::FullyOnchain);
+
+    if has_ckb || has_legacy {
+        return StorageDependencyTier::FullyOnCkb;
+    }
+    if has_btc {
+        return StorageDependencyTier::FullyOnBtc;
     }
     if binary_media || has_renderable_image {
-        return StorageDependencyTier::FullyOnchain;
+        // Inline binary data stored in CKB cell
+        return StorageDependencyTier::FullyOnCkb;
     }
     StorageDependencyTier::Unknown
 }
@@ -264,7 +278,8 @@ fn classify_dependency_tier(scheme: &str) -> StorageDependencyTier {
     match scheme {
         "http" | "https" => StorageDependencyTier::CentralizedDependent,
         "ipfs" | "ar" => StorageDependencyTier::DecentralizedExternal,
-        "btcfs" | "ckbfs" | "data" => StorageDependencyTier::FullyOnchain,
+        "btcfs" => StorageDependencyTier::FullyOnBtc,
+        "ckbfs" | "data" => StorageDependencyTier::FullyOnCkb,
         _ => StorageDependencyTier::Unknown,
     }
 }
@@ -751,13 +766,13 @@ mod tests {
     }
 
     #[test]
-    fn classifies_btcfs_svg_as_fully_onchain() {
+    fn classifies_btcfs_svg_as_fully_on_btc() {
         let profile = analyze_spore_media_profile(
             "image/svg+xml",
             br#"<svg><image href="btcfs://abcd1234i0" /></svg>"#,
             None,
         );
-        assert_eq!(profile.tier, StorageDependencyTier::FullyOnchain);
+        assert_eq!(profile.tier, StorageDependencyTier::FullyOnBtc);
         assert!(profile.has_renderable_image);
         assert!(profile.sources.iter().any(|s| s.scheme == "btcfs"));
     }
@@ -793,7 +808,7 @@ mod tests {
         .to_string();
 
         let profile = analyze_spore_media_profile("dob/0", b"01", Some(&metadata));
-        assert_eq!(profile.tier, StorageDependencyTier::FullyOnchain);
+        assert_eq!(profile.tier, StorageDependencyTier::FullyOnBtc);
         assert!(profile
             .sources
             .iter()
@@ -856,5 +871,18 @@ mod tests {
             .sources
             .iter()
             .any(|s| s.scheme == "ipfs" && s.uri == "ipfs://QmHashValue1234567890abcdef"));
+    }
+
+    #[test]
+    fn classifies_ckbfs_as_fully_on_ckb() {
+        let profile = analyze_spore_media_profile("text/plain", b"ckbfs://somecellhash", None);
+        assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkb);
+        assert!(profile.sources.iter().any(|s| s.scheme == "ckbfs"));
+    }
+
+    #[test]
+    fn classifies_inline_binary_as_fully_on_ckb() {
+        let profile = analyze_spore_media_profile("image/png", &[0x89, 0x50, 0x4E, 0x47], None);
+        assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkb);
     }
 }
