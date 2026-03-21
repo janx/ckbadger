@@ -1572,11 +1572,13 @@ fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum SyncChartKind {
     BlockRate,
     TxRate,
     WriteLatency,
     BuildLatency,
+    StoragePressure,
 }
 
 #[derive(Clone, Copy)]
@@ -1631,6 +1633,7 @@ fn sync_chart_data(app: &App, kind: SyncChartKind) -> &VecDeque<f64> {
         SyncChartKind::TxRate => &app.tx_rate_history,
         SyncChartKind::WriteLatency => &app.db_write_history,
         SyncChartKind::BuildLatency => &app.bulk_build_ms_history,
+        SyncChartKind::StoragePressure => &app.l0_files_history,
     }
 }
 
@@ -4567,6 +4570,18 @@ fn detect_layout_density(app: &App, area: Rect) -> LayoutDensity {
         LayoutDensity::Compact
     } else {
         LayoutDensity::Standard
+    }
+}
+
+/// Determine how many columns to render based on available width.
+#[allow(dead_code)]
+fn sync_column_count(width: u16) -> usize {
+    if width < 80 {
+        1
+    } else if width < 130 {
+        2
+    } else {
+        3
     }
 }
 
