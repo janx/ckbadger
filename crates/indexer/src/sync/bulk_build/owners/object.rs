@@ -1924,6 +1924,8 @@ impl ObjectOwner {
         spore_id: &[u8],
     ) -> Result<()> {
         let slot = match tier {
+            StorageDependencyTier::FullyOnCkb => &mut agg.fully_on_ckb_count,
+            StorageDependencyTier::FullyOnBtc => &mut agg.fully_on_btc_count,
             StorageDependencyTier::FullyOnchain => &mut agg.fully_onchain_count,
             StorageDependencyTier::DecentralizedExternal => &mut agg.decentralized_external_count,
             StorageDependencyTier::CentralizedDependent => &mut agg.centralized_dependent_count,

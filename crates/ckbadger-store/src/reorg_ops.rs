@@ -2033,6 +2033,8 @@ impl CkbadgerStore {
                                 _ => StorageDependencyTier::Unknown,
                             };
                             let tier_slot = match tier {
+                                StorageDependencyTier::FullyOnCkb => &mut agg.fully_on_ckb_count,
+                                StorageDependencyTier::FullyOnBtc => &mut agg.fully_on_btc_count,
                                 StorageDependencyTier::FullyOnchain => &mut agg.fully_onchain_count,
                                 StorageDependencyTier::DecentralizedExternal => {
                                     &mut agg.decentralized_external_count
