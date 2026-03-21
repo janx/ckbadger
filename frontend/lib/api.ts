@@ -775,6 +775,8 @@ interface Asset {
   ownedKnowledge: string | null;
   storageTier?:
     | 'fully_onchain'
+    | 'fully_on_ckb'
+    | 'fully_on_btc'
     | 'offchain_dependent'
     | 'decentralized_external'
     | 'centralized_dependent'
@@ -804,6 +806,8 @@ interface AssetQueryParams {
   sortDirection?: 'asc' | 'desc';
   storageTier?:
     | 'fully_onchain'
+    | 'fully_on_ckb'
+    | 'fully_on_btc'
     | 'offchain_dependent'
     | 'decentralized_external'
     | 'centralized_dependent'
@@ -947,8 +951,16 @@ interface SporeCluster {
   ownedCapacity?: string | null;
   ownedKnowledge?: string | null;
   storageProfile?: {
-    tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
+    tier:
+      | 'fully_onchain'
+      | 'fully_on_ckb'
+      | 'fully_on_btc'
+      | 'decentralized_external'
+      | 'centralized_dependent'
+      | 'unknown';
     fullyOnchainCount: number;
+    fullyOnCkbCount: number;
+    fullyOnBtcCount: number;
     decentralizedExternalCount: number;
     centralizedDependentCount: number;
     unknownCount: number;
@@ -970,13 +982,21 @@ interface SporeNft {
   ownedCapacity?: string | null;
   ownedKnowledge?: string | null;
   mediaProfile?: {
-    tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
+    tier:
+      | 'fully_onchain'
+      | 'fully_on_ckb'
+      | 'fully_on_btc'
+      | 'decentralized_external'
+      | 'centralized_dependent'
+      | 'unknown';
     sources: Array<{
       uri: string;
       scheme: string;
       sourceLocation: string;
       dependencyTier:
         | 'fully_onchain'
+        | 'fully_on_ckb'
+        | 'fully_on_btc'
         | 'decentralized_external'
         | 'centralized_dependent'
         | 'unknown';
@@ -1011,8 +1031,16 @@ interface ObjectCollection {
   ownedCapacity: string;
   ownedKnowledge: string;
   storageProfile?: {
-    tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
+    tier:
+      | 'fully_onchain'
+      | 'fully_on_ckb'
+      | 'fully_on_btc'
+      | 'decentralized_external'
+      | 'centralized_dependent'
+      | 'unknown';
     fullyOnchainCount: number;
+    fullyOnCkbCount: number;
+    fullyOnBtcCount: number;
     decentralizedExternalCount: number;
     centralizedDependentCount: number;
     unknownCount: number;
