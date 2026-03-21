@@ -1,6 +1,3 @@
-// Allow dead_code until BackgroundSampler is integrated into the main loop (Task 6).
-#![allow(dead_code)]
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
