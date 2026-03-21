@@ -1998,7 +1998,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
 
         (left, right)
     } else if let Some(bb) = sync.bulk_build.as_ref() {
-        build_bulk_build_diagnostics(bb, app, &cols, &rate_jitter_text, &eta_conf)
+        build_bulk_build_diagnostics(bb, app, &cols, &rate_jitter_text, &eta_conf, dense_panel)
     } else {
         (
             {
@@ -2104,12 +2104,13 @@ fn build_bulk_build_diagnostics(
     cols: &[Rect],
     rate_jitter_text: &str,
     eta_conf: &(&'static str, Color),
+    dense_panel: bool,
 ) -> (Vec<Line<'static>>, Vec<Line<'static>>) {
     // ── Left column: finalize checklist OR engine header + stage breakdown ──
     let left = if bb.finalize_phase.is_some() {
         build_finalize_left_column(bb, cols[0].height as usize)
     } else {
-        build_batch_left_column(bb, cols)
+        build_batch_left_column(bb, cols, dense_panel)
     };
 
     // ── Right column: memory, materialization, pressure gauges, sparklines ──
@@ -2189,7 +2190,11 @@ fn build_bulk_build_diagnostics(
 }
 
 /// Build the left column for normal per-batch bulk-build diagnostics.
-fn build_batch_left_column(bb: &BulkBuildProgressData, cols: &[Rect]) -> Vec<Line<'static>> {
+fn build_batch_left_column(
+    bb: &BulkBuildProgressData,
+    cols: &[Rect],
+    dense_panel: bool,
+) -> Vec<Line<'static>> {
     let batch_count_text = bb
         .batch_count
         .map(format_num_u64)
@@ -2247,6 +2252,105 @@ fn build_batch_left_column(bb: &BulkBuildProgressData, cols: &[Rect]) -> Vec<Lin
             Span::styled(format!(" {:>6.1}ms", ms), Style::default().fg(FOREGROUND)),
             Span::styled(format!(" {}", pct), Style::default().fg(SLATE_500)),
         ]));
+    }
+
+    // Facts parallel breakdown detail line (after stage bars)
+    if let (Some(par_ms), Some(merge_ms), Some(serial_ms)) = (
+        bb.facts_par_iter_ms,
+        bb.facts_merge_ms,
+        bb.facts_serial_equivalent_ms,
+    ) {
+        let speedup = if par_ms > 0.0 {
+            serial_ms / par_ms
+        } else {
+            0.0
+        };
+        let miss_rate_text = match (bb.facts_intern_slow_path_count, bb.facts_intern_total_count) {
+            (Some(slow), Some(total)) if total > 0 => {
+                format!("{:.1}%", slow as f64 / total as f64 * 100.0)
+            }
+            _ => "-".to_string(),
+        };
+        if dense_panel {
+            // Compact: one line
+            left.push(Line::from(vec![
+                Span::styled("  par ", Style::default().fg(SLATE_500)),
+                Span::styled(format!("{par_ms:.0}ms"), Style::default().fg(FOREGROUND)),
+                Span::styled("  merge ", Style::default().fg(SLATE_500)),
+                Span::styled(format!("{merge_ms:.0}ms"), Style::default().fg(FOREGROUND)),
+                Span::styled(
+                    format!("  {speedup:.1}"),
+                    Style::default().fg(TERMINAL_GREEN),
+                ),
+                Span::styled("\u{00d7} speedup", Style::default().fg(SLATE_500)),
+                Span::styled("  miss ", Style::default().fg(SLATE_500)),
+                Span::styled(miss_rate_text, Style::default().fg(FOREGROUND)),
+            ]));
+        } else {
+            // Detail: multi-line
+            left.push(Line::from(vec![
+                Span::styled("  par_iter ", Style::default().fg(SLATE_500)),
+                Span::styled(format!("{par_ms:>7.1}ms"), Style::default().fg(FOREGROUND)),
+                Span::styled(
+                    format!("  (serial equiv {serial_ms:.0}ms \u{2192} {speedup:.1}\u{00d7})"),
+                    Style::default().fg(SLATE_500),
+                ),
+            ]));
+            left.push(Line::from(vec![
+                Span::styled("  merge    ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format!("{merge_ms:>7.1}ms"),
+                    Style::default().fg(FOREGROUND),
+                ),
+                Span::styled(
+                    format!(
+                        "  ({:.1}%)",
+                        if (par_ms + merge_ms) > 0.0 {
+                            merge_ms / (par_ms + merge_ms) * 100.0
+                        } else {
+                            0.0
+                        }
+                    ),
+                    Style::default().fg(SLATE_500),
+                ),
+            ]));
+            let intern_text = match (bb.facts_intern_total_count, bb.facts_intern_slow_path_count) {
+                (Some(total), Some(slow)) => {
+                    format!(
+                        "  intern   {}k calls  {} miss ({})",
+                        total / 1000,
+                        format_num_u64(slow),
+                        miss_rate_text
+                    )
+                }
+                _ => "  intern   -".to_string(),
+            };
+            left.push(Line::from(Span::styled(
+                intern_text,
+                Style::default().fg(SLATE_500),
+            )));
+            // Volume line
+            let cells_text = bb
+                .facts_cell_count
+                .map(|c| format!("{}k", c / 1000))
+                .unwrap_or_else(|| "-".to_string());
+            let blocks_text = bb
+                .batch_block_span
+                .map(|b| format!("{}k", b / 1000))
+                .unwrap_or_else(|| "-".to_string());
+            left.push(Line::from(vec![
+                Span::styled("  volume   ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format!("{cells_text} cells"),
+                    Style::default().fg(FOREGROUND),
+                ),
+                Span::styled("  ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format!("{blocks_text} blocks"),
+                    Style::default().fg(FOREGROUND),
+                ),
+            ]));
+        }
     }
 
     let flush_text = bb
@@ -5796,7 +5900,7 @@ mod tests {
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(60), Constraint::Length(40)])
             .split(Rect::new(0, 0, 100, 20));
-        let lines = build_batch_left_column(&bb, &cols);
+        let lines = build_batch_left_column(&bb, &cols, false);
         let all_text: String = lines
             .iter()
             .map(|l| line_text(l))
