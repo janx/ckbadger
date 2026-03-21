@@ -297,14 +297,12 @@ impl BulkSyncPerfRun {
     pub fn record_batch_sample(&mut self, sample: BatchSample) -> Result<()> {
         self.append_sample("batch", &sample)?;
         self.batch_samples.push(sample);
-        self.write_metrics_file(&self.build_metrics(STATUS_RUNNING, None))?;
         Ok(())
     }
 
     pub fn record_heartbeat_sample(&mut self, sample: HeartbeatSample) -> Result<()> {
         self.append_sample("heartbeat", &sample)?;
         self.heartbeat_samples.push(sample);
-        self.write_metrics_file(&self.build_metrics(STATUS_RUNNING, None))?;
         Ok(())
     }
 
@@ -313,7 +311,6 @@ impl BulkSyncPerfRun {
         report: crate::sync::MaterializationReport,
     ) -> Result<()> {
         self.materialization_report = Some(report);
-        self.write_metrics_file(&self.build_metrics(STATUS_RUNNING, None))?;
         Ok(())
     }
 
