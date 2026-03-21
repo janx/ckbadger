@@ -797,25 +797,6 @@ fn start_bulk_build_session_marker(
     Ok(marker)
 }
 
-fn flush_bulk_build_materialized_state(
-    domain_store: &CkbadgerStore,
-    append_store: &CkbadgerStore,
-) -> Result<()> {
-    append_store.flush_all_memtables().map_err(|e| {
-        anyhow!(
-            "failed to flush append-only bulk build memtables before sync status persistence: {}",
-            e
-        )
-    })?;
-    domain_store.flush_all_memtables().map_err(|e| {
-        anyhow!(
-            "failed to flush domain bulk build memtables before sync status persistence: {}",
-            e
-        )
-    })?;
-    Ok(())
-}
-
 #[derive(Default)]
 struct CoreOwners {
     address: owners::address::AddressOwner,
@@ -2127,7 +2108,6 @@ where
         }
 
         runtime.finalize(domain_store.as_ref(), &mut materializer)?;
-        flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
         let sync_status = sync_totals.finalize_success(domain_store.as_ref(), false)?;
         crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
             .refresh_latest_dao_statistics()?;
@@ -2243,7 +2223,6 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             sync_totals.record_batch(&batch_stats)?;
         }
         runtime.finalize(domain_store.as_ref(), &mut materializer)?;
-        flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
         let sync_status = sync_totals.finalize_success(domain_store.as_ref(), true)?;
         crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
             .refresh_latest_dao_statistics()?;

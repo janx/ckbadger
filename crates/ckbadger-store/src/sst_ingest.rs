@@ -105,7 +105,18 @@ impl SstIngestBatch {
                 )
             })?;
 
+            let mut prev_key: Option<&[u8]> = None;
             for entry in &self.entries[group_start..i] {
+                if let Some(pk) = prev_key {
+                    if pk == entry.1.as_slice() {
+                        return Err(anyhow!(
+                            "duplicate key in SST batch: cf={} key_len={} batch_id={}",
+                            cf_name,
+                            entry.1.len(),
+                            batch_id,
+                        ));
+                    }
+                }
                 writer.put(&entry.1, &entry.2).map_err(|e| {
                     anyhow!(
                         "SstFileWriter::put failed: cf={} key_len={} error={}",
@@ -114,6 +125,7 @@ impl SstIngestBatch {
                         e
                     )
                 })?;
+                prev_key = Some(&entry.1);
             }
 
             writer.finish().map_err(|e| {
