@@ -45,6 +45,7 @@ pub(crate) mod interner;
 pub(crate) mod live_cells;
 pub(crate) mod materialize;
 pub(crate) mod owners;
+pub(crate) mod prefetch;
 pub(crate) mod sequencer;
 
 const BULK_BUILD_MIN_BLOCK_SPAN: u64 = 10_000;
