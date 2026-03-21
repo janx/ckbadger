@@ -433,11 +433,11 @@ impl App {
             let batch_count = bb.batch_count.unwrap_or(0);
             if batch_count > 0 && batch_count != self.last_overlap_batch_count {
                 let build_ms = bb.build_ms.unwrap_or(0.0);
-                let prefetch_collect_ms = bb.prefetch_collect_ms.unwrap_or(0.0);
+                let prefetch_recv_ms = bb.prefetch_recv_ms.unwrap_or(0.0);
                 let flush_wait_ms = bb.flush_wait_ms.unwrap_or(0.0);
 
                 push_history_sample(&mut self.build_cpu_ms_history, build_ms);
-                push_history_sample(&mut self.fetch_wait_ms_history, prefetch_collect_ms);
+                push_history_sample(&mut self.fetch_wait_ms_history, prefetch_recv_ms);
                 push_history_sample(&mut self.flush_wait_ms_history, flush_wait_ms);
                 self.last_overlap_batch_count = batch_count;
             }
@@ -2182,13 +2182,13 @@ fn budget_sparkline_line(
 /// per sub-phase) but stays on a single line — no extra vertical space.
 fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, area: Rect) {
     let build_ms = bb.build_ms.unwrap_or(0.0);
-    let prefetch_collect_ms = bb.prefetch_collect_ms.unwrap_or(0.0);
+    let prefetch_recv_ms = bb.prefetch_recv_ms.unwrap_or(0.0);
     let flush_wait_ms = bb.flush_wait_ms.unwrap_or(0.0);
     let fetch_ms = bb.fetch_ms.unwrap_or(0.0);
     let flush_ms = bb.flush_ms.unwrap_or(0.0);
     let batch_count = bb.batch_count.unwrap_or(0);
-    let iteration_ms = build_ms + prefetch_collect_ms + flush_wait_ms;
-    let wait_ms = prefetch_collect_ms + flush_wait_ms;
+    let iteration_ms = build_ms + prefetch_recv_ms + flush_wait_ms;
+    let wait_ms = prefetch_recv_ms + flush_wait_ms;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -6119,9 +6119,9 @@ mod tests {
     fn test_iteration_budget_components() {
         // Iteration budget: build dominates, wait times are small fractions.
         let build_ms = 3000.0_f64;
-        let prefetch_collect_ms = 50.0_f64;
+        let prefetch_recv_ms = 50.0_f64;
         let flush_wait_ms = 100.0_f64;
-        let total = build_ms + prefetch_collect_ms + flush_wait_ms;
+        let total = build_ms + prefetch_recv_ms + flush_wait_ms;
         assert!((total - 3150.0).abs() < f64::EPSILON);
         assert!(build_ms / total > 0.9, "build should dominate");
     }
@@ -6129,18 +6129,18 @@ mod tests {
     #[test]
     fn test_gantt_bar_positions_collapsed() {
         let build_ms = 3000.0_f64;
-        let prefetch_collect_ms = 50.0_f64;
+        let prefetch_recv_ms = 50.0_f64;
         let flush_wait_ms = 100.0_f64;
         let fetch_ms = 200.0_f64;
         let flush_ms = 80.0_f64;
-        let iteration_ms = build_ms + prefetch_collect_ms + flush_wait_ms;
+        let iteration_ms = build_ms + prefetch_recv_ms + flush_wait_ms;
 
         // BUILD: 0 → build_ms
         assert!((0.0_f64).abs() < f64::EPSILON);
         assert!((build_ms - 3000.0).abs() < f64::EPSILON);
 
-        // FETCH: ends at build_ms + prefetch_collect_ms, extends left by fetch_ms
-        let fetch_end = build_ms + prefetch_collect_ms;
+        // FETCH: ends at build_ms + prefetch_recv_ms, extends left by fetch_ms
+        let fetch_end = build_ms + prefetch_recv_ms;
         let fetch_start = (fetch_end - fetch_ms).max(0.0);
         assert!((fetch_start - 2850.0).abs() < f64::EPSILON);
         assert!((fetch_end - 3050.0).abs() < f64::EPSILON);

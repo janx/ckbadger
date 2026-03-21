@@ -266,7 +266,7 @@ impl BulkBuildEngine {
             }
             let prefetch_collect_elapsed = collect_started.elapsed();
 
-            // controllable_ms: build + prefetch_collect. Excludes flush_wait because
+            // controllable_ms: build + prefetch_recv. Excludes flush_wait because
             // flush depends on RocksDB compaction, not batch size. Including flush_wait
             // would create a positive feedback loop (slow flush → shrink batch → faster
             // build → longer flush wait → shrink more → drives to minimum floor).
@@ -363,7 +363,7 @@ impl BulkBuildEngine {
             sample.flush_wait_ms = flush_wait_elapsed.as_secs_f64() * 1000.0;
             sample.flush_channel_depth = FLUSH_CHANNEL_DEPTH as u64;
             sample.flush_channel_pending = flush_channel_pending;
-            sample.prefetch_collect_ms = prefetch_collect_elapsed.as_secs_f64() * 1000.0;
+            sample.prefetch_recv_ms = prefetch_collect_elapsed.as_secs_f64() * 1000.0;
             sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
             // Cumulative row counts: tracks rows sent to flush channel.
