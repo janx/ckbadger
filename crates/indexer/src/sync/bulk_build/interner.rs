@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::sync::types::InternId;
@@ -13,6 +14,8 @@ pub(crate) struct IdentityInterner {
     /// snapshot is alive the inner Vec is mutated in-place (no clone);
     /// if a snapshot is still alive (refcount > 1) it clones first.
     values: Mutex<Arc<Vec<Arc<[u8]>>>>,
+    intern_call_count: AtomicU64,
+    intern_slow_path_count: AtomicU64,
 }
 
 impl Default for IdentityInterner {
@@ -20,6 +23,8 @@ impl Default for IdentityInterner {
         Self {
             by_value: DashMap::new(),
             values: Mutex::new(Arc::new(Vec::new())),
+            intern_call_count: AtomicU64::new(0),
+            intern_slow_path_count: AtomicU64::new(0),
         }
     }
 }
@@ -30,15 +35,22 @@ impl IdentityInterner {
         Self {
             by_value: DashMap::with_capacity(capacity),
             values: Mutex::new(Arc::new(Vec::with_capacity(capacity))),
+            intern_call_count: AtomicU64::new(0),
+            intern_slow_path_count: AtomicU64::new(0),
         }
     }
 
     /// Intern a byte sequence. Thread-safe for concurrent callers.
     pub(crate) fn intern_bytes(&self, bytes: Vec<u8>) -> InternId {
+        self.intern_call_count.fetch_add(1, Ordering::Relaxed);
         // Fast path: lock-free DashMap read
         if let Some(id) = self.by_value.get(&bytes) {
             return *id;
         }
+        // Counts Mutex acquisitions, not new-identity insertions. The double-check inside the
+        // Mutex may find the value already inserted by another thread, but the contention
+        // (Mutex wait) still occurred.
+        self.intern_slow_path_count.fetch_add(1, Ordering::Relaxed);
         // Slow path: acquire values lock, double-check, insert
         let mut values = self.values.lock().unwrap();
         if let Some(id) = self.by_value.get(&bytes) {
@@ -49,6 +61,14 @@ impl IdentityInterner {
         vec.push(Arc::from(bytes.as_slice()));
         self.by_value.insert(bytes, id);
         id
+    }
+
+    /// Read and reset per-batch intern counters. Called once per batch.
+    #[allow(dead_code)]
+    pub(crate) fn drain_counters(&self) -> (u64, u64) {
+        let total = self.intern_call_count.swap(0, Ordering::Relaxed);
+        let slow = self.intern_slow_path_count.swap(0, Ordering::Relaxed);
+        (total, slow)
     }
 
     /// Create a frozen snapshot for read-only access during reduce phase.
@@ -225,5 +245,25 @@ mod tests {
     #[should_panic(expected = "intern id overflow: index")]
     fn script_identity_intern_id_overflows_u32() {
         InternId::new(u32::MAX as usize + 1);
+    }
+
+    #[test]
+    fn drain_counters_returns_counts_and_resets() {
+        let interner = IdentityInterner::default();
+        // First intern: new value → slow path (Mutex)
+        interner.intern_bytes(vec![1, 2, 3]);
+        // Second intern: same value → fast path (DashMap hit)
+        interner.intern_bytes(vec![1, 2, 3]);
+        // Third intern: new value → slow path
+        interner.intern_bytes(vec![4, 5, 6]);
+
+        let (total, slow) = interner.drain_counters();
+        assert_eq!(total, 3, "3 total intern_bytes calls");
+        assert_eq!(slow, 2, "2 slow-path Mutex acquisitions (new identities)");
+
+        // After drain, counters reset to zero
+        let (total2, slow2) = interner.drain_counters();
+        assert_eq!(total2, 0);
+        assert_eq!(slow2, 0);
     }
 }

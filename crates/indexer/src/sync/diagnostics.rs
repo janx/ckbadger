@@ -434,6 +434,12 @@ impl BulkBuildPerfStats {
             target_iteration_ms: Some(us_to_ms(
                 self.target_iteration_ms_us.load(Ordering::Relaxed),
             )),
+            facts_par_iter_ms: None,
+            facts_merge_ms: None,
+            facts_serial_equivalent_ms: None,
+            facts_intern_slow_path_count: None,
+            facts_intern_total_count: None,
+            facts_cell_count: None,
         })
     }
 

@@ -283,6 +283,24 @@ pub struct BulkBuildProgressData {
     /// Target wall-clock iteration budget in ms (constant: 1500ms).
     #[serde(default)]
     pub target_iteration_ms: Option<f64>,
+    /// Facts phase: rayon par_iter wall-clock time in ms.
+    #[serde(default)]
+    pub facts_par_iter_ms: Option<f64>,
+    /// Facts phase: serial arena merge wall-clock time in ms.
+    #[serde(default)]
+    pub facts_merge_ms: Option<f64>,
+    /// Facts phase: sum of per-block parse times (serial equivalent) in ms.
+    #[serde(default)]
+    pub facts_serial_equivalent_ms: Option<f64>,
+    /// Facts phase: number of intern_bytes calls that took the Mutex slow path.
+    #[serde(default)]
+    pub facts_intern_slow_path_count: Option<u64>,
+    /// Facts phase: total number of intern_bytes calls.
+    #[serde(default)]
+    pub facts_intern_total_count: Option<u64>,
+    /// Facts phase: total cells parsed in the batch.
+    #[serde(default)]
+    pub facts_cell_count: Option<u64>,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {
@@ -758,6 +776,12 @@ mod tests {
             ms_per_block_ema: Some(0.042),
             controllable_ms: Some(1380.0),
             target_iteration_ms: Some(1500.0),
+            facts_par_iter_ms: None,
+            facts_merge_ms: None,
+            facts_serial_equivalent_ms: None,
+            facts_intern_slow_path_count: None,
+            facts_intern_total_count: None,
+            facts_cell_count: None,
         };
 
         let json = serde_json::to_string(&bb).unwrap();
