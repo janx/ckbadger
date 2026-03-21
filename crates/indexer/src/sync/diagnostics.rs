@@ -314,6 +314,13 @@ pub(crate) struct BulkBuildPerfStats {
     ms_per_block_ema_bits: AtomicU64,
     controllable_ms_us: AtomicU64,
     target_iteration_ms_us: AtomicU64,
+    // Facts phase breakdown
+    last_facts_par_iter_us: AtomicU64,
+    last_facts_merge_us: AtomicU64,
+    last_facts_serial_equivalent_us: AtomicU64,
+    last_facts_intern_slow_path_count: AtomicU64,
+    last_facts_intern_total_count: AtomicU64,
+    last_facts_cell_count: AtomicU64,
 }
 
 impl BulkBuildPerfStats {
@@ -341,6 +348,12 @@ impl BulkBuildPerfStats {
         ms_per_block_ema: f64,
         controllable_ms: f64,
         target_iteration_ms: f64,
+        facts_par_iter_ms: f64,
+        facts_merge_ms: f64,
+        facts_serial_equivalent_ms: f64,
+        facts_intern_slow_path_count: u64,
+        facts_intern_total_count: u64,
+        facts_cell_count: u64,
     ) {
         self.last_facts_us
             .store(ms_to_us(facts_ms), Ordering::Relaxed);
@@ -381,6 +394,18 @@ impl BulkBuildPerfStats {
             .store(ms_to_us(controllable_ms), Ordering::Relaxed);
         self.target_iteration_ms_us
             .store(ms_to_us(target_iteration_ms), Ordering::Relaxed);
+        self.last_facts_par_iter_us
+            .store(ms_to_us(facts_par_iter_ms), Ordering::Relaxed);
+        self.last_facts_merge_us
+            .store(ms_to_us(facts_merge_ms), Ordering::Relaxed);
+        self.last_facts_serial_equivalent_us
+            .store(ms_to_us(facts_serial_equivalent_ms), Ordering::Relaxed);
+        self.last_facts_intern_slow_path_count
+            .store(facts_intern_slow_path_count, Ordering::Relaxed);
+        self.last_facts_intern_total_count
+            .store(facts_intern_total_count, Ordering::Relaxed);
+        self.last_facts_cell_count
+            .store(facts_cell_count, Ordering::Relaxed);
     }
 
     pub(crate) fn snapshot(&self) -> Option<BulkBuildProgressData> {
@@ -434,12 +459,21 @@ impl BulkBuildPerfStats {
             target_iteration_ms: Some(us_to_ms(
                 self.target_iteration_ms_us.load(Ordering::Relaxed),
             )),
-            facts_par_iter_ms: None,
-            facts_merge_ms: None,
-            facts_serial_equivalent_ms: None,
-            facts_intern_slow_path_count: None,
-            facts_intern_total_count: None,
-            facts_cell_count: None,
+            facts_par_iter_ms: Some(us_to_ms(
+                self.last_facts_par_iter_us.load(Ordering::Relaxed),
+            )),
+            facts_merge_ms: Some(us_to_ms(self.last_facts_merge_us.load(Ordering::Relaxed))),
+            facts_serial_equivalent_ms: Some(us_to_ms(
+                self.last_facts_serial_equivalent_us.load(Ordering::Relaxed),
+            )),
+            facts_intern_slow_path_count: Some(
+                self.last_facts_intern_slow_path_count
+                    .load(Ordering::Relaxed),
+            ),
+            facts_intern_total_count: Some(
+                self.last_facts_intern_total_count.load(Ordering::Relaxed),
+            ),
+            facts_cell_count: Some(self.last_facts_cell_count.load(Ordering::Relaxed)),
         })
     }
 
@@ -985,6 +1019,12 @@ mod tests {
             0.042,         // ms_per_block_ema
             1380.0,        // controllable_ms
             1500.0,        // target_iteration_ms
+            0.0,           // facts_par_iter_ms
+            0.0,           // facts_merge_ms
+            0.0,           // facts_serial_equivalent_ms
+            0,             // facts_intern_slow_path_count
+            0,             // facts_intern_total_count
+            0,             // facts_cell_count
         );
 
         let snap = perf.snapshot().expect("should have data after record");
@@ -1002,6 +1042,48 @@ mod tests {
         assert!((snap.ms_per_block_ema.unwrap() - 0.042).abs() < f64::EPSILON);
         assert!((snap.controllable_ms.unwrap() - 1380.0).abs() < 0.01);
         assert!((snap.target_iteration_ms.unwrap() - 1500.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_snapshot_includes_facts_breakdown() {
+        let perf = BulkBuildPerfStats::default();
+        perf.record_batch(
+            45.2,
+            35.8,
+            28.1,
+            18.5,
+            8.3,
+            5.1,
+            52.0,
+            120.5,
+            141.0,
+            1_800_000_000,
+            12_345_678,
+            5_000,
+            3_000,
+            45_230,
+            12_890,
+            8_500,
+            1,
+            4.7,
+            0.042,
+            1380.0,
+            1500.0,
+            // facts breakdown:
+            40.0,   // facts_par_iter_ms
+            5.2,    // facts_merge_ms
+            280.0,  // facts_serial_equivalent_ms
+            1_200,  // facts_intern_slow_path_count
+            42_000, // facts_intern_total_count
+            28_000, // facts_cell_count
+        );
+        let snap = perf.snapshot().unwrap();
+        assert!((snap.facts_par_iter_ms.unwrap() - 40.0).abs() < 0.01);
+        assert!((snap.facts_merge_ms.unwrap() - 5.2).abs() < 0.01);
+        assert!((snap.facts_serial_equivalent_ms.unwrap() - 280.0).abs() < 0.01);
+        assert_eq!(snap.facts_intern_slow_path_count, Some(1_200));
+        assert_eq!(snap.facts_intern_total_count, Some(42_000));
+        assert_eq!(snap.facts_cell_count, Some(28_000));
     }
 
     #[test]

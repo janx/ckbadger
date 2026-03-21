@@ -38,7 +38,6 @@ use crate::sync::helpers::checked_usize_to_i16;
 /// Per-batch timing breakdown for the Facts phase.
 /// Returned alongside `FactsArena` to decompose `facts_ms` into parallel vs serial components.
 #[derive(Debug, Default, Clone)]
-#[allow(dead_code)] // fields consumed by downstream tasks (BulkBuildPerfStats, BatchSample, TUI)
 pub(crate) struct FactsTimingBreakdown {
     /// Wall-clock time of the rayon par_iter phase (ms).
     pub par_iter_ms: f64,

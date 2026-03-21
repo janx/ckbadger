@@ -64,7 +64,6 @@ impl IdentityInterner {
     }
 
     /// Read and reset per-batch intern counters. Called once per batch.
-    #[allow(dead_code)]
     pub(crate) fn drain_counters(&self) -> (u64, u64) {
         let total = self.intern_call_count.swap(0, Ordering::Relaxed);
         let slow = self.intern_slow_path_count.swap(0, Ordering::Relaxed);

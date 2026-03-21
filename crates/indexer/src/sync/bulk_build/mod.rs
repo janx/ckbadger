@@ -327,6 +327,13 @@ impl BulkBuildEngine {
             sample.history_ms = build_timings.history_ms;
             sample.address_reduce_ms = build_timings.address_reduce_ms;
             sample.activity_stats_ms = build_timings.activity_stats_ms;
+            sample.facts_par_iter_ms = build_timings.facts_breakdown.par_iter_ms;
+            sample.facts_merge_ms = build_timings.facts_breakdown.merge_ms;
+            sample.facts_serial_equivalent_ms = build_timings.facts_breakdown.serial_equivalent_ms;
+            sample.facts_intern_slow_path_count =
+                build_timings.facts_breakdown.intern_slow_path_count;
+            sample.facts_intern_total_count = build_timings.facts_breakdown.intern_total_count;
+            sample.facts_cell_count = build_timings.facts_breakdown.cell_count;
             sample.flush_ms = prev_flush_ms;
             sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
@@ -368,6 +375,12 @@ impl BulkBuildEngine {
                 ms_per_block_ema,
                 controllable_ms,
                 BULK_BUILD_TARGET_ITERATION_MS,
+                build_timings.facts_breakdown.par_iter_ms,
+                build_timings.facts_breakdown.merge_ms,
+                build_timings.facts_breakdown.serial_equivalent_ms,
+                build_timings.facts_breakdown.intern_slow_path_count,
+                build_timings.facts_breakdown.intern_total_count,
+                build_timings.facts_breakdown.cell_count,
             );
 
             indexer.record_bulk_sync_perf_batch_sample(sample);
@@ -642,7 +655,6 @@ impl BatchExecutionStats {
 #[derive(Debug, Default, Clone)]
 struct BatchBuildTimings {
     facts_ms: f64,
-    #[allow(dead_code)] // consumed by downstream tasks (BulkBuildPerfStats, BatchSample)
     facts_breakdown: binary_facts::FactsTimingBreakdown,
     resolve_ms: f64,
     reduce_ms: f64,
