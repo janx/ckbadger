@@ -293,6 +293,8 @@ pub(crate) struct BulkBuildPerfStats {
     last_flush_us: AtomicU64,
     last_fetch_us: AtomicU64,
     last_build_us: AtomicU64,
+    last_flush_wait_us: AtomicU64,
+    last_prefetch_collect_us: AtomicU64,
     // In-memory state
     owner_memory_bytes: AtomicU64,
     live_cell_count: AtomicU64,
@@ -354,6 +356,8 @@ impl BulkBuildPerfStats {
         facts_intern_slow_path_count: u64,
         facts_intern_total_count: u64,
         facts_cell_count: u64,
+        flush_wait_ms: f64,
+        prefetch_collect_ms: f64,
     ) {
         self.last_facts_us
             .store(ms_to_us(facts_ms), Ordering::Relaxed);
@@ -406,6 +410,10 @@ impl BulkBuildPerfStats {
             .store(facts_intern_total_count, Ordering::Relaxed);
         self.last_facts_cell_count
             .store(facts_cell_count, Ordering::Relaxed);
+        self.last_flush_wait_us
+            .store(ms_to_us(flush_wait_ms), Ordering::Relaxed);
+        self.last_prefetch_collect_us
+            .store(ms_to_us(prefetch_collect_ms), Ordering::Relaxed);
     }
 
     pub(crate) fn snapshot(&self) -> Option<BulkBuildProgressData> {
@@ -437,8 +445,10 @@ impl BulkBuildPerfStats {
                 self.last_activity_stats_us.load(Ordering::Relaxed),
             )),
             flush_ms: Some(us_to_ms(self.last_flush_us.load(Ordering::Relaxed))),
-            flush_wait_ms: None,
-            prefetch_collect_ms: None,
+            flush_wait_ms: Some(us_to_ms(self.last_flush_wait_us.load(Ordering::Relaxed))),
+            prefetch_collect_ms: Some(us_to_ms(
+                self.last_prefetch_collect_us.load(Ordering::Relaxed),
+            )),
             fetch_ms: Some(us_to_ms(self.last_fetch_us.load(Ordering::Relaxed))),
             build_ms: Some(us_to_ms(self.last_build_us.load(Ordering::Relaxed))),
             owner_memory_bytes: Some(self.owner_memory_bytes.load(Ordering::Relaxed)),
@@ -1027,6 +1037,8 @@ mod tests {
             0,             // facts_intern_slow_path_count
             0,             // facts_intern_total_count
             0,             // facts_cell_count
+            0.0,           // flush_wait_ms
+            0.0,           // prefetch_collect_ms
         );
 
         let snap = perf.snapshot().expect("should have data after record");
@@ -1078,6 +1090,8 @@ mod tests {
             1_200,  // facts_intern_slow_path_count
             42_000, // facts_intern_total_count
             28_000, // facts_cell_count
+            0.0,    // flush_wait_ms
+            0.0,    // prefetch_collect_ms
         );
         let snap = perf.snapshot().unwrap();
         assert!((snap.facts_par_iter_ms.unwrap() - 40.0).abs() < 0.01);
@@ -1086,6 +1100,42 @@ mod tests {
         assert_eq!(snap.facts_intern_slow_path_count, Some(1_200));
         assert_eq!(snap.facts_intern_total_count, Some(42_000));
         assert_eq!(snap.facts_cell_count, Some(28_000));
+    }
+
+    #[test]
+    fn test_bulk_build_perf_includes_wait_fields() {
+        let stats = BulkBuildPerfStats::default();
+        assert!(stats.snapshot().is_none());
+
+        stats.record_batch(
+            10.0, 5.0, 8.0, 3.0, 2.0,
+            1.0, // facts, resolve, reduce, history, addr_reduce, activity_stats
+            50.0, 200.0, 3000.0, // flush, fetch, build
+            1000, 500, 100, 80, // owner_mem, live_cells, created, consumed
+            1000, 500, // cumulative_history, cumulative_sealed
+            5000, 1, // batch_block_span, batch_count
+            2.5, 0.8, 3100.0,
+            1500.0, // tx_density, ms_per_block_ema, controllable, target_iteration
+            8.0, 2.0, 40.0, // facts_par_iter, facts_merge, facts_serial_equiv
+            5, 100, 200, // facts_intern_slow, facts_intern_total, facts_cell_count
+            15.0, 3.5, // flush_wait_ms, prefetch_collect_ms
+        );
+
+        let snap = stats
+            .snapshot()
+            .expect("snapshot should be Some after record_batch");
+        let fw = snap.flush_wait_ms.expect("flush_wait_ms should be Some");
+        assert!(
+            (fw - 15.0).abs() < 0.01,
+            "flush_wait_ms: expected ~15.0, got {fw}"
+        );
+        let pc = snap
+            .prefetch_collect_ms
+            .expect("prefetch_collect_ms should be Some");
+        assert!(
+            (pc - 3.5).abs() < 0.01,
+            "prefetch_collect_ms: expected ~3.5, got {pc}"
+        );
     }
 
     #[test]

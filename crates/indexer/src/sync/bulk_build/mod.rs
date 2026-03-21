@@ -381,6 +381,8 @@ impl BulkBuildEngine {
                 build_timings.facts_breakdown.intern_slow_path_count,
                 build_timings.facts_breakdown.intern_total_count,
                 build_timings.facts_breakdown.cell_count,
+                0.0, // flush_wait_ms (wired in Task 3)
+                0.0, // prefetch_collect_ms (wired in Task 3)
             );
 
             indexer.record_bulk_sync_perf_batch_sample(sample);
