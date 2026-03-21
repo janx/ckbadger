@@ -42,8 +42,17 @@ export function normalizeActivityAction(action: string): string {
 
 /** Map storage tier enum to human-readable label. */
 export function formatStorageTier(
-  tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown' | string
+  tier:
+    | 'fully_onchain'
+    | 'fully_on_ckb'
+    | 'fully_on_btc'
+    | 'decentralized_external'
+    | 'centralized_dependent'
+    | 'unknown'
+    | string
 ): string {
+  if (tier === 'fully_on_ckb') return 'Fully on CKB';
+  if (tier === 'fully_on_btc') return 'Fully on Bitcoin';
   if (tier === 'fully_onchain') return 'Fully On-chain';
   if (tier === 'decentralized_external') return 'Decentralized External';
   if (tier === 'centralized_dependent') return 'Centralized Dependency';

@@ -10,6 +10,7 @@ describe('parseSporeClusterDescription', () => {
       metadataEntries: [],
       rawJson: null,
       isJson: false,
+      dob: null,
     });
   });
 
@@ -54,6 +55,7 @@ describe('parseSporeClusterDescription', () => {
       metadataEntries: [],
       rawJson: '[\n  "a",\n  "b",\n  "c"\n]',
       isJson: true,
+      dob: null,
     });
   });
 
@@ -63,7 +65,11 @@ describe('parseSporeClusterDescription', () => {
         description: 'DOB collection metadata',
         dob: {
           ver: 1,
-          pattern: [{}, {}, {}],
+          pattern: [
+            ['Background', 'String', 0, 1, 'options', ['red', 'blue', 'green']],
+            ['Size', null, 1, 1, 'range', [10, 100]],
+            [{}, {}, {}],
+          ],
           decoders: [{}, {}],
         },
       })
@@ -87,5 +93,13 @@ describe('parseSporeClusterDescription', () => {
         value: '2',
       },
     ]);
+    expect(parsed?.dob).toEqual({
+      version: 1,
+      patternItems: [
+        { traitName: 'Background', patternType: 'options', dobType: 'String', optionsCount: 3 },
+        { traitName: 'Size', patternType: 'range', dobType: null, optionsCount: 2 },
+      ],
+      decodersCount: 2,
+    });
   });
 });

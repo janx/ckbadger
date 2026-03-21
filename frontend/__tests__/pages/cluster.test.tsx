@@ -130,12 +130,9 @@ describe('ClusterDetailPage', () => {
       expect(screen.getByText('A test collection of spores')).toBeInTheDocument();
       expect(screen.getByText('Spore Cluster')).toBeInTheDocument();
       expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
-      expect(screen.getByText('Cluster Info')).toBeInTheDocument();
-      expect(screen.getByText('Cluster ID')).toBeInTheDocument();
-      expect(screen.getByText('Description')).toBeInTheDocument();
-      expect(screen.getAllByText('Total Spores').length).toBeGreaterThan(0);
-      expect(screen.getByText('Creator')).toBeInTheDocument();
-      expect(screen.queryByText('Created at Block')).not.toBeInTheDocument();
+      expect(screen.getByText('Collection Overview')).toBeInTheDocument();
+      expect(screen.getByText('Supply')).toBeInTheDocument();
+      expect(screen.getByText('creator')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^Activities \(/ })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^Holders \(/ })).toBeInTheDocument();
@@ -425,22 +422,30 @@ describe('ClusterDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('On-chain generative spores')).toBeInTheDocument();
+      // Non-DOB metadata still shows in description area
       const versionLabel = screen.getByText('Version');
       expect(versionLabel).toBeInTheDocument();
       expect(versionLabel.parentElement?.textContent).toContain('1');
       expect(screen.getByText('Category')).toBeInTheDocument();
       expect(screen.getByText('collectible')).toBeInTheDocument();
-      expect(screen.getByText('DOB Version')).toBeInTheDocument();
-      expect(screen.getByText('DOB Pattern Items')).toBeInTheDocument();
-      expect(screen.getByText('DOB Decoders')).toBeInTheDocument();
+      // DOB metadata moves to the DOB Blueprint section
+      expect(screen.getByText('DOB Blueprint')).toBeInTheDocument();
+      expect(screen.getByText('version')).toBeInTheDocument();
+      expect(screen.getByText('traits')).toBeInTheDocument();
       expect(screen.getByText('View Raw Cluster Metadata JSON')).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByText('View Raw Cluster Metadata JSON'));
 
     await waitFor(() => {
-      expect(screen.getByText(/"category": "collectible"/)).toBeInTheDocument();
-      expect(screen.getByText(/"description": "On-chain generative spores"/)).toBeInTheDocument();
+      // Raw JSON is now syntax-highlighted (split across spans), so check container text
+      const pre = screen
+        .getByText('View Raw Cluster Metadata JSON')
+        .closest('details')
+        ?.querySelector('pre');
+      expect(pre).toBeInTheDocument();
+      expect(pre?.textContent).toContain('"category"');
+      expect(pre?.textContent).toContain('"collectible"');
     });
   });
 

@@ -4,11 +4,25 @@ export interface ClusterMetadataEntry {
   value: string;
 }
 
+export interface DobPatternItem {
+  traitName: string;
+  patternType: string;
+  dobType: string | null;
+  optionsCount: number | null;
+}
+
+export interface DobInfo {
+  version: number | string | null;
+  patternItems: DobPatternItem[];
+  decodersCount: number;
+}
+
 export interface ParsedClusterDescription {
   summary: string;
   metadataEntries: ClusterMetadataEntry[];
   rawJson: string | null;
   isJson: boolean;
+  dob: DobInfo | null;
 }
 
 const SUMMARY_KEYS = ['description', 'desc', 'summary', 'about', 'bio', 'title', 'name'] as const;
@@ -93,6 +107,56 @@ function formatMetadataValue(value: unknown): string | null {
   return null;
 }
 
+function extractDobInfo(value: unknown): DobInfo | null {
+  const dob = asRecord(value);
+  if (!dob) {
+    return null;
+  }
+
+  const version = typeof dob.ver === 'number' || typeof dob.ver === 'string' ? dob.ver : null;
+
+  const patternItems: DobPatternItem[] = [];
+  const pattern = dob.pattern;
+  if (Array.isArray(pattern)) {
+    for (const item of pattern) {
+      if (Array.isArray(item) && item.length >= 5) {
+        // Array format: [traitName, dobType, dnaOffset, dnaLength, patternType, traitArgs?]
+        const traitArgs = item.length > 5 ? item[5] : null;
+        patternItems.push({
+          traitName: String(item[0] ?? ''),
+          patternType: String(item[4] ?? ''),
+          dobType: item[1] != null ? String(item[1]) : null,
+          optionsCount: Array.isArray(traitArgs) ? traitArgs.length : null,
+        });
+      } else {
+        const rec = asRecord(item);
+        if (rec) {
+          // Object format: {traitName, dobType, patternType, traitArgs, ...}
+          const traitArgs = rec.traitArgs;
+          patternItems.push({
+            traitName: String(rec.traitName ?? rec.trait_name ?? ''),
+            patternType: String(rec.patternType ?? rec.pattern_type ?? ''),
+            dobType:
+              rec.dobType != null || rec.dob_type != null
+                ? String(rec.dobType ?? rec.dob_type)
+                : null,
+            optionsCount: Array.isArray(traitArgs) ? traitArgs.length : null,
+          });
+        }
+      }
+    }
+  }
+
+  const decoders = dob.decoders;
+  const decodersCount = Array.isArray(decoders) ? decoders.length : 0;
+
+  if (version === null && patternItems.length === 0 && decodersCount === 0) {
+    return null;
+  }
+
+  return { version, patternItems, decodersCount };
+}
+
 function extractDobMetadataEntries(value: unknown): ClusterMetadataEntry[] {
   const dob = asRecord(value);
   if (!dob) {
@@ -163,6 +227,7 @@ export function parseSporeClusterDescription(
         metadataEntries: [],
         rawJson: null,
         isJson: false,
+        dob: null,
       };
     }
 
@@ -172,6 +237,7 @@ export function parseSporeClusterDescription(
         metadataEntries: [],
         rawJson: null,
         isJson: false,
+        dob: null,
       };
     }
 
@@ -181,6 +247,7 @@ export function parseSporeClusterDescription(
         metadataEntries: [],
         rawJson: JSON.stringify(parsed, null, 2),
         isJson: true,
+        dob: null,
       };
     }
 
@@ -188,6 +255,7 @@ export function parseSporeClusterDescription(
     const metadataEntries: ClusterMetadataEntry[] = [];
     let summary: string | null = null;
     let summaryKey: string | null = null;
+    let dob: DobInfo | null = null;
 
     for (const key of SUMMARY_KEYS) {
       const value = record[key];
@@ -204,6 +272,7 @@ export function parseSporeClusterDescription(
       }
 
       if (key === 'dob') {
+        dob = extractDobInfo(value);
         for (const entry of extractDobMetadataEntries(value)) {
           metadataEntries.push(entry);
           if (metadataEntries.length >= MAX_METADATA_ENTRIES) {
@@ -241,6 +310,7 @@ export function parseSporeClusterDescription(
       metadataEntries,
       rawJson: JSON.stringify(record, null, 2),
       isJson: true,
+      dob,
     };
   } catch {
     return {
@@ -248,6 +318,7 @@ export function parseSporeClusterDescription(
       metadataEntries: [],
       rawJson: null,
       isJson: false,
+      dob: null,
     };
   }
 }
