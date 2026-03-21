@@ -108,6 +108,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Char('c') => app.toggle_compact_layout(),
                         KeyCode::Char('v') => app.cycle_diagnostics_view_mode(),
                         KeyCode::Char('R') => app.refresh().await,
+                        KeyCode::Char('e') => app.toggle_build_subphases(),
                         _ => {}
                     }
                 }
