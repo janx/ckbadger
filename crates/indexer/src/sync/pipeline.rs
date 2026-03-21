@@ -346,9 +346,53 @@ fn parse_bulk_protocol_facts(
     }
 }
 
-/// Minimum blocks per rayon work unit for the hex-based facts path.
-/// See `binary_facts::FACTS_PAR_CHUNK_SIZE` for rationale.
-const FACTS_PAR_CHUNK_SIZE: usize = 500;
+/// Compute cell-weighted chunk boundaries for the hex-based path.
+/// Mirrors [`binary_facts::compute_cell_weighted_chunks`] but reads
+/// output counts from `BlockResponseWithCycles` instead of molecule types.
+fn compute_hex_cell_weighted_chunks(blocks: &[BlockResponseWithCycles]) -> Vec<(usize, usize)> {
+    if blocks.is_empty() {
+        return vec![];
+    }
+
+    let num_threads = rayon::current_num_threads();
+    let target_chunks = (2 * num_threads).max(1);
+
+    if blocks.len() <= target_chunks {
+        return (0..blocks.len()).map(|i| (i, i + 1)).collect();
+    }
+
+    let cell_counts: Vec<usize> = blocks
+        .iter()
+        .map(|b| b.block.transactions.iter().map(|tx| tx.outputs.len()).sum())
+        .collect();
+    let total_cells: usize = cell_counts.iter().sum();
+
+    if total_cells == 0 {
+        let chunk_size = blocks.len().div_ceil(target_chunks);
+        return (0..blocks.len())
+            .step_by(chunk_size)
+            .map(|start| (start, blocks.len().min(start + chunk_size)))
+            .collect();
+    }
+
+    let cells_per_chunk = total_cells.div_ceil(target_chunks);
+    let mut chunks = Vec::with_capacity(target_chunks);
+    let mut start = 0;
+    let mut current_cells = 0;
+
+    for (i, &count) in cell_counts.iter().enumerate() {
+        current_cells += count;
+        if current_cells >= cells_per_chunk && chunks.len() < target_chunks - 1 {
+            chunks.push((start, i + 1));
+            start = i + 1;
+            current_cells = 0;
+        }
+    }
+    if start < blocks.len() {
+        chunks.push((start, blocks.len()));
+    }
+    chunks
+}
 
 pub(crate) fn build_bulk_facts_arena_from_blocks(
     blocks: &[BlockResponseWithCycles],
@@ -363,12 +407,13 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
     let serial_equivalent_us = AtomicU64::new(0);
     let total_cells = AtomicU64::new(0);
 
-    // Process blocks in chunks via par_chunks to avoid rayon scheduling
-    // overhead on tiny per-block work units (30-175 µs each).
+    // Cell-weighted chunks: same strategy as binary_facts path.
     let par_start = Instant::now();
-    let chunk_results: Vec<Result<FactsArena>> = blocks
-        .par_chunks(FACTS_PAR_CHUNK_SIZE)
-        .map(|chunk| {
+    let chunk_ranges = compute_hex_cell_weighted_chunks(blocks);
+    let chunk_results: Vec<Result<FactsArena>> = chunk_ranges
+        .par_iter()
+        .map(|&(start, end)| {
+            let chunk = &blocks[start..end];
             let chunk_start = Instant::now();
             let mut sub_arena = FactsArena::default();
             let mut chunk_cells: u64 = 0;

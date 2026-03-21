@@ -944,18 +944,72 @@ fn parse_binary_protocol_facts(
 // Arena builder
 // ---------------------------------------------------------------------------
 
-/// Minimum blocks per rayon work unit.  Per-block parse cost is 30-175 µs
-/// depending on chain density.  Rayon task dispatch + cache invalidation
-/// costs ~10-20 µs, so individual blocks are too fine-grained.  Chunking
-/// at 500 blocks gives ~15-85 ms per work unit — well above rayon overhead
-/// — and lets 24 cores achieve meaningful speedup.
-const FACTS_PAR_CHUNK_SIZE: usize = 500;
+/// Compute cell-weighted chunk boundaries so that each rayon work unit gets
+/// roughly equal work.  Target: `2 * num_cpus` chunks for good load
+/// balancing via work-stealing, with each chunk containing enough cells
+/// (1000+) to amortise the ~10-20 µs rayon scheduling overhead.
+///
+/// Returns a vec of `(start_idx, end_idx)` pairs (exclusive end) into `blocks`.
+fn compute_cell_weighted_chunks(blocks: &[RawCkbBlock]) -> Vec<(usize, usize)> {
+    if blocks.is_empty() {
+        return vec![];
+    }
+
+    let num_threads = rayon::current_num_threads();
+    let target_chunks = (2 * num_threads).max(1);
+
+    if blocks.len() <= target_chunks {
+        // Fewer blocks than target chunks: one block per chunk.
+        return (0..blocks.len()).map(|i| (i, i + 1)).collect();
+    }
+
+    // O(n) pre-scan: count outputs per block from molecule headers (no parsing).
+    let cell_counts: Vec<usize> = blocks
+        .iter()
+        .map(|b| {
+            b.block
+                .transactions()
+                .iter()
+                .map(|tx| tx.outputs().len())
+                .sum()
+        })
+        .collect();
+    let total_cells: usize = cell_counts.iter().sum();
+
+    if total_cells == 0 {
+        // Edge case: no cells at all — divide blocks evenly.
+        let chunk_size = blocks.len().div_ceil(target_chunks);
+        return (0..blocks.len())
+            .step_by(chunk_size)
+            .map(|start| (start, blocks.len().min(start + chunk_size)))
+            .collect();
+    }
+
+    let cells_per_chunk = total_cells.div_ceil(target_chunks);
+    let mut chunks = Vec::with_capacity(target_chunks);
+    let mut start = 0;
+    let mut current_cells = 0;
+
+    for (i, &count) in cell_counts.iter().enumerate() {
+        current_cells += count;
+        if current_cells >= cells_per_chunk && chunks.len() < target_chunks - 1 {
+            chunks.push((start, i + 1));
+            start = i + 1;
+            current_cells = 0;
+        }
+    }
+    // Remaining blocks form the final chunk.
+    if start < blocks.len() {
+        chunks.push((start, blocks.len()));
+    }
+    chunks
+}
 
 /// Build a FactsArena from raw CKB blocks using binary-native parsing.
 ///
-/// Blocks are processed in chunks of [`FACTS_PAR_CHUNK_SIZE`] via
-/// `par_chunks` to avoid rayon scheduling overhead on tiny per-block
-/// work units.
+/// Blocks are split into cell-weighted chunks targeting `2 * num_cpus`
+/// parallel work units.  Each chunk gets roughly equal cell count,
+/// ensuring good load balancing regardless of block density.
 pub(crate) fn build_bulk_facts_arena_from_raw_blocks(
     blocks: &[RawCkbBlock],
     interner: &IdentityInterner,
@@ -969,11 +1023,15 @@ pub(crate) fn build_bulk_facts_arena_from_raw_blocks(
 
     let par_start = Instant::now();
 
-    // Each rayon work unit processes a *chunk* of blocks serially, producing
-    // a local sub-arena.  The merge phase concatenates sub-arenas in order.
-    let chunk_results: Vec<Result<super::facts::FactsArena>> = blocks
-        .par_chunks(FACTS_PAR_CHUNK_SIZE)
-        .map(|chunk| {
+    // Cell-weighted chunks: each rayon work unit processes roughly equal
+    // cell count.  This replaces the old fixed par_chunks(500) which gave
+    // poor speedup (1.45x on 24 cores) because early-phase blocks have
+    // very few cells, producing chunks with microseconds of useful work.
+    let chunk_ranges = compute_cell_weighted_chunks(blocks);
+    let chunk_results: Vec<Result<super::facts::FactsArena>> = chunk_ranges
+        .par_iter()
+        .map(|&(start, end)| {
+            let chunk = &blocks[start..end];
             let chunk_start = Instant::now();
             let mut sub_arena = super::facts::FactsArena::default();
             let mut chunk_cells: u64 = 0;
@@ -1303,5 +1361,141 @@ mod tests {
             classify_semantic_tag_from_code_hash(Some(&hash), Some(1)),
             CellSemanticTag::Plain,
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // compute_cell_weighted_chunks tests
+    // -----------------------------------------------------------------------
+
+    /// Helper to build a minimal `RawCkbBlock` with a given number of outputs.
+    fn make_raw_block_with_outputs(num_outputs: usize) -> RawCkbBlock {
+        use ckb_types::packed;
+        use ckb_types::prelude::*;
+
+        let outputs: Vec<packed::CellOutput> = (0..num_outputs)
+            .map(|_| {
+                packed::CellOutput::new_builder()
+                    .capacity(packed::Uint64::from_slice(&100u64.to_le_bytes()).unwrap())
+                    .lock(
+                        packed::Script::new_builder()
+                            .code_hash(packed::Byte32::default())
+                            .hash_type(packed::Byte::new(1))
+                            .build(),
+                    )
+                    .build()
+            })
+            .collect();
+        let outputs_data: Vec<packed::Bytes> =
+            (0..num_outputs).map(|_| packed::Bytes::default()).collect();
+
+        let tx = packed::Transaction::new_builder()
+            .raw(
+                packed::RawTransaction::new_builder()
+                    .outputs(packed::CellOutputVec::new_builder().set(outputs).build())
+                    .outputs_data(packed::BytesVec::new_builder().set(outputs_data).build())
+                    .build(),
+            )
+            .build();
+
+        let header = packed::Header::new_builder()
+            .raw(packed::RawHeader::new_builder().build())
+            .build();
+
+        let block = packed::Block::new_builder()
+            .header(header)
+            .transactions(packed::TransactionVec::new_builder().push(tx).build())
+            .build();
+
+        RawCkbBlock {
+            block: block.into_view(),
+            cycles: vec![],
+        }
+    }
+
+    #[test]
+    fn cell_weighted_chunks_empty() {
+        let chunks = compute_cell_weighted_chunks(&[]);
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn cell_weighted_chunks_single_block() {
+        let blocks = vec![make_raw_block_with_outputs(10)];
+        let chunks = compute_cell_weighted_chunks(&blocks);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], (0, 1));
+    }
+
+    #[test]
+    fn cell_weighted_chunks_covers_all_blocks() {
+        // Many blocks with varying cell counts
+        let blocks: Vec<RawCkbBlock> = (0..100)
+            .map(|i| make_raw_block_with_outputs(if i < 50 { 1 } else { 20 }))
+            .collect();
+        let chunks = compute_cell_weighted_chunks(&blocks);
+
+        // Every block is in exactly one chunk
+        let mut covered = vec![false; blocks.len()];
+        for &(start, end) in &chunks {
+            assert!(start < end, "chunk must be non-empty");
+            for slot in &mut covered[start..end] {
+                assert!(!*slot, "block in multiple chunks");
+                *slot = true;
+            }
+        }
+        assert!(covered.iter().all(|&c| c), "every block must be covered");
+    }
+
+    #[test]
+    fn cell_weighted_chunks_balances_cell_count() {
+        // 50 blocks with 1 cell + 50 blocks with 100 cells = 5050 cells total
+        let blocks: Vec<RawCkbBlock> = (0..100)
+            .map(|i| make_raw_block_with_outputs(if i < 50 { 1 } else { 100 }))
+            .collect();
+        let chunks = compute_cell_weighted_chunks(&blocks);
+
+        // Should have created multiple chunks
+        assert!(
+            chunks.len() > 1,
+            "expected multiple chunks, got {}",
+            chunks.len()
+        );
+
+        // Heavy blocks (50-99 with 100 cells each) should be spread across chunks,
+        // not all in one chunk.  Check that no single chunk has more than 60%
+        // of total cells.
+        let total_cells: usize = 50 + 50 * 100;
+        for &(start, end) in &chunks {
+            let chunk_cells: usize = (start..end).map(|i| if i < 50 { 1 } else { 100 }).sum();
+            assert!(
+                chunk_cells <= total_cells * 60 / 100,
+                "chunk ({start}..{end}) has {chunk_cells} cells ({:.0}% of {total_cells}), too unbalanced",
+                chunk_cells as f64 / total_cells as f64 * 100.0,
+            );
+        }
+    }
+
+    #[test]
+    fn cell_weighted_chunks_zero_cells() {
+        // Blocks with no transactions (no cells)
+        let blocks: Vec<RawCkbBlock> = (0..10)
+            .map(|_| {
+                use ckb_types::packed;
+                use ckb_types::prelude::*;
+                let header = packed::Header::new_builder()
+                    .raw(packed::RawHeader::new_builder().build())
+                    .build();
+                let block = packed::Block::new_builder().header(header).build();
+                RawCkbBlock {
+                    block: block.into_view(),
+                    cycles: vec![],
+                }
+            })
+            .collect();
+        let chunks = compute_cell_weighted_chunks(&blocks);
+
+        // Should still partition all blocks
+        let total_blocks: usize = chunks.iter().map(|&(s, e)| e - s).sum();
+        assert_eq!(total_blocks, 10);
     }
 }
