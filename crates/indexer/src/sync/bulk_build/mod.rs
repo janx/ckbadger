@@ -258,6 +258,7 @@ impl BulkBuildEngine {
             // there is no data dependency between flush(N-1) and build(N).
             // The await still happens before spawning flush(N) to maintain
             // at-most-one-flush-in-flight invariant.
+            let flush_wait_started = Instant::now();
             if let Some(handle) = pending_flush_handle.take() {
                 let result = handle
                     .await
@@ -267,6 +268,7 @@ impl BulkBuildEngine {
                 flush_count += 1;
                 prev_flush_ms = result.flush_ms;
             }
+            let flush_wait_elapsed = flush_wait_started.elapsed();
             sync_totals.record_batch(&batch_stats)?;
 
             let last_block_number = batch_stats.last_block_number.ok_or_else(|| {
@@ -335,6 +337,8 @@ impl BulkBuildEngine {
             sample.facts_intern_total_count = build_timings.facts_breakdown.intern_total_count;
             sample.facts_cell_count = build_timings.facts_breakdown.cell_count;
             sample.flush_ms = prev_flush_ms;
+            sample.flush_wait_ms = flush_wait_elapsed.as_secs_f64() * 1000.0;
+            sample.prefetch_collect_ms = prefetch_collect_elapsed.as_secs_f64() * 1000.0;
             sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
             // Cumulative row counts: flush_row_totals tracks completed async flushes.
@@ -381,8 +385,8 @@ impl BulkBuildEngine {
                 build_timings.facts_breakdown.intern_slow_path_count,
                 build_timings.facts_breakdown.intern_total_count,
                 build_timings.facts_breakdown.cell_count,
-                0.0, // flush_wait_ms (wired in Task 3)
-                0.0, // prefetch_collect_ms (wired in Task 3)
+                flush_wait_elapsed.as_secs_f64() * 1000.0,
+                prefetch_collect_elapsed.as_secs_f64() * 1000.0,
             );
 
             indexer.record_bulk_sync_perf_batch_sample(sample);
