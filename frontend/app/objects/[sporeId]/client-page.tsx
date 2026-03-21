@@ -17,16 +17,15 @@ import {
   TerminalPanelContent,
   TerminalPanelFooter,
 } from '@/components/ui/terminal-panel';
-import { PageHeader, Badge } from '@/components/ui/page-header';
+import { Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
-import { DataField, DataGrid } from '@/components/ui/data-field';
 import { Address } from '@/components/ui/address';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CapacityStatisticsSection } from '@/components/ui/capacity-statistics-section';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { ObjectActivityCard } from '@/components/object/object-activity-card';
-import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
+import { storageTierCardStyle, StorageTierTooltip } from '@/components/object/storage-tier';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
@@ -121,6 +120,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     retry: false,
   });
   const collection = collectionQuery.data;
+  const isMnftCollection = !!collection && collection.standard.toLowerCase() === 'm-nft';
   const collectionAssetId = collection?.collectionId ?? assetId;
   const isDotbitCollectionView =
     isDotbitCollection ||
@@ -382,6 +382,11 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   useEffect(() => {
     setExternalPreviewFailed(false);
   }, [externalImagePreviewUrl]);
+  useEffect(() => {
+    if (isMnftCollection && collection) {
+      router.replace(`/classes/${collection.collectionId}`);
+    }
+  }, [isMnftCollection, collection, router]);
   const isPageLoading =
     sporeQuery.isLoading || (shouldQueryCollection && collectionQuery.isLoading);
   const hasTerminalError =
@@ -416,6 +421,9 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     );
   }
   if (collection) {
+    if (isMnftCollection) {
+      return null; // redirecting to /classes/[classId]
+    }
     return (
       <div className="bg-base-bg min-h-screen">
         <Header />
@@ -428,220 +436,202 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               ← Back to Objects
             </Link>
           </div>
-          <PageHeader
-            title={collection.name || 'Object Collection'}
-            badge={<Badge variant="neutral">{collection.standard.toUpperCase()}</Badge>}
-          />
-          <ObjectCollectionStatCards
-            totalCount={collection.totalCount}
-            liveCount={collection.liveCount}
-            storageTier={collection.storageProfile?.tier}
-            storageOnchainRatio={collection.storageProfile?.fullyOnchainRatio}
-          />
-          <div className="space-y-6">
-            <CapacityStatisticsSection
-              capacityRange={capacityRange}
-              onCapacityRangeChange={setCapacityRange}
-              capacityChart={collectionCapacityChart}
-              isCapacityChartLoading={isCollectionCapacityChartLoading}
-              totalCapacity={collection.ownedCapacity}
-              commonKnowledgeSize={collection.ownedKnowledge}
-              totalCapacityLabel="Owned Capacity"
-            />
-            <TerminalPanel>
-              <TerminalPanelHeader indicator="active">Collection ID</TerminalPanelHeader>
-              <TerminalPanelContent>
-                <HexDisplay value={collection.collectionId} truncate={false} />
-              </TerminalPanelContent>
-            </TerminalPanel>
-            <TerminalPanel>
-              <Tabs value={activeCollectionTab} onValueChange={handleCollectionTabChange}>
-                <TerminalPanelHeader
-                  indicator="active"
-                  actions={
-                    <div className="flex flex-wrap items-center gap-3">
-                      <TabsList className="border-b-0">
-                        <TabsTrigger value="activities">
-                          Activities ({formatNumber(collection.activitiesCount)})
-                        </TabsTrigger>
-                        <TabsTrigger value="objects">
-                          Objects ({formatNumber(collection.totalCount)})
-                        </TabsTrigger>
-                        <TabsTrigger value="holders">
-                          Holders ({formatNumber(collection.holdersCount)})
-                        </TabsTrigger>
-                      </TabsList>
-                      {activeCollectionTab === 'objects' && supportsCollectionFilters && (
-                        <div className="flex items-center gap-2">
-                          <select
-                            value={collectionStatusFilter}
-                            onChange={(event) =>
-                              setCollectionStatusSelection(event.target.value as ItemStatusFilter)
-                            }
-                            aria-label="Status Filter"
-                            className="focus:border-emphasis border-base-border bg-base-surface text-text-bright rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
-                          >
-                            <option value="all">All</option>
-                            <option value="live">Live</option>
-                            <option value="recycled">{collectionInactiveStatusLabel}</option>
-                          </select>
-                          <input
-                            type="text"
-                            value={searchInput}
-                            onChange={(event) => setSearchInput(event.target.value)}
-                            placeholder={collectionSearchLabel}
-                            aria-label={collectionSearchLabel}
-                            className="focus:border-emphasis border-base-border bg-base-surface text-text-bright placeholder:text-text-dim w-44 rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
-                          />
-                          {isCollectionItemsFetching && (
-                            <span className="text-text-dim font-mono text-xs">Searching...</span>
-                          )}
+
+          {/* Unified Collection Overview */}
+          <TerminalPanel className="mb-6">
+            <TerminalPanelHeader indicator="active">Collection Overview</TerminalPanelHeader>
+            <TerminalPanelContent>
+              {/* Name + badge */}
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-text-bright font-mono text-2xl font-bold">
+                  {collection.name || 'Object Collection'}
+                </h1>
+                <Badge variant="neutral">{collection.standard.toUpperCase()}</Badge>
+              </div>
+
+              {/* Collection ID */}
+              <div className="mt-3 flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                <span className="text-text-dim text-xs uppercase tracking-wider">
+                  collection id
+                </span>
+                <HexDisplay value={collection.collectionId} truncate={false} size="sm" />
+              </div>
+
+              {/* Stat cards row */}
+              <div className="border-base-border mt-4 grid grid-cols-2 gap-3 border-t pt-4 sm:grid-cols-4">
+                {/* Storage profile card (color-coded) */}
+                {collection.storageProfile?.tier &&
+                  (() => {
+                    const style = storageTierCardStyle(collection.storageProfile.tier);
+                    return (
+                      <div className={style.card}>
+                        <div
+                          className={`mb-1.5 font-mono text-[10px] uppercase tracking-wider ${style.label}`}
+                        >
+                          Storage Profile
                         </div>
-                      )}
-                    </div>
-                  }
-                >
-                  {activeCollectionTab === 'activities'
-                    ? 'Activities'
-                    : activeCollectionTab === 'holders'
-                      ? 'Holders'
-                      : 'Objects'}
-                </TerminalPanelHeader>
-                <TabsContent value="activities" className="py-0">
-                  <TerminalPanelContent>
-                    {isCollectionActivitiesLoading ? (
-                      <div className="text-text-dim py-8 text-center">Loading activities...</div>
-                    ) : isCollectionActivitiesError ? (
-                      <div className="text-rouge py-8 text-center">
-                        Failed to load activities. Please refresh and try again.
-                      </div>
-                    ) : !collectionActivities?.data?.length ? (
-                      <div className="text-text-dim py-8 text-center">
-                        No activities in this collection
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {collectionActivities.data.map((activity: CollectionActivity) => (
-                          <ObjectActivityCard
-                            key={`${activity.txHash}-${activity.txIndex}`}
-                            txHash={activity.txHash}
-                            blockNumber={activity.blockNumber}
-                            txIndex={activity.txIndex}
-                            timestamp={formatActivityTimestamp(activity.timestamp)}
-                            actions={activity.actions}
-                            badgeActions
+                        <div className="flex items-center gap-1">
+                          <span
+                            className={`font-mono text-sm font-semibold leading-tight ${style.text}`}
+                          >
+                            {formatStorageTier(collection.storageProfile.tier)}
+                          </span>
+                          <StorageTierTooltip
+                            tier={collection.storageProfile.tier}
+                            buttonClassName={style.tooltipButton}
                           />
-                        ))}
+                        </div>
+                        {collection.storageProfile.fullyOnchainRatio && (
+                          <div className="text-text-dim mt-1 font-mono text-xs">
+                            On-chain:{' '}
+                            {(Number(collection.storageProfile.fullyOnchainRatio) * 100).toFixed(1)}
+                            %
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                {/* Supply card */}
+                <div className="border-base-border rounded border p-3">
+                  <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+                    Supply
+                  </div>
+                  <div className="text-warning font-mono text-sm font-semibold tabular-nums">
+                    {formatNumber(collection.totalCount)}
+                  </div>
+                  {collection.liveCount !== collection.totalCount && (
+                    <div className="text-text-dim font-mono text-xs">
+                      {formatNumber(collection.liveCount)} live
+                    </div>
+                  )}
+                </div>
+
+                {/* Holders card */}
+                <div className="border-base-border rounded border p-3">
+                  <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+                    Holders
+                  </div>
+                  <div className="text-text-bright font-mono text-sm font-semibold tabular-nums">
+                    {formatNumber(collection.holdersCount)}
+                  </div>
+                </div>
+              </div>
+            </TerminalPanelContent>
+          </TerminalPanel>
+
+          <CapacityStatisticsSection
+            className="mb-6"
+            capacityRange={capacityRange}
+            onCapacityRangeChange={setCapacityRange}
+            capacityChart={collectionCapacityChart}
+            isCapacityChartLoading={isCollectionCapacityChartLoading}
+            totalCapacity={collection.ownedCapacity}
+            commonKnowledgeSize={collection.ownedKnowledge}
+            totalCapacityLabel="Owned Capacity"
+          />
+
+          <TerminalPanel>
+            <Tabs value={activeCollectionTab} onValueChange={handleCollectionTabChange}>
+              <TerminalPanelHeader
+                indicator="active"
+                actions={
+                  <div className="flex flex-wrap items-center gap-3">
+                    <TabsList className="border-b-0">
+                      <TabsTrigger value="activities">
+                        Activities ({formatNumber(collection.activitiesCount)})
+                      </TabsTrigger>
+                      <TabsTrigger value="objects">
+                        Objects ({formatNumber(collection.totalCount)})
+                      </TabsTrigger>
+                      <TabsTrigger value="holders">
+                        Holders ({formatNumber(collection.holdersCount)})
+                      </TabsTrigger>
+                    </TabsList>
+                    {activeCollectionTab === 'objects' && supportsCollectionFilters && (
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={collectionStatusFilter}
+                          onChange={(event) =>
+                            setCollectionStatusSelection(event.target.value as ItemStatusFilter)
+                          }
+                          aria-label="Status Filter"
+                          className="focus:border-emphasis border-base-border bg-base-surface text-text-bright rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
+                        >
+                          <option value="all">All</option>
+                          <option value="live">Live</option>
+                          <option value="recycled">{collectionInactiveStatusLabel}</option>
+                        </select>
+                        <input
+                          type="text"
+                          value={searchInput}
+                          onChange={(event) => setSearchInput(event.target.value)}
+                          placeholder={collectionSearchLabel}
+                          aria-label={collectionSearchLabel}
+                          className="focus:border-emphasis border-base-border bg-base-surface text-text-bright placeholder:text-text-dim w-44 rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
+                        />
+                        {isCollectionItemsFetching && (
+                          <span className="text-text-dim font-mono text-xs">Searching...</span>
+                        )}
                       </div>
                     )}
-                  </TerminalPanelContent>
-                  <TerminalPanelFooter>
-                    <CursorPagination
-                      total={collectionActivities?.total ?? undefined}
-                      totalLabel="Activities"
-                      pageSize={DEFAULT_PAGE_SIZE}
-                      page={collectionActivitiesPagination.page}
-                      currentCount={collectionActivities?.data?.length ?? 0}
-                      hasMore={collectionActivities?.hasMore ?? false}
-                      hasPrevious={collectionActivitiesPagination.hasPrevious}
-                      onNext={() =>
-                        collectionActivitiesPagination.goToNext(collectionActivities?.nextCursor)
-                      }
-                      onPrevious={collectionActivitiesPagination.goToPrevious}
-                    />
-                  </TerminalPanelFooter>
-                </TabsContent>
-                <TabsContent value="objects" className="py-0">
-                  <TerminalPanelContent>
-                    {isDotbitCollectionView ? (
-                      isCollectionItemsLoading ? (
-                        <div className="text-text-dim py-8 text-center">Loading Objects...</div>
-                      ) : isCollectionItemsError ? (
-                        <div className="text-rouge py-8 text-center">
-                          Failed to load Objects. Please refresh and try again.
-                        </div>
-                      ) : !collectionItems?.data?.length ? (
-                        <div className="text-text-dim py-8 text-center">
-                          No Objects in this collection
-                        </div>
-                      ) : (
-                        <div className="border-base-border bg-base-surface/30 overflow-hidden rounded border">
-                          {collectionItems.data.map((item) => (
-                            <div
-                              key={item.nftId}
-                              className="row-scan hover:bg-base-elevated/40 border-base-border border-b px-3 py-2.5 transition-colors last:border-b-0"
-                            >
-                              <div className="mb-1 flex items-center justify-between gap-3">
-                                <Link
-                                  href={`/identities/dotbit/${encodeURIComponent(item.nftId)}`}
-                                  className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
-                                >
-                                  {item.name || item.nftId}
-                                </Link>
-                                {item.isLive ? (
-                                  <Badge variant="green">Live</Badge>
-                                ) : (
-                                  <Badge variant="red">Recycled</Badge>
-                                )}
-                              </div>
-                              <div className="text-text-dim flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs">
-                                <span>
-                                  ID:{' '}
-                                  <span className="text-text">
-                                    <HexDisplay
-                                      value={item.nftId}
-                                      size="sm"
-                                      startChars={10}
-                                      endChars={8}
-                                    />
-                                  </span>
-                                </span>
-                                <span>Block #{formatNumber(item.createdAtBlock)}</span>
-                                {item.isLive && (
-                                  <span>
-                                    Cell:{' '}
-                                    {item.txHash &&
-                                    item.outputIndex !== null &&
-                                    item.outputIndex !== undefined ? (
-                                      <Link
-                                        href={`/cell/${item.txHash}-${item.outputIndex}`}
-                                        className="text-emphasis hover:underline"
-                                      >
-                                        <HexDisplay
-                                          value={item.txHash}
-                                          size="sm"
-                                          startChars={10}
-                                          endChars={8}
-                                        />
-                                        -{item.outputIndex}
-                                      </Link>
-                                    ) : (
-                                      <span className="text-text-dim">Unavailable</span>
-                                    )}
-                                  </span>
-                                )}
-                                {item.ownerLockHash && (
-                                  <span>
-                                    Owner:{' '}
-                                    <Link
-                                      href={`/address/${item.ownerLockHash}`}
-                                      className="hover:underline"
-                                    >
-                                      <HexDisplay
-                                        value={item.ownerLockHash}
-                                        size="sm"
-                                        startChars={10}
-                                        endChars={8}
-                                      />
-                                    </Link>
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )
-                    ) : isCollectionItemsLoading || isCollectionItemsFetching ? (
+                  </div>
+                }
+              >
+                {activeCollectionTab === 'activities'
+                  ? 'Activities'
+                  : activeCollectionTab === 'holders'
+                    ? 'Holders'
+                    : 'Objects'}
+              </TerminalPanelHeader>
+              <TabsContent value="activities" className="py-0">
+                <TerminalPanelContent>
+                  {isCollectionActivitiesLoading ? (
+                    <div className="text-text-dim py-8 text-center">Loading activities...</div>
+                  ) : isCollectionActivitiesError ? (
+                    <div className="text-rouge py-8 text-center">
+                      Failed to load activities. Please refresh and try again.
+                    </div>
+                  ) : !collectionActivities?.data?.length ? (
+                    <div className="text-text-dim py-8 text-center">
+                      No activities in this collection
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {collectionActivities.data.map((activity: CollectionActivity) => (
+                        <ObjectActivityCard
+                          key={`${activity.txHash}-${activity.txIndex}`}
+                          txHash={activity.txHash}
+                          blockNumber={activity.blockNumber}
+                          txIndex={activity.txIndex}
+                          timestamp={formatActivityTimestamp(activity.timestamp)}
+                          actions={activity.actions}
+                          badgeActions
+                        />
+                      ))}
+                    </div>
+                  )}
+                </TerminalPanelContent>
+                <TerminalPanelFooter>
+                  <CursorPagination
+                    total={collectionActivities?.total ?? undefined}
+                    totalLabel="Activities"
+                    pageSize={DEFAULT_PAGE_SIZE}
+                    page={collectionActivitiesPagination.page}
+                    currentCount={collectionActivities?.data?.length ?? 0}
+                    hasMore={collectionActivities?.hasMore ?? false}
+                    hasPrevious={collectionActivitiesPagination.hasPrevious}
+                    onNext={() =>
+                      collectionActivitiesPagination.goToNext(collectionActivities?.nextCursor)
+                    }
+                    onPrevious={collectionActivitiesPagination.goToPrevious}
+                  />
+                </TerminalPanelFooter>
+              </TabsContent>
+              <TabsContent value="objects" className="py-0">
+                <TerminalPanelContent>
+                  {isDotbitCollectionView ? (
+                    isCollectionItemsLoading ? (
                       <div className="text-text-dim py-8 text-center">Loading Objects...</div>
                     ) : isCollectionItemsError ? (
                       <div className="text-rouge py-8 text-center">
@@ -652,162 +642,245 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                         No Objects in this collection
                       </div>
                     ) : (
-                      <div className="space-y-2">
+                      <div className="border-base-border bg-base-surface/30 overflow-hidden rounded border">
                         {collectionItems.data.map((item) => (
                           <div
                             key={item.nftId}
-                            className="border-base-border bg-base-surface/40 flex flex-col gap-2 rounded border p-3"
+                            className="row-scan hover:bg-base-elevated/40 border-base-border border-b px-3 py-2.5 transition-colors last:border-b-0"
                           >
-                            <div className="flex items-center justify-between gap-3">
-                              {item.standard.toLowerCase() === 'm-nft' ? (
-                                <Link
-                                  href={`/objects/mnft/${item.nftId}`}
-                                  className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
-                                >
-                                  {item.name || item.nftId}
-                                </Link>
-                              ) : item.standard.toLowerCase() === 'did_ckb' ||
-                                item.standard.toLowerCase() === 'did:ckb' ? (
-                                <Link
-                                  href={`/identities/did/${encodeURIComponent(item.nftId)}`}
-                                  className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
-                                >
-                                  {item.name || item.nftId}
-                                </Link>
-                              ) : (
-                                <div className="text-text-bright font-mono text-sm">
-                                  {item.name || item.nftId}
-                                </div>
-                              )}
+                            <div className="mb-1 flex items-center justify-between gap-3">
+                              <Link
+                                href={`/identities/dotbit/${encodeURIComponent(item.nftId)}`}
+                                className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
+                              >
+                                {item.name || item.nftId}
+                              </Link>
                               {item.isLive ? (
                                 <Badge variant="green">Live</Badge>
                               ) : (
-                                <Badge variant="red">
-                                  {item.standard.toLowerCase() === 'did_ckb' ||
-                                  item.standard.toLowerCase() === 'did:ckb'
-                                    ? 'Recycled'
-                                    : 'Burned'}
-                                </Badge>
+                                <Badge variant="red">Recycled</Badge>
                               )}
                             </div>
+                            <div className="text-text-dim flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs">
+                              <span>
+                                ID:{' '}
+                                <span className="text-text">
+                                  <HexDisplay
+                                    value={item.nftId}
+                                    size="sm"
+                                    startChars={10}
+                                    endChars={8}
+                                  />
+                                </span>
+                              </span>
+                              <span>Block #{formatNumber(item.createdAtBlock)}</span>
+                              {item.isLive && (
+                                <span>
+                                  Cell:{' '}
+                                  {item.txHash &&
+                                  item.outputIndex !== null &&
+                                  item.outputIndex !== undefined ? (
+                                    <Link
+                                      href={`/cell/${item.txHash}-${item.outputIndex}`}
+                                      className="text-emphasis hover:underline"
+                                    >
+                                      <HexDisplay
+                                        value={item.txHash}
+                                        size="sm"
+                                        startChars={10}
+                                        endChars={8}
+                                      />
+                                      -{item.outputIndex}
+                                    </Link>
+                                  ) : (
+                                    <span className="text-text-dim">Unavailable</span>
+                                  )}
+                                </span>
+                              )}
+                              {item.ownerLockHash && (
+                                <span>
+                                  Owner:{' '}
+                                  <Link
+                                    href={`/address/${item.ownerLockHash}`}
+                                    className="hover:underline"
+                                  >
+                                    <HexDisplay
+                                      value={item.ownerLockHash}
+                                      size="sm"
+                                      startChars={10}
+                                      endChars={8}
+                                    />
+                                  </Link>
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  ) : isCollectionItemsLoading || isCollectionItemsFetching ? (
+                    <div className="text-text-dim py-8 text-center">Loading Objects...</div>
+                  ) : isCollectionItemsError ? (
+                    <div className="text-rouge py-8 text-center">
+                      Failed to load Objects. Please refresh and try again.
+                    </div>
+                  ) : !collectionItems?.data?.length ? (
+                    <div className="text-text-dim py-8 text-center">
+                      No Objects in this collection
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {collectionItems.data.map((item) => (
+                        <div
+                          key={item.nftId}
+                          className="border-base-border bg-base-surface/40 flex flex-col gap-2 rounded border p-3"
+                        >
+                          <div className="flex items-center justify-between gap-3">
                             {item.standard.toLowerCase() === 'm-nft' ? (
                               <Link
                                 href={`/objects/mnft/${item.nftId}`}
-                                className="hover:underline"
+                                className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
                               >
-                                <HexDisplay value={item.nftId} size="sm" />
+                                {item.name || item.nftId}
                               </Link>
                             ) : item.standard.toLowerCase() === 'did_ckb' ||
                               item.standard.toLowerCase() === 'did:ckb' ? (
                               <Link
                                 href={`/identities/did/${encodeURIComponent(item.nftId)}`}
-                                className="hover:underline"
+                                className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
                               >
-                                <HexDisplay value={item.nftId} size="sm" />
+                                {item.name || item.nftId}
                               </Link>
                             ) : (
-                              <HexDisplay value={item.nftId} size="sm" />
-                            )}
-                            <div className="text-text-dim font-mono text-xs">
-                              Created at block #{formatNumber(item.createdAtBlock)}
-                            </div>
-                            {item.ownerLockHash && (
-                              <div className="text-text-dim font-mono text-xs">
-                                Owner:{' '}
-                                <Link
-                                  href={`/address/${item.ownerLockHash}`}
-                                  className="hover:underline"
-                                >
-                                  <HexDisplay
-                                    value={item.ownerLockHash}
-                                    size="sm"
-                                    startChars={10}
-                                    endChars={8}
-                                  />
-                                </Link>
+                              <div className="text-text-bright font-mono text-sm">
+                                {item.name || item.nftId}
                               </div>
                             )}
+                            {item.isLive ? (
+                              <Badge variant="green">Live</Badge>
+                            ) : (
+                              <Badge variant="red">
+                                {item.standard.toLowerCase() === 'did_ckb' ||
+                                item.standard.toLowerCase() === 'did:ckb'
+                                  ? 'Recycled'
+                                  : 'Burned'}
+                              </Badge>
+                            )}
                           </div>
-                        ))}
-                      </div>
-                    )}
-                  </TerminalPanelContent>
-                  <TerminalPanelFooter>
-                    <CursorPagination
-                      total={collectionItems?.total ?? undefined}
-                      totalLabel="Objects"
-                      pageSize={DEFAULT_PAGE_SIZE}
-                      page={collectionItemsPagination.page}
-                      hasMore={collectionItems?.hasMore ?? false}
-                      hasPrevious={collectionItemsPagination.hasPrevious}
-                      onNext={() => collectionItemsPagination.goToNext(collectionItems?.nextCursor)}
-                      onPrevious={collectionItemsPagination.goToPrevious}
-                    />
-                  </TerminalPanelFooter>
-                </TabsContent>
-                <TabsContent value="holders" className="py-0">
-                  <TerminalPanelContent>
-                    {isCollectionHoldersLoading ? (
-                      <div className="text-text-dim py-8 text-center">Loading holders...</div>
-                    ) : isCollectionHoldersError ? (
-                      <div className="text-rouge py-8 text-center">
-                        Failed to load holders. Please refresh and try again.
-                      </div>
-                    ) : !collectionHolders?.data?.length ? (
-                      <div className="text-text-dim py-8 text-center">
-                        No holders in this collection
-                      </div>
-                    ) : (
-                      <div className="border-base-border bg-base-surface/30 overflow-hidden rounded border">
-                        {collectionHolders.data.map((holder: CollectionHolder) => (
-                          <div
-                            key={holder.lockScriptHash}
-                            className="row-scan hover:bg-base-elevated/40 border-base-border flex items-center justify-between gap-3 border-b px-3 py-2.5 transition-colors last:border-b-0"
-                          >
-                            <div className="min-w-0">
+                          {item.standard.toLowerCase() === 'm-nft' ? (
+                            <Link href={`/objects/mnft/${item.nftId}`} className="hover:underline">
+                              <HexDisplay value={item.nftId} size="sm" />
+                            </Link>
+                          ) : item.standard.toLowerCase() === 'did_ckb' ||
+                            item.standard.toLowerCase() === 'did:ckb' ? (
+                            <Link
+                              href={`/identities/did/${encodeURIComponent(item.nftId)}`}
+                              className="hover:underline"
+                            >
+                              <HexDisplay value={item.nftId} size="sm" />
+                            </Link>
+                          ) : (
+                            <HexDisplay value={item.nftId} size="sm" />
+                          )}
+                          <div className="text-text-dim font-mono text-xs">
+                            Created at block #{formatNumber(item.createdAtBlock)}
+                          </div>
+                          {item.ownerLockHash && (
+                            <div className="text-text-dim font-mono text-xs">
+                              Owner:{' '}
                               <Link
-                                href={`/address/${holder.address ?? holder.lockScriptHash}`}
-                                className="text-text font-mono text-xs hover:underline"
+                                href={`/address/${item.ownerLockHash}`}
+                                className="hover:underline"
                               >
-                                {holder.address ? (
-                                  holder.address
-                                ) : (
-                                  <HexDisplay
-                                    value={holder.lockScriptHash}
-                                    size="sm"
-                                    startChars={12}
-                                    endChars={10}
-                                  />
-                                )}
+                                <HexDisplay
+                                  value={item.ownerLockHash}
+                                  size="sm"
+                                  startChars={10}
+                                  endChars={8}
+                                />
                               </Link>
                             </div>
-                            <div className="text-text-bright shrink-0 font-mono text-sm">
-                              {formatNumber(holder.itemCount)}
-                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </TerminalPanelContent>
+                <TerminalPanelFooter>
+                  <CursorPagination
+                    total={collectionItems?.total ?? undefined}
+                    totalLabel="Objects"
+                    pageSize={DEFAULT_PAGE_SIZE}
+                    page={collectionItemsPagination.page}
+                    hasMore={collectionItems?.hasMore ?? false}
+                    hasPrevious={collectionItemsPagination.hasPrevious}
+                    onNext={() => collectionItemsPagination.goToNext(collectionItems?.nextCursor)}
+                    onPrevious={collectionItemsPagination.goToPrevious}
+                  />
+                </TerminalPanelFooter>
+              </TabsContent>
+              <TabsContent value="holders" className="py-0">
+                <TerminalPanelContent>
+                  {isCollectionHoldersLoading ? (
+                    <div className="text-text-dim py-8 text-center">Loading holders...</div>
+                  ) : isCollectionHoldersError ? (
+                    <div className="text-rouge py-8 text-center">
+                      Failed to load holders. Please refresh and try again.
+                    </div>
+                  ) : !collectionHolders?.data?.length ? (
+                    <div className="text-text-dim py-8 text-center">
+                      No holders in this collection
+                    </div>
+                  ) : (
+                    <div className="border-base-border bg-base-surface/30 overflow-hidden rounded border">
+                      {collectionHolders.data.map((holder: CollectionHolder) => (
+                        <div
+                          key={holder.lockScriptHash}
+                          className="row-scan hover:bg-base-elevated/40 border-base-border flex items-center justify-between gap-3 border-b px-3 py-2.5 transition-colors last:border-b-0"
+                        >
+                          <div className="min-w-0">
+                            <Link
+                              href={`/address/${holder.address ?? holder.lockScriptHash}`}
+                              className="text-text font-mono text-xs hover:underline"
+                            >
+                              {holder.address ? (
+                                holder.address
+                              ) : (
+                                <HexDisplay
+                                  value={holder.lockScriptHash}
+                                  size="sm"
+                                  startChars={12}
+                                  endChars={10}
+                                />
+                              )}
+                            </Link>
                           </div>
-                        ))}
-                      </div>
-                    )}
-                  </TerminalPanelContent>
-                  <TerminalPanelFooter>
-                    <CursorPagination
-                      total={collectionHolders?.total}
-                      totalLabel="Holders"
-                      pageSize={DEFAULT_PAGE_SIZE}
-                      page={collectionHoldersPagination.page}
-                      currentCount={collectionHolders?.data?.length ?? 0}
-                      hasMore={collectionHolders?.hasMore ?? false}
-                      hasPrevious={collectionHoldersPagination.hasPrevious}
-                      onNext={() =>
-                        collectionHoldersPagination.goToNext(collectionHolders?.nextCursor)
-                      }
-                      onPrevious={collectionHoldersPagination.goToPrevious}
-                    />
-                  </TerminalPanelFooter>
-                </TabsContent>
-              </Tabs>
-            </TerminalPanel>
-          </div>
+                          <div className="text-text-bright shrink-0 font-mono text-sm">
+                            {formatNumber(holder.itemCount)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </TerminalPanelContent>
+                <TerminalPanelFooter>
+                  <CursorPagination
+                    total={collectionHolders?.total}
+                    totalLabel="Holders"
+                    pageSize={DEFAULT_PAGE_SIZE}
+                    page={collectionHoldersPagination.page}
+                    currentCount={collectionHolders?.data?.length ?? 0}
+                    hasMore={collectionHolders?.hasMore ?? false}
+                    hasPrevious={collectionHoldersPagination.hasPrevious}
+                    onNext={() =>
+                      collectionHoldersPagination.goToNext(collectionHolders?.nextCursor)
+                    }
+                    onPrevious={collectionHoldersPagination.goToPrevious}
+                  />
+                </TerminalPanelFooter>
+              </TabsContent>
+            </Tabs>
+          </TerminalPanel>
         </main>
       </div>
     );
@@ -962,289 +1035,280 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
             ← Back to Objects
           </Link>
         </div>
-        <PageHeader
-          title={
-            cluster?.name
-              ? `${cluster.name} (${truncateHash(spore.sporeId, 6, 4)})`
-              : `Spore Asset (${truncateHash(spore.sporeId, 6, 4)})`
-          }
-          badge={
-            spore.isLive ? <Badge variant="green">Live</Badge> : <Badge variant="red">Burned</Badge>
-          }
-        />
-        <div className="grid gap-6 xl:grid-cols-5">
-          <div className="space-y-6 xl:col-span-2">
-            <TerminalPanel>
-              <TerminalPanelHeader indicator="active">Spore Content Preview</TerminalPanelHeader>
-              <TerminalPanelContent>
-                <div className="border-base-border mb-4 overflow-hidden rounded border">
+
+        {/* Unified Spore Overview */}
+        <TerminalPanel className="mb-6">
+          <TerminalPanelHeader indicator="active">Spore Overview</TerminalPanelHeader>
+          <TerminalPanelContent>
+            {/* Hero layout: preview + identity */}
+            <div className="flex flex-col gap-6 lg:flex-row">
+              {/* Preview — larger, hero-style */}
+              <div className="w-full shrink-0 lg:w-80">
+                <div className="border-base-border overflow-hidden rounded border">
                   {renderSporePreview()}
                 </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <div className="border-base-border bg-base-surface/50 rounded border px-3 py-2">
-                    <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                      Content Type
-                    </div>
-                    <div className="text-text-bright mt-1 break-all font-mono text-xs">
-                      {previewContentType}
-                    </div>
-                  </div>
-                  <div className="border-base-border bg-base-surface/50 rounded border px-3 py-2">
-                    <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                      Payload Size
-                    </div>
-                    <div className="text-text-bright mt-1 font-mono text-xs">
-                      {formatNumber(previewBytes)} bytes
-                    </div>
-                  </div>
-                  <div className="border-base-border bg-base-surface/50 rounded border px-3 py-2 sm:col-span-2">
-                    <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                      Rendering Pipeline
-                    </div>
-                    <div className="text-text mt-1 text-xs">{renderPipeline}</div>
-                  </div>
-                  {spore.mediaProfile && (
-                    <div className="border-base-border bg-base-surface/50 rounded border px-3 py-2 sm:col-span-2">
-                      <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                        Storage Tier
-                      </div>
-                      <div className="mt-1 flex items-center gap-2 text-xs">
-                        <Badge
-                          variant={
-                            spore.mediaProfile.tier === 'fully_on_ckb_and_btc'
-                              ? 'green'
-                              : spore.mediaProfile.tier === 'centralized_dependent'
-                                ? 'red'
-                                : spore.mediaProfile.tier === 'decentralized_dependent'
-                                  ? 'neutral'
-                                  : 'neutral'
-                          }
-                        >
-                          {formatStorageTier(spore.mediaProfile.tier)}
-                        </Badge>
-                        <span className="text-text-dim">
-                          {spore.mediaProfile.hasRenderableImage
-                            ? 'Renderable image detected'
-                            : 'No renderable image detected'}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                  {dobContent?.dnaHex && (
-                    <div className="border-info/30 bg-info/10 rounded border px-3 py-2 sm:col-span-2">
-                      <div className="text-info font-mono text-[10px] uppercase tracking-wider">
-                        DOB DNA
-                      </div>
-                      <div className="text-info-dim mt-1 font-mono text-xs">
-                        {shortenHex(dobContent.dnaHex, 18, 14)}
-                      </div>
-                    </div>
+              </div>
+
+              {/* Identity section */}
+              <div className="min-w-0 flex-1">
+                {/* Name + badge */}
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-text-bright font-mono text-2xl font-bold">
+                    {cluster?.name
+                      ? `${cluster.name} (${truncateHash(spore.sporeId, 6, 4)})`
+                      : `Spore Asset (${truncateHash(spore.sporeId, 6, 4)})`}
+                  </h1>
+                  {spore.isLive ? (
+                    <Badge variant="green">Live</Badge>
+                  ) : (
+                    <Badge variant="red">Burned</Badge>
                   )}
                 </div>
-              </TerminalPanelContent>
-            </TerminalPanel>
-            {spore.mediaProfile && (
-              <TerminalPanel>
-                <TerminalPanelHeader indicator="active">Media Sources</TerminalPanelHeader>
-                <TerminalPanelContent>
-                  {!spore.mediaProfile.sources.length ? (
-                    <div className="text-text-dim text-xs">No explicit media URI dependencies.</div>
+
+                {/* Spore ID */}
+                <div className="mt-3 flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                  <span className="text-text-dim text-xs uppercase tracking-wider">spore id</span>
+                  <HexDisplay value={spore.sporeId} truncate={false} size="sm" />
+                </div>
+
+                {/* Owner */}
+                <div className="mt-1.5 flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                  <span className="text-text-dim text-xs uppercase tracking-wider">owner</span>
+                  {resolvedOwnerAddress ? (
+                    <Address address={resolvedOwnerAddress} truncate={false} />
                   ) : (
-                    <div className="space-y-2">
-                      {spore.mediaProfile.sources.map((source, index) => (
-                        <div
-                          key={`${source.uri}-${index}`}
-                          className="border-base-border bg-base-surface/40 rounded border p-2"
-                        >
-                          <div className="mb-1 flex items-center gap-2">
-                            <Badge
-                              variant={
-                                source.dependencyTier === 'fully_on_ckb_and_btc'
-                                  ? 'green'
-                                  : source.dependencyTier === 'centralized_dependent'
-                                    ? 'red'
-                                    : 'neutral'
-                              }
-                            >
-                              {formatStorageTier(source.dependencyTier)}
-                            </Badge>
-                            <span className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                              {source.sourceLocation}
-                            </span>
-                          </div>
-                          <div className="text-text-bright break-all font-mono text-xs">
-                            {source.uri}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                    <span className="text-text-dim">unavailable</span>
                   )}
-                  {!!spore.mediaProfile.issues.length && (
-                    <div className="border-rouge-dim/40 bg-rouge/10 text-rouge-dim mt-3 space-y-1 rounded border p-2 font-mono text-xs">
-                      {spore.mediaProfile.issues.map((issue) => (
-                        <div key={issue}>- {issue}</div>
-                      ))}
-                    </div>
-                  )}
-                </TerminalPanelContent>
-              </TerminalPanel>
-            )}
-          </div>
-          <div className="space-y-6 xl:col-span-3">
-            <TerminalPanel>
-              <TerminalPanelHeader indicator="active">Spore Details</TerminalPanelHeader>
-              <TerminalPanelContent>
-                <DataGrid columns={1}>
-                  <DataField label="Spore ID" layout="vertical" valueClassName="w-full">
-                    <HexDisplay value={spore.sporeId} truncate={false} />
-                  </DataField>
-                  <DataField label="Status">
-                    {spore.isLive ? (
-                      <Badge variant="green">Live</Badge>
-                    ) : (
-                      <Badge variant="red">Burned</Badge>
-                    )}
-                  </DataField>
-                  <DataField label="Content Type">
-                    <span className="text-text-bright font-mono">{previewContentType}</span>
-                  </DataField>
-                  <DataField label="Payload Size">
-                    <span className="text-text-bright font-mono">
-                      {formatNumber(previewBytes)} bytes
-                    </span>
-                  </DataField>
-                  <DataField label="Interpreted As">
-                    <span className="text-text-bright font-mono">
-                      {normalizedPreviewContentType.startsWith('image/')
-                        ? 'Image'
-                        : normalizedPreviewContentType.startsWith('video/')
-                          ? 'Video'
-                          : normalizedPreviewContentType.startsWith('audio/')
-                            ? 'Audio'
-                            : normalizedPreviewContentType.startsWith('text/')
-                              ? 'Text'
-                              : normalizedPreviewContentType.startsWith('dob/')
-                                ? 'DOB Metadata'
-                                : 'Binary'}
-                    </span>
-                  </DataField>
-                  <DataField label="Owner" layout="vertical" valueClassName="w-full">
-                    {resolvedOwnerAddress ? (
-                      <Address address={resolvedOwnerAddress} truncate={false} />
-                    ) : (
-                      <span className="text-text-dim font-mono">Address unavailable</span>
-                    )}
-                  </DataField>
-                  <DataField label="Owner Lock Hash" layout="vertical" valueClassName="w-full">
-                    <Link href={`/address/${spore.ownerLockHash}`} className="hover:underline">
-                      <HexDisplay value={spore.ownerLockHash} truncate={false} />
-                    </Link>
-                  </DataField>
-                  <DataField label="Origin Cell">
-                    {hasCellLink ? (
-                      <Link
-                        href={`/cell/${spore.txHash}-${sporeOutputIndex}`}
-                        className="text-emphasis font-mono hover:underline"
-                      >
-                        <HexDisplay value={spore.txHash} size="sm" />-{sporeOutputIndex}
-                      </Link>
-                    ) : (
-                      <span className="text-text-dim font-mono">Unavailable</span>
-                    )}
-                  </DataField>
-                  <DataField label="Created at Block">
-                    <Link
-                      href={`/blocks/${spore.createdAtBlock}`}
-                      className="text-emphasis font-mono hover:underline"
-                    >
-                      #{formatNumber(spore.createdAtBlock)}
-                    </Link>
-                  </DataField>
-                </DataGrid>
-              </TerminalPanelContent>
-            </TerminalPanel>
-            {hasDecodedTraits && (
-              <TerminalPanel>
-                <TerminalPanelHeader indicator="active">Decoded Traits</TerminalPanelHeader>
-                <TerminalPanelContent>
-                  <div className="text-text-dim mb-3 text-sm">
-                    Traits derived from DOB metadata and on-chain DNA bytes.
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {dobContent!.traits.map((trait) => (
+                </div>
+
+                {/* Owner Lock Hash */}
+                <div className="mt-1.5 flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                  <span className="text-text-dim text-xs uppercase tracking-wider">lock hash</span>
+                  <Link href={`/address/${spore.ownerLockHash}`} className="hover:underline">
+                    <HexDisplay
+                      value={spore.ownerLockHash}
+                      size="sm"
+                      startChars={14}
+                      endChars={10}
+                    />
+                  </Link>
+                </div>
+
+                {/* Rendering pipeline */}
+                <div className="text-text-dim mt-3 text-xs">{renderPipeline}</div>
+              </div>
+            </div>
+
+            {/* Stat cards row */}
+            <div className="border-base-border mt-4 grid grid-cols-2 gap-3 border-t pt-4 sm:grid-cols-4">
+              {/* Storage profile card (color-coded) */}
+              {spore.mediaProfile?.tier &&
+                (() => {
+                  const style = storageTierCardStyle(spore.mediaProfile.tier);
+                  return (
+                    <div className={style.card}>
                       <div
-                        key={`${trait.name}-${trait.value}`}
-                        className="border-base-border bg-base-surface/50 rounded border p-2.5"
+                        className={`mb-1.5 font-mono text-[10px] uppercase tracking-wider ${style.label}`}
                       >
-                        <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                          {trait.name}
-                        </div>
-                        <div className="text-text-bright mt-1 break-all font-mono text-xs">
-                          {trait.value}
-                        </div>
+                        Storage Profile
                       </div>
-                    ))}
-                  </div>
-                </TerminalPanelContent>
-              </TerminalPanel>
-            )}
-            {shouldShowPayloadTextPanel && (
-              <TerminalPanel>
-                <TerminalPanelHeader indicator="active">Payload Text View</TerminalPanelHeader>
-                <TerminalPanelContent>
-                  <pre className="border-base-border bg-base-bg/40 text-text-bright max-h-80 max-w-full overflow-x-auto overflow-y-auto whitespace-pre-wrap break-all rounded border p-3 font-mono text-xs">
-                    {previewTextSnippet}
-                  </pre>
-                  {previewTextTruncated && (
-                    <div className="text-text-dim mt-2 text-xs">
-                      Showing first 600 characters from on-chain payload text.
+                      <div className="flex items-center gap-1">
+                        <span
+                          className={`font-mono text-sm font-semibold leading-tight ${style.text}`}
+                        >
+                          {formatStorageTier(spore.mediaProfile.tier)}
+                        </span>
+                        <StorageTierTooltip
+                          tier={spore.mediaProfile.tier}
+                          buttonClassName={style.tooltipButton}
+                        />
+                      </div>
                     </div>
-                  )}
-                </TerminalPanelContent>
-              </TerminalPanel>
+                  );
+                })()}
+
+              {/* Content card */}
+              <div className="border-base-border rounded border p-3">
+                <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+                  Content
+                </div>
+                <div className="text-text-bright font-mono text-sm font-semibold">
+                  {previewContentType}
+                </div>
+                <div className="text-text-dim font-mono text-xs">
+                  {formatNumber(previewBytes)} bytes
+                </div>
+              </div>
+
+              {/* Origin Cell card */}
+              <div className="border-base-border rounded border p-3">
+                <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+                  Origin Cell
+                </div>
+                {hasCellLink ? (
+                  <Link
+                    href={`/cell/${spore.txHash}-${sporeOutputIndex}`}
+                    className="text-text-bright font-mono text-sm font-semibold hover:underline"
+                  >
+                    <HexDisplay value={spore.txHash} size="sm" />-{sporeOutputIndex}
+                  </Link>
+                ) : (
+                  <span className="text-text-dim font-mono text-sm">Unavailable</span>
+                )}
+              </div>
+
+              {/* Created card */}
+              <div className="border-base-border rounded border p-3">
+                <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+                  Created
+                </div>
+                <Link
+                  href={`/blocks/${spore.createdAtBlock}`}
+                  className="text-text-bright font-mono text-sm font-semibold tabular-nums hover:underline"
+                >
+                  #{formatNumber(spore.createdAtBlock)}
+                </Link>
+              </div>
+            </div>
+
+            {/* DOB DNA (inline in overview) */}
+            {dobContent?.dnaHex && (
+              <div className="border-info/30 bg-info/10 mt-3 rounded border px-3 py-2">
+                <div className="text-info font-mono text-[10px] uppercase tracking-wider">
+                  DOB DNA
+                </div>
+                <div className="text-info-dim mt-1 font-mono text-xs">
+                  {shortenHex(dobContent.dnaHex, 18, 14)}
+                </div>
+              </div>
             )}
-            <CapacityStatisticsSection
-              capacityRange={capacityRange}
-              onCapacityRangeChange={setCapacityRange}
-              capacityChart={capacityChart}
-              isCapacityChartLoading={isCapacityChartLoading}
-              totalCapacity={spore.ownedCapacity}
-              commonKnowledgeSize={spore.ownedKnowledge}
-            />
+
+            {/* Cluster context */}
             {cluster && (
-              <TerminalPanel>
-                <TerminalPanelHeader indicator="active">Cluster Context</TerminalPanelHeader>
-                <TerminalPanelContent>
-                  <DataGrid columns={1}>
-                    <DataField label="Name" layout="vertical" valueClassName="w-full">
-                      <Link
-                        href={`/clusters/${cluster.clusterId}`}
-                        className="text-emphasis hover:underline"
-                      >
-                        {cluster.name || 'Unnamed Collection'}
-                      </Link>
-                    </DataField>
-                    {cluster.description && (
-                      <DataField label="Description" layout="vertical" valueClassName="w-full">
-                        <ClusterDescription description={cluster.description} />
-                      </DataField>
-                    )}
-                    <DataField label="Cluster ID" layout="vertical" valueClassName="w-full">
-                      <Link href={`/clusters/${cluster.clusterId}`} className="hover:underline">
-                        <HexDisplay value={cluster.clusterId} truncate={false} />
-                      </Link>
-                    </DataField>
-                    <DataField label="Total Spores">
-                      <span className="text-warning font-mono">
-                        {formatNumber(cluster.sporesCount)}
-                      </span>
-                    </DataField>
-                  </DataGrid>
-                </TerminalPanelContent>
-              </TerminalPanel>
+              <div className="border-base-border mt-3 border-t pt-3">
+                <div className="flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                  <span className="text-text-dim text-xs uppercase tracking-wider">cluster</span>
+                  <Link
+                    href={`/clusters/${cluster.clusterId}`}
+                    className="text-emphasis hover:underline"
+                  >
+                    {cluster.name || 'Unnamed Collection'}
+                  </Link>
+                  <span className="text-text-dim text-xs">
+                    ({formatNumber(cluster.sporesCount)} spores)
+                  </span>
+                </div>
+                {cluster.description && (
+                  <div className="mt-2">
+                    <ClusterDescription description={cluster.description} />
+                  </div>
+                )}
+              </div>
             )}
-          </div>
-        </div>
+          </TerminalPanelContent>
+        </TerminalPanel>
+
+        {/* Decoded Traits */}
+        {hasDecodedTraits && (
+          <TerminalPanel className="mb-6">
+            <TerminalPanelHeader indicator="active">Decoded Traits</TerminalPanelHeader>
+            <TerminalPanelContent>
+              <div className="text-text-dim mb-3 text-sm">
+                Traits derived from DOB metadata and on-chain DNA bytes.
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {dobContent!.traits.map((trait) => (
+                  <div
+                    key={`${trait.name}-${trait.value}`}
+                    className="border-base-border bg-base-surface/50 rounded border p-2.5"
+                  >
+                    <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                      {trait.name}
+                    </div>
+                    <div className="text-text-bright mt-1 break-all font-mono text-xs">
+                      {trait.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </TerminalPanelContent>
+          </TerminalPanel>
+        )}
+
+        {/* Payload Text View */}
+        {shouldShowPayloadTextPanel && (
+          <TerminalPanel className="mb-6">
+            <TerminalPanelHeader indicator="active">Payload Text View</TerminalPanelHeader>
+            <TerminalPanelContent>
+              <pre className="border-base-border bg-base-bg/40 text-text-bright max-h-80 max-w-full overflow-x-auto overflow-y-auto whitespace-pre-wrap break-all rounded border p-3 font-mono text-xs">
+                {previewTextSnippet}
+              </pre>
+              {previewTextTruncated && (
+                <div className="text-text-dim mt-2 text-xs">
+                  Showing first 600 characters from on-chain payload text.
+                </div>
+              )}
+            </TerminalPanelContent>
+          </TerminalPanel>
+        )}
+
+        {/* Media Sources */}
+        {spore.mediaProfile && (
+          <TerminalPanel className="mb-6">
+            <TerminalPanelHeader indicator="active">Media Sources</TerminalPanelHeader>
+            <TerminalPanelContent>
+              {!spore.mediaProfile.sources.length ? (
+                <div className="text-text-dim text-xs">No explicit media URI dependencies.</div>
+              ) : (
+                <div className="space-y-2">
+                  {spore.mediaProfile.sources.map((source, index) => (
+                    <div
+                      key={`${source.uri}-${index}`}
+                      className="border-base-border bg-base-surface/40 rounded border p-2"
+                    >
+                      <div className="mb-1 flex items-center gap-2">
+                        <Badge
+                          variant={
+                            source.dependencyTier === 'fully_on_ckb_and_btc'
+                              ? 'green'
+                              : source.dependencyTier === 'centralized_dependent'
+                                ? 'red'
+                                : 'neutral'
+                          }
+                        >
+                          {formatStorageTier(source.dependencyTier)}
+                        </Badge>
+                        <span className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                          {source.sourceLocation}
+                        </span>
+                      </div>
+                      <div className="text-text-bright break-all font-mono text-xs">
+                        {source.uri}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!!spore.mediaProfile.issues.length && (
+                <div className="border-rouge-dim/40 bg-rouge/10 text-rouge-dim mt-3 space-y-1 rounded border p-2 font-mono text-xs">
+                  {spore.mediaProfile.issues.map((issue) => (
+                    <div key={issue}>- {issue}</div>
+                  ))}
+                </div>
+              )}
+            </TerminalPanelContent>
+          </TerminalPanel>
+        )}
+
+        {/* Capacity Statistics */}
+        <CapacityStatisticsSection
+          capacityRange={capacityRange}
+          onCapacityRangeChange={setCapacityRange}
+          capacityChart={capacityChart}
+          isCapacityChartLoading={isCapacityChartLoading}
+          totalCapacity={spore.ownedCapacity}
+          commonKnowledgeSize={spore.ownedKnowledge}
+        />
       </main>
     </div>
   );

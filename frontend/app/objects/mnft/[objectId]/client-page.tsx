@@ -138,7 +138,7 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6 flex items-center gap-4">
           <Link
-            href={`/objects/${detail.class.classId}`}
+            href={`/classes/${detail.class.classId}`}
             className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
             ← Back to Class
@@ -205,7 +205,7 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
                   <HexDisplay value={detail.issuer.issuerId} truncate={false} />
                 </DataField>
                 <DataField label="Class ID" layout="vertical" valueClassName="w-full">
-                  <Link href={`/objects/${detail.class.classId}`} className="hover:underline">
+                  <Link href={`/classes/${detail.class.classId}`} className="hover:underline">
                     <HexDisplay value={detail.class.classId} truncate={false} />
                   </Link>
                 </DataField>
