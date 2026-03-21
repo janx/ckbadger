@@ -803,9 +803,8 @@ interface AssetQueryParams {
     | 'hMultiplier';
   sortDirection?: 'asc' | 'desc';
   storageTier?:
-    | 'fully_onchain'
-    | 'fully_on_ckb_and_btc'
     | 'fully_on_ckb'
+    | 'fully_on_ckb_and_btc'
     | 'decentralized_dependent'
     | 'centralized_dependent'
     | 'unknown';

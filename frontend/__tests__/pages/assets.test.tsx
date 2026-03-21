@@ -461,14 +461,14 @@ describe('AssetsPage', () => {
     });
 
     fireEvent.change(screen.getByLabelText('Filter by storage tier'), {
-      target: { value: 'fully_onchain' },
+      target: { value: 'fully_on_ckb' },
     });
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
-        expect.objectContaining({ type: 'object', storageTier: 'fully_onchain' })
+        expect.objectContaining({ type: 'object', storageTier: 'fully_on_ckb' })
       );
-      expect(window.location.search).toContain('storageTier=fully_onchain');
+      expect(window.location.search).toContain('storageTier=fully_on_ckb');
     });
 
     fireEvent.change(screen.getByLabelText('Filter by storage tier'), {

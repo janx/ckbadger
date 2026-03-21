@@ -32,7 +32,8 @@ type AssetTab = 'token' | 'object' | 'identity';
 type SortDirection = 'asc' | 'desc';
 type StorageTierFilter =
   | 'all'
-  | 'fully_onchain'
+  | 'fully_on_ckb'
+  | 'fully_on_ckb_and_btc'
   | 'decentralized_dependent'
   | 'centralized_dependent'
   | 'unknown';
@@ -52,7 +53,8 @@ const OBJECT_STANDARD_OPTIONS = ['spore', 'm-nft'];
 const IDENTITY_STANDARD_OPTIONS = ['dotbit', 'did:ckb'];
 const STORAGE_TIER_OPTIONS: StorageTierFilter[] = [
   'all',
-  'fully_onchain',
+  'fully_on_ckb',
+  'fully_on_ckb_and_btc',
   'decentralized_dependent',
   'centralized_dependent',
   'unknown',
@@ -82,8 +84,10 @@ function normalizeStorageTier(value: string | null): StorageTierFilter {
   switch (normalized) {
     case 'all':
       return 'all';
-    case 'fully_onchain':
-      return 'fully_onchain';
+    case 'fully_on_ckb':
+      return 'fully_on_ckb';
+    case 'fully_on_ckb_and_btc':
+      return 'fully_on_ckb_and_btc';
     case 'decentralized_dependent':
       return 'decentralized_dependent';
     case 'centralized_dependent':
@@ -96,8 +100,10 @@ function normalizeStorageTier(value: string | null): StorageTierFilter {
 }
 function formatStorageTierLabel(value: StorageTierFilter): string {
   switch (value) {
-    case 'fully_onchain':
-      return 'Fully On-chain';
+    case 'fully_on_ckb':
+      return 'Fully on CKB';
+    case 'fully_on_ckb_and_btc':
+      return 'Fully on BTC+CKB';
     case 'decentralized_dependent':
       return 'Decentralized Dependent';
     case 'centralized_dependent':

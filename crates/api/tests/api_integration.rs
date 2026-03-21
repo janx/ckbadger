@@ -5657,7 +5657,7 @@ async fn test_assets_list_supports_storage_tier_filter_and_onchain_ratio_sort() 
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/assets?type=nft&storage_tier=fully_onchain")
+        .uri("/api/v1/assets?type=nft&storage_tier=fully_on_ckb")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
