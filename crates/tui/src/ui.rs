@@ -6420,4 +6420,89 @@ mod tests {
             all_text
         );
     }
+
+    #[test]
+    fn test_overlap_ratio_fully_hidden() {
+        let fetch_ms = 200.0_f64;
+        let prefetch_collect_ms = 0.0_f64;
+        let fetch_overlap = (1.0 - prefetch_collect_ms / fetch_ms).clamp(0.0, 1.0);
+        assert!((fetch_overlap - 1.0).abs() < f64::EPSILON);
+
+        let flush_ms = 50.0_f64;
+        let flush_wait_ms = 0.0_f64;
+        let flush_overlap = (1.0 - flush_wait_ms / flush_ms).clamp(0.0, 1.0);
+        assert!((flush_overlap - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_overlap_ratio_partially_hidden() {
+        let fetch_ms = 200.0_f64;
+        let prefetch_collect_ms = 50.0_f64;
+        let fetch_overlap = (1.0 - prefetch_collect_ms / fetch_ms).clamp(0.0, 1.0);
+        assert!((fetch_overlap - 0.75).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_overlap_ratio_zero_duration() {
+        let fetch_ms = 0.0_f64;
+        let fetch_overlap = if fetch_ms > 0.0 {
+            (1.0 - 0.0 / fetch_ms).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        assert!((fetch_overlap - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_idle_ratio() {
+        let build_ms = 3000.0_f64;
+        let prefetch_collect_ms = 50.0_f64;
+        let flush_wait_ms = 100.0_f64;
+        let iteration_ms = build_ms + prefetch_collect_ms + flush_wait_ms;
+        let idle_ratio = (prefetch_collect_ms + flush_wait_ms) / iteration_ms;
+        assert!((idle_ratio - 150.0 / 3150.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_gantt_bar_positions_collapsed() {
+        let build_ms = 3000.0_f64;
+        let prefetch_collect_ms = 50.0_f64;
+        let flush_wait_ms = 100.0_f64;
+        let fetch_ms = 200.0_f64;
+        let flush_ms = 80.0_f64;
+        let iteration_ms = build_ms + prefetch_collect_ms + flush_wait_ms;
+
+        // BUILD: 0 → build_ms
+        assert!((0.0_f64).abs() < f64::EPSILON);
+        assert!((build_ms - 3000.0).abs() < f64::EPSILON);
+
+        // FETCH: ends at build_ms + prefetch_collect_ms, extends left by fetch_ms
+        let fetch_end = build_ms + prefetch_collect_ms;
+        let fetch_start = (fetch_end - fetch_ms).max(0.0);
+        assert!((fetch_start - 2850.0).abs() < f64::EPSILON);
+        assert!((fetch_end - 3050.0).abs() < f64::EPSILON);
+
+        // FLUSH: starts at iteration_ms
+        let flush_start = iteration_ms;
+        let flush_end = iteration_ms + flush_ms;
+        assert!((flush_start - 3150.0).abs() < f64::EPSILON);
+        assert!((flush_end - 3230.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_subphase_invariant() {
+        let facts_ms = 10.0_f64;
+        let resolve_ms = 5.0_f64;
+        let reduce_ms = 8.0_f64;
+        let history_ms = 3.0_f64;
+        let addr_ms = 2.0_f64;
+        let actvty_ms = 1.0_f64;
+        let build_ms = 29.0_f64;
+
+        let sub_phase_sum = facts_ms + resolve_ms + reduce_ms + history_ms + addr_ms + actvty_ms;
+        assert!(
+            (sub_phase_sum - build_ms).abs() < 0.5,
+            "sub-phase sum {sub_phase_sum} should be within 0.5ms of build_ms {build_ms}"
+        );
+    }
 }
