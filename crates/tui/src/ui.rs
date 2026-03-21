@@ -1505,7 +1505,15 @@ fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
         );
     } else {
         let base_specs = sync_chart_specs(false);
-        let third_spec = base_specs[2];
+        let third_spec = if is_bulk_build {
+            SyncChartSpec {
+                title: "Build Latency (ms)",
+                unit: "ms",
+                kind: SyncChartKind::BuildLatency,
+            }
+        } else {
+            base_specs[2]
+        };
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -1528,454 +1536,14 @@ fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
             base_specs[1].unit,
             sync_chart_data(app, base_specs[1].kind),
         );
-        if is_bulk_build {
-            draw_pipeline_overlap_panel(f, app, cols[2]);
-        } else {
-            draw_chart_panel(
-                f,
-                cols[2],
-                third_spec.title,
-                third_spec.unit,
-                sync_chart_data(app, third_spec.kind),
-            );
-        }
-    }
-}
-
-/// Renders the pipeline overlap panel: Gantt timeline (top) + overlap sparklines (bottom).
-fn draw_pipeline_overlap_panel(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(" Pipeline Overlap ")
-        .title_style(Style::default().fg(Color::White));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if inner.height < 4 || inner.width < 12 {
-        // Text-only fallback
-        draw_overlap_text_fallback(f, app, inner);
-        return;
-    }
-
-    if inner.height < 8 || inner.width < 40 {
-        // Sparklines only (also for narrow terminals where Gantt bars aren't meaningful)
-        draw_overlap_sparklines(f, app, inner);
-        return;
-    }
-
-    // Split: top half for Gantt, bottom half for sparklines
-    let gantt_height = if app.show_build_subphases {
-        // 9 rows for expanded (header + FETCH + 6 sub-phases + FLUSH)
-        std::cmp::min(9, inner.height.saturating_sub(4))
-    } else {
-        // 4 rows for collapsed (header + FETCH + BUILD + FLUSH)
-        std::cmp::min(4, inner.height.saturating_sub(4))
-    };
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(gantt_height), Constraint::Min(3)])
-        .split(inner);
-
-    draw_gantt_timeline(f, app, chunks[0]);
-    draw_overlap_sparklines(f, app, chunks[1]);
-}
-
-/// Renders a horizontal Gantt bar chart for the current batch.
-fn draw_gantt_timeline(f: &mut Frame, app: &App, area: Rect) {
-    let bb = match app.sync_status.as_ref().and_then(|s| s.bulk_build.as_ref()) {
-        Some(bb) => bb,
-        None => return,
-    };
-
-    let build_ms = bb.build_ms.unwrap_or(0.0);
-    let prefetch_collect_ms = bb.prefetch_collect_ms.unwrap_or(0.0);
-    let flush_wait_ms = bb.flush_wait_ms.unwrap_or(0.0);
-    let fetch_ms = bb.fetch_ms.unwrap_or(0.0);
-    let flush_ms = bb.flush_ms.unwrap_or(0.0);
-    let batch_count = bb.batch_count.unwrap_or(0);
-    let iteration_ms = build_ms + prefetch_collect_ms + flush_wait_ms;
-
-    if iteration_ms <= 0.0 || build_ms <= 0.0 {
-        return;
-    }
-
-    // Include async flush in the visible time axis for context
-    let visible_ms = iteration_ms + flush_ms;
-    if visible_ms <= 0.0 {
-        return;
-    }
-    let label_width = 7u16; // "ACTVTY " = 6 chars + space
-    let bar_width = area.width.saturating_sub(label_width) as f64;
-    if bar_width <= 0.0 {
-        return;
-    }
-
-    // Helper: map ms to column offset within bar region
-    let col =
-        |ms: f64| -> u16 { ((ms / visible_ms * bar_width).round() as u16).min(bar_width as u16) };
-
-    // Header line
-    if area.height > 0 {
-        let header = format!("Batch #{:<5} ({:.0}ms)", batch_count, iteration_ms);
-        let header_span = Span::styled(header, Style::default().fg(Color::White));
-        f.render_widget(
-            Paragraph::new(Line::from(header_span)),
-            Rect::new(area.x, area.y, area.width, 1),
+        draw_chart_panel(
+            f,
+            cols[2],
+            third_spec.title,
+            third_spec.unit,
+            sync_chart_data(app, third_spec.kind),
         );
     }
-
-    let mut row = 1u16;
-
-    if app.show_build_subphases {
-        // Expanded: show sub-phases instead of single BUILD bar
-        let facts_ms = bb.facts_ms.unwrap_or(0.0);
-        let resolve_ms = bb.resolve_ms.unwrap_or(0.0);
-        let reduce_ms = bb.reduce_ms.unwrap_or(0.0);
-        let history_ms = bb.history_ms.unwrap_or(0.0);
-        let addr_ms = bb.address_reduce_ms.unwrap_or(0.0);
-        let actvty_ms = bb.activity_stats_ms.unwrap_or(0.0);
-
-        let sub_phases: &[(&str, f64, Color)] = &[
-            ("FACTS", facts_ms, Color::Yellow),
-            ("RESOLV", resolve_ms, Color::Magenta),
-            ("REDUCE", reduce_ms, Color::Blue),
-            ("HIST", history_ms, Color::Green),
-            ("ADDR", addr_ms, Color::Cyan),
-            ("ACTVTY", actvty_ms, Color::White),
-        ];
-
-        // Sub-phase sum invariant: fall back to collapsed view if violated.
-        let sub_phase_sum: f64 = sub_phases.iter().map(|(_, d, _)| d).sum();
-        if (sub_phase_sum - build_ms).abs() > 0.5 {
-            // Sum doesn't match build_ms within tolerance — fall back to collapsed.
-            draw_gantt_bar(
-                f,
-                area,
-                row,
-                label_width,
-                "FETCH",
-                Color::Green,
-                col((build_ms + prefetch_collect_ms - fetch_ms).max(0.0)),
-                col(build_ms + prefetch_collect_ms),
-                fetch_ms,
-            );
-            if row + 1 < area.height {
-                draw_gantt_bar(
-                    f,
-                    area,
-                    row + 1,
-                    label_width,
-                    "BUILD",
-                    Color::Yellow,
-                    col(0.0),
-                    col(build_ms),
-                    build_ms,
-                );
-            }
-            if row + 2 < area.height && flush_ms > 0.0 {
-                draw_gantt_bar(
-                    f,
-                    area,
-                    row + 2,
-                    label_width,
-                    "FLUSH",
-                    Color::Cyan,
-                    col(iteration_ms),
-                    col(iteration_ms + flush_ms),
-                    flush_ms,
-                );
-            }
-            return;
-        }
-
-        // FETCH bar (overlaps with build)
-        if row < area.height {
-            let fetch_end = build_ms + prefetch_collect_ms;
-            let fetch_start = (fetch_end - fetch_ms).max(0.0);
-            draw_gantt_bar(
-                f,
-                area,
-                row,
-                label_width,
-                "FETCH",
-                Color::Green,
-                col(fetch_start),
-                col(fetch_end),
-                fetch_ms,
-            );
-            row += 1;
-        }
-
-        // Sub-phase bars (sequential within build)
-        let mut phase_offset = 0.0;
-        for (label, dur, color) in sub_phases {
-            if row >= area.height {
-                break;
-            }
-            if *dur > 0.0 {
-                draw_gantt_bar(
-                    f,
-                    area,
-                    row,
-                    label_width,
-                    label,
-                    *color,
-                    col(phase_offset),
-                    col(phase_offset + dur),
-                    *dur,
-                );
-            }
-            phase_offset += dur;
-            row += 1;
-        }
-
-        // FLUSH bar (async, starts after iteration)
-        if row < area.height && flush_ms > 0.0 {
-            draw_gantt_bar(
-                f,
-                area,
-                row,
-                label_width,
-                "FLUSH",
-                Color::Cyan,
-                col(iteration_ms),
-                col(iteration_ms + flush_ms),
-                flush_ms,
-            );
-        }
-    } else {
-        // Collapsed: FETCH, BUILD, FLUSH
-
-        // FETCH bar
-        if row < area.height {
-            let fetch_end = build_ms + prefetch_collect_ms;
-            let fetch_start = (fetch_end - fetch_ms).max(0.0);
-            draw_gantt_bar(
-                f,
-                area,
-                row,
-                label_width,
-                "FETCH",
-                Color::Green,
-                col(fetch_start),
-                col(fetch_end),
-                fetch_ms,
-            );
-            row += 1;
-        }
-
-        // BUILD bar
-        if row < area.height {
-            draw_gantt_bar(
-                f,
-                area,
-                row,
-                label_width,
-                "BUILD",
-                Color::Yellow,
-                col(0.0),
-                col(build_ms),
-                build_ms,
-            );
-            row += 1;
-        }
-
-        // FLUSH bar (async, starts after iteration)
-        if row < area.height && flush_ms > 0.0 {
-            draw_gantt_bar(
-                f,
-                area,
-                row,
-                label_width,
-                "FLUSH",
-                Color::Cyan,
-                col(iteration_ms),
-                col(iteration_ms + flush_ms),
-                flush_ms,
-            );
-        }
-    }
-}
-
-/// Draws a single Gantt bar row with label.
-#[allow(clippy::too_many_arguments)]
-fn draw_gantt_bar(
-    f: &mut Frame,
-    area: Rect,
-    row: u16,
-    label_width: u16,
-    label: &str,
-    color: Color,
-    start_col: u16,
-    end_col: u16,
-    duration_ms: f64,
-) {
-    let y = area.y + row;
-    if y >= area.y + area.height {
-        return;
-    }
-
-    // Label (left-aligned, fixed width)
-    let label_text = format!(
-        "{:<width$}",
-        label,
-        width = (label_width.saturating_sub(1)) as usize
-    );
-    f.render_widget(
-        Paragraph::new(Span::styled(label_text, Style::default().fg(color))),
-        Rect::new(area.x, y, label_width, 1),
-    );
-
-    // Bar
-    let bar_x = area.x + label_width + start_col;
-    let bar_len = end_col.saturating_sub(start_col).max(1);
-    let max_x = area.x + area.width;
-    if bar_x >= max_x {
-        return;
-    }
-    let actual_len = bar_len.min(max_x - bar_x);
-    if actual_len > 0 {
-        let bar_str: String = "\u{2588}".repeat(actual_len as usize);
-        f.render_widget(
-            Paragraph::new(Span::styled(bar_str, Style::default().fg(color))),
-            Rect::new(bar_x, y, actual_len, 1),
-        );
-    }
-
-    // Duration annotation (after bar if space allows)
-    let annot_x = bar_x + actual_len + 1;
-    if annot_x >= max_x {
-        return;
-    }
-    let annot = format!("{:.0}ms", duration_ms);
-    let annot_len = (annot.len() as u16).min(max_x - annot_x);
-    if annot_len > 0 {
-        f.render_widget(
-            Paragraph::new(Span::styled(annot, Style::default().fg(Color::DarkGray))),
-            Rect::new(annot_x, y, annot_len, 1),
-        );
-    }
-}
-
-/// Renders three overlap ratio sparklines.
-fn draw_overlap_sparklines(f: &mut Frame, app: &App, area: Rect) {
-    let sparkline_chars: [char; 8] = [
-        '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}', '\u{2587}',
-        '\u{2588}',
-    ];
-
-    let metrics: &[(&str, &VecDeque<f64>, bool)] = &[
-        ("Fetch", &app.fetch_overlap_history, false),
-        ("Flush", &app.flush_overlap_history, false),
-        ("Idle ", &app.idle_ratio_history, true),
-    ];
-
-    for (i, (label, history, is_inverted)) in metrics.iter().enumerate() {
-        let y = area.y + i as u16;
-        if y >= area.y + area.height {
-            break;
-        }
-
-        // Label (6 chars)
-        let lw = 6u16;
-        f.render_widget(
-            Paragraph::new(Span::styled(
-                format!("{:<6}", label),
-                Style::default().fg(Color::DarkGray),
-            )),
-            Rect::new(area.x, y, lw, 1),
-        );
-
-        // Stats width: " 100%  100%" = 12 chars
-        let stats_width = 12u16;
-        let spark_width = area.width.saturating_sub(lw + stats_width) as usize;
-
-        let visible: Vec<f64> = if history.len() > spark_width {
-            history
-                .iter()
-                .skip(history.len() - spark_width)
-                .copied()
-                .collect()
-        } else {
-            history.iter().copied().collect()
-        };
-
-        let mut spark_spans: Vec<Span> = Vec::with_capacity(spark_width);
-
-        // Left-pad if shorter than available width
-        let pad = spark_width.saturating_sub(visible.len());
-        if pad > 0 {
-            spark_spans.push(Span::raw(" ".repeat(pad)));
-        }
-
-        for &val in &visible {
-            let idx = ((val * 7.0).round() as usize).min(7);
-            let ch = sparkline_chars[idx];
-            let color = if *is_inverted {
-                if val < 0.2 {
-                    Color::Green
-                } else if val < 0.5 {
-                    Color::Yellow
-                } else {
-                    Color::Red
-                }
-            } else if val > 0.8 {
-                Color::Green
-            } else if val > 0.5 {
-                Color::Yellow
-            } else {
-                Color::Red
-            };
-            spark_spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
-        }
-
-        f.render_widget(
-            Paragraph::new(Line::from(spark_spans)),
-            Rect::new(area.x + lw, y, spark_width as u16, 1),
-        );
-
-        // Current + average stats
-        let current = visible.last().copied().unwrap_or(0.0);
-        let avg = if visible.is_empty() {
-            0.0
-        } else {
-            visible.iter().sum::<f64>() / visible.len() as f64
-        };
-        let stats = format!("{:>4.0}% {:>4.0}%", current * 100.0, avg * 100.0);
-        let stats_color = if *is_inverted {
-            if current < 0.2 {
-                Color::Green
-            } else {
-                Color::Yellow
-            }
-        } else if current > 0.8 {
-            Color::Green
-        } else {
-            Color::Yellow
-        };
-        f.render_widget(
-            Paragraph::new(Span::styled(stats, Style::default().fg(stats_color))),
-            Rect::new(area.x + lw + spark_width as u16, y, stats_width, 1),
-        );
-    }
-}
-
-/// Text-only fallback for very small panels.
-fn draw_overlap_text_fallback(f: &mut Frame, app: &App, area: Rect) {
-    let fetch = app.fetch_overlap_history.back().copied().unwrap_or(1.0);
-    let flush = app.flush_overlap_history.back().copied().unwrap_or(1.0);
-    let idle = app.idle_ratio_history.back().copied().unwrap_or(0.0);
-    let text = format!(
-        "F:{:.0}% Fl:{:.0}% I:{:.0}%",
-        fetch * 100.0,
-        flush * 100.0,
-        idle * 100.0,
-    );
-    f.render_widget(
-        Paragraph::new(Span::styled(text, Style::default().fg(Color::White))),
-        Rect::new(area.x, area.y, area.width, 1),
-    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1983,6 +1551,7 @@ enum SyncChartKind {
     BlockRate,
     TxRate,
     WriteLatency,
+    BuildLatency,
 }
 
 #[derive(Clone, Copy)]
@@ -2036,6 +1605,7 @@ fn sync_chart_data(app: &App, kind: SyncChartKind) -> &VecDeque<f64> {
         SyncChartKind::BlockRate => &app.rate_history,
         SyncChartKind::TxRate => &app.tx_rate_history,
         SyncChartKind::WriteLatency => &app.db_write_history,
+        SyncChartKind::BuildLatency => &app.bulk_build_ms_history,
     }
 }
 
@@ -2580,6 +2150,93 @@ fn io_fetch_write_jitter_line(
     ])
 }
 
+/// Build a single overlap sparkline line for the diagnostics right column.
+fn overlap_sparkline_line(
+    label: &str,
+    history: &VecDeque<f64>,
+    spark_width: usize,
+    inverted: bool,
+) -> Line<'static> {
+    let sparkline_chars: [char; 8] = [
+        '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}', '\u{2587}',
+        '\u{2588}',
+    ];
+
+    let visible: Vec<f64> = if history.len() > spark_width {
+        history
+            .iter()
+            .skip(history.len() - spark_width)
+            .copied()
+            .collect()
+    } else {
+        history.iter().copied().collect()
+    };
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+
+    // Label
+    spans.push(Span::styled(
+        format!("{:<6}", label),
+        Style::default().fg(SLATE_500),
+    ));
+
+    // Pad
+    let pad = spark_width.saturating_sub(visible.len());
+    if pad > 0 {
+        spans.push(Span::raw(" ".repeat(pad)));
+    }
+
+    // Sparkline chars
+    for &val in &visible {
+        let idx = ((val * 7.0).round() as usize).min(7);
+        let ch = sparkline_chars[idx];
+        let color = if inverted {
+            if val < 0.2 {
+                TERMINAL_GREEN
+            } else if val < 0.5 {
+                AMBER
+            } else {
+                ERROR_RED
+            }
+        } else if val > 0.8 {
+            TERMINAL_GREEN
+        } else if val > 0.5 {
+            AMBER
+        } else {
+            ERROR_RED
+        };
+        spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
+    }
+
+    // Stats
+    let current = visible
+        .last()
+        .copied()
+        .unwrap_or(if inverted { 0.0 } else { 1.0 });
+    let avg = if visible.is_empty() {
+        0.0
+    } else {
+        visible.iter().sum::<f64>() / visible.len() as f64
+    };
+    let stats_color = if inverted {
+        if current < 0.2 {
+            TERMINAL_GREEN
+        } else {
+            AMBER
+        }
+    } else if current > 0.8 {
+        TERMINAL_GREEN
+    } else {
+        AMBER
+    };
+    spans.push(Span::styled(
+        format!(" {:>3.0}% {:>3.0}%", current * 100.0, avg * 100.0),
+        Style::default().fg(stats_color),
+    ));
+
+    Line::from(spans)
+}
+
 fn build_bulk_build_diagnostics(
     bb: &BulkBuildProgressData,
     app: &App,
@@ -2642,6 +2299,22 @@ fn build_bulk_build_diagnostics(
         )
     };
 
+    let overlap_spark_width = cols[1].width.saturating_sub(20).clamp(6, 20) as usize;
+    let overlap_fetch = overlap_sparkline_line(
+        "Fetch",
+        &app.fetch_overlap_history,
+        overlap_spark_width,
+        false,
+    );
+    let overlap_flush = overlap_sparkline_line(
+        "Flush",
+        &app.flush_overlap_history,
+        overlap_spark_width,
+        false,
+    );
+    let overlap_idle =
+        overlap_sparkline_line("Idle", &app.idle_ratio_history, overlap_spark_width, true);
+
     let right = vec![
         Line::from(vec![
             Span::styled("Owner mem ", Style::default().fg(SLATE_500)),
@@ -2666,6 +2339,9 @@ fn build_bulk_build_diagnostics(
             Span::styled("  jitter ", Style::default().fg(SLATE_500)),
             Span::styled(rate_jitter_text.to_string(), Style::default().fg(AMBER)),
         ]),
+        overlap_fetch,
+        overlap_flush,
+        overlap_idle,
     ];
 
     (left, right)
