@@ -94,13 +94,6 @@ enum DiagnosticsViewMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Removed in Task 7
-enum CompactSyncLayout {
-    DiagnosticsOnly,
-    ChartsAndDiagnostics,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CompactOverviewLayout {
     MemoryOnly,
     MemoryAndStorage,
@@ -979,86 +972,6 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
     draw_sync_events(f, app, chunks[3]);
 }
 
-#[allow(dead_code)] // Removed in Task 7
-fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(SLATE_800))
-        .title(Span::styled("Realtime", Style::default().fg(FOREGROUND)));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let Some(sync) = &app.sync_status else {
-        f.render_widget(Paragraph::new("No realtime sync data"), inner);
-        return;
-    };
-
-    let behind = sync.chain_tip - sync.tip_block;
-    let ema_rate = sync.rate_ema.unwrap_or(0.0);
-    let block_rate_text = format_rate_pair(sync.rate_realtime, sync.rate_ema, "blk/s");
-    let tx_rate_text = format_rate_pair(sync.tx_rate_realtime, sync.tx_rate_ema, "tx/s");
-    let jitter = rate_jitter(&app.rate_history, 30).unwrap_or(0.0);
-    let eta_conf = eta_confidence_label(ema_rate, jitter);
-    let bottleneck = sync_bottleneck(sync.db_write_ms, sync.rpc_fetch_ms);
-    let (phase_label, phase_color) = startup_phase_label(sync.startup_phase.as_deref());
-
-    let stale_secs = stale_age_secs(app.memory_stats.as_ref());
-    let (stale_text, stale_color) = stale_status(stale_secs);
-    let stale_style = Style::default().fg(stale_color);
-
-    let heartbeat_on = heartbeat_is_on(app.last_refresh.elapsed().as_millis());
-    let heartbeat = if heartbeat_on { "●" } else { "○" };
-    let heartbeat_color = if app.last_refresh.elapsed().as_secs() <= 2 {
-        TERMINAL_GREEN
-    } else {
-        AMBER
-    };
-
-    let mut spans = vec![
-        Span::styled(heartbeat, Style::default().fg(heartbeat_color)),
-        Span::styled("  Behind ", Style::default().fg(SLATE_500)),
-        Span::styled(format_num(behind), Style::default().fg(FOREGROUND)),
-        Span::styled("  |  Rate ", Style::default().fg(SLATE_500)),
-        Span::styled(block_rate_text, Style::default().fg(TERMINAL_GREEN)),
-        Span::styled("  |  Tx ", Style::default().fg(SLATE_500)),
-        Span::styled(tx_rate_text, Style::default().fg(TERMINAL_GREEN)),
-        Span::styled("  |  ETA ", Style::default().fg(SLATE_500)),
-        Span::styled(
-            sync.eta.clone().unwrap_or_else(|| "-".to_string()),
-            Style::default().fg(FOREGROUND),
-        ),
-        Span::styled(" ", Style::default().fg(SLATE_700)),
-        Span::styled(
-            format!("{} ", eta_conf.0),
-            Style::default().fg(Color::Black).bg(eta_conf.1),
-        ),
-        Span::styled(" | phase ", Style::default().fg(SLATE_500)),
-        Span::styled(phase_label, Style::default().fg(phase_color)),
-    ];
-    if sync.is_direct_db_read {
-        spans.push(Span::styled(
-            " [DB]",
-            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
-        ));
-    }
-    spans.extend([
-        Span::styled(" | Bottleneck ", Style::default().fg(SLATE_500)),
-        Span::styled(
-            bottleneck_label(bottleneck),
-            Style::default().fg(match bottleneck {
-                SyncBottleneck::WriteBound => AMBER,
-                SyncBottleneck::FetchBound => TERMINAL_DIM,
-                SyncBottleneck::Mixed => FOREGROUND,
-                SyncBottleneck::Unknown => SLATE_500,
-            }),
-        ),
-        Span::styled(" | stale ", Style::default().fg(SLATE_500)),
-        Span::styled(stale_text, stale_style),
-    ]);
-    let line = Line::from(spans);
-    f.render_widget(Paragraph::new(line), inner);
-}
-
 fn heartbeat_is_on(elapsed_millis: u128) -> bool {
     (elapsed_millis / 500).is_multiple_of(2)
 }
@@ -1259,183 +1172,6 @@ fn draw_chain_info(f: &mut Frame, app: &App, area: Rect) {
         ]),
     ];
     f.render_widget(Paragraph::new(right_lines), cols[2]);
-}
-
-#[allow(dead_code)] // Removed in Task 7
-fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(SLATE_800))
-        .title(Span::styled("Sync Status", Style::default().fg(FOREGROUND)));
-
-    let Some(sync) = &app.sync_status else {
-        let msg = Paragraph::new("No sync data available").block(block);
-        f.render_widget(msg, area);
-        return;
-    };
-
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(22),
-            Constraint::Min(24),
-            Constraint::Length(24),
-        ])
-        .split(inner);
-
-    let (mode, mode_color) = if !sync.is_syncing {
-        ("SYNCED", TERMINAL_GREEN)
-    } else if sync.is_bulk_sync {
-        ("BULK SYNC", AMBER)
-    } else {
-        ("SYNCING", TERMINAL_GREEN)
-    };
-
-    let mut left = vec![Line::from(vec![Span::styled(
-        format!(" {} ", mode),
-        Style::default().fg(Color::Black).bg(mode_color),
-    )])];
-
-    left.push(Line::from(vec![
-        Span::styled("Progress: ", Style::default().fg(SLATE_500)),
-        Span::styled(
-            format!("{:.2}%", sync.progress),
-            Style::default()
-                .fg(TERMINAL_GREEN)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]));
-
-    let ratio = (sync.progress / 100.0).clamp(0.0, 1.0);
-    let bar_width = 16;
-    let filled = (ratio * bar_width as f64) as usize;
-    let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(bar_width - filled));
-    left.push(Line::from(Span::styled(
-        bar,
-        Style::default().fg(TERMINAL_GREEN),
-    )));
-    f.render_widget(Paragraph::new(left), cols[0]);
-
-    let blocks_behind = sync.chain_tip - sync.tip_block;
-    let mid = vec![
-        Line::from(vec![
-            Span::styled("Current: ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_num(sync.tip_block),
-                Style::default()
-                    .fg(TERMINAL_GREEN)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(" / {}", format_num(sync.chain_tip)),
-                Style::default().fg(SLATE_500),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Behind:  ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_num(blocks_behind),
-                Style::default().fg(if blocks_behind > 1000 {
-                    AMBER
-                } else {
-                    TERMINAL_GREEN
-                }),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Blk Now: ", Style::default().fg(SLATE_500)),
-            if let Some(rt) = sync.rate_realtime {
-                Span::styled(
-                    format!("{rt:.0} blk/s"),
-                    Style::default()
-                        .fg(TERMINAL_GREEN)
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                Span::styled("-", Style::default().fg(SLATE_500))
-            },
-        ]),
-        Line::from(vec![
-            Span::styled("Blk EMA: ", Style::default().fg(SLATE_500)),
-            if let Some(ema) = sync.rate_ema {
-                Span::raw(format!("{ema:.0} blk/s"))
-            } else {
-                Span::styled("-", Style::default().fg(SLATE_500))
-            },
-        ]),
-        Line::from(vec![
-            Span::styled("Tx Now:  ", Style::default().fg(SLATE_500)),
-            if let Some(rt) = sync.tx_rate_realtime {
-                Span::styled(
-                    format!("{rt:.0} tx/s"),
-                    Style::default()
-                        .fg(TERMINAL_GREEN)
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                Span::styled("-", Style::default().fg(SLATE_500))
-            },
-        ]),
-        Line::from(vec![
-            Span::styled("Tx EMA:  ", Style::default().fg(SLATE_500)),
-            if let Some(ema) = sync.tx_rate_ema {
-                Span::raw(format!("{ema:.0} tx/s"))
-            } else {
-                Span::styled("-", Style::default().fg(SLATE_500))
-            },
-        ]),
-    ];
-    f.render_widget(Paragraph::new(mid), cols[1]);
-
-    let right = sync_timing_lines(
-        sync.eta.as_deref(),
-        sync.eta_seconds,
-        sync.elapsed_time.as_deref(),
-        sync.startup_phase.as_deref(),
-        sync.is_bulk_sync,
-    );
-    f.render_widget(Paragraph::new(right), cols[2]);
-
-    if sync.is_bulk_sync {
-        if let Some(mem) = &app.memory_stats {
-            let remaining_height = inner.height.saturating_sub(5);
-            if remaining_height >= 1 {
-                let synced_area = Rect {
-                    x: inner.x,
-                    y: inner.y + inner.height.saturating_sub(1),
-                    width: inner.width,
-                    height: 1,
-                };
-                let mut spans = vec![
-                    Span::styled("Synced ", Style::default().fg(SLATE_500)),
-                    Span::styled(
-                        format!(
-                            "Txs {}  Cells {}",
-                            format_num(mem.total_transactions),
-                            format_num(mem.total_cells)
-                        ),
-                        Style::default().fg(FOREGROUND),
-                    ),
-                ];
-                if mem.total_addresses > 0 {
-                    spans.push(Span::styled(
-                        format!("  Addrs {}", format_num(mem.total_addresses)),
-                        Style::default().fg(FOREGROUND),
-                    ));
-                }
-                if mem.sst_files_size > 0 {
-                    spans.push(Span::styled(
-                        format!("  SST {}", format_bytes(mem.sst_files_size)),
-                        Style::default().fg(SLATE_500),
-                    ));
-                }
-                f.render_widget(Paragraph::new(Line::from(spans)), synced_area);
-            }
-        }
-    }
 }
 
 fn draw_sync_status_row(f: &mut Frame, app: &App, area: Rect) {
@@ -3308,66 +3044,6 @@ fn detail_right_lines(
     ]
 }
 
-#[allow(dead_code)] // Removed in Task 7
-fn sync_timing_lines(
-    eta: Option<&str>,
-    eta_seconds: Option<f64>,
-    elapsed: Option<&str>,
-    startup_phase: Option<&str>,
-    is_bulk_sync: bool,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-
-    if let Some(eta) = eta {
-        lines.push(Line::from(vec![
-            Span::styled("ETA: ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                eta.to_string(),
-                Style::default()
-                    .fg(TERMINAL_GREEN)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
-    }
-
-    if is_bulk_sync {
-        if let Some(secs) = eta_seconds {
-            let done_at = Local::now() + chrono::TimeDelta::seconds(secs as i64);
-            lines.push(Line::from(vec![
-                Span::styled("Est. done: ", Style::default().fg(SLATE_500)),
-                Span::styled(
-                    done_at.format("%H:%M").to_string(),
-                    Style::default().fg(TERMINAL_GREEN),
-                ),
-            ]));
-        }
-    }
-
-    if let Some(elapsed) = elapsed {
-        lines.push(Line::from(vec![
-            Span::styled("Elapsed: ", Style::default().fg(SLATE_500)),
-            Span::styled(elapsed.to_string(), Style::default().fg(FOREGROUND)),
-        ]));
-    }
-
-    if let Some(startup_phase) = startup_phase {
-        let (label, color) = startup_phase_label(Some(startup_phase));
-        lines.push(Line::from(vec![
-            Span::styled("Phase: ", Style::default().fg(SLATE_500)),
-            Span::styled(label, Style::default().fg(color)),
-        ]));
-    }
-
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "No timing data",
-            Style::default().fg(SLATE_500),
-        )));
-    }
-
-    lines
-}
-
 fn draw_sync_events(f: &mut Frame, app: &App, area: Rect) {
     let title = if app.sync_event_scroll > 0 {
         format!("Sync Events [j/k g/G] (scroll +{})", app.sync_event_scroll)
@@ -4750,16 +4426,6 @@ fn sync_column_count(width: u16) -> usize {
     }
 }
 
-#[allow(dead_code)] // Removed in Task 7
-fn compact_sync_layout(area: Rect) -> CompactSyncLayout {
-    let min_height_for_charts = if area.width < 120 { 38 } else { 30 };
-    if area.height >= min_height_for_charts {
-        CompactSyncLayout::ChartsAndDiagnostics
-    } else {
-        CompactSyncLayout::DiagnosticsOnly
-    }
-}
-
 fn draw_help_popup(f: &mut Frame) {
     let outer = f.area();
     let popup_area = centered_rect(74, 62, outer);
@@ -5311,20 +4977,20 @@ mod tests {
     use super::{
         adaptive_control_lines, adaptive_state_label, api_health_state, build_batch_left_column,
         build_finalize_left_column, chart_height_warning, compact_overview_layout,
-        compact_sync_layout, consumed_cells_source_color, consumed_cells_source_label,
-        dense_right_lines, detail_right_lines, diagnostics_dense_panel, direct_io_reads_label,
-        eta_confidence_label, footer_hint_line, footer_status_message, format_age_secs, format_num,
-        format_num_commas, format_num_compact, format_rate_pair, format_signed_num_i128,
-        format_stage_commit_gap_ms, header_right_line, header_title_line, heartbeat_is_on,
-        io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
-        overview_log_min_height, overview_services_min_height, percentile_from_history,
-        pipeline_bottleneck, pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state,
-        runtime_live_delta, service_log_tails_line, sparkline, stale_age_secs, stale_status,
-        startup_phase_label, storage_pressure_l0_line, storage_pressure_wbm_line,
-        storage_runtime_columns, supervisor_services_line, sync_bottleneck, sync_timing_lines,
-        system_kv_line, system_store_path_lines, system_workdir_lines, trend_delta, trim_for_panel,
-        AdaptiveControlSnapshot, App, Color, CompactOverviewLayout, CompactSyncLayout,
-        DiagnosticsViewMode, SyncBottleneck, AMBER, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
+        consumed_cells_source_color, consumed_cells_source_label, dense_right_lines,
+        detail_right_lines, diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label,
+        footer_hint_line, footer_status_message, format_age_secs, format_num, format_num_commas,
+        format_num_compact, format_rate_pair, format_signed_num_i128, format_stage_commit_gap_ms,
+        header_right_line, header_title_line, heartbeat_is_on, io_fetch_write_jitter_line,
+        is_rate_drop, merged_sparkline_p95_line, overview_log_min_height,
+        overview_services_min_height, percentile_from_history, pipeline_bottleneck,
+        pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state, runtime_live_delta,
+        service_log_tails_line, sparkline, stale_age_secs, stale_status, startup_phase_label,
+        storage_pressure_l0_line, storage_pressure_wbm_line, storage_runtime_columns,
+        supervisor_services_line, sync_bottleneck, system_kv_line, system_store_path_lines,
+        system_workdir_lines, trend_delta, trim_for_panel, AdaptiveControlSnapshot, App, Color,
+        CompactOverviewLayout, DiagnosticsViewMode, SyncBottleneck, AMBER, CYAN,
+        STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
     use crate::db::{
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
@@ -5560,30 +5226,6 @@ mod tests {
     }
 
     #[test]
-    fn test_compact_sync_layout() {
-        assert_eq!(
-            compact_sync_layout(Rect::new(0, 0, 120, 20)),
-            CompactSyncLayout::DiagnosticsOnly
-        );
-        assert_eq!(
-            compact_sync_layout(Rect::new(0, 0, 120, 29)),
-            CompactSyncLayout::DiagnosticsOnly
-        );
-        assert_eq!(
-            compact_sync_layout(Rect::new(0, 0, 120, 30)),
-            CompactSyncLayout::ChartsAndDiagnostics
-        );
-        assert_eq!(
-            compact_sync_layout(Rect::new(0, 0, 100, 37)),
-            CompactSyncLayout::DiagnosticsOnly
-        );
-        assert_eq!(
-            compact_sync_layout(Rect::new(0, 0, 100, 38)),
-            CompactSyncLayout::ChartsAndDiagnostics
-        );
-    }
-
-    #[test]
     fn test_io_fetch_write_jitter_line_format() {
         let line =
             io_fetch_write_jitter_line("123.4ms", "567.8ms", "34.5ms", "+533.3ms", "9.0 blk/s");
@@ -5751,35 +5393,6 @@ mod tests {
             labels,
             vec!["FP", "WC", "L0", "WBM", "Compact", "Stability", "I/O"]
         );
-    }
-
-    #[test]
-    fn test_sync_timing_lines_do_not_show_data_source() {
-        let lines = sync_timing_lines(
-            Some("2m 03s"),
-            None,
-            Some("17m 12s"),
-            Some("bulk_sync"),
-            false,
-        );
-        let text = lines
-            .iter()
-            .map(line_text)
-            .collect::<Vec<String>>()
-            .join(" ");
-        assert!(text.contains("ETA: 2m 03s"));
-        assert!(text.contains("Elapsed: 17m 12s"));
-        assert!(text.contains("Phase: bulk_sync"));
-        assert!(!text.contains("Source"));
-        assert!(!text.contains("DB"));
-        assert!(!text.contains("RPC"));
-    }
-
-    #[test]
-    fn test_sync_timing_lines_empty_shows_fallback() {
-        let lines = sync_timing_lines(None, None, None, None, false);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(line_text(&lines[0]), "No timing data");
     }
 
     #[test]
