@@ -1505,15 +1505,7 @@ fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
         );
     } else {
         let base_specs = sync_chart_specs(false);
-        let third_spec = if is_bulk_build {
-            SyncChartSpec {
-                title: "Build Latency (ms)",
-                unit: "ms",
-                kind: SyncChartKind::BuildLatency,
-            }
-        } else {
-            base_specs[2]
-        };
+        let third_spec = base_specs[2];
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -1921,9 +1913,9 @@ fn draw_overlap_sparklines(f: &mut Frame, app: &App, area: Rect) {
             let idx = ((val * 7.0).round() as usize).min(7);
             let ch = sparkline_chars[idx];
             let color = if *is_inverted {
-                if val < 0.1 {
+                if val < 0.2 {
                     Color::Green
-                } else if val < 0.3 {
+                } else if val < 0.5 {
                     Color::Yellow
                 } else {
                     Color::Red
@@ -1952,7 +1944,7 @@ fn draw_overlap_sparklines(f: &mut Frame, app: &App, area: Rect) {
         };
         let stats = format!("{:>4.0}% {:>4.0}%", current * 100.0, avg * 100.0);
         let stats_color = if *is_inverted {
-            if current < 0.1 {
+            if current < 0.2 {
                 Color::Green
             } else {
                 Color::Yellow
@@ -1991,7 +1983,6 @@ enum SyncChartKind {
     BlockRate,
     TxRate,
     WriteLatency,
-    BuildLatency,
 }
 
 #[derive(Clone, Copy)]
@@ -2045,7 +2036,6 @@ fn sync_chart_data(app: &App, kind: SyncChartKind) -> &VecDeque<f64> {
         SyncChartKind::BlockRate => &app.rate_history,
         SyncChartKind::TxRate => &app.tx_rate_history,
         SyncChartKind::WriteLatency => &app.db_write_history,
-        SyncChartKind::BuildLatency => &app.bulk_build_ms_history,
     }
 }
 
