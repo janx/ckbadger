@@ -428,6 +428,8 @@ pub enum ObjectExtra {
         total: u32,
         issued: u32,
         configure: u8,
+        #[serde(default)]
+        storage_tier: StorageDependencyTier,
     },
     /// mNFT token (individual item) metadata.
     MnftToken {
@@ -569,6 +571,16 @@ pub struct ObjectCollectionAggregate {
     pub holders_count: i64,
     #[serde(default)]
     pub activities_count: i64,
+    #[serde(default)]
+    pub fully_on_ckb_and_btc_count: i64,
+    #[serde(default)]
+    pub fully_on_ckb_count: i64,
+    #[serde(default)]
+    pub decentralized_dependent_count: i64,
+    #[serde(default)]
+    pub centralized_dependent_count: i64,
+    #[serde(default)]
+    pub unknown_count: i64,
 }
 
 /// Pre-aggregated Identity collection data, maintained inline by the indexer.
@@ -2067,6 +2079,7 @@ mod tests {
                 total: 100,
                 issued: 42,
                 configure: 0xFF,
+                storage_tier: StorageDependencyTier::FullyOnCkb,
             },
         };
         let bytes = bincode::serialize(&entry).unwrap();

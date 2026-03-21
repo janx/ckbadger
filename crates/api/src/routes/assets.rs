@@ -59,6 +59,7 @@ fn get_collection_aggregate(
                 live_count: id_agg.live_count,
                 holders_count: id_agg.holders_count,
                 activities_count: id_agg.activities_count,
+                ..Default::default()
             }
         }))
     } else {
@@ -1323,6 +1324,7 @@ async fn get_object_item_detail(
                 total,
                 issued,
                 configure,
+                ..
             } => (
                 description.clone(),
                 renderer.clone(),
@@ -2764,6 +2766,7 @@ mod tests {
             live_count: 2,
             holders_count: 2,
             activities_count: 0,
+            ..Default::default()
         };
 
         let mut batch = StoreBatch::new(&domain);

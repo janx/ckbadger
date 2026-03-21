@@ -573,10 +573,26 @@ fn build_asset_caches_sync(
             "object"
         };
         let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
-        let storage_tier = resolve_nft_collection_storage_tier_override(&standard)
-            .unwrap_or("unknown")
-            .to_string();
-        let fully_onchain_count = if matches!(
+        let has_tier_counts = agg.fully_on_ckb_count > 0
+            || agg.fully_on_ckb_and_btc_count > 0
+            || agg.decentralized_dependent_count > 0
+            || agg.centralized_dependent_count > 0;
+        let storage_tier = if has_tier_counts {
+            resolve_storage_tier(
+                agg.fully_on_ckb_and_btc_count,
+                agg.fully_on_ckb_count,
+                agg.decentralized_dependent_count,
+                agg.centralized_dependent_count,
+                agg.unknown_count,
+            )
+        } else {
+            resolve_nft_collection_storage_tier_override(&standard)
+                .unwrap_or("unknown")
+                .to_string()
+        };
+        let fully_onchain_count = if has_tier_counts {
+            agg.fully_on_ckb_count + agg.fully_on_ckb_and_btc_count
+        } else if matches!(
             storage_tier.as_str(),
             "fully_on_ckb_and_btc" | "fully_on_ckb"
         ) {

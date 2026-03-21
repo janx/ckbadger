@@ -387,6 +387,7 @@ async fn list_identity_collection_items(
         live_count: agg.live_count,
         holders_count: agg.holders_count,
         activities_count: agg.activities_count,
+        ..Default::default()
     };
 
     list_identity_items_inner(

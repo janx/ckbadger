@@ -524,6 +524,7 @@ mod tests {
             live_count: 42,
             holders_count: 11,
             activities_count: 37,
+            ..Default::default()
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -555,6 +556,7 @@ mod tests {
                 live_count: 8,
                 holders_count: 3,
                 activities_count: 15,
+                ..Default::default()
             },
         );
         batch.put_object_collection_aggregate(
@@ -566,6 +568,7 @@ mod tests {
                 live_count: 90,
                 holders_count: 50,
                 activities_count: 800,
+                ..Default::default()
             },
         );
         batch.commit().unwrap();

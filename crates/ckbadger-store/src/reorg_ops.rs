@@ -2118,6 +2118,16 @@ impl CkbadgerStore {
                         let idx_key = keys::encode_nft_by_collection_key(collection_id, &nft_id);
                         batch.put_cf(self.cf_object_by_collection(), idx_key, []);
                         secondary_keys_written += 1;
+                        // Resolve storage tier from class entry before taking mutable borrow on agg
+                        let token_tier = self
+                            .get_object(collection_id)
+                            .ok()
+                            .flatten()
+                            .map(|class_entry| match &class_entry.extra {
+                                ObjectExtra::MnftClass { storage_tier, .. } => *storage_tier,
+                                _ => StorageDependencyTier::Unknown,
+                            })
+                            .unwrap_or(StorageDependencyTier::Unknown);
                         let agg = nft_collection_aggs
                             .entry(collection_id.clone())
                             .or_insert_with(|| ObjectCollectionAggregate {
@@ -2134,6 +2144,25 @@ impl CkbadgerStore {
                             agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
                                 anyhow::anyhow!(
                                     "mNFT live_count overflow while repairing rollback state: collection_id=0x{}",
+                                    bytes_to_hex(collection_id)
+                                )
+                            })?;
+                            let tier_slot = match token_tier {
+                                StorageDependencyTier::FullyOnCkb => &mut agg.fully_on_ckb_count,
+                                StorageDependencyTier::FullyOnCkbAndBtc => {
+                                    &mut agg.fully_on_ckb_and_btc_count
+                                }
+                                StorageDependencyTier::DecentralizedDependent => {
+                                    &mut agg.decentralized_dependent_count
+                                }
+                                StorageDependencyTier::CentralizedDependent => {
+                                    &mut agg.centralized_dependent_count
+                                }
+                                StorageDependencyTier::Unknown => &mut agg.unknown_count,
+                            };
+                            *tier_slot = tier_slot.checked_add(1).ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "mNFT tier count overflow while repairing rollback state: collection_id=0x{}",
                                     bytes_to_hex(collection_id)
                                 )
                             })?;
@@ -3044,6 +3073,7 @@ mod tests {
                 live_count: 99,
                 holders_count: 99,
                 activities_count: 99,
+                ..Default::default()
             },
         );
         put_canonical_tx(&mut domain_batch, 0, 0, &[0xA1; 32]);
@@ -4610,6 +4640,7 @@ mod tests {
                 live_count: 99,
                 holders_count: 99,
                 activities_count: 99,
+                ..Default::default()
             },
         );
         batch.commit().unwrap();

@@ -22,8 +22,8 @@ use ckbadger_store::types::{
     IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats, ObjectCollectionActivityEntry,
     ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry, ObjectExtra, ObjectStandard,
     OwnerActivityDelta, ProtocolAction, ReorgEvent, ScriptDailyDelta, ScriptInfo,
-    ScriptVersionInfo, SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo,
-    TxActivityBundle, TxIndexEntry, TypeCallEntry,
+    ScriptVersionInfo, SporeDailyDelta, SporeMediaProfile, StorageDependencyTier, TokenDailyDelta,
+    TokenInfo, TxActivityBundle, TxIndexEntry, TypeCallEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -2494,6 +2494,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
             live_count: 6,
             holders_count: 0,
             activities_count: 0,
+            ..Default::default()
         },
     );
     batch.commit().unwrap();
@@ -5575,6 +5576,7 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
             live_count: 1,
             holders_count: 0,
             activities_count: 0,
+            ..Default::default()
         },
     );
     batch.commit().unwrap();
@@ -5709,6 +5711,7 @@ async fn test_assets_list_includes_did_ckb_collection_under_nft_type() {
             live_count: 2,
             holders_count: 0,
             activities_count: 0,
+            ..Default::default()
         },
     );
     batch.commit().unwrap();
@@ -5991,6 +5994,7 @@ async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
             live_count: 60,
             holders_count: 0,
             activities_count: 0,
+            ..Default::default()
         },
     );
     batch.commit().unwrap();
@@ -6406,6 +6410,7 @@ async fn test_assets_nft_list_uses_dotbit_display_name_when_aggregate_name_missi
             live_count: 12,
             holders_count: 0,
             activities_count: 0,
+            ..Default::default()
         },
     );
     batch.commit().unwrap();
@@ -6766,6 +6771,7 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
             live_count: 1,
             holders_count: 0,
             activities_count: 0,
+            ..Default::default()
         },
     );
     batch.put_object(
@@ -6786,6 +6792,7 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
                 total: 1000,
                 issued: 1,
                 configure: 7,
+                storage_tier: StorageDependencyTier::FullyOnCkb,
             },
         },
     );
@@ -7276,6 +7283,7 @@ async fn test_assets_nft_item_detail_mnft() {
                 total: 500,
                 issued: 128,
                 configure: 9,
+                storage_tier: StorageDependencyTier::FullyOnCkb,
             },
         },
     );

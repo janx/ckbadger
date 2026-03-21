@@ -282,6 +282,21 @@ fn classify_dependency_tier(scheme: &str) -> StorageDependencyTier {
     }
 }
 
+/// Analyze an mNFT class renderer URL to determine its storage dependency tier.
+///
+/// The renderer is a class-level property shared by all tokens in the class.
+/// - `None` or empty → `FullyOnCkb` (no external dependency)
+/// - Contains a URI → classified by scheme (http → Centralized, ipfs → Decentralized, etc.)
+pub fn analyze_renderer_tier(renderer: Option<&str>) -> StorageDependencyTier {
+    let url = match renderer {
+        Some(s) if !s.trim().is_empty() => s.trim(),
+        _ => return StorageDependencyTier::FullyOnCkb,
+    };
+    let mut sources = Vec::new();
+    extract_uri_sources(url, "renderer", &mut sources);
+    resolve_tier(&sources)
+}
+
 fn extract_uri_sources(text: &str, source_location: &str, out: &mut Vec<SporeMediaSource>) {
     let normalized = text.to_ascii_lowercase();
     let schemes = [
@@ -938,5 +953,70 @@ mod tests {
         assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkbAndBtc);
         assert!(profile.sources.iter().any(|s| s.scheme == "ckbfs"));
         assert!(profile.sources.iter().any(|s| s.scheme == "btcfs"));
+    }
+
+    #[test]
+    fn renderer_tier_none_is_fully_on_ckb() {
+        assert_eq!(
+            analyze_renderer_tier(None),
+            StorageDependencyTier::FullyOnCkb
+        );
+    }
+
+    #[test]
+    fn renderer_tier_empty_is_fully_on_ckb() {
+        assert_eq!(
+            analyze_renderer_tier(Some("")),
+            StorageDependencyTier::FullyOnCkb
+        );
+        assert_eq!(
+            analyze_renderer_tier(Some("  ")),
+            StorageDependencyTier::FullyOnCkb
+        );
+    }
+
+    #[test]
+    fn renderer_tier_http_is_centralized() {
+        assert_eq!(
+            analyze_renderer_tier(Some("https://example.com/render")),
+            StorageDependencyTier::CentralizedDependent
+        );
+        assert_eq!(
+            analyze_renderer_tier(Some("http://render.mnft.io/v1")),
+            StorageDependencyTier::CentralizedDependent
+        );
+    }
+
+    #[test]
+    fn renderer_tier_ipfs_is_decentralized() {
+        assert_eq!(
+            analyze_renderer_tier(Some("ipfs://QmHash123")),
+            StorageDependencyTier::DecentralizedDependent
+        );
+    }
+
+    #[test]
+    fn renderer_tier_ckbfs_is_fully_on_ckb() {
+        assert_eq!(
+            analyze_renderer_tier(Some("ckbfs://cellhash")),
+            StorageDependencyTier::FullyOnCkb
+        );
+    }
+
+    #[test]
+    fn renderer_tier_btcfs_is_fully_on_ckb_and_btc() {
+        assert_eq!(
+            analyze_renderer_tier(Some("btcfs://inscription123")),
+            StorageDependencyTier::FullyOnCkbAndBtc
+        );
+    }
+
+    #[test]
+    fn renderer_tier_no_recognized_scheme_is_fully_on_ckb() {
+        // A plain string without a recognized URI scheme is treated as inline content
+        assert_eq!(
+            analyze_renderer_tier(Some("renderer:v1")),
+            StorageDependencyTier::FullyOnCkb
+        );
     }
 }
