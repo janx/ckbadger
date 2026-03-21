@@ -944,44 +944,29 @@ fn parse_binary_protocol_facts(
 // Arena builder
 // ---------------------------------------------------------------------------
 
-/// Compute cell-weighted chunk boundaries so that each rayon work unit gets
-/// roughly equal work.  Target: `2 * num_cpus` chunks for good load
-/// balancing via work-stealing, with each chunk containing enough cells
-/// (1000+) to amortise the ~10-20 µs rayon scheduling overhead.
-///
-/// Returns a vec of `(start_idx, end_idx)` pairs (exclusive end) into `blocks`.
-fn compute_cell_weighted_chunks(blocks: &[RawCkbBlock]) -> Vec<(usize, usize)> {
-    if blocks.is_empty() {
+/// Compute cell-weighted chunk boundaries from pre-computed per-block cell counts.
+pub(crate) fn compute_cell_weighted_chunks_from_counts(
+    block_count: usize,
+    cell_counts: &[usize],
+    total_cells: usize,
+) -> Vec<(usize, usize)> {
+    debug_assert_eq!(cell_counts.len(), block_count);
+    if block_count == 0 {
         return vec![];
     }
 
     let num_threads = rayon::current_num_threads();
     let target_chunks = (2 * num_threads).max(1);
 
-    if blocks.len() <= target_chunks {
-        // Fewer blocks than target chunks: one block per chunk.
-        return (0..blocks.len()).map(|i| (i, i + 1)).collect();
+    if block_count <= target_chunks {
+        return (0..block_count).map(|i| (i, i + 1)).collect();
     }
 
-    // O(n) pre-scan: count outputs per block from molecule headers (no parsing).
-    let cell_counts: Vec<usize> = blocks
-        .iter()
-        .map(|b| {
-            b.block
-                .transactions()
-                .iter()
-                .map(|tx| tx.outputs().len())
-                .sum()
-        })
-        .collect();
-    let total_cells: usize = cell_counts.iter().sum();
-
     if total_cells == 0 {
-        // Edge case: no cells at all — divide blocks evenly.
-        let chunk_size = blocks.len().div_ceil(target_chunks);
-        return (0..blocks.len())
+        let chunk_size = block_count.div_ceil(target_chunks);
+        return (0..block_count)
             .step_by(chunk_size)
-            .map(|start| (start, blocks.len().min(start + chunk_size)))
+            .map(|start| (start, block_count.min(start + chunk_size)))
             .collect();
     }
 
@@ -998,11 +983,63 @@ fn compute_cell_weighted_chunks(blocks: &[RawCkbBlock]) -> Vec<(usize, usize)> {
             current_cells = 0;
         }
     }
-    // Remaining blocks form the final chunk.
-    if start < blocks.len() {
-        chunks.push((start, blocks.len()));
+    if start < block_count {
+        chunks.push((start, block_count));
     }
     chunks
+}
+
+/// Compute cell-weighted chunk boundaries so that each rayon work unit gets
+/// roughly equal work.  Target: `2 * num_cpus` chunks for good load
+/// balancing via work-stealing, with each chunk containing enough cells
+/// (1000+) to amortise the ~10-20 µs rayon scheduling overhead.
+///
+/// Returns a vec of `(start_idx, end_idx)` pairs (exclusive end) into `blocks`.
+#[cfg(test)]
+fn compute_cell_weighted_chunks(blocks: &[RawCkbBlock]) -> Vec<(usize, usize)> {
+    let cell_counts: Vec<usize> = blocks
+        .iter()
+        .map(|b| {
+            b.block
+                .transactions()
+                .iter()
+                .map(|tx| tx.outputs().len())
+                .sum()
+        })
+        .collect();
+    let total: usize = cell_counts.iter().sum();
+    compute_cell_weighted_chunks_from_counts(blocks.len(), &cell_counts, total)
+}
+
+/// Process blocks serially into a FactsArena. Used when total cell count
+/// is below the parallelism threshold where rayon overhead exceeds benefit.
+fn build_facts_arena_serial(
+    blocks: &[RawCkbBlock],
+    interner: &IdentityInterner,
+) -> Result<(super::facts::FactsArena, u64)> {
+    let mut arena = super::facts::FactsArena::default();
+    let mut total_cells: u64 = 0;
+
+    for raw in blocks {
+        let (block_facts, txs, cells) = parse_block_to_facts(raw, interner)?;
+        let tx_start = arena.txs.len();
+        let cell_start = arena.cells.len();
+        total_cells += cells.len() as u64;
+
+        for mut tx in txs {
+            tx.output_range =
+                (cell_start + tx.output_range.start)..(cell_start + tx.output_range.end);
+            arena.txs.push(tx);
+        }
+        arena.cells.extend(cells);
+
+        let tx_end = arena.txs.len();
+        let mut block = block_facts;
+        block.tx_range = tx_start..tx_end;
+        arena.blocks.push(block);
+    }
+
+    Ok((arena, total_cells))
 }
 
 /// Build a FactsArena from raw CKB blocks using binary-native parsing.
@@ -1018,6 +1055,41 @@ pub(crate) fn build_bulk_facts_arena_from_raw_blocks(
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Instant;
 
+    // Single O(n) pre-scan: count cells per block from molecule headers.
+    let cell_counts: Vec<usize> = blocks
+        .iter()
+        .map(|b| {
+            b.block
+                .transactions()
+                .iter()
+                .map(|tx| tx.outputs().len())
+                .sum()
+        })
+        .collect();
+    let total_cells_estimate: usize = cell_counts.iter().sum();
+
+    // Serial fast-path: when total cells are small, rayon overhead exceeds
+    // the parallelism benefit. Threshold from perf data: batches under ~50K
+    // cells averaged 0.30x speedup (3.3x slowdown) with par_iter.
+    if total_cells_estimate < 50_000 {
+        let start = Instant::now();
+        let (arena, cell_count) = build_facts_arena_serial(blocks, interner)?;
+        let elapsed = start.elapsed();
+        let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
+        let (intern_total, intern_slow) = interner.drain_counters();
+        return Ok((
+            arena,
+            FactsTimingBreakdown {
+                par_iter_ms: elapsed_ms,
+                merge_ms: 0.0,
+                serial_equivalent_ms: elapsed_ms,
+                intern_slow_path_count: intern_slow,
+                intern_total_count: intern_total,
+                cell_count,
+            },
+        ));
+    }
+
     let serial_equivalent_us = AtomicU64::new(0);
     let total_cells = AtomicU64::new(0);
 
@@ -1027,7 +1099,8 @@ pub(crate) fn build_bulk_facts_arena_from_raw_blocks(
     // cell count.  This replaces the old fixed par_chunks(500) which gave
     // poor speedup (1.45x on 24 cores) because early-phase blocks have
     // very few cells, producing chunks with microseconds of useful work.
-    let chunk_ranges = compute_cell_weighted_chunks(blocks);
+    let chunk_ranges =
+        compute_cell_weighted_chunks_from_counts(blocks.len(), &cell_counts, total_cells_estimate);
     let chunk_results: Vec<Result<super::facts::FactsArena>> = chunk_ranges
         .par_iter()
         .map(|&(start, end)| {
@@ -1473,6 +1546,30 @@ mod tests {
                 chunk_cells as f64 / total_cells as f64 * 100.0,
             );
         }
+    }
+
+    #[test]
+    fn cell_weighted_chunks_from_counts_matches_wrapper() {
+        let blocks: Vec<RawCkbBlock> = (0..100)
+            .map(|i| make_raw_block_with_outputs(if i < 50 { 1 } else { 20 }))
+            .collect();
+        let wrapper_result = compute_cell_weighted_chunks(&blocks);
+
+        let cell_counts: Vec<usize> = blocks
+            .iter()
+            .map(|b| {
+                b.block
+                    .transactions()
+                    .iter()
+                    .map(|tx| tx.outputs().len())
+                    .sum()
+            })
+            .collect();
+        let total: usize = cell_counts.iter().sum();
+        let direct_result =
+            compute_cell_weighted_chunks_from_counts(blocks.len(), &cell_counts, total);
+
+        assert_eq!(wrapper_result, direct_result);
     }
 
     #[test]
