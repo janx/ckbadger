@@ -346,6 +346,10 @@ fn parse_bulk_protocol_facts(
     }
 }
 
+/// Minimum blocks per rayon work unit for the hex-based facts path.
+/// See `binary_facts::FACTS_PAR_CHUNK_SIZE` for rationale.
+const FACTS_PAR_CHUNK_SIZE: usize = 500;
+
 pub(crate) fn build_bulk_facts_arena_from_blocks(
     blocks: &[BlockResponseWithCycles],
     interner: &IdentityInterner,
@@ -359,43 +363,63 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
     let serial_equivalent_us = AtomicU64::new(0);
     let total_cells = AtomicU64::new(0);
 
-    // Parse each block in parallel via rayon. Each block produces local
-    // (BlockFacts, Vec<TxFacts>, Vec<CellFacts>) with output_range starting
-    // at local index 0. The merge phase below remaps offsets sequentially.
+    // Process blocks in chunks via par_chunks to avoid rayon scheduling
+    // overhead on tiny per-block work units (30-175 µs each).
     let par_start = Instant::now();
-    let per_block_results: Vec<Result<(BlockFacts, Vec<TxFacts>, Vec<CellFacts>)>> = blocks
-        .par_iter()
-        .map(|block| {
-            let block_start = Instant::now();
-            let result = parse_single_block(block, interner);
-            serial_equivalent_us
-                .fetch_add(block_start.elapsed().as_micros() as u64, Ordering::Relaxed);
-            if let Ok((_, _, ref cells)) = result {
-                total_cells.fetch_add(cells.len() as u64, Ordering::Relaxed);
+    let chunk_results: Vec<Result<FactsArena>> = blocks
+        .par_chunks(FACTS_PAR_CHUNK_SIZE)
+        .map(|chunk| {
+            let chunk_start = Instant::now();
+            let mut sub_arena = FactsArena::default();
+            let mut chunk_cells: u64 = 0;
+
+            for block in chunk {
+                let (block_facts, txs, cells) = parse_single_block(block, interner)?;
+                let tx_start = sub_arena.txs.len();
+                let cell_start = sub_arena.cells.len();
+                chunk_cells += cells.len() as u64;
+
+                for mut tx in txs {
+                    tx.output_range =
+                        (cell_start + tx.output_range.start)..(cell_start + tx.output_range.end);
+                    sub_arena.txs.push(tx);
+                }
+                sub_arena.cells.extend(cells);
+
+                let tx_end = sub_arena.txs.len();
+                let mut block_f = block_facts;
+                block_f.tx_range = tx_start..tx_end;
+                sub_arena.blocks.push(block_f);
             }
-            result
+
+            serial_equivalent_us
+                .fetch_add(chunk_start.elapsed().as_micros() as u64, Ordering::Relaxed);
+            total_cells.fetch_add(chunk_cells, Ordering::Relaxed);
+            Ok(sub_arena)
         })
         .collect();
     let par_elapsed = par_start.elapsed();
 
+    // Merge sub-arenas sequentially, remapping tx/cell offsets.
     let merge_start = Instant::now();
     let mut arena = FactsArena::default();
-    for result in per_block_results {
-        let (block_facts, txs, cells) = result?;
-        let tx_start = arena.txs.len();
-        let cell_start = arena.cells.len();
+    for result in chunk_results {
+        let sub = result?;
+        let tx_offset = arena.txs.len();
+        let cell_offset = arena.cells.len();
 
-        for mut tx in txs {
+        for mut block in sub.blocks {
+            block.tx_range = (tx_offset + block.tx_range.start)..(tx_offset + block.tx_range.end);
+            arena.blocks.push(block);
+        }
+
+        for mut tx in sub.txs {
             tx.output_range =
-                (cell_start + tx.output_range.start)..(cell_start + tx.output_range.end);
+                (cell_offset + tx.output_range.start)..(cell_offset + tx.output_range.end);
             arena.txs.push(tx);
         }
-        arena.cells.extend(cells);
 
-        let tx_end = arena.txs.len();
-        let mut block = block_facts;
-        block.tx_range = tx_start..tx_end;
-        arena.blocks.push(block);
+        arena.cells.extend(sub.cells);
     }
     let merge_elapsed = merge_start.elapsed();
 

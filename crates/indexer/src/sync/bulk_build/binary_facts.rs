@@ -944,7 +944,18 @@ fn parse_binary_protocol_facts(
 // Arena builder
 // ---------------------------------------------------------------------------
 
+/// Minimum blocks per rayon work unit.  Per-block parse cost is 30-175 µs
+/// depending on chain density.  Rayon task dispatch + cache invalidation
+/// costs ~10-20 µs, so individual blocks are too fine-grained.  Chunking
+/// at 500 blocks gives ~15-85 ms per work unit — well above rayon overhead
+/// — and lets 24 cores achieve meaningful speedup.
+const FACTS_PAR_CHUNK_SIZE: usize = 500;
+
 /// Build a FactsArena from raw CKB blocks using binary-native parsing.
+///
+/// Blocks are processed in chunks of [`FACTS_PAR_CHUNK_SIZE`] via
+/// `par_chunks` to avoid rayon scheduling overhead on tiny per-block
+/// work units.
 pub(crate) fn build_bulk_facts_arena_from_raw_blocks(
     blocks: &[RawCkbBlock],
     interner: &IdentityInterner,
@@ -957,40 +968,65 @@ pub(crate) fn build_bulk_facts_arena_from_raw_blocks(
     let total_cells = AtomicU64::new(0);
 
     let par_start = Instant::now();
-    #[allow(clippy::type_complexity)]
-    let per_block_results: Vec<Result<(BlockFacts, Vec<TxFacts>, Vec<CellFacts>)>> = blocks
-        .par_iter()
-        .map(|raw| {
-            let block_start = Instant::now();
-            let result = parse_block_to_facts(raw, interner);
-            serial_equivalent_us
-                .fetch_add(block_start.elapsed().as_micros() as u64, Ordering::Relaxed);
-            if let Ok((_, _, ref cells)) = result {
-                total_cells.fetch_add(cells.len() as u64, Ordering::Relaxed);
+
+    // Each rayon work unit processes a *chunk* of blocks serially, producing
+    // a local sub-arena.  The merge phase concatenates sub-arenas in order.
+    let chunk_results: Vec<Result<super::facts::FactsArena>> = blocks
+        .par_chunks(FACTS_PAR_CHUNK_SIZE)
+        .map(|chunk| {
+            let chunk_start = Instant::now();
+            let mut sub_arena = super::facts::FactsArena::default();
+            let mut chunk_cells: u64 = 0;
+
+            for raw in chunk {
+                let (block_facts, txs, cells) = parse_block_to_facts(raw, interner)?;
+                let tx_start = sub_arena.txs.len();
+                let cell_start = sub_arena.cells.len();
+                chunk_cells += cells.len() as u64;
+
+                for mut tx in txs {
+                    tx.output_range =
+                        (cell_start + tx.output_range.start)..(cell_start + tx.output_range.end);
+                    sub_arena.txs.push(tx);
+                }
+                sub_arena.cells.extend(cells);
+
+                let tx_end = sub_arena.txs.len();
+                let mut block = block_facts;
+                block.tx_range = tx_start..tx_end;
+                sub_arena.blocks.push(block);
             }
-            result
+
+            serial_equivalent_us
+                .fetch_add(chunk_start.elapsed().as_micros() as u64, Ordering::Relaxed);
+            total_cells.fetch_add(chunk_cells, Ordering::Relaxed);
+            Ok(sub_arena)
         })
         .collect();
     let par_elapsed = par_start.elapsed();
 
+    // Merge sub-arenas sequentially, remapping tx/cell offsets.
     let merge_start = Instant::now();
     let mut arena = super::facts::FactsArena::default();
-    for result in per_block_results {
-        let (block_facts, txs, cells) = result?;
-        let tx_start = arena.txs.len();
-        let cell_start = arena.cells.len();
+    for result in chunk_results {
+        let sub = result?;
+        let tx_offset = arena.txs.len();
+        let cell_offset = arena.cells.len();
 
-        for mut tx in txs {
+        // Remap block → tx ranges.
+        for mut block in sub.blocks {
+            block.tx_range = (tx_offset + block.tx_range.start)..(tx_offset + block.tx_range.end);
+            arena.blocks.push(block);
+        }
+
+        // Remap tx → cell ranges.
+        for mut tx in sub.txs {
             tx.output_range =
-                (cell_start + tx.output_range.start)..(cell_start + tx.output_range.end);
+                (cell_offset + tx.output_range.start)..(cell_offset + tx.output_range.end);
             arena.txs.push(tx);
         }
-        arena.cells.extend(cells);
 
-        let tx_end = arena.txs.len();
-        let mut block = block_facts;
-        block.tx_range = tx_start..tx_end;
-        arena.blocks.push(block);
+        arena.cells.extend(sub.cells);
     }
     let merge_elapsed = merge_start.elapsed();
 
