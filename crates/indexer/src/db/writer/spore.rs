@@ -1000,7 +1000,7 @@ mod tests {
                 content_type: "image/png".to_string(),
                 content_length: 4,
                 media_profile: SporeMediaProfile {
-                    tier: StorageDependencyTier::FullyOnchain,
+                    tier: StorageDependencyTier::FullyOnCkb,
                     sources: Vec::new(),
                     has_renderable_image: false,
                     issues: Vec::new(),
@@ -1188,7 +1188,7 @@ mod tests {
                     total_count: 1,
                     live_count: 1,
                     owner_count: 1,
-                    fully_onchain_count: 1,
+                    fully_on_ckb_count: 1,
                     ..Default::default()
                 },
             );
@@ -1225,7 +1225,7 @@ mod tests {
         let agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
         assert_eq!(agg.owner_count, 1);
         assert_eq!(agg.live_count, 1);
-        assert_eq!(agg.fully_onchain_count, 1);
+        assert_eq!(agg.fully_on_ckb_count, 1);
         assert_eq!(
             store
                 .get_cluster_owner_count(&cluster_id, &owner_a)
@@ -1261,7 +1261,7 @@ mod tests {
                     total_count: 1,
                     live_count: 1,
                     owner_count: 0,
-                    fully_onchain_count: 1,
+                    fully_on_ckb_count: 1,
                     ..Default::default()
                 },
             );
@@ -1305,7 +1305,7 @@ mod tests {
                     total_count: 1,
                     live_count: 0,
                     owner_count: 1,
-                    fully_onchain_count: 1,
+                    fully_on_ckb_count: 1,
                     ..Default::default()
                 },
             );
@@ -1348,7 +1348,7 @@ mod tests {
                     total_count: 1,
                     live_count: 0,
                     owner_count: 1,
-                    fully_onchain_count: 1,
+                    fully_on_ckb_count: 1,
                     ..Default::default()
                 },
             );
@@ -1385,7 +1385,7 @@ mod tests {
                     total_count: 1,
                     live_count: 1,
                     owner_count: 1,
-                    fully_onchain_count: 1,
+                    fully_on_ckb_count: 1,
                     ..Default::default()
                 },
             );
@@ -1412,10 +1412,10 @@ mod tests {
         let new_agg = store.get_cluster_aggregate(&new_cluster).unwrap().unwrap();
         assert_eq!(old_agg.live_count, 0);
         assert_eq!(old_agg.owner_count, 0);
-        assert_eq!(old_agg.fully_onchain_count, 0);
+        assert_eq!(old_agg.fully_on_ckb_count, 0);
         assert_eq!(new_agg.live_count, 1);
         assert_eq!(new_agg.owner_count, 1);
-        assert_eq!(new_agg.fully_onchain_count, 1);
+        assert_eq!(new_agg.fully_on_ckb_count, 1);
     }
 
     #[test]
@@ -1624,7 +1624,7 @@ mod tests {
                     total_count: 1,
                     live_count: 1,
                     owner_count: 1,
-                    fully_onchain_count: 1,
+                    fully_on_ckb_count: 1,
                     ..Default::default()
                 },
             );

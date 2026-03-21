@@ -4520,7 +4520,7 @@ mod tests {
                     content_type: "image/png".to_string(),
                     content_length: 8,
                     media_profile: SporeMediaProfile {
-                        tier: StorageDependencyTier::FullyOnchain,
+                        tier: StorageDependencyTier::FullyOnCkb,
                         ..Default::default()
                     },
                 },
@@ -4542,7 +4542,7 @@ mod tests {
                     content_type: "image/png".to_string(),
                     content_length: 8,
                     media_profile: SporeMediaProfile {
-                        tier: StorageDependencyTier::FullyOnchain,
+                        tier: StorageDependencyTier::FullyOnCkb,
                         ..Default::default()
                     },
                 },
@@ -4634,7 +4634,7 @@ mod tests {
         assert_eq!(cluster_agg.total_count, 1);
         assert_eq!(cluster_agg.live_count, 1);
         assert_eq!(cluster_agg.owner_count, 1);
-        assert_eq!(cluster_agg.fully_onchain_count, 1);
+        assert_eq!(cluster_agg.fully_on_ckb_count, 1);
 
         let class_agg = store
             .get_object_collection_aggregate(&class_id)
