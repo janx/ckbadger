@@ -1888,6 +1888,12 @@ impl Indexer {
                     parse_ms: t_parse_ms,
                     precompute_ms: precompute_parser_ms,
                 };
+                // Increment pending tx counter BEFORE sending to the channel.
+                // The writer decrements this counter immediately upon receiving
+                // a batch. If we increment after send, the writer can race ahead
+                // and observe counter=0 before our fetch_add executes, causing
+                // an underflow panic.
+                parse_tx_pending_txs_for_parser.fetch_add(batch_tx_count_u64, Ordering::Relaxed);
                 if parse_tx
                     .send(ParsedBatch {
                         batch_epoch,
@@ -1923,7 +1929,6 @@ impl Indexer {
                     );
                     break;
                 }
-                parse_tx_pending_txs_for_parser.fetch_add(batch_tx_count_u64, Ordering::Relaxed);
             }
         });
 
