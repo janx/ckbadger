@@ -4711,6 +4711,7 @@ fn draw_help_popup(f: &mut Frame) {
         Line::from("  h        Previous tab"),
         Line::from("  c        Toggle compact layout override"),
         Line::from("  v        Cycle diagnostics view (Auto/Compact/Detail)"),
+        Line::from("  e        Toggle build sub-phase expansion"),
         Line::from("  R        Force refresh"),
         Line::from(""),
         Line::from(Span::styled(
