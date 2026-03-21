@@ -94,6 +94,7 @@ enum DiagnosticsViewMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Removed in Task 7
 enum CompactSyncLayout {
     DiagnosticsOnly,
     ChartsAndDiagnostics,
@@ -943,108 +944,42 @@ fn draw_overview_tail(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
-    let is_bulk_sync = app.sync_status.as_ref().is_some_and(|s| s.is_bulk_sync);
     let is_bulk_build = app
         .sync_status
         .as_ref()
         .and_then(|s| s.bulk_build.as_ref())
         .is_some();
-    let progress_height: u16 = if is_bulk_sync { 8 } else { 7 };
 
-    match detect_layout_density(app, area) {
-        LayoutDensity::Compact => match compact_sync_layout(area) {
-            CompactSyncLayout::DiagnosticsOnly => {
-                let chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Length(4),
-                        Constraint::Length(progress_height),
-                        Constraint::Min(7),
-                        Constraint::Min(3),
-                    ])
-                    .split(area);
-                draw_sync_realtime_bar(f, app, chunks[0]);
-                draw_sync_progress(f, app, chunks[1]);
-                draw_sync_diagnostics(f, app, chunks[2]);
-                draw_sync_events(f, app, chunks[3]);
-            }
-            CompactSyncLayout::ChartsAndDiagnostics => {
-                let chart_height = if area.width < 120 { 16 } else { 8 };
-                let diagnostics_height = if area.width < 120 { 8 } else { 7 };
-                let chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Length(4),
-                        Constraint::Length(progress_height),
-                        Constraint::Length(chart_height),
-                        Constraint::Length(diagnostics_height),
-                        Constraint::Min(3),
-                    ])
-                    .split(area);
-                draw_sync_realtime_bar(f, app, chunks[0]);
-                draw_sync_progress(f, app, chunks[1]);
-                draw_sync_charts(f, app, chunks[2]);
-                draw_sync_diagnostics(f, app, chunks[3]);
-                draw_sync_events(f, app, chunks[4]);
-            }
-        },
-        LayoutDensity::Standard => {
-            // Bulk-build diagnostics has 10 lines (stages + I/O + volume + adaptive);
-            // allocate 12 (10 inner + 2 border) to avoid clipping.
-            let diag_height: u16 = if is_bulk_build {
-                if app.show_build_subphases {
-                    16
-                } else {
-                    12
-                }
-            } else {
-                6
-            };
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(4),
-                    Constraint::Length(progress_height),
-                    Constraint::Length(10),
-                    Constraint::Length(diag_height),
-                    Constraint::Min(3),
-                ])
-                .split(area);
-            draw_sync_realtime_bar(f, app, chunks[0]);
-            draw_sync_progress(f, app, chunks[1]);
-            draw_sync_charts(f, app, chunks[2]);
-            draw_sync_diagnostics(f, app, chunks[3]);
-            draw_sync_events(f, app, chunks[4]);
+    let diag_height: u16 = if is_bulk_build {
+        if app.show_build_subphases {
+            16
+        } else {
+            12
         }
-        LayoutDensity::Wide => {
-            let diag_height: u16 = if is_bulk_build {
-                if app.show_build_subphases {
-                    16
-                } else {
-                    12
-                }
-            } else {
-                8
-            };
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(4),
-                    Constraint::Length(progress_height),
-                    Constraint::Length(10),
-                    Constraint::Length(diag_height),
-                    Constraint::Min(3),
-                ])
-                .split(area);
-            draw_sync_realtime_bar(f, app, chunks[0]);
-            draw_sync_progress(f, app, chunks[1]);
-            draw_sync_charts(f, app, chunks[2]);
-            draw_sync_diagnostics(f, app, chunks[3]);
-            draw_sync_events(f, app, chunks[4]);
-        }
-    }
+    } else {
+        6
+    };
+
+    let status_height: u16 = 10;
+    let charts_height: u16 = 10;
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(status_height),
+            Constraint::Length(charts_height),
+            Constraint::Length(diag_height),
+            Constraint::Min(3),
+        ])
+        .split(area);
+
+    draw_sync_status_row(f, app, chunks[0]);
+    draw_sync_charts(f, app, chunks[1]);
+    draw_sync_diagnostics(f, app, chunks[2]);
+    draw_sync_events(f, app, chunks[3]);
 }
 
+#[allow(dead_code)] // Removed in Task 7
 fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1326,6 +1261,7 @@ fn draw_chain_info(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(right_lines), cols[2]);
 }
 
+#[allow(dead_code)] // Removed in Task 7
 fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1502,7 +1438,6 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-#[allow(dead_code)]
 fn draw_sync_status_row(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1559,7 +1494,6 @@ fn draw_sync_status_row(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-#[allow(dead_code)]
 fn draw_status_text_column(f: &mut Frame, app: &App, area: Rect) {
     let Some(sync) = &app.sync_status else {
         f.render_widget(Paragraph::new("No sync data"), area);
@@ -1675,123 +1609,100 @@ fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
         .as_ref()
         .and_then(|s| s.bulk_build.as_ref())
         .is_some();
-    if stack_sync_charts(area) {
-        let specs = sync_chart_specs(true);
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(area);
-        draw_chart_panel(
-            f,
-            rows[0],
-            specs[0].title,
-            specs[0].unit,
-            sync_chart_data(app, specs[0].kind),
-        );
-        draw_chart_panel(
-            f,
-            rows[1],
-            specs[1].title,
-            specs[1].unit,
-            sync_chart_data(app, specs[1].kind),
-        );
+
+    let num_cols = sync_column_count(area.width);
+
+    // Chart A is always build latency (bulk) or write latency (live)
+    let chart_a_title = if is_bulk_build {
+        "Build Latency (ms)"
     } else {
-        let base_specs = sync_chart_specs(false);
-        let third_spec = if is_bulk_build {
-            SyncChartSpec {
-                title: "Build Latency (ms)",
-                unit: "ms",
-                kind: SyncChartKind::BuildLatency,
+        "Write Latency (ms)"
+    };
+    let chart_a_kind = if is_bulk_build {
+        SyncChartKind::BuildLatency
+    } else {
+        SyncChartKind::WriteLatency
+    };
+
+    match num_cols {
+        1 => {
+            draw_chart_panel(
+                f,
+                area,
+                chart_a_title,
+                "ms",
+                sync_chart_data(app, chart_a_kind),
+            );
+        }
+        2 => {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(area);
+            draw_chart_panel(
+                f,
+                cols[0],
+                chart_a_title,
+                "ms",
+                sync_chart_data(app, chart_a_kind),
+            );
+            if is_bulk_build {
+                draw_overlap_chart_panel(f, cols[1], app);
+            } else {
+                draw_chart_panel(
+                    f,
+                    cols[1],
+                    "Storage Pressure (L0)",
+                    "files",
+                    sync_chart_data(app, SyncChartKind::StoragePressure),
+                );
             }
-        } else {
-            base_specs[2]
-        };
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(34),
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
-            ])
-            .split(area);
-        draw_chart_panel(
-            f,
-            cols[0],
-            base_specs[0].title,
-            base_specs[0].unit,
-            sync_chart_data(app, base_specs[0].kind),
-        );
-        draw_chart_panel(
-            f,
-            cols[1],
-            base_specs[1].title,
-            base_specs[1].unit,
-            sync_chart_data(app, base_specs[1].kind),
-        );
-        draw_chart_panel(
-            f,
-            cols[2],
-            third_spec.title,
-            third_spec.unit,
-            sync_chart_data(app, third_spec.kind),
-        );
+        }
+        _ => {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(34),
+                    Constraint::Percentage(33),
+                    Constraint::Percentage(33),
+                ])
+                .split(area);
+            draw_chart_panel(
+                f,
+                cols[0],
+                chart_a_title,
+                "ms",
+                sync_chart_data(app, chart_a_kind),
+            );
+            if is_bulk_build {
+                draw_overlap_chart_panel(f, cols[1], app);
+            } else {
+                draw_chart_panel(
+                    f,
+                    cols[1],
+                    "Write Commit (ms)",
+                    "ms",
+                    sync_chart_data(app, SyncChartKind::WriteLatency),
+                );
+            }
+            draw_chart_panel(
+                f,
+                cols[2],
+                "Storage Pressure (L0)",
+                "files",
+                sync_chart_data(app, SyncChartKind::StoragePressure),
+            );
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 enum SyncChartKind {
     BlockRate,
     TxRate,
     WriteLatency,
     BuildLatency,
     StoragePressure,
-}
-
-#[derive(Clone, Copy)]
-struct SyncChartSpec {
-    title: &'static str,
-    unit: &'static str,
-    kind: SyncChartKind,
-}
-
-const STACKED_SYNC_CHART_SPECS: [SyncChartSpec; 2] = [
-    SyncChartSpec {
-        title: "Sync Rate (blk/s)",
-        unit: "blk/s",
-        kind: SyncChartKind::BlockRate,
-    },
-    SyncChartSpec {
-        title: "Sync Tx Rate (tx/s)",
-        unit: "tx/s",
-        kind: SyncChartKind::TxRate,
-    },
-];
-
-const WIDE_SYNC_CHART_SPECS: [SyncChartSpec; 3] = [
-    SyncChartSpec {
-        title: "Sync Rate (blk/s)",
-        unit: "blk/s",
-        kind: SyncChartKind::BlockRate,
-    },
-    SyncChartSpec {
-        title: "Sync Tx Rate (tx/s)",
-        unit: "tx/s",
-        kind: SyncChartKind::TxRate,
-    },
-    SyncChartSpec {
-        title: "Write Stage Latency (ms)",
-        unit: "ms",
-        kind: SyncChartKind::WriteLatency,
-    },
-];
-
-fn sync_chart_specs(stacked: bool) -> &'static [SyncChartSpec] {
-    if stacked {
-        &STACKED_SYNC_CHART_SPECS
-    } else {
-        &WIDE_SYNC_CHART_SPECS
-    }
 }
 
 fn sync_chart_data(app: &App, kind: SyncChartKind) -> &VecDeque<f64> {
@@ -1875,7 +1786,6 @@ fn draw_chart_panel(f: &mut Frame, area: Rect, title: &str, unit: &str, data: &V
 
 /// Renders a pipeline overlap chart showing fetch overlap % as the primary series.
 /// Stats line shows both fetch and flush current + average values.
-#[allow(dead_code)] // Wired in Task 5 (draw_sync_charts)
 fn draw_overlap_chart_panel(f: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1963,10 +1873,6 @@ fn draw_overlap_chart_panel(f: &mut Frame, area: Rect, app: &App) {
             rows[1],
         );
     }
-}
-
-fn stack_sync_charts(area: Rect) -> bool {
-    area.width < 120 && area.height >= 10
 }
 
 fn chart_height_warning(inner_height: u16) -> Option<&'static str> {
@@ -3402,6 +3308,7 @@ fn detail_right_lines(
     ]
 }
 
+#[allow(dead_code)] // Removed in Task 7
 fn sync_timing_lines(
     eta: Option<&str>,
     eta_seconds: Option<f64>,
@@ -4833,7 +4740,6 @@ fn detect_layout_density(app: &App, area: Rect) -> LayoutDensity {
 }
 
 /// Determine how many columns to render based on available width.
-#[allow(dead_code)]
 fn sync_column_count(width: u16) -> usize {
     if width < 80 {
         1
@@ -4844,6 +4750,7 @@ fn sync_column_count(width: u16) -> usize {
     }
 }
 
+#[allow(dead_code)] // Removed in Task 7
 fn compact_sync_layout(area: Rect) -> CompactSyncLayout {
     let min_height_for_charts = if area.width < 120 { 38 } else { 30 };
     if area.height >= min_height_for_charts {
@@ -5412,13 +5319,12 @@ mod tests {
         io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
         overview_log_min_height, overview_services_min_height, percentile_from_history,
         pipeline_bottleneck, pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state,
-        runtime_live_delta, service_log_tails_line, sparkline, stack_sync_charts, stale_age_secs,
-        stale_status, startup_phase_label, storage_pressure_l0_line, storage_pressure_wbm_line,
-        storage_runtime_columns, supervisor_services_line, sync_bottleneck, sync_chart_specs,
-        sync_timing_lines, system_kv_line, system_store_path_lines, system_workdir_lines,
-        trend_delta, trim_for_panel, AdaptiveControlSnapshot, App, Color, CompactOverviewLayout,
-        CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck, SyncChartKind, AMBER, CYAN,
-        STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
+        runtime_live_delta, service_log_tails_line, sparkline, stale_age_secs, stale_status,
+        startup_phase_label, storage_pressure_l0_line, storage_pressure_wbm_line,
+        storage_runtime_columns, supervisor_services_line, sync_bottleneck, sync_timing_lines,
+        system_kv_line, system_store_path_lines, system_workdir_lines, trend_delta, trim_for_panel,
+        AdaptiveControlSnapshot, App, Color, CompactOverviewLayout, CompactSyncLayout,
+        DiagnosticsViewMode, SyncBottleneck, AMBER, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
     use crate::db::{
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
@@ -5874,27 +5780,6 @@ mod tests {
         let lines = sync_timing_lines(None, None, None, None, false);
         assert_eq!(lines.len(), 1);
         assert_eq!(line_text(&lines[0]), "No timing data");
-    }
-
-    #[test]
-    fn test_stack_sync_charts_rule() {
-        assert!(stack_sync_charts(Rect::new(0, 0, 100, 12)));
-        assert!(!stack_sync_charts(Rect::new(0, 0, 100, 8)));
-        assert!(!stack_sync_charts(Rect::new(0, 0, 130, 12)));
-    }
-
-    #[test]
-    fn test_sync_chart_specs_include_tx_rate() {
-        let stacked = sync_chart_specs(true);
-        assert_eq!(stacked.len(), 2);
-        assert_eq!(stacked[0].kind, SyncChartKind::BlockRate);
-        assert_eq!(stacked[1].kind, SyncChartKind::TxRate);
-
-        let wide = sync_chart_specs(false);
-        assert_eq!(wide.len(), 3);
-        assert_eq!(wide[0].kind, SyncChartKind::BlockRate);
-        assert_eq!(wide[1].kind, SyncChartKind::TxRate);
-        assert_eq!(wide[2].kind, SyncChartKind::WriteLatency);
     }
 
     #[test]
