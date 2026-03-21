@@ -72,57 +72,56 @@ const STORAGE_TIER_DESCRIPTIONS: Record<string, string> = {
     'Storage profile could not be determined. The content storage method for objects in this cluster is unverified.',
 };
 
-function storageTierColor(tier: string): {
+const TOOLTIP_BTN_BASE =
+  'ml-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border font-mono text-[9px] leading-none transition-colors';
+
+function storageTierCardStyle(tier: string): {
+  card: string;
+  label: string;
   text: string;
-  textClass?: string;
-  accent: string;
-  bg: string;
-  cardClass?: string;
+  tooltipButton?: string;
 } {
-  if (tier === 'fully_on_ckb') {
+  if (tier === 'fully_on_btc') {
     return {
-      text: '',
-      textClass: 'storage-text-ckb',
-      accent: 'border-l-[#2edba3] shadow-[inset_1px_0_8px_-4px_#2edba3]',
-      bg: '',
-      cardClass: 'storage-card-ckb',
+      card: 'storage-card-no-crt storage-card-btc rounded border border-[#8b6914] bg-[#4a3a12] p-3',
+      label: 'text-[#c8a84a]',
+      text: 'storage-text-engraved',
+      tooltipButton: `${TOOLTIP_BTN_BASE} text-[#c8a84a] border-[#8b6914] hover:text-[#f0d060] hover:border-[#c8a84a]`,
     };
   }
   if (tier === 'fully_on_ckb_and_btc') {
     return {
-      text: '',
-      textClass: 'storage-text-both',
-      accent: 'border-l-[#8ca050] shadow-[inset_1px_0_6px_-3px_rgba(140,160,80,0.5)]',
-      bg: '',
-      cardClass: 'storage-card-both',
+      card: 'storage-card-no-crt storage-card-both rounded border border-[#4a6838] bg-gradient-to-br from-[#4a3a12] to-[#0e3830] p-3',
+      label: 'text-[#a0b880]',
+      text: 'storage-text-split',
+      tooltipButton: `${TOOLTIP_BTN_BASE} text-[#a0b880] border-[#4a6838] hover:text-[#c0d8a0] hover:border-[#6a8850]`,
     };
   }
-  if (tier === 'fully_on_btc') {
+  if (tier === 'fully_on_ckb' || tier === 'fully_onchain') {
     return {
-      text: '',
-      textClass: 'storage-text-btc',
-      accent: 'border-l-[#b8872a] shadow-[inset_1px_0_6px_-3px_rgba(184,135,42,0.5)]',
-      bg: '',
-      cardClass: 'storage-card-btc',
+      card: 'storage-card-no-crt storage-card-ckb rounded border border-[#1a6050] bg-[#0e3830] p-3',
+      label: 'text-[#5abfa0]',
+      text: 'storage-text-gem',
+      tooltipButton: `${TOOLTIP_BTN_BASE} text-[#5abfa0] border-[#1a6050] hover:text-[#40e8b0] hover:border-[#2a8068]`,
     };
   }
   if (tier === 'centralized_dependent') {
     return {
+      card: 'border-base-border rounded border p-3',
+      label: 'text-text-dim',
       text: 'text-negative',
-      accent: 'border-l-negative shadow-[inset_1px_0_8px_-4px_theme(colors.negative)]',
-      bg: 'bg-negative/5 border-negative/20',
     };
   }
   return {
+    card: 'border-base-border rounded border p-3',
+    label: 'text-text-dim',
     text: 'text-warning',
-    accent: 'border-l-warning shadow-[inset_1px_0_8px_-4px_theme(colors.warning)]',
-    bg: 'bg-warning/5 border-warning/20',
   };
 }
 
-function StorageTierTooltip({ tier }: { tier: string }) {
+function StorageTierTooltip({ tier, buttonClassName }: { tier: string; buttonClassName?: string }) {
   const text = STORAGE_TIER_DESCRIPTIONS[tier] || STORAGE_TIER_DESCRIPTIONS.unknown;
-  return <Tooltip text={text} />;
+  return <Tooltip text={text} buttonClassName={buttonClassName} />;
 }
 
 /** Simple JSON syntax highlighter — no dependencies. */
@@ -523,21 +522,24 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
               {/* Storage profile card */}
               {cluster.storageProfile?.tier &&
                 (() => {
-                  const colors = storageTierColor(cluster.storageProfile.tier);
+                  const style = storageTierCardStyle(cluster.storageProfile.tier);
                   return (
-                    <div
-                      className={`rounded border border-l-2 p-3 ${colors.bg} ${colors.accent} ${colors.cardClass || ''}`}
-                    >
-                      <div className="text-text-dim relative z-10 mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+                    <div className={style.card}>
+                      <div
+                        className={`mb-1.5 font-mono text-[10px] uppercase tracking-wider ${style.label}`}
+                      >
                         Storage Profile
                       </div>
-                      <div className="relative z-10 flex items-center gap-1">
+                      <div className="flex items-center gap-1">
                         <span
-                          className={`font-mono text-sm font-semibold leading-tight ${colors.textClass || colors.text}`}
+                          className={`font-mono text-sm font-semibold leading-tight ${style.text}`}
                         >
                           {formatStorageTier(cluster.storageProfile.tier)}
                         </span>
-                        <StorageTierTooltip tier={cluster.storageProfile.tier} />
+                        <StorageTierTooltip
+                          tier={cluster.storageProfile.tier}
+                          buttonClassName={style.tooltipButton}
+                        />
                       </div>
                     </div>
                   );

@@ -3,7 +3,15 @@
 import { useRef, useState } from 'react';
 import { parseSporeClusterDescription } from '@/lib/spore-cluster-description';
 
-export function Tooltip({ text, className }: { text: string; className?: string }) {
+export function Tooltip({
+  text,
+  className,
+  buttonClassName,
+}: {
+  text: string;
+  className?: string;
+  buttonClassName?: string;
+}) {
   const [visible, setVisible] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState({ top: 0, left: 0 });
@@ -22,7 +30,10 @@ export function Tooltip({ text, className }: { text: string; className?: string 
       <button
         ref={btnRef}
         type="button"
-        className="text-text-dim hover:text-text border-base-border hover:border-text-dim ml-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border font-mono text-[9px] leading-none transition-colors"
+        className={
+          buttonClassName ||
+          'text-text-dim hover:text-text border-base-border hover:border-text-dim ml-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border font-mono text-[9px] leading-none transition-colors'
+        }
         onMouseEnter={show}
         onMouseLeave={hide}
         onFocus={show}
