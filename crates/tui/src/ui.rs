@@ -131,6 +131,7 @@ pub struct App {
     fetch_overlap_history: VecDeque<f64>,
     flush_overlap_history: VecDeque<f64>,
     idle_ratio_history: VecDeque<f64>,
+    l0_files_history: VecDeque<f64>,
     last_overlap_batch_count: u64,
     show_build_subphases: bool,
     log_entries: VecDeque<LogEntry>,
@@ -200,6 +201,7 @@ impl App {
             fetch_overlap_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             flush_overlap_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             idle_ratio_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            l0_files_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             last_overlap_batch_count: 0,
             show_build_subphases: false,
             log_entries,
@@ -465,6 +467,13 @@ impl App {
                 self.last_overlap_batch_count = batch_count;
             }
         }
+
+        let l0_files = self
+            .memory_stats
+            .as_ref()
+            .map(|m| m.l0_files_count as f64)
+            .unwrap_or(0.0);
+        push_history_sample(&mut self.l0_files_history, l0_files);
 
         let mut block_rate_alerted = false;
         if self.rate_history.len() >= 2 {
