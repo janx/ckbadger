@@ -555,6 +555,155 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[tokio::test]
+    async fn flush_channel_handle_flushes_all_queued_batches() {
+        let root = super::super::unique_temp_test_dir("flush-channel-handle");
+        std::fs::create_dir_all(&root).unwrap();
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+
+        let domain_store = Arc::new(CkbadgerStore::open_domain(&domain_path).unwrap());
+        let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path).unwrap());
+
+        let handle = FlushChannelHandle::new(4, domain_store.clone(), append_store.clone());
+
+        let mut outpoint_keys = Vec::new();
+        let mut header_keys = Vec::new();
+
+        for i in 0u8..3 {
+            let outpoint_key = keys::encode_outpoint(&[i; 32], 0);
+            let header_key = keys::encode_block_num(i as i64);
+            outpoint_keys.push(outpoint_key);
+            header_keys.push(header_key);
+
+            let cell_info = LiveCellInfo {
+                capacity: 100_00000000,
+                lock_script_hash: vec![0x21; 32],
+                lock_code_hash: vec![0x22; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0x23; 20],
+                type_script_hash: None,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                data_size: 0,
+                occupied_capacity: 61_00000000,
+                udt_amount: None,
+                data_hash: None,
+            };
+            let block_header = CachedBlockHeader {
+                hash: vec![i; 32],
+                timestamp: 1_700_000_000_000,
+                epoch_number: i as i64,
+                epoch_index: 0,
+                epoch_length: 1800,
+                dao: vec![0x00; 32],
+                transactions_count: 1,
+            };
+
+            let pending = PendingFlush {
+                history_rows: vec![
+                    MaterializedRow::new(
+                        CF_CELLS,
+                        outpoint_key.to_vec(),
+                        bincode::serialize(&cell_info).unwrap(),
+                    ),
+                    MaterializedRow::new(
+                        CF_BLOCK_HEADERS,
+                        header_key.to_vec(),
+                        bincode::serialize(&block_header).unwrap(),
+                    ),
+                ],
+                sealed_rows: vec![],
+            };
+            handle.send(pending).await.unwrap();
+        }
+
+        let stats = handle.close_and_wait().await.unwrap();
+        assert_eq!(stats.flush_count, 3);
+        assert_eq!(stats.total_history_rows, 6);
+        assert_eq!(stats.total_sealed_rows, 0);
+        assert!(stats.last_flush_ms > 0.0);
+
+        // Verify all 3 cells exist in append-only store.
+        for key in &outpoint_keys {
+            assert!(
+                append_store
+                    .get_cf(append_store.cf_cells(), key)
+                    .unwrap()
+                    .is_some(),
+                "cell not found for outpoint key"
+            );
+        }
+
+        // Verify all 3 headers exist in domain store.
+        for key in &header_keys {
+            assert!(
+                domain_store
+                    .get_cf(domain_store.cf_block_headers(), key)
+                    .unwrap()
+                    .is_some(),
+                "block header not found"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn flush_channel_handle_backpressure_drains_all() {
+        let root = super::super::unique_temp_test_dir("flush-channel-backpressure");
+        std::fs::create_dir_all(&root).unwrap();
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+
+        let domain_store = Arc::new(CkbadgerStore::open_domain(&domain_path).unwrap());
+        let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path).unwrap());
+
+        // Deliberately small channel depth to exercise backpressure.
+        let handle = FlushChannelHandle::new(2, domain_store.clone(), append_store.clone());
+
+        let cell_info = LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x21; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x23; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        };
+        let cell_bytes = bincode::serialize(&cell_info).unwrap();
+
+        for i in 0u8..10 {
+            let outpoint_key = keys::encode_outpoint(&[i; 32], 0);
+            let pending = PendingFlush {
+                history_rows: vec![MaterializedRow::new(
+                    CF_CELLS,
+                    outpoint_key.to_vec(),
+                    cell_bytes.clone(),
+                )],
+                sealed_rows: vec![],
+            };
+            handle.send(pending).await.unwrap();
+        }
+
+        let stats = handle.close_and_wait().await.unwrap();
+        assert_eq!(stats.flush_count, 10);
+        assert_eq!(stats.total_history_rows, 10);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn add_external_counts_updates_report() {
         let root = super::super::unique_temp_test_dir("bulk-build-external-counts");
