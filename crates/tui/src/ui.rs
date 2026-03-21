@@ -1502,6 +1502,173 @@ fn draw_sync_progress(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+#[allow(dead_code)]
+fn draw_sync_status_row(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800))
+        .title(Span::styled("Sync Status", Style::default().fg(FOREGROUND)));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let num_cols = sync_column_count(inner.width);
+
+    match num_cols {
+        1 => {
+            draw_status_text_column(f, app, inner);
+        }
+        2 => {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+                .split(inner);
+            draw_status_text_column(f, app, cols[0]);
+            draw_chart_panel(
+                f,
+                cols[1],
+                "Block Rate (blk/s)",
+                "blk/s",
+                sync_chart_data(app, SyncChartKind::BlockRate),
+            );
+        }
+        _ => {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(34),
+                    Constraint::Percentage(33),
+                    Constraint::Percentage(33),
+                ])
+                .split(inner);
+            draw_status_text_column(f, app, cols[0]);
+            draw_chart_panel(
+                f,
+                cols[1],
+                "Block Rate (blk/s)",
+                "blk/s",
+                sync_chart_data(app, SyncChartKind::BlockRate),
+            );
+            draw_chart_panel(
+                f,
+                cols[2],
+                "TX Rate (tx/s)",
+                "tx/s",
+                sync_chart_data(app, SyncChartKind::TxRate),
+            );
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn draw_status_text_column(f: &mut Frame, app: &App, area: Rect) {
+    let Some(sync) = &app.sync_status else {
+        f.render_widget(Paragraph::new("No sync data"), area);
+        return;
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Line 1: Mode badge + progress bar + percentage
+    let (mode, mode_color) = if !sync.is_syncing {
+        ("SYNCED", TERMINAL_GREEN)
+    } else if sync.is_bulk_sync {
+        ("BULK SYNC", AMBER)
+    } else {
+        ("SYNCING", TERMINAL_GREEN)
+    };
+    let ratio = (sync.progress / 100.0).clamp(0.0, 1.0);
+    let bar_width = 12;
+    let filled = (ratio * bar_width as f64) as usize;
+    let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(bar_width - filled));
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!(" {} ", mode),
+            Style::default().fg(Color::Black).bg(mode_color),
+        ),
+        Span::raw(" "),
+        Span::styled(bar, Style::default().fg(TERMINAL_GREEN)),
+        Span::styled(
+            format!(" {:.2}%", sync.progress),
+            Style::default()
+                .fg(TERMINAL_GREEN)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    // Line 2: Block tip / chain tip + behind count
+    let blocks_behind = sync.chain_tip - sync.tip_block;
+    lines.push(Line::from(vec![
+        Span::styled("Tip ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format_num(sync.tip_block),
+            Style::default()
+                .fg(TERMINAL_GREEN)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" / {}", format_num(sync.chain_tip)),
+            Style::default().fg(SLATE_500),
+        ),
+        Span::styled("  behind ", Style::default().fg(SLATE_500)),
+        Span::styled(
+            format_num(blocks_behind),
+            Style::default().fg(if blocks_behind > 1000 {
+                AMBER
+            } else {
+                TERMINAL_GREEN
+            }),
+        ),
+    ]));
+
+    // Line 3: Block rate (cur / avg)
+    let block_rate_text = format_rate_pair(sync.rate_realtime, sync.rate_ema, "blk/s");
+    lines.push(Line::from(vec![
+        Span::styled("Rate  ", Style::default().fg(SLATE_500)),
+        Span::styled(block_rate_text, Style::default().fg(TERMINAL_GREEN)),
+    ]));
+
+    // Line 4: TX rate (cur / avg)
+    let tx_rate_text = format_rate_pair(sync.tx_rate_realtime, sync.tx_rate_ema, "tx/s");
+    lines.push(Line::from(vec![
+        Span::styled("TxR   ", Style::default().fg(SLATE_500)),
+        Span::styled(tx_rate_text, Style::default().fg(TERMINAL_GREEN)),
+    ]));
+
+    // Line 5: ETA + elapsed
+    let eta_text = sync.eta.clone().unwrap_or_else(|| "-".to_string());
+    let elapsed_text = sync.elapsed_time.clone().unwrap_or_else(|| "-".to_string());
+    lines.push(Line::from(vec![
+        Span::styled("ETA   ", Style::default().fg(SLATE_500)),
+        Span::styled(eta_text, Style::default().fg(FOREGROUND)),
+        Span::styled("  elapsed ", Style::default().fg(SLATE_500)),
+        Span::styled(elapsed_text, Style::default().fg(FOREGROUND)),
+    ]));
+
+    // Line 6: Heartbeat dot + startup phase + [DB] indicator
+    let heartbeat_on = heartbeat_is_on(app.last_refresh.elapsed().as_millis());
+    let heartbeat = if heartbeat_on { "●" } else { "○" };
+    let heartbeat_color = if app.last_refresh.elapsed().as_secs() <= 2 {
+        TERMINAL_GREEN
+    } else {
+        AMBER
+    };
+    let (phase_label, phase_color) = startup_phase_label(sync.startup_phase.as_deref());
+    let mut phase_spans = vec![
+        Span::styled(heartbeat, Style::default().fg(heartbeat_color)),
+        Span::styled("  phase ", Style::default().fg(SLATE_500)),
+        Span::styled(phase_label, Style::default().fg(phase_color)),
+    ];
+    if sync.is_direct_db_read {
+        phase_spans.push(Span::styled(
+            " [DB]",
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        ));
+    }
+    lines.push(Line::from(phase_spans));
+
+    f.render_widget(Paragraph::new(lines), area);
+}
+
 fn draw_sync_charts(f: &mut Frame, app: &App, area: Rect) {
     let is_bulk_build = app
         .sync_status
