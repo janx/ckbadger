@@ -233,12 +233,6 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
             totalCapacityLabel="Owned Capacity"
           />
           <TerminalPanel>
-            <TerminalPanelHeader indicator="active">Collection ID</TerminalPanelHeader>
-            <TerminalPanelContent>
-              <HexDisplay value={collection.collectionId} truncate={false} />
-            </TerminalPanelContent>
-          </TerminalPanel>
-          <TerminalPanel>
             <Tabs value={activeTab} onValueChange={handleTabChange}>
               <TerminalPanelHeader
                 indicator="active"
