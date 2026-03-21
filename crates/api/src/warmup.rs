@@ -182,6 +182,8 @@ fn format_ratio_4(numerator: i64, denominator: i64) -> String {
 
 fn resolve_storage_tier(
     fully_onchain: i64,
+    fully_on_ckb: i64,
+    fully_on_btc: i64,
     decentralized_external: i64,
     centralized_dependent: i64,
     unknown: i64,
@@ -192,11 +194,17 @@ fn resolve_storage_tier(
     if decentralized_external > 0 {
         return "decentralized_external".to_string();
     }
-    if fully_onchain > 0 && unknown == 0 {
+    let total_onchain = fully_onchain + fully_on_ckb + fully_on_btc;
+    if total_onchain > 0 && unknown == 0 {
+        let has_ckb = fully_on_ckb > 0 || fully_onchain > 0;
+        let has_btc = fully_on_btc > 0;
+        if has_ckb && !has_btc {
+            return "fully_on_ckb".to_string();
+        }
+        if has_btc && !has_ckb {
+            return "fully_on_btc".to_string();
+        }
         return "fully_onchain".to_string();
-    }
-    if unknown > 0 {
-        return "unknown".to_string();
     }
     "unknown".to_string()
 }
@@ -510,9 +518,13 @@ fn build_asset_caches_sync(
                 e
             )
         })?;
-        let fully_onchain_ratio = format_ratio_4(agg.fully_onchain_count, agg.live_count);
+        let total_onchain =
+            agg.fully_onchain_count + agg.fully_on_ckb_count + agg.fully_on_btc_count;
+        let fully_onchain_ratio = format_ratio_4(total_onchain, agg.live_count);
         let storage_tier = resolve_storage_tier(
             agg.fully_onchain_count,
+            agg.fully_on_ckb_count,
+            agg.fully_on_btc_count,
             agg.decentralized_external_count,
             agg.centralized_dependent_count,
             agg.unknown_count,
@@ -539,7 +551,7 @@ fn build_asset_caches_sync(
             owned_knowledge: Some(owned_knowledge.to_string()),
             storage_tier: Some(storage_tier),
             fully_onchain_ratio: Some(fully_onchain_ratio),
-            fully_onchain_count: Some(agg.fully_onchain_count),
+            fully_onchain_count: Some(total_onchain),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -572,7 +584,10 @@ fn build_asset_caches_sync(
         let storage_tier = resolve_nft_collection_storage_tier_override(&standard)
             .unwrap_or("unknown")
             .to_string();
-        let fully_onchain_count = if storage_tier == "fully_onchain" {
+        let fully_onchain_count = if matches!(
+            storage_tier.as_str(),
+            "fully_onchain" | "fully_on_ckb" | "fully_on_btc"
+        ) {
             agg.live_count
         } else {
             0
@@ -640,7 +655,10 @@ fn build_asset_caches_sync(
         let storage_tier = resolve_nft_collection_storage_tier_override(&standard)
             .unwrap_or("unknown")
             .to_string();
-        let fully_onchain_count = if storage_tier == "fully_onchain" {
+        let fully_onchain_count = if matches!(
+            storage_tier.as_str(),
+            "fully_onchain" | "fully_on_ckb" | "fully_on_btc"
+        ) {
             agg.live_count
         } else {
             0

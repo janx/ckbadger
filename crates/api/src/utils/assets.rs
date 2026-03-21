@@ -32,6 +32,8 @@ static NFT_STORAGE_TIER_OVERRIDES: LazyLock<HashMap<String, String>> =
 
 const VALID_TIERS: &[&str] = &[
     "fully_onchain",
+    "fully_on_ckb",
+    "fully_on_btc",
     "decentralized_external",
     "centralized_dependent",
     "unknown",
@@ -42,7 +44,7 @@ fn default_nft_storage_tier_overrides() -> HashMap<String, String> {
     for standard in [".bit", "dotbit", "did:ckb", "did_ckb"] {
         defaults.insert(
             normalize_standard_alias_key(standard),
-            "fully_onchain".to_string(),
+            "fully_on_ckb".to_string(),
         );
     }
     defaults
@@ -330,19 +332,19 @@ mod tests {
     fn nft_storage_tier_overrides_cover_dotbit_and_did_ckb() {
         assert_eq!(
             resolve_nft_collection_storage_tier_override("dotbit"),
-            Some("fully_onchain")
+            Some("fully_on_ckb")
         );
         assert_eq!(
             resolve_nft_collection_storage_tier_override(".bit"),
-            Some("fully_onchain")
+            Some("fully_on_ckb")
         );
         assert_eq!(
             resolve_nft_collection_storage_tier_override("did_ckb"),
-            Some("fully_onchain")
+            Some("fully_on_ckb")
         );
         assert_eq!(
             resolve_nft_collection_storage_tier_override("did:ckb"),
-            Some("fully_onchain")
+            Some("fully_on_ckb")
         );
         assert_eq!(resolve_nft_collection_storage_tier_override("m-nft"), None);
     }
