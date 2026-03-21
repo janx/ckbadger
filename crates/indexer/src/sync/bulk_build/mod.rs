@@ -109,6 +109,13 @@ impl BulkBuildEngine {
         );
         let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(String::new());
         let token_info_cache = preload_token_info_cache(indexer.writer.store().as_ref())?;
+        let fetch_pool = std::sync::Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(8)
+                .thread_name(|i| format!("ckb-fetch-{}", i))
+                .build()
+                .map_err(|e| anyhow!("failed to create fetch rayon pool: {}", e))?,
+        );
         let configured_batch_size = u64::try_from(indexer.config.batch_size).map_err(|_| {
             anyhow!(
                 "bulk build batch_size exceeds u64 range: batch_size={}",
@@ -199,7 +206,7 @@ impl BulkBuildEngine {
                     let s = start_block;
                     let e = end_block;
                     let blocks = tokio::task::spawn_blocking(move || {
-                        Indexer::fetch_blocks_direct_binary(&store, s, e)
+                        Indexer::fetch_blocks_direct_binary(&store, s, e, None)
                     })
                     .await
                     .map_err(|e| anyhow!("bulk build fetch task panicked: {}", e))??;
@@ -222,9 +229,15 @@ impl BulkBuildEngine {
             );
             let prefetch_handle = if next_start <= handoff_target {
                 let store = ckb_store.clone();
+                let pool = Arc::clone(&fetch_pool);
                 Some(tokio::task::spawn_blocking(move || {
                     let started = Instant::now();
-                    let blocks = Indexer::fetch_blocks_direct_binary(&store, next_start, next_end)?;
+                    let blocks = Indexer::fetch_blocks_direct_binary(
+                        &store,
+                        next_start,
+                        next_end,
+                        Some(&pool),
+                    )?;
                     Ok::<_, anyhow::Error>((blocks, started.elapsed(), next_end))
                 }))
             } else {
