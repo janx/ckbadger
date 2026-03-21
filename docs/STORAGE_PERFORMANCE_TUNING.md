@@ -24,9 +24,15 @@ During bulk sync, all three pipeline stages interact with the filesystem through
 ```
 Fetcher  --[read CKB RocksDB]--> LUKS decrypt --> btrfs read (COW fragmentation)
 Parser   --[CPU-intensive]------> competes with dm-crypt kernel threads for CPU
-Writer   --[write ckbadger DB]--> LUKS encrypt --> btrfs write (COW amplification)
+Writer   --[SST ingest]---------→ LUKS encrypt --> btrfs write (COW amplification)
 Compact  --[background R+W]----> both encrypt + decrypt, heavy COW overhead
 ```
+
+**Note:** Since 2026-03-20, bulk-build batch flushes use SST bulk ingest (`SstFileWriter` +
+`IngestExternalFile`) instead of `WriteBatch`. This bypasses memtables and WAL entirely —
+sorted SST files are written to a temp directory and renamed into L0. Memtable tuning
+parameters now primarily affect the finalize phase and live-sync. The btrfs COW overhead
+still applies to the SST file writes and background compaction of ingested L0 files.
 
 Note: During bulk sync, the Fetcher reads directly from the CKB node's local RocksDB via `CkbChainReader` (not network RPC). This means the read path also goes through LUKS + btrfs.
 

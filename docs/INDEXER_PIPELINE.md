@@ -234,7 +234,7 @@ With default settings on typical hardware:
 
 3. **4-way prefetch + split write threads**: Address balance and script info DB reads are prefetched in parallel with DAO/UDT reads via nested `rayon::join` (4-way). The write phase splits work across T1 (cells + consumption) and T2 (transactions + address deltas + script deltas + addr_tx index), with zero CF overlap. This hides the read latency in the prefetch phase and halves T1's write time.
 
-4. **RocksDB WriteBatch**: All writes within a batch are grouped into atomic WriteBatch operations for maximum throughput.
+4. **SST Bulk Ingest** (bulk-build): Batch flushes bypass the memtable/WAL path entirely via `SstFileWriter` + `IngestExternalFile`. Rows are sorted by (CF, key), written as one SST file per CF, and ingested directly into L0 with `move_files=true` (zero-copy rename). This eliminates memtable pressure and WAL overhead during bulk sync. Live-sync continues to use `WriteBatch` for atomic per-batch writes.
 
 ### Memory Usage
 
@@ -354,10 +354,10 @@ for the full design rationale.
 │  3. Sequencer ────── LiveCellOwner resolves inputs from memory           │
 │  4. Owner Reducers ─ address (serial) │ script,token,dao,fiber,object    │
 │     └─ address returns cell_dist      │ (parallel via rayon::join)       │
-│  5. Materializer ─── Class A/C rows → StoreBatch → RocksDB              │
+│  5. Materializer ─── Class A/C rows → SST ingest → RocksDB              │
 │                                                                           │
 │  Pipelining: fetch batch N+1 overlaps with build N                       │
-│  Flush overlap: RocksDB flush N runs as background task during build N+1 │
+│  SST overlap: SST ingest for batch N runs as background task during N+1  │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -377,7 +377,7 @@ for the full design rationale.
 2. **Protocol facts side-map**: removed `Option<CellProtocolFacts>` from every `LiveCellSlot`, saving ~24B per entry
 3. **Parallel reducers**: address runs serially (produces cell distribution deltas), then script + token + dao + fiber + object run in parallel via nested `rayon::join`
 4. **Inter-batch pipelining**: `tokio::spawn` fetches batch N+1 from CKB RocksDB while batch N is being built (~200ms fetch hidden behind ~3-4s build)
-5. **RocksDB flush overlap**: after materializing batch N, flush is dispatched as `spawn_blocking` and runs concurrently with batch N+1 compute
+5. **SST ingest overlap**: after materializing batch N, SST file writes and ingestion are dispatched as `spawn_blocking` and run concurrently with batch N+1 compute. SST files bypass memtables entirely, so there is no flush latency.
 6. **Parallel block parsing**: `rayon::par_iter` parses blocks within a batch, merges output ranges for global cell indices post-merge
 
 ### Bulk-Build Write Classes
@@ -437,7 +437,7 @@ crates/indexer/src/sync/bulk_build/
   live_cells.rs    # LiveCellOwner — in-memory UTXO set + protocol facts side-map
   sequencer.rs     # Canonical tx-order sequencing + input resolution
   accounting.rs    # Fee/capacity accounting
-  materialize.rs   # StoreBatch assembly + flush_rows_to_stores()
+  materialize.rs   # SST ingest assembly + flush_rows_to_stores()
   owners/
     mod.rs         # ReducerContext, parallel reducer dispatch
     address.rs     # AddressOwner — balances, cell counts, addr_stats
@@ -450,7 +450,7 @@ crates/indexer/src/sync/bulk_build/
 
 ## Crash Recovery
 
-The indexer implements crash recovery to handle failures during batch writes. RocksDB WriteBatch provides atomicity within a single batch, but a crash between batches can leave the store in an inconsistent state.
+The indexer implements crash recovery to handle failures during batch writes. During live-sync, RocksDB WriteBatch provides atomicity within a single batch. During bulk-build, SST ingest provides per-CF atomicity. A crash between batches can leave the store in an inconsistent state.
 
 ### Write Ordering Strategy
 
@@ -589,4 +589,4 @@ pub struct MemoryStatsData {
 
 ---
 
-_Last updated: 2026-03-19_
+_Last updated: 2026-03-21_

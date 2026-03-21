@@ -93,6 +93,7 @@
 2. Converts hot-path `live/consumed` CF values to tiny records (marker/meta).
 3. Shrinks write amplification during input-heavy blocks.
 4. Keeps rebuild deterministic: if derived data is wrong, drop DB and replay from genesis.
+5. Bulk-build uses SST bulk ingest (`SstFileWriter` + `IngestExternalFile`) to bypass memtables and WAL, writing sorted SST files directly into L0 per CF.
 
 ## Migration Status
 

@@ -94,7 +94,8 @@ model that future script schema refactors should follow.
 ### Bulk-Build Sealed Aggregate Note
 
 During fresh-db bulk sync, the indexer writes `stats_dao`, `stats_script`, and `stats_token`
-inline as Class C sealed aggregates:
+inline as Class C sealed aggregates via SST bulk ingest (sorted SST files ingested directly
+into L0, bypassing memtables):
 
 - `stats_dao` stores DAO daily snapshots keyed by date, then refreshes the latest/top summary rows
   after sync tip metadata is finalized.

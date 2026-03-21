@@ -157,7 +157,7 @@ crates/
   ipc/            # Unix socket IPC protocol (ckbadger-ipc)
   api/            # Axum REST/WebSocket server library (port 8101)
   indexer/        # Blockchain sync daemon library (three-stage pipeline)
-    src/sync/bulk_build/ # Bulk-build engine (in-memory reducers, FactsArena, LiveCellOwner)
+    src/sync/bulk_build/ # Bulk-build engine (in-memory reducers, SST bulk ingest, FactsArena, LiveCellOwner)
     src/verify/   #   Data integrity verification suite (56 checks)
   ckbadger-store/ # Embedded RocksDB storage engine (dual-store, 53 domain + 1 append-only CFs)
   common/         # Shared types (block, cell, tx, script, error)
@@ -334,7 +334,7 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | CLI binary       | `crates/cli/src/main.rs` (subcommands, supervisor)                                                                                                 |
 | Config           | `crates/config/src/lib.rs` (ckbadger.toml parsing)                                                                                                 |
 | IPC protocol     | `crates/ipc/src/` (Unix socket server/client)                                                                                                      |
-| Storage engine   | `crates/ckbadger-store/src/` (types, store, keys, \*\_ops.rs)                                                                                      |
+| Storage engine   | `crates/ckbadger-store/src/` (types, store, keys, sst_ingest, \*\_ops.rs)                                                                          |
 | API routes       | `crates/api/src/routes/*.rs` (18 modules)                                                                                                          |
 | Response types   | `crates/api/src/response.rs`                                                                                                                       |
 | WebSocket        | `crates/api/src/ws/`                                                                                                                               |
