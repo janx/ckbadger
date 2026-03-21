@@ -252,13 +252,17 @@ impl TransactionParser {
     }
 
     fn parse_hex_u32(field: &str) -> u32 {
-        u32::from_str_radix(&field[2..], 16)
-            .unwrap_or_else(|e| panic!("hex parse '{}': {}", field, e))
+        let hex = field
+            .strip_prefix("0x")
+            .unwrap_or_else(|| panic!("hex field missing 0x prefix: '{}'", field));
+        u32::from_str_radix(hex, 16).unwrap_or_else(|e| panic!("hex parse '{}': {}", field, e))
     }
 
     fn parse_hex_hash32(field: &str) -> [u8; 32] {
-        let bytes =
-            hex::decode(&field[2..]).unwrap_or_else(|e| panic!("hex decode '{}': {}", field, e));
+        let hex = field
+            .strip_prefix("0x")
+            .unwrap_or_else(|| panic!("hex field missing 0x prefix: '{}'", field));
+        let bytes = hex::decode(hex).unwrap_or_else(|e| panic!("hex decode '{}': {}", field, e));
         bytes
             .try_into()
             .unwrap_or_else(|v: Vec<u8>| panic!("hash must be 32 bytes, got {}", v.len()))

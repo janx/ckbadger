@@ -167,9 +167,18 @@ impl DaoParser {
                     return None;
                 }
 
-                let deposit_block_number = dao_cell.deposit_block_number?;
+                let deposit_block_number = dao_cell.deposit_block_number
+                    .unwrap_or_else(|| panic!(
+                        "DAO WithdrawRequest at output index {} has no deposit_block_number, tx_hash=0x{}",
+                        idx, hex::encode(tx_hash)
+                    ));
 
-                let (orig_tx, orig_idx, _, _) = input_cells.get(idx)?;
+                let (orig_tx, orig_idx, _, _) = input_cells.get(idx)
+                    .unwrap_or_else(|| panic!(
+                        "DAO WithdrawRequest at output index {} has no corresponding input cell \
+                         (input_cells.len()={}), tx_hash=0x{}",
+                        idx, input_cells.len(), hex::encode(tx_hash)
+                    ));
 
                 Some(ParsedDaoWithdrawRequest {
                     tx_hash: tx_hash.to_vec(),
@@ -411,7 +420,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_withdraw_requests_does_not_fallback_to_last_input() {
+    #[should_panic(expected = "no corresponding input cell")]
+    fn test_parse_withdraw_requests_panics_on_missing_input() {
         let dao_code_hash = DAO_CODE_HASH.to_string();
         let lock = crate::rpc::Script {
             code_hash: "0x".to_string() + &"11".repeat(32),
@@ -439,6 +449,51 @@ mod tests {
                 "0x0100000000000000".to_string(),
                 "0x0200000000000000".to_string(),
             ],
+            witnesses: vec![],
+        };
+
+        let input_cells = vec![(
+            vec![0xAB; 32],
+            0,
+            crate::rpc::CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock,
+                type_: Some(dao_type),
+            },
+            "0x00".to_string(),
+        )];
+
+        // Should panic: output[0] matches input[0], but output[1] has
+        // no corresponding input — this is an invariant violation.
+        let _ = DaoParser::parse_withdraw_requests(&tx, &[0xCC; 32], &input_cells);
+    }
+
+    #[test]
+    fn test_parse_withdraw_requests_positional_match() {
+        let dao_code_hash = DAO_CODE_HASH.to_string();
+        let lock = crate::rpc::Script {
+            code_hash: "0x".to_string() + &"11".repeat(32),
+            hash_type: "type".to_string(),
+            args: "0x".to_string(),
+        };
+        let dao_type = crate::rpc::Script {
+            code_hash: dao_code_hash,
+            hash_type: "type".to_string(),
+            args: "0x".to_string(),
+        };
+        let output = crate::rpc::CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: lock.clone(),
+            type_: Some(dao_type.clone()),
+        };
+        let tx = crate::rpc::TransactionView {
+            hash: "0x".to_string() + &"aa".repeat(32),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![output],
+            outputs_data: vec!["0x0100000000000000".to_string()],
             witnesses: vec![],
         };
 
