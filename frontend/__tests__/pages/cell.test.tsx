@@ -229,9 +229,9 @@ describe('CellDetailPage', () => {
     });
 
     expect(screen.getByText('Capacity')).toBeInTheDocument();
-    expect(screen.getByText('Total Capacity')).toBeInTheDocument();
-    expect(screen.getByText('Common Knowledge Size')).toBeInTheDocument();
-    expect(screen.getByText('Common Knowledge Share')).toBeInTheDocument();
+    expect(screen.getByText('Owned Capacity')).toBeInTheDocument();
+    expect(screen.getByText(/Common Knowledge:/)).toBeInTheDocument();
+    expect(screen.getByText(/% share/)).toBeInTheDocument();
     expect(screen.getByText('Byte Composition (61 bytes)')).toBeInTheDocument();
     expect(screen.getByText('Capacity Field')).toBeInTheDocument();
     expect(screen.getByText('Cell Data')).toBeInTheDocument();

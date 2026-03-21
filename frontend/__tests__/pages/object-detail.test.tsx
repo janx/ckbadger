@@ -396,8 +396,8 @@ describe('SporeDetailPage', () => {
 
     expect(screen.getByText('Test Collection')).toBeInTheDocument();
     expect(screen.getByText('Total Objects')).toBeInTheDocument();
-    expect(screen.getByText(/Common Knowledge Share:/)).toBeInTheDocument();
-    expect(screen.getByText(/^Common Knowledge:/)).toBeInTheDocument();
+    expect(screen.getByText(/Common Knowledge:/)).toBeInTheDocument();
+    expect(screen.getByText(/% share/)).toBeInTheDocument();
     expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Activities \(150\)$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Objects \(500\)$/ })).toBeInTheDocument();
