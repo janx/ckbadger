@@ -358,6 +358,7 @@ impl BulkBuildEngine {
             sample.facts_cell_count = build_timings.facts_breakdown.cell_count;
             sample.flush_ms = prev_flush_ms;
             sample.flush_wait_ms = flush_wait_elapsed.as_secs_f64() * 1000.0;
+            sample.flush_channel_depth = FLUSH_CHANNEL_DEPTH as u64;
             sample.prefetch_collect_ms = prefetch_collect_elapsed.as_secs_f64() * 1000.0;
             sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
