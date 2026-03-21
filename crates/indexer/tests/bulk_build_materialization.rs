@@ -63,7 +63,13 @@ fn fixture_lock_script_with_args(args_hex: &str) -> Script {
 fn fixture_header_with_ar(number: u64, hash_byte: u8, ar: u64, timestamp_ms: i64) -> HeaderView {
     let mut header = fixture_header_with_timestamp(number, hash_byte, timestamp_ms);
     let mut dao = [0u8; 32];
+    // C = total_issuance (must be > U for valid DAO field)
+    let total_issuance: u64 = 10_000_000_000_000_000;
+    // U = occupied_capacity (must be < C)
+    let occupied_capacity: u64 = 2_000_000_000_000_000;
+    dao[0..8].copy_from_slice(&total_issuance.to_le_bytes());
     dao[8..16].copy_from_slice(&ar.to_le_bytes());
+    dao[24..32].copy_from_slice(&occupied_capacity.to_le_bytes());
     header.dao = format!("0x{}", hex::encode(dao));
     header
 }
