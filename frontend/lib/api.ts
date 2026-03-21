@@ -1037,6 +1037,25 @@ interface ObjectCollection {
     unknownCount: number;
     fullyOnchainRatio: string;
   };
+  classDetail?: {
+    classId: string;
+    issuerId: string;
+    name: string | null;
+    description: string | null;
+    renderer: string | null;
+    total: number;
+    issued: number;
+    configure: number;
+  };
+  issuerDetail?: {
+    issuerId: string;
+    name: string | null;
+    classCount: number;
+    setCount: number;
+    infoHex: string | null;
+  };
+  createdAtBlock?: number;
+  ownerLockHash?: string;
 }
 
 export interface IdentityCollection {
