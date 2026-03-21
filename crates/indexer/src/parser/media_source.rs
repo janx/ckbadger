@@ -136,7 +136,12 @@ fn resolve_tier(
         .iter()
         .any(|source| source.dependency_tier == StorageDependencyTier::FullyOnchain);
 
-    if has_ckb || has_legacy {
+    let ckb_side = has_ckb || has_legacy;
+    if ckb_side && has_btc {
+        // Mixed CKB + BTC sources — not "fully on" either chain
+        return StorageDependencyTier::FullyOnchain;
+    }
+    if ckb_side {
         return StorageDependencyTier::FullyOnCkb;
     }
     if has_btc {
@@ -219,14 +224,25 @@ fn extract_dob_media_sources(
     }
 
     let dob1_patterns = extract_dob1_pattern(meta);
-    let Some(svg_markup) = build_dob1_svg(&dob1_patterns, &traits) else {
-        if !dob1_patterns.is_empty() {
-            issues.push("DOB metadata included dob1 pattern but produced empty SVG".to_string());
+    match build_dob1_svg(&dob1_patterns, &traits) {
+        Some(svg_markup) => {
+            extract_uri_sources(&svg_markup, "dob_svg", &mut sources);
+            (sources, true)
         }
-        return (sources, false);
-    };
-    extract_uri_sources(&svg_markup, "dob_svg", &mut sources);
-    (sources, true)
+        None => {
+            if !dob1_patterns.is_empty() {
+                issues
+                    .push("DOB metadata included dob1 pattern but produced empty SVG".to_string());
+            }
+            // DOB0-only: scan resolved trait values for URI references (e.g. btcfs://, ipfs://).
+            // Without DOB1, trait values themselves may contain the image/resource URIs.
+            for trait_value in traits.values() {
+                extract_uri_sources(trait_value, "dob0_trait", &mut sources);
+            }
+            let has_image = sources.iter().any(|s| uri_seems_image(&s.uri));
+            (sources, has_image)
+        }
+    }
 }
 
 /// Extract external references (IPFS/Arweave CIDs) embedded in content type parameters.
@@ -884,5 +900,61 @@ mod tests {
     fn classifies_inline_binary_as_fully_on_ckb() {
         let profile = analyze_spore_media_profile("image/png", &[0x89, 0x50, 0x4E, 0x47], None);
         assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkb);
+    }
+
+    #[test]
+    fn dob0_only_btcfs_trait_classifies_as_fully_on_btc() {
+        // DOB0-only cluster (no DOB1 decoders): btcfs:// URIs in trait options
+        // should be detected even without DOB1 SVG rendering.
+        let metadata = serde_json::json!({
+            "description": "A cluster with btcfs png as the primary rendering objects.",
+            "dob": {
+                "ver": 0,
+                "pattern": [
+                    ["prev.type", "String", 0, 1, "options", ["image"]],
+                    ["prev.bg", "String", 1, 1, "options", [
+                        "btcfs://545b94cb1ecf2175b81c601346e4a7e05149cafc6f235330c9918e35f920e109i0"
+                    ]],
+                    ["prev.bgcolor", "String", 2, 1, "options", ["#E0E1E2"]]
+                ]
+            }
+        })
+        .to_string();
+
+        let profile = analyze_spore_media_profile("dob/0", b"aabbcc", Some(&metadata));
+        assert_eq!(profile.tier, StorageDependencyTier::FullyOnBtc);
+        assert!(profile.sources.iter().any(|s| s.scheme == "btcfs"));
+    }
+
+    #[test]
+    fn dob0_only_ipfs_trait_classifies_as_decentralized_external() {
+        let metadata = serde_json::json!({
+            "dob": {
+                "ver": 0,
+                "pattern": [
+                    ["bg", "String", 0, 1, "options", [
+                        "ipfs://QmHash1234567890"
+                    ]]
+                ]
+            }
+        })
+        .to_string();
+
+        let profile = analyze_spore_media_profile("dob/0", b"00", Some(&metadata));
+        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedExternal);
+        assert!(profile.sources.iter().any(|s| s.scheme == "ipfs"));
+    }
+
+    #[test]
+    fn mixed_ckb_and_btc_sources_not_fully_on_either() {
+        // A spore referencing both ckbfs:// and btcfs:// is not "fully on" either chain
+        let profile = analyze_spore_media_profile(
+            "text/plain",
+            b"ckbfs://cellhash123 btcfs://inscriptioni0",
+            None,
+        );
+        assert_eq!(profile.tier, StorageDependencyTier::FullyOnchain);
+        assert!(profile.sources.iter().any(|s| s.scheme == "ckbfs"));
+        assert!(profile.sources.iter().any(|s| s.scheme == "btcfs"));
     }
 }

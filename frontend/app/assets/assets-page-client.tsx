@@ -26,6 +26,7 @@ import {
 } from '@/lib/detail-routes';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatCkbCompact } from '@/lib/utils';
+import { formatStorageTier } from '@/lib/asset-utils';
 type AssetTab = 'token' | 'object' | 'identity';
 type SortDirection = 'asc' | 'desc';
 type StorageTierFilter = 'all' | 'fully_onchain' | 'offchain_dependent' | 'unknown';
@@ -188,6 +189,7 @@ function AssetTable({
   });
   const assets = data?.data ?? [];
   const nameColumnClass = 'min-w-0 flex-[2_0_10rem] pr-4';
+  const storageColumnClass = 'w-36 shrink-0';
   const typeColumnClass = 'w-20 shrink-0';
   const smallNumberColumnClass = 'w-20 shrink-0 whitespace-nowrap text-right';
   const mediumNumberColumnClass = 'w-28 shrink-0 whitespace-nowrap text-right';
@@ -214,19 +216,6 @@ function AssetTable({
     return asset.name || 'Unnamed Collection';
   };
   const getTypeBadgeLabel = (asset: Asset) => formatStandardLabel(asset.standard);
-  const getStorageBadgeLabel = (asset: Asset) => {
-    const tier = asset.storageTier;
-    if (!tier) return null;
-    if (tier === 'fully_onchain') return 'FULLY ON-CHAIN';
-    if (
-      tier === 'offchain_dependent' ||
-      tier === 'decentralized_external' ||
-      tier === 'centralized_dependent'
-    ) {
-      return 'OFFCHAIN DEPENDENT';
-    }
-    return 'UNKNOWN';
-  };
   const toggleSort = (nextKey: AssetSortKey) => {
     if (nextKey === sortKey) {
       setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
@@ -264,6 +253,11 @@ function AssetTable({
               <div className={nameColumnClass}>
                 <div className="bg-base-elevated h-4 w-48 rounded" />
               </div>
+              {assetType === 'object' && (
+                <div className={storageColumnClass}>
+                  <div className="bg-base-elevated h-4 w-24 rounded" />
+                </div>
+              )}
               <div className={typeColumnClass}>
                 <div className="bg-base-elevated h-4 w-12 rounded" />
               </div>
@@ -318,6 +312,11 @@ function AssetTable({
     <>
       <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-3 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
         {renderSortHeader('name', assetType === 'token' ? 'Token' : 'Collection', nameColumnClass)}
+        {assetType === 'object' && (
+          <div className={`${storageColumnClass} font-mono text-xs uppercase tracking-wider`}>
+            Storage
+          </div>
+        )}
         {renderSortHeader('type', 'Standard', typeColumnClass)}
         {assetType !== 'token' &&
           renderSortHeader('supply', 'Items', smallNumberColumnClass, 'right')}
@@ -367,11 +366,6 @@ function AssetTable({
                       >
                         {getAssetName(asset)}
                       </span>
-                      {asset.assetType === 'object' && getStorageBadgeLabel(asset) && (
-                        <span className="border-base-border text-text rounded border px-1.5 py-0.5 font-mono text-[10px]">
-                          {getStorageBadgeLabel(asset)}
-                        </span>
-                      )}
                       {asset.published && (
                         <span className="text-emphasis" title="Verified">
                           <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
@@ -396,6 +390,13 @@ function AssetTable({
                 </div>
               </AppLink>
             </div>
+            {assetType === 'object' && (
+              <div
+                className={`${storageColumnClass} font-mono text-xs ${asset.storageTier === 'fully_on_ckb' || asset.storageTier === 'fully_on_btc' || asset.storageTier === 'fully_onchain' ? 'text-gold' : 'text-text-dim'}`}
+              >
+                {asset.storageTier ? formatStorageTier(asset.storageTier) : '-'}
+              </div>
+            )}
             <div className={typeColumnClass}>
               <div className="flex flex-wrap gap-1">
                 <Badge variant="neutral">{getTypeBadgeLabel(asset)}</Badge>
@@ -521,12 +522,20 @@ function AssetTable({
               </AppLink>
               <Badge variant="neutral">{getTypeBadgeLabel(asset)}</Badge>
             </div>
-            {assetType === 'object' && getStorageBadgeLabel(asset) && (
-              <span className="border-base-border text-text rounded border px-1.5 py-0.5 font-mono text-[10px]">
-                {getStorageBadgeLabel(asset)}
-              </span>
-            )}
             <div className="text-text-dim flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-xs tabular-nums">
+              {assetType === 'object' && asset.storageTier && (
+                <span
+                  className={
+                    asset.storageTier === 'fully_on_ckb' ||
+                    asset.storageTier === 'fully_on_btc' ||
+                    asset.storageTier === 'fully_onchain'
+                      ? 'text-gold'
+                      : ''
+                  }
+                >
+                  Storage: {formatStorageTier(asset.storageTier)}
+                </span>
+              )}
               <span>
                 24h: <span className="text-warning">{formatNumber(asset.transfers24h)}</span>
               </span>
