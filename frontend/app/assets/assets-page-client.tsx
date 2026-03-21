@@ -392,7 +392,7 @@ function AssetTable({
             </div>
             {assetType === 'object' && (
               <div
-                className={`${storageColumnClass} font-mono text-xs ${asset.storageTier === 'fully_on_ckb' || asset.storageTier === 'fully_on_btc' || asset.storageTier === 'fully_onchain' ? 'text-gold' : 'text-text-dim'}`}
+                className={`${storageColumnClass} font-mono text-xs ${asset.storageTier === 'fully_on_ckb' || asset.storageTier === 'fully_on_btc' || asset.storageTier === 'fully_on_ckb_and_btc' ? 'text-gold' : 'text-text-dim'}`}
               >
                 {asset.storageTier ? formatStorageTier(asset.storageTier) : '-'}
               </div>
@@ -528,7 +528,7 @@ function AssetTable({
                   className={
                     asset.storageTier === 'fully_on_ckb' ||
                     asset.storageTier === 'fully_on_btc' ||
-                    asset.storageTier === 'fully_onchain'
+                    asset.storageTier === 'fully_on_ckb_and_btc'
                       ? 'text-gold'
                       : ''
                   }

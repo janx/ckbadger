@@ -506,7 +506,10 @@ fn fetch_assets_cached(
                 );
             }
             if storage_tier_filter == "fully_onchain" {
-                return matches!(tier, "fully_onchain" | "fully_on_ckb" | "fully_on_btc");
+                return matches!(
+                    tier,
+                    "fully_on_ckb_and_btc" | "fully_on_ckb" | "fully_on_btc"
+                );
             }
             tier == storage_tier_filter
         });
@@ -581,15 +584,15 @@ fn normalize_assets_storage_tier(
         return Ok(None);
     }
     match normalized.as_str() {
-        "fully_onchain"
-        | "fully_on_ckb"
+        "fully_onchain" | "fully_on_ckb_and_btc" => Ok(Some("fully_onchain".to_string())),
+        "fully_on_ckb"
         | "fully_on_btc"
         | "offchain_dependent"
         | "decentralized_external"
         | "centralized_dependent"
         | "unknown" => Ok(Some(normalized)),
         _ => Err(ApiError::bad_request(
-            "Invalid storage_tier. Expected one of: fully_onchain, fully_on_ckb, fully_on_btc, offchain_dependent, decentralized_external, centralized_dependent, unknown",
+            "Invalid storage_tier. Expected one of: fully_onchain, fully_on_ckb_and_btc, fully_on_ckb, fully_on_btc, offchain_dependent, decentralized_external, centralized_dependent, unknown",
         )),
     }
 }

@@ -84,7 +84,7 @@ const mockClusterAssets = {
       clusterName: 'Test Collection',
       ownedCapacity: '9000000000',
       ownedKnowledge: '5000000000',
-      storageTier: 'fully_onchain' as const,
+      storageTier: 'fully_on_ckb_and_btc' as const,
       fullyOnchainRatio: '1.0000',
       fullyOnchainCount: 50,
       hMultiplier: 1.8,
@@ -183,7 +183,7 @@ const mockMixedObjectAssets = {
       clusterName: 'Spore With Icon',
       ownedCapacity: '3000000000',
       ownedKnowledge: '1000000000',
-      storageTier: 'fully_onchain' as const,
+      storageTier: 'fully_on_ckb_and_btc' as const,
       fullyOnchainRatio: '1.0000',
       fullyOnchainCount: 10,
       hMultiplier: 3.0,
@@ -378,7 +378,7 @@ describe('AssetsPage', () => {
     await waitFor(() => {
       expect(screen.getAllByText('Test Collection').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('SPORE').length).toBeGreaterThan(0);
-      expect(screen.getAllByText('FULLY ON-CHAIN').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Fully on Bitcoin+CKB').length).toBeGreaterThanOrEqual(1);
       const links = screen.getAllByRole('link', { name: /Test Collection/i });
       expect(
         links.some(

@@ -33,9 +33,6 @@ pub fn analyze_spore_media_profile(
     let mut sources = Vec::new();
     let mut issues = Vec::new();
 
-    let binary_media = normalized_type.starts_with("image/")
-        || normalized_type.starts_with("video/")
-        || normalized_type.starts_with("audio/");
     let mut has_renderable_image =
         normalized_type.starts_with("image/") || normalized_type.contains("svg");
 
@@ -97,7 +94,7 @@ pub fn analyze_spore_media_profile(
         has_renderable_image = sources.iter().any(|source| uri_seems_image(&source.uri));
     }
 
-    let tier = resolve_tier(binary_media, has_renderable_image, &sources);
+    let tier = resolve_tier(&sources);
     SporeMediaProfile {
         tier,
         sources,
@@ -106,11 +103,7 @@ pub fn analyze_spore_media_profile(
     }
 }
 
-fn resolve_tier(
-    binary_media: bool,
-    has_renderable_image: bool,
-    sources: &[SporeMediaSource],
-) -> StorageDependencyTier {
+fn resolve_tier(sources: &[SporeMediaSource]) -> StorageDependencyTier {
     if sources
         .iter()
         .any(|source| source.dependency_tier == StorageDependencyTier::CentralizedDependent)
@@ -134,12 +127,12 @@ fn resolve_tier(
     // did not exist before this change). Treat them as CKB.
     let has_legacy = sources
         .iter()
-        .any(|source| source.dependency_tier == StorageDependencyTier::FullyOnchain);
+        .any(|source| source.dependency_tier == StorageDependencyTier::FullyOnCkbAndBtc);
 
     let ckb_side = has_ckb || has_legacy;
     if ckb_side && has_btc {
         // Mixed CKB + BTC sources — not "fully on" either chain
-        return StorageDependencyTier::FullyOnchain;
+        return StorageDependencyTier::FullyOnCkbAndBtc;
     }
     if ckb_side {
         return StorageDependencyTier::FullyOnCkb;
@@ -147,11 +140,8 @@ fn resolve_tier(
     if has_btc {
         return StorageDependencyTier::FullyOnBtc;
     }
-    if binary_media || has_renderable_image {
-        // Inline binary data stored in CKB cell
-        return StorageDependencyTier::FullyOnCkb;
-    }
-    StorageDependencyTier::Unknown
+    // No external dependencies — content is stored entirely in the CKB cell.
+    StorageDependencyTier::FullyOnCkb
 }
 
 fn decode_text_payload(content: &[u8]) -> Result<String, String> {
@@ -953,7 +943,7 @@ mod tests {
             b"ckbfs://cellhash123 btcfs://inscriptioni0",
             None,
         );
-        assert_eq!(profile.tier, StorageDependencyTier::FullyOnchain);
+        assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkbAndBtc);
         assert!(profile.sources.iter().any(|s| s.scheme == "ckbfs"));
         assert!(profile.sources.iter().any(|s| s.scheme == "btcfs"));
     }

@@ -1011,7 +1011,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                       <div className="mt-1 flex items-center gap-2 text-xs">
                         <Badge
                           variant={
-                            spore.mediaProfile.tier === 'fully_onchain'
+                            spore.mediaProfile.tier === 'fully_on_ckb_and_btc'
                               ? 'green'
                               : spore.mediaProfile.tier === 'centralized_dependent'
                                 ? 'red'
@@ -1059,7 +1059,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                           <div className="mb-1 flex items-center gap-2">
                             <Badge
                               variant={
-                                source.dependencyTier === 'fully_onchain'
+                                source.dependencyTier === 'fully_on_ckb_and_btc'
                                   ? 'green'
                                   : source.dependencyTier === 'centralized_dependent'
                                     ? 'red'

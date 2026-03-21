@@ -62,8 +62,8 @@ const STORAGE_TIER_DESCRIPTIONS: Record<string, string> = {
     'All content is stored directly on the CKB blockchain (on-chain data or ckbfs://). Fully verifiable and permanent.',
   fully_on_btc:
     'Content is inscribed on Bitcoin via btcfs:// and bridged to CKB. Data permanence depends on Bitcoin.',
-  fully_onchain:
-    'All content data is stored on-chain. No external dependencies — fully verifiable and permanent.',
+  fully_on_ckb_and_btc:
+    'Content is stored across both CKB (on-chain data or ckbfs://) and Bitcoin (btcfs://). Fully verifiable and permanent.',
   decentralized_external:
     'Some content references external decentralized storage (e.g. IPFS, Arweave). Data persists as long as the external network hosts it.',
   centralized_dependent:
@@ -72,19 +72,38 @@ const STORAGE_TIER_DESCRIPTIONS: Record<string, string> = {
     'Storage profile could not be determined. The content storage method for objects in this cluster is unverified.',
 };
 
-function storageTierColor(tier: string): { text: string; accent: string; bg: string } {
-  if (tier === 'fully_onchain' || tier === 'fully_on_ckb') {
+function storageTierColor(tier: string): {
+  text: string;
+  textClass?: string;
+  accent: string;
+  bg: string;
+  cardClass?: string;
+} {
+  if (tier === 'fully_on_ckb') {
     return {
-      text: 'text-positive',
-      accent: 'border-l-positive shadow-[inset_1px_0_8px_-4px_theme(colors.positive)]',
-      bg: 'bg-positive/5 border-positive/20',
+      text: '',
+      textClass: 'storage-text-ckb',
+      accent: 'border-l-[#2edba3] shadow-[inset_1px_0_8px_-4px_#2edba3]',
+      bg: '',
+      cardClass: 'storage-card-ckb',
+    };
+  }
+  if (tier === 'fully_on_ckb_and_btc') {
+    return {
+      text: '',
+      textClass: 'storage-text-both',
+      accent: 'border-l-[#8ca050] shadow-[inset_1px_0_6px_-3px_rgba(140,160,80,0.5)]',
+      bg: '',
+      cardClass: 'storage-card-both',
     };
   }
   if (tier === 'fully_on_btc') {
     return {
-      text: 'text-[#f7931a]',
-      accent: 'border-l-[#f7931a] shadow-[inset_1px_0_8px_-4px_#f7931a]',
-      bg: 'bg-[#f7931a]/5 border-[#f7931a]/20',
+      text: '',
+      textClass: 'storage-text-btc',
+      accent: 'border-l-[#b8872a] shadow-[inset_1px_0_6px_-3px_rgba(184,135,42,0.5)]',
+      bg: '',
+      cardClass: 'storage-card-btc',
     };
   }
   if (tier === 'centralized_dependent') {
@@ -506,13 +525,15 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                 (() => {
                   const colors = storageTierColor(cluster.storageProfile.tier);
                   return (
-                    <div className={`rounded border border-l-2 p-3 ${colors.bg} ${colors.accent}`}>
-                      <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+                    <div
+                      className={`rounded border border-l-2 p-3 ${colors.bg} ${colors.accent} ${colors.cardClass || ''}`}
+                    >
+                      <div className="text-text-dim relative z-10 mb-1.5 font-mono text-[10px] uppercase tracking-wider">
                         Storage Profile
                       </div>
-                      <div className="flex items-center gap-1">
+                      <div className="relative z-10 flex items-center gap-1">
                         <span
-                          className={`font-mono text-sm font-semibold leading-tight ${colors.text}`}
+                          className={`font-mono text-sm font-semibold leading-tight ${colors.textClass || colors.text}`}
                         >
                           {formatStorageTier(cluster.storageProfile.tier)}
                         </span>

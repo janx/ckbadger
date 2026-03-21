@@ -1007,10 +1007,10 @@ deprecated = [
 "SECP256k1/Multisig" = "Default Multisig"
 
 [nft_storage_tier_overrides]
-".bit" = "fully_onchain"
-"dotbit" = "fully_onchain"
-"did:ckb" = "fully_onchain"
-"did_ckb" = "fully_onchain"
+".bit" = "fully_on_ckb_and_btc"
+"dotbit" = "fully_on_ckb_and_btc"
+"did:ckb" = "fully_on_ckb_and_btc"
+"did_ckb" = "fully_on_ckb_and_btc"
 "#;
         let cfg = parse_labels_config(toml).unwrap();
 
@@ -1027,7 +1027,7 @@ deprecated = [
         assert_eq!(cfg.nft_storage_tier_overrides.len(), 4);
         assert_eq!(
             cfg.nft_storage_tier_overrides.get(".bit"),
-            Some(&"fully_onchain".to_string())
+            Some(&"fully_on_ckb_and_btc".to_string())
         );
 
         assert_eq!(cfg.deprecated.len(), 5);
@@ -1072,7 +1072,7 @@ deprecated = [
 "DAS Lock" = ".bit Lock"
 
 [nft_storage_tier_overrides]
-".bit" = "fully_onchain"
+".bit" = "fully_on_ckb_and_btc"
 "#;
         std::fs::write(dir.path().join("labels.toml"), labels_content).unwrap();
 

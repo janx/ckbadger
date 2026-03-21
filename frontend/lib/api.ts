@@ -774,7 +774,7 @@ interface Asset {
   ownedCapacity: string | null;
   ownedKnowledge: string | null;
   storageTier?:
-    | 'fully_onchain'
+    | 'fully_on_ckb_and_btc'
     | 'fully_on_ckb'
     | 'fully_on_btc'
     | 'offchain_dependent'
@@ -806,6 +806,7 @@ interface AssetQueryParams {
   sortDirection?: 'asc' | 'desc';
   storageTier?:
     | 'fully_onchain'
+    | 'fully_on_ckb_and_btc'
     | 'fully_on_ckb'
     | 'fully_on_btc'
     | 'offchain_dependent'
@@ -952,7 +953,7 @@ interface SporeCluster {
   ownedKnowledge?: string | null;
   storageProfile?: {
     tier:
-      | 'fully_onchain'
+      | 'fully_on_ckb_and_btc'
       | 'fully_on_ckb'
       | 'fully_on_btc'
       | 'decentralized_external'
@@ -983,7 +984,7 @@ interface SporeNft {
   ownedKnowledge?: string | null;
   mediaProfile?: {
     tier:
-      | 'fully_onchain'
+      | 'fully_on_ckb_and_btc'
       | 'fully_on_ckb'
       | 'fully_on_btc'
       | 'decentralized_external'
@@ -994,7 +995,7 @@ interface SporeNft {
       scheme: string;
       sourceLocation: string;
       dependencyTier:
-        | 'fully_onchain'
+        | 'fully_on_ckb_and_btc'
         | 'fully_on_ckb'
         | 'fully_on_btc'
         | 'decentralized_external'
@@ -1032,7 +1033,7 @@ interface ObjectCollection {
   ownedKnowledge: string;
   storageProfile?: {
     tier:
-      | 'fully_onchain'
+      | 'fully_on_ckb_and_btc'
       | 'fully_on_ckb'
       | 'fully_on_btc'
       | 'decentralized_external'

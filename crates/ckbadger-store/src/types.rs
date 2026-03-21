@@ -302,9 +302,8 @@ pub enum StorageDependencyTier {
     FullyOnCkb,
     /// Content inscribed on Bitcoin and bridged to CKB via btcfs://.
     FullyOnBtc,
-    /// Legacy alias — new code should not produce this.
-    /// Kept only for mixed btc+ckb cluster-level resolution.
-    FullyOnchain,
+    /// Content depends on both Bitcoin (btcfs://) and CKB (ckbfs://, inline) storage.
+    FullyOnCkbAndBtc,
     DecentralizedExternal,
     CentralizedDependent,
     #[default]
@@ -316,7 +315,7 @@ impl StorageDependencyTier {
         match self {
             StorageDependencyTier::FullyOnCkb => "fully_on_ckb",
             StorageDependencyTier::FullyOnBtc => "fully_on_btc",
-            StorageDependencyTier::FullyOnchain => "fully_onchain",
+            StorageDependencyTier::FullyOnCkbAndBtc => "fully_on_ckb_and_btc",
             StorageDependencyTier::DecentralizedExternal => "decentralized_external",
             StorageDependencyTier::CentralizedDependent => "centralized_dependent",
             StorageDependencyTier::Unknown => "unknown",
@@ -329,7 +328,7 @@ impl StorageDependencyTier {
             self,
             StorageDependencyTier::FullyOnCkb
                 | StorageDependencyTier::FullyOnBtc
-                | StorageDependencyTier::FullyOnchain
+                | StorageDependencyTier::FullyOnCkbAndBtc
         )
     }
 }
@@ -552,7 +551,7 @@ pub struct ClusterAggregate {
     pub live_count: i64,
     pub owner_count: i64,
     #[serde(default)]
-    pub fully_onchain_count: i64,
+    pub fully_on_ckb_and_btc_count: i64,
     #[serde(default)]
     pub fully_on_ckb_count: i64,
     #[serde(default)]

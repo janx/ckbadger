@@ -1041,7 +1041,7 @@ fn format_ratio_4(numerator: i64, denominator: i64) -> String {
 }
 
 fn resolve_storage_tier(
-    fully_onchain: i64,
+    fully_on_ckb_and_btc: i64,
     fully_on_ckb: i64,
     fully_on_btc: i64,
     decentralized_external: i64,
@@ -1054,17 +1054,17 @@ fn resolve_storage_tier(
     if decentralized_external > 0 {
         return "decentralized_external".to_string();
     }
-    let total_onchain = fully_onchain + fully_on_ckb + fully_on_btc;
+    let total_onchain = fully_on_ckb_and_btc + fully_on_ckb + fully_on_btc;
     if total_onchain > 0 && unknown == 0 {
-        let has_ckb = fully_on_ckb > 0 || fully_onchain > 0;
-        let has_btc = fully_on_btc > 0;
+        let has_ckb = fully_on_ckb > 0 || fully_on_ckb_and_btc > 0;
+        let has_btc = fully_on_btc > 0 || fully_on_ckb_and_btc > 0;
         if has_ckb && !has_btc {
             return "fully_on_ckb".to_string();
         }
         if has_btc && !has_ckb {
             return "fully_on_btc".to_string();
         }
-        return "fully_onchain".to_string();
+        return "fully_on_ckb_and_btc".to_string();
     }
     "unknown".to_string()
 }
@@ -1073,7 +1073,7 @@ fn cluster_storage_profile_from_aggregate(
     aggregate: Option<&ckbadger_store::types::ClusterAggregate>,
     spores_count: i64,
 ) -> ClusterStorageProfileResponse {
-    let fully_onchain_count = aggregate.map(|a| a.fully_onchain_count).unwrap_or(0);
+    let fully_on_ckb_and_btc_count = aggregate.map(|a| a.fully_on_ckb_and_btc_count).unwrap_or(0);
     let fully_on_ckb_count = aggregate.map(|a| a.fully_on_ckb_count).unwrap_or(0);
     let fully_on_btc_count = aggregate.map(|a| a.fully_on_btc_count).unwrap_or(0);
     let decentralized_external_count = aggregate
@@ -1085,10 +1085,10 @@ fn cluster_storage_profile_from_aggregate(
     let unknown_count = aggregate
         .map(|a| a.unknown_count)
         .unwrap_or(spores_count.max(0));
-    let total_onchain = fully_onchain_count + fully_on_ckb_count + fully_on_btc_count;
+    let total_onchain = fully_on_ckb_and_btc_count + fully_on_ckb_count + fully_on_btc_count;
     ClusterStorageProfileResponse {
         tier: resolve_storage_tier(
-            fully_onchain_count,
+            fully_on_ckb_and_btc_count,
             fully_on_ckb_count,
             fully_on_btc_count,
             decentralized_external_count,
