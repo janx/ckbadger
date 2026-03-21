@@ -1706,6 +1706,98 @@ fn draw_chart_panel(f: &mut Frame, area: Rect, title: &str, unit: &str, data: &V
     );
 }
 
+/// Renders a pipeline overlap chart showing fetch overlap % as the primary series.
+/// Stats line shows both fetch and flush current + average values.
+#[allow(dead_code)] // Wired in Task 5 (draw_sync_charts)
+fn draw_overlap_chart_panel(f: &mut Frame, area: Rect, app: &App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800))
+        .title(Span::styled(
+            "Pipeline Overlap (%)",
+            Style::default().fg(FOREGROUND),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.width < 10 || inner.height == 0 {
+        return;
+    }
+
+    if let Some(message) = chart_height_warning(inner.height) {
+        f.render_widget(
+            Paragraph::new(message).style(Style::default().fg(SLATE_500)),
+            inner,
+        );
+        return;
+    }
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(inner);
+
+    // Stats line: both series
+    let fetch_cur = app.fetch_overlap_history.back().copied().unwrap_or(1.0);
+    let flush_cur = app.flush_overlap_history.back().copied().unwrap_or(1.0);
+    let fetch_avg = if app.fetch_overlap_history.is_empty() {
+        1.0
+    } else {
+        app.fetch_overlap_history.iter().sum::<f64>() / app.fetch_overlap_history.len() as f64
+    };
+    let flush_avg = if app.flush_overlap_history.is_empty() {
+        1.0
+    } else {
+        app.flush_overlap_history.iter().sum::<f64>() / app.flush_overlap_history.len() as f64
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("fetch ", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(
+                format!("{:.0}%", fetch_cur * 100.0),
+                Style::default().fg(TERMINAL_GREEN),
+            ),
+            Span::styled(
+                format!(" avg {:.0}%", fetch_avg * 100.0),
+                Style::default().fg(TERMINAL_DIM),
+            ),
+            Span::styled(" | flush ", Style::default().fg(CYAN)),
+            Span::styled(
+                format!("{:.0}%", flush_cur * 100.0),
+                Style::default().fg(CYAN),
+            ),
+            Span::styled(
+                format!(" avg {:.0}%", flush_avg * 100.0),
+                Style::default().fg(TERMINAL_DIM),
+            ),
+        ])),
+        rows[0],
+    );
+
+    // Chart: render fetch overlap as main series using existing bar chart
+    if rows[1].height > 0 && rows[1].width > 0 {
+        let chart_result = render_bar_chart(
+            &app.fetch_overlap_history,
+            rows[1].width as usize,
+            rows[1].height as usize,
+        );
+        let chart_lines: Vec<Line> = chart_result
+            .rows
+            .into_iter()
+            .map(|row| {
+                Line::from(Span::styled(
+                    row.content,
+                    Style::default().fg(TERMINAL_GREEN),
+                ))
+            })
+            .collect();
+        f.render_widget(
+            Paragraph::new(chart_lines).wrap(Wrap { trim: false }),
+            rows[1],
+        );
+    }
+}
+
 fn stack_sync_charts(area: Rect) -> bool {
     area.width < 120 && area.height >= 10
 }
