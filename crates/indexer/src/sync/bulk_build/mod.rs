@@ -642,6 +642,8 @@ impl BatchExecutionStats {
 #[derive(Debug, Default, Clone)]
 struct BatchBuildTimings {
     facts_ms: f64,
+    #[allow(dead_code)] // consumed by downstream tasks (BulkBuildPerfStats, BatchSample)
+    facts_breakdown: binary_facts::FactsTimingBreakdown,
     resolve_ms: f64,
     reduce_ms: f64,
     history_ms: f64,
@@ -1352,7 +1354,8 @@ impl BulkBuildRuntimeState {
         }
 
         let facts_started = Instant::now();
-        let arena = binary_facts::build_bulk_facts_arena_from_raw_blocks(blocks, &self.interner)?;
+        let (arena, facts_breakdown) =
+            binary_facts::build_bulk_facts_arena_from_raw_blocks(blocks, &self.interner)?;
         let facts_elapsed = facts_started.elapsed();
 
         // Snapshot interner for zero-copy reads during resolve/reduce phases.
@@ -1570,6 +1573,7 @@ impl BulkBuildRuntimeState {
 
         let timings = BatchBuildTimings {
             facts_ms: facts_elapsed.as_secs_f64() * 1000.0,
+            facts_breakdown,
             resolve_ms: resolve_elapsed.as_secs_f64() * 1000.0,
             reduce_ms: reduce_elapsed.as_secs_f64() * 1000.0,
             history_ms: history_elapsed.as_secs_f64() * 1000.0,
@@ -1610,7 +1614,7 @@ impl BulkBuildRuntimeState {
             ));
         }
         let facts_started = Instant::now();
-        let arena =
+        let (arena, facts_breakdown) =
             crate::sync::pipeline::build_bulk_facts_arena_from_blocks(blocks, &self.interner)?;
         let facts_elapsed = facts_started.elapsed();
         let frozen = self.interner.snapshot_for_reads();
@@ -1708,6 +1712,7 @@ impl BulkBuildRuntimeState {
             },
             BatchBuildTimings {
                 facts_ms: facts_elapsed.as_secs_f64() * 1000.0,
+                facts_breakdown,
                 resolve_ms: resolve_elapsed.as_secs_f64() * 1000.0,
                 reduce_ms: reduce_elapsed.as_secs_f64() * 1000.0,
                 history_ms: history_elapsed.as_secs_f64() * 1000.0,
@@ -4623,8 +4628,9 @@ mod tests {
             hex::decode(&block.block.transactions[1].hash[2..]).expect("split tx hash");
 
         let interner = interner::IdentityInterner::default();
-        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
-            .expect("facts arena");
+        let (arena, _) =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
+                .expect("facts arena");
         let resolved = sequencer::BulkSequencer::default()
             .resolve(&arena)
             .expect("resolved txs");
@@ -4672,8 +4678,9 @@ mod tests {
             hex::decode(&block.block.transactions[1].hash[2..]).expect("split tx hash");
 
         let interner = interner::IdentityInterner::default();
-        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
-            .expect("facts arena");
+        let (arena, _) =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
+                .expect("facts arena");
         let resolved = sequencer::BulkSequencer::default()
             .resolve(&arena)
             .expect("resolved txs");
@@ -4725,8 +4732,9 @@ mod tests {
     fn flush_bulk_build_materialized_state_flushes_domain_and_append_memtables() {
         let block = bulk_build_addr_tx_fixture();
         let interner = interner::IdentityInterner::default();
-        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
-            .expect("facts arena");
+        let (arena, _) =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
+                .expect("facts arena");
         let resolved = sequencer::BulkSequencer::default()
             .resolve(&arena)
             .expect("resolved txs");
@@ -4821,8 +4829,9 @@ mod tests {
         )));
 
         let interner = interner::IdentityInterner::default();
-        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
-            .expect("facts arena");
+        let (arena, _) =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
+                .expect("facts arena");
         let resolved = sequencer::BulkSequencer::default()
             .resolve(&arena)
             .expect("resolved txs");
@@ -4914,8 +4923,9 @@ mod tests {
         let expected_channel_id = keys::encode_fiber_channel_id(&open_tx_hash, 0);
 
         let interner = interner::IdentityInterner::default();
-        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
-            .expect("facts arena");
+        let (arena, _) =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
+                .expect("facts arena");
         let frozen = interner.snapshot_for_reads();
         let mut sequencer = sequencer::BulkSequencer::default();
         let resolved = sequencer.resolve(&arena).expect("resolved txs");
@@ -4998,8 +5008,9 @@ mod tests {
         let transfer_tx_hash = vec![0xb1; 32];
 
         let interner = interner::IdentityInterner::default();
-        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&blocks, &interner)
-            .expect("facts arena");
+        let (arena, _) =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&blocks, &interner)
+                .expect("facts arena");
         let resolved = sequencer::BulkSequencer::default()
             .resolve(&arena)
             .expect("resolved txs");
@@ -5377,7 +5388,7 @@ mod tests {
         // Before the fix, block 0 was skipped and this would fail with
         // "missing live input" at block 11.
         let interner = interner::IdentityInterner::default();
-        let arena = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(
+        let (arena, _) = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(
             &[genesis_block, block_11],
             &interner,
         )

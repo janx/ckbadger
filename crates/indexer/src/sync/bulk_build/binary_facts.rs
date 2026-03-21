@@ -32,6 +32,30 @@ use super::interner::IdentityInterner;
 use crate::sync::helpers::checked_usize_to_i16;
 
 // ---------------------------------------------------------------------------
+// Timing breakdown
+// ---------------------------------------------------------------------------
+
+/// Per-batch timing breakdown for the Facts phase.
+/// Returned alongside `FactsArena` to decompose `facts_ms` into parallel vs serial components.
+#[derive(Debug, Default, Clone)]
+#[allow(dead_code)] // fields consumed by downstream tasks (BulkBuildPerfStats, BatchSample, TUI)
+pub(crate) struct FactsTimingBreakdown {
+    /// Wall-clock time of the rayon par_iter phase (ms).
+    pub par_iter_ms: f64,
+    /// Wall-clock time of the serial arena merge phase (ms).
+    pub merge_ms: f64,
+    /// Sum of per-block parse times across all rayon threads (ms).
+    /// `serial_equivalent_ms / par_iter_ms` = actual speedup ratio.
+    pub serial_equivalent_ms: f64,
+    /// Number of `intern_bytes` calls that took the Mutex slow path.
+    pub intern_slow_path_count: u64,
+    /// Total number of `intern_bytes` calls.
+    pub intern_total_count: u64,
+    /// Total cells parsed in this batch.
+    pub cell_count: u64,
+}
+
+// ---------------------------------------------------------------------------
 // Public container
 // ---------------------------------------------------------------------------
 
@@ -925,15 +949,32 @@ fn parse_binary_protocol_facts(
 pub(crate) fn build_bulk_facts_arena_from_raw_blocks(
     blocks: &[RawCkbBlock],
     interner: &IdentityInterner,
-) -> Result<super::facts::FactsArena> {
+) -> Result<(super::facts::FactsArena, FactsTimingBreakdown)> {
     use rayon::prelude::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Instant;
 
+    let serial_equivalent_us = AtomicU64::new(0);
+    let total_cells = AtomicU64::new(0);
+
+    let par_start = Instant::now();
     #[allow(clippy::type_complexity)]
     let per_block_results: Vec<Result<(BlockFacts, Vec<TxFacts>, Vec<CellFacts>)>> = blocks
         .par_iter()
-        .map(|raw| parse_block_to_facts(raw, interner))
+        .map(|raw| {
+            let block_start = Instant::now();
+            let result = parse_block_to_facts(raw, interner);
+            serial_equivalent_us
+                .fetch_add(block_start.elapsed().as_micros() as u64, Ordering::Relaxed);
+            if let Ok((_, _, ref cells)) = result {
+                total_cells.fetch_add(cells.len() as u64, Ordering::Relaxed);
+            }
+            result
+        })
         .collect();
+    let par_elapsed = par_start.elapsed();
 
+    let merge_start = Instant::now();
     let mut arena = super::facts::FactsArena::default();
     for result in per_block_results {
         let (block_facts, txs, cells) = result?;
@@ -952,7 +993,20 @@ pub(crate) fn build_bulk_facts_arena_from_raw_blocks(
         block.tx_range = tx_start..tx_end;
         arena.blocks.push(block);
     }
-    Ok(arena)
+    let merge_elapsed = merge_start.elapsed();
+
+    let (intern_total, intern_slow) = interner.drain_counters();
+
+    let breakdown = FactsTimingBreakdown {
+        par_iter_ms: par_elapsed.as_secs_f64() * 1000.0,
+        merge_ms: merge_elapsed.as_secs_f64() * 1000.0,
+        serial_equivalent_ms: serial_equivalent_us.load(Ordering::Relaxed) as f64 / 1000.0,
+        intern_slow_path_count: intern_slow,
+        intern_total_count: intern_total,
+        cell_count: total_cells.load(Ordering::Relaxed),
+    };
+
+    Ok((arena, breakdown))
 }
 
 // ===========================================================================

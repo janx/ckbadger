@@ -349,15 +349,36 @@ fn parse_bulk_protocol_facts(
 pub(crate) fn build_bulk_facts_arena_from_blocks(
     blocks: &[BlockResponseWithCycles],
     interner: &IdentityInterner,
-) -> Result<FactsArena> {
+) -> Result<(
+    FactsArena,
+    super::bulk_build::binary_facts::FactsTimingBreakdown,
+)> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Instant;
+
+    let serial_equivalent_us = AtomicU64::new(0);
+    let total_cells = AtomicU64::new(0);
+
     // Parse each block in parallel via rayon. Each block produces local
     // (BlockFacts, Vec<TxFacts>, Vec<CellFacts>) with output_range starting
     // at local index 0. The merge phase below remaps offsets sequentially.
+    let par_start = Instant::now();
     let per_block_results: Vec<Result<(BlockFacts, Vec<TxFacts>, Vec<CellFacts>)>> = blocks
         .par_iter()
-        .map(|block| parse_single_block(block, interner))
+        .map(|block| {
+            let block_start = Instant::now();
+            let result = parse_single_block(block, interner);
+            serial_equivalent_us
+                .fetch_add(block_start.elapsed().as_micros() as u64, Ordering::Relaxed);
+            if let Ok((_, _, ref cells)) = result {
+                total_cells.fetch_add(cells.len() as u64, Ordering::Relaxed);
+            }
+            result
+        })
         .collect();
+    let par_elapsed = par_start.elapsed();
 
+    let merge_start = Instant::now();
     let mut arena = FactsArena::default();
     for result in per_block_results {
         let (block_facts, txs, cells) = result?;
@@ -376,7 +397,20 @@ pub(crate) fn build_bulk_facts_arena_from_blocks(
         block.tx_range = tx_start..tx_end;
         arena.blocks.push(block);
     }
-    Ok(arena)
+    let merge_elapsed = merge_start.elapsed();
+
+    let (intern_total, intern_slow) = interner.drain_counters();
+
+    let breakdown = super::bulk_build::binary_facts::FactsTimingBreakdown {
+        par_iter_ms: par_elapsed.as_secs_f64() * 1000.0,
+        merge_ms: merge_elapsed.as_secs_f64() * 1000.0,
+        serial_equivalent_ms: serial_equivalent_us.load(Ordering::Relaxed) as f64 / 1000.0,
+        intern_slow_path_count: intern_slow,
+        intern_total_count: intern_total,
+        cell_count: total_cells.load(Ordering::Relaxed),
+    };
+
+    Ok((arena, breakdown))
 }
 
 /// Parse a single block into local facts with output ranges starting at 0.
@@ -3210,7 +3244,8 @@ mod tests {
     fn build_facts_arena_captures_exact_cell_semantics() {
         let blocks = vec![create_facts_fixture_block_with_two_txs()];
         let interner = IdentityInterner::default();
-        let arena = build_bulk_facts_arena_from_blocks(&blocks, &interner).expect("facts");
+        let (arena, _breakdown) =
+            build_bulk_facts_arena_from_blocks(&blocks, &interner).expect("facts");
         let frozen = interner.snapshot_for_reads();
         let sudt_cell = arena
             .cells
@@ -3346,7 +3381,8 @@ mod tests {
         };
 
         let interner = IdentityInterner::default();
-        let arena = build_bulk_facts_arena_from_blocks(&[block], &interner).expect("facts");
+        let (arena, _breakdown) =
+            build_bulk_facts_arena_from_blocks(&[block], &interner).expect("facts");
         let cluster_cell = arena
             .cells
             .iter()
@@ -3631,7 +3667,7 @@ mod tests {
         };
 
         let interner = IdentityInterner::default();
-        let arena =
+        let (arena, _breakdown) =
             build_bulk_facts_arena_from_blocks(&[block], &interner).expect("should not crash");
 
         let dotbit_cell = arena

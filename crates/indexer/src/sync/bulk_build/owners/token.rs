@@ -752,7 +752,7 @@ pub(crate) fn materialize_token_state_for_test(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<TokenStateSnapshot> {
     let interner = IdentityInterner::default();
-    let arena = build_bulk_facts_arena_from_blocks(blocks, &interner)?;
+    let (arena, _) = build_bulk_facts_arena_from_blocks(blocks, &interner)?;
     let resolved = BulkSequencer::default().resolve(&arena)?;
     let frozen = interner.snapshot_for_reads();
     let ctx = ReducerContext::new(&frozen);
