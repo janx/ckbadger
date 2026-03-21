@@ -258,6 +258,14 @@ pub struct NftCollectionDetailResponse {
     pub owned_capacity: String,
     pub owned_knowledge: String,
     pub storage_profile: CollectionStorageProfileResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class_detail: Option<MnftClassSummaryResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issuer_detail: Option<MnftIssuerSummaryResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at_block: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_lock_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1724,6 +1732,104 @@ async fn get_object_collection(
     let holders_count = agg.holders_count;
     let activities_count = agg.activities_count;
 
+    // Enrich with mNFT class/issuer metadata when the collection is an mNFT class.
+    let (class_detail, issuer_detail, created_at_block, owner_lock_hash) = if standard == "m-nft" {
+        match state
+            .store
+            .get_object(&collection_id_bytes)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+        {
+            Some(class_entry)
+                if matches!(
+                    class_entry.standard,
+                    ckbadger_store::types::ObjectStandard::MnftClass
+                ) =>
+            {
+                let (desc, renderer, total, issued, configure) = match &class_entry.extra {
+                    ckbadger_store::types::ObjectExtra::MnftClass {
+                        description,
+                        renderer,
+                        total,
+                        issued,
+                        configure,
+                        ..
+                    } => (
+                        description.clone(),
+                        renderer.clone(),
+                        *total,
+                        *issued,
+                        *configure,
+                    ),
+                    _ => {
+                        return Err(ApiError::internal(format!(
+                            "mNFT class entry has wrong extra variant: collection_id=0x{}",
+                            hex::encode(&collection_id_bytes)
+                        )))
+                    }
+                };
+
+                let issuer_id = class_entry.collection_id.clone().unwrap_or_default();
+
+                let issuer_detail = if !issuer_id.is_empty() {
+                    match state
+                        .store
+                        .get_object(&issuer_id)
+                        .map_err(|e| ApiError::internal(e.to_string()))?
+                    {
+                        Some(issuer_entry) => {
+                            let (class_count, set_count, info) = match &issuer_entry.extra {
+                                    ckbadger_store::types::ObjectExtra::MnftIssuer {
+                                        class_count,
+                                        set_count,
+                                        info,
+                                    } => (*class_count, *set_count, info.clone()),
+                                    _ => {
+                                        return Err(ApiError::internal(format!(
+                                            "mNFT issuer entry has wrong extra variant: issuer_id=0x{}, collection_id=0x{}",
+                                            hex::encode(&issuer_id),
+                                            hex::encode(&collection_id_bytes)
+                                        )))
+                                    }
+                                };
+                            Some(MnftIssuerSummaryResponse {
+                                issuer_id: format!("0x{}", hex::encode(&issuer_id)),
+                                name: issuer_entry.name,
+                                class_count,
+                                set_count,
+                                info_hex: info.map(|v| format!("0x{}", hex::encode(v))),
+                            })
+                        }
+                        None => None,
+                    }
+                } else {
+                    None
+                };
+
+                let class_detail = Some(MnftClassSummaryResponse {
+                    class_id: format!("0x{}", hex::encode(&collection_id_bytes)),
+                    issuer_id: format!("0x{}", hex::encode(&issuer_id)),
+                    name: class_entry.name,
+                    description: desc,
+                    renderer,
+                    total,
+                    issued,
+                    configure,
+                });
+
+                let created_at = Some(class_entry.created_at_block);
+                let owner = class_entry
+                    .owner_lock_hash
+                    .as_ref()
+                    .map(|h| format!("0x{}", hex::encode(h)));
+
+                (class_detail, issuer_detail, created_at, owner)
+            }
+            _ => (None, None, None, None),
+        }
+    } else {
+        (None, None, None, None)
+    };
+
     ok(NftCollectionDetailResponse {
         collection_id: format!("0x{}", hex::encode(&collection_id_bytes)),
         standard,
@@ -1735,6 +1841,10 @@ async fn get_object_collection(
         owned_capacity,
         owned_knowledge,
         storage_profile,
+        class_detail,
+        issuer_detail,
+        created_at_block,
+        owner_lock_hash,
     })
 }
 
