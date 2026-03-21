@@ -1573,7 +1573,10 @@ impl BulkBuildRuntimeState {
         let history = history_result?;
         let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = reduce_right_result?;
 
-        // Post-overlap: identity deltas need both history + object reducer done.
+        // Post-overlap: activity deltas need both history + object reducer done.
+        owners
+            .object
+            .apply_object_activity_count_deltas(&history.object_activity_count_deltas)?;
         owners
             .object
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
@@ -1716,6 +1719,9 @@ impl BulkBuildRuntimeState {
         let (history_result, history_elapsed) = history_result_with_elapsed;
         let history = history_result?;
         let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = reduce_right_result?;
+        owners
+            .object
+            .apply_object_activity_count_deltas(&history.object_activity_count_deltas)?;
         owners
             .object
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
@@ -1934,12 +1940,14 @@ fn apply_cell_dist_cohort_deltas(
 
 struct HistoryBuildResult {
     rows: Vec<materialize::MaterializedRow>,
+    object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     activity_bundles: Vec<ckbadger_store::types::TxActivityBundle>,
 }
 
 struct BlockHistoryRows {
     rows: Vec<materialize::MaterializedRow>,
+    object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     activity_bundles: Vec<ckbadger_store::types::TxActivityBundle>,
 }
@@ -2401,14 +2409,21 @@ fn build_history_rows(
     let estimated_total =
         arena.blocks.len() * 2 + arena.txs.len() * 2 + arena.cells.len() * 2 + arena.txs.len();
     let mut all_rows = Vec::with_capacity(estimated_total);
-    let mut all_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
+    let mut all_object_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
+    let mut all_identity_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_bundles: Vec<ckbadger_store::types::TxActivityBundle> = Vec::new();
     for result in block_results {
         let block_rows = result?;
         all_rows.extend(block_rows.rows);
         all_bundles.extend(block_rows.activity_bundles);
+        for (k, v) in block_rows.object_activity_count_deltas {
+            let entry = all_object_deltas.entry(k).or_insert(0);
+            *entry = entry
+                .checked_add(v)
+                .ok_or_else(|| anyhow!("object activity delta overflow during parallel merge"))?;
+        }
         for (k, v) in block_rows.identity_activity_count_deltas {
-            let entry = all_deltas.entry(k).or_insert(0);
+            let entry = all_identity_deltas.entry(k).or_insert(0);
             *entry = entry
                 .checked_add(v)
                 .ok_or_else(|| anyhow!("identity activity delta overflow during parallel merge"))?;
@@ -2417,7 +2432,8 @@ fn build_history_rows(
 
     Ok(HistoryBuildResult {
         rows: all_rows,
-        identity_activity_count_deltas: all_deltas,
+        object_activity_count_deltas: all_object_deltas,
+        identity_activity_count_deltas: all_identity_deltas,
         activity_bundles: all_bundles,
     })
 }
@@ -2460,6 +2476,7 @@ fn build_history_rows_for_block(
         + cell_count * 2 // cells + possible data_hash
         + block_txs.len(); // activity bundles estimate
     let mut rows = Vec::with_capacity(estimated_rows);
+    let mut object_activity_count_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut identity_activity_count_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
 
     // Block header + hash index (2 rows per block).
@@ -2845,6 +2862,15 @@ fn build_history_rows_for_block(
         }
 
         for resolved_entry in object_activity_acc.into_resolved_entries() {
+            let delta = object_activity_count_deltas
+                .entry(resolved_entry.collection_id.clone())
+                .or_insert(0);
+            *delta = delta.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "object collection activity delta overflow in bulk build history rows: collection_id=0x{}",
+                    hex::encode(&resolved_entry.collection_id)
+                )
+            })?;
             rows.push(materialize::MaterializedRow::new(
                 CF_OBJECT_COLLECTION_ACTIVITIES,
                 keys::encode_nft_collection_activity_key(
@@ -2913,6 +2939,7 @@ fn build_history_rows_for_block(
 
     Ok(BlockHistoryRows {
         rows,
+        object_activity_count_deltas,
         identity_activity_count_deltas,
         activity_bundles,
     })
@@ -2921,6 +2948,7 @@ fn build_history_rows_for_block(
 #[cfg(test)]
 fn build_object_collection_activity_rows(
     resolved: &[facts::ResolvedTxFacts<'_>],
+    object_activity_count_deltas: &mut FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: &mut FxHashMap<Vec<u8>, i64>,
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let mut object_activity_acc =
@@ -3059,6 +3087,15 @@ fn build_object_collection_activity_rows(
     }
 
     for resolved_entry in object_activity_acc.into_resolved_entries() {
+        let delta = object_activity_count_deltas
+            .entry(resolved_entry.collection_id.clone())
+            .or_insert(0);
+        *delta = delta.checked_add(1).ok_or_else(|| {
+            anyhow!(
+                "object collection activity delta overflow in test helper: collection_id=0x{}",
+                hex::encode(&resolved_entry.collection_id)
+            )
+        })?;
         rows.push(materialize::MaterializedRow::new(
             CF_OBJECT_COLLECTION_ACTIVITIES,
             keys::encode_nft_collection_activity_key(
@@ -5305,10 +5342,14 @@ mod tests {
             },
         ];
 
+        let mut object_activity_count_deltas = FxHashMap::default();
         let mut identity_activity_count_deltas = FxHashMap::default();
-        let rows =
-            build_object_collection_activity_rows(&resolved, &mut identity_activity_count_deltas)
-                .expect("dotbit collection activity rows");
+        let rows = build_object_collection_activity_rows(
+            &resolved,
+            &mut object_activity_count_deltas,
+            &mut identity_activity_count_deltas,
+        )
+        .expect("dotbit collection activity rows");
 
         let identity_rows: HashMap<Vec<u8>, ObjectCollectionActivityEntry> = rows
             .iter()
@@ -5513,10 +5554,14 @@ mod tests {
             },
         ];
 
+        let mut object_activity_count_deltas = FxHashMap::default();
         let mut identity_activity_count_deltas = FxHashMap::default();
-        let rows =
-            build_object_collection_activity_rows(&resolved, &mut identity_activity_count_deltas)
-                .expect("mnft collection activity rows");
+        let rows = build_object_collection_activity_rows(
+            &resolved,
+            &mut object_activity_count_deltas,
+            &mut identity_activity_count_deltas,
+        )
+        .expect("mnft collection activity rows");
 
         // Should produce object rows, not identity rows
         let object_rows: HashMap<Vec<u8>, ObjectCollectionActivityEntry> = rows
@@ -5562,6 +5607,17 @@ mod tests {
         let burn = object_rows.get(burn_key.as_slice()).expect("mnft burn");
         assert_eq!(burn.actions.len(), 1);
         assert!(matches!(burn.actions[0], AssetAction::Burn));
+
+        // Verify object activity count deltas (regression: was missing before fix)
+        assert_eq!(
+            object_activity_count_deltas.get(class_id.as_slice()),
+            Some(&3),
+            "3 mNFT activity entries should produce delta of 3"
+        );
+        assert!(
+            identity_activity_count_deltas.is_empty(),
+            "no identity deltas for mNFT"
+        );
     }
 
     /// Regression: bulk build must include genesis block 0 in the first batch.

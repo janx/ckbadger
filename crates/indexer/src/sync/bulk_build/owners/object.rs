@@ -465,6 +465,46 @@ impl ObjectOwner {
         Ok(())
     }
 
+    pub(crate) fn apply_object_activity_count_deltas(
+        &mut self,
+        deltas: &FxHashMap<Vec<u8>, i64>,
+    ) -> Result<()> {
+        for (collection_id, delta) in deltas {
+            if *delta == 0 {
+                continue;
+            }
+            let agg = match self
+                .object_collection_aggs
+                .get_mut(collection_id.as_slice())
+            {
+                Some(agg) => agg,
+                None => {
+                    // Spore cluster activities share the same activity CF but their
+                    // counts live in ClusterAggregate, not ObjectCollectionAggregate.
+                    // Skip silently if the collection_id belongs to a cluster.
+                    if self.cluster_aggs.contains_key(collection_id.as_slice()) {
+                        continue;
+                    }
+                    bail!(
+                        "missing object collection aggregate while applying activity_count delta in bulk build: collection_id=0x{} delta={}",
+                        hex::encode(collection_id),
+                        delta
+                    );
+                }
+            };
+
+            agg.activities_count = checked_next_i64(
+                agg.activities_count,
+                *delta,
+                "object collection activities_count",
+                collection_id,
+                0,
+            )?;
+        }
+
+        Ok(())
+    }
+
     fn apply_input(&mut self, input: &ResolvedInputFacts) -> Result<()> {
         let Some(protocol) = input.protocol_facts.as_ref() else {
             return Ok(());
