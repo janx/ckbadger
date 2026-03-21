@@ -5,9 +5,11 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
     ObjectCollectionAggregate, ObjectEntry, ObjectExtra, ObjectStandard, ObjectTypeIndex,
+    StorageDependencyTier,
 };
 use ckbadger_store::CkbadgerStore;
 
+use crate::parser::media_source::analyze_renderer_tier;
 use crate::parser::mnft::{ParsedMnftClass, ParsedMnftIssuer, ParsedMnftToken};
 
 use super::BatchWriter;
@@ -208,6 +210,68 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Get the storage tier for an mNFT class from its ObjectEntry.
+    fn mnft_class_tier(entry: &ObjectEntry) -> StorageDependencyTier {
+        match &entry.extra {
+            ObjectExtra::MnftClass { storage_tier, .. } => *storage_tier,
+            _ => StorageDependencyTier::Unknown,
+        }
+    }
+
+    /// Look up the storage tier of the class that owns a given token's collection.
+    fn resolve_mnft_token_tier(
+        &self,
+        class_id: &[u8],
+        state: &mut MnftBatchState,
+    ) -> Result<StorageDependencyTier> {
+        let class_entry = state.get_token(self.store.as_ref(), class_id)?;
+        Ok(class_entry
+            .as_ref()
+            .map(Self::mnft_class_tier)
+            .unwrap_or(StorageDependencyTier::Unknown))
+    }
+
+    fn adjust_collection_tier_count(
+        collection_id: &[u8],
+        agg: &mut ObjectCollectionAggregate,
+        tier: StorageDependencyTier,
+        delta: i64,
+        context: &str,
+    ) -> Result<()> {
+        if delta == 0 {
+            return Ok(());
+        }
+        let slot = match tier {
+            StorageDependencyTier::FullyOnCkb => &mut agg.fully_on_ckb_count,
+            StorageDependencyTier::FullyOnCkbAndBtc => &mut agg.fully_on_ckb_and_btc_count,
+            StorageDependencyTier::DecentralizedDependent => &mut agg.decentralized_dependent_count,
+            StorageDependencyTier::CentralizedDependent => &mut agg.centralized_dependent_count,
+            StorageDependencyTier::Unknown => &mut agg.unknown_count,
+        };
+        let next = slot.checked_add(delta).ok_or_else(|| {
+            anyhow::anyhow!(
+                "mnft collection tier count overflow: collection_id=0x{}, tier={}, current={}, delta={}, context={}",
+                hex::encode(collection_id),
+                tier.as_str(),
+                *slot,
+                delta,
+                context
+            )
+        })?;
+        if next < 0 {
+            bail!(
+                "mnft collection tier count underflow: collection_id=0x{}, tier={}, current={}, delta={}, context={}",
+                hex::encode(collection_id),
+                tier.as_str(),
+                *slot,
+                delta,
+                context
+            );
+        }
+        *slot = next;
+        Ok(())
+    }
+
     pub fn insert_mnft_issuer(
         &self,
         issuer: &ParsedMnftIssuer,
@@ -272,6 +336,11 @@ impl BatchWriter {
         state: &mut MnftBatchState,
     ) -> Result<()> {
         let existing = state.get_token(self.store.as_ref(), &class.class_id)?;
+        let new_tier = analyze_renderer_tier(class.renderer.as_deref());
+        let old_tier = existing.as_ref().and_then(|e| match &e.extra {
+            ObjectExtra::MnftClass { storage_tier, .. } => Some(*storage_tier),
+            _ => None,
+        });
         let entry = ObjectEntry {
             standard: ObjectStandard::MnftClass,
             collection_id: Some(class.issuer_id.clone()),
@@ -294,6 +363,7 @@ impl BatchWriter {
                 total: class.total,
                 issued: class.issued,
                 configure: class.configure,
+                storage_tier: new_tier,
             },
         };
         batch.put_object(&class.class_id, &entry);
@@ -305,6 +375,26 @@ impl BatchWriter {
             .unwrap_or_default();
         agg.name = class.name.clone();
         agg.standard = ObjectStandard::MnftClass;
+        // If renderer changed, recompute tier counts: shift all live tokens from old tier to new
+        if let Some(old) = old_tier {
+            if old != new_tier && agg.live_count > 0 {
+                let count = agg.live_count;
+                Self::adjust_collection_tier_count(
+                    &class.class_id,
+                    &mut agg,
+                    old,
+                    -count,
+                    "mnft class renderer changed (old)",
+                )?;
+                Self::adjust_collection_tier_count(
+                    &class.class_id,
+                    &mut agg,
+                    new_tier,
+                    count,
+                    "mnft class renderer changed (new)",
+                )?;
+            }
+        }
         state.put_collection_aggregate(&class.class_id, agg, batch);
         batch.put_mnft_class_outpoint(tx_hash, output_index, &class.class_id);
         Ok(())
@@ -391,6 +481,9 @@ impl BatchWriter {
             batch.put_object_by_collection(&token.class_id, &token.token_id);
         }
 
+        // Resolve storage tier from the parent class
+        let token_tier = self.resolve_mnft_token_tier(&token.class_id, state)?;
+
         // Update collection aggregate if this is a new token
         if existing.is_none() {
             let mut agg = state
@@ -412,6 +505,13 @@ impl BatchWriter {
                     agg.live_count
                 )
             })?;
+            Self::adjust_collection_tier_count(
+                &token.class_id,
+                &mut agg,
+                token_tier,
+                1,
+                "insert new mnft token",
+            )?;
             self.apply_mnft_owner_transition(
                 &token.class_id,
                 None,
@@ -439,6 +539,13 @@ impl BatchWriter {
                     agg.live_count
                 )
             })?;
+            Self::adjust_collection_tier_count(
+                &token.class_id,
+                &mut agg,
+                token_tier,
+                1,
+                "reactivate mnft token",
+            )?;
             self.apply_mnft_owner_transition(
                 &token.class_id,
                 None,
@@ -561,6 +668,14 @@ impl BatchWriter {
                     );
                 }
                 agg.live_count -= 1;
+                let token_tier = self.resolve_mnft_token_tier(cid, state)?;
+                Self::adjust_collection_tier_count(
+                    cid,
+                    &mut agg,
+                    token_tier,
+                    -1,
+                    "consume mnft token",
+                )?;
                 self.apply_mnft_owner_transition(
                     cid,
                     old_owner.as_deref(),
@@ -975,7 +1090,7 @@ mod tests {
         let mut seed = StoreBatch::new(writer.store());
         let mut seed_state = writer.new_mnft_batch_state();
         writer
-            .insert_mnft_class(&class, &tx_hash, 7, 1, &mut seed)
+            .insert_mnft_class_with_state(&class, &tx_hash, 7, 1, &mut seed, &mut seed_state)
             .unwrap();
         writer
             .insert_mnft_token_with_state(&token_a, &tx_hash, 8, 1, 0, &mut seed, &mut seed_state)
@@ -1054,11 +1169,12 @@ mod tests {
         let tx_hash = vec![0x51; 32];
 
         let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_mnft_batch_state();
         writer
-            .insert_mnft_class(&class, &tx_hash, 7, 1, &mut batch)
+            .insert_mnft_class_with_state(&class, &tx_hash, 7, 1, &mut batch, &mut state)
             .unwrap();
         writer
-            .insert_mnft_token(&token, &tx_hash, 8, 1, 0, &mut batch)
+            .insert_mnft_token_with_state(&token, &tx_hash, 8, 1, 0, &mut batch, &mut state)
             .unwrap();
         batch.commit().unwrap();
 

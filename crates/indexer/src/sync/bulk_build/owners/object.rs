@@ -992,9 +992,19 @@ impl ObjectOwner {
                     total: class.total,
                     issued: class.issued,
                     configure: class.configure,
+                    storage_tier: crate::parser::media_source::analyze_renderer_tier(
+                        class.renderer.as_deref(),
+                    ),
                 },
             },
         );
+
+        let new_tier =
+            crate::parser::media_source::analyze_renderer_tier(class.renderer.as_deref());
+        let old_tier = existing.as_ref().and_then(|e| match &e.extra {
+            ObjectExtra::MnftClass { storage_tier, .. } => Some(*storage_tier),
+            _ => None,
+        });
 
         let agg = self
             .object_collection_aggs
@@ -1002,6 +1012,16 @@ impl ObjectOwner {
             .or_default();
         agg.name = class.name.clone();
         agg.standard = ObjectStandard::MnftClass;
+        // If renderer changed, recompute tier counts: shift all live tokens from old tier to new
+        if let Some(old) = old_tier {
+            if old != new_tier && agg.live_count > 0 {
+                let count = agg.live_count;
+                Self::adjust_object_collection_tier_count(agg, old, -count, &class_id, &class_id)?;
+                Self::adjust_object_collection_tier_count(
+                    agg, new_tier, count, &class_id, &class_id,
+                )?;
+            }
+        }
 
         let output_index = Self::as_i16_outpoint_index(&cell.outpoint, "mNFT class")?;
         self.mnft_class_outpoints.insert(
@@ -1094,6 +1114,7 @@ impl ObjectOwner {
         self.mnft_by_collection
             .insert(keys::encode_nft_by_collection_key(&class_id, &token_id));
 
+        let token_tier = self.resolve_mnft_token_tier(&class_id);
         let agg = self
             .object_collection_aggs
             .entry(class_id.clone())
@@ -1114,6 +1135,7 @@ impl ObjectOwner {
                 &token_id,
                 tx.block_number,
             )?;
+            Self::adjust_object_collection_tier_count(agg, token_tier, 1, &class_id, &token_id)?;
             Self::apply_mnft_owner_transition(
                 &mut self.mnft_owner_counts,
                 &class_id,
@@ -1129,6 +1151,7 @@ impl ObjectOwner {
                 &token_id,
                 tx.block_number,
             )?;
+            Self::adjust_object_collection_tier_count(agg, token_tier, 1, &class_id, &token_id)?;
             Self::apply_mnft_owner_transition(
                 &mut self.mnft_owner_counts,
                 &class_id,
@@ -1514,6 +1537,7 @@ impl ObjectOwner {
         entry.is_live = false;
         entry.owner_lock_hash = None;
 
+        let token_tier = self.resolve_mnft_token_tier(&class_id);
         let agg = self
             .object_collection_aggs
             .get_mut(class_id.as_slice())
@@ -1531,6 +1555,7 @@ impl ObjectOwner {
             token_id,
             0,
         )?;
+        Self::adjust_object_collection_tier_count(agg, token_tier, -1, &class_id, token_id)?;
         Self::apply_mnft_owner_transition(
             &mut self.mnft_owner_counts,
             &class_id,
@@ -1945,6 +1970,58 @@ impl ObjectOwner {
                 "cluster tier count underflow: cluster_id=0x{}, spore_id=0x{}, tier={}, current={}, delta={}",
                 hex::encode(cluster_id),
                 hex::encode(spore_id),
+                tier.as_str(),
+                *slot,
+                delta
+            );
+        }
+        *slot = next;
+        Ok(())
+    }
+
+    fn mnft_class_tier(entry: &ObjectEntry) -> StorageDependencyTier {
+        match &entry.extra {
+            ObjectExtra::MnftClass { storage_tier, .. } => *storage_tier,
+            _ => StorageDependencyTier::Unknown,
+        }
+    }
+
+    fn resolve_mnft_token_tier(&self, class_id: &[u8]) -> StorageDependencyTier {
+        self.mnft_entries
+            .get(class_id)
+            .map(Self::mnft_class_tier)
+            .unwrap_or(StorageDependencyTier::Unknown)
+    }
+
+    fn adjust_object_collection_tier_count(
+        agg: &mut ObjectCollectionAggregate,
+        tier: StorageDependencyTier,
+        delta: i64,
+        collection_id: &[u8],
+        token_id: &[u8],
+    ) -> Result<()> {
+        let slot = match tier {
+            StorageDependencyTier::FullyOnCkb => &mut agg.fully_on_ckb_count,
+            StorageDependencyTier::FullyOnCkbAndBtc => &mut agg.fully_on_ckb_and_btc_count,
+            StorageDependencyTier::DecentralizedDependent => &mut agg.decentralized_dependent_count,
+            StorageDependencyTier::CentralizedDependent => &mut agg.centralized_dependent_count,
+            StorageDependencyTier::Unknown => &mut agg.unknown_count,
+        };
+        let next = slot.checked_add(delta).ok_or_else(|| {
+            anyhow!(
+                "mnft collection tier count overflow: collection_id=0x{}, token_id=0x{}, tier={}, current={}, delta={}",
+                hex::encode(collection_id),
+                hex::encode(token_id),
+                tier.as_str(),
+                *slot,
+                delta
+            )
+        })?;
+        if next < 0 {
+            bail!(
+                "mnft collection tier count underflow: collection_id=0x{}, token_id=0x{}, tier={}, current={}, delta={}",
+                hex::encode(collection_id),
+                hex::encode(token_id),
                 tier.as_str(),
                 *slot,
                 delta

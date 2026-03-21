@@ -2746,6 +2746,18 @@ fn build_history_rows_for_block(
                             false,
                         );
                     }
+                    facts::CellProtocolFacts::MnftToken(token) => {
+                        object_activity_acc.record(
+                            &token.class_id,
+                            &tx.tx_hash,
+                            &token.token_id,
+                            &tx.block_hash,
+                            tx.block_number,
+                            tx.tx_index,
+                            tx.timestamp_ms,
+                            false,
+                        );
+                    }
                     facts::CellProtocolFacts::Dotbit(dotbit) => {
                         dotbit_consumed_account_ids.insert(dotbit.account_id.to_vec());
                     }
@@ -2779,6 +2791,18 @@ fn build_history_rows_for_block(
                             &collection_id,
                             &tx.tx_hash,
                             &spore.spore_id,
+                            &tx.block_hash,
+                            tx.block_number,
+                            tx.tx_index,
+                            tx.timestamp_ms,
+                            true,
+                        );
+                    }
+                    facts::CellProtocolFacts::MnftToken(token) => {
+                        object_activity_acc.record(
+                            &token.class_id,
+                            &tx.tx_hash,
+                            &token.token_id,
                             &tx.block_hash,
                             tx.block_number,
                             tx.tx_index,
@@ -2936,6 +2960,18 @@ fn build_object_collection_activity_rows(
                         false,
                     );
                 }
+                facts::CellProtocolFacts::MnftToken(token) => {
+                    object_activity_acc.record(
+                        &token.class_id,
+                        &tx.tx_hash,
+                        &token.token_id,
+                        &tx.block_hash,
+                        tx.block_number,
+                        tx.tx_index,
+                        tx.timestamp_ms,
+                        false,
+                    );
+                }
                 facts::CellProtocolFacts::Dotbit(dotbit) => {
                     dotbit_consumed_account_ids.insert(dotbit.account_id.to_vec());
                 }
@@ -2969,6 +3005,18 @@ fn build_object_collection_activity_rows(
                         &collection_id,
                         &tx.tx_hash,
                         &spore.spore_id,
+                        &tx.block_hash,
+                        tx.block_number,
+                        tx.tx_index,
+                        tx.timestamp_ms,
+                        true,
+                    );
+                }
+                facts::CellProtocolFacts::MnftToken(token) => {
+                    object_activity_acc.record(
+                        &token.class_id,
+                        &tx.tx_hash,
+                        &token.token_id,
                         &tx.block_hash,
                         tx.block_number,
                         tx.tx_index,
@@ -4153,8 +4201,8 @@ mod tests {
         TransactionView,
     };
     use crate::sync::bulk_build::facts::{
-        CellFacts, CellProtocolFacts, CellSemanticTag, DotbitProtocolFacts, OutPointKey,
-        ResolvedInputFacts, ResolvedTxFacts,
+        CellFacts, CellProtocolFacts, CellSemanticTag, DotbitProtocolFacts, MnftTokenProtocolFacts,
+        OutPointKey, ResolvedInputFacts, ResolvedTxFacts,
     };
     use crate::sync::types::InternId;
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
@@ -5323,6 +5371,203 @@ mod tests {
             .expect("dotbit recycle");
         assert_eq!(recycle.actions.len(), 1);
         assert!(matches!(recycle.actions[0], AssetAction::Recycle));
+    }
+
+    /// Regression: mNFT token collection activities must be recorded during
+    /// bulk build. Previously only Spore/Dotbit were handled, leaving mNFT
+    /// collection activities empty despite objects/holders being populated.
+    #[test]
+    fn build_object_collection_activity_rows_materializes_mnft_token_activities() {
+        let class_id = vec![0xAA; 24]; // 24-byte mNFT class_id
+        let token_id_a = vec![0xBB; 28]; // mNFT token_id
+        let token_id_b = vec![0xCC; 28];
+
+        fn mnft_output(
+            tx_hash_byte: u8,
+            lock_hash_id: InternId,
+            class_id: Vec<u8>,
+            token_id: Vec<u8>,
+        ) -> CellFacts {
+            CellFacts {
+                outpoint: OutPointKey::new([tx_hash_byte; 32], 0),
+                created_at_block: 0,
+                created_by_block_dao_ar: 0,
+                capacity: 200_00000000,
+                lock_script_hash_id: lock_hash_id,
+                lock_code_hash_id: InternId::new(301),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(302),
+                type_script_hash_id: Some(InternId::new(303)),
+                type_code_hash_id: Some(InternId::new(304)),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(305)),
+                occupied_capacity: 61_00000000,
+                data_size: 0,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: CellSemanticTag::Mnft,
+                dao_state: None,
+                protocol_facts: Some(CellProtocolFacts::MnftToken(MnftTokenProtocolFacts {
+                    token_id,
+                    class_id,
+                    token_index: 1,
+                    characteristic: vec![0; 8],
+                    configure: 0b00000011,
+                    state: 0,
+                })),
+            }
+        }
+
+        fn mnft_input(
+            tx_hash_byte: u8,
+            lock_hash_id: InternId,
+            class_id: Vec<u8>,
+            token_id: Vec<u8>,
+        ) -> ResolvedInputFacts {
+            ResolvedInputFacts {
+                outpoint: OutPointKey::new([tx_hash_byte; 32], 0),
+                created_at_block: 0,
+                created_by_block_dao_ar: 0,
+                capacity: 200_00000000,
+                occupied_capacity: 61_00000000,
+                data_size: 0,
+                udt_amount: None,
+                lock_script_hash_id: lock_hash_id,
+                lock_code_hash_id: InternId::new(301),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(302),
+                type_script_hash_id: Some(InternId::new(303)),
+                type_code_hash_id: Some(InternId::new(304)),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(305)),
+                semantic_tag: CellSemanticTag::Mnft,
+                dao_state: None,
+                dao_compensation_ars: None,
+                protocol_facts: Some(CellProtocolFacts::MnftToken(MnftTokenProtocolFacts {
+                    token_id,
+                    class_id,
+                    token_index: 1,
+                    characteristic: vec![0; 8],
+                    configure: 0b00000011,
+                    state: 0,
+                })),
+            }
+        }
+
+        let owner_a = InternId::new(601);
+        let owner_b = InternId::new(602);
+
+        let resolved = vec![
+            // TX1: Mint token_a
+            ResolvedTxFacts {
+                tx_hash: [0x41; 32],
+                block_number: 400,
+                block_hash: [0xb0; 32],
+                timestamp_ms: 1_700_200_000_000,
+                block_dao_ar: 0,
+                tx_index: 0,
+                dotbit_action: None,
+                resolved_inputs: Vec::new(),
+                cells: vec![mnft_output(
+                    0x41,
+                    owner_a,
+                    class_id.clone(),
+                    token_id_a.clone(),
+                )]
+                .into(),
+            },
+            // TX2: Transfer token_a (consume + create same token)
+            ResolvedTxFacts {
+                tx_hash: [0x42; 32],
+                block_number: 401,
+                block_hash: [0xb1; 32],
+                timestamp_ms: 1_700_200_360_000,
+                block_dao_ar: 0,
+                tx_index: 0,
+                dotbit_action: None,
+                resolved_inputs: vec![mnft_input(
+                    0x41,
+                    owner_a,
+                    class_id.clone(),
+                    token_id_a.clone(),
+                )],
+                cells: vec![mnft_output(
+                    0x42,
+                    owner_b,
+                    class_id.clone(),
+                    token_id_a.clone(),
+                )]
+                .into(),
+            },
+            // TX3: Burn token_b (consume only)
+            ResolvedTxFacts {
+                tx_hash: [0x43; 32],
+                block_number: 402,
+                block_hash: [0xb2; 32],
+                timestamp_ms: 1_700_200_720_000,
+                block_dao_ar: 0,
+                tx_index: 0,
+                dotbit_action: None,
+                resolved_inputs: vec![mnft_input(
+                    0x50,
+                    owner_a,
+                    class_id.clone(),
+                    token_id_b.clone(),
+                )],
+                cells: Vec::new().into(),
+            },
+        ];
+
+        let mut identity_activity_count_deltas = FxHashMap::default();
+        let rows =
+            build_object_collection_activity_rows(&resolved, &mut identity_activity_count_deltas)
+                .expect("mnft collection activity rows");
+
+        // Should produce object rows, not identity rows
+        let object_rows: HashMap<Vec<u8>, ObjectCollectionActivityEntry> = rows
+            .iter()
+            .filter(|row| row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES)
+            .map(|row| {
+                (
+                    row.key.clone(),
+                    bincode::deserialize(&row.value)
+                        .expect("deserialize object collection activity"),
+                )
+            })
+            .collect();
+
+        assert_eq!(object_rows.len(), 3, "expected 3 mNFT activity rows");
+
+        // No identity rows for mNFT
+        let identity_count = rows
+            .iter()
+            .filter(|row| row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES)
+            .count();
+        assert_eq!(identity_count, 0);
+
+        // Verify mint
+        let mint_key =
+            keys::encode_nft_collection_activity_key(&class_id, 400, 0, &[0xb0; 32], &[0x41; 32]);
+        let mint = object_rows.get(mint_key.as_slice()).expect("mnft mint");
+        assert_eq!(mint.actions.len(), 1);
+        assert!(matches!(mint.actions[0], AssetAction::Mint));
+
+        // Verify transfer
+        let transfer_key =
+            keys::encode_nft_collection_activity_key(&class_id, 401, 0, &[0xb1; 32], &[0x42; 32]);
+        let transfer = object_rows
+            .get(transfer_key.as_slice())
+            .expect("mnft transfer");
+        assert_eq!(transfer.actions.len(), 1);
+        assert!(matches!(transfer.actions[0], AssetAction::Transfer));
+
+        // Verify burn
+        let burn_key =
+            keys::encode_nft_collection_activity_key(&class_id, 402, 0, &[0xb2; 32], &[0x43; 32]);
+        let burn = object_rows.get(burn_key.as_slice()).expect("mnft burn");
+        assert_eq!(burn.actions.len(), 1);
+        assert!(matches!(burn.actions[0], AssetAction::Burn));
     }
 
     /// Regression: bulk build must include genesis block 0 in the first batch.
