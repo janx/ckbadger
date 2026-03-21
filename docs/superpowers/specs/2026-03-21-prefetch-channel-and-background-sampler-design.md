@@ -29,6 +29,11 @@ The bulk build main loop spends only 57% of wall clock on useful compute (795s b
 
 Reduce wall clock to ~1100-1150s by eliminating prefetch stalls and per-iteration overhead. Expected improvement: 20-25%.
 
+### Key Types
+
+- `CkbChainReader` does **not** implement `Clone` (it wraps a raw RocksDB `DB` handle). In the existing codebase it is always held as `Arc<CkbChainReader>`. The `ckb_store.clone()` calls in `mod.rs` clone the `Arc`, not the reader. Both the prefetch worker and the main loop therefore share the same underlying reader via `Arc`.
+- Because they share the same `Arc<CkbChainReader>`, the main loop's `ckb_store.refresh()` call also refreshes the worker's view. No separate refresh is needed in the worker.
+
 ---
 
 ## Optimization 1: PrefetchChannelHandle (depth=4)
@@ -86,13 +91,22 @@ pub(crate) struct PrefetchResult {
     pub effective_end: u64,
 }
 
+/// Worker exit reason for diagnostics.
+pub(crate) enum PrefetchExitReason {
+    /// Worker fetched all blocks up to handoff_target.
+    Completed,
+    /// Main loop dropped the receiver.
+    ReceiverDropped,
+}
+
 pub(crate) struct PrefetchWorkerStats {
     pub total_fetches: u64,
     pub total_blocks: u64,
+    pub exit_reason: PrefetchExitReason,
 }
 
 pub(crate) struct PrefetchChannelHandle {
-    result_rx: tokio::sync::mpsc::Receiver<PrefetchResult>,
+    result_rx: tokio::sync::mpsc::Receiver<Result<PrefetchResult>>,
     span_tx: tokio::sync::watch::Sender<u64>,
     worker_handle: tokio::task::JoinHandle<Result<PrefetchWorkerStats>>,
 }
@@ -106,12 +120,14 @@ impl PrefetchChannelHandle {
     /// `update_span()`.
     pub(crate) fn new(
         depth: usize,
-        ckb_store: CkbChainReader,
+        ckb_store: Arc<CkbChainReader>,
         fetch_pool: Arc<rayon::ThreadPool>,
         start_block: u64,
         handoff_target: u64,
         initial_span: u64,
     ) -> Self {
+        // Channel carries Result so fetch errors propagate immediately
+        // with full context, rather than a generic "worker terminated" message.
         let (result_tx, result_rx) = tokio::sync::mpsc::channel(depth);
         let (span_tx, span_rx) = tokio::sync::watch::channel(initial_span);
 
@@ -126,43 +142,58 @@ impl PrefetchChannelHandle {
     }
 
     fn prefetch_worker(
-        result_tx: tokio::sync::mpsc::Sender<PrefetchResult>,
+        result_tx: tokio::sync::mpsc::Sender<Result<PrefetchResult>>,
         span_rx: tokio::sync::watch::Receiver<u64>,
-        ckb_store: CkbChainReader,
+        ckb_store: Arc<CkbChainReader>,
         fetch_pool: Arc<rayon::ThreadPool>,
         start_block: u64,
         handoff_target: u64,
     ) -> Result<PrefetchWorkerStats> {
-        let mut stats = PrefetchWorkerStats { total_fetches: 0, total_blocks: 0 };
+        let mut stats = PrefetchWorkerStats {
+            total_fetches: 0, total_blocks: 0,
+            exit_reason: PrefetchExitReason::Completed,
+        };
         let mut position = start_block;
 
         while position <= handoff_target {
-            // Read latest span (non-blocking, always succeeds while sender alive)
-            let span = *span_rx.borrow();
+            // Read latest span (non-blocking, always succeeds while sender alive).
+            // Clamp to minimum to guard against update_span(0).
+            let span = (*span_rx.borrow()).max(BULK_BUILD_MIN_BLOCK_SPAN);
             let end = std::cmp::min(
                 position.saturating_add(span.saturating_sub(1)),
                 handoff_target,
             );
 
             let started = std::time::Instant::now();
-            let blocks = Indexer::fetch_blocks_direct_binary(
+            let fetch_result = Indexer::fetch_blocks_direct_binary(
                 &ckb_store, position, end, Some(&fetch_pool),
-            )?;
-            let block_count = blocks.len() as u64;
-            let fetch_elapsed = started.elapsed();
+            );
 
-            let result = PrefetchResult {
-                blocks,
-                fetch_elapsed,
-                effective_end: end,
+            // Send Result<PrefetchResult> — errors propagate to main loop immediately.
+            let to_send = match fetch_result {
+                Ok(blocks) => {
+                    let block_count = blocks.len() as u64;
+                    stats.total_fetches += 1;
+                    stats.total_blocks += block_count;
+                    Ok(PrefetchResult {
+                        blocks,
+                        fetch_elapsed: started.elapsed(),
+                        effective_end: end,
+                    })
+                }
+                Err(e) => Err(e),
             };
+            let is_err = to_send.is_err();
 
-            if result_tx.blocking_send(result).is_err() {
-                break; // main loop dropped receiver
+            if result_tx.blocking_send(to_send).is_err() {
+                stats.exit_reason = PrefetchExitReason::ReceiverDropped;
+                break;
             }
 
-            stats.total_fetches += 1;
-            stats.total_blocks += block_count;
+            if is_err {
+                break; // error was sent to main loop; worker exits
+            }
+
             position = end.saturating_add(1);
         }
 
@@ -171,11 +202,12 @@ impl PrefetchChannelHandle {
 
     /// Receive next batch. Blocks if pipeline is empty (worker still fetching).
     /// Returns instantly if buffered results are available.
+    /// Fetch errors propagate with full context via the channel.
     pub(crate) async fn recv(&mut self) -> Result<PrefetchResult> {
-        self.result_rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow!("prefetch worker terminated unexpectedly"))
+        match self.result_rx.recv().await {
+            Some(result) => result,
+            None => Err(anyhow!("prefetch worker terminated without sending an error")),
+        }
     }
 
     /// Update batch span. The worker picks this up before its next fetch.
@@ -183,12 +215,11 @@ impl PrefetchChannelHandle {
         let _ = self.span_tx.send(span);
     }
 
-    /// Number of results buffered and ready to consume (0..=depth).
-    pub(crate) fn buffered(&self) -> usize {
-        // mpsc receiver doesn't expose this directly; track via
-        // capacity math if needed, or omit from initial implementation.
-        0 // placeholder
-    }
+    // Note: mpsc::Receiver does not expose a len() method.
+    // The perf sample field `prefetch_buffered` is deferred to a
+    // follow-up if needed. The prefetch_recv_ms timing already
+    // captures the observable effect (0 = data was buffered,
+    // >0 = pipeline drained).
 
     /// Shut down: drop receiver to signal worker, then join.
     pub(crate) async fn close_and_wait(self) -> Result<PrefetchWorkerStats> {
@@ -280,17 +311,33 @@ let prefetch_stats = prefetch.close_and_wait().await?;
 ### Perf Sample Changes
 
 - `prefetch_collect_ms` → `prefetch_recv_ms` (measures `recv()` wait; 0 when pipeline has data, >0 when drained)
-- Add `prefetch_buffered` field (number of results ready in channel)
-- `prefetch_depth` replaces `flush_channel_depth` naming convention (add `prefetch_depth` constant to sample)
+- Add `prefetch_depth` field to sample (constant = 4, for post-hoc analysis correlation)
 
 ### CKB Store Refresh
 
-The current code calls `ckb_store.refresh()` at the top of each loop iteration to pick up new chain tip data. With the prefetch worker holding its own `CkbChainReader` clone, the worker's store view may be stale. This is acceptable because:
-- The worker fetches historical blocks (0 to handoff_target) that don't change
-- `refresh()` only matters for detecting tip advancement
-- The main loop still refreshes its own store for `chain_tip` / `handoff_target` checks
+Since the worker and main loop share the same `Arc<CkbChainReader>`, the main loop's `ckb_store.refresh()` call at the top of each iteration also refreshes the worker's view. No separate refresh is needed in the worker.
 
-If the CkbChainReader requires periodic refresh for RocksDB secondary catchup, the worker should call `refresh()` periodically (e.g., every 100 fetches). This is a minor detail to verify during implementation.
+### Main Loop Termination
+
+The current loop has two break conditions:
+1. `blocks_remaining <= bulk_sync_threshold` (line 163) — handoff to live pipeline
+2. `start_block > handoff_target` (line 182) — reached target
+
+With the prefetch channel, the main loop breaks when:
+1. `recv()` returns `None` — worker finished (reached handoff_target or error was already sent)
+2. The loop's own `blocks_remaining` check still applies (main loop tracks `progress.current()`)
+
+The main loop must still call `ckb_store.refresh()` and check `chain_tip` each iteration for the handoff decision. If the main loop decides to break before the worker finishes, `close_and_wait()` drops the receiver, causing the worker to exit on its next `blocking_send`.
+
+### Shutdown Ordering
+
+After this change, the bulk build loop has three concurrent workers. Shutdown order:
+
+1. **Prefetch** stops first — main loop breaks, `prefetch.close_and_wait()` drains/joins
+2. **Flush channel** drains remaining batches — `flush_channel.close_and_wait()` (existing code, line 517)
+3. **BackgroundSampler** stops last — `sampler.shutdown()` after finalization completes
+
+This ordering ensures: no more input (prefetch done) → all computed data flushed (flush done) → sampler captures final RocksDB state.
 
 ---
 
@@ -456,18 +503,25 @@ sampler.shutdown();
 
 The current `write_metrics_file()` re-iterates all accumulated `batch_samples` every call to recompute percentiles and aggregates. With 677 batches, this is O(N) per call × N calls = O(N²) total.
 
-**Fix**: Move `write_metrics_file()` out of the per-batch `record_batch_sample()` path. Write it only:
-1. At run completion (inside finalization)
-2. Optionally on a periodic timer (e.g., every 30s) for liveness, driven by the background sampler or a separate timer
+Three callers invoke `build_metrics()` + `write_metrics_file()` on every call:
+- `record_batch_sample()` (line 298) — called every batch
+- `record_heartbeat_sample()` (line 305) — called periodically
+- `set_materialization_report()` (line 314) — called at finalization
 
-The per-batch path keeps only the O(1) JSONL append:
+**Fix**: Remove `write_metrics_file()` from all three per-event call sites. Write it only:
+1. At run completion (inside finalization / `close()`)
+2. Optionally on a periodic timer (e.g., every 30s) for liveness
+
+The per-event paths keep only their O(1) work (push + JSONL append):
 ```rust
 // In record_batch_sample():
 fn record_batch_sample(&mut self, sample: BatchSample) {
     self.batch_samples.push(sample);
     self.append_sample_to_jsonl(&self.batch_samples.last().unwrap());
-    // REMOVED: self.write_metrics_file();
+    // REMOVED: self.build_metrics(); self.write_metrics_file();
 }
+
+// Similarly for record_heartbeat_sample() and set_materialization_report()
 ```
 
 ### Sampling Interval Rationale
