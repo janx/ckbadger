@@ -1,7 +1,7 @@
 use anyhow::Result;
 use ckbadger_common::{
-    format_duration_smart, BulkBuildProgressData, MemoryStatsData, PipelineProgressData,
-    SyncProgressData, SyncStatusData,
+    format_duration_smart, BackgroundTaskEntry, BackgroundTasksData, BulkBuildProgressData,
+    MemoryStatsData, PipelineProgressData, SyncProgressData, SyncStatusData,
 };
 use ckbadger_store::{
     secondary_store_path, CkbadgerStore, MemoryProfile, SecondaryStoreOwner, StoreRuntimeConfig,
@@ -22,6 +22,8 @@ struct ApiNetworkStats {
     pub epoch: String,
     pub tps: String,
     pub transactions_per_day: String,
+    #[serde(default)]
+    pub api_background_tasks: Option<Vec<BackgroundTaskEntry>>,
 }
 
 fn parse_epoch_string(epoch: &str) -> (i64, i32, i32) {
@@ -497,12 +499,18 @@ impl TuiDb {
         Result<SyncStatusRow>,
         Option<MemoryStatsData>,
         Option<RuntimeDiagData>,
+        Option<BackgroundTasksData>,
     ) {
         self.refresh_store();
+        let bg_tasks = self
+            .store
+            .as_ref()
+            .and_then(|s| s.get_background_tasks().ok());
         (
             self.get_sync_status_without_refresh(),
             self.get_memory_stats_without_refresh(),
             self.get_runtime_diag_without_refresh(),
+            bg_tasks,
         )
     }
 
@@ -568,7 +576,11 @@ impl TuiDb {
 
     pub async fn get_chain_info_and_api_service_info(
         &self,
-    ) -> (Option<ChainInfoData>, ApiServiceInfo) {
+    ) -> (
+        Option<ChainInfoData>,
+        ApiServiceInfo,
+        Option<Vec<BackgroundTaskEntry>>,
+    ) {
         let mut api_info = ApiServiceInfo::default();
         let url = format!("{}/statistics/network", self.api_url);
         let started = Instant::now();
@@ -580,7 +592,7 @@ impl TuiDb {
             Ok(resp) => resp,
             Err(e) => {
                 api_info.error = Some(format!("request failed: {e}"));
-                return (None, api_info);
+                return (None, api_info, None);
             }
         };
 
@@ -588,7 +600,7 @@ impl TuiDb {
         api_info.status_code = Some(response.status().as_u16());
         if !response.status().is_success() {
             api_info.error = Some(format!("http {}", response.status()));
-            return (None, api_info);
+            return (None, api_info, None);
         }
 
         match response.json::<ApiNetworkStats>().await {
@@ -596,11 +608,13 @@ impl TuiDb {
                 api_info.latest_block = Some(stats.latest_block);
                 api_info.tps = Some(stats.tps.clone());
                 api_info.avg_block_time = Some(stats.avg_block_time.clone());
-                (Some(chain_info_from_api_stats(&stats)), api_info)
+                let chain_info = chain_info_from_api_stats(&stats);
+                let api_bg_tasks = stats.api_background_tasks;
+                (Some(chain_info), api_info, api_bg_tasks)
             }
             Err(e) => {
                 api_info.error = Some(format!("decode failed: {e}"));
-                (None, api_info)
+                (None, api_info, None)
             }
         }
     }

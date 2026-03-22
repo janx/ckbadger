@@ -1,5 +1,5 @@
 use chrono::{DateTime, Local};
-use ckbadger_common::{BulkBuildProgressData, MemoryStatsData};
+use ckbadger_common::{BackgroundTaskEntry, BulkBuildProgressData, MemoryStatsData};
 use ckbadger_store::{APPEND_CFS, DOMAIN_CFS};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -107,6 +107,7 @@ pub struct App {
     chain_info: Option<ChainInfoData>,
     api_service: ApiServiceInfo,
     runtime_diag: Option<RuntimeDiagData>,
+    background_tasks: Vec<BackgroundTaskEntry>,
     supervisor_services: Option<Vec<SupervisorServiceData>>,
     service_log_tails: Option<Vec<ServiceLogTailData>>,
     last_refresh: Instant,
@@ -177,6 +178,7 @@ impl App {
             chain_info: None,
             api_service: ApiServiceInfo::default(),
             runtime_diag: None,
+            background_tasks: Vec::new(),
             supervisor_services: None,
             service_log_tails: None,
             last_refresh: Instant::now(),
@@ -327,8 +329,8 @@ impl App {
 
     pub async fn refresh(&mut self) {
         let (
-            (sync_status_result, memory_stats, runtime_diag),
-            (chain_info, api_service),
+            (sync_status_result, memory_stats, runtime_diag, indexer_bg_tasks),
+            (chain_info, api_service, api_bg_tasks),
             services,
             log_tails,
         ) = tokio::join!(
@@ -345,6 +347,16 @@ impl App {
                 self.log_warning(format!("Failed to load sync status: {e}"));
             }
         }
+
+        // Merge background tasks from both sources (indexer RocksDB + API HTTP)
+        let mut merged_tasks: Vec<BackgroundTaskEntry> = Vec::new();
+        if let Some(bg_data) = indexer_bg_tasks {
+            merged_tasks.extend(bg_data.tasks);
+        }
+        if let Some(api_tasks) = api_bg_tasks {
+            merged_tasks.extend(api_tasks);
+        }
+        self.background_tasks = merged_tasks;
 
         self.memory_stats = memory_stats;
         self.chain_info = chain_info;
