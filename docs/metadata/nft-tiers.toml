@@ -1,5 +1,5 @@
 [overrides]
-".bit" = "fully_on_ckb"
-"did:ckb" = "fully_on_ckb"
-"did_ckb" = "fully_on_ckb"
-"dotbit" = "fully_on_ckb"
+".bit" = "pure_ckb"
+"did:ckb" = "pure_ckb"
+"did_ckb" = "pure_ckb"
+"dotbit" = "pure_ckb"

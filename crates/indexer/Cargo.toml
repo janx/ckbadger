@@ -41,6 +41,9 @@ rayon = { workspace = true }
 rustc-hash = { workspace = true }
 async-trait = { workspace = true }
 
+# TOML parsing (for workdir overlay)
+toml = "0.8"
+
 # Configuration
 config = { workspace = true }
 
@@ -62,7 +65,9 @@ bincode = { workspace = true }
 libc = { workspace = true }
 
 [build-dependencies]
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
 
 [dev-dependencies]
 tokio-test = { workspace = true }

@@ -34,9 +34,9 @@ pub struct Config {
     pub fast_sync_mode: bool,
     /// Resolved path to the CKB node RocksDB directory for direct reads.
     pub ckb_db_path: String,
-    /// Path to token-labels repository for label import.
-    #[serde(default = "default_token_labels_path")]
-    pub token_labels_path: String,
+    /// Path to workdir metadata override directory.
+    #[serde(default)]
+    pub metadata_path: Option<String>,
     /// CKB network identifier ("mainnet" or "testnet").
     #[serde(default = "default_network")]
     pub network: String,
@@ -77,10 +77,6 @@ fn default_bulk_sync_threshold() -> u64 {
 
 fn default_fast_sync_mode() -> bool {
     true
-}
-
-fn default_token_labels_path() -> String {
-    "docs/token-labels".to_string()
 }
 
 fn default_network() -> String {
@@ -157,11 +153,6 @@ mod tests {
     }
 
     #[test]
-    fn test_default_token_labels_path() {
-        assert_eq!(default_token_labels_path(), "docs/token-labels");
-    }
-
-    #[test]
     fn test_default_force_startup_cleanup() {
         assert!(!default_force_startup_cleanup());
     }
@@ -181,7 +172,7 @@ mod tests {
             bulk_sync_threshold: 72,
             fast_sync_mode: true,
             ckb_db_path: "/var/lib/ckb/data/db".to_string(),
-            token_labels_path: "docs/token-labels".to_string(),
+            metadata_path: None,
             network: "mainnet".to_string(),
             force_startup_cleanup: false,
             store_runtime_config: StoreRuntimeConfig::default(),

@@ -9,7 +9,7 @@ use ckbadger_store::{types::SyncStatus, CkbadgerStore, RuntimeStatus, StoreRunti
 
 use crate::cycles_worker::spawn_cycles_task_worker;
 use crate::db::Repository;
-use crate::label_import::{run_label_import_bundled, run_label_import_staged};
+use crate::label_import::run_label_import as label_import_run;
 use crate::runtime_diag::{generate_run_id, read_cgroup_memory_snapshot};
 use crate::sync::Indexer;
 use crate::Config;
@@ -23,7 +23,7 @@ pub struct IndexerServiceConfig {
     pub build_version: String,
     pub ckb_rpc_url: String,
     pub ckb_db_path: String,
-    pub token_labels_path: String,
+    pub metadata_path: Option<String>,
     pub network: String,
     pub batch_size: usize,
     pub poll_interval_ms: u64,
@@ -50,7 +50,7 @@ impl From<IndexerServiceConfig> for Config {
             bulk_sync_threshold: svc.bulk_sync_threshold,
             fast_sync_mode: true,
             ckb_db_path: svc.ckb_db_path,
-            token_labels_path: svc.token_labels_path,
+            metadata_path: svc.metadata_path,
             network: svc.network,
             force_startup_cleanup: false,
             store_runtime_config: svc.store_runtime_config,
@@ -63,11 +63,8 @@ impl From<IndexerServiceConfig> for Config {
 pub struct LabelImportServiceConfig {
     pub domain_data_path: String,
     pub append_only_data_path: String,
-    pub token_labels_path: String,
+    pub metadata_path: Option<String>,
     pub network: String,
-    pub import_udt: bool,
-    pub import_scripts: bool,
-    pub use_bundled: bool,
     pub store_runtime_config: StoreRuntimeConfig,
 }
 
@@ -79,31 +76,21 @@ pub async fn run_indexer(config: IndexerServiceConfig) -> Result<()> {
 }
 
 async fn run_startup_label_import(store: Arc<CkbadgerStore>, config: &Config) -> Result<()> {
-    let token_labels_path = config.token_labels_path.clone();
-    let has_fs_labels = !token_labels_path.is_empty()
-        && std::path::Path::new(&token_labels_path)
-            .join("information")
-            .exists();
+    let metadata_path = config.metadata_path.clone();
     let network = config.network.clone();
 
     info!(
-        has_filesystem_labels = has_fs_labels,
+        has_metadata_override = metadata_path.is_some(),
         network = %network,
         "Running label import before sync startup"
     );
 
     let summary = tokio::task::spawn_blocking(move || {
-        if has_fs_labels {
-            let label_config = LabelImportConfig {
-                token_labels_path,
-                network,
-                import_udt: true,
-                import_scripts: true,
-            };
-            run_label_import_staged(store.as_ref(), &label_config)
-        } else {
-            run_label_import_bundled(store.as_ref(), &network)
-        }
+        let label_config = LabelImportConfig {
+            metadata_path,
+            network,
+        };
+        label_import_run(store.as_ref(), &label_config)
     })
     .await
     .map_err(|e| anyhow::anyhow!("startup label import task panicked: {}", e))??;
@@ -641,29 +628,15 @@ pub async fn run_label_import(config: LabelImportServiceConfig) -> Result<()> {
         config.store_runtime_config,
     )?);
 
-    let network = config.network.clone();
-    let use_bundled = config.use_bundled;
-
-    let result = if use_bundled {
-        info!("Using bundled label data (no filesystem override found)");
-        tokio::task::spawn_blocking(move || {
-            crate::label_import::run_label_import_bundled(core_store.as_ref(), &network)
-        })
-        .await
-        .expect("label import task panicked")?
-    } else {
-        let base_config = LabelImportConfig {
-            token_labels_path: config.token_labels_path,
-            network,
-            import_udt: config.import_udt,
-            import_scripts: config.import_scripts,
-        };
-        tokio::task::spawn_blocking(move || {
-            run_label_import_staged(core_store.as_ref(), &base_config)
-        })
-        .await
-        .expect("label import task panicked")?
+    let label_config = LabelImportConfig {
+        metadata_path: config.metadata_path,
+        network: config.network,
     };
+
+    let result =
+        tokio::task::spawn_blocking(move || label_import_run(core_store.as_ref(), &label_config))
+            .await
+            .expect("label import task panicked")?;
 
     info!(
         "Label import completed: {} UDT, {} scripts, {} errors",
@@ -1255,7 +1228,7 @@ mod tests {
             build_version: "0.1.0+feature/foo@abcdef123456".to_string(),
             ckb_rpc_url: "http://localhost:8114".to_string(),
             ckb_db_path: "/ckb/data/db".to_string(),
-            token_labels_path: "docs/labels".to_string(),
+            metadata_path: Some("/workdir/metadata".to_string()),
             network: "mainnet".to_string(),
             batch_size: 5000,
             poll_interval_ms: 500,
@@ -1276,7 +1249,7 @@ mod tests {
         assert_eq!(config.build_version, "0.1.0+feature/foo@abcdef123456");
         assert_eq!(config.ckb_rpc_url, "http://localhost:8114");
         assert_eq!(config.ckb_db_path, "/ckb/data/db");
-        assert_eq!(config.token_labels_path, "docs/labels");
+        assert_eq!(config.metadata_path, Some("/workdir/metadata".to_string()));
         assert_eq!(config.network, "mainnet");
         assert_eq!(config.batch_size, 5000);
         assert_eq!(config.poll_interval_ms, 500);

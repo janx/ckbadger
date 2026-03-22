@@ -12,8 +12,7 @@ use tracing::info;
 
 use ckbadger_config::{
     default_config_toml, load_config, resolve_ckb_paths, resolve_share_dir, resolve_store_paths,
-    resolve_token_labels_path, resolve_workdir_path, CkbadgerConfig, ResolvedCkbPaths, StoreConfig,
-    WorkDir,
+    resolve_workdir_path, CkbadgerConfig, ResolvedCkbPaths, StoreConfig, WorkDir,
 };
 
 use ckbadger_api::entry::{run_api, run_frontend_server, ApiServiceConfig, FrontendServiceConfig};
@@ -210,9 +209,6 @@ fn build_indexer_service_config(
     build_version: &str,
 ) -> Result<IndexerServiceConfig> {
     let store_paths = resolve_store_paths(workdir, &config.store);
-    let token_labels_path = resolve_token_labels_path(work, resolve_share_dir().as_deref())
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
 
     Ok(IndexerServiceConfig {
         domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
@@ -221,7 +217,10 @@ fn build_indexer_service_config(
         build_version: build_version.to_string(),
         ckb_rpc_url: config.ckb.rpc_url.clone(),
         ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
-        token_labels_path,
+        metadata_path: work
+            .metadata
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string()),
         network: config.ckb.network.clone(),
         batch_size: config.indexer.batch_size,
         poll_interval_ms: config.indexer.poll_interval_ms,
@@ -454,23 +453,11 @@ async fn cmd_label_import(workdir: &Path) -> Result<()> {
     let work = WorkDir::resolve(workdir);
     let store_paths = resolve_store_paths(workdir, &config.store);
 
-    let token_labels_path = resolve_token_labels_path(&work, resolve_share_dir().as_deref())
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let use_bundled = token_labels_path.is_empty();
-
-    if use_bundled {
-        info!("No filesystem token-labels found, will use bundled data");
-    }
     let import_config = LabelImportServiceConfig {
         domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
         append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
-        token_labels_path,
+        metadata_path: work.metadata.map(|p| p.to_string_lossy().to_string()),
         network: config.ckb.network.clone(),
-        import_udt: true,
-        import_scripts: true,
-        use_bundled,
         store_runtime_config: store_runtime_config(&config.store),
     };
 
@@ -593,11 +580,8 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
         println!();
         println!("Preserved:");
         println!("  {}", work.config_path.display());
-        if let Some(ref tl) = work.token_labels {
-            println!("  {}/", tl.display());
-        }
-        if let Some(ref lt) = work.labels_toml {
-            println!("  {}", lt.display());
+        if let Some(ref md) = work.metadata {
+            println!("  {}/", md.display());
         }
     }
 

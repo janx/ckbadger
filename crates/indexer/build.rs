@@ -1,39 +1,87 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[derive(Deserialize, Serialize)]
+struct TokenMetadata {
+    name: String,
+    symbol: String,
+    decimals: i16,
+    standard: String,
+    #[serde(default)]
+    icon: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    mainnet: Option<TokenDeployment>,
+    #[serde(default)]
+    testnet: Option<TokenDeployment>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct TokenDeployment {
+    code_hash: String,
+    hash_type: String,
+    args: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ScriptMetadata {
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    website: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    mainnet: Vec<ScriptDeployment>,
+    #[serde(default)]
+    testnet: Vec<ScriptDeployment>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ScriptDeployment {
+    code_hash: String,
+    #[serde(default)]
+    data_hash: Option<String>,
+    hash_type: String,
+    #[serde(default)]
+    deprecated: bool,
+}
 
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let out_dir = env::var("OUT_DIR").unwrap();
 
     let repo_root = PathBuf::from(&manifest_dir).join("../.."); // crates/indexer -> repo root
-    let labels_dir = repo_root.join("docs/token-labels");
-    let overrides_file = repo_root.join("docs/script-name-overrides.json");
+    let metadata_dir = repo_root.join("docs/metadata");
 
     // Rerun triggers
-    println!("cargo:rerun-if-changed={}", labels_dir.display());
-    println!("cargo:rerun-if-changed={}", overrides_file.display());
+    println!("cargo:rerun-if-changed={}", metadata_dir.display());
 
     // --- UDT labels ---
-    let mut udt_entries = Vec::new();
-    for network in &["mainnet", "testnet"] {
-        let network_dir = labels_dir.join("information/udt").join(network);
-        if !network_dir.exists() {
-            continue;
+    let tokens_dir = metadata_dir.join("tokens");
+    let mut token_entries: Vec<TokenMetadata> = Vec::new();
+    if tokens_dir.exists() {
+        for entry in fs::read_dir(&tokens_dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+            if let Ok(content) = fs::read_to_string(&path) {
+                match toml::from_str::<TokenMetadata>(&content) {
+                    Ok(token) => token_entries.push(token),
+                    Err(e) => {
+                        eprintln!("cargo:warning=failed to parse {}: {}", path.display(), e);
+                    }
+                }
+            }
         }
-        collect_index_jsons(&network_dir, &mut udt_entries);
     }
-    // Filter to published only
-    let udt_entries: Vec<serde_json::Value> = udt_entries
-        .into_iter()
-        .filter(|v| {
-            v.get("published")
-                .and_then(|p| p.as_bool())
-                .unwrap_or(false)
-        })
-        .collect();
-    let udt_json = serde_json::to_string(&udt_entries).expect("failed to serialize UDT labels");
+    let udt_json = serde_json::to_string(&token_entries).expect("failed to serialize UDT labels");
     fs::write(
         Path::new(&out_dir).join("bundled_udt_labels.json"),
         udt_json,
@@ -41,10 +89,23 @@ fn main() {
     .expect("failed to write bundled_udt_labels.json");
 
     // --- Script labels ---
-    let mut script_entries = Vec::new();
-    let script_dir = labels_dir.join("information/script");
-    if script_dir.exists() {
-        collect_index_jsons(&script_dir, &mut script_entries);
+    let scripts_dir = metadata_dir.join("scripts");
+    let mut script_entries: Vec<ScriptMetadata> = Vec::new();
+    if scripts_dir.exists() {
+        for entry in fs::read_dir(&scripts_dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+            if let Ok(content) = fs::read_to_string(&path) {
+                match toml::from_str::<ScriptMetadata>(&content) {
+                    Ok(script) => script_entries.push(script),
+                    Err(e) => {
+                        eprintln!("cargo:warning=failed to parse {}: {}", path.display(), e);
+                    }
+                }
+            }
+        }
     }
     let script_json =
         serde_json::to_string(&script_entries).expect("failed to serialize script labels");
@@ -55,7 +116,7 @@ fn main() {
     .expect("failed to write bundled_script_labels.json");
 
     // --- UDT-compatible script code_hashes ---
-    // Extract code_hashes from scripts with decoderType "udt", excluding the 3
+    // Extract code_hashes from scripts with category "udt", excluding the 3
     // well-known UDT code_hashes (SUDT, xUDT data1, xUDT type) that are already
     // hardcoded in the activity builder.
     let excluded_udt_code_hashes: HashSet<&str> = [
@@ -68,37 +129,19 @@ fn main() {
 
     let mut udt_script_code_hashes: Vec<String> = Vec::new();
     for entry in &script_entries {
-        // Only scripts with decoderType "udt"
-        let is_udt = entry.get("decoderType").and_then(|v| v.as_str()) == Some("udt");
+        let is_udt = entry.category.as_deref() == Some("udt");
         if !is_udt {
             continue;
         }
 
-        // Iterate deployments -> each network -> array of deployments
-        let deployments = match entry.get("deployments").and_then(|d| d.as_object()) {
-            Some(d) => d,
-            None => continue,
-        };
-        for (_network, network_deployments) in deployments {
-            let deployment_list = match network_deployments.as_array() {
-                Some(a) => a,
-                None => continue,
-            };
-            for deployment in deployment_list {
-                // Skip deprecated deployments
-                let is_deprecated = deployment
-                    .get("deprecated")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                if is_deprecated {
-                    continue;
-                }
-
-                if let Some(code_hash) = deployment.get("codeHash").and_then(|v| v.as_str()) {
-                    if !code_hash.is_empty() && !excluded_udt_code_hashes.contains(code_hash) {
-                        udt_script_code_hashes.push(code_hash.to_string());
-                    }
-                }
+        for deployment in entry.mainnet.iter().chain(entry.testnet.iter()) {
+            if deployment.deprecated {
+                continue;
+            }
+            if !deployment.code_hash.is_empty()
+                && !excluded_udt_code_hashes.contains(deployment.code_hash.as_str())
+            {
+                udt_script_code_hashes.push(deployment.code_hash.clone());
             }
         }
     }
@@ -112,38 +155,4 @@ fn main() {
         udt_code_hashes_json,
     )
     .expect("failed to write bundled_udt_script_code_hashes.json");
-
-    // --- Script name overrides ---
-    let overrides_content = if overrides_file.exists() {
-        fs::read_to_string(&overrides_file).expect("failed to read script-name-overrides.json")
-    } else {
-        r#"{"overrides":{},"deprecated":[]}"#.to_string()
-    };
-    fs::write(
-        Path::new(&out_dir).join("bundled_script_overrides.json"),
-        overrides_content,
-    )
-    .expect("failed to write bundled_script_overrides.json");
-}
-
-fn collect_index_jsons(dir: &Path, out: &mut Vec<serde_json::Value>) {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let index_path = path.join("index.json");
-        if !index_path.exists() {
-            continue;
-        }
-        if let Ok(content) = fs::read_to_string(&index_path) {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
-                out.push(value);
-            }
-        }
-    }
 }

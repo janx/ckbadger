@@ -1,13 +1,12 @@
 //! Configuration crate for ckbadger.
 //!
 //! Provides TOML-based configuration parsing, work directory resolution,
-//! share directory discovery, and token labels path resolution.
+//! and share directory discovery.
 //!
 //! Priority: CLI args > ckbadger.toml > defaults
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -84,23 +83,6 @@ pub struct LogConfig {
     pub level: String,
 }
 
-/// Labels configuration, parsed from labels.toml.
-///
-/// Provides script name overrides, NFT storage tier overrides,
-/// and a list of deprecated script code hashes.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct LabelsConfig {
-    /// Map from original script name to display name override.
-    #[serde(default)]
-    pub script_name_overrides: HashMap<String, String>,
-    /// Map from NFT collection name to storage tier override.
-    #[serde(default)]
-    pub nft_storage_tier_overrides: HashMap<String, String>,
-    /// List of deprecated script code hashes.
-    #[serde(default)]
-    pub deprecated: Vec<String>,
-}
-
 // ---------------------------------------------------------------------------
 // Default impls — these MUST match the values in the TOML example
 // ---------------------------------------------------------------------------
@@ -174,8 +156,8 @@ impl Default for LogConfig {
 /// Resolved paths for a work directory.
 ///
 /// All paths are constructed deterministically from `root`.
-/// `token_labels` and `labels_toml` are `Some` only when the
-/// corresponding path exists on disk at resolve time.
+/// `metadata` is `Some` only when the corresponding path exists on disk
+/// at resolve time.
 #[derive(Debug, Clone)]
 pub struct WorkDir {
     /// The work directory root.
@@ -198,17 +180,15 @@ pub struct WorkDir {
     pub indexer_sock: PathBuf,
     /// Process log directory.
     pub log_dir: PathBuf,
-    /// Local token-labels override directory (if it exists on disk).
-    pub token_labels: Option<PathBuf>,
-    /// Local labels.toml override file (if it exists on disk).
-    pub labels_toml: Option<PathBuf>,
+    /// Local metadata override directory (if it exists on disk).
+    pub metadata: Option<PathBuf>,
 }
 
 impl WorkDir {
     /// Construct all work directory paths from `root`.
     ///
-    /// `token_labels` and `labels_toml` are set to `Some` only when the
-    /// corresponding path already exists on disk.
+    /// `metadata` is set to `Some` only when the corresponding path
+    /// already exists on disk.
     pub fn resolve(root: &Path) -> Self {
         let root = root.to_path_buf();
         let config_path = root.join("ckbadger.toml");
@@ -222,16 +202,9 @@ impl WorkDir {
         let indexer_sock = run_dir.join("indexer.sock");
         let log_dir = run_dir.join("logs");
 
-        let token_labels_path = root.join("token-labels");
-        let token_labels = if token_labels_path.exists() {
-            Some(token_labels_path)
-        } else {
-            None
-        };
-
-        let labels_toml_path = root.join("labels.toml");
-        let labels_toml = if labels_toml_path.exists() {
-            Some(labels_toml_path)
+        let metadata_path = root.join("metadata");
+        let metadata = if metadata_path.exists() {
+            Some(metadata_path)
         } else {
             None
         };
@@ -247,8 +220,7 @@ impl WorkDir {
             supervisor_pid,
             indexer_sock,
             log_dir,
-            token_labels,
-            labels_toml,
+            metadata,
         }
     }
 
@@ -290,31 +262,6 @@ pub fn parse_config(toml_str: &str) -> Result<CkbadgerConfig> {
     }
 
     toml::from_str(toml_str).context("failed to parse ckbadger.toml")
-}
-
-// ---------------------------------------------------------------------------
-// Labels config loading
-// ---------------------------------------------------------------------------
-
-/// Load labels config from the work directory's `labels.toml` (if it exists).
-///
-/// Returns the default (empty) config if the file does not exist.
-/// Returns an error only if the file exists but cannot be read or parsed.
-pub fn load_labels_config(work_dir: &Path) -> Result<LabelsConfig> {
-    let labels_path = work_dir.join("labels.toml");
-    if !labels_path.exists() {
-        return Ok(LabelsConfig::default());
-    }
-    let content = std::fs::read_to_string(&labels_path)
-        .with_context(|| format!("failed to read labels config: {}", labels_path.display()))?;
-    parse_labels_config(&content)
-}
-
-/// Parse a TOML string into `LabelsConfig`.
-///
-/// Missing keys fall back to their default values via `#[serde(default)]`.
-pub fn parse_labels_config(toml_str: &str) -> Result<LabelsConfig> {
-    toml::from_str(toml_str).context("failed to parse labels.toml")
 }
 
 // ---------------------------------------------------------------------------
@@ -479,7 +426,6 @@ pub fn resolve_ckb_paths(work_dir: &Path, ckb: &CkbConfig) -> Result<ResolvedCkb
 ///   bin/ckbadger          <- binary
 ///   share/                <- share dir
 ///     frontend/
-///     token-labels/
 /// ```
 pub fn resolve_share_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
@@ -506,33 +452,6 @@ pub fn resolve_share_dir_from(exe_path: &Path) -> Option<PathBuf> {
     } else {
         None
     }
-}
-
-// ---------------------------------------------------------------------------
-// Token labels resolution
-// ---------------------------------------------------------------------------
-
-/// Resolve the token labels path.
-///
-/// Priority:
-/// 1. `work_dir/token-labels/` (local override) — if it exists
-/// 2. `share_dir/token-labels/` (bundled default) — if share_dir is Some and the path exists
-/// 3. `None` — no token labels available
-pub fn resolve_token_labels_path(work_dir: &WorkDir, share_dir: Option<&Path>) -> Option<PathBuf> {
-    // 1. Check work_dir local override (already resolved in WorkDir)
-    if work_dir.token_labels.is_some() {
-        return work_dir.token_labels.clone();
-    }
-
-    // 2. Check share directory
-    if let Some(share) = share_dir {
-        let share_labels = share.join("token-labels");
-        if share_labels.is_dir() {
-            return Some(share_labels);
-        }
-    }
-
-    None
 }
 
 // ---------------------------------------------------------------------------
@@ -840,42 +759,26 @@ network = "testnet"
         assert_eq!(wd.supervisor_pid, root.join("run/supervisor.pid"));
         assert_eq!(wd.indexer_sock, root.join("run/indexer.sock"));
         assert_eq!(wd.log_dir, root.join("run/logs"));
-        assert!(wd.token_labels.is_none());
-        assert!(wd.labels_toml.is_none());
+        assert!(wd.metadata.is_none());
     }
 
     #[test]
-    fn test_workdir_resolve_with_existing_token_labels() {
+    fn test_workdir_resolve_with_metadata_dir() {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
-        std::fs::create_dir(root.join("token-labels")).unwrap();
+        std::fs::create_dir(root.join("metadata")).unwrap();
 
         let wd = WorkDir::resolve(root);
-        assert_eq!(wd.token_labels, Some(root.join("token-labels")));
-        assert!(wd.labels_toml.is_none());
+        assert_eq!(wd.metadata, Some(root.join("metadata")));
     }
 
     #[test]
-    fn test_workdir_resolve_with_existing_labels_toml() {
+    fn test_workdir_resolve_without_metadata_dir() {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
-        std::fs::write(root.join("labels.toml"), "# labels").unwrap();
 
         let wd = WorkDir::resolve(root);
-        assert!(wd.token_labels.is_none());
-        assert_eq!(wd.labels_toml, Some(root.join("labels.toml")));
-    }
-
-    #[test]
-    fn test_workdir_resolve_with_both_overrides() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-        std::fs::create_dir(root.join("token-labels")).unwrap();
-        std::fs::write(root.join("labels.toml"), "# labels").unwrap();
-
-        let wd = WorkDir::resolve(root);
-        assert_eq!(wd.token_labels, Some(root.join("token-labels")));
-        assert_eq!(wd.labels_toml, Some(root.join("labels.toml")));
+        assert!(wd.metadata.is_none());
     }
 
     #[test]
@@ -929,178 +832,5 @@ network = "testnet"
 
         let result = resolve_share_dir_from(&exe_path);
         assert!(result.is_none());
-    }
-
-    // -- Token labels resolution --
-
-    #[test]
-    fn test_resolve_token_labels_workdir_takes_priority() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-
-        // Set up both work_dir/token-labels and share/token-labels
-        std::fs::create_dir(root.join("token-labels")).unwrap();
-        let share_dir = dir.path().join("share-test");
-        std::fs::create_dir(&share_dir).unwrap();
-        std::fs::create_dir(share_dir.join("token-labels")).unwrap();
-
-        let wd = WorkDir::resolve(root);
-        let result = resolve_token_labels_path(&wd, Some(&share_dir));
-        assert_eq!(result, Some(root.join("token-labels")));
-    }
-
-    #[test]
-    fn test_resolve_token_labels_falls_back_to_share() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-        // No work_dir/token-labels, but share/token-labels exists
-        let share_dir = dir.path().join("share-test");
-        std::fs::create_dir(&share_dir).unwrap();
-        std::fs::create_dir(share_dir.join("token-labels")).unwrap();
-
-        let wd = WorkDir::resolve(root);
-        let result = resolve_token_labels_path(&wd, Some(&share_dir));
-        assert_eq!(result, Some(share_dir.join("token-labels")));
-    }
-
-    #[test]
-    fn test_resolve_token_labels_none_when_neither_exists() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-
-        let wd = WorkDir::resolve(root);
-        let result = resolve_token_labels_path(&wd, None);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_resolve_token_labels_none_when_share_has_no_labels() {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path();
-        let share_dir = dir.path().join("share-test");
-        std::fs::create_dir(&share_dir).unwrap();
-        // share exists but has no token-labels subdirectory
-
-        let wd = WorkDir::resolve(root);
-        let result = resolve_token_labels_path(&wd, Some(&share_dir));
-        assert!(result.is_none());
-    }
-
-    // -- LabelsConfig parsing --
-
-    #[test]
-    fn test_parse_labels_empty_string_returns_default() {
-        let cfg = parse_labels_config("").unwrap();
-        assert_eq!(cfg, LabelsConfig::default());
-        assert!(cfg.script_name_overrides.is_empty());
-        assert!(cfg.nft_storage_tier_overrides.is_empty());
-        assert!(cfg.deprecated.is_empty());
-    }
-
-    #[test]
-    fn test_parse_labels_full_example() {
-        let toml = r#"
-deprecated = [
-    "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81",
-    "0xd51e6eaf48124c601f41abe173f1da550b4cbca9c6a166781906a287abbb3d9a",
-    "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9",
-    "0x1122a4fb54697cf2e6e3a96c9d80fd398a936559b90954c6e88eb7ba0cf652df",
-    "0x90ca618be6c15f5857d3cbd09f9f24ca6770af047ba9ee70989ec3b229419ac7",
-]
-
-[script_name_overrides]
-"DAS Lock" = ".bit Lock"
-"DID Account" = ".bit Account"
-"DID Cell" = ".bit Cell"
-"Web5 DID" = "did:ckb"
-"SECP256K1/blake160" = "Default Lock"
-"SECP256k1/Multisig" = "Default Multisig"
-
-[nft_storage_tier_overrides]
-".bit" = "fully_on_ckb_and_btc"
-"dotbit" = "fully_on_ckb_and_btc"
-"did:ckb" = "fully_on_ckb_and_btc"
-"did_ckb" = "fully_on_ckb_and_btc"
-"#;
-        let cfg = parse_labels_config(toml).unwrap();
-
-        assert_eq!(cfg.script_name_overrides.len(), 6);
-        assert_eq!(
-            cfg.script_name_overrides.get("DAS Lock"),
-            Some(&".bit Lock".to_string())
-        );
-        assert_eq!(
-            cfg.script_name_overrides.get("SECP256K1/blake160"),
-            Some(&"Default Lock".to_string())
-        );
-
-        assert_eq!(cfg.nft_storage_tier_overrides.len(), 4);
-        assert_eq!(
-            cfg.nft_storage_tier_overrides.get(".bit"),
-            Some(&"fully_on_ckb_and_btc".to_string())
-        );
-
-        assert_eq!(cfg.deprecated.len(), 5);
-        assert_eq!(
-            cfg.deprecated[0],
-            "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81"
-        );
-        assert_eq!(
-            cfg.deprecated[4],
-            "0x90ca618be6c15f5857d3cbd09f9f24ca6770af047ba9ee70989ec3b229419ac7"
-        );
-    }
-
-    #[test]
-    fn test_parse_labels_partial_only_script_overrides() {
-        let toml = r#"
-[script_name_overrides]
-"DAS Lock" = ".bit Lock"
-"#;
-        let cfg = parse_labels_config(toml).unwrap();
-
-        assert_eq!(cfg.script_name_overrides.len(), 1);
-        assert_eq!(
-            cfg.script_name_overrides.get("DAS Lock"),
-            Some(&".bit Lock".to_string())
-        );
-        assert!(cfg.nft_storage_tier_overrides.is_empty());
-        assert!(cfg.deprecated.is_empty());
-    }
-
-    // -- load_labels_config --
-
-    #[test]
-    fn test_load_labels_config_file_exists() {
-        let dir = TempDir::new().unwrap();
-        let labels_content = r#"
-deprecated = [
-    "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81",
-]
-
-[script_name_overrides]
-"DAS Lock" = ".bit Lock"
-
-[nft_storage_tier_overrides]
-".bit" = "fully_on_ckb_and_btc"
-"#;
-        std::fs::write(dir.path().join("labels.toml"), labels_content).unwrap();
-
-        let cfg = load_labels_config(dir.path()).unwrap();
-        assert_eq!(cfg.script_name_overrides.len(), 1);
-        assert_eq!(
-            cfg.script_name_overrides.get("DAS Lock"),
-            Some(&".bit Lock".to_string())
-        );
-        assert_eq!(cfg.nft_storage_tier_overrides.len(), 1);
-        assert_eq!(cfg.deprecated.len(), 1);
-    }
-
-    #[test]
-    fn test_load_labels_config_file_missing_returns_default() {
-        let dir = TempDir::new().unwrap();
-        // No labels.toml created
-        let cfg = load_labels_config(dir.path()).unwrap();
-        assert_eq!(cfg, LabelsConfig::default());
     }
 }
