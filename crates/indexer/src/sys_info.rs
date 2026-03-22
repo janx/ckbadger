@@ -147,12 +147,14 @@ impl DiskStatsTracker {
         let snapshot = match parse_diskstats_snapshot(content, &self.device) {
             Ok(snapshot) => snapshot,
             Err(DiskStatsSnapshotError::MissingDevice) => {
+                self.reset_baseline_after_parse_unavailable();
                 return DiskWindowSample::Unavailable {
                     reason: format!("diskstats device '{}' not found", self.device),
-                }
+                };
             }
             Err(DiskStatsSnapshotError::MalformedRow(reason)) => {
-                return DiskWindowSample::Unavailable { reason }
+                self.reset_baseline_after_parse_unavailable();
+                return DiskWindowSample::Unavailable { reason };
             }
         };
 
@@ -198,6 +200,12 @@ impl DiskStatsTracker {
         self.prev_timestamp = Some(now);
         self.warmup_next = false;
         DiskWindowSample::Sample(metrics)
+    }
+
+    fn reset_baseline_after_parse_unavailable(&mut self) {
+        self.prev_snapshot = None;
+        self.prev_timestamp = None;
+        self.warmup_next = false;
     }
 }
 
@@ -1246,6 +1254,71 @@ MemAvailable:   45000000 kB
         };
 
         assert!(reason.contains("sda"));
+    }
+
+    #[test]
+    fn test_disk_tracker_rearms_after_parse_unavailable() {
+        let warmup = "\
+ 259       0 nvme0n1 100 0 2048 10 200 0 4096 20 1 30 40 0 0 0 0 0
+";
+        let malformed = "\
+ 259       0 nvme0n1 110 0 4096 30 206
+";
+        let missing_device = "\
+ 259       0 sda 110 0 4096 30 206 0 8192 80 4 90 180 0 0 0 0 0
+";
+        let valid_after_reset = "\
+ 259       0 nvme0n1 120 0 6144 50 210 0 8192 100 5 150 260 0 0 0 0 0
+";
+        let start = Instant::now();
+
+        let mut tracker = DiskStatsTracker::new("nvme0n1".to_string());
+        assert!(matches!(
+            tracker.read_window_from_content(warmup, start),
+            DiskWindowSample::Warmup
+        ));
+
+        let malformed_sample =
+            tracker.read_window_from_content(malformed, start + Duration::from_secs(1));
+        let DiskWindowSample::Unavailable { reason } = malformed_sample else {
+            panic!("expected unavailable, got {:?}", malformed_sample);
+        };
+        assert!(reason.contains("expected at least 14"));
+
+        assert!(matches!(
+            tracker.read_window_from_content(valid_after_reset, start + Duration::from_secs(2)),
+            DiskWindowSample::Warmup
+        ));
+
+        let sample = tracker.read_window_from_content(
+            "\
+ 259       0 nvme0n1 130 0 8192 70 215 0 10240 120 6 210 360 0 0 0 0 0
+",
+            start + Duration::from_secs(3),
+        );
+        let DiskWindowSample::Sample(metrics) = sample else {
+            panic!("expected sample after re-arm, got {:?}", sample);
+        };
+        assert!((metrics.read_mb - 1.0).abs() < f64::EPSILON);
+        assert!((metrics.write_mb - 1.0).abs() < f64::EPSILON);
+
+        let mut tracker = DiskStatsTracker::new("nvme0n1".to_string());
+        assert!(matches!(
+            tracker.read_window_from_content(warmup, start + Duration::from_secs(10)),
+            DiskWindowSample::Warmup
+        ));
+
+        let missing_sample =
+            tracker.read_window_from_content(missing_device, start + Duration::from_secs(11));
+        let DiskWindowSample::Unavailable { reason } = missing_sample else {
+            panic!("expected unavailable, got {:?}", missing_sample);
+        };
+        assert!(reason.contains("not found"));
+
+        assert!(matches!(
+            tracker.read_window_from_content(valid_after_reset, start + Duration::from_secs(12)),
+            DiskWindowSample::Warmup
+        ));
     }
 
     #[test]
