@@ -58,6 +58,7 @@ ckb-hash = { workspace = true }
 # RocksDB for persistent live cell store
 rocksdb = { workspace = true }
 bincode = { workspace = true }
+libc = { workspace = true }
 
 [build-dependencies]
 serde_json = "1"

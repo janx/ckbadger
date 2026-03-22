@@ -722,10 +722,18 @@ fn print_startup_info(
 }
 
 fn get_total_ram_gb() -> Option<u64> {
-    let content = std::fs::read_to_string("/proc/meminfo").ok()?;
-    parse_meminfo_total_gb(&content)
+    unsafe {
+        let pages = libc::sysconf(libc::_SC_PHYS_PAGES);
+        let page_size = libc::sysconf(libc::_SC_PAGESIZE);
+        if pages > 0 && page_size > 0 {
+            Some((pages as u64 * page_size as u64) / (1024 * 1024 * 1024))
+        } else {
+            None
+        }
+    }
 }
 
+#[cfg(test)]
 fn parse_meminfo_total_gb(content: &str) -> Option<u64> {
     for line in content.lines() {
         if let Some(rest) = line.strip_prefix("MemTotal:") {

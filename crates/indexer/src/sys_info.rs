@@ -1,3 +1,4 @@
+use std::ffi::CStr;
 use std::fs;
 
 /// Static system environment captured once at sync start.
@@ -379,45 +380,163 @@ fn parse_scheduler_content(content: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Cross-platform system info readers (POSIX libc)
+// ---------------------------------------------------------------------------
+
+/// Read total physical memory in MB using POSIX sysconf.
+fn sysconf_mem_total_mb() -> u64 {
+    unsafe {
+        let pages = libc::sysconf(libc::_SC_PHYS_PAGES);
+        let page_size = libc::sysconf(libc::_SC_PAGESIZE);
+        if pages > 0 && page_size > 0 {
+            (pages as u64 * page_size as u64) / (1024 * 1024)
+        } else {
+            0
+        }
+    }
+}
+
+/// Read CPU core count using POSIX sysconf.
+fn sysconf_cpu_cores() -> u32 {
+    unsafe {
+        let n = libc::sysconf(libc::_SC_NPROCESSORS_ONLN);
+        if n > 0 {
+            n as u32
+        } else {
+            0
+        }
+    }
+}
+
+/// Read 1-minute load average using POSIX getloadavg.
+fn posix_load_avg_1m() -> f64 {
+    let mut loadavg = [0.0f64; 1];
+    unsafe {
+        if libc::getloadavg(loadavg.as_mut_ptr(), 1) == 1 {
+            loadavg[0]
+        } else {
+            0.0
+        }
+    }
+}
+
+/// Read kernel/OS version using POSIX uname.
+fn posix_kernel_version() -> String {
+    unsafe {
+        let mut info: libc::utsname = std::mem::zeroed();
+        if libc::uname(&mut info) == 0 {
+            CStr::from_ptr(info.release.as_ptr())
+                .to_string_lossy()
+                .into_owned()
+        } else {
+            String::new()
+        }
+    }
+}
+
+/// Read CPU model string (platform-specific).
+#[cfg(target_os = "linux")]
+fn read_cpu_model() -> String {
+    let cpuinfo = fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
+    parse_cpu_model(&cpuinfo)
+}
+
+#[cfg(target_os = "macos")]
+fn read_cpu_model() -> String {
+    sysctl_string("machdep.cpu.brand_string")
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn read_cpu_model() -> String {
+    String::new()
+}
+
+/// Read available memory in MB (platform-specific).
+///
+/// On Linux, reads MemAvailable from /proc/meminfo.
+/// On other platforms, returns 0 (used for monitoring only, not critical decisions).
+#[cfg(target_os = "linux")]
+fn read_mem_available_mb() -> u64 {
+    let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    parse_mem_available_mb(&meminfo)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_mem_available_mb() -> u64 {
+    0
+}
+
+/// Read a sysctl string value (macOS/BSD).
+#[cfg(target_os = "macos")]
+fn sysctl_string(name: &str) -> String {
+    use std::ffi::CString;
+    let c_name = match CString::new(name) {
+        Ok(s) => s,
+        Err(_) => return String::new(),
+    };
+    unsafe {
+        let mut size: libc::size_t = 0;
+        if libc::sysctlbyname(
+            c_name.as_ptr(),
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        ) != 0
+        {
+            return String::new();
+        }
+        let mut buf = vec![0u8; size];
+        if libc::sysctlbyname(
+            c_name.as_ptr(),
+            buf.as_mut_ptr() as *mut libc::c_void,
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        ) != 0
+        {
+            return String::new();
+        }
+        if let Some(pos) = buf.iter().position(|&b| b == 0) {
+            buf.truncate(pos);
+        }
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // High-level capture functions
 // ---------------------------------------------------------------------------
 
-/// Reads all procfs/sysfs to capture static environment. Never fails.
+/// Capture static environment snapshot. Uses cross-platform POSIX APIs for
+/// CPU/RAM/kernel, with Linux-specific procfs/sysfs for disk info.
+/// Never fails (returns defaults on any resolution failure).
 pub fn capture_environment(data_path: &str) -> EnvironmentSnapshot {
-    let cpuinfo = fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
-    let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();
-    let kernel = fs::read_to_string("/proc/version")
-        .ok()
-        .map(|s| {
-            // Extract just the kernel version, e.g. "Linux version 6.19.6-1-cachyos-eevdf ..."
-            s.split_whitespace().nth(2).unwrap_or("").to_string()
-        })
-        .unwrap_or_default();
-
+    // Disk info is Linux-specific (procfs/sysfs); returns empty on macOS.
     let mounts = fs::read_to_string("/proc/mounts").unwrap_or_default();
     let (disk_device, filesystem) = parse_mount_info(&mounts, data_path).unwrap_or_default();
     let disk_scheduler = read_disk_scheduler(&disk_device);
 
     EnvironmentSnapshot {
-        cpu_model: parse_cpu_model(&cpuinfo),
-        cpu_cores: parse_cpu_cores(&cpuinfo),
-        ram_total_mb: parse_mem_total_mb(&meminfo),
-        kernel,
+        cpu_model: read_cpu_model(),
+        cpu_cores: sysconf_cpu_cores(),
+        ram_total_mb: sysconf_mem_total_mb(),
+        kernel: posix_kernel_version(),
         disk_device,
         disk_scheduler,
         filesystem,
     }
 }
 
-/// Reads per-batch environment. Never fails (returns defaults on error).
+/// Read per-batch environment. Uses cross-platform POSIX APIs for load/memory,
+/// with Linux-specific procfs for disk I/O deltas.
+/// Never fails (returns defaults on error).
 pub fn read_batch_environment(disk_tracker: &mut DiskStatsTracker) -> BatchEnvironment {
-    let loadavg = fs::read_to_string("/proc/loadavg").unwrap_or_default();
-    let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();
     let (disk_read_mb, disk_write_mb) = disk_tracker.read_delta();
 
     BatchEnvironment {
-        load_avg_1m: parse_load_avg_1m(&loadavg),
-        mem_available_mb: parse_mem_available_mb(&meminfo),
+        load_avg_1m: posix_load_avg_1m(),
+        mem_available_mb: read_mem_available_mb(),
         disk_read_mb,
         disk_write_mb,
     }
@@ -655,5 +774,46 @@ MemAvailable:   45000000 kB
             resolve_diskstats_device(mountinfo, diskstats, "/mnt/data"),
             None
         );
+    }
+
+    // -- Cross-platform reader tests --
+
+    #[test]
+    fn test_sysconf_mem_total_mb_returns_nonzero() {
+        let mb = sysconf_mem_total_mb();
+        assert!(mb > 0, "sysconf should detect system memory, got {mb}");
+    }
+
+    #[test]
+    fn test_sysconf_cpu_cores_returns_nonzero() {
+        let cores = sysconf_cpu_cores();
+        assert!(cores > 0, "sysconf should detect CPU cores, got {cores}");
+    }
+
+    #[test]
+    fn test_posix_kernel_version_returns_nonempty() {
+        let version = posix_kernel_version();
+        assert!(
+            !version.is_empty(),
+            "uname should return a kernel version string"
+        );
+    }
+
+    #[test]
+    fn test_read_cpu_model_returns_nonempty() {
+        let model = read_cpu_model();
+        assert!(
+            !model.is_empty(),
+            "CPU model should be detected on Linux and macOS"
+        );
+    }
+
+    #[test]
+    fn test_capture_environment_returns_populated_snapshot() {
+        let env = capture_environment("/tmp");
+        assert!(env.cpu_cores > 0);
+        assert!(env.ram_total_mb > 0);
+        assert!(!env.kernel.is_empty());
+        assert!(!env.cpu_model.is_empty());
     }
 }

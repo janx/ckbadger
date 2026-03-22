@@ -15,6 +15,7 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 ckbadger-common = { path = "../common" }
 ckb-hash = { workspace = true }
+libc = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
