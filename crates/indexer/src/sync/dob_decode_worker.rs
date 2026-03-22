@@ -66,6 +66,18 @@ impl DobDecodeWorker {
     pub async fn run(&self) -> Result<()> {
         info!("DOB decode worker started");
 
+        // Get total for progress tracking (one-time scan).
+        let total = self.store.count_undecoded_dob_spores()?;
+        let start = std::time::Instant::now();
+
+        self.store.update_background_task("dob_decode", |entry| {
+            entry.state = ckbadger_common::BackgroundTaskState::Running;
+            entry.started_at = Some(chrono::Utc::now().timestamp());
+            entry.progress_current = Some(0);
+            entry.progress_total = Some(total);
+            entry.message = Some(format!("{} undecoded spores", total));
+        })?;
+
         let mut cursor: Option<Vec<u8>> = None;
         let mut total_decoded: u64 = 0;
         let mut total_skipped: u64 = 0;
@@ -76,6 +88,13 @@ impl DobDecodeWorker {
                     total_decoded,
                     total_skipped, "DOB decode worker shutting down"
                 );
+                let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                let _ = self.store.update_background_task("dob_decode", |entry| {
+                    entry.state = ckbadger_common::BackgroundTaskState::Completed;
+                    entry.progress_current = Some(total_decoded + total_skipped);
+                    entry.elapsed_ms = Some(elapsed_ms);
+                    entry.message = Some("Shutdown requested".to_string());
+                });
                 return Ok(());
             }
 
@@ -100,6 +119,13 @@ impl DobDecodeWorker {
                         total_decoded,
                         total_skipped, "DOB decode worker shutting down mid-batch"
                     );
+                    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    let _ = self.store.update_background_task("dob_decode", |entry| {
+                        entry.state = ckbadger_common::BackgroundTaskState::Completed;
+                        entry.progress_current = Some(total_decoded + total_skipped);
+                        entry.elapsed_ms = Some(elapsed_ms);
+                        entry.message = Some("Shutdown requested".to_string());
+                    });
                     return Ok(());
                 }
 
@@ -145,6 +171,31 @@ impl DobDecodeWorker {
                 }
             }
 
+            // Update progress at batch boundary
+            let elapsed = start.elapsed();
+            let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
+            let processed = total_decoded + total_skipped;
+            let rate = if elapsed.as_secs_f64() > 0.0 {
+                total_decoded as f64 / elapsed.as_secs_f64()
+            } else {
+                0.0
+            };
+            let eta = if rate > 0.0 && total > processed {
+                Some((total - processed) as f64 / rate)
+            } else {
+                None
+            };
+            let _ = self.store.update_background_task("dob_decode", |entry| {
+                entry.progress_current = Some(processed);
+                entry.elapsed_ms = Some(elapsed_ms);
+                entry.rate = Some(rate);
+                entry.eta_seconds = eta;
+                entry.message = Some(format!(
+                    "Decoded {}, skipped {}",
+                    total_decoded, total_skipped
+                ));
+            });
+
             // Advance cursor to last key in batch
             if let Some((last_key, _, _)) = batch_entries.last() {
                 cursor = Some(last_key.clone());
@@ -159,6 +210,19 @@ impl DobDecodeWorker {
                 break;
             }
         }
+
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let _ = self.store.update_background_task("dob_decode", |entry| {
+            entry.state = ckbadger_common::BackgroundTaskState::Completed;
+            entry.progress_current = Some(total_decoded + total_skipped);
+            entry.elapsed_ms = Some(elapsed_ms);
+            entry.rate = None;
+            entry.eta_seconds = None;
+            entry.message = Some(format!(
+                "Done: {} decoded, {} skipped",
+                total_decoded, total_skipped
+            ));
+        });
 
         Ok(())
     }

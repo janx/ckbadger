@@ -1275,6 +1275,14 @@ impl Indexer {
             let dob_threshold = self.config.bulk_sync_threshold;
             let dob_cache_path = self.config.decoder_cache_path.clone();
 
+            // Initialize DOB task as Waiting before spawning the worker.
+            let _ = dob_store.update_background_task("dob_decode", |entry| {
+                entry.state = ckbadger_common::BackgroundTaskState::Waiting;
+                entry.message = Some("Waiting for sync to catch up".to_string());
+            });
+
+            let dob_store_for_err = Arc::clone(&dob_store);
+
             tokio::spawn(async move {
                 // Wait until sync is within threshold of chain tip.
                 loop {
@@ -1308,6 +1316,10 @@ impl Indexer {
 
                 if let Err(e) = worker.run().await {
                     warn!(error = %e, "DOB decode worker failed");
+                    let _ = dob_store_for_err.update_background_task("dob_decode", |entry| {
+                        entry.state = ckbadger_common::BackgroundTaskState::Failed;
+                        entry.error = Some(e.to_string());
+                    });
                 }
             });
         }
