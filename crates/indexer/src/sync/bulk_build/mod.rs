@@ -55,9 +55,176 @@ const BULK_BUILD_MAX_BLOCK_SPAN: u64 = 100_000;
 const BULK_BUILD_TARGET_ITERATION_MS: f64 = 1500.0;
 const BULK_BUILD_MS_PER_BLOCK_ALPHA: f64 = 0.5;
 const BULK_BUILD_INITIAL_MS_PER_BLOCK: f64 = 0.05;
+const BULK_BUILD_TARGET_HISTORY_ROWS: f64 = 800_000.0;
+const BULK_BUILD_INITIAL_HISTORY_ROWS_PER_BLOCK: f64 = 30.0;
 const BULK_BUILD_MAX_STEP_RATIO: f64 = 2.0;
 const FLUSH_CHANNEL_DEPTH: usize = 4;
 const PREFETCH_DEPTH: usize = 4;
+
+#[derive(Debug, Clone, Copy)]
+struct BatchControlObservation {
+    actual_blocks: u64,
+    fetch_ms: f64,
+    build_ms: f64,
+    flush_ms: f64,
+    history_rows: usize,
+}
+
+#[derive(Debug, Clone)]
+struct AdaptiveBatchController {
+    critical_stage_ms_per_block_ema: f64,
+    history_rows_per_block_ema: f64,
+}
+
+impl Default for AdaptiveBatchController {
+    fn default() -> Self {
+        Self {
+            critical_stage_ms_per_block_ema: BULK_BUILD_INITIAL_MS_PER_BLOCK,
+            history_rows_per_block_ema: BULK_BUILD_INITIAL_HISTORY_ROWS_PER_BLOCK,
+        }
+    }
+}
+
+impl AdaptiveBatchController {
+    fn observe_and_update(
+        &mut self,
+        batch_count: u64,
+        current_span: u64,
+        observation: BatchControlObservation,
+    ) -> Result<u64> {
+        if observation.actual_blocks == 0 {
+            return Ok(current_span);
+        }
+
+        let actual_blocks = observation.actual_blocks as f64;
+        let is_representative = batch_count > 1 && actual_blocks >= (current_span as f64 * 0.5);
+        if !is_representative {
+            return Ok(current_span);
+        }
+
+        let critical_stage_ms = observation
+            .fetch_ms
+            .max(observation.build_ms)
+            .max(observation.flush_ms);
+        if !critical_stage_ms.is_finite() || critical_stage_ms <= 0.0 {
+            bail!(
+                "bulk build adaptive sizing: critical stage ms became invalid: \
+                 fetch_ms={} build_ms={} flush_ms={} actual_blocks={}",
+                observation.fetch_ms,
+                observation.build_ms,
+                observation.flush_ms,
+                observation.actual_blocks
+            );
+        }
+
+        let critical_stage_sample = critical_stage_ms / actual_blocks;
+        self.critical_stage_ms_per_block_ema = ema_update(
+            self.critical_stage_ms_per_block_ema,
+            critical_stage_sample,
+            "critical_stage_ms_per_block_ema",
+        )?;
+
+        if observation.history_rows > 0 {
+            let history_rows_sample = observation.history_rows as f64 / actual_blocks;
+            self.history_rows_per_block_ema = ema_update(
+                self.history_rows_per_block_ema,
+                history_rows_sample,
+                "history_rows_per_block_ema",
+            )?;
+        }
+
+        let time_budget_blocks =
+            BULK_BUILD_TARGET_ITERATION_MS / self.critical_stage_ms_per_block_ema;
+        if !time_budget_blocks.is_finite() || time_budget_blocks < 0.0 {
+            bail!(
+                "bulk build adaptive sizing: time budget blocks is invalid: \
+                 time_budget_blocks={} critical_stage_ms_per_block_ema={} target_ms={}",
+                time_budget_blocks,
+                self.critical_stage_ms_per_block_ema,
+                BULK_BUILD_TARGET_ITERATION_MS
+            );
+        }
+
+        let history_budget_blocks =
+            BULK_BUILD_TARGET_HISTORY_ROWS / self.history_rows_per_block_ema;
+        if !history_budget_blocks.is_finite() || history_budget_blocks < 0.0 {
+            bail!(
+                "bulk build adaptive sizing: history budget blocks is invalid: \
+                 history_budget_blocks={} history_rows_per_block_ema={} target_history_rows={}",
+                history_budget_blocks,
+                self.history_rows_per_block_ema,
+                BULK_BUILD_TARGET_HISTORY_ROWS
+            );
+        }
+
+        let desired = time_budget_blocks.min(history_budget_blocks) as u64;
+        Ok(clamp_batch_block_span(current_span, desired))
+    }
+
+    fn critical_stage_ms_per_block_ema(&self) -> f64 {
+        self.critical_stage_ms_per_block_ema
+    }
+}
+
+fn ema_update(current: f64, sample: f64, label: &str) -> Result<f64> {
+    let updated =
+        current * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA) + sample * BULK_BUILD_MS_PER_BLOCK_ALPHA;
+    if !updated.is_finite() || updated <= 0.0 {
+        bail!(
+            "bulk build adaptive sizing: {} became invalid: current={} sample={} updated={}",
+            label,
+            current,
+            sample,
+            updated
+        );
+    }
+    Ok(updated)
+}
+
+fn clamp_batch_block_span(current_span: u64, desired: u64) -> u64 {
+    let step_max = (current_span as f64 * BULK_BUILD_MAX_STEP_RATIO) as u64;
+    let step_min = (current_span as f64 / BULK_BUILD_MAX_STEP_RATIO) as u64;
+
+    desired
+        .clamp(step_min, step_max)
+        .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN)
+}
+
+fn fetch_pool_thread_count(
+    configured_parallel_fetch_size: usize,
+    available_parallelism: usize,
+) -> Result<usize> {
+    if configured_parallel_fetch_size == 0 {
+        bail!("bulk build fetch pool size must be > 0");
+    }
+    if available_parallelism == 0 {
+        bail!("bulk build available parallelism must be > 0");
+    }
+    Ok(configured_parallel_fetch_size.min(available_parallelism))
+}
+
+fn build_fetch_pool(parallel_fetch_size: usize) -> Result<rayon::ThreadPool> {
+    let available_parallelism = std::thread::available_parallelism().map_err(|e| {
+        anyhow!(
+            "failed to read available parallelism for bulk build fetch pool sizing: {}",
+            e
+        )
+    })?;
+    let thread_count = fetch_pool_thread_count(parallel_fetch_size, available_parallelism.get())?;
+
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(thread_count)
+        .thread_name(|i| format!("ckb-fetch-{}", i))
+        .build()
+        .map_err(|e| anyhow!("failed to create fetch rayon pool: {}", e))
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct PreparedFinalizeArtifacts {
+    activity_sealed_rows: Vec<materialize::MaterializedRow>,
+    chain_sealed_rows: Vec<materialize::MaterializedRow>,
+    final_snapshot_rows: Vec<materialize::MaterializedRow>,
+}
 
 #[derive(Default)]
 pub(crate) struct BulkBuildEngine;
@@ -118,13 +285,7 @@ impl BulkBuildEngine {
             disk_device,
         );
         let token_info_cache = preload_token_info_cache(indexer.writer.store().as_ref())?;
-        let fetch_pool = std::sync::Arc::new(
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(8)
-                .thread_name(|i| format!("ckb-fetch-{}", i))
-                .build()
-                .map_err(|e| anyhow!("failed to create fetch rayon pool: {}", e))?,
-        );
+        let fetch_pool = std::sync::Arc::new(build_fetch_pool(indexer.config.parallel_fetch_size)?);
         let configured_batch_size = u64::try_from(indexer.config.batch_size).map_err(|_| {
             anyhow!(
                 "bulk build batch_size exceeds u64 range: batch_size={}",
@@ -132,7 +293,7 @@ impl BulkBuildEngine {
             )
         })?;
         let mut batch_block_span = configured_batch_size;
-        let mut ms_per_block_ema: f64 = BULK_BUILD_INITIAL_MS_PER_BLOCK;
+        let mut batch_controller = AdaptiveBatchController::default();
         let mut batch_count: u64 = 0;
         // Compute initial handoff_target for the prefetch worker.
         let initial_chain_tip = ckb_store
@@ -207,14 +368,11 @@ impl BulkBuildEngine {
                 runtime.apply_blocks(&blocks, indexer.config.is_mainnet(), &token_info_cache)?;
             let build_elapsed = build_started.elapsed();
 
-            // controllable_ms: build + prefetch_recv. Excludes flush_wait because
-            // flush depends on RocksDB compaction, not batch size. Including flush_wait
-            // would create a positive feedback loop (slow flush → shrink batch → faster
-            // build → longer flush wait → shrink more → drives to minimum floor).
-            let controllable_ms = (build_elapsed + prefetch_recv_elapsed).as_secs_f64() * 1000.0;
-
             // Read the most recent flush_ms from the worker (non-blocking).
             prev_flush_ms = flush_channel.last_flush_ms();
+            let critical_stage_ms = (fetch_elapsed.as_secs_f64() * 1000.0)
+                .max(build_elapsed.as_secs_f64() * 1000.0)
+                .max(prev_flush_ms);
 
             // Capture row counts before send() moves the data.
             let pending_flush_row_count = (
@@ -341,8 +499,8 @@ impl BulkBuildEngine {
                 batch_block_span,
                 batch_count + 1, // batch_count is incremented below
                 tx_density,
-                ms_per_block_ema,
-                controllable_ms,
+                batch_controller.critical_stage_ms_per_block_ema(),
+                critical_stage_ms,
                 BULK_BUILD_TARGET_ITERATION_MS,
                 build_timings.facts_breakdown.par_iter_ms,
                 build_timings.facts_breakdown.merge_ms,
@@ -377,7 +535,7 @@ impl BulkBuildEngine {
                 progress_pct = format!("{:.1}%", progress_pct),
                 fetch_ms = format!("{:.1}", fetch_elapsed.as_secs_f64() * 1000.0),
                 build_ms = format!("{:.1}", build_elapsed.as_secs_f64() * 1000.0),
-                controllable_ms = format!("{:.1}", controllable_ms),
+                critical_stage_ms = format!("{:.1}", critical_stage_ms),
                 facts_ms = format!("{:.1}", build_timings.facts_ms),
                 resolve_ms = format!("{:.1}", build_timings.resolve_ms),
                 reduce_ms = format!("{:.1}", build_timings.reduce_ms),
@@ -388,53 +546,17 @@ impl BulkBuildEngine {
                 "Bulk build materialized batch"
             );
 
-            // Adaptive batch sizing: target a fixed wall-clock budget per iteration
-            // using EMA of ms-per-block as the cost model. Excludes flush_wait
-            // (captured in controllable_ms above) to avoid flush-driven shrinkage.
-            //
-            // Skip EMA update when the sample would be unrepresentative:
-            // - batch_count <= 1: first batch has cold-cache inflated read times
-            //   (batch_count is incremented before this block runs, so first batch = 1)
-            // - actual_blocks < batch_block_span/2: runt batch truncated by handoff_target
-            let actual_blocks = batch_stats.block_count as f64;
-            let is_representative =
-                batch_count > 1 && actual_blocks >= (batch_block_span as f64 * 0.5);
-
-            if is_representative && actual_blocks > 0.0 && controllable_ms > 0.0 {
-                let sample = controllable_ms / actual_blocks;
-                ms_per_block_ema = ms_per_block_ema * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA)
-                    + sample * BULK_BUILD_MS_PER_BLOCK_ALPHA;
-
-                if !ms_per_block_ema.is_finite() || ms_per_block_ema <= 0.0 {
-                    bail!(
-                        "bulk build adaptive sizing: ms_per_block_ema became invalid: \
-                         ms_per_block_ema={} sample={} controllable_ms={} actual_blocks={}",
-                        ms_per_block_ema,
-                        sample,
-                        controllable_ms,
-                        actual_blocks
-                    );
-                }
-
-                let desired_f64 = BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema;
-                if !desired_f64.is_finite() || desired_f64 < 0.0 {
-                    bail!(
-                        "bulk build adaptive sizing: desired blocks is invalid: \
-                         desired_f64={} ms_per_block_ema={} target_ms={}",
-                        desired_f64,
-                        ms_per_block_ema,
-                        BULK_BUILD_TARGET_ITERATION_MS
-                    );
-                }
-                let desired = desired_f64 as u64;
-
-                let step_max = (batch_block_span as f64 * BULK_BUILD_MAX_STEP_RATIO) as u64;
-                let step_min = (batch_block_span as f64 / BULK_BUILD_MAX_STEP_RATIO) as u64;
-
-                batch_block_span = desired
-                    .clamp(step_min, step_max)
-                    .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
-            }
+            batch_block_span = batch_controller.observe_and_update(
+                batch_count,
+                batch_block_span,
+                BatchControlObservation {
+                    actual_blocks: batch_stats.block_count,
+                    fetch_ms: fetch_elapsed.as_secs_f64() * 1000.0,
+                    build_ms: build_elapsed.as_secs_f64() * 1000.0,
+                    flush_ms: prev_flush_ms,
+                    history_rows: pending_flush_row_count.0,
+                },
+            )?;
 
             prefetch.update_span(batch_block_span);
 
@@ -470,7 +592,15 @@ impl BulkBuildEngine {
         indexer
             .bulk_build_perf
             .record_finalize_step(1, finalize_started.elapsed());
-        let flush_stats = flush_channel.close_and_wait().await?;
+        let flush_drain = flush_channel.begin_shutdown();
+        let prepared_finalize = match runtime.prepare_finalize_artifacts() {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                let _ = flush_drain.wait().await;
+                return Err(err);
+            }
+        };
+        let flush_stats = flush_drain.wait().await?;
         materializer.add_external_counts(
             flush_stats.total_history_rows,
             flush_stats.total_sealed_rows,
@@ -479,11 +609,7 @@ impl BulkBuildEngine {
 
         // Destructure runtime to get owned fields for explicit sub-phase control.
         let BulkBuildRuntimeState {
-            interner,
-            sequencer,
             owners,
-            activity_stats,
-            chain_stats,
             hodl_tracker,
             cell_dist_tracker,
             ..
@@ -493,23 +619,19 @@ impl BulkBuildEngine {
         indexer
             .bulk_build_perf
             .record_finalize_step(2, finalize_started.elapsed());
-        let sealed_rows = activity_stats.build_rows()?;
-        materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
+        materializer.stream_sealed_aggregate_rows(&prepared_finalize.activity_sealed_rows)?;
 
         // Phase 2: chain stats (hash rate, difficulty, uncle rate, epoch time, etc.)
         indexer
             .bulk_build_perf
             .record_finalize_step(3, finalize_started.elapsed());
-        let chain_sealed_rows = chain_stats.build_rows()?;
-        materializer.stream_sealed_aggregate_rows(&chain_sealed_rows)?;
+        materializer.stream_sealed_aggregate_rows(&prepared_finalize.chain_sealed_rows)?;
 
         // Phase 3: final snapshot (live cell markers + index CFs)
         indexer
             .bulk_build_perf
             .record_finalize_step(4, finalize_started.elapsed());
-        let frozen = interner.snapshot_for_reads();
-        let final_snapshot_rows = build_final_snapshot_rows(&sequencer, &frozen)?;
-        materializer.materialize_final_snapshot(&final_snapshot_rows)?;
+        materializer.materialize_final_snapshot(&prepared_finalize.final_snapshot_rows)?;
 
         // Phases 4-9: owners (flush_sealed + materialize_final per owner)
         let mut owners = owners;
@@ -1723,26 +1845,17 @@ impl BulkBuildRuntimeState {
         domain_store: &CkbadgerStore,
         materializer: &mut materialize::Materializer<'_>,
     ) -> Result<()> {
+        let prepared_finalize = self.prepare_finalize_artifacts()?;
         let BulkBuildRuntimeState {
-            interner,
-            sequencer,
             owners,
-            activity_stats,
-            chain_stats,
             hodl_tracker,
             cell_dist_tracker,
             ..
         } = self;
 
-        let sealed_rows = activity_stats.build_rows()?;
-        materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
-
-        let chain_sealed_rows = chain_stats.build_rows()?;
-        materializer.stream_sealed_aggregate_rows(&chain_sealed_rows)?;
-
-        let frozen = interner.snapshot_for_reads();
-        let final_snapshot_rows = build_final_snapshot_rows(&sequencer, &frozen)?;
-        materializer.materialize_final_snapshot(&final_snapshot_rows)?;
+        materializer.stream_sealed_aggregate_rows(&prepared_finalize.activity_sealed_rows)?;
+        materializer.stream_sealed_aggregate_rows(&prepared_finalize.chain_sealed_rows)?;
+        materializer.materialize_final_snapshot(&prepared_finalize.final_snapshot_rows)?;
 
         let mut owners = owners;
         owners.materialize_all(materializer)?;
@@ -1754,6 +1867,15 @@ impl BulkBuildRuntimeState {
             meta_batch.commit()?;
         }
         Ok(())
+    }
+
+    fn prepare_finalize_artifacts(&self) -> Result<PreparedFinalizeArtifacts> {
+        let frozen = self.interner.snapshot_for_reads();
+        Ok(PreparedFinalizeArtifacts {
+            activity_sealed_rows: self.activity_stats.build_rows()?,
+            chain_sealed_rows: self.chain_stats.build_rows()?,
+            final_snapshot_rows: build_final_snapshot_rows(&self.sequencer, &frozen)?,
+        })
     }
 }
 
@@ -6020,6 +6142,100 @@ mod tests {
             !bad_desired.is_finite() || bad_desired < 0.0,
             "zero EMA should produce non-finite desired"
         );
+    }
+
+    #[test]
+    fn adaptive_batch_controller_shrinks_on_slow_flush_stage() {
+        let mut controller = AdaptiveBatchController::default();
+
+        let next = controller
+            .observe_and_update(
+                3,
+                32_000,
+                BatchControlObservation {
+                    actual_blocks: 32_000,
+                    fetch_ms: 1_400.0,
+                    build_ms: 1_200.0,
+                    flush_ms: 6_000.0,
+                    history_rows: 640_000,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(next, 16_000, "slow flush should force span shrink");
+    }
+
+    #[test]
+    fn adaptive_batch_controller_caps_growth_by_history_row_budget() {
+        let mut controller = AdaptiveBatchController::default();
+
+        let next = controller
+            .observe_and_update(
+                3,
+                20_000,
+                BatchControlObservation {
+                    actual_blocks: 20_000,
+                    fetch_ms: 200.0,
+                    build_ms: 180.0,
+                    flush_ms: 190.0,
+                    history_rows: 1_000_000,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            next, 20_000,
+            "row budget should block expansion even when stage times are sparse"
+        );
+    }
+
+    #[test]
+    fn adaptive_batch_controller_expands_sparse_batches_when_work_budget_allows() {
+        let mut controller = AdaptiveBatchController::default();
+
+        let next = controller
+            .observe_and_update(
+                4,
+                20_000,
+                BatchControlObservation {
+                    actual_blocks: 20_000,
+                    fetch_ms: 940.0,
+                    build_ms: 700.0,
+                    flush_ms: 650.0,
+                    history_rows: 400_000,
+                },
+            )
+            .unwrap();
+
+        assert!(
+            next > 25_000 && next < 35_000,
+            "sparse batches should expand toward ~30k, got {next}"
+        );
+    }
+
+    #[test]
+    fn fetch_pool_thread_count_caps_to_available_parallelism() {
+        assert_eq!(fetch_pool_thread_count(64, 16).unwrap(), 16);
+        assert_eq!(fetch_pool_thread_count(8, 16).unwrap(), 8);
+    }
+
+    #[test]
+    fn prepare_finalize_artifacts_matches_direct_finalize_components() {
+        let mut runtime = BulkBuildRuntimeState::default();
+        let block = bulk_build_addr_tx_fixture();
+        runtime
+            .apply_blocks_hex(std::slice::from_ref(&block), true, &FxHashMap::default())
+            .unwrap();
+
+        let direct_activity_rows = runtime.activity_stats.build_rows().unwrap();
+        let direct_chain_rows = runtime.chain_stats.build_rows().unwrap();
+        let frozen = runtime.interner.snapshot_for_reads();
+        let direct_snapshot_rows = build_final_snapshot_rows(&runtime.sequencer, &frozen).unwrap();
+
+        let prepared = runtime.prepare_finalize_artifacts().unwrap();
+        assert_eq!(prepared.activity_sealed_rows, direct_activity_rows);
+        assert_eq!(prepared.chain_sealed_rows, direct_chain_rows);
+        assert_eq!(prepared.final_snapshot_rows, direct_snapshot_rows);
     }
 
     #[test]
