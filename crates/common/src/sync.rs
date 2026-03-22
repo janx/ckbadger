@@ -309,6 +309,12 @@ pub struct BulkBuildProgressData {
     /// Facts phase: total cells parsed in the batch.
     #[serde(default)]
     pub facts_cell_count: Option<u64>,
+    /// Number of batches currently pending in the prefetch channel (0..=capacity).
+    #[serde(default)]
+    pub prefetch_channel_pending: Option<u64>,
+    /// Maximum capacity of the prefetch channel.
+    #[serde(default)]
+    pub prefetch_channel_capacity: Option<u64>,
     /// Number of batches currently pending in the flush channel (0..=capacity).
     #[serde(default)]
     pub flush_channel_pending: Option<u64>,
@@ -848,6 +854,8 @@ mod tests {
             facts_intern_slow_path_count: None,
             facts_intern_total_count: None,
             facts_cell_count: None,
+            prefetch_channel_pending: Some(1),
+            prefetch_channel_capacity: Some(4),
             flush_channel_pending: Some(2),
             flush_channel_capacity: Some(4),
         };
@@ -861,6 +869,10 @@ mod tests {
         assert_eq!(parsed.live_cell_count, Some(12_345_678));
         assert_eq!(parsed.batch_count, Some(156));
         assert_eq!(parsed.tx_density, Some(4.7));
+        assert_eq!(parsed.prefetch_channel_pending, Some(1));
+        assert_eq!(parsed.prefetch_channel_capacity, Some(4));
+        assert_eq!(parsed.flush_channel_pending, Some(2));
+        assert_eq!(parsed.flush_channel_capacity, Some(4));
     }
 
     #[test]

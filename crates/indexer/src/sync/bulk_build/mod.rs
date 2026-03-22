@@ -193,6 +193,8 @@ impl BulkBuildEngine {
                 }
             };
             let prefetch_recv_elapsed = recv_started.elapsed();
+            let prefetch_channel_pending = prefetch.pending() as u64;
+            let prefetch_channel_capacity = prefetch.capacity() as u64;
 
             let (blocks, fetch_elapsed, effective_end) = (
                 prefetch_result.blocks,
@@ -350,6 +352,8 @@ impl BulkBuildEngine {
                 build_timings.facts_breakdown.cell_count,
                 flush_wait_elapsed.as_secs_f64() * 1000.0,
                 prefetch_recv_elapsed.as_secs_f64() * 1000.0,
+                prefetch_channel_pending,
+                prefetch_channel_capacity,
                 flush_channel_pending,
                 FLUSH_CHANNEL_DEPTH as u64,
             );

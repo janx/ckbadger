@@ -2396,32 +2396,19 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
                 lines.push(Line::from(spans));
             }
 
-            // ── Queue indicator (flush channel occupancy) ──
-            if let (Some(pending), Some(capacity)) =
-                (bb.flush_channel_pending, bb.flush_channel_capacity)
-            {
-                let filled = (pending as usize).min(capacity as usize);
-                let empty = (capacity as usize).saturating_sub(filled);
-                let indicator = format!(
-                    "[{}{}]",
-                    "\u{25A0}".repeat(filled),
-                    "\u{2591}".repeat(empty)
-                );
-                let q_color = if filled == capacity as usize {
-                    ERROR_RED
-                } else if filled as u64 >= capacity / 2 {
-                    AMBER
-                } else {
-                    TERMINAL_GREEN
-                };
-                lines.push(Line::from(vec![
-                    Span::styled("     ", Style::default()),
-                    Span::styled(indicator, Style::default().fg(q_color)),
-                    Span::styled(
-                        format!(" {}/{}", pending, capacity),
-                        Style::default().fg(SLATE_500),
-                    ),
-                ]));
+            if let Some(line) = bulk_queue_indicator_line(
+                "Prefetch",
+                bb.prefetch_channel_pending,
+                bb.prefetch_channel_capacity,
+            ) {
+                lines.push(line);
+            }
+            if let Some(line) = bulk_queue_indicator_line(
+                "Flush",
+                bb.flush_channel_pending,
+                bb.flush_channel_capacity,
+            ) {
+                lines.push(line);
             }
         }
     }
@@ -4296,6 +4283,37 @@ fn queue_utilization(queue_depth: Option<u64>, queue_capacity: Option<u64>) -> O
     }
 }
 
+fn bulk_queue_indicator_line(
+    label: &'static str,
+    queue_depth: Option<u64>,
+    queue_capacity: Option<u64>,
+) -> Option<Line<'static>> {
+    let (queue_depth, queue_capacity) = match (queue_depth, queue_capacity) {
+        (Some(depth), Some(capacity)) if capacity > 0 => (depth, capacity),
+        _ => return None,
+    };
+    let q_color = if queue_depth >= queue_capacity {
+        ERROR_RED
+    } else if queue_depth * 2 >= queue_capacity {
+        AMBER
+    } else {
+        TERMINAL_GREEN
+    };
+
+    Some(Line::from(vec![
+        Span::styled(format!("{label:<9}"), Style::default().fg(SLATE_500)),
+        Span::styled(
+            format!("{queue_depth}/{queue_capacity}"),
+            Style::default().fg(TERMINAL_DIM),
+        ),
+        Span::styled(" ", Style::default().fg(SLATE_700)),
+        Span::styled(
+            draw_bar(queue_depth as f64 / queue_capacity as f64, 8),
+            Style::default().fg(q_color),
+        ),
+    ]))
+}
+
 fn format_util_pct(util: Option<f64>) -> String {
     util.map(|u| format!("{:.0}%", u * 100.0))
         .unwrap_or_else(|| "-".to_string())
@@ -5210,11 +5228,11 @@ fn draw_system_params_compact(
 mod tests {
     use super::{
         adaptive_control_lines, adaptive_state_label, api_health_state, build_batch_left_column,
-        build_finalize_left_column, chart_height_warning, compact_overview_layout,
-        consumed_cells_source_color, consumed_cells_source_label, dense_right_lines,
-        detail_right_lines, diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label,
-        footer_hint_line, footer_status_message, format_age_secs, format_num, format_num_commas,
-        format_num_compact, format_rate_expanded, format_signed_num_i128,
+        build_finalize_left_column, bulk_queue_indicator_line, chart_height_warning,
+        compact_overview_layout, consumed_cells_source_color, consumed_cells_source_label,
+        dense_right_lines, detail_right_lines, diagnostics_dense_panel, direct_io_reads_label,
+        eta_confidence_label, footer_hint_line, footer_status_message, format_age_secs, format_num,
+        format_num_commas, format_num_compact, format_rate_expanded, format_signed_num_i128,
         format_stage_commit_gap_ms, header_right_line, header_title_line, heartbeat_is_on,
         io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
         overview_log_min_height, overview_services_min_height, percentile_from_history,
@@ -6156,6 +6174,19 @@ mod tests {
         mem.l0_files_max = 18;
         let line = storage_pressure_l0_line(&mem, 10);
         assert!(line_text(&line).contains("[HOT]"));
+    }
+
+    #[test]
+    fn test_bulk_queue_indicator_line_formats_prefetch_queue() {
+        let line = bulk_queue_indicator_line("Prefetch", Some(2), Some(4)).unwrap();
+        let text = line_text(&line);
+        assert!(text.contains("Prefetch"));
+        assert!(text.contains("2/4"));
+    }
+
+    #[test]
+    fn test_bulk_queue_indicator_line_returns_none_without_capacity() {
+        assert!(bulk_queue_indicator_line("Prefetch", Some(2), None).is_none());
     }
 
     #[test]

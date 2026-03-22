@@ -49,6 +49,7 @@ pub(crate) struct PrefetchWorkerStats {
 
 pub(crate) struct PrefetchChannelHandle {
     result_rx: tokio::sync::mpsc::Receiver<Result<PrefetchResult>>,
+    depth: usize,
     span_tx: tokio::sync::watch::Sender<u64>,
     worker_handle: tokio::task::JoinHandle<Result<PrefetchWorkerStats>>,
 }
@@ -80,6 +81,7 @@ impl PrefetchChannelHandle {
 
         Self {
             result_rx,
+            depth,
             span_tx,
             worker_handle,
         }
@@ -180,6 +182,14 @@ impl PrefetchChannelHandle {
         let _ = self.span_tx.send(span);
     }
 
+    pub(crate) fn pending(&self) -> usize {
+        self.result_rx.len()
+    }
+
+    pub(crate) fn capacity(&self) -> usize {
+        self.depth
+    }
+
     pub(crate) async fn close_and_wait(self) -> Result<PrefetchWorkerStats> {
         drop(self.result_rx);
         drop(self.span_tx);
@@ -192,6 +202,39 @@ impl PrefetchChannelHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn prefetch_channel_reports_pending_and_capacity() {
+        let (result_tx, result_rx) = tokio::sync::mpsc::channel(8);
+        let (span_tx, _span_rx) = tokio::sync::watch::channel(10_000u64);
+        let worker_handle = tokio::task::spawn_blocking(|| {
+            Ok(PrefetchWorkerStats {
+                total_fetches: 0,
+                total_blocks: 0,
+                disk_throttle_count: 0,
+                exit_reason: PrefetchExitReason::Completed,
+            })
+        });
+
+        let handle = PrefetchChannelHandle {
+            result_rx,
+            depth: 8,
+            span_tx,
+            worker_handle,
+        };
+
+        result_tx
+            .send(Ok(PrefetchResult {
+                blocks: vec![],
+                fetch_elapsed: Duration::from_millis(10),
+                effective_end: 1000,
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(handle.pending(), 1);
+        assert_eq!(handle.capacity(), 8);
+    }
 
     #[tokio::test]
     async fn prefetch_channel_recv_gets_results_in_order() {
@@ -208,6 +251,7 @@ mod tests {
 
         let mut handle = PrefetchChannelHandle {
             result_rx,
+            depth: 8,
             span_tx,
             worker_handle,
         };
@@ -247,6 +291,7 @@ mod tests {
 
         let mut handle = PrefetchChannelHandle {
             result_rx,
+            depth: 2,
             span_tx,
             worker_handle,
         };
@@ -277,6 +322,7 @@ mod tests {
 
         let mut handle = PrefetchChannelHandle {
             result_rx,
+            depth: 2,
             span_tx,
             worker_handle,
         };
@@ -311,6 +357,7 @@ mod tests {
 
         let handle = PrefetchChannelHandle {
             result_rx,
+            depth: 2,
             span_tx,
             worker_handle,
         };
