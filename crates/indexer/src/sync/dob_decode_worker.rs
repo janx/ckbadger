@@ -35,8 +35,7 @@ const MAX_MEDIA_SOURCES: usize = 24;
 pub struct DobDecodeWorker {
     /// Domain store — reads spore/cluster entries and writes decode results.
     store: Arc<CkbadgerStore>,
-    /// Append-only store — reserved for future cell payload access.
-    #[allow(dead_code)]
+    /// Append-only store — provides decoder code cell payload metadata.
     append_only_store: Arc<CkbadgerStore>,
     /// Disk cache for decoder RISC-V binaries.
     decoder_cache: Arc<DecoderBinaryCache>,
@@ -267,8 +266,7 @@ impl DobDecodeWorker {
         let pattern_json = extract_pattern_json(dob_obj)?;
 
         // Fetch decoder binary (from cache or chain)
-        let decoder_binary =
-            fetch_decoder_binary(&decoder_ref, &self.rpc_url, &self.decoder_cache).await?;
+        let decoder_binary = self.load_decoder_binary(&decoder_ref).await?;
 
         // Determine DOB version from content type
         let dob_version = parse_dob_version(content_type);
@@ -311,6 +309,63 @@ impl DobDecodeWorker {
             media_sources,
             decoded_at: chrono::Utc::now().timestamp(),
         })
+    }
+
+    async fn load_decoder_binary(&self, decoder_ref: &DecoderRef) -> Result<Vec<u8>> {
+        match decoder_ref {
+            DecoderRef::CodeHash(code_hash) => {
+                let cache_key = DecoderBinaryCache::code_hash_key(code_hash);
+                if let Some(binary) = self.decoder_cache.get(&cache_key) {
+                    return Ok(binary);
+                }
+
+                let (tx_hash, output_index, _) = self
+                    .store
+                    .find_any_cell_by_data_hash(code_hash, self.append_only_store.as_ref())
+                    .with_context(|| {
+                        format!(
+                            "failed to resolve decoder code cell from local data-hash index: code_hash=0x{}",
+                            hex::encode(code_hash)
+                        )
+                    })?
+                    .with_context(|| {
+                        format!(
+                            "decoder code cell missing from local data-hash index: code_hash=0x{}",
+                            hex::encode(code_hash)
+                        )
+                    })?;
+
+                let binary =
+                    fetch_output_data_by_outpoint(&tx_hash, output_index, &self.rpc_url)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to fetch decoder binary via resolved code cell: code_hash=0x{}, tx_hash=0x{}, output_index={}",
+                                hex::encode(code_hash),
+                                hex::encode(&tx_hash),
+                                output_index
+                            )
+                        })?;
+
+                verify_blake2b_hash(&binary, code_hash).with_context(|| {
+                    format!(
+                        "resolved decoder binary hash mismatch: code_hash=0x{}, tx_hash=0x{}, output_index={}",
+                        hex::encode(code_hash),
+                        hex::encode(&tx_hash),
+                        output_index
+                    )
+                })?;
+
+                self.decoder_cache
+                    .put(&cache_key, &binary)
+                    .context("failed to cache resolved decoder binary")?;
+
+                Ok(binary)
+            }
+            DecoderRef::TypeId(_) => {
+                fetch_decoder_binary(decoder_ref, &self.rpc_url, &self.decoder_cache).await
+            }
+        }
     }
 
     /// After decoding, update the spore's media profile with newly discovered
@@ -472,7 +527,43 @@ async fn extract_dna_from_spore(
         .first()
         .with_context(|| format!("no outpoint found for spore_id=0x{}", hex::encode(spore_id)))?;
 
-    // Step 2: Fetch the transaction from CKB node via RPC.
+    // Step 2: Fetch the spore cell data from CKB node via RPC.
+    let output_data = fetch_output_data_by_outpoint(tx_hash, *output_index, rpc_url)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to fetch spore cell data via RPC: spore_id=0x{}, tx_hash=0x{}, output_index={}",
+                hex::encode(spore_id),
+                hex::encode(tx_hash),
+                output_index
+            )
+        })?;
+
+    // Step 3: Parse the Spore molecule to extract content bytes.
+    let content_bytes =
+        SporeParser::parse_spore_content_from_data(&output_data).with_context(|| {
+            format!(
+                "failed to parse Spore molecule content: spore_id=0x{}, tx_hash=0x{}",
+                hex::encode(spore_id),
+                hex::encode(tx_hash)
+            )
+        })?;
+
+    // Step 4: Convert content to text and extract DNA hex.
+    let content_text = String::from_utf8_lossy(&content_bytes);
+    parse_dna_hex_from_content_text(&content_text).with_context(|| {
+        format!(
+            "failed to extract DNA hex from spore content: spore_id=0x{}",
+            hex::encode(spore_id)
+        )
+    })
+}
+
+async fn fetch_output_data_by_outpoint(
+    tx_hash: &[u8],
+    output_index: i16,
+    rpc_url: &str,
+) -> Result<Vec<u8>> {
     let tx_hash_hex = format!("0x{}", hex::encode(tx_hash));
     let rpc = CkbRpcClient::new(rpc_url);
     let tx_with_status = rpc
@@ -488,8 +579,12 @@ async fn extract_dna_from_spore(
         )
     })?;
 
-    // Step 3: Get the output data at the correct index.
-    let idx = *output_index as usize;
+    let idx = usize::try_from(output_index).with_context(|| {
+        format!(
+            "negative output_index in outpoint lookup: tx_hash={}, output_index={}",
+            tx_hash_hex, output_index
+        )
+    })?;
     let output_data_hex = tx.outputs_data.get(idx).with_context(|| {
         format!(
             "output_index {} out of range (outputs_data len={}): tx_hash={}",
@@ -499,25 +594,24 @@ async fn extract_dna_from_spore(
         )
     })?;
 
-    // Step 4: Parse the Spore molecule to extract content bytes.
-    let output_data = parse_hex_to_bytes(output_data_hex);
-    let content_bytes =
-        SporeParser::parse_spore_content_from_data(&output_data).with_context(|| {
-            format!(
-                "failed to parse Spore molecule content: spore_id=0x{}, tx_hash={}",
-                hex::encode(spore_id),
-                tx_hash_hex
-            )
-        })?;
+    Ok(parse_hex_to_bytes(output_data_hex))
+}
 
-    // Step 5: Convert content to text and extract DNA hex.
-    let content_text = String::from_utf8_lossy(&content_bytes);
-    parse_dna_hex_from_content_text(&content_text).with_context(|| {
-        format!(
-            "failed to extract DNA hex from spore content: spore_id=0x{}",
-            hex::encode(spore_id)
-        )
-    })
+fn verify_blake2b_hash(data: &[u8], expected_hash: &[u8]) -> Result<()> {
+    let mut hasher = ckb_hash::new_blake2b();
+    hasher.update(data);
+    let mut hash = [0u8; 32];
+    hasher.finalize(&mut hash);
+
+    if hash.as_slice() != expected_hash {
+        bail!(
+            "blake2b mismatch: expected {}, got {}",
+            hex::encode(expected_hash),
+            hex::encode(hash)
+        );
+    }
+
+    Ok(())
 }
 
 /// Parse the DOB version from a content type string like "dob/0" or "dob/1".
@@ -658,6 +752,8 @@ fn merge_media_sources(profile: &mut SporeMediaProfile, new_sources: &[SporeMedi
 mod tests {
     use super::*;
     use serde_json::json;
+    use wiremock::matchers::{body_partial_json, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn test_parse_dob_version() {
@@ -984,5 +1080,120 @@ mod tests {
                 .contains("no outpoint found"),
             "should fail when no outpoints exist for the spore"
         );
+    }
+
+    #[tokio::test]
+    async fn test_load_decoder_binary_resolves_code_hash_via_local_data_hash_index() {
+        let domain_dir = tempfile::tempdir().unwrap();
+        let append_only_dir = tempfile::tempdir().unwrap();
+        let cache_dir = tempfile::tempdir().unwrap();
+
+        let store = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
+        let append_only_store =
+            Arc::new(CkbadgerStore::open_append_only(append_only_dir.path()).unwrap());
+        let decoder_cache = Arc::new(DecoderBinaryCache::new(cache_dir.path()).unwrap());
+        let shutdown = Arc::new(AtomicBool::new(false));
+
+        let decoder_binary = b"test decoder binary".to_vec();
+        let mut hasher = ckb_hash::new_blake2b();
+        hasher.update(&decoder_binary);
+        let mut expected_hash = [0u8; 32];
+        hasher.finalize(&mut expected_hash);
+        let code_hash = expected_hash.to_vec();
+
+        let tx_hash = vec![0xAB; 32];
+        let output_index: i16 = 1;
+        let created_at_block = 42;
+        let cell_info = ckbadger_store::types::LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: decoder_binary.len() as i32,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: Some(code_hash.clone()),
+        };
+
+        let mut append_batch = StoreBatch::new(append_only_store.as_ref());
+        append_batch.put_cell_payload_by_outpoint(&tx_hash, output_index, &cell_info);
+        append_batch.commit().unwrap();
+
+        let mut domain_batch = StoreBatch::new(store.as_ref());
+        domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, output_index, created_at_block);
+        domain_batch.put_cell_by_data_hash(&code_hash, created_at_block, &tx_hash, output_index);
+        domain_batch.commit().unwrap();
+
+        let server = MockServer::start().await;
+        let tx_hash_hex = format!("0x{}", hex::encode(&tx_hash));
+        let dummy_lock = json!({
+            "code_hash": format!("0x{}", "11".repeat(32)),
+            "hash_type": "type",
+            "args": "0x"
+        });
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({
+                "method": "get_transaction",
+                "params": [tx_hash_hex.clone()]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "transaction": {
+                        "hash": tx_hash_hex,
+                        "version": "0x0",
+                        "cell_deps": [],
+                        "header_deps": [],
+                        "inputs": [],
+                        "outputs": [
+                            {
+                                "capacity": "0x0",
+                                "lock": dummy_lock.clone(),
+                                "type": null
+                            },
+                            {
+                                "capacity": "0x0",
+                                "lock": dummy_lock,
+                                "type": null
+                            }
+                        ],
+                        "outputs_data": [
+                            "0x",
+                            format!("0x{}", hex::encode(&decoder_binary))
+                        ],
+                        "witnesses": []
+                    },
+                    "tx_status": {
+                        "status": "committed",
+                        "block_hash": null,
+                        "block_number": null
+                    }
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let worker = DobDecodeWorker::new(
+            store,
+            append_only_store,
+            decoder_cache.clone(),
+            server.uri(),
+            shutdown,
+        );
+
+        let loaded = worker
+            .load_decoder_binary(&DecoderRef::CodeHash(code_hash.clone()))
+            .await
+            .unwrap();
+        assert_eq!(loaded, decoder_binary);
+
+        let cache_key = DecoderBinaryCache::code_hash_key(&code_hash);
+        assert_eq!(decoder_cache.get(&cache_key).unwrap(), decoder_binary);
     }
 }
