@@ -1,11 +1,14 @@
 use chrono::{DateTime, Local};
-use ckbadger_common::{BackgroundTaskEntry, BulkBuildProgressData, MemoryStatsData};
+use ckbadger_common::{
+    format_duration_smart, BackgroundTaskEntry, BackgroundTaskState, BulkBuildProgressData,
+    MemoryStatsData,
+};
 use ckbadger_store::{APPEND_CFS, DOMAIN_CFS};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap},
     Frame,
 };
 use std::collections::VecDeque;
@@ -821,78 +824,122 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
     let log_min_height = overview_log_min_height();
+    let bg_height = background_tasks_height(app);
     match detect_layout_density(app, area) {
         LayoutDensity::Compact => match compact_overview_layout(area) {
             CompactOverviewLayout::MemoryOnly => {
+                let mut constraints = vec![Constraint::Length(6), Constraint::Length(7)];
+                if bg_height > 0 {
+                    constraints.push(Constraint::Length(bg_height));
+                }
+                constraints.push(Constraint::Length(8));
+                constraints.push(Constraint::Min(log_min_height));
+
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Length(6),
-                        Constraint::Length(7),
-                        Constraint::Length(8),
-                        Constraint::Min(log_min_height),
-                    ])
+                    .constraints(constraints)
                     .split(area);
 
-                draw_overview_kpis(f, app, chunks[0]);
-                draw_chain_info(f, app, chunks[1]);
-                draw_memory_stats(f, app, chunks[2]);
-                draw_overview_tail(f, app, chunks[3]);
+                let mut i = 0;
+                draw_overview_kpis(f, app, chunks[i]);
+                i += 1;
+                draw_chain_info(f, app, chunks[i]);
+                i += 1;
+                if bg_height > 0 {
+                    draw_background_tasks(f, app, chunks[i]);
+                    i += 1;
+                }
+                draw_memory_stats(f, app, chunks[i]);
+                i += 1;
+                draw_overview_tail(f, app, chunks[i]);
             }
             CompactOverviewLayout::MemoryAndStorage => {
+                let mut constraints = vec![Constraint::Length(6), Constraint::Length(7)];
+                if bg_height > 0 {
+                    constraints.push(Constraint::Length(bg_height));
+                }
+                constraints.push(Constraint::Length(8));
+                constraints.push(Constraint::Length(8));
+                constraints.push(Constraint::Min(log_min_height));
+
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Length(6),
-                        Constraint::Length(7),
-                        Constraint::Length(8),
-                        Constraint::Length(8),
-                        Constraint::Min(log_min_height),
-                    ])
+                    .constraints(constraints)
                     .split(area);
 
-                draw_overview_kpis(f, app, chunks[0]);
-                draw_chain_info(f, app, chunks[1]);
-                draw_memory_stats(f, app, chunks[2]);
-                draw_storage_health(f, app, chunks[3]);
-                draw_overview_tail(f, app, chunks[4]);
+                let mut i = 0;
+                draw_overview_kpis(f, app, chunks[i]);
+                i += 1;
+                draw_chain_info(f, app, chunks[i]);
+                i += 1;
+                if bg_height > 0 {
+                    draw_background_tasks(f, app, chunks[i]);
+                    i += 1;
+                }
+                draw_memory_stats(f, app, chunks[i]);
+                i += 1;
+                draw_storage_health(f, app, chunks[i]);
+                i += 1;
+                draw_overview_tail(f, app, chunks[i]);
             }
         },
         LayoutDensity::Standard => {
+            let mut constraints = vec![Constraint::Length(6), Constraint::Length(7)];
+            if bg_height > 0 {
+                constraints.push(Constraint::Length(bg_height));
+            }
+            constraints.push(Constraint::Length(8));
+            constraints.push(Constraint::Length(8));
+            constraints.push(Constraint::Min(log_min_height));
+
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(6),
-                    Constraint::Length(7),
-                    Constraint::Length(8),
-                    Constraint::Length(8),
-                    Constraint::Min(log_min_height),
-                ])
+                .constraints(constraints)
                 .split(area);
 
-            draw_overview_kpis(f, app, chunks[0]);
-            draw_chain_info(f, app, chunks[1]);
-            draw_memory_stats(f, app, chunks[2]);
-            draw_storage_health(f, app, chunks[3]);
-            draw_overview_tail(f, app, chunks[4]);
+            let mut i = 0;
+            draw_overview_kpis(f, app, chunks[i]);
+            i += 1;
+            draw_chain_info(f, app, chunks[i]);
+            i += 1;
+            if bg_height > 0 {
+                draw_background_tasks(f, app, chunks[i]);
+                i += 1;
+            }
+            draw_memory_stats(f, app, chunks[i]);
+            i += 1;
+            draw_storage_health(f, app, chunks[i]);
+            i += 1;
+            draw_overview_tail(f, app, chunks[i]);
         }
         LayoutDensity::Wide => {
+            let mut constraints = vec![Constraint::Length(6), Constraint::Length(7)];
+            if bg_height > 0 {
+                constraints.push(Constraint::Length(bg_height));
+            }
+            constraints.push(Constraint::Length(8));
+            constraints.push(Constraint::Length(8));
+            constraints.push(Constraint::Min(log_min_height));
+
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(6),
-                    Constraint::Length(7),
-                    Constraint::Length(8),
-                    Constraint::Length(8),
-                    Constraint::Min(log_min_height),
-                ])
+                .constraints(constraints)
                 .split(area);
 
-            draw_overview_kpis(f, app, chunks[0]);
-            draw_chain_info(f, app, chunks[1]);
-            draw_memory_stats(f, app, chunks[2]);
-            draw_storage_health(f, app, chunks[3]);
-            draw_overview_tail(f, app, chunks[4]);
+            let mut i = 0;
+            draw_overview_kpis(f, app, chunks[i]);
+            i += 1;
+            draw_chain_info(f, app, chunks[i]);
+            i += 1;
+            if bg_height > 0 {
+                draw_background_tasks(f, app, chunks[i]);
+                i += 1;
+            }
+            draw_memory_stats(f, app, chunks[i]);
+            i += 1;
+            draw_storage_health(f, app, chunks[i]);
+            i += 1;
+            draw_overview_tail(f, app, chunks[i]);
         }
     }
 }
@@ -3129,6 +3176,126 @@ fn draw_sync_events(f: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+/// Filter out Completed tasks that finished more than 5 minutes ago.
+fn visible_background_tasks(tasks: &[BackgroundTaskEntry]) -> Vec<&BackgroundTaskEntry> {
+    let now_ts = chrono::Utc::now().timestamp();
+    tasks
+        .iter()
+        .filter(|t| {
+            if t.state != BackgroundTaskState::Completed {
+                return true;
+            }
+            // Hide completed tasks after 5 minutes
+            if let (Some(started_at), Some(elapsed_ms)) = (t.started_at, t.elapsed_ms) {
+                let finished_at = started_at + (elapsed_ms / 1000.0) as i64;
+                let age_secs = now_ts - finished_at;
+                age_secs < 300
+            } else {
+                // No timing info — keep visible
+                true
+            }
+        })
+        .collect()
+}
+
+fn build_task_row(task: &BackgroundTaskEntry) -> Row<'static> {
+    let name = Cell::from(task.name.clone());
+
+    let (state_text, state_color) = match task.state {
+        BackgroundTaskState::Waiting => ("Waiting", Color::DarkGray),
+        BackgroundTaskState::Running => ("Running", TERMINAL_GREEN),
+        BackgroundTaskState::Completed => ("Completed", CYAN),
+        BackgroundTaskState::Failed => ("Failed", ERROR_RED),
+    };
+    let state = Cell::from(Span::styled(state_text, Style::default().fg(state_color)));
+
+    let progress_text = match (task.progress_current, task.progress_total) {
+        (Some(cur), Some(total)) => format!("{}/{}", cur, total),
+        _ => task.message.as_deref().unwrap_or("\u{2014}").to_string(),
+    };
+    let progress = Cell::from(progress_text);
+
+    let rate_text = match task.rate {
+        Some(r) => format!("{:.1}/s", r),
+        None => "\u{2014}".to_string(),
+    };
+    let rate = Cell::from(rate_text);
+
+    let elapsed_text = match task.elapsed_ms {
+        Some(ms) => format_duration_smart(ms / 1000.0),
+        None => "\u{2014}".to_string(),
+    };
+    let elapsed = Cell::from(elapsed_text);
+
+    Row::new(vec![name, state, progress, rate, elapsed])
+}
+
+fn draw_background_tasks(f: &mut Frame, app: &App, area: Rect) {
+    let visible = visible_background_tasks(&app.background_tasks);
+    if visible.is_empty() {
+        return;
+    }
+
+    let header = Row::new(vec![
+        Cell::from(Span::styled(
+            "Task",
+            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+        )),
+        Cell::from(Span::styled(
+            "State",
+            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+        )),
+        Cell::from(Span::styled(
+            "Progress",
+            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+        )),
+        Cell::from(Span::styled(
+            "Rate",
+            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+        )),
+        Cell::from(Span::styled(
+            "Elapsed",
+            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+        )),
+    ]);
+
+    let rows: Vec<Row<'static>> = visible.iter().map(|t| build_task_row(t)).collect();
+
+    let widths = [
+        Constraint::Length(16),
+        Constraint::Length(11),
+        Constraint::Length(14),
+        Constraint::Length(9),
+        Constraint::Length(10),
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(SLATE_800))
+                .title(Span::styled(
+                    " Background Tasks ",
+                    Style::default().fg(FOREGROUND),
+                )),
+        )
+        .style(Style::default().fg(FOREGROUND));
+
+    f.render_widget(table, area);
+}
+
+/// Height needed for the background tasks section (0 if hidden).
+fn background_tasks_height(app: &App) -> u16 {
+    let visible = visible_background_tasks(&app.background_tasks);
+    if visible.is_empty() {
+        0
+    } else {
+        // 2 for borders + 1 for header + 1 per task row
+        (2 + 1 + visible.len() as u16).min(10)
+    }
 }
 
 fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
