@@ -886,7 +886,10 @@ impl BulkSyncPerfRun {
         let parse = sum_ms(|s| s.parse_ms);
         let precompute = sum_ms(|s| s.precompute_ms);
         let build = sum_ms(|s| s.build_ms);
-        let prefetch = sum_ms(|s| s.prefetch_ms);
+        // Pipeline reports prefetch work in `prefetch_ms`; bulk-build reports
+        // hot-path prefetch wait in `prefetch_recv_ms`. The report should show
+        // both under one prefetch phase so bulk-build wait is not omitted.
+        let prefetch = sum_ms(|s| s.prefetch_ms) + sum_ms(|s| s.prefetch_recv_ms);
         let finalize_batch = sum_ms(|s| s.finalize_ms);
 
         // Common
@@ -1927,6 +1930,22 @@ mod tests {
         assert!(report.contains("| **batch total** |"));
         assert!(report.contains("| **wall clock** |"));
         assert!(report.contains("% Batch"));
+    }
+
+    #[test]
+    fn test_wall_clock_breakdown_includes_bulk_build_prefetch_recv_time() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        let mut sample = test_batch_sample(10, 2.0, 0.0, 100, 4, 1);
+        sample.engine = "bulk_build".to_string();
+        sample.prefetch_recv_ms = 250.0;
+        run.record_batch_sample(sample).unwrap();
+        run.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        assert!(report.contains("| prefetch | 0.250 | 12.500% |"));
     }
 
     #[test]
