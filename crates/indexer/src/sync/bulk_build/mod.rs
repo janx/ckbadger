@@ -51,143 +51,114 @@ pub(crate) mod sequencer;
 
 const BULK_BUILD_MIN_BLOCK_SPAN: u64 = 10_000;
 const BULK_BUILD_MAX_BLOCK_SPAN: u64 = 100_000;
-// EMA adaptive controller constants
-const BULK_BUILD_TARGET_ITERATION_MS: f64 = 1500.0;
-const BULK_BUILD_MS_PER_BLOCK_ALPHA: f64 = 0.5;
-const BULK_BUILD_INITIAL_MS_PER_BLOCK: f64 = 0.05;
-const BULK_BUILD_TARGET_HISTORY_ROWS: f64 = 800_000.0;
-const BULK_BUILD_INITIAL_HISTORY_ROWS_PER_BLOCK: f64 = 30.0;
-const BULK_BUILD_MAX_STEP_RATIO: f64 = 2.0;
 const FLUSH_CHANNEL_DEPTH: usize = 4;
 const PREFETCH_DEPTH: usize = 4;
 
+// ── Throughput controller constants ──────────────────────────────────
+//
+// Design principle: maximize batch_block_span (larger writes are more
+// efficient for RocksDB) and only shrink when RocksDB compaction can't
+// keep up.  A cooldown prevents oscillation after pressure events.
+const BULK_BUILD_GROW_PCT: u64 = 125; // 1.25x growth per healthy batch
+const BULK_BUILD_MODERATE_SHRINK_PCT: u64 = 80; // 0.8x on moderate pressure
+const BULK_BUILD_SEVERE_SHRINK_PCT: u64 = 50; // 0.5x on severe pressure
+const BULK_BUILD_SEVERE_COOLDOWN: u64 = 3;
+const BULK_BUILD_MODERATE_COOLDOWN: u64 = 2;
+const BULK_BUILD_MAX_HISTORY_ROWS: f64 = 800_000.0;
+const BULK_BUILD_ROWS_EMA_ALPHA: f64 = 0.3;
+const BULK_BUILD_INITIAL_ROWS_PER_BLOCK: f64 = 30.0;
+const BULK_BUILD_L0_MODERATE: u64 = 64;
+const BULK_BUILD_L0_SEVERE: u64 = 96;
+
 #[derive(Debug, Clone, Copy)]
-struct BatchControlObservation {
+struct ThroughputObservation {
     actual_blocks: u64,
-    fetch_ms: f64,
-    build_ms: f64,
-    flush_ms: f64,
     history_rows: usize,
+    /// Max L0 file count across all CFs (from sampler).
+    l0_files_max: u64,
+    /// Pending compaction bytes (from sampler, converted to bytes).
+    compaction_pending_bytes: u64,
+    /// Total immutable memtables across all CFs (from sampler).
+    immutable_memtables: u64,
 }
 
+/// Throughput-oriented batch span controller for the bulk build engine.
+///
+/// Grows `batch_block_span` toward the maximum to maximize RocksDB write
+/// amortization.  Shrinks only when RocksDB compaction pressure exceeds
+/// MemoryProfile thresholds or when the materialization row budget would
+/// be exceeded.  A cooldown window after each pressure event prevents
+/// grow/shrink oscillation.
 #[derive(Debug, Clone)]
-struct AdaptiveBatchController {
-    critical_stage_ms_per_block_ema: f64,
-    history_rows_per_block_ema: f64,
+struct ThroughputController {
+    span: u64,
+    cooldown: u64,
+    rows_per_block_ema: f64,
+    rows_ema_observed: bool,
 }
 
-impl Default for AdaptiveBatchController {
-    fn default() -> Self {
+impl ThroughputController {
+    fn new(initial_span: u64) -> Self {
         Self {
-            critical_stage_ms_per_block_ema: BULK_BUILD_INITIAL_MS_PER_BLOCK,
-            history_rows_per_block_ema: BULK_BUILD_INITIAL_HISTORY_ROWS_PER_BLOCK,
+            span: initial_span.clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN),
+            cooldown: 0,
+            rows_per_block_ema: BULK_BUILD_INITIAL_ROWS_PER_BLOCK,
+            rows_ema_observed: false,
         }
     }
-}
 
-impl AdaptiveBatchController {
     fn observe_and_update(
         &mut self,
         batch_count: u64,
-        current_span: u64,
-        observation: BatchControlObservation,
-    ) -> Result<u64> {
-        if observation.actual_blocks == 0 {
-            return Ok(current_span);
+        obs: &ThroughputObservation,
+        profile: &ckbadger_store::store::MemoryProfile,
+    ) -> u64 {
+        // Skip first batch (not representative).
+        if batch_count <= 1 || obs.actual_blocks == 0 {
+            return self.span;
         }
 
-        let actual_blocks = observation.actual_blocks as f64;
-        let is_representative = batch_count > 1 && actual_blocks >= (current_span as f64 * 0.5);
-        if !is_representative {
-            return Ok(current_span);
+        // Update rows/block EMA for history row budget.
+        if obs.history_rows > 0 {
+            let sample = obs.history_rows as f64 / obs.actual_blocks as f64;
+            self.rows_per_block_ema = self.rows_per_block_ema * (1.0 - BULK_BUILD_ROWS_EMA_ALPHA)
+                + sample * BULK_BUILD_ROWS_EMA_ALPHA;
+            self.rows_ema_observed = true;
         }
 
-        let critical_stage_ms = observation
-            .fetch_ms
-            .max(observation.build_ms)
-            .max(observation.flush_ms);
-        if !critical_stage_ms.is_finite() || critical_stage_ms <= 0.0 {
-            bail!(
-                "bulk build adaptive sizing: critical stage ms became invalid: \
-                 fetch_ms={} build_ms={} flush_ms={} actual_blocks={}",
-                observation.fetch_ms,
-                observation.build_ms,
-                observation.flush_ms,
-                observation.actual_blocks
-            );
+        // Detect RocksDB pressure.
+        let severe = obs.l0_files_max >= BULK_BUILD_L0_SEVERE
+            || obs.compaction_pending_bytes >= profile.severe_compaction_pending_bytes_bulk
+            || obs.immutable_memtables >= profile.severe_immutable_memtables;
+        let moderate = !severe
+            && (obs.l0_files_max >= BULK_BUILD_L0_MODERATE
+                || obs.compaction_pending_bytes >= profile.moderate_compaction_pending_bytes_bulk
+                || obs.immutable_memtables >= profile.moderate_immutable_memtables);
+
+        if severe {
+            self.span = self.span * BULK_BUILD_SEVERE_SHRINK_PCT / 100;
+            self.cooldown = BULK_BUILD_SEVERE_COOLDOWN;
+        } else if moderate {
+            self.span = self.span * BULK_BUILD_MODERATE_SHRINK_PCT / 100;
+            self.cooldown = BULK_BUILD_MODERATE_COOLDOWN;
+        } else if self.cooldown > 0 {
+            self.cooldown -= 1;
+        } else {
+            // Healthy: grow span to maximize write batch amortization.
+            self.span = self.span * BULK_BUILD_GROW_PCT / 100;
         }
 
-        let critical_stage_sample = critical_stage_ms / actual_blocks;
-        self.critical_stage_ms_per_block_ema = ema_update(
-            self.critical_stage_ms_per_block_ema,
-            critical_stage_sample,
-            "critical_stage_ms_per_block_ema",
-        )?;
-
-        if observation.history_rows > 0 {
-            let history_rows_sample = observation.history_rows as f64 / actual_blocks;
-            self.history_rows_per_block_ema = ema_update(
-                self.history_rows_per_block_ema,
-                history_rows_sample,
-                "history_rows_per_block_ema",
-            )?;
+        // Apply history row budget cap (only after first real observation).
+        if self.rows_ema_observed && self.rows_per_block_ema > 0.0 {
+            let row_budget_span = (BULK_BUILD_MAX_HISTORY_ROWS / self.rows_per_block_ema) as u64;
+            self.span = self.span.min(row_budget_span);
         }
 
-        let time_budget_blocks =
-            BULK_BUILD_TARGET_ITERATION_MS / self.critical_stage_ms_per_block_ema;
-        if !time_budget_blocks.is_finite() || time_budget_blocks < 0.0 {
-            bail!(
-                "bulk build adaptive sizing: time budget blocks is invalid: \
-                 time_budget_blocks={} critical_stage_ms_per_block_ema={} target_ms={}",
-                time_budget_blocks,
-                self.critical_stage_ms_per_block_ema,
-                BULK_BUILD_TARGET_ITERATION_MS
-            );
-        }
-
-        let history_budget_blocks =
-            BULK_BUILD_TARGET_HISTORY_ROWS / self.history_rows_per_block_ema;
-        if !history_budget_blocks.is_finite() || history_budget_blocks < 0.0 {
-            bail!(
-                "bulk build adaptive sizing: history budget blocks is invalid: \
-                 history_budget_blocks={} history_rows_per_block_ema={} target_history_rows={}",
-                history_budget_blocks,
-                self.history_rows_per_block_ema,
-                BULK_BUILD_TARGET_HISTORY_ROWS
-            );
-        }
-
-        let desired = time_budget_blocks.min(history_budget_blocks) as u64;
-        Ok(clamp_batch_block_span(current_span, desired))
+        self.span = self
+            .span
+            .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
+        self.span
     }
-
-    fn critical_stage_ms_per_block_ema(&self) -> f64 {
-        self.critical_stage_ms_per_block_ema
-    }
-}
-
-fn ema_update(current: f64, sample: f64, label: &str) -> Result<f64> {
-    let updated =
-        current * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA) + sample * BULK_BUILD_MS_PER_BLOCK_ALPHA;
-    if !updated.is_finite() || updated <= 0.0 {
-        bail!(
-            "bulk build adaptive sizing: {} became invalid: current={} sample={} updated={}",
-            label,
-            current,
-            sample,
-            updated
-        );
-    }
-    Ok(updated)
-}
-
-fn clamp_batch_block_span(current_span: u64, desired: u64) -> u64 {
-    let step_max = (current_span as f64 * BULK_BUILD_MAX_STEP_RATIO) as u64;
-    let step_min = (current_span as f64 / BULK_BUILD_MAX_STEP_RATIO) as u64;
-
-    desired
-        .clamp(step_min, step_max)
-        .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN)
 }
 
 fn fetch_pool_thread_count(
@@ -293,7 +264,8 @@ impl BulkBuildEngine {
             )
         })?;
         let mut batch_block_span = configured_batch_size;
-        let mut batch_controller = AdaptiveBatchController::default();
+        let mut batch_controller = ThroughputController::new(configured_batch_size);
+        let mem_profile = indexer.writer.store().memory_profile();
         let mut batch_count: u64 = 0;
         // Compute initial handoff_target for the prefetch worker.
         let initial_chain_tip = ckb_store
@@ -499,9 +471,9 @@ impl BulkBuildEngine {
                 batch_block_span,
                 batch_count + 1, // batch_count is incremented below
                 tx_density,
-                batch_controller.critical_stage_ms_per_block_ema(),
+                0.0, // ms_per_block_ema (not tracked by throughput controller)
                 critical_stage_ms,
-                BULK_BUILD_TARGET_ITERATION_MS,
+                0.0, // target_iteration_ms (not applicable)
                 build_timings.facts_breakdown.par_iter_ms,
                 build_timings.facts_breakdown.merge_ms,
                 build_timings.facts_breakdown.serial_equivalent_ms,
@@ -548,15 +520,15 @@ impl BulkBuildEngine {
 
             batch_block_span = batch_controller.observe_and_update(
                 batch_count,
-                batch_block_span,
-                BatchControlObservation {
+                &ThroughputObservation {
                     actual_blocks: batch_stats.block_count,
-                    fetch_ms: fetch_elapsed.as_secs_f64() * 1000.0,
-                    build_ms: build_elapsed.as_secs_f64() * 1000.0,
-                    flush_ms: prev_flush_ms,
                     history_rows: pending_flush_row_count.0,
+                    l0_files_max: snap.l0_files,
+                    compaction_pending_bytes: snap.compaction_pending_mb * 1024 * 1024,
+                    immutable_memtables: snap.imm_memtables,
                 },
-            )?;
+                mem_profile,
+            );
 
             prefetch.update_span(batch_block_span);
 
@@ -5938,279 +5910,152 @@ mod tests {
     }
 
     #[test]
-    fn test_adaptive_batch_sizing_sparse_blocks() {
-        // Sparse blocks: ms_per_block is low, controller should expand batch.
-        // Phase 1 reality: 10K blocks, 466ms controllable → 0.047 ms/blk
-        let ms_per_block_ema: f64 = 0.047;
-        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema) as u64;
-        // desired = 1500/0.047 ≈ 31914
-        let clamped = desired.clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
+    fn throughput_controller_grows_when_no_pressure() {
+        let profile =
+            ckbadger_store::store::MemoryProfile::compute(32 * 1024 * 1024 * 1024, 8, false);
+        let mut controller = ThroughputController::new(20_000);
+
+        let obs = ThroughputObservation {
+            actual_blocks: 20_000,
+            history_rows: 400_000,
+            l0_files_max: 5,
+            compaction_pending_bytes: 0,
+            immutable_memtables: 2,
+        };
+        let next = controller.observe_and_update(3, &obs, &profile);
+        // 20_000 * 125% = 25_000
+        assert_eq!(next, 25_000, "should grow 25% when healthy");
+    }
+
+    #[test]
+    fn throughput_controller_shrinks_on_severe_l0() {
+        let profile =
+            ckbadger_store::store::MemoryProfile::compute(32 * 1024 * 1024 * 1024, 8, false);
+        let mut controller = ThroughputController::new(40_000);
+
+        let obs = ThroughputObservation {
+            actual_blocks: 40_000,
+            history_rows: 800_000,
+            l0_files_max: BULK_BUILD_L0_SEVERE,
+            compaction_pending_bytes: 0,
+            immutable_memtables: 2,
+        };
+        let next = controller.observe_and_update(3, &obs, &profile);
+        // 40_000 * 50% = 20_000
+        assert_eq!(next, 20_000, "severe L0 should halve span");
+    }
+
+    #[test]
+    fn throughput_controller_shrinks_on_moderate_l0() {
+        let profile =
+            ckbadger_store::store::MemoryProfile::compute(32 * 1024 * 1024 * 1024, 8, false);
+        let mut controller = ThroughputController::new(50_000);
+
+        let obs = ThroughputObservation {
+            actual_blocks: 50_000,
+            history_rows: 0, // no history rows, so row budget doesn't interfere
+            l0_files_max: BULK_BUILD_L0_MODERATE,
+            compaction_pending_bytes: 0,
+            immutable_memtables: 2,
+        };
+        let next = controller.observe_and_update(3, &obs, &profile);
+        // 50_000 * 80% = 40_000
+        assert_eq!(next, 40_000, "moderate L0 should shrink to 80%");
+    }
+
+    #[test]
+    fn throughput_controller_cooldown_prevents_oscillation() {
+        let profile =
+            ckbadger_store::store::MemoryProfile::compute(32 * 1024 * 1024 * 1024, 8, false);
+        let mut controller = ThroughputController::new(40_000);
+
+        // Severe pressure → sets cooldown to 3
+        let severe = ThroughputObservation {
+            actual_blocks: 40_000,
+            history_rows: 400_000,
+            l0_files_max: BULK_BUILD_L0_SEVERE,
+            compaction_pending_bytes: 0,
+            immutable_memtables: 2,
+        };
+        let span_after_severe = controller.observe_and_update(3, &severe, &profile);
+
+        // Healthy obs during cooldown → should NOT grow
+        let healthy = ThroughputObservation {
+            actual_blocks: 20_000,
+            history_rows: 200_000,
+            l0_files_max: 5,
+            compaction_pending_bytes: 0,
+            immutable_memtables: 2,
+        };
+        let next = controller.observe_and_update(4, &healthy, &profile);
+        assert_eq!(next, span_after_severe, "cooldown should prevent growth");
+
+        // Drain cooldown
+        let _ = controller.observe_and_update(5, &healthy, &profile);
+        let _ = controller.observe_and_update(6, &healthy, &profile);
+        // Now should grow
+        let after_cooldown = controller.observe_and_update(7, &healthy, &profile);
         assert!(
-            clamped > 30_000 && clamped < 35_000,
-            "sparse blocks should expand to ~32K, got {clamped}"
+            after_cooldown > span_after_severe,
+            "should grow after cooldown expires"
         );
     }
 
     #[test]
-    fn test_adaptive_batch_sizing_dense_blocks() {
-        // Dense blocks: ms_per_block is high, controller should shrink to floor.
-        // Phase 4 reality: 10K blocks, 1880ms controllable → 0.188 ms/blk
-        let ms_per_block_ema: f64 = 0.188;
-        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema) as u64;
-        // desired = 1500/0.188 = 7978
-        let clamped = desired.clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
-        assert_eq!(clamped, BULK_BUILD_MIN_BLOCK_SPAN); // clamped at floor
-    }
+    fn throughput_controller_caps_by_history_row_budget() {
+        let profile =
+            ckbadger_store::store::MemoryProfile::compute(32 * 1024 * 1024 * 1024, 8, false);
+        let mut controller = ThroughputController::new(50_000);
 
-    #[test]
-    fn test_adaptive_batch_sizing_very_sparse() {
-        // Very sparse: ms_per_block is very low, should clamp at ceiling.
-        // Hypothetical: 0.01 ms/blk → desired = 150K → clamp to 100K
-        let ms_per_block_ema: f64 = 0.01;
-        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema) as u64;
-        let clamped = desired.clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
-        assert_eq!(clamped, BULK_BUILD_MAX_BLOCK_SPAN); // clamped at ceiling
-    }
-
-    #[test]
-    fn test_adaptive_batch_sizing_at_clamp_boundaries() {
-        // Exactly at lower boundary: 0.15 ms/blk → 10000 blocks
-        let ms_per_block_ema: f64 = BULK_BUILD_TARGET_ITERATION_MS / 10_000.0;
-        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema) as u64;
-        assert_eq!(
-            desired.clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN),
-            BULK_BUILD_MIN_BLOCK_SPAN,
-        );
-
-        // Exactly at upper boundary: 0.015 ms/blk → 100000 blocks
-        let ms_per_block_ema: f64 = BULK_BUILD_TARGET_ITERATION_MS / 100_000.0;
-        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema) as u64;
-        assert_eq!(
-            desired.clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN),
-            BULK_BUILD_MAX_BLOCK_SPAN,
-        );
-    }
-
-    #[test]
-    fn test_adaptive_ema_update() {
-        // Verify EMA blending with alpha=0.5
-        let mut ema: f64 = BULK_BUILD_INITIAL_MS_PER_BLOCK; // 0.05
-        let sample: f64 = 0.10;
-        ema = ema * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA) + sample * BULK_BUILD_MS_PER_BLOCK_ALPHA;
-        // 0.05 * 0.5 + 0.10 * 0.5 = 0.075
-        assert!((ema - 0.075).abs() < 1e-10);
-
-        // Second sample converges further
-        ema = ema * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA) + sample * BULK_BUILD_MS_PER_BLOCK_ALPHA;
-        // 0.075 * 0.5 + 0.10 * 0.5 = 0.0875
-        assert!((ema - 0.0875).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_adaptive_step_ratio_clamp() {
-        // Verify per-step 2x limit prevents wild jumps
-        let batch_block_span: u64 = 20_000;
-        let step_max = (batch_block_span as f64 * BULK_BUILD_MAX_STEP_RATIO) as u64; // 40K
-        let step_min = (batch_block_span as f64 / BULK_BUILD_MAX_STEP_RATIO) as u64; // 10K
-
-        // Large desired value clamped to 2x current
-        let desired: u64 = 100_000;
-        let result = desired
-            .clamp(step_min, step_max)
-            .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
-        assert_eq!(result, 40_000, "should clamp to 2x current span");
-
-        // Small desired value clamped to 0.5x current
-        let desired: u64 = 5_000;
-        let result = desired
-            .clamp(step_min, step_max)
-            .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
-        assert_eq!(result, 10_000, "should clamp to max(0.5x, hard min)");
-    }
-
-    #[test]
-    fn test_adaptive_stall_stays_at_floor() {
-        // When already at min floor and a stall occurs, batch stays at floor.
-        let batch_block_span: u64 = BULK_BUILD_MIN_BLOCK_SPAN; // 10K
-        let mut ema: f64 = 0.188; // Phase 4 steady state
-
-        // Simulate 15s stall on 10K blocks
-        let stall_sample: f64 = 15_000.0 / 10_000.0; // 1.5 ms/blk
-        ema = ema * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA)
-            + stall_sample * BULK_BUILD_MS_PER_BLOCK_ALPHA;
-        // 0.188 * 0.5 + 1.5 * 0.5 = 0.844
-
-        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ema) as u64;
-        // 1500/0.844 = 1777
-        let step_max = (batch_block_span as f64 * BULK_BUILD_MAX_STEP_RATIO) as u64;
-        let step_min = (batch_block_span as f64 / BULK_BUILD_MAX_STEP_RATIO) as u64;
-        let result = desired
-            .clamp(step_min, step_max)
-            .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
-        assert_eq!(result, BULK_BUILD_MIN_BLOCK_SPAN, "stall: stays at floor");
-    }
-
-    #[test]
-    fn test_adaptive_runt_batch_skip() {
-        // Runt batch (actual < span/2) should not update EMA.
-        // Simulate batch_count > 1 (not the first batch) but actual blocks < half the span.
-        let batch_count: u64 = 3; // not the first batch
-        let batch_block_span: u64 = 30_000;
-        let actual_blocks: f64 = 5_000.0; // < 30000 * 0.5 = 15000
-        let is_representative = batch_count > 1 && actual_blocks >= (batch_block_span as f64 * 0.5);
-        assert!(!is_representative, "runt batch should be skipped");
-    }
-
-    #[test]
-    fn test_adaptive_cold_cache_skip() {
-        // First batch: batch_count is already incremented to 1 before the
-        // adaptive block runs (line 369), so first batch has batch_count=1.
-        // The check `batch_count > 1` skips it.
-        let batch_count: u64 = 1; // after increment
-        let actual_blocks: f64 = 10_000.0;
-        let batch_block_span: u64 = 10_000;
-        let is_representative = batch_count > 1 && actual_blocks >= (batch_block_span as f64 * 0.5);
+        // 50 rows/block sample, blended with initial EMA of 30 → EMA ~36
+        // Row budget = 800K / 36 ≈ 22K, much less than growth target (62.5K)
+        let obs = ThroughputObservation {
+            actual_blocks: 50_000,
+            history_rows: 2_500_000, // 50 rows/block
+            l0_files_max: 5,
+            compaction_pending_bytes: 0,
+            immutable_memtables: 2,
+        };
+        let next = controller.observe_and_update(3, &obs, &profile);
         assert!(
-            !is_representative,
-            "cold-cache first batch should be skipped"
+            next < 50_000,
+            "row budget should prevent growth, got {next}"
         );
     }
 
     #[test]
-    fn test_adaptive_normal_batch_representative() {
-        // Normal batch (batch_count > 1 after increment) should update EMA
-        let batch_count: u64 = 5;
-        let actual_blocks: f64 = 10_000.0;
-        let batch_block_span: u64 = 10_000;
-        let is_representative = batch_count > 1 && actual_blocks >= (batch_block_span as f64 * 0.5);
-        assert!(is_representative, "normal batch should be representative");
+    fn throughput_controller_skips_first_batch() {
+        let profile =
+            ckbadger_store::store::MemoryProfile::compute(32 * 1024 * 1024 * 1024, 8, false);
+        let mut controller = ThroughputController::new(20_000);
+
+        let obs = ThroughputObservation {
+            actual_blocks: 20_000,
+            history_rows: 400_000,
+            l0_files_max: 5,
+            compaction_pending_bytes: 0,
+            immutable_memtables: 2,
+        };
+        let next = controller.observe_and_update(1, &obs, &profile);
+        assert_eq!(next, 20_000, "first batch should be skipped");
     }
 
     #[test]
-    fn test_adaptive_phase_transition_convergence() {
-        // Simulate Phase 1 → Phase 2 transition.
-        // Phase 1 steady state: 0.04 ms/blk, batch = 37.5K blocks
-        let mut ema: f64 = 0.040;
-        let mut batch_block_span: u64 = 37_500;
+    fn throughput_controller_clamps_to_bounds() {
+        let profile =
+            ckbadger_store::store::MemoryProfile::compute(32 * 1024 * 1024 * 1024, 8, false);
+        let mut controller = ThroughputController::new(BULK_BUILD_MAX_BLOCK_SPAN);
 
-        // First Phase 2 batch: 37.5K blocks at 0.108 ms/blk → 4050ms
-        let sample = 0.108;
-        ema = ema * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA) + sample * BULK_BUILD_MS_PER_BLOCK_ALPHA;
-        // ema = 0.074
-        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ema) as u64;
-        let step_max = (batch_block_span as f64 * BULK_BUILD_MAX_STEP_RATIO) as u64;
-        let step_min = (batch_block_span as f64 / BULK_BUILD_MAX_STEP_RATIO) as u64;
-        batch_block_span = desired
-            .clamp(step_min, step_max)
-            .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
-        // desired ≈ 20270, within step bounds
-        assert!(
-            batch_block_span < 25_000 && batch_block_span > 15_000,
-            "first transition batch should be ~20K, got {}",
-            batch_block_span
-        );
-
-        // Second Phase 2 batch: converges further toward ~14K
-        ema = ema * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA) + sample * BULK_BUILD_MS_PER_BLOCK_ALPHA;
-        let desired = (BULK_BUILD_TARGET_ITERATION_MS / ema) as u64;
-        let step_max = (batch_block_span as f64 * BULK_BUILD_MAX_STEP_RATIO) as u64;
-        let step_min = (batch_block_span as f64 / BULK_BUILD_MAX_STEP_RATIO) as u64;
-        batch_block_span = desired
-            .clamp(step_min, step_max)
-            .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
-        assert!(
-            batch_block_span < 20_000 && batch_block_span > 12_000,
-            "second transition batch should converge to ~16K, got {}",
-            batch_block_span
-        );
-    }
-
-    #[test]
-    fn test_adaptive_ema_fail_fast_invariants() {
-        // Verify that the EMA must remain finite and positive
-        let ms_per_block_ema: f64 = 0.05;
-        assert!(ms_per_block_ema.is_finite() && ms_per_block_ema > 0.0);
-
-        // Verify desired_f64 is finite for valid EMA
-        let desired_f64 = BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema;
-        assert!(desired_f64.is_finite() && desired_f64 > 0.0);
-
-        // Verify that zero EMA would be caught (division produces Inf)
-        let bad_ema: f64 = 0.0;
-        let bad_desired = BULK_BUILD_TARGET_ITERATION_MS / bad_ema;
-        assert!(
-            !bad_desired.is_finite() || bad_desired < 0.0,
-            "zero EMA should produce non-finite desired"
-        );
-    }
-
-    #[test]
-    fn adaptive_batch_controller_shrinks_on_slow_flush_stage() {
-        let mut controller = AdaptiveBatchController::default();
-
-        let next = controller
-            .observe_and_update(
-                3,
-                32_000,
-                BatchControlObservation {
-                    actual_blocks: 32_000,
-                    fetch_ms: 1_400.0,
-                    build_ms: 1_200.0,
-                    flush_ms: 6_000.0,
-                    history_rows: 640_000,
-                },
-            )
-            .unwrap();
-
-        assert_eq!(next, 16_000, "slow flush should force span shrink");
-    }
-
-    #[test]
-    fn adaptive_batch_controller_caps_growth_by_history_row_budget() {
-        let mut controller = AdaptiveBatchController::default();
-
-        let next = controller
-            .observe_and_update(
-                3,
-                20_000,
-                BatchControlObservation {
-                    actual_blocks: 20_000,
-                    fetch_ms: 200.0,
-                    build_ms: 180.0,
-                    flush_ms: 190.0,
-                    history_rows: 1_000_000,
-                },
-            )
-            .unwrap();
-
-        assert_eq!(
-            next, 20_000,
-            "row budget should block expansion even when stage times are sparse"
-        );
-    }
-
-    #[test]
-    fn adaptive_batch_controller_expands_sparse_batches_when_work_budget_allows() {
-        let mut controller = AdaptiveBatchController::default();
-
-        let next = controller
-            .observe_and_update(
-                4,
-                20_000,
-                BatchControlObservation {
-                    actual_blocks: 20_000,
-                    fetch_ms: 940.0,
-                    build_ms: 700.0,
-                    flush_ms: 650.0,
-                    history_rows: 400_000,
-                },
-            )
-            .unwrap();
-
-        assert!(
-            next > 25_000 && next < 35_000,
-            "sparse batches should expand toward ~30k, got {next}"
-        );
+        // Already at max, healthy, no history rows → should stay at max
+        let obs = ThroughputObservation {
+            actual_blocks: BULK_BUILD_MAX_BLOCK_SPAN,
+            history_rows: 0,
+            l0_files_max: 5,
+            compaction_pending_bytes: 0,
+            immutable_memtables: 2,
+        };
+        let next = controller.observe_and_update(3, &obs, &profile);
+        assert_eq!(next, BULK_BUILD_MAX_BLOCK_SPAN, "should not exceed max");
     }
 
     #[test]

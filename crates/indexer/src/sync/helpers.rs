@@ -24,17 +24,10 @@ pub(crate) const PIPELINE_RESET_REASON_DEEP_FORK_PAUSED: u8 = 3;
 pub(crate) const PIPELINE_RESET_REASON_BATCH_WRITE_FAILED: u8 = 4;
 
 pub(crate) const ADAPTIVE_REASON_UNKNOWN: u8 = 0;
-pub(crate) const ADAPTIVE_REASON_PRESSURE_BACKOFF: u8 = 1;
-pub(crate) const ADAPTIVE_REASON_PRESSURE_BACKOFF_FLOOR_DOWN: u8 = 2;
-pub(crate) const ADAPTIVE_REASON_HEALTHY_STEP_UP: u8 = 3;
-pub(crate) const ADAPTIVE_REASON_HEALTHY_STEP_UP_FLOOR_RECOVER: u8 = 4;
-pub(crate) const ADAPTIVE_REASON_MODERATE_BACKOFF: u8 = 5;
-pub(crate) const ADAPTIVE_REASON_MODERATE_BACKOFF_INFLIGHT_RELIEF: u8 = 6;
-pub(crate) const ADAPTIVE_REASON_MODERATE_BACKOFF_FLOOR_DOWN: u8 = 7;
-pub(crate) const ADAPTIVE_REASON_THROUGHPUT_BACKOFF: u8 = 8;
-pub(crate) const ADAPTIVE_REASON_ADJUSTED: u8 = 9;
-pub(crate) const ADAPTIVE_REASON_EARLY_HEIGHT_BOOST: u8 = 10;
-pub(crate) const ADAPTIVE_REASON_SEVERE_PRESSURE_BACKOFF: u8 = 11;
+pub(crate) const ADAPTIVE_REASON_SEVERE_BACKOFF: u8 = 1;
+pub(crate) const ADAPTIVE_REASON_MODERATE_BACKOFF: u8 = 2;
+pub(crate) const ADAPTIVE_REASON_GROW_INFLIGHT: u8 = 3;
+pub(crate) const ADAPTIVE_REASON_GROW_BATCH: u8 = 4;
 
 // ---------------------------------------------------------------------------
 // Startup phase codec
@@ -77,36 +70,20 @@ pub(crate) fn decode_pipeline_reset_reason(reason_code: u8) -> &'static str {
 
 pub(crate) fn encode_adaptive_batch_reason(reason: &'static str) -> u8 {
     match reason {
-        "pressure_backoff" => ADAPTIVE_REASON_PRESSURE_BACKOFF,
-        "pressure_backoff_floor_down" => ADAPTIVE_REASON_PRESSURE_BACKOFF_FLOOR_DOWN,
-        "healthy_step_up" => ADAPTIVE_REASON_HEALTHY_STEP_UP,
-        "healthy_step_up_floor_recover" => ADAPTIVE_REASON_HEALTHY_STEP_UP_FLOOR_RECOVER,
+        "severe_backoff" => ADAPTIVE_REASON_SEVERE_BACKOFF,
         "moderate_backoff" => ADAPTIVE_REASON_MODERATE_BACKOFF,
-        "moderate_backoff_inflight_relief" => ADAPTIVE_REASON_MODERATE_BACKOFF_INFLIGHT_RELIEF,
-        "moderate_backoff_floor_down" => ADAPTIVE_REASON_MODERATE_BACKOFF_FLOOR_DOWN,
-        "throughput_backoff" => ADAPTIVE_REASON_THROUGHPUT_BACKOFF,
-        "adjusted" => ADAPTIVE_REASON_ADJUSTED,
-        "early_height_boost" => ADAPTIVE_REASON_EARLY_HEIGHT_BOOST,
-        "severe_pressure_backoff" => ADAPTIVE_REASON_SEVERE_PRESSURE_BACKOFF,
+        "grow_inflight" => ADAPTIVE_REASON_GROW_INFLIGHT,
+        "grow_batch" => ADAPTIVE_REASON_GROW_BATCH,
         _ => ADAPTIVE_REASON_UNKNOWN,
     }
 }
 
 pub(crate) fn decode_adaptive_batch_reason(reason_code: u8) -> Option<&'static str> {
     match reason_code {
-        ADAPTIVE_REASON_PRESSURE_BACKOFF => Some("pressure_backoff"),
-        ADAPTIVE_REASON_PRESSURE_BACKOFF_FLOOR_DOWN => Some("pressure_backoff_floor_down"),
-        ADAPTIVE_REASON_HEALTHY_STEP_UP => Some("healthy_step_up"),
-        ADAPTIVE_REASON_HEALTHY_STEP_UP_FLOOR_RECOVER => Some("healthy_step_up_floor_recover"),
+        ADAPTIVE_REASON_SEVERE_BACKOFF => Some("severe_backoff"),
         ADAPTIVE_REASON_MODERATE_BACKOFF => Some("moderate_backoff"),
-        ADAPTIVE_REASON_MODERATE_BACKOFF_INFLIGHT_RELIEF => {
-            Some("moderate_backoff_inflight_relief")
-        }
-        ADAPTIVE_REASON_MODERATE_BACKOFF_FLOOR_DOWN => Some("moderate_backoff_floor_down"),
-        ADAPTIVE_REASON_THROUGHPUT_BACKOFF => Some("throughput_backoff"),
-        ADAPTIVE_REASON_ADJUSTED => Some("adjusted"),
-        ADAPTIVE_REASON_EARLY_HEIGHT_BOOST => Some("early_height_boost"),
-        ADAPTIVE_REASON_SEVERE_PRESSURE_BACKOFF => Some("severe_pressure_backoff"),
+        ADAPTIVE_REASON_GROW_INFLIGHT => Some("grow_inflight"),
+        ADAPTIVE_REASON_GROW_BATCH => Some("grow_batch"),
         _ => None,
     }
 }
@@ -443,17 +420,10 @@ mod tests {
     #[test]
     fn test_adaptive_reason_roundtrip_known_values() {
         let reasons = [
-            "pressure_backoff",
-            "pressure_backoff_floor_down",
-            "severe_pressure_backoff",
-            "healthy_step_up",
-            "healthy_step_up_floor_recover",
+            "severe_backoff",
             "moderate_backoff",
-            "moderate_backoff_inflight_relief",
-            "moderate_backoff_floor_down",
-            "throughput_backoff",
-            "adjusted",
-            "early_height_boost",
+            "grow_inflight",
+            "grow_batch",
         ];
         for reason in reasons {
             let code = encode_adaptive_batch_reason(reason);

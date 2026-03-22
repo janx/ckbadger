@@ -686,19 +686,6 @@ impl Indexer {
                     continue;
                 }
 
-                if let Some((previous_target_batch_txs, new_target_batch_txs)) =
-                    adaptive_batch_controller_for_fetcher
-                        .maybe_apply_early_height_boost(start_block)
-                {
-                    info!(
-                        start_block,
-                        cutoff_height = ADAPTIVE_BATCH_EARLY_HEIGHT_CUTOFF,
-                        previous_target_batch_txs,
-                        new_target_batch_txs,
-                        "Adaptive batch warmup: boosted target batch txs for early-chain bulk sync"
-                    );
-                }
-
                 let adaptive_snapshot = adaptive_batch_controller_for_fetcher.snapshot();
                 let fetch_queue_depth_now = sender_queue_depth(&fetch_tx);
                 let parse_queue_depth_now = sender_queue_depth(&parse_tx_for_fetcher_depth);
@@ -2451,13 +2438,6 @@ impl Indexer {
                                 .update_after_write(AdaptiveBatchInput {
                                     write_ms: db_stage_ms,
                                     commit_ms: write_metrics.commit_ms,
-                                    batch_tx_count,
-                                    blocks_remaining,
-                                    parse_ms: Some(parser_perf_sample.parse_ms),
-                                    precompute_ms: Some(parser_perf_sample.precompute_ms),
-                                    parse_queue_fill_pct: queue_pressure.parse_queue_fill_pct,
-                                    writer_queue_fill_pct: queue_pressure.writer_queue_fill_pct,
-                                    memory_ratio_pct,
                                     l0_files_max: Some(compaction_pressure.l0_files_max),
                                     compaction_pending_bytes: Some(
                                         compaction_pressure.compaction_pending_bytes,
@@ -2500,7 +2480,7 @@ impl Indexer {
                                 l0_files_max = compaction_pressure.l0_files_max,
                                 memory_ratio_pct = memory_ratio_pct.map(|v| format!("{:.1}", v)),
                                 write_us_per_tx = write_us_per_tx.map(|v| format!("{:.1}", v)),
-                                adaptive_backoff_streak = self.adaptive_batch_controller.snapshot().backoff_streak,
+                                adaptive_cooldown = self.adaptive_batch_controller.snapshot().cooldown_steps,
                                 blocks_remaining,
                                 db_stage_ms = format!("{:.1}", db_stage_ms),
                                 db_commit_ms = format!("{:.1}", write_metrics.commit_ms),
