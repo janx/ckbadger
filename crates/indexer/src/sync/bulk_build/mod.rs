@@ -45,6 +45,9 @@ pub(crate) mod interner;
 pub(crate) mod live_cells;
 pub(crate) mod materialize;
 pub(crate) mod owners;
+#[allow(dead_code)]
+pub(crate) mod prefetch;
+pub(crate) mod sampler;
 pub(crate) mod sequencer;
 
 const BULK_BUILD_MIN_BLOCK_SPAN: u64 = 10_000;
@@ -110,7 +113,11 @@ impl BulkBuildEngine {
             indexer.append_only_store.as_ref(),
         );
         let disk_device = crate::sys_info::detect_disk_device(&indexer.config.domain_data_path);
-        let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(disk_device);
+        let sampler = sampler::BackgroundSampler::new(
+            indexer.writer.store().clone(),
+            std::time::Duration::from_millis(200),
+            disk_device,
+        );
         let token_info_cache = preload_token_info_cache(indexer.writer.store().as_ref())?;
         let fetch_pool = std::sync::Arc::new(
             rayon::ThreadPoolBuilder::new()
@@ -313,22 +320,21 @@ impl BulkBuildEngine {
                 batch_stats.tx_count,
             );
 
-            let perf_stats = indexer.writer.store().memory_stats();
-            let batch_env = crate::sys_info::read_batch_environment(&mut disk_tracker);
+            let snap = sampler.latest();
             let mut sample = BatchSample::new(
                 batch_stats.block_count,
                 fetch_elapsed.as_secs_f64() + build_elapsed.as_secs_f64(),
                 0.0,
-                perf_stats.compaction_pending_bytes / (1024 * 1024),
-                perf_stats.l0_files_count,
-                perf_stats.immutable_memtables,
+                snap.compaction_pending_mb,
+                snap.l0_files,
+                snap.imm_memtables,
                 chrono::Utc::now()
                     .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                     .to_string(),
-                batch_env.load_avg_1m,
-                batch_env.mem_available_mb,
-                batch_env.disk_read_mb,
-                batch_env.disk_write_mb,
+                snap.load_avg_1m,
+                snap.mem_available_mb,
+                snap.disk_read_mb,
+                snap.disk_write_mb,
             );
             sample.engine = "bulk_build".to_string();
             sample.txs = batch_stats.tx_count;
@@ -656,6 +662,7 @@ impl BulkBuildEngine {
         );
         let report = materializer.finish();
         indexer.record_bulk_sync_perf_materialization_report(report);
+        sampler.shutdown();
         Ok(())
     }
 }

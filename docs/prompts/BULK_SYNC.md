@@ -30,7 +30,7 @@ Bulk sync is the high-throughput index building path used with a fresh store.
    Reorg handling is a live-sync-only path.
 
 7. **Assume optimal path for speed**  
-   Bulk sync must optimize for the happy path and minimize total wall clock.
+   Bulk sync must optimize for the happy path and maximum throughput.  
    Use optimistic execution instead of defensive recovery branches in the hot path.
 
 8. **Abnormal state policy**  
