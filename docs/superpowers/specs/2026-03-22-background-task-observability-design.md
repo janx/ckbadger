@@ -29,11 +29,13 @@ Add logging, measurement, and TUI coverage for post-sync background tasks (DOB d
 
 All tasks are spawned via `tokio::spawn` with no external progress reporting. Operators can only observe them through log output.
 
+**Prefetch worker and background sampler** are also listed above but are intentionally **out of scope** for this spec. They are bulk-sync-only internal mechanisms whose metrics are already captured in `BulkBuildProgressData` and `PrefetchWorkerStats`. They do not run after sync completes and do not need operator-facing TUI coverage.
+
 ### Existing Patterns
 
 The TUI already reads sync progress from RocksDB:
 - `get_sync_status()` / `get_sync_progress()` / `get_memory_stats()` — written by indexer, read by TUI via secondary reader
-- API-side data reaches TUI via the `/sync/status` HTTP endpoint
+- API-side data reaches TUI via the `/statistics/network` HTTP endpoint (`crates/tui/src/db.rs` `get_chain_info_and_api_service_info()`)
 
 The design follows these existing patterns rather than introducing new communication channels.
 
@@ -90,13 +92,16 @@ pub enum BackgroundTaskState {
 }
 ```
 
-Cache key constant: `pub const BACKGROUND_TASKS_CACHE_KEY: &str = "bg:tasks";`
+Cache key constant in `crates/common/src/sync.rs` (alongside existing `SYNC_STATUS_CACHE_KEY`):
+`pub const BACKGROUND_TASKS_CACHE_KEY: &str = "bg:tasks";`
+
+**Note on `#[serde(rename_all = "camelCase")]`**: This annotation is relevant only for the JSON serialization path (API responses, TUI HTTP fetch). RocksDB storage uses **bincode** (matching `SyncStatus`/`RuntimeStatus` in `sync_ops.rs`). The `camelCase` rename has no effect on bincode encoding but is kept on the types for API response serialization.
 
 ## Storage Layer
 
 ### Store Operations (`crates/ckbadger-store/src/background_task_ops.rs`)
 
-No new column family. Uses existing metadata CF with a fixed key, same pattern as `get_sync_status()`.
+No new column family. Uses existing metadata CF (`CF_SYNC_META`) with a fixed key, same pattern as `get_sync_status()`. Serialization format: **bincode** (matching `SyncStatus`/`RuntimeStatus`).
 
 ```rust
 /// Read current background tasks state.
@@ -114,7 +119,9 @@ pub fn update_background_task(
 ) -> Result<()>
 ```
 
-The `update_background_task` helper handles the read-modify-write. Each task calls this with its own name. No contention risk since tasks update at most every few seconds.
+The `update_background_task` helper handles the read-modify-write (get -> deserialize -> modify -> serialize -> put). This is non-atomic, same pattern as `update_sync_status` and `update_runtime_status` in `sync_ops.rs`.
+
+**Concurrency safety**: The DOB decode worker runs on a separate tokio task from the main indexer pipeline. The "dob_decode" Waiting entry is initialized in `indexer.rs` *before* `tokio::spawn`, ensuring the entry exists before the worker starts. After that, only the DOB worker's spawned task updates the "dob_decode" entry — no other writer touches this task name. Each task name has a single writer, so no read-modify-write race can occur.
 
 ### StoreBatch (`crates/ckbadger-store/src/batch.rs`)
 
@@ -131,6 +138,8 @@ For tasks that want to write atomically with other batch operations.
 /// Called once at DOB decode worker start to get progress denominator.
 pub fn count_undecoded_dob_spores(&self) -> Result<u64>
 ```
+
+**Performance note**: This follows the same iteration path as `list_undecoded_dob_spores` (full CF scan with deserialization and filter). This is acceptable as a **one-time startup cost** before the worker begins processing. The count may drift slightly as the worker processes entries, but this is fine for progress display — the denominator is a snapshot, not a live guarantee.
 
 ## Instrumenting Background Tasks
 
@@ -200,22 +209,22 @@ pub fn update_background_task(
 
 ## API Endpoint Change
 
-Extend the `/sync/status` response (in the route handler, not the stored type) with:
+Extend the `/statistics/network` response (`NetworkStats` or the enclosing response type) with:
 
 ```rust
 #[serde(default)]
 pub api_background_tasks: Option<Vec<BackgroundTaskEntry>>,
 ```
 
-Handler reads from `AppState.background_tasks` and includes it in the response. Backward-compatible (optional field, defaults to None for older clients).
+Handler reads from `AppState.background_tasks` and includes it in the response. Backward-compatible (optional field with `#[serde(default)]`, defaults to None for older clients). This reuses the endpoint TUI already calls (`crates/tui/src/db.rs` line 573), requiring no additional HTTP requests.
 
 ## TUI Display (`crates/tui/src/ui.rs`)
 
 ### Data Source
 
 TUI merges two sources into a single `Vec<BackgroundTaskEntry>`:
-1. **Indexer tasks**: `get_background_tasks()` from RocksDB secondary reader
-2. **API tasks**: `api_background_tasks` field from `/sync/status` HTTP response
+1. **Indexer tasks**: `get_background_tasks()` from RocksDB secondary reader — fetched within `get_local_snapshot()` alongside existing sync status/progress reads
+2. **API tasks**: `api_background_tasks` field from `/statistics/network` HTTP response — fetched within existing `get_chain_info_and_api_service_info()` call, requiring no additional HTTP requests
 
 ### Layout
 
@@ -251,10 +260,12 @@ New "Background Tasks" section, rendered as a compact table after sync progress:
 
 | Test | Location | What |
 |------|----------|------|
-| `BackgroundTaskEntry` serde roundtrip | `common/src/sync.rs` | Serialize/deserialize all states |
-| `update_background_task` insert + update | `ckbadger-store/src/background_task_ops.rs` | Insert new task, update existing, verify isolation |
-| `count_undecoded_dob_spores` | `ckbadger-store/src/spore_ops.rs` | Returns 0 for empty store, correct count with test data |
-| `/sync/status` includes `apiBackgroundTasks` | `api/tests/api_integration.rs` | Field present in response |
+| `BackgroundTaskEntry` serde roundtrip | `common/src/sync.rs` | Serialize/deserialize all states via both bincode and JSON |
+| `BackgroundTaskState` transitions | `common/src/sync.rs` | Verify all valid state values serialize correctly |
+| `update_background_task` insert + update | `ckbadger-store/src/background_task_ops.rs` | Insert new task, update existing, verify other tasks untouched (isolation) |
+| `update_background_task` multiple tasks | `ckbadger-store/src/background_task_ops.rs` | Insert "dob_decode" and "cache_warmup", update one, verify the other is unchanged |
+| `count_undecoded_dob_spores` | `ckbadger-store/src/spore_ops.rs` | Returns 0 for empty store; correct count with mix of decoded and undecoded test data |
+| `/statistics/network` includes `apiBackgroundTasks` | `api/tests/api_integration.rs` | Field present in response when tasks exist |
 
 ## Scope
 
@@ -270,7 +281,8 @@ New "Background Tasks" section, rendered as a compact table after sync progress:
 | `crates/indexer/src/sync/indexer.rs` | Initialize dob_decode task entry as Waiting |
 | `crates/api/src/lib.rs` | `background_tasks` field on AppState + helper |
 | `crates/api/src/warmup.rs` | Instrument 3 warmup tasks |
-| `crates/api/src/routes/sync.rs` | Include api_background_tasks in response |
+| `crates/api/src/routes/statistics.rs` | Include api_background_tasks in `/statistics/network` response |
+| `crates/tui/src/db.rs` | Read background tasks from RocksDB in `get_local_snapshot()`, parse api_background_tasks from `/statistics/network` |
 | `crates/tui/src/ui.rs` | New Background Tasks section |
 
 ### Storage Impact
