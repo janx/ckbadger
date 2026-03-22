@@ -17,7 +17,8 @@ use ckbadger_dob_decoder::fetch::fetch_decoder_binary;
 use ckbadger_dob_decoder::types::{DecoderRef, DobTrait};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    DobDecodedEntry, DobDecodedTrait, ObjectExtra, SporeMediaProfile, SporeMediaSource,
+    ClusterAggregate, DobDecodedEntry, DobDecodedTrait, ObjectEntry, ObjectExtra,
+    SporeMediaProfile, SporeMediaSource, StorageDependencyTier,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -326,12 +327,14 @@ impl DobDecodeWorker {
             )
         })?;
 
-        if let ObjectExtra::Spore {
+        let (old_tier, new_tier) = if let ObjectExtra::Spore {
             ref mut media_profile,
             ..
         } = entry.extra
         {
+            let old_tier = media_profile.tier;
             merge_media_sources(media_profile, new_sources);
+            (old_tier, media_profile.tier)
         } else {
             // Not a spore entry — this shouldn't happen since we only decode DOB spores,
             // but log and return without error.
@@ -340,11 +343,106 @@ impl DobDecodeWorker {
                 "expected Spore extra when updating media profile"
             );
             return Ok(());
-        }
+        };
 
         let mut batch = StoreBatch::new(&self.store);
+        if old_tier != new_tier {
+            self.sync_cluster_aggregate_for_media_tier_change(
+                spore_id, &entry, old_tier, new_tier, &mut batch,
+            )?;
+        }
         batch.put_spore(spore_id, &entry);
         batch.commit()?;
+        Ok(())
+    }
+
+    fn sync_cluster_aggregate_for_media_tier_change(
+        &self,
+        spore_id: &[u8],
+        entry: &ObjectEntry,
+        old_tier: StorageDependencyTier,
+        new_tier: StorageDependencyTier,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        if !entry.is_live {
+            return Ok(());
+        }
+
+        let cluster_id = entry.collection_id.as_deref().with_context(|| {
+            format!(
+                "live spore missing collection_id during DOB media profile update: spore_id=0x{}",
+                hex::encode(spore_id)
+            )
+        })?;
+        let mut agg = self
+            .store
+            .get_cluster_aggregate(cluster_id)?
+            .with_context(|| {
+                format!(
+                    "missing cluster aggregate during DOB media profile update: spore_id=0x{}, cluster_id=0x{}",
+                    hex::encode(spore_id),
+                    hex::encode(cluster_id)
+                )
+            })?;
+
+        self.adjust_cluster_tier_count(
+            cluster_id,
+            &mut agg,
+            old_tier,
+            -1,
+            "dob decode media profile update",
+        )?;
+        self.adjust_cluster_tier_count(
+            cluster_id,
+            &mut agg,
+            new_tier,
+            1,
+            "dob decode media profile update",
+        )?;
+        batch.put_cluster_aggregate(cluster_id, &agg);
+        Ok(())
+    }
+
+    fn adjust_cluster_tier_count(
+        &self,
+        cluster_id: &[u8],
+        agg: &mut ClusterAggregate,
+        tier: StorageDependencyTier,
+        delta: i64,
+        context: &str,
+    ) -> Result<()> {
+        if delta == 0 {
+            return Ok(());
+        }
+
+        let slot = match tier {
+            StorageDependencyTier::FullyOnCkb => &mut agg.fully_on_ckb_count,
+            StorageDependencyTier::FullyOnCkbAndBtc => &mut agg.fully_on_ckb_and_btc_count,
+            StorageDependencyTier::DecentralizedDependent => &mut agg.decentralized_dependent_count,
+            StorageDependencyTier::CentralizedDependent => &mut agg.centralized_dependent_count,
+            StorageDependencyTier::Unknown => &mut agg.unknown_count,
+        };
+        let next = slot.checked_add(delta).ok_or_else(|| {
+            anyhow::anyhow!(
+                "cluster tier count overflow during DOB media profile update: cluster_id=0x{}, tier={}, current={}, delta={}, context={}",
+                hex::encode(cluster_id),
+                tier.as_str(),
+                *slot,
+                delta,
+                context
+            )
+        })?;
+        if next < 0 {
+            bail!(
+                "cluster tier count underflow during DOB media profile update: cluster_id=0x{}, tier={}, current={}, delta={}, context={}",
+                hex::encode(cluster_id),
+                tier.as_str(),
+                *slot,
+                delta,
+                context
+            );
+        }
+        *slot = next;
         Ok(())
     }
 }
@@ -776,6 +874,93 @@ mod tests {
             ckbadger_store::types::StorageDependencyTier::CentralizedDependent
         );
         assert!(profile.has_renderable_image); // .png extension
+    }
+
+    #[test]
+    fn test_update_spore_media_profile_updates_cluster_aggregate_tier_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let cache_dir = dir.path().join("decoder-cache");
+        let decoder_cache = Arc::new(DecoderBinaryCache::new(&cache_dir).unwrap());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker = DobDecodeWorker::new(
+            store.clone(),
+            store.clone(),
+            decoder_cache,
+            "http://localhost:9999".to_string(),
+            shutdown,
+        );
+
+        let cluster_id = vec![0x11; 32];
+        let spore_id = [0x22u8; 32];
+        let spore_entry = ckbadger_store::types::ObjectEntry {
+            standard: ckbadger_store::types::ObjectStandard::Spore,
+            collection_id: Some(cluster_id.clone()),
+            token_id: None,
+            owner_lock_hash: Some(vec![0x33; 32]),
+            name: None,
+            description: None,
+            is_live: true,
+            created_at_block: 42,
+            created_at_tx: vec![0x44; 32],
+            extra: ckbadger_store::types::ObjectExtra::Spore {
+                content_type: "dob/0".to_string(),
+                content_length: 3,
+                media_profile: SporeMediaProfile {
+                    tier: ckbadger_store::types::StorageDependencyTier::FullyOnCkb,
+                    sources: vec![SporeMediaSource {
+                        uri: "ckbfs://existing-cell".to_string(),
+                        scheme: "ckbfs".to_string(),
+                        source_location: "payload_text".to_string(),
+                        dependency_tier: ckbadger_store::types::StorageDependencyTier::FullyOnCkb,
+                    }],
+                    has_renderable_image: false,
+                    issues: vec![],
+                },
+            },
+        };
+        store.put_spore_direct(&spore_id, &spore_entry).unwrap();
+
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_cluster_aggregate(
+            &cluster_id,
+            &ckbadger_store::types::ClusterAggregate {
+                total_count: 1,
+                live_count: 1,
+                owner_count: 1,
+                fully_on_ckb_count: 1,
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+
+        let new_sources = vec![SporeMediaSource {
+            uri: "btcfs://inscription123i0".to_string(),
+            scheme: "btcfs".to_string(),
+            source_location: "dob_decoded_trait".to_string(),
+            dependency_tier: ckbadger_store::types::StorageDependencyTier::FullyOnCkbAndBtc,
+        }];
+
+        worker
+            .update_spore_media_profile(&spore_id, &new_sources)
+            .unwrap();
+
+        let updated_spore = store.get_spore(&spore_id).unwrap().unwrap();
+        match updated_spore.extra {
+            ObjectExtra::Spore { media_profile, .. } => {
+                assert_eq!(
+                    media_profile.tier,
+                    ckbadger_store::types::StorageDependencyTier::FullyOnCkbAndBtc
+                );
+            }
+            other => panic!("expected spore extra, got {other:?}"),
+        }
+
+        let updated_agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
+        assert_eq!(updated_agg.fully_on_ckb_count, 0);
+        assert_eq!(updated_agg.fully_on_ckb_and_btc_count, 1);
+        assert_eq!(updated_agg.live_count, 1);
+        assert_eq!(updated_agg.total_count, 1);
     }
 
     #[test]
