@@ -112,6 +112,7 @@ fn create_router_without_warmup(config: AppConfig) -> axum::Router {
         ckb_db_cleanup: config.ckb_db_cleanup,
         mem_cache: InMemoryCache::new(),
         asset_cache_warmup_error: Arc::new(std::sync::RwLock::new(None)),
+        background_tasks: Arc::new(std::sync::RwLock::new(Default::default())),
     });
 
     axum::Router::new()

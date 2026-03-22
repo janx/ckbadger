@@ -10,6 +10,7 @@ use crate::utils::{
     resolve_nft_collection_storage_tier_override,
 };
 use crate::AppState;
+use ckbadger_common::BackgroundTaskState;
 use ckbadger_store::AddressBalance;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
@@ -208,6 +209,13 @@ fn resolve_storage_tier(
 /// since the last successful refresh, avoiding wasteful CF scans when idle.
 pub async fn refresh_assets_cache_loop(state: Arc<AppState>) {
     let mut last_refreshed_tip: i64 = -1;
+
+    state.update_background_task("assets_refresh", |entry| {
+        entry.state = BackgroundTaskState::Running;
+        entry.started_at = Some(chrono::Utc::now().timestamp());
+        entry.message = Some("Assets refresh loop started".to_string());
+    });
+
     loop {
         let current_tip = state
             .store
@@ -221,20 +229,37 @@ pub async fn refresh_assets_cache_loop(state: Arc<AppState>) {
             continue;
         }
 
+        let cycle_start = std::time::Instant::now();
         let state_clone = state.clone();
         let result =
             tokio::task::spawn_blocking(move || refresh_assets_cache_sync(&state_clone)).await;
+
+        let cycle_elapsed_ms = cycle_start.elapsed().as_secs_f64() * 1000.0;
 
         match result {
             Ok(Ok(())) => {
                 last_refreshed_tip = current_tip;
                 tracing::debug!("Assets cache refreshed at tip {}", current_tip);
+                state.update_background_task("assets_refresh", |entry| {
+                    entry.elapsed_ms = Some(cycle_elapsed_ms);
+                    entry.message =
+                        Some(format!("Last refresh: {:.1}s", cycle_elapsed_ms / 1000.0));
+                    entry.error = None;
+                });
             }
             Ok(Err(e)) => {
                 tracing::warn!("Assets cache refresh failed: {}", e);
+                state.update_background_task("assets_refresh", |entry| {
+                    entry.elapsed_ms = Some(cycle_elapsed_ms);
+                    entry.error = Some(e.to_string());
+                });
             }
             Err(e) => {
                 tracing::warn!("Assets cache refresh task panicked: {}", e);
+                state.update_background_task("assets_refresh", |entry| {
+                    entry.elapsed_ms = Some(cycle_elapsed_ms);
+                    entry.error = Some(format!("task panicked: {}", e));
+                });
             }
         }
 
@@ -749,9 +774,36 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
 }
 
 pub async fn warmup_assets_cache_once(state: Arc<AppState>) -> anyhow::Result<()> {
-    let refresh = tokio::task::spawn_blocking(move || refresh_assets_cache_sync(&state))
-        .await
-        .map_err(|e| anyhow::anyhow!("assets cache warmup task panicked: {}", e))?;
+    state.update_background_task("cache_warmup", |entry| {
+        entry.state = BackgroundTaskState::Running;
+        entry.started_at = Some(chrono::Utc::now().timestamp());
+        entry.message = Some("Warming up asset caches...".to_string());
+    });
+
+    let start = std::time::Instant::now();
+    let refresh = tokio::task::spawn_blocking(move || {
+        let result = refresh_assets_cache_sync(&state);
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        match &result {
+            Ok(()) => {
+                state.update_background_task("cache_warmup", |entry| {
+                    entry.state = BackgroundTaskState::Completed;
+                    entry.elapsed_ms = Some(elapsed_ms);
+                    entry.message = Some("Asset caches ready".to_string());
+                });
+            }
+            Err(e) => {
+                state.update_background_task("cache_warmup", |entry| {
+                    entry.state = BackgroundTaskState::Failed;
+                    entry.elapsed_ms = Some(elapsed_ms);
+                    entry.error = Some(e.to_string());
+                });
+            }
+        }
+        result
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("assets cache warmup task panicked: {}", e))?;
     refresh
 }
 
@@ -792,6 +844,16 @@ fn warmup_cell_charts_from_store(state: &AppState) -> Result<(), String> {
 pub async fn warmup_chart_caches(state: Arc<AppState>) {
     info!("Starting cache warmup for charts...");
 
+    // Total chart types: 2 materialized + 10 async = 12
+    let chart_start = std::time::Instant::now();
+    state.update_background_task("chart_warmup", |entry| {
+        entry.state = BackgroundTaskState::Running;
+        entry.started_at = Some(chrono::Utc::now().timestamp());
+        entry.message = Some("Warming up chart caches...".to_string());
+        entry.progress_current = Some(0);
+        entry.progress_total = Some(12);
+    });
+
     // Warm up materialized chart caches from store snapshots (fast read, no CF scan).
     let state_for_cells = state.clone();
     match tokio::task::spawn_blocking(move || warmup_cell_charts_from_store(&state_for_cells)).await
@@ -821,9 +883,25 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
                     .await;
             }
             info!("Warmed up materialized chart caches (cell-size + address-cohort)");
+            state.update_background_task("chart_warmup", |entry| {
+                entry.progress_current = Some(2);
+                entry.message = Some("Materialized charts ready".to_string());
+            });
         }
-        Ok(Err(e)) => tracing::warn!("Failed to warmup materialized charts: {}", e),
-        Err(e) => tracing::warn!("Materialized chart warmup panicked: {}", e),
+        Ok(Err(e)) => {
+            tracing::warn!("Failed to warmup materialized charts: {}", e);
+            state.update_background_task("chart_warmup", |entry| {
+                entry.progress_current = Some(2);
+                entry.message = Some(format!("Materialized charts failed: {}", e));
+            });
+        }
+        Err(e) => {
+            tracing::warn!("Materialized chart warmup panicked: {}", e);
+            state.update_background_task("chart_warmup", |entry| {
+                entry.progress_current = Some(2);
+                entry.message = Some(format!("Materialized chart warmup panicked: {}", e));
+            });
+        }
     }
 
     // These chart caches used to be prefilled with placeholder payloads (often empty),
@@ -880,6 +958,14 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
         run_warmup!("chart:total-supply", warmup_total_supply),
         run_warmup!("chart:secondary-issuance", warmup_secondary_issuance),
     );
+
+    let elapsed_ms = chart_start.elapsed().as_secs_f64() * 1000.0;
+    state.update_background_task("chart_warmup", |entry| {
+        entry.state = BackgroundTaskState::Completed;
+        entry.progress_current = Some(12);
+        entry.elapsed_ms = Some(elapsed_ms);
+        entry.message = Some("All chart caches ready".to_string());
+    });
 
     info!("Cache warmup completed");
 }

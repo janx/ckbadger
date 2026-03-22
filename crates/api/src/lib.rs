@@ -10,6 +10,7 @@ pub mod warmup;
 pub mod ws;
 
 use axum::{routing::get, Router};
+use ckbadger_common::{BackgroundTaskEntry, BackgroundTaskState, BackgroundTasksData};
 use ckbadger_store::CkbadgerStore;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -66,6 +67,8 @@ pub struct AppState {
     pub mem_cache: InMemoryCache,
     /// Last asset cache warmup failure. `None` means warmup is still pending or last refresh succeeded.
     pub asset_cache_warmup_error: Arc<RwLock<Option<String>>>,
+    /// Background task status for observability (API-side tasks only).
+    pub background_tasks: Arc<RwLock<BackgroundTasksData>>,
 }
 
 impl AppState {
@@ -81,6 +84,38 @@ impl AppState {
             .asset_cache_warmup_error
             .write()
             .expect("asset cache warmup error lock poisoned") = None;
+    }
+
+    /// Update a single API-side background task by name, inserting if absent.
+    pub fn update_background_task(
+        &self,
+        task_name: &str,
+        f: impl FnOnce(&mut BackgroundTaskEntry),
+    ) {
+        let mut data = self
+            .background_tasks
+            .write()
+            .expect("background tasks lock poisoned");
+        let entry = match data.tasks.iter_mut().find(|t| t.name == task_name) {
+            Some(existing) => existing,
+            None => {
+                data.tasks.push(BackgroundTaskEntry {
+                    name: task_name.to_string(),
+                    state: BackgroundTaskState::Waiting,
+                    message: None,
+                    progress_current: None,
+                    progress_total: None,
+                    rate: None,
+                    eta_seconds: None,
+                    started_at: None,
+                    elapsed_ms: None,
+                    error: None,
+                });
+                data.tasks.last_mut().unwrap()
+            }
+        };
+        f(entry);
+        data.updated_at = chrono::Utc::now().timestamp();
     }
 
     pub fn asset_cache_unavailable(&self, pending_message: &'static str) -> ApiRouteError {
@@ -151,6 +186,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         ckb_db_cleanup: config.ckb_db_cleanup,
         mem_cache,
         asset_cache_warmup_error: Arc::new(RwLock::new(None)),
+        background_tasks: Arc::new(RwLock::new(BackgroundTasksData::default())),
     });
 
     if let Err(e) = warmup::warmup_assets_cache_once(state.clone()).await {
