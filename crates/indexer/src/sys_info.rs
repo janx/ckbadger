@@ -1,5 +1,6 @@
 use std::ffi::CStr;
 use std::fs;
+use std::time::{Duration, Instant};
 
 /// Static system environment captured once at sync start.
 #[derive(Debug, Clone, Default)]
@@ -20,67 +21,333 @@ pub struct BatchEnvironment {
     pub mem_available_mb: u64,
     pub disk_read_mb: f64,
     pub disk_write_mb: f64,
+    pub disk_read_mb_s: Option<f64>,
+    pub disk_write_mb_s: Option<f64>,
+    pub disk_read_iops: Option<f64>,
+    pub disk_write_iops: Option<f64>,
+    pub disk_util_pct: Option<f64>,
+    pub disk_await_ms: Option<f64>,
+    pub disk_avg_queue_depth: Option<f64>,
+    pub disk_in_flight: Option<u64>,
+    pub disk_state: Option<String>,
 }
 
-/// Tracks cumulative disk sector counters between batches.
+/// Windowed disk state classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskTelemetryState {
+    Idle,
+    Active,
+    Saturated,
+    Unavailable,
+}
+
+/// Windowed disk telemetry values derived from `/proc/diskstats`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiskWindowMetrics {
+    pub read_mb: f64,
+    pub write_mb: f64,
+    pub read_mb_s: f64,
+    pub write_mb_s: f64,
+    pub read_iops: f64,
+    pub write_iops: f64,
+    pub util_pct: Option<f64>,
+    pub await_ms: Option<f64>,
+    pub avg_queue_depth: Option<f64>,
+    pub in_flight: Option<u64>,
+    pub state: DiskTelemetryState,
+}
+
+/// Result of sampling a disk telemetry window.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DiskWindowSample {
+    Warmup,
+    Sample(DiskWindowMetrics),
+    Unavailable { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct DiskStatsSnapshot {
+    read_ios: u64,
+    read_sectors: u64,
+    read_time_ms: u64,
+    write_ios: u64,
+    write_sectors: u64,
+    write_time_ms: u64,
+    in_flight: u64,
+    time_io_ms: u64,
+    weighted_time_io_ms: u64,
+}
+
+#[derive(Debug)]
+enum DiskStatsSnapshotError {
+    MissingDevice,
+    MalformedRow(String),
+}
+
+const DISK_IDLE_UTIL_PCT: f64 = 10.0;
+const DISK_IDLE_MB_S: f64 = 1.0;
+const DISK_IDLE_QUEUE_DEPTH: f64 = 0.5;
+const DISK_SATURATED_UTIL_PCT: f64 = 90.0;
+const DISK_SATURATED_UTIL_PCT_WITH_QUEUE: f64 = 85.0;
+const DISK_SATURATED_QUEUE_DEPTH: f64 = 1.0;
+const DISK_SATURATED_AWAIT_MS: f64 = 15.0;
+const DISK_SATURATED_WRITE_MB_S: f64 = 1.0;
+
+/// Tracks windowed disk counters between batches.
 #[derive(Debug)]
 pub struct DiskStatsTracker {
     device: String,
-    prev_read_sectors: u64,
-    prev_write_sectors: u64,
-    initialized: bool,
+    prev_snapshot: Option<DiskStatsSnapshot>,
+    prev_timestamp: Option<Instant>,
 }
 
 impl DiskStatsTracker {
     pub fn new(device: String) -> Self {
         Self {
             device,
-            prev_read_sectors: 0,
-            prev_write_sectors: 0,
-            initialized: false,
+            prev_snapshot: None,
+            prev_timestamp: None,
         }
     }
 
-    /// Reads /proc/diskstats and returns (read_mb_delta, write_mb_delta).
+    /// Reads /proc/diskstats and returns the legacy MB delta view.
     /// First call returns (0.0, 0.0) since no previous reading exists.
     pub fn read_delta(&mut self) -> (f64, f64) {
-        let content = match fs::read_to_string("/proc/diskstats") {
-            Ok(c) => c,
-            Err(_) => return (0.0, 0.0),
-        };
-        self.compute_delta(&content)
+        match self.read_window() {
+            DiskWindowSample::Sample(metrics) => (metrics.read_mb, metrics.write_mb),
+            DiskWindowSample::Warmup | DiskWindowSample::Unavailable { .. } => (0.0, 0.0),
+        }
     }
 
     /// Testable variant that takes content string.
     #[cfg(test)]
     pub fn read_delta_from_content(&mut self, content: &str) -> (f64, f64) {
-        self.compute_delta(content)
+        match self.read_window_from_content(content, Instant::now()) {
+            DiskWindowSample::Sample(metrics) => (metrics.read_mb, metrics.write_mb),
+            DiskWindowSample::Warmup | DiskWindowSample::Unavailable { .. } => (0.0, 0.0),
+        }
     }
 
-    fn compute_delta(&mut self, content: &str) -> (f64, f64) {
-        let Some((read_sectors, write_sectors)) = parse_diskstats(content, &self.device) else {
-            return (0.0, 0.0);
+    /// Reads /proc/diskstats and returns an explicit window sample.
+    pub fn read_window(&mut self) -> DiskWindowSample {
+        let content = match fs::read_to_string("/proc/diskstats") {
+            Ok(content) => content,
+            Err(err) => {
+                return DiskWindowSample::Unavailable {
+                    reason: format!("failed to read /proc/diskstats: {err}"),
+                }
+            }
+        };
+        self.read_window_from_content(&content, Instant::now())
+    }
+
+    fn read_window_from_content(&mut self, content: &str, now: Instant) -> DiskWindowSample {
+        let snapshot = match parse_diskstats_snapshot(content, &self.device) {
+            Ok(snapshot) => snapshot,
+            Err(DiskStatsSnapshotError::MissingDevice) => {
+                return DiskWindowSample::Unavailable {
+                    reason: format!("diskstats device '{}' not found", self.device),
+                }
+            }
+            Err(DiskStatsSnapshotError::MalformedRow(reason)) => {
+                return DiskWindowSample::Unavailable { reason }
+            }
         };
 
-        if !self.initialized {
-            self.prev_read_sectors = read_sectors;
-            self.prev_write_sectors = write_sectors;
-            self.initialized = true;
-            return (0.0, 0.0);
+        let Some(prev_snapshot) = self.prev_snapshot.as_ref() else {
+            self.prev_snapshot = Some(snapshot);
+            self.prev_timestamp = Some(now);
+            return DiskWindowSample::Warmup;
+        };
+        let Some(prev_timestamp) = self.prev_timestamp else {
+            return DiskWindowSample::Unavailable {
+                reason: format!(
+                    "diskstats tracker for '{}' is in an inconsistent state",
+                    self.device
+                ),
+            };
+        };
+
+        let Some(window) = now.checked_duration_since(prev_timestamp) else {
+            return DiskWindowSample::Unavailable {
+                reason: format!("diskstats window for '{}' moved backwards", self.device),
+            };
+        };
+
+        let metrics =
+            match compute_disk_window_metrics(prev_snapshot, &snapshot, window, &self.device) {
+                Ok(metrics) => metrics,
+                Err(reason) => {
+                    return DiskWindowSample::Unavailable { reason };
+                }
+            };
+
+        self.prev_snapshot = Some(snapshot);
+        self.prev_timestamp = Some(now);
+        DiskWindowSample::Sample(metrics)
+    }
+}
+
+fn compute_disk_window_metrics(
+    prev: &DiskStatsSnapshot,
+    curr: &DiskStatsSnapshot,
+    window: Duration,
+    device: &str,
+) -> Result<DiskWindowMetrics, String> {
+    let window_secs = window.as_secs_f64();
+    let window_ms = window_secs * 1000.0;
+    if window_ms <= 0.0 {
+        return Err(format!(
+            "diskstats window for '{}' had zero duration",
+            device
+        ));
+    }
+
+    let read_ios_delta = checked_delta(curr.read_ios, prev.read_ios, "read_ios", device)?;
+    let read_sectors_delta =
+        checked_delta(curr.read_sectors, prev.read_sectors, "read_sectors", device)?;
+    let read_time_ms_delta =
+        checked_delta(curr.read_time_ms, prev.read_time_ms, "read_time_ms", device)?;
+    let write_ios_delta = checked_delta(curr.write_ios, prev.write_ios, "write_ios", device)?;
+    let write_sectors_delta = checked_delta(
+        curr.write_sectors,
+        prev.write_sectors,
+        "write_sectors",
+        device,
+    )?;
+    let write_time_ms_delta = checked_delta(
+        curr.write_time_ms,
+        prev.write_time_ms,
+        "write_time_ms",
+        device,
+    )?;
+    let time_io_ms_delta = checked_delta(curr.time_io_ms, prev.time_io_ms, "time_io_ms", device)?;
+    let weighted_time_io_ms_delta = checked_delta(
+        curr.weighted_time_io_ms,
+        prev.weighted_time_io_ms,
+        "weighted_time_io_ms",
+        device,
+    )?;
+
+    let read_mb = read_sectors_delta as f64 * 512.0 / (1024.0 * 1024.0);
+    let write_mb = write_sectors_delta as f64 * 512.0 / (1024.0 * 1024.0);
+    let read_mb_s = read_mb / window_secs;
+    let write_mb_s = write_mb / window_secs;
+    let read_iops = read_ios_delta as f64 / window_secs;
+    let write_iops = write_ios_delta as f64 / window_secs;
+    let util_pct = Some(time_io_ms_delta as f64 / window_ms * 100.0);
+    let await_ms = if read_ios_delta + write_ios_delta == 0 {
+        None
+    } else {
+        Some(
+            (read_time_ms_delta + write_time_ms_delta) as f64
+                / (read_ios_delta + write_ios_delta) as f64,
+        )
+    };
+    let avg_queue_depth = Some(weighted_time_io_ms_delta as f64 / window_ms);
+    let state = classify_disk_window(read_mb_s, write_mb_s, util_pct, await_ms, avg_queue_depth);
+
+    Ok(DiskWindowMetrics {
+        read_mb,
+        write_mb,
+        read_mb_s,
+        write_mb_s,
+        read_iops,
+        write_iops,
+        util_pct,
+        await_ms,
+        avg_queue_depth,
+        in_flight: Some(curr.in_flight),
+        state,
+    })
+}
+
+fn classify_disk_window(
+    read_mb_s: f64,
+    write_mb_s: f64,
+    util_pct: Option<f64>,
+    await_ms: Option<f64>,
+    avg_queue_depth: Option<f64>,
+) -> DiskTelemetryState {
+    let util = util_pct.unwrap_or(0.0);
+    let queue_depth = avg_queue_depth.unwrap_or(0.0);
+    let await_ms = await_ms.unwrap_or(0.0);
+
+    if util >= DISK_SATURATED_UTIL_PCT
+        || (util >= DISK_SATURATED_UTIL_PCT_WITH_QUEUE && queue_depth >= DISK_SATURATED_QUEUE_DEPTH)
+        || (await_ms >= DISK_SATURATED_AWAIT_MS && write_mb_s >= DISK_SATURATED_WRITE_MB_S)
+    {
+        DiskTelemetryState::Saturated
+    } else if util <= DISK_IDLE_UTIL_PCT
+        && read_mb_s <= DISK_IDLE_MB_S
+        && write_mb_s <= DISK_IDLE_MB_S
+        && queue_depth <= DISK_IDLE_QUEUE_DEPTH
+    {
+        DiskTelemetryState::Idle
+    } else {
+        DiskTelemetryState::Active
+    }
+}
+
+fn checked_delta(curr: u64, prev: u64, field: &str, device: &str) -> Result<u64, String> {
+    curr.checked_sub(prev).ok_or_else(|| {
+        format!(
+            "diskstats counter '{}' for device '{}' moved backwards: prev={}, curr={}",
+            field, device, prev, curr
+        )
+    })
+}
+
+fn parse_diskstats_snapshot(
+    content: &str,
+    device: &str,
+) -> Result<DiskStatsSnapshot, DiskStatsSnapshotError> {
+    for line in content.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.get(2) != Some(&device) {
+            continue;
         }
 
-        let read_delta = read_sectors - self.prev_read_sectors;
-        let write_delta = write_sectors - self.prev_write_sectors;
+        if fields.len() < 14 {
+            return Err(DiskStatsSnapshotError::MalformedRow(format!(
+                "diskstats row for device '{}' has {} fields, expected at least 14",
+                device,
+                fields.len()
+            )));
+        }
 
-        self.prev_read_sectors = read_sectors;
-        self.prev_write_sectors = write_sectors;
+        let parse = |idx: usize, name: &str| -> Result<u64, DiskStatsSnapshotError> {
+            fields
+                .get(idx)
+                .ok_or_else(|| {
+                    DiskStatsSnapshotError::MalformedRow(format!(
+                        "diskstats row for device '{}' missing field '{}'",
+                        device, name
+                    ))
+                })?
+                .parse::<u64>()
+                .map_err(|err| {
+                    DiskStatsSnapshotError::MalformedRow(format!(
+                        "diskstats row for device '{}' has invalid '{}' value '{}': {}",
+                        device, name, fields[idx], err
+                    ))
+                })
+        };
 
-        // Each sector is 512 bytes
-        let read_mb = read_delta as f64 * 512.0 / (1024.0 * 1024.0);
-        let write_mb = write_delta as f64 * 512.0 / (1024.0 * 1024.0);
-
-        (read_mb, write_mb)
+        return Ok(DiskStatsSnapshot {
+            read_ios: parse(3, "read_ios")?,
+            read_sectors: parse(5, "read_sectors")?,
+            read_time_ms: parse(6, "read_time_ms")?,
+            write_ios: parse(7, "write_ios")?,
+            write_sectors: parse(9, "write_sectors")?,
+            write_time_ms: parse(10, "write_time_ms")?,
+            in_flight: parse(11, "in_flight")?,
+            time_io_ms: parse(12, "time_io_ms")?,
+            weighted_time_io_ms: parse(13, "weighted_time_io_ms")?,
+        });
     }
+
+    Err(DiskStatsSnapshotError::MissingDevice)
 }
 
 // ---------------------------------------------------------------------------
@@ -148,15 +415,9 @@ pub fn parse_load_avg_1m(loadavg: &str) -> f64 {
 /// /proc/diskstats format: fields [2]=name [5]=rd_sectors [9]=wr_sectors
 /// (0-indexed after splitting whitespace)
 pub fn parse_diskstats(content: &str, device: &str) -> Option<(u64, u64)> {
-    for line in content.lines() {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.len() >= 10 && fields[2] == device {
-            let read_sectors = fields[5].parse::<u64>().ok()?;
-            let write_sectors = fields[9].parse::<u64>().ok()?;
-            return Some((read_sectors, write_sectors));
-        }
-    }
-    None
+    parse_diskstats_snapshot(content, device)
+        .ok()
+        .map(|snapshot| (snapshot.read_sectors, snapshot.write_sectors))
 }
 
 /// Resolve (device_display_name, filesystem) for a path from /proc/mounts content.
@@ -668,16 +929,63 @@ fn resolve_scheduler_device(device: &str) -> String {
 }
 
 /// Read per-batch environment. Uses cross-platform POSIX APIs for load/memory,
-/// with Linux-specific procfs for disk I/O deltas.
+/// with Linux-specific procfs windowed disk telemetry.
 /// Never fails (returns defaults on error).
 pub fn read_batch_environment(disk_tracker: &mut DiskStatsTracker) -> BatchEnvironment {
-    let (disk_read_mb, disk_write_mb) = disk_tracker.read_delta();
-
-    BatchEnvironment {
-        load_avg_1m: posix_load_avg_1m(),
-        mem_available_mb: read_mem_available_mb(),
-        disk_read_mb,
-        disk_write_mb,
+    match disk_tracker.read_window() {
+        DiskWindowSample::Warmup => BatchEnvironment {
+            load_avg_1m: posix_load_avg_1m(),
+            mem_available_mb: read_mem_available_mb(),
+            disk_read_mb: 0.0,
+            disk_write_mb: 0.0,
+            disk_read_mb_s: None,
+            disk_write_mb_s: None,
+            disk_read_iops: None,
+            disk_write_iops: None,
+            disk_util_pct: None,
+            disk_await_ms: None,
+            disk_avg_queue_depth: None,
+            disk_in_flight: None,
+            disk_state: Some("warmup".to_string()),
+        },
+        DiskWindowSample::Sample(metrics) => BatchEnvironment {
+            load_avg_1m: posix_load_avg_1m(),
+            mem_available_mb: read_mem_available_mb(),
+            disk_read_mb: metrics.read_mb,
+            disk_write_mb: metrics.write_mb,
+            disk_read_mb_s: Some(metrics.read_mb_s),
+            disk_write_mb_s: Some(metrics.write_mb_s),
+            disk_read_iops: Some(metrics.read_iops),
+            disk_write_iops: Some(metrics.write_iops),
+            disk_util_pct: metrics.util_pct,
+            disk_await_ms: metrics.await_ms,
+            disk_avg_queue_depth: metrics.avg_queue_depth,
+            disk_in_flight: metrics.in_flight,
+            disk_state: Some(
+                match metrics.state {
+                    DiskTelemetryState::Idle => "idle",
+                    DiskTelemetryState::Active => "active",
+                    DiskTelemetryState::Saturated => "saturated",
+                    DiskTelemetryState::Unavailable => "unavailable",
+                }
+                .to_string(),
+            ),
+        },
+        DiskWindowSample::Unavailable { .. } => BatchEnvironment {
+            load_avg_1m: posix_load_avg_1m(),
+            mem_available_mb: read_mem_available_mb(),
+            disk_read_mb: 0.0,
+            disk_write_mb: 0.0,
+            disk_read_mb_s: None,
+            disk_write_mb_s: None,
+            disk_read_iops: None,
+            disk_write_iops: None,
+            disk_util_pct: None,
+            disk_await_ms: None,
+            disk_avg_queue_depth: None,
+            disk_in_flight: None,
+            disk_state: Some("unavailable".to_string()),
+        },
     }
 }
 
@@ -769,6 +1077,23 @@ MemAvailable:   45000000 kB
     }
 
     #[test]
+    fn test_parse_diskstats_snapshot_reads_required_fields() {
+        let content = "\
+ 259       0 nvme0n1 123456 0 500000 17 654321 0 300000 29 4 31 41 0 0 0 0 0
+";
+        let snapshot = parse_diskstats_snapshot(content, "nvme0n1").unwrap();
+        assert_eq!(snapshot.read_ios, 123456);
+        assert_eq!(snapshot.read_sectors, 500000);
+        assert_eq!(snapshot.read_time_ms, 17);
+        assert_eq!(snapshot.write_ios, 654321);
+        assert_eq!(snapshot.write_sectors, 300000);
+        assert_eq!(snapshot.write_time_ms, 29);
+        assert_eq!(snapshot.in_flight, 4);
+        assert_eq!(snapshot.time_io_ms, 31);
+        assert_eq!(snapshot.weighted_time_io_ms, 41);
+    }
+
+    #[test]
     fn test_parse_mount_info() {
         let mounts = "\
 /dev/nvme0n1p2 /home btrfs rw,relatime 0 0
@@ -829,6 +1154,78 @@ MemAvailable:   45000000 kB
     }
 
     #[test]
+    fn test_disk_tracker_reports_warmup_then_sample() {
+        let content1 = "\
+ 259       0 nvme0n1 100 0 2048 10 200 0 4096 20 1 30 40 0 0 0 0 0
+";
+        let content2 = "\
+ 259       0 nvme0n1 110 0 4096 30 206 0 8192 80 4 90 180 0 0 0 0 0
+";
+        let mut tracker = DiskStatsTracker::new("nvme0n1".to_string());
+        let start = Instant::now();
+        assert!(matches!(
+            tracker.read_window_from_content(content1, start),
+            DiskWindowSample::Warmup
+        ));
+
+        let sample = tracker.read_window_from_content(content2, start + Duration::from_secs(2));
+        let DiskWindowSample::Sample(metrics) = sample else {
+            panic!("expected sample, got {:?}", sample);
+        };
+
+        assert!((metrics.read_mb - 1.0).abs() < f64::EPSILON);
+        assert!((metrics.write_mb - 2.0).abs() < f64::EPSILON);
+        assert!((metrics.read_mb_s - 0.5).abs() < f64::EPSILON);
+        assert!((metrics.write_mb_s - 1.0).abs() < f64::EPSILON);
+        assert!((metrics.read_iops - 5.0).abs() < f64::EPSILON);
+        assert!((metrics.write_iops - 3.0).abs() < f64::EPSILON);
+        assert_eq!(metrics.util_pct, Some(3.0));
+        assert_eq!(metrics.await_ms, Some(5.0));
+        assert_eq!(metrics.avg_queue_depth, Some(0.07));
+        assert_eq!(metrics.in_flight, Some(4));
+        assert_eq!(metrics.state, DiskTelemetryState::Idle);
+    }
+
+    #[test]
+    fn test_disk_tracker_zero_io_window_marks_await_unavailable() {
+        let content1 = "\
+ 259       0 nvme0n1 100 0 2048 10 200 0 4096 20 1 30 40 0 0 0 0 0
+";
+        let content2 = "\
+ 259       0 nvme0n1 100 0 2048 10 200 0 4096 20 0 30 40 0 0 0 0 0
+";
+        let mut tracker = DiskStatsTracker::new("nvme0n1".to_string());
+        let start = Instant::now();
+        tracker.read_window_from_content(content1, start);
+        let sample = tracker.read_window_from_content(content2, start + Duration::from_millis(250));
+        let DiskWindowSample::Sample(metrics) = sample else {
+            panic!("expected sample, got {:?}", sample);
+        };
+
+        assert_eq!(metrics.read_iops, 0.0);
+        assert_eq!(metrics.write_iops, 0.0);
+        assert_eq!(metrics.await_ms, None);
+        assert_eq!(metrics.util_pct, Some(0.0));
+        assert_eq!(metrics.avg_queue_depth, Some(0.0));
+        assert_eq!(metrics.in_flight, Some(0));
+        assert_eq!(metrics.state, DiskTelemetryState::Idle);
+    }
+
+    #[test]
+    fn test_disk_tracker_missing_device_reports_unavailable() {
+        let content = "\
+ 259       0 nvme0n1 100 0 2048 10 200 0 4096 20 1 30 40 0 0 0 0 0
+";
+        let mut tracker = DiskStatsTracker::new("sda".to_string());
+        let sample = tracker.read_window_from_content(content, Instant::now());
+        let DiskWindowSample::Unavailable { reason } = sample else {
+            panic!("expected unavailable, got {:?}", sample);
+        };
+
+        assert!(reason.contains("sda"));
+    }
+
+    #[test]
     fn test_resolve_diskstats_device_nvme_direct() {
         // ext4 on raw NVMe partition: major:minor match
         let mountinfo = "36 1 259:2 / /home rw - ext4 /dev/nvme0n1p2 rw\n";
@@ -852,6 +1249,28 @@ MemAvailable:   45000000 kB
         assert_eq!(
             resolve_diskstats_device(mountinfo, diskstats, "/data/ckbadger"),
             Some("dm-0".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_diskstats_device_supports_dm_and_btrfs_cases() {
+        let dm_mountinfo = "42 1 253:0 / /data rw - ext4 /dev/dm-0 rw\n";
+        let dm_diskstats = "\
+ 253       0 dm-0 80 0 400000 0 180 0 280000 0 0 0 0 0 0 0 0 0
+";
+        assert_eq!(
+            resolve_diskstats_device(dm_mountinfo, dm_diskstats, "/data/ckbadger"),
+            Some("dm-0".to_string())
+        );
+
+        let btrfs_mountinfo = "42 1 0:27 /@home /home rw - btrfs /dev/sda1 rw,compress=zstd:3\n";
+        let btrfs_diskstats = "\
+   8       0 sda 100 0 200 0 300 0 400 0 0 0 0 0 0 0 0 0
+   8       1 sda1 80 0 150 0 250 0 350 0 0 0 0 0 0 0 0 0
+";
+        assert_eq!(
+            resolve_diskstats_device(btrfs_mountinfo, btrfs_diskstats, "/home/user/data"),
+            Some("sda1".to_string())
         );
     }
 
