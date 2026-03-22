@@ -1275,6 +1275,19 @@ mod tests {
             spv.description.as_deref(),
             Some("Bitcoin SPV light-client type script used by RGB++ flows.")
         );
+
+        let dotbit_income_code_hash =
+            hex::decode("ebafc1ebe95b88cac426f984ed5fce998089ecad0cd2f8b17755c9de4cb02162")
+                .unwrap();
+        let dotbit_income = store
+            .get_script_info(&dotbit_income_code_hash)
+            .unwrap()
+            .expect(".bit income script should be imported");
+        assert_eq!(dotbit_income.name.as_deref(), Some(".bit Income Cell"));
+        assert_eq!(
+            dotbit_income.description.as_deref(),
+            Some(".bit income aggregation type script.")
+        );
     }
 
     #[test]
