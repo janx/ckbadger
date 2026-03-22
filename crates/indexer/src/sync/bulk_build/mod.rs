@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -172,7 +172,12 @@ fn fetch_pool_thread_count(
     if available_parallelism == 0 {
         bail!("bulk build available parallelism must be > 0");
     }
-    Ok(configured_parallel_fetch_size.min(available_parallelism))
+    // Scale to ~1/3 of available cores to avoid cache contention with the
+    // build phase's global rayon pool. Clamped to [2, 8]: floor 2 for
+    // minimum parallelism, ceiling 8 because fetch is I/O-bound (more
+    // threads don't improve SSD random read throughput).
+    let scaled = (available_parallelism / 3).clamp(2, 8);
+    Ok(configured_parallel_fetch_size.min(scaled))
 }
 
 fn build_fetch_pool(parallel_fetch_size: usize) -> Result<rayon::ThreadPool> {
@@ -278,6 +283,7 @@ impl BulkBuildEngine {
         } else {
             indexer.progress.current() + 1
         };
+        let build_active = Arc::new(AtomicBool::new(false));
         let mut prefetch = prefetch::PrefetchChannelHandle::new(
             PREFETCH_DEPTH,
             ckb_store.clone(),
@@ -286,6 +292,7 @@ impl BulkBuildEngine {
             initial_handoff,
             configured_batch_size,
             sampler.subscribe(),
+            Arc::clone(&build_active),
         );
         // Bounded flush channel: the build loop sends PendingFlush into
         // a channel. A dedicated worker drains it serially, committing
@@ -337,8 +344,10 @@ impl BulkBuildEngine {
             );
 
             let build_started = Instant::now();
+            build_active.store(true, Ordering::Release);
             let (batch_stats, build_timings, pending_flush) =
                 runtime.apply_blocks(&blocks, indexer.config.is_mainnet(), &token_info_cache)?;
+            build_active.store(false, Ordering::Release);
             let build_elapsed = build_started.elapsed();
 
             // Read the most recent flush_ms from the worker (non-blocking).
@@ -557,6 +566,7 @@ impl BulkBuildEngine {
             total_fetches = prefetch_stats.total_fetches,
             total_blocks = prefetch_stats.total_blocks,
             disk_throttle_count = prefetch_stats.disk_throttle_count,
+            build_gate_count = prefetch_stats.build_gate_count,
             exit_reason = ?prefetch_stats.exit_reason,
             "Prefetch worker finished"
         );
@@ -6077,9 +6087,18 @@ mod tests {
     }
 
     #[test]
-    fn fetch_pool_thread_count_caps_to_available_parallelism() {
-        assert_eq!(fetch_pool_thread_count(64, 16).unwrap(), 16);
-        assert_eq!(fetch_pool_thread_count(8, 16).unwrap(), 8);
+    fn fetch_pool_thread_count_scales_with_available_parallelism() {
+        // Formula: min(configured, (parallelism / 3).clamp(2, 8))
+        // 24 cores → scaled=8, 16 cores → scaled=5, 12 → 4, 8 → 2, 4 → 2
+        assert_eq!(fetch_pool_thread_count(64, 24).unwrap(), 8); // 24/3=8
+        assert_eq!(fetch_pool_thread_count(64, 16).unwrap(), 5); // 16/3=5
+        assert_eq!(fetch_pool_thread_count(64, 12).unwrap(), 4); // 12/3=4
+        assert_eq!(fetch_pool_thread_count(64, 8).unwrap(), 2); // 8/3=2, clamped to 2
+        assert_eq!(fetch_pool_thread_count(64, 4).unwrap(), 2); // 4/3=1, clamped to 2
+        assert_eq!(fetch_pool_thread_count(64, 32).unwrap(), 8); // 32/3=10, capped at 8
+        assert_eq!(fetch_pool_thread_count(64, 64).unwrap(), 8); // 64/3=21, capped at 8
+        assert_eq!(fetch_pool_thread_count(3, 24).unwrap(), 3); // configured < scaled
+        assert_eq!(fetch_pool_thread_count(1, 24).unwrap(), 1); // configured < floor
     }
 
     #[test]
