@@ -364,6 +364,7 @@ level = "info"
 pub struct ResolvedStorePaths {
     pub domain_data: PathBuf,
     pub append_only_data: PathBuf,
+    pub decoder_cache: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -399,6 +400,7 @@ pub fn resolve_store_paths(work_dir: &Path, store: &StoreConfig) -> ResolvedStor
     ResolvedStorePaths {
         domain_data: resolve_workdir_path(work_dir, &store.domain_data_path),
         append_only_data: resolve_workdir_path(work_dir, &store.append_only_data_path),
+        decoder_cache: resolve_workdir_path(work_dir, &store.decoder_cache_path),
     }
 }
 

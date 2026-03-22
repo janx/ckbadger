@@ -46,6 +46,13 @@ pub struct Config {
     pub force_startup_cleanup: bool,
     #[serde(default)]
     pub store_runtime_config: StoreRuntimeConfig,
+    /// Path to the DOB decoder binary cache directory.
+    #[serde(default = "default_decoder_cache_path")]
+    pub decoder_cache_path: String,
+}
+
+fn default_decoder_cache_path() -> String {
+    "data/decoder-cache".to_string()
 }
 
 fn default_batch_size() -> usize {
@@ -178,6 +185,7 @@ mod tests {
             network: "mainnet".to_string(),
             force_startup_cleanup: false,
             store_runtime_config: StoreRuntimeConfig::default(),
+            decoder_cache_path: default_decoder_cache_path(),
         }
     }
 

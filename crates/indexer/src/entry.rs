@@ -31,6 +31,7 @@ pub struct IndexerServiceConfig {
     pub pipeline_buffer: usize,
     pub bulk_sync_threshold: u64,
     pub store_runtime_config: StoreRuntimeConfig,
+    pub decoder_cache_path: String,
 }
 
 impl From<IndexerServiceConfig> for Config {
@@ -53,6 +54,7 @@ impl From<IndexerServiceConfig> for Config {
             network: svc.network,
             force_startup_cleanup: false,
             store_runtime_config: svc.store_runtime_config,
+            decoder_cache_path: svc.decoder_cache_path,
         }
     }
 }
@@ -1265,6 +1267,7 @@ mod tests {
                 memory_budget_gb: Some(24),
                 direct_io_reads: false,
             },
+            decoder_cache_path: "/data/decoder-cache".to_string(),
         };
 
         let config: Config = svc.into();
@@ -1286,5 +1289,6 @@ mod tests {
         assert!(config.start_block.is_none());
         assert_eq!(config.store_runtime_config.memory_budget_gb, Some(24));
         assert!(!config.store_runtime_config.direct_io_reads);
+        assert_eq!(config.decoder_cache_path, "/data/decoder-cache");
     }
 }

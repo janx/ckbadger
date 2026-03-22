@@ -22,9 +22,12 @@ use ckb_store_reader::CkbChainReader;
 use crate::rpc::CkbRpcClient;
 use crate::runtime_diag::{generate_incident_id, read_cgroup_memory_snapshot, FlightRecorder};
 
+use ckbadger_dob_decoder::cache::DecoderBinaryCache;
+
 use super::adaptive::*;
 use super::bulk_build::BulkBuildEngine;
 use super::diagnostics::*;
+use super::dob_decode_worker::DobDecodeWorker;
 use super::helpers::*;
 use super::sync_mode::*;
 use super::types::{CachedCellInfo, CachedUdtCellInfo};
@@ -1263,6 +1266,55 @@ impl Indexer {
                 }
             }
         });
+
+        // Spawn DOB decode worker as a fire-and-forget background task.
+        // It waits until sync catches up to near-tip, then processes all
+        // undecoded DOB spores in a single pass.
+        {
+            let dob_store = Arc::clone(self.writer.store());
+            let dob_append_only = Arc::clone(&self.append_only_store);
+            let dob_rpc_url = self.config.ckb_rpc_url.clone();
+            let dob_shutdown = Arc::clone(&self.shutdown_requested);
+            let dob_progress = Arc::clone(&self.progress);
+            let dob_threshold = self.config.bulk_sync_threshold;
+            let dob_cache_path = self.config.decoder_cache_path.clone();
+
+            tokio::spawn(async move {
+                // Wait until sync is within threshold of chain tip.
+                loop {
+                    if dob_shutdown.load(Ordering::Relaxed) {
+                        info!("DOB decode worker cancelled before start (shutdown)");
+                        return;
+                    }
+                    if dob_progress.blocks_remaining() <= dob_threshold {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                }
+
+                let decoder_cache = match DecoderBinaryCache::new(std::path::Path::new(
+                    &dob_cache_path,
+                )) {
+                    Ok(cache) => Arc::new(cache),
+                    Err(e) => {
+                        warn!(error = %e, "Failed to initialize DOB decoder cache, skipping DOB decode worker");
+                        return;
+                    }
+                };
+
+                let worker = DobDecodeWorker::new(
+                    dob_store,
+                    dob_append_only,
+                    decoder_cache,
+                    dob_rpc_url,
+                    dob_shutdown,
+                );
+
+                if let Err(e) = worker.run().await {
+                    warn!(error = %e, "DOB decode worker failed");
+                }
+            });
+        }
 
         match sync_path {
             SyncPath::BulkBuild => BulkBuildEngine::run(self).await,

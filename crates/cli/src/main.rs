@@ -229,6 +229,7 @@ fn build_indexer_service_config(
         pipeline_buffer: config.indexer.pipeline_buffer,
         bulk_sync_threshold: config.indexer.bulk_sync_threshold,
         store_runtime_config: store_runtime_config(&config.store),
+        decoder_cache_path: store_paths.decoder_cache.to_string_lossy().to_string(),
     })
 }
 
