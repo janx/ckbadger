@@ -19,62 +19,64 @@ fn non_empty_name(name: Option<&str>) -> Option<String> {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct ScriptNameOverridesDoc {
+struct NftTiersDoc {
     #[serde(default)]
-    nft_storage_tier_overrides: HashMap<String, String>,
+    overrides: HashMap<String, String>,
 }
 
-static NFT_STORAGE_TIER_OVERRIDES: LazyLock<HashMap<String, String>> =
-    LazyLock::new(|| match load_and_validate_nft_storage_tier_overrides() {
-        Ok(overrides) => overrides,
-        Err(e) => panic!("nft_storage_tier_overrides initialization failed: {e}"),
-    });
+static NFT_COMPOSITION_TIER_OVERRIDES: LazyLock<HashMap<String, String>> =
+    LazyLock::new(
+        || match load_and_validate_nft_composition_tier_overrides() {
+            Ok(overrides) => overrides,
+            Err(e) => panic!("nft_composition_tier_overrides initialization failed: {e}"),
+        },
+    );
 
 const VALID_TIERS: &[&str] = &[
-    "fully_on_ckb_and_btc",
-    "fully_on_ckb",
-    "decentralized_dependent",
-    "centralized_dependent",
+    "btc_ckb",
+    "pure_ckb",
+    "decentralized_mixture",
+    "centralized_mixture",
     "unknown",
 ];
 
-fn default_nft_storage_tier_overrides() -> HashMap<String, String> {
+fn default_nft_composition_tier_overrides() -> HashMap<String, String> {
     let mut defaults = HashMap::new();
     for standard in [".bit", "dotbit", "did:ckb", "did_ckb"] {
         defaults.insert(
             normalize_standard_alias_key(standard),
-            "fully_on_ckb".to_string(),
+            "pure_ckb".to_string(),
         );
     }
     defaults
 }
 
-fn load_and_validate_nft_storage_tier_overrides() -> Result<HashMap<String, String>> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/script-name-overrides.json");
+fn load_and_validate_nft_composition_tier_overrides() -> Result<HashMap<String, String>> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata/nft-tiers.toml");
     let content = match std::fs::read_to_string(&path) {
         Ok(content) => content,
         Err(_) => {
             // File may not exist in deployed binaries (CARGO_MANIFEST_DIR is
             // baked at compile time). Fall back to hardcoded defaults.
-            return Ok(default_nft_storage_tier_overrides());
+            return Ok(default_nft_composition_tier_overrides());
         }
     };
 
-    let parsed: ScriptNameOverridesDoc = serde_json::from_str(&content).map_err(|e| {
+    let parsed: NftTiersDoc = toml::from_str(&content).map_err(|e| {
         anyhow!(
-            "malformed docs/script-name-overrides.json at {}: {}",
+            "malformed docs/metadata/nft-tiers.toml at {}: {}",
             path.display(),
             e
         )
     })?;
 
     let mut overrides = HashMap::new();
-    for (standard, tier) in parsed.nft_storage_tier_overrides {
+    for (standard, tier) in parsed.overrides {
         let standard = normalize_standard_alias_key(&standard);
         let normalized_tier = tier.trim().to_ascii_lowercase();
         if !VALID_TIERS.contains(&normalized_tier.as_str()) {
             bail!(
-                "invalid nft_storage_tier_overrides tier for standard='{}': '{}' (valid: {})",
+                "invalid nft_composition_tier_overrides tier for standard='{}': '{}' (valid: {})",
                 standard,
                 normalized_tier,
                 VALID_TIERS.join(", ")
@@ -94,9 +96,9 @@ fn normalize_standard_alias_key(standard: &str) -> String {
     }
 }
 
-pub fn resolve_nft_collection_storage_tier_override(standard: &str) -> Option<&'static str> {
+pub fn resolve_nft_collection_composition_tier_override(standard: &str) -> Option<&'static str> {
     let normalized = normalize_standard_alias_key(standard);
-    NFT_STORAGE_TIER_OVERRIDES
+    NFT_COMPOSITION_TIER_OVERRIDES
         .get(&normalized)
         .map(String::as_str)
 }
@@ -328,24 +330,27 @@ mod tests {
     }
 
     #[test]
-    fn nft_storage_tier_overrides_cover_dotbit_and_did_ckb() {
+    fn nft_composition_tier_overrides_cover_dotbit_and_did_ckb() {
         assert_eq!(
-            resolve_nft_collection_storage_tier_override("dotbit"),
-            Some("fully_on_ckb")
+            resolve_nft_collection_composition_tier_override("dotbit"),
+            Some("pure_ckb")
         );
         assert_eq!(
-            resolve_nft_collection_storage_tier_override(".bit"),
-            Some("fully_on_ckb")
+            resolve_nft_collection_composition_tier_override(".bit"),
+            Some("pure_ckb")
         );
         assert_eq!(
-            resolve_nft_collection_storage_tier_override("did_ckb"),
-            Some("fully_on_ckb")
+            resolve_nft_collection_composition_tier_override("did_ckb"),
+            Some("pure_ckb")
         );
         assert_eq!(
-            resolve_nft_collection_storage_tier_override("did:ckb"),
-            Some("fully_on_ckb")
+            resolve_nft_collection_composition_tier_override("did:ckb"),
+            Some("pure_ckb")
         );
-        assert_eq!(resolve_nft_collection_storage_tier_override("m-nft"), None);
+        assert_eq!(
+            resolve_nft_collection_composition_tier_override("m-nft"),
+            None
+        );
     }
 
     #[test]

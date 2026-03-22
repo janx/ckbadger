@@ -25,7 +25,7 @@ import { ClusterDescription, Tooltip } from '@/components/spore/cluster-descript
 import { parseSporeClusterDescription, type DobInfo } from '@/lib/spore-cluster-description';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatNumber } from '@/lib/utils';
-import { formatActivityTimestamp, formatStorageTier } from '@/lib/asset-utils';
+import { formatActivityTimestamp, formatCompositionTier } from '@/lib/asset-utils';
 type ListContentFilter = 'all' | 'image' | 'video' | 'audio' | 'text' | 'other';
 type ListSort = 'createdDesc' | 'createdAsc' | 'sizeDesc' | 'sizeAsc';
 type CollectionSectionTab = 'activities' | 'objects' | 'holders';
@@ -57,29 +57,29 @@ function getSortIndicator(direction: 'asc' | 'desc' | null): string {
   if (direction === 'desc') return '↓';
   return '↕';
 }
-const STORAGE_TIER_DESCRIPTIONS: Record<string, string> = {
-  fully_on_ckb:
+const COMPOSITION_TIER_DESCRIPTIONS: Record<string, string> = {
+  pure_ckb:
     'All content is stored directly on the CKB blockchain (on-chain data or ckbfs://). Fully verifiable and permanent.',
-  fully_on_ckb_and_btc:
+  btc_ckb:
     'Content is stored across both CKB (on-chain data or ckbfs://) and Bitcoin (btcfs://). Fully verifiable and permanent.',
-  decentralized_dependent:
+  decentralized_mixture:
     'Some content references external decentralized storage (e.g. IPFS, Arweave). Data persists as long as the external network hosts it.',
-  centralized_dependent:
+  centralized_mixture:
     'Some content depends on centralized servers (http/https). Data availability relies on the server operator.',
   unknown:
-    'Storage profile could not be determined. The content storage method for objects in this cluster is unverified.',
+    'Composition could not be determined. The content storage method for objects in this cluster is unverified.',
 };
 
 const TOOLTIP_BTN_BASE =
   'ml-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border font-mono text-[9px] leading-none transition-colors';
 
-function storageTierCardStyle(tier: string): {
+function compositionTierCardStyle(tier: string): {
   card: string;
   label: string;
   text: string;
   tooltipButton?: string;
 } {
-  if (tier === 'fully_on_ckb_and_btc') {
+  if (tier === 'btc_ckb') {
     return {
       card: 'storage-card-no-crt storage-card-both rounded border border-[#222840] bg-[#10131c] p-3',
       label: 'text-[#a0b880]',
@@ -87,7 +87,7 @@ function storageTierCardStyle(tier: string): {
       tooltipButton: `${TOOLTIP_BTN_BASE} text-[#a0b880] border-[#4a6838] hover:text-[#c0d8a0] hover:border-[#6a8850]`,
     };
   }
-  if (tier === 'fully_on_ckb' || tier === 'fully_onchain') {
+  if (tier === 'pure_ckb' || tier === 'fully_onchain') {
     return {
       card: 'storage-card-no-crt storage-card-ckb rounded border border-[#222840] bg-[#10131c] p-3',
       label: 'text-[#5abfa0]',
@@ -95,7 +95,7 @@ function storageTierCardStyle(tier: string): {
       tooltipButton: `${TOOLTIP_BTN_BASE} text-[#5abfa0] border-[#1a6050] hover:text-[#40e8b0] hover:border-[#2a8068]`,
     };
   }
-  if (tier === 'centralized_dependent') {
+  if (tier === 'centralized_mixture') {
     return {
       card: 'border-base-border rounded border p-3',
       label: 'text-text-dim',
@@ -109,8 +109,14 @@ function storageTierCardStyle(tier: string): {
   };
 }
 
-function StorageTierTooltip({ tier, buttonClassName }: { tier: string; buttonClassName?: string }) {
-  const text = STORAGE_TIER_DESCRIPTIONS[tier] || STORAGE_TIER_DESCRIPTIONS.unknown;
+function CompositionTierTooltip({
+  tier,
+  buttonClassName,
+}: {
+  tier: string;
+  buttonClassName?: string;
+}) {
+  const text = COMPOSITION_TIER_DESCRIPTIONS[tier] || COMPOSITION_TIER_DESCRIPTIONS.unknown;
   return <Tooltip text={text} buttonClassName={buttonClassName} />;
 }
 
@@ -510,9 +516,9 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
             {/* Stat cards row */}
             <div className="border-base-border mt-4 grid grid-cols-2 gap-3 border-t pt-4 sm:grid-cols-4">
               {/* Storage profile card */}
-              {cluster.storageProfile?.tier &&
+              {cluster.composition?.tier &&
                 (() => {
-                  const style = storageTierCardStyle(cluster.storageProfile.tier);
+                  const style = compositionTierCardStyle(cluster.composition.tier);
                   return (
                     <div className={style.card}>
                       <div
@@ -524,10 +530,10 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                         <span
                           className={`font-mono text-sm font-semibold leading-tight ${style.text}`}
                         >
-                          {formatStorageTier(cluster.storageProfile.tier)}
+                          {formatCompositionTier(cluster.composition.tier)}
                         </span>
-                        <StorageTierTooltip
-                          tier={cluster.storageProfile.tier}
+                        <CompositionTierTooltip
+                          tier={cluster.composition.tier}
                           buttonClassName={style.tooltipButton}
                         />
                       </div>

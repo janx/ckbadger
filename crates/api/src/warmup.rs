@@ -6,8 +6,8 @@ use crate::routes::statistics::{
 };
 use crate::utils::{
     accumulate_owned_capacity, hash_type_to_string, resolve_collection_standard,
-    resolve_dob_collection_name, resolve_nft_collection_name,
-    resolve_nft_collection_storage_tier_override,
+    resolve_dob_collection_name, resolve_nft_collection_composition_tier_override,
+    resolve_nft_collection_name,
 };
 use crate::AppState;
 use ckbadger_common::BackgroundTaskState;
@@ -54,9 +54,9 @@ pub struct CachedAssetEntry {
     pub cluster_name: Option<String>,
     pub owned_capacity: Option<String>,
     pub owned_knowledge: Option<String>,
-    pub storage_tier: Option<String>,
-    pub fully_onchain_ratio: Option<String>,
-    pub fully_onchain_count: Option<i64>,
+    pub composition_tier: Option<String>,
+    pub onchain_ratio: Option<String>,
+    pub onchain_count: Option<i64>,
     // Token-specific fields (None for NFT entries)
     pub type_code_hash: Option<String>,
     pub type_hash_type: Option<String>,
@@ -147,9 +147,9 @@ impl CachedAssetEntry {
             cluster_name: self.cluster_name.clone(),
             owned_capacity: self.owned_capacity.clone(),
             owned_knowledge: self.owned_knowledge.clone(),
-            storage_tier: self.storage_tier.clone(),
-            fully_onchain_ratio: self.fully_onchain_ratio.clone(),
-            fully_onchain_count: self.fully_onchain_count,
+            composition_tier: self.composition_tier.clone(),
+            onchain_ratio: self.onchain_ratio.clone(),
+            onchain_count: self.onchain_count,
             h_multiplier: {
                 match (&self.owned_capacity, &self.owned_knowledge) {
                     (Some(cap_str), Some(occ_str)) => {
@@ -181,25 +181,25 @@ fn format_ratio_4(numerator: i64, denominator: i64) -> String {
     format!("{whole}.{frac:04}")
 }
 
-fn resolve_storage_tier(
-    fully_on_ckb_and_btc: i64,
-    fully_on_ckb: i64,
-    decentralized_dependent: i64,
-    centralized_dependent: i64,
+fn resolve_composition_tier(
+    btc_ckb: i64,
+    pure_ckb: i64,
+    decentralized_mixture: i64,
+    centralized_mixture: i64,
     unknown: i64,
 ) -> String {
-    if centralized_dependent > 0 {
-        return "centralized_dependent".to_string();
+    if centralized_mixture > 0 {
+        return "centralized_mixture".to_string();
     }
-    if decentralized_dependent > 0 {
-        return "decentralized_dependent".to_string();
+    if decentralized_mixture > 0 {
+        return "decentralized_mixture".to_string();
     }
-    let total_onchain = fully_on_ckb_and_btc + fully_on_ckb;
+    let total_onchain = btc_ckb + pure_ckb;
     if total_onchain > 0 && unknown == 0 {
-        if fully_on_ckb_and_btc > 0 {
-            return "fully_on_ckb_and_btc".to_string();
+        if btc_ckb > 0 {
+            return "btc_ckb".to_string();
         }
-        return "fully_on_ckb".to_string();
+        return "pure_ckb".to_string();
     }
     "unknown".to_string()
 }
@@ -486,9 +486,9 @@ fn build_asset_caches_sync(
             cluster_name: None,
             owned_capacity: Some(owned_capacity.to_string()),
             owned_knowledge: Some(owned_knowledge.to_string()),
-            storage_tier: None,
-            fully_onchain_ratio: None,
-            fully_onchain_count: None,
+            composition_tier: None,
+            onchain_ratio: None,
+            onchain_count: None,
             type_code_hash: Some(format!("0x{}", hex::encode(&info.type_code_hash))),
             type_hash_type: hash_type_to_string(info.hash_type).map(|s| s.to_string()),
             type_args: Some(format!("0x{}", hex::encode(&info.type_args))),
@@ -537,13 +537,13 @@ fn build_asset_caches_sync(
                 e
             )
         })?;
-        let total_onchain = agg.fully_on_ckb_and_btc_count + agg.fully_on_ckb_count;
-        let fully_onchain_ratio = format_ratio_4(total_onchain, agg.live_count);
-        let storage_tier = resolve_storage_tier(
-            agg.fully_on_ckb_and_btc_count,
-            agg.fully_on_ckb_count,
-            agg.decentralized_dependent_count,
-            agg.centralized_dependent_count,
+        let total_onchain = agg.btc_ckb_count + agg.pure_ckb_count;
+        let onchain_ratio = format_ratio_4(total_onchain, agg.live_count);
+        let composition_tier = resolve_composition_tier(
+            agg.btc_ckb_count,
+            agg.pure_ckb_count,
+            agg.decentralized_mixture_count,
+            agg.centralized_mixture_count,
             agg.unknown_count,
         );
 
@@ -566,9 +566,9 @@ fn build_asset_caches_sync(
             cluster_name: display_name,
             owned_capacity: Some(owned_capacity.to_string()),
             owned_knowledge: Some(owned_knowledge.to_string()),
-            storage_tier: Some(storage_tier),
-            fully_onchain_ratio: Some(fully_onchain_ratio),
-            fully_onchain_count: Some(total_onchain),
+            composition_tier: Some(composition_tier),
+            onchain_ratio: Some(onchain_ratio),
+            onchain_count: Some(total_onchain),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -598,34 +598,31 @@ fn build_asset_caches_sync(
             "object"
         };
         let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
-        let has_tier_counts = agg.fully_on_ckb_count > 0
-            || agg.fully_on_ckb_and_btc_count > 0
-            || agg.decentralized_dependent_count > 0
-            || agg.centralized_dependent_count > 0;
-        let storage_tier = if has_tier_counts {
-            resolve_storage_tier(
-                agg.fully_on_ckb_and_btc_count,
-                agg.fully_on_ckb_count,
-                agg.decentralized_dependent_count,
-                agg.centralized_dependent_count,
+        let has_tier_counts = agg.pure_ckb_count > 0
+            || agg.btc_ckb_count > 0
+            || agg.decentralized_mixture_count > 0
+            || agg.centralized_mixture_count > 0;
+        let composition_tier = if has_tier_counts {
+            resolve_composition_tier(
+                agg.btc_ckb_count,
+                agg.pure_ckb_count,
+                agg.decentralized_mixture_count,
+                agg.centralized_mixture_count,
                 agg.unknown_count,
             )
         } else {
-            resolve_nft_collection_storage_tier_override(&standard)
+            resolve_nft_collection_composition_tier_override(&standard)
                 .unwrap_or("unknown")
                 .to_string()
         };
-        let fully_onchain_count = if has_tier_counts {
-            agg.fully_on_ckb_count + agg.fully_on_ckb_and_btc_count
-        } else if matches!(
-            storage_tier.as_str(),
-            "fully_on_ckb_and_btc" | "fully_on_ckb"
-        ) {
+        let onchain_count = if has_tier_counts {
+            agg.pure_ckb_count + agg.btc_ckb_count
+        } else if matches!(composition_tier.as_str(), "btc_ckb" | "pure_ckb") {
             agg.live_count
         } else {
             0
         };
-        let fully_onchain_ratio = format_ratio_4(fully_onchain_count, agg.live_count);
+        let onchain_ratio = format_ratio_4(onchain_count, agg.live_count);
         let nft_daily = state.store.list_object_daily_deltas(collection_id_bytes)?;
         let (owned_capacity, owned_knowledge) = accumulate_owned_capacity(
             nft_daily
@@ -659,9 +656,9 @@ fn build_asset_caches_sync(
             cluster_name: display_name,
             owned_capacity: Some(owned_capacity.to_string()),
             owned_knowledge: Some(owned_knowledge.to_string()),
-            storage_tier: Some(storage_tier),
-            fully_onchain_ratio: Some(fully_onchain_ratio),
-            fully_onchain_count: Some(fully_onchain_count),
+            composition_tier: Some(composition_tier),
+            onchain_ratio: Some(onchain_ratio),
+            onchain_count: Some(onchain_count),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -685,18 +682,15 @@ fn build_asset_caches_sync(
         let standard_str = agg.standard.asset_standard().to_string();
         let standard = resolve_collection_standard(collection_id_bytes, &standard_str);
         let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
-        let storage_tier = resolve_nft_collection_storage_tier_override(&standard)
+        let composition_tier = resolve_nft_collection_composition_tier_override(&standard)
             .unwrap_or("unknown")
             .to_string();
-        let fully_onchain_count = if matches!(
-            storage_tier.as_str(),
-            "fully_on_ckb_and_btc" | "fully_on_ckb"
-        ) {
+        let onchain_count = if matches!(composition_tier.as_str(), "btc_ckb" | "pure_ckb") {
             agg.live_count
         } else {
             0
         };
-        let fully_onchain_ratio = format_ratio_4(fully_onchain_count, agg.live_count);
+        let onchain_ratio = format_ratio_4(onchain_count, agg.live_count);
         let id_daily = state.store.list_object_daily_deltas(collection_id_bytes)?;
         let (owned_capacity, owned_knowledge) = accumulate_owned_capacity(
             id_daily
@@ -730,9 +724,9 @@ fn build_asset_caches_sync(
             cluster_name: display_name,
             owned_capacity: Some(owned_capacity.to_string()),
             owned_knowledge: Some(owned_knowledge.to_string()),
-            storage_tier: Some(storage_tier),
-            fully_onchain_ratio: Some(fully_onchain_ratio),
-            fully_onchain_count: Some(fully_onchain_count),
+            composition_tier: Some(composition_tier),
+            onchain_ratio: Some(onchain_ratio),
+            onchain_count: Some(onchain_count),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,

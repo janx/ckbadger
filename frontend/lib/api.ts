@@ -773,11 +773,11 @@ interface Asset {
   clusterName: string | null;
   ownedCapacity: string | null;
   ownedKnowledge: string | null;
-  storageTier?:
-    | 'fully_on_ckb_and_btc'
-    | 'fully_on_ckb'
-    | 'decentralized_dependent'
-    | 'centralized_dependent'
+  compositionTier?:
+    | 'btc_ckb'
+    | 'pure_ckb'
+    | 'decentralized_mixture'
+    | 'centralized_mixture'
     | 'unknown';
   fullyOnchainRatio?: string | null;
   fullyOnchainCount?: number | null;
@@ -802,11 +802,11 @@ interface AssetQueryParams {
     | 'onchainRatio'
     | 'hMultiplier';
   sortDirection?: 'asc' | 'desc';
-  storageTier?:
-    | 'fully_on_ckb'
-    | 'fully_on_ckb_and_btc'
-    | 'decentralized_dependent'
-    | 'centralized_dependent'
+  compositionTier?:
+    | 'pure_ckb'
+    | 'btc_ckb'
+    | 'decentralized_mixture'
+    | 'centralized_mixture'
     | 'unknown';
 }
 
@@ -946,17 +946,12 @@ interface SporeCluster {
   createdAtBlock: number;
   ownedCapacity?: string | null;
   ownedKnowledge?: string | null;
-  storageProfile?: {
-    tier:
-      | 'fully_on_ckb_and_btc'
-      | 'fully_on_ckb'
-      | 'decentralized_dependent'
-      | 'centralized_dependent'
-      | 'unknown';
+  composition?: {
+    tier: 'btc_ckb' | 'pure_ckb' | 'decentralized_mixture' | 'centralized_mixture' | 'unknown';
     fullyOnchainCount: number;
-    fullyOnCkbCount: number;
-    decentralizedDependentCount: number;
-    centralizedDependentCount: number;
+    pureCkbCount: number;
+    decentralizedMixtureCount: number;
+    centralizedMixtureCount: number;
     unknownCount: number;
     fullyOnchainRatio: string;
   };
@@ -976,21 +971,16 @@ interface SporeNft {
   ownedCapacity?: string | null;
   ownedKnowledge?: string | null;
   mediaProfile?: {
-    tier:
-      | 'fully_on_ckb_and_btc'
-      | 'fully_on_ckb'
-      | 'decentralized_dependent'
-      | 'centralized_dependent'
-      | 'unknown';
+    tier: 'btc_ckb' | 'pure_ckb' | 'decentralized_mixture' | 'centralized_mixture' | 'unknown';
     sources: Array<{
       uri: string;
       scheme: string;
       sourceLocation: string;
       dependencyTier:
-        | 'fully_on_ckb_and_btc'
-        | 'fully_on_ckb'
-        | 'decentralized_dependent'
-        | 'centralized_dependent'
+        | 'btc_ckb'
+        | 'pure_ckb'
+        | 'decentralized_mixture'
+        | 'centralized_mixture'
         | 'unknown';
     }>;
     hasRenderableImage: boolean;
@@ -1022,17 +1012,12 @@ interface ObjectCollection {
   activitiesCount: number;
   ownedCapacity: string;
   ownedKnowledge: string;
-  storageProfile?: {
-    tier:
-      | 'fully_on_ckb_and_btc'
-      | 'fully_on_ckb'
-      | 'decentralized_dependent'
-      | 'centralized_dependent'
-      | 'unknown';
+  composition?: {
+    tier: 'btc_ckb' | 'pure_ckb' | 'decentralized_mixture' | 'centralized_mixture' | 'unknown';
     fullyOnchainCount: number;
-    fullyOnCkbCount: number;
-    decentralizedDependentCount: number;
-    centralizedDependentCount: number;
+    pureCkbCount: number;
+    decentralizedMixtureCount: number;
+    centralizedMixtureCount: number;
     unknownCount: number;
     fullyOnchainRatio: string;
   };
@@ -1842,7 +1827,7 @@ export const api = {
       }
     }
     if (params.sortDirection) query.set('sort_direction', params.sortDirection);
-    if (params.storageTier) query.set('storage_tier', params.storageTier);
+    if (params.compositionTier) query.set('composition_tier', params.compositionTier);
     return fetchApi(`/assets?${query}`);
   },
 

@@ -1,5 +1,5 @@
 {
-  "_comment": "Override script names (by name), define extra known scripts when token-labels cannot be updated, mark deprecated scripts (by code_hash), define NFT storage-tier overrides by standard, and group scripts by protocol. Applied during label import and API asset rendering.",
+  "_comment": "Override script names (by name), define extra known scripts when token-labels cannot be updated, mark deprecated scripts (by code_hash), define NFT composition-tier overrides by standard, and group scripts by protocol. Applied during label import and API asset rendering.",
   "overrides": {
     "DAS Lock": ".bit Lock",
     "DID Account": ".bit Account",
@@ -136,11 +136,11 @@
       }
     }
   ],
-  "nft_storage_tier_overrides": {
-    ".bit": "fully_on_ckb",
-    "dotbit": "fully_on_ckb",
-    "did:ckb": "fully_on_ckb",
-    "did_ckb": "fully_on_ckb"
+  "nft_composition_tier_overrides": {
+    ".bit": "pure_ckb",
+    "dotbit": "pure_ckb",
+    "did:ckb": "pure_ckb",
+    "did_ckb": "pure_ckb"
   },
   "deprecated": [
     "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81",

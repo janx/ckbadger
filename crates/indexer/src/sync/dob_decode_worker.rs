@@ -17,8 +17,8 @@ use ckbadger_dob_decoder::fetch::fetch_decoder_binary;
 use ckbadger_dob_decoder::types::{DecoderRef, DobTrait};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    ClusterAggregate, DobDecodedEntry, DobDecodedTrait, ObjectEntry, ObjectExtra,
-    SporeMediaProfile, SporeMediaSource, StorageDependencyTier,
+    ClusterAggregate, CompositionTier, DobDecodedEntry, DobDecodedTrait, ObjectEntry, ObjectExtra,
+    SporeMediaProfile, SporeMediaSource,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -415,8 +415,8 @@ impl DobDecodeWorker {
         &self,
         spore_id: &[u8],
         entry: &ObjectEntry,
-        old_tier: StorageDependencyTier,
-        new_tier: StorageDependencyTier,
+        old_tier: CompositionTier,
+        new_tier: CompositionTier,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if !entry.is_live {
@@ -462,7 +462,7 @@ impl DobDecodeWorker {
         &self,
         cluster_id: &[u8],
         agg: &mut ClusterAggregate,
-        tier: StorageDependencyTier,
+        tier: CompositionTier,
         delta: i64,
         context: &str,
     ) -> Result<()> {
@@ -471,11 +471,11 @@ impl DobDecodeWorker {
         }
 
         let slot = match tier {
-            StorageDependencyTier::FullyOnCkb => &mut agg.fully_on_ckb_count,
-            StorageDependencyTier::FullyOnCkbAndBtc => &mut agg.fully_on_ckb_and_btc_count,
-            StorageDependencyTier::DecentralizedDependent => &mut agg.decentralized_dependent_count,
-            StorageDependencyTier::CentralizedDependent => &mut agg.centralized_dependent_count,
-            StorageDependencyTier::Unknown => &mut agg.unknown_count,
+            CompositionTier::PureCkb => &mut agg.pure_ckb_count,
+            CompositionTier::BtcCkb => &mut agg.btc_ckb_count,
+            CompositionTier::DecentralizedMixture => &mut agg.decentralized_mixture_count,
+            CompositionTier::CentralizedMixture => &mut agg.centralized_mixture_count,
+            CompositionTier::Unknown => &mut agg.unknown_count,
         };
         let next = slot.checked_add(delta).ok_or_else(|| {
             anyhow::anyhow!(
@@ -919,13 +919,12 @@ mod tests {
     #[test]
     fn test_merge_media_sources_no_duplicates() {
         let mut profile = SporeMediaProfile {
-            tier: ckbadger_store::types::StorageDependencyTier::FullyOnCkb,
+            tier: ckbadger_store::types::CompositionTier::PureCkb,
             sources: vec![SporeMediaSource {
                 uri: "ipfs://existing".to_string(),
                 scheme: "ipfs".to_string(),
                 source_location: "payload_text".to_string(),
-                dependency_tier:
-                    ckbadger_store::types::StorageDependencyTier::DecentralizedDependent,
+                dependency_tier: ckbadger_store::types::CompositionTier::DecentralizedMixture,
             }],
             has_renderable_image: false,
             issues: vec![],
@@ -935,14 +934,13 @@ mod tests {
                 uri: "ipfs://existing".to_string(), // duplicate
                 scheme: "ipfs".to_string(),
                 source_location: "dob_decoded_trait".to_string(),
-                dependency_tier:
-                    ckbadger_store::types::StorageDependencyTier::DecentralizedDependent,
+                dependency_tier: ckbadger_store::types::CompositionTier::DecentralizedMixture,
             },
             SporeMediaSource {
                 uri: "btcfs://new".to_string(),
                 scheme: "btcfs".to_string(),
                 source_location: "dob_decoded_trait".to_string(),
-                dependency_tier: ckbadger_store::types::StorageDependencyTier::FullyOnCkbAndBtc,
+                dependency_tier: ckbadger_store::types::CompositionTier::BtcCkb,
             },
         ];
         merge_media_sources(&mut profile, &new_sources);
@@ -953,7 +951,7 @@ mod tests {
     #[test]
     fn test_merge_media_sources_recalculates_tier() {
         let mut profile = SporeMediaProfile {
-            tier: ckbadger_store::types::StorageDependencyTier::FullyOnCkb,
+            tier: ckbadger_store::types::CompositionTier::PureCkb,
             sources: vec![],
             has_renderable_image: false,
             issues: vec![],
@@ -962,12 +960,12 @@ mod tests {
             uri: "https://example.com/image.png".to_string(),
             scheme: "https".to_string(),
             source_location: "dob_decoded_trait".to_string(),
-            dependency_tier: ckbadger_store::types::StorageDependencyTier::CentralizedDependent,
+            dependency_tier: ckbadger_store::types::CompositionTier::CentralizedMixture,
         }];
         merge_media_sources(&mut profile, &new_sources);
         assert_eq!(
             profile.tier,
-            ckbadger_store::types::StorageDependencyTier::CentralizedDependent
+            ckbadger_store::types::CompositionTier::CentralizedMixture
         );
         assert!(profile.has_renderable_image); // .png extension
     }
@@ -1003,12 +1001,12 @@ mod tests {
                 content_type: "dob/0".to_string(),
                 content_length: 3,
                 media_profile: SporeMediaProfile {
-                    tier: ckbadger_store::types::StorageDependencyTier::FullyOnCkb,
+                    tier: ckbadger_store::types::CompositionTier::PureCkb,
                     sources: vec![SporeMediaSource {
                         uri: "ckbfs://existing-cell".to_string(),
                         scheme: "ckbfs".to_string(),
                         source_location: "payload_text".to_string(),
-                        dependency_tier: ckbadger_store::types::StorageDependencyTier::FullyOnCkb,
+                        dependency_tier: ckbadger_store::types::CompositionTier::PureCkb,
                     }],
                     has_renderable_image: false,
                     issues: vec![],
@@ -1024,7 +1022,7 @@ mod tests {
                 total_count: 1,
                 live_count: 1,
                 owner_count: 1,
-                fully_on_ckb_count: 1,
+                pure_ckb_count: 1,
                 ..Default::default()
             },
         );
@@ -1034,7 +1032,7 @@ mod tests {
             uri: "btcfs://inscription123i0".to_string(),
             scheme: "btcfs".to_string(),
             source_location: "dob_decoded_trait".to_string(),
-            dependency_tier: ckbadger_store::types::StorageDependencyTier::FullyOnCkbAndBtc,
+            dependency_tier: ckbadger_store::types::CompositionTier::BtcCkb,
         }];
 
         worker
@@ -1046,15 +1044,15 @@ mod tests {
             ObjectExtra::Spore { media_profile, .. } => {
                 assert_eq!(
                     media_profile.tier,
-                    ckbadger_store::types::StorageDependencyTier::FullyOnCkbAndBtc
+                    ckbadger_store::types::CompositionTier::BtcCkb
                 );
             }
             other => panic!("expected spore extra, got {other:?}"),
         }
 
         let updated_agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
-        assert_eq!(updated_agg.fully_on_ckb_count, 0);
-        assert_eq!(updated_agg.fully_on_ckb_and_btc_count, 1);
+        assert_eq!(updated_agg.pure_ckb_count, 0);
+        assert_eq!(updated_agg.btc_ckb_count, 1);
         assert_eq!(updated_agg.live_count, 1);
         assert_eq!(updated_agg.total_count, 1);
     }

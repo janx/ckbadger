@@ -8,9 +8,9 @@ use ckbadger_store::store::{
     CF_IDENTITY_BY_COLLECTION, CF_OBJECT_BY_COLLECTION, CF_STATS_IDENTITY,
 };
 use ckbadger_store::types::{
-    ClusterAggregate, ClusterDailyDelta, IdentityCollectionAggregate, IdentityEntry, IdentityExtra,
-    IdentityStandard, ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry, ObjectExtra,
-    ObjectStandard, ObjectTypeIndex, SporeDailyDelta, SporeTypeIndex, StorageDependencyTier,
+    ClusterAggregate, ClusterDailyDelta, CompositionTier, IdentityCollectionAggregate,
+    IdentityEntry, IdentityExtra, IdentityStandard, ObjectCollectionAggregate, ObjectDailyDelta,
+    ObjectEntry, ObjectExtra, ObjectStandard, ObjectTypeIndex, SporeDailyDelta, SporeTypeIndex,
     DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
@@ -746,7 +746,7 @@ impl ObjectOwner {
         let old_tier = existing
             .as_ref()
             .map(Self::spore_media_tier)
-            .unwrap_or(StorageDependencyTier::Unknown);
+            .unwrap_or(CompositionTier::Unknown);
 
         let cluster_id = spore
             .cluster_id
@@ -1033,7 +1033,7 @@ impl ObjectOwner {
                     total: class.total,
                     issued: class.issued,
                     configure: class.configure,
-                    storage_tier: crate::parser::media_source::analyze_renderer_tier(
+                    composition_tier: crate::parser::media_source::analyze_renderer_tier(
                         class.renderer.as_deref(),
                     ),
                 },
@@ -1043,7 +1043,9 @@ impl ObjectOwner {
         let new_tier =
             crate::parser::media_source::analyze_renderer_tier(class.renderer.as_deref());
         let old_tier = existing.as_ref().and_then(|e| match &e.extra {
-            ObjectExtra::MnftClass { storage_tier, .. } => Some(*storage_tier),
+            ObjectExtra::MnftClass {
+                composition_tier, ..
+            } => Some(*composition_tier),
             _ => None,
         });
 
@@ -1975,26 +1977,26 @@ impl ObjectOwner {
         Ok(())
     }
 
-    fn spore_media_tier(entry: &ObjectEntry) -> StorageDependencyTier {
+    fn spore_media_tier(entry: &ObjectEntry) -> CompositionTier {
         match &entry.extra {
             ObjectExtra::Spore { media_profile, .. } => media_profile.tier,
-            _ => StorageDependencyTier::Unknown,
+            _ => CompositionTier::Unknown,
         }
     }
 
     fn adjust_cluster_tier_count(
         agg: &mut ClusterAggregate,
-        tier: StorageDependencyTier,
+        tier: CompositionTier,
         delta: i64,
         cluster_id: &[u8],
         spore_id: &[u8],
     ) -> Result<()> {
         let slot = match tier {
-            StorageDependencyTier::FullyOnCkb => &mut agg.fully_on_ckb_count,
-            StorageDependencyTier::FullyOnCkbAndBtc => &mut agg.fully_on_ckb_and_btc_count,
-            StorageDependencyTier::DecentralizedDependent => &mut agg.decentralized_dependent_count,
-            StorageDependencyTier::CentralizedDependent => &mut agg.centralized_dependent_count,
-            StorageDependencyTier::Unknown => &mut agg.unknown_count,
+            CompositionTier::PureCkb => &mut agg.pure_ckb_count,
+            CompositionTier::BtcCkb => &mut agg.btc_ckb_count,
+            CompositionTier::DecentralizedMixture => &mut agg.decentralized_mixture_count,
+            CompositionTier::CentralizedMixture => &mut agg.centralized_mixture_count,
+            CompositionTier::Unknown => &mut agg.unknown_count,
         };
         let next = slot.checked_add(delta).ok_or_else(|| {
             anyhow!(
@@ -2020,33 +2022,35 @@ impl ObjectOwner {
         Ok(())
     }
 
-    fn mnft_class_tier(entry: &ObjectEntry) -> StorageDependencyTier {
+    fn mnft_class_tier(entry: &ObjectEntry) -> CompositionTier {
         match &entry.extra {
-            ObjectExtra::MnftClass { storage_tier, .. } => *storage_tier,
-            _ => StorageDependencyTier::Unknown,
+            ObjectExtra::MnftClass {
+                composition_tier, ..
+            } => *composition_tier,
+            _ => CompositionTier::Unknown,
         }
     }
 
-    fn resolve_mnft_token_tier(&self, class_id: &[u8]) -> StorageDependencyTier {
+    fn resolve_mnft_token_tier(&self, class_id: &[u8]) -> CompositionTier {
         self.mnft_entries
             .get(class_id)
             .map(Self::mnft_class_tier)
-            .unwrap_or(StorageDependencyTier::Unknown)
+            .unwrap_or(CompositionTier::Unknown)
     }
 
     fn adjust_object_collection_tier_count(
         agg: &mut ObjectCollectionAggregate,
-        tier: StorageDependencyTier,
+        tier: CompositionTier,
         delta: i64,
         collection_id: &[u8],
         token_id: &[u8],
     ) -> Result<()> {
         let slot = match tier {
-            StorageDependencyTier::FullyOnCkb => &mut agg.fully_on_ckb_count,
-            StorageDependencyTier::FullyOnCkbAndBtc => &mut agg.fully_on_ckb_and_btc_count,
-            StorageDependencyTier::DecentralizedDependent => &mut agg.decentralized_dependent_count,
-            StorageDependencyTier::CentralizedDependent => &mut agg.centralized_dependent_count,
-            StorageDependencyTier::Unknown => &mut agg.unknown_count,
+            CompositionTier::PureCkb => &mut agg.pure_ckb_count,
+            CompositionTier::BtcCkb => &mut agg.btc_ckb_count,
+            CompositionTier::DecentralizedMixture => &mut agg.decentralized_mixture_count,
+            CompositionTier::CentralizedMixture => &mut agg.centralized_mixture_count,
+            CompositionTier::Unknown => &mut agg.unknown_count,
         };
         let next = slot.checked_add(delta).ok_or_else(|| {
             anyhow!(

@@ -117,7 +117,7 @@ pub struct ListParams {
     sort_key: AssetSortKey,
     #[serde(default = "default_sort_direction")]
     sort_direction: SortDirection,
-    storage_tier: Option<String>,
+    composition_tier: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -227,22 +227,22 @@ pub struct AssetResponse {
     pub cluster_name: Option<String>,
     pub owned_capacity: Option<String>,
     pub owned_knowledge: Option<String>,
-    pub storage_tier: Option<String>,
-    pub fully_onchain_ratio: Option<String>,
-    pub fully_onchain_count: Option<i64>,
+    pub composition_tier: Option<String>,
+    pub onchain_ratio: Option<String>,
+    pub onchain_count: Option<i64>,
     pub h_multiplier: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CollectionStorageProfileResponse {
+pub struct CollectionCompositionResponse {
     pub tier: String,
-    pub fully_onchain_count: i64,
-    pub fully_on_ckb_count: i64,
-    pub decentralized_dependent_count: i64,
-    pub centralized_dependent_count: i64,
+    pub onchain_count: i64,
+    pub pure_ckb_count: i64,
+    pub decentralized_mixture_count: i64,
+    pub centralized_mixture_count: i64,
     pub unknown_count: i64,
-    pub fully_onchain_ratio: String,
+    pub onchain_ratio: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -257,7 +257,7 @@ pub struct NftCollectionDetailResponse {
     pub activities_count: i64,
     pub owned_capacity: String,
     pub owned_knowledge: String,
-    pub storage_profile: CollectionStorageProfileResponse,
+    pub composition: CollectionCompositionResponse,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub class_detail: Option<MnftClassSummaryResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -375,11 +375,12 @@ async fn list_assets(
     let search_lower = params.search.as_ref().map(|s| s.to_lowercase());
     let filter_type = params.asset_type;
     let filter_standard = normalize_assets_standard(params.standard.as_deref());
-    let filter_storage_tier = normalize_assets_storage_tier(params.storage_tier.as_deref())?;
+    let filter_composition_tier =
+        normalize_assets_composition_tier(params.composition_tier.as_deref())?;
 
     let request = CachedAssetsRequest {
         standard: filter_standard.as_deref(),
-        storage_tier: filter_storage_tier.as_deref(),
+        composition_tier: filter_composition_tier.as_deref(),
         search: search_lower.as_deref(),
         limit,
         cursor: params.cursor.as_deref(),
@@ -410,7 +411,7 @@ async fn list_assets(
 /// Returns an explicit error when cache is unavailable.
 struct CachedAssetsRequest<'a> {
     standard: Option<&'a str>,
-    storage_tier: Option<&'a str>,
+    composition_tier: Option<&'a str>,
     search: Option<&'a str>,
     limit: i64,
     cursor: Option<&'a str>,
@@ -499,15 +500,15 @@ fn fetch_assets_cached(
     if let Some(standard_filter) = request.standard {
         all_cached.retain(|entry| entry.standard.eq_ignore_ascii_case(standard_filter));
     }
-    if let Some(storage_tier_filter) = request.storage_tier {
+    if let Some(composition_tier_filter) = request.composition_tier {
         all_cached.retain(|entry| {
             if entry.asset_type == "token" {
                 return false;
             }
-            let Some(tier) = entry.storage_tier.as_deref() else {
+            let Some(tier) = entry.composition_tier.as_deref() else {
                 return false;
             };
-            tier == storage_tier_filter
+            tier == composition_tier_filter
         });
     }
 
@@ -569,7 +570,7 @@ fn normalize_assets_standard(value: Option<&str>) -> Option<String> {
     })
 }
 
-fn normalize_assets_storage_tier(
+fn normalize_assets_composition_tier(
     value: Option<&str>,
 ) -> Result<Option<String>, (axum::http::StatusCode, Json<ApiError>)> {
     let Some(raw) = value else {
@@ -580,13 +581,13 @@ fn normalize_assets_storage_tier(
         return Ok(None);
     }
     match normalized.as_str() {
-        "fully_on_ckb"
-        | "fully_on_ckb_and_btc"
-        | "decentralized_dependent"
-        | "centralized_dependent"
+        "pure_ckb"
+        | "btc_ckb"
+        | "decentralized_mixture"
+        | "centralized_mixture"
         | "unknown" => Ok(Some(normalized)),
         _ => Err(ApiError::bad_request(
-            "Invalid storage_tier. Expected one of: fully_on_ckb, fully_on_ckb_and_btc, decentralized_dependent, centralized_dependent, unknown",
+            "Invalid composition_tier. Expected one of: pure_ckb, btc_ckb, decentralized_mixture, centralized_mixture, unknown",
         )),
     }
 }
@@ -754,8 +755,8 @@ fn compare_asset_entries(
             direction,
         ),
         AssetSortKey::OnchainRatio => compare_optional_i64(
-            parse_ratio_1e4(left.fully_onchain_ratio.as_deref()),
-            parse_ratio_1e4(right.fully_onchain_ratio.as_deref()),
+            parse_ratio_1e4(left.onchain_ratio.as_deref()),
+            parse_ratio_1e4(right.onchain_ratio.as_deref()),
             direction,
         ),
         AssetSortKey::HMultiplier => {
@@ -1702,14 +1703,14 @@ async fn get_object_collection(
     let raw_standard = agg.standard.asset_standard().to_string();
     let standard = resolve_collection_standard(&collection_id_bytes, &raw_standard);
     let name = resolve_nft_collection_name(&standard, agg.name.as_deref());
-    let storage_profile = CollectionStorageProfileResponse {
+    let composition = CollectionCompositionResponse {
         tier: "unknown".to_string(),
-        fully_onchain_count: 0,
-        fully_on_ckb_count: 0,
-        decentralized_dependent_count: 0,
-        centralized_dependent_count: 0,
+        onchain_count: 0,
+        pure_ckb_count: 0,
+        decentralized_mixture_count: 0,
+        centralized_mixture_count: 0,
         unknown_count: agg.live_count,
-        fully_onchain_ratio: format_ratio_4(0, agg.live_count),
+        onchain_ratio: format_ratio_4(0, agg.live_count),
     };
 
     if agg.holders_count < 0 {
@@ -1837,7 +1838,7 @@ async fn get_object_collection(
         activities_count,
         owned_capacity,
         owned_knowledge,
-        storage_profile,
+        composition,
         class_detail,
         issuer_detail,
         created_at_block,

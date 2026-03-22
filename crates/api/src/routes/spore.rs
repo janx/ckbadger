@@ -173,14 +173,14 @@ fn is_sole_spores_sentinel(id: &[u8]) -> bool {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ClusterStorageProfileResponse {
+pub struct ClusterCompositionResponse {
     pub tier: String,
-    pub fully_onchain_count: i64,
-    pub fully_on_ckb_count: i64,
-    pub decentralized_dependent_count: i64,
-    pub centralized_dependent_count: i64,
+    pub onchain_count: i64,
+    pub pure_ckb_count: i64,
+    pub decentralized_mixture_count: i64,
+    pub centralized_mixture_count: i64,
     pub unknown_count: i64,
-    pub fully_onchain_ratio: String,
+    pub onchain_ratio: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -197,7 +197,7 @@ pub struct ClusterResponse {
     pub created_at_block: i64,
     pub owned_capacity: Option<String>,
     pub owned_knowledge: Option<String>,
-    pub storage_profile: ClusterStorageProfileResponse,
+    pub composition: ClusterCompositionResponse,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -483,59 +483,57 @@ fn format_ratio_4(numerator: i64, denominator: i64) -> String {
     format!("{whole}.{frac:04}")
 }
 
-fn resolve_storage_tier(
-    fully_on_ckb_and_btc: i64,
-    fully_on_ckb: i64,
-    decentralized_dependent: i64,
-    centralized_dependent: i64,
+fn resolve_composition_tier(
+    btc_ckb: i64,
+    pure_ckb: i64,
+    decentralized_mixture: i64,
+    centralized_mixture: i64,
     unknown: i64,
 ) -> String {
-    if centralized_dependent > 0 {
-        return "centralized_dependent".to_string();
+    if centralized_mixture > 0 {
+        return "centralized_mixture".to_string();
     }
-    if decentralized_dependent > 0 {
-        return "decentralized_dependent".to_string();
+    if decentralized_mixture > 0 {
+        return "decentralized_mixture".to_string();
     }
-    let total_onchain = fully_on_ckb_and_btc + fully_on_ckb;
+    let total_onchain = btc_ckb + pure_ckb;
     if total_onchain > 0 && unknown == 0 {
-        if fully_on_ckb_and_btc > 0 {
-            return "fully_on_ckb_and_btc".to_string();
+        if btc_ckb > 0 {
+            return "btc_ckb".to_string();
         }
-        return "fully_on_ckb".to_string();
+        return "pure_ckb".to_string();
     }
     "unknown".to_string()
 }
 
-fn cluster_storage_profile_from_aggregate(
+fn cluster_composition_from_aggregate(
     aggregate: Option<&ckbadger_store::types::ClusterAggregate>,
     spores_count: i64,
-) -> ClusterStorageProfileResponse {
-    let fully_on_ckb_and_btc_count = aggregate.map(|a| a.fully_on_ckb_and_btc_count).unwrap_or(0);
-    let fully_on_ckb_count = aggregate.map(|a| a.fully_on_ckb_count).unwrap_or(0);
-    let decentralized_dependent_count = aggregate
-        .map(|a| a.decentralized_dependent_count)
+) -> ClusterCompositionResponse {
+    let btc_ckb_count = aggregate.map(|a| a.btc_ckb_count).unwrap_or(0);
+    let pure_ckb_count = aggregate.map(|a| a.pure_ckb_count).unwrap_or(0);
+    let decentralized_mixture_count = aggregate
+        .map(|a| a.decentralized_mixture_count)
         .unwrap_or(0);
-    let centralized_dependent_count = aggregate
-        .map(|a| a.centralized_dependent_count)
-        .unwrap_or(0);
+    let centralized_mixture_count = aggregate.map(|a| a.centralized_mixture_count).unwrap_or(0);
     let unknown_count = aggregate
         .map(|a| a.unknown_count)
         .unwrap_or(spores_count.max(0));
-    let total_onchain = fully_on_ckb_and_btc_count + fully_on_ckb_count;
-    ClusterStorageProfileResponse {
-        tier: resolve_storage_tier(
-            fully_on_ckb_and_btc_count,
-            fully_on_ckb_count,
-            decentralized_dependent_count,
-            centralized_dependent_count,
+    let total_onchain = btc_ckb_count + pure_ckb_count;
+    ClusterCompositionResponse {
+        tier: resolve_composition_tier(
+            btc_ckb_count,
+            pure_ckb_count,
+            decentralized_mixture_count,
+            centralized_mixture_count,
             unknown_count,
         ),
-        fully_onchain_count: total_onchain,
-        fully_on_ckb_count,
-        decentralized_dependent_count,
-        centralized_dependent_count,
+        onchain_count: total_onchain,
+        pure_ckb_count,
+        decentralized_mixture_count,
+        centralized_mixture_count,
         unknown_count,
-        fully_onchain_ratio: format_ratio_4(total_onchain, spores_count),
+        onchain_ratio: format_ratio_4(total_onchain, spores_count),
     }
 }
 
@@ -668,7 +666,7 @@ fn build_cluster_responses_from_cached_entries(
             created_at_block,
             owned_capacity: None,
             owned_knowledge: None,
-            storage_profile: cluster_storage_profile_from_aggregate(
+            composition: cluster_composition_from_aggregate(
                 cluster_aggregate,
                 entry.transfers_count,
             ),
@@ -1014,10 +1012,7 @@ async fn get_cluster(
         created_at_block,
         owned_capacity,
         owned_knowledge,
-        storage_profile: cluster_storage_profile_from_aggregate(
-            cluster_aggregate.as_ref(),
-            spores_count,
-        ),
+        composition: cluster_composition_from_aggregate(cluster_aggregate.as_ref(), spores_count),
     })
 }
 
@@ -1434,9 +1429,9 @@ mod tests {
                 cluster_name: None,
                 owned_capacity: None,
                 owned_knowledge: None,
-                storage_tier: None,
-                fully_onchain_ratio: None,
-                fully_onchain_count: None,
+                composition_tier: None,
+                onchain_ratio: None,
+                onchain_count: None,
                 type_code_hash: None,
                 type_hash_type: None,
                 type_args: None,
@@ -1461,9 +1456,9 @@ mod tests {
                 cluster_name: None,
                 owned_capacity: None,
                 owned_knowledge: None,
-                storage_tier: None,
-                fully_onchain_ratio: None,
-                fully_onchain_count: None,
+                composition_tier: None,
+                onchain_ratio: None,
+                onchain_count: None,
                 type_code_hash: None,
                 type_hash_type: None,
                 type_args: None,

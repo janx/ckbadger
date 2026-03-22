@@ -2030,20 +2030,18 @@ impl CkbadgerStore {
 
                             let tier = match &entry.extra {
                                 ObjectExtra::Spore { media_profile, .. } => media_profile.tier,
-                                _ => StorageDependencyTier::Unknown,
+                                _ => CompositionTier::Unknown,
                             };
                             let tier_slot = match tier {
-                                StorageDependencyTier::FullyOnCkb => &mut agg.fully_on_ckb_count,
-                                StorageDependencyTier::FullyOnCkbAndBtc => {
-                                    &mut agg.fully_on_ckb_and_btc_count
+                                CompositionTier::PureCkb => &mut agg.pure_ckb_count,
+                                CompositionTier::BtcCkb => &mut agg.btc_ckb_count,
+                                CompositionTier::DecentralizedMixture => {
+                                    &mut agg.decentralized_mixture_count
                                 }
-                                StorageDependencyTier::DecentralizedDependent => {
-                                    &mut agg.decentralized_dependent_count
+                                CompositionTier::CentralizedMixture => {
+                                    &mut agg.centralized_mixture_count
                                 }
-                                StorageDependencyTier::CentralizedDependent => {
-                                    &mut agg.centralized_dependent_count
-                                }
-                                StorageDependencyTier::Unknown => &mut agg.unknown_count,
+                                CompositionTier::Unknown => &mut agg.unknown_count,
                             };
                             *tier_slot = tier_slot.checked_add(1).ok_or_else(|| {
                                 anyhow::anyhow!(
@@ -2124,10 +2122,12 @@ impl CkbadgerStore {
                             .ok()
                             .flatten()
                             .map(|class_entry| match &class_entry.extra {
-                                ObjectExtra::MnftClass { storage_tier, .. } => *storage_tier,
-                                _ => StorageDependencyTier::Unknown,
+                                ObjectExtra::MnftClass {
+                                    composition_tier, ..
+                                } => *composition_tier,
+                                _ => CompositionTier::Unknown,
                             })
-                            .unwrap_or(StorageDependencyTier::Unknown);
+                            .unwrap_or(CompositionTier::Unknown);
                         let agg = nft_collection_aggs
                             .entry(collection_id.clone())
                             .or_insert_with(|| ObjectCollectionAggregate {
@@ -2148,17 +2148,15 @@ impl CkbadgerStore {
                                 )
                             })?;
                             let tier_slot = match token_tier {
-                                StorageDependencyTier::FullyOnCkb => &mut agg.fully_on_ckb_count,
-                                StorageDependencyTier::FullyOnCkbAndBtc => {
-                                    &mut agg.fully_on_ckb_and_btc_count
+                                CompositionTier::PureCkb => &mut agg.pure_ckb_count,
+                                CompositionTier::BtcCkb => &mut agg.btc_ckb_count,
+                                CompositionTier::DecentralizedMixture => {
+                                    &mut agg.decentralized_mixture_count
                                 }
-                                StorageDependencyTier::DecentralizedDependent => {
-                                    &mut agg.decentralized_dependent_count
+                                CompositionTier::CentralizedMixture => {
+                                    &mut agg.centralized_mixture_count
                                 }
-                                StorageDependencyTier::CentralizedDependent => {
-                                    &mut agg.centralized_dependent_count
-                                }
-                                StorageDependencyTier::Unknown => &mut agg.unknown_count,
+                                CompositionTier::Unknown => &mut agg.unknown_count,
                             };
                             *tier_slot = tier_slot.checked_add(1).ok_or_else(|| {
                                 anyhow::anyhow!(
@@ -2582,9 +2580,9 @@ mod tests {
     use crate::store::CkbadgerStore;
     use crate::types::{
         AddressBalance, AssetAction, CachedBlockHeader, CellDistributionTrackerState,
-        DaoDepositCacheEntry, HodlTrackerState, LiveCellInfo, ObjectCollectionActivityEntry,
-        ObjectCollectionAggregate, ObjectEntry, ObjectExtra, ObjectStandard, OwnerActivityDelta,
-        ScriptInfo, SporeMediaProfile, StorageDependencyTier, SyncStatus, TokenInfo,
+        CompositionTier, DaoDepositCacheEntry, HodlTrackerState, LiveCellInfo,
+        ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectEntry, ObjectExtra,
+        ObjectStandard, OwnerActivityDelta, ScriptInfo, SporeMediaProfile, SyncStatus, TokenInfo,
         TxActivityBundle, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
 
@@ -4551,7 +4549,7 @@ mod tests {
                     content_type: "image/png".to_string(),
                     content_length: 8,
                     media_profile: SporeMediaProfile {
-                        tier: StorageDependencyTier::FullyOnCkb,
+                        tier: CompositionTier::PureCkb,
                         ..Default::default()
                     },
                 },
@@ -4573,7 +4571,7 @@ mod tests {
                     content_type: "image/png".to_string(),
                     content_length: 8,
                     media_profile: SporeMediaProfile {
-                        tier: StorageDependencyTier::FullyOnCkb,
+                        tier: CompositionTier::PureCkb,
                         ..Default::default()
                     },
                 },
@@ -4666,7 +4664,7 @@ mod tests {
         assert_eq!(cluster_agg.total_count, 1);
         assert_eq!(cluster_agg.live_count, 1);
         assert_eq!(cluster_agg.owner_count, 1);
-        assert_eq!(cluster_agg.fully_on_ckb_count, 1);
+        assert_eq!(cluster_agg.pure_ckb_count, 1);
 
         let class_agg = store
             .get_object_collection_aggregate(&class_id)

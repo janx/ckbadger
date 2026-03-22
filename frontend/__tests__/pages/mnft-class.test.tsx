@@ -40,12 +40,12 @@ const mockCollection = {
   activitiesCount: 50,
   ownedCapacity: '500000000000',
   ownedKnowledge: '300000000000',
-  storageProfile: {
+  composition: {
     tier: 'unknown' as const,
     fullyOnchainCount: 0,
-    fullyOnCkbCount: 0,
-    decentralizedDependentCount: 0,
-    centralizedDependentCount: 0,
+    pureCkbCount: 0,
+    decentralizedMixtureCount: 0,
+    centralizedMixtureCount: 0,
     unknownCount: 80,
     fullyOnchainRatio: '0',
   },

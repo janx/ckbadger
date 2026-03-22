@@ -26,8 +26,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { ObjectActivityCard } from '@/components/object/object-activity-card';
 import {
-  storageTierCardStyle,
-  StorageTierTooltip,
+  compositionTierCardStyle,
+  CompositionTierTooltip,
   previewPanelStyle,
 } from '@/components/object/storage-tier';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
@@ -52,7 +52,7 @@ function normalizeObjectAssetId(assetId: string): string {
   return assetId;
 }
 import { formatNumber, truncateHash } from '@/lib/utils';
-import { formatActivityTimestamp, formatStorageTier } from '@/lib/asset-utils';
+import { formatActivityTimestamp, formatCompositionTier } from '@/lib/asset-utils';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { decodeDobContent, extractSporePayload, type SporePayload } from '@/lib/dob-render';
 import { detectPreview } from '@/lib/preview-utils';
@@ -383,9 +383,9 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               {/* Stat cards row */}
               <div className="border-base-border mt-4 grid grid-cols-2 gap-3 border-t pt-4 sm:grid-cols-4">
                 {/* Storage profile card (color-coded) */}
-                {collection.storageProfile?.tier &&
+                {collection.composition?.tier &&
                   (() => {
-                    const style = storageTierCardStyle(collection.storageProfile.tier);
+                    const style = compositionTierCardStyle(collection.composition.tier);
                     return (
                       <div className={style.card}>
                         <div
@@ -397,18 +397,17 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                           <span
                             className={`font-mono text-sm font-semibold leading-tight ${style.text}`}
                           >
-                            {formatStorageTier(collection.storageProfile.tier)}
+                            {formatCompositionTier(collection.composition.tier)}
                           </span>
-                          <StorageTierTooltip
-                            tier={collection.storageProfile.tier}
+                          <CompositionTierTooltip
+                            tier={collection.composition.tier}
                             buttonClassName={style.tooltipButton}
                           />
                         </div>
-                        {collection.storageProfile.fullyOnchainRatio && (
+                        {collection.composition.fullyOnchainRatio && (
                           <div className="text-text-dim mt-1 font-mono text-xs">
                             On-chain:{' '}
-                            {(Number(collection.storageProfile.fullyOnchainRatio) * 100).toFixed(1)}
-                            %
+                            {(Number(collection.composition.fullyOnchainRatio) * 100).toFixed(1)}%
                           </div>
                         )}
                       </div>
@@ -824,8 +823,8 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const previewStyle = previewPanelStyle(spore.mediaProfile?.tier);
   const previewPhysicality: PreviewPhysicality = (() => {
     const tier = spore.mediaProfile?.tier;
-    if (tier === 'fully_on_ckb') return 'onchain';
-    if (tier === 'fully_on_ckb_and_btc') return 'onchain-btc';
+    if (tier === 'pure_ckb') return 'onchain';
+    if (tier === 'btc_ckb') return 'onchain-btc';
     return 'default';
   })();
 
@@ -967,7 +966,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               {/* Storage profile card (color-coded) */}
               {spore.mediaProfile?.tier &&
                 (() => {
-                  const style = storageTierCardStyle(spore.mediaProfile.tier);
+                  const style = compositionTierCardStyle(spore.mediaProfile.tier);
                   return (
                     <div className={style.card}>
                       <div
@@ -979,9 +978,9 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                         <span
                           className={`font-mono text-sm font-semibold leading-tight ${style.text}`}
                         >
-                          {formatStorageTier(spore.mediaProfile.tier)}
+                          {formatCompositionTier(spore.mediaProfile.tier)}
                         </span>
-                        <StorageTierTooltip
+                        <CompositionTierTooltip
                           tier={spore.mediaProfile.tier}
                           buttonClassName={style.tooltipButton}
                         />

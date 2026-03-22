@@ -40,20 +40,20 @@ export function normalizeActivityAction(action: string): string {
   return action.toLowerCase();
 }
 
-/** Map storage tier enum to human-readable label. */
-export function formatStorageTier(
+/** Map composition tier enum to human-readable label. */
+export function formatCompositionTier(
   tier:
-    | 'fully_on_ckb_and_btc'
-    | 'fully_on_ckb'
-    | 'decentralized_dependent'
-    | 'centralized_dependent'
+    | 'btc_ckb'
+    | 'pure_ckb'
+    | 'decentralized_mixture'
+    | 'centralized_mixture'
     | 'unknown'
     | string
 ): string {
-  if (tier === 'fully_on_ckb') return 'Fully on CKB';
-  if (tier === 'fully_on_ckb_and_btc') return 'Fully on BTC+CKB';
-  if (tier === 'decentralized_dependent') return 'Decentralized Dependent';
-  if (tier === 'centralized_dependent') return 'Centralized Dependent';
+  if (tier === 'pure_ckb') return 'Pure CKB';
+  if (tier === 'btc_ckb') return 'BTC+CKB';
+  if (tier === 'decentralized_mixture') return 'Decentralized Mixture';
+  if (tier === 'centralized_mixture') return 'Centralized Mixture';
   return 'Unknown';
 }
 

@@ -2,14 +2,14 @@ import Link from '@/components/ui/link';
 
 import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { formatNumber } from '@/lib/utils';
-import { formatStorageTier } from '@/lib/asset-utils';
+import { formatCompositionTier } from '@/lib/asset-utils';
 
 interface ObjectCollectionStatCardsProps {
   totalCount: number;
   totalLabel?: string;
   liveCount?: number;
   createdAtBlock?: number;
-  storageTier?: string;
+  compositionTier?: string;
   storageOnchainRatio?: string;
 }
 
@@ -18,7 +18,7 @@ export function ObjectCollectionStatCards({
   totalLabel = 'Total Objects',
   liveCount,
   createdAtBlock,
-  storageTier,
+  compositionTier,
   storageOnchainRatio,
 }: ObjectCollectionStatCardsProps) {
   const showLiveCount = liveCount !== undefined && liveCount !== totalCount;
@@ -51,14 +51,14 @@ export function ObjectCollectionStatCards({
         </TerminalPanel>
       )}
 
-      {storageTier && (
+      {compositionTier && (
         <TerminalPanel variant="inset">
           <TerminalPanelContent className="space-y-2">
             <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
               Storage Integrity
             </div>
             <div className="text-gold text-base font-semibold">
-              {formatStorageTier(storageTier)}
+              {formatCompositionTier(compositionTier)}
             </div>
             {storageOnchainRatio && (
               <div className="text-text-dim font-mono text-xs">

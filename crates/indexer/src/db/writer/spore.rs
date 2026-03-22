@@ -5,8 +5,8 @@ use crate::parser::{analyze_spore_media_profile, ParsedClusterCell, ParsedSporeC
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    ClusterAggregate, IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
-    ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex, StorageDependencyTier,
+    ClusterAggregate, CompositionTier, IdentityCollectionAggregate, IdentityEntry, IdentityExtra,
+    IdentityStandard, ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex,
 };
 use ckbadger_store::types::{DID_CKB_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION};
 use ckbadger_store::CkbadgerStore;
@@ -361,10 +361,10 @@ impl BatchWriter {
         Ok(())
     }
 
-    fn spore_media_tier(entry: &ObjectEntry) -> StorageDependencyTier {
+    fn spore_media_tier(entry: &ObjectEntry) -> CompositionTier {
         match &entry.extra {
             ObjectExtra::Spore { media_profile, .. } => media_profile.tier,
-            _ => StorageDependencyTier::Unknown,
+            _ => CompositionTier::Unknown,
         }
     }
 
@@ -372,7 +372,7 @@ impl BatchWriter {
         &self,
         cluster_id: &[u8],
         agg: &mut ClusterAggregate,
-        tier: StorageDependencyTier,
+        tier: CompositionTier,
         delta: i64,
         context: &str,
     ) -> Result<()> {
@@ -380,11 +380,11 @@ impl BatchWriter {
             return Ok(());
         }
         let slot = match tier {
-            StorageDependencyTier::FullyOnCkb => &mut agg.fully_on_ckb_count,
-            StorageDependencyTier::FullyOnCkbAndBtc => &mut agg.fully_on_ckb_and_btc_count,
-            StorageDependencyTier::DecentralizedDependent => &mut agg.decentralized_dependent_count,
-            StorageDependencyTier::CentralizedDependent => &mut agg.centralized_dependent_count,
-            StorageDependencyTier::Unknown => &mut agg.unknown_count,
+            CompositionTier::PureCkb => &mut agg.pure_ckb_count,
+            CompositionTier::BtcCkb => &mut agg.btc_ckb_count,
+            CompositionTier::DecentralizedMixture => &mut agg.decentralized_mixture_count,
+            CompositionTier::CentralizedMixture => &mut agg.centralized_mixture_count,
+            CompositionTier::Unknown => &mut agg.unknown_count,
         };
         let next = slot.checked_add(delta).ok_or_else(|| {
             anyhow::anyhow!(
@@ -548,9 +548,9 @@ impl BatchWriter {
             existing
                 .as_ref()
                 .map(Self::spore_media_tier)
-                .unwrap_or(StorageDependencyTier::Unknown)
+                .unwrap_or(CompositionTier::Unknown)
         } else {
-            StorageDependencyTier::Unknown
+            CompositionTier::Unknown
         };
         let old_cluster = existing.as_ref().and_then(|e| e.collection_id.clone());
         let old_owner = if was_live {
@@ -1000,7 +1000,7 @@ mod tests {
                 content_type: "image/png".to_string(),
                 content_length: 4,
                 media_profile: SporeMediaProfile {
-                    tier: StorageDependencyTier::FullyOnCkb,
+                    tier: CompositionTier::PureCkb,
                     sources: Vec::new(),
                     has_renderable_image: false,
                     issues: Vec::new(),
@@ -1188,7 +1188,7 @@ mod tests {
                     total_count: 1,
                     live_count: 1,
                     owner_count: 1,
-                    fully_on_ckb_count: 1,
+                    pure_ckb_count: 1,
                     ..Default::default()
                 },
             );
@@ -1225,7 +1225,7 @@ mod tests {
         let agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
         assert_eq!(agg.owner_count, 1);
         assert_eq!(agg.live_count, 1);
-        assert_eq!(agg.fully_on_ckb_count, 1);
+        assert_eq!(agg.pure_ckb_count, 1);
         assert_eq!(
             store
                 .get_cluster_owner_count(&cluster_id, &owner_a)
@@ -1261,7 +1261,7 @@ mod tests {
                     total_count: 1,
                     live_count: 1,
                     owner_count: 0,
-                    fully_on_ckb_count: 1,
+                    pure_ckb_count: 1,
                     ..Default::default()
                 },
             );
@@ -1305,7 +1305,7 @@ mod tests {
                     total_count: 1,
                     live_count: 0,
                     owner_count: 1,
-                    fully_on_ckb_count: 1,
+                    pure_ckb_count: 1,
                     ..Default::default()
                 },
             );
@@ -1348,7 +1348,7 @@ mod tests {
                     total_count: 1,
                     live_count: 0,
                     owner_count: 1,
-                    fully_on_ckb_count: 1,
+                    pure_ckb_count: 1,
                     ..Default::default()
                 },
             );
@@ -1385,7 +1385,7 @@ mod tests {
                     total_count: 1,
                     live_count: 1,
                     owner_count: 1,
-                    fully_on_ckb_count: 1,
+                    pure_ckb_count: 1,
                     ..Default::default()
                 },
             );
@@ -1412,10 +1412,10 @@ mod tests {
         let new_agg = store.get_cluster_aggregate(&new_cluster).unwrap().unwrap();
         assert_eq!(old_agg.live_count, 0);
         assert_eq!(old_agg.owner_count, 0);
-        assert_eq!(old_agg.fully_on_ckb_count, 0);
+        assert_eq!(old_agg.pure_ckb_count, 0);
         assert_eq!(new_agg.live_count, 1);
         assert_eq!(new_agg.owner_count, 1);
-        assert_eq!(new_agg.fully_on_ckb_count, 1);
+        assert_eq!(new_agg.pure_ckb_count, 1);
     }
 
     #[test]
@@ -1624,7 +1624,7 @@ mod tests {
                     total_count: 1,
                     live_count: 1,
                     owner_count: 1,
-                    fully_on_ckb_count: 1,
+                    pure_ckb_count: 1,
                     ..Default::default()
                 },
             );

@@ -84,7 +84,7 @@ const mockClusterAssets = {
       clusterName: 'Test Collection',
       ownedCapacity: '9000000000',
       ownedKnowledge: '5000000000',
-      storageTier: 'fully_on_ckb_and_btc' as const,
+      compositionTier: 'btc_ckb' as const,
       fullyOnchainRatio: '1.0000',
       fullyOnchainCount: 50,
       hMultiplier: 1.8,
@@ -183,7 +183,7 @@ const mockMixedObjectAssets = {
       clusterName: 'Spore With Icon',
       ownedCapacity: '3000000000',
       ownedKnowledge: '1000000000',
-      storageTier: 'fully_on_ckb_and_btc' as const,
+      compositionTier: 'btc_ckb' as const,
       fullyOnchainRatio: '1.0000',
       fullyOnchainCount: 10,
       hMultiplier: 3.0,
@@ -209,7 +209,7 @@ const mockMixedObjectAssets = {
       clusterName: null,
       ownedCapacity: '2000000000',
       ownedKnowledge: '900000000',
-      storageTier: 'centralized_dependent' as const,
+      compositionTier: 'centralized_mixture' as const,
       fullyOnchainRatio: '0.0000',
       fullyOnchainCount: 0,
       hMultiplier: 2.22,
@@ -378,7 +378,7 @@ describe('AssetsPage', () => {
     await waitFor(() => {
       expect(screen.getAllByText('Test Collection').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('SPORE').length).toBeGreaterThan(0);
-      expect(screen.getAllByText('Fully on BTC+CKB').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('BTC+CKB').length).toBeGreaterThanOrEqual(1);
       const links = screen.getAllByRole('link', { name: /Test Collection/i });
       expect(
         links.some(
@@ -456,30 +456,30 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
-        expect.objectContaining({ type: 'object', storageTier: undefined })
+        expect.objectContaining({ type: 'object', compositionTier: undefined })
       );
     });
 
     fireEvent.change(screen.getByLabelText('Filter by storage tier'), {
-      target: { value: 'fully_on_ckb' },
+      target: { value: 'pure_ckb' },
     });
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
-        expect.objectContaining({ type: 'object', storageTier: 'fully_on_ckb' })
+        expect.objectContaining({ type: 'object', compositionTier: 'pure_ckb' })
       );
-      expect(window.location.search).toContain('storageTier=fully_on_ckb');
+      expect(window.location.search).toContain('compositionTier=pure_ckb');
     });
 
     fireEvent.change(screen.getByLabelText('Filter by storage tier'), {
-      target: { value: 'centralized_dependent' },
+      target: { value: 'centralized_mixture' },
     });
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
-        expect.objectContaining({ type: 'object', storageTier: 'centralized_dependent' })
+        expect.objectContaining({ type: 'object', compositionTier: 'centralized_mixture' })
       );
-      expect(window.location.search).toContain('storageTier=centralized_dependent');
+      expect(window.location.search).toContain('compositionTier=centralized_mixture');
     });
   });
 
@@ -617,7 +617,7 @@ describe('AssetsPage', () => {
     await waitFor(() => {
       // Dual-render: text appears in both table and card layouts
       expect(screen.getAllByText('MNFT Without Icon').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('Centralized Dependent').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Centralized Mixture').length).toBeGreaterThanOrEqual(1);
     });
   });
 

@@ -28,15 +28,15 @@ import {
 } from '@/lib/detail-routes';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatCkbCompact } from '@/lib/utils';
-import { formatStorageTier } from '@/lib/asset-utils';
+import { formatCompositionTier } from '@/lib/asset-utils';
 type AssetTab = 'token' | 'object' | 'identity';
 type SortDirection = 'asc' | 'desc';
-type StorageTierFilter =
+type CompositionTierFilter =
   | 'all'
-  | 'fully_on_ckb'
-  | 'fully_on_ckb_and_btc'
-  | 'decentralized_dependent'
-  | 'centralized_dependent'
+  | 'pure_ckb'
+  | 'btc_ckb'
+  | 'decentralized_mixture'
+  | 'centralized_mixture'
   | 'unknown';
 type AssetSortKey =
   | 'name'
@@ -52,12 +52,12 @@ type AssetSortKey =
 const TOKEN_STANDARD_OPTIONS = ['xudt', 'sudt'];
 const OBJECT_STANDARD_OPTIONS = ['spore', 'm-nft'];
 const IDENTITY_STANDARD_OPTIONS = ['dotbit', 'did:ckb'];
-const STORAGE_TIER_OPTIONS: StorageTierFilter[] = [
+const COMPOSITION_TIER_OPTIONS: CompositionTierFilter[] = [
   'all',
-  'fully_on_ckb',
-  'fully_on_ckb_and_btc',
-  'decentralized_dependent',
-  'centralized_dependent',
+  'pure_ckb',
+  'btc_ckb',
+  'decentralized_mixture',
+  'centralized_mixture',
   'unknown',
 ];
 function normalizeAssetTab(value: string | null): AssetTab {
@@ -77,7 +77,7 @@ function normalizeStandardFilter(value: string | null): string | undefined {
   const normalized = value.trim().toLowerCase();
   return normalized.length > 0 ? normalized : undefined;
 }
-function normalizeStorageTier(value: string | null): StorageTierFilter {
+function normalizeCompositionTier(value: string | null): CompositionTierFilter {
   if (!value) {
     return 'all';
   }
@@ -85,30 +85,30 @@ function normalizeStorageTier(value: string | null): StorageTierFilter {
   switch (normalized) {
     case 'all':
       return 'all';
-    case 'fully_on_ckb':
-      return 'fully_on_ckb';
-    case 'fully_on_ckb_and_btc':
-      return 'fully_on_ckb_and_btc';
-    case 'decentralized_dependent':
-      return 'decentralized_dependent';
-    case 'centralized_dependent':
-      return 'centralized_dependent';
+    case 'pure_ckb':
+      return 'pure_ckb';
+    case 'btc_ckb':
+      return 'btc_ckb';
+    case 'decentralized_mixture':
+      return 'decentralized_mixture';
+    case 'centralized_mixture':
+      return 'centralized_mixture';
     case 'unknown':
       return 'unknown';
     default:
       return 'all';
   }
 }
-function formatStorageTierLabel(value: StorageTierFilter): string {
+function formatCompositionTierLabel(value: CompositionTierFilter): string {
   switch (value) {
-    case 'fully_on_ckb':
-      return 'Fully on CKB';
-    case 'fully_on_ckb_and_btc':
-      return 'Fully on BTC+CKB';
-    case 'decentralized_dependent':
-      return 'Decentralized Dependent';
-    case 'centralized_dependent':
-      return 'Centralized Dependent';
+    case 'pure_ckb':
+      return 'Pure CKB';
+    case 'btc_ckb':
+      return 'BTC+CKB';
+    case 'decentralized_mixture':
+      return 'Decentralized Mixture';
+    case 'centralized_mixture':
+      return 'Centralized Mixture';
     case 'unknown':
       return 'Unknown';
     default:
@@ -162,12 +162,12 @@ function AssetTable({
   assetType,
   search,
   standard,
-  storageTier,
+  compositionTier,
 }: {
   assetType: AssetTab;
   search: string | undefined;
   standard: string | undefined;
-  storageTier: StorageTierFilter;
+  compositionTier: CompositionTierFilter;
 }) {
   const pagination = useCursorPagination();
   const { reset } = pagination;
@@ -177,7 +177,7 @@ function AssetTable({
     setSortKey('capacity');
     setSortDirection('desc');
     reset();
-  }, [assetType, standard, storageTier, reset]);
+  }, [assetType, standard, compositionTier, reset]);
   const { data, isLoading } = useQuery({
     queryKey: [
       'assets',
@@ -187,7 +187,7 @@ function AssetTable({
       standard,
       sortKey,
       sortDirection,
-      storageTier,
+      compositionTier,
     ],
     queryFn: () =>
       api.getAssets({
@@ -198,13 +198,14 @@ function AssetTable({
         standard,
         sortKey,
         sortDirection,
-        storageTier: assetType === 'object' && storageTier !== 'all' ? storageTier : undefined,
+        compositionTier:
+          assetType === 'object' && compositionTier !== 'all' ? compositionTier : undefined,
       }),
     placeholderData: keepPreviousData,
   });
   const assets = data?.data ?? [];
   const nameColumnClass = 'min-w-0 flex-[2_0_10rem] pr-4';
-  const storageColumnClass = 'w-36 shrink-0';
+  const compositionColumnClass = 'w-36 shrink-0';
   const typeColumnClass = 'w-20 shrink-0';
   const smallNumberColumnClass = 'w-20 shrink-0 whitespace-nowrap text-right';
   const mediumNumberColumnClass = 'w-28 shrink-0 whitespace-nowrap text-right';
@@ -270,7 +271,7 @@ function AssetTable({
                 <div className="bg-base-elevated h-4 w-48 rounded" />
               </div>
               {assetType === 'object' && (
-                <div className={storageColumnClass}>
+                <div className={compositionColumnClass}>
                   <div className="bg-base-elevated h-4 w-24 rounded" />
                 </div>
               )}
@@ -329,7 +330,7 @@ function AssetTable({
       <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-3 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
         {renderSortHeader('name', assetType === 'token' ? 'Token' : 'Collection', nameColumnClass)}
         {assetType === 'object' && (
-          <div className={`${storageColumnClass} font-mono text-xs uppercase tracking-wider`}>
+          <div className={`${compositionColumnClass} font-mono text-xs uppercase tracking-wider`}>
             Storage
           </div>
         )}
@@ -411,9 +412,9 @@ function AssetTable({
             </div>
             {assetType === 'object' && (
               <div
-                className={`${storageColumnClass} font-mono text-xs ${asset.storageTier === 'fully_on_ckb' ? 'storage-text-gem' : asset.storageTier === 'fully_on_ckb_and_btc' ? 'storage-text-split' : 'text-text-dim'}`}
+                className={`${compositionColumnClass} font-mono text-xs ${asset.compositionTier === 'pure_ckb' ? 'storage-text-gem' : asset.compositionTier === 'btc_ckb' ? 'storage-text-split' : 'text-text-dim'}`}
               >
-                {asset.storageTier ? formatStorageTier(asset.storageTier) : '-'}
+                {asset.compositionTier ? formatCompositionTier(asset.compositionTier) : '-'}
               </div>
             )}
             <div className={typeColumnClass}>
@@ -542,17 +543,17 @@ function AssetTable({
               <Badge variant="neutral">{getTypeBadgeLabel(asset)}</Badge>
             </div>
             <div className="text-text-dim flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-xs tabular-nums">
-              {assetType === 'object' && asset.storageTier && (
+              {assetType === 'object' && asset.compositionTier && (
                 <span
                   className={
-                    asset.storageTier === 'fully_on_ckb'
+                    asset.compositionTier === 'pure_ckb'
                       ? 'storage-text-gem'
-                      : asset.storageTier === 'fully_on_ckb_and_btc'
+                      : asset.compositionTier === 'btc_ckb'
                         ? 'storage-text-split'
                         : ''
                   }
                 >
-                  Storage: {formatStorageTier(asset.storageTier)}
+                  Storage: {formatCompositionTier(asset.compositionTier)}
                 </span>
               )}
               <span>
@@ -598,16 +599,16 @@ export function AssetsPageClient() {
   const [standard, setStandard] = useState<string | undefined>(() =>
     normalizeStandardFilter(searchParams.get('standard'))
   );
-  const [storageTier, setStorageTier] = useState<StorageTierFilter>(() =>
-    normalizeStorageTier(searchParams.get('storageTier'))
+  const [compositionTier, setCompositionTier] = useState<CompositionTierFilter>(() =>
+    normalizeCompositionTier(searchParams.get('compositionTier'))
   );
   useEffect(() => {
     const tabFromUrl = normalizeAssetTab(searchParams.get('type'));
     setActiveTab((prev) => (prev === tabFromUrl ? prev : tabFromUrl));
     const standardFromUrl = normalizeStandardFilter(searchParams.get('standard'));
     setStandard((prev) => (prev === standardFromUrl ? prev : standardFromUrl));
-    const storageTierFromUrl = normalizeStorageTier(searchParams.get('storageTier'));
-    setStorageTier((prev) => (prev === storageTierFromUrl ? prev : storageTierFromUrl));
+    const compositionTierFromUrl = normalizeCompositionTier(searchParams.get('compositionTier'));
+    setCompositionTier((prev) => (prev === compositionTierFromUrl ? prev : compositionTierFromUrl));
   }, [searchParams]);
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -623,11 +624,11 @@ export function AssetsPageClient() {
     setSearch(undefined);
     setSearchInput('');
     setStandard(undefined);
-    setStorageTier('all');
+    setCompositionTier('all');
     const params = new URLSearchParams(searchParams.toString());
     params.set('type', nextTab);
     params.delete('standard');
-    params.delete('storageTier');
+    params.delete('compositionTier');
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   };
@@ -643,14 +644,14 @@ export function AssetsPageClient() {
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   };
-  const handleStorageTierChange = (value: string) => {
-    const nextStorageTier = normalizeStorageTier(value);
-    setStorageTier(nextStorageTier);
+  const handleCompositionTierChange = (value: string) => {
+    const nextCompositionTier = normalizeCompositionTier(value);
+    setCompositionTier(nextCompositionTier);
     const params = new URLSearchParams(searchParams.toString());
-    if (nextStorageTier === 'all') {
-      params.delete('storageTier');
+    if (nextCompositionTier === 'all') {
+      params.delete('compositionTier');
     } else {
-      params.set('storageTier', nextStorageTier);
+      params.set('compositionTier', nextCompositionTier);
     }
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
@@ -716,14 +717,14 @@ export function AssetsPageClient() {
                   </select>
                   {activeTab === 'object' && (
                     <select
-                      value={storageTier}
-                      onChange={(event) => handleStorageTierChange(event.target.value)}
+                      value={compositionTier}
+                      onChange={(event) => handleCompositionTierChange(event.target.value)}
                       aria-label="Filter by storage tier"
                       className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface text-text-bright min-w-[12rem] rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
                     >
-                      {STORAGE_TIER_OPTIONS.map((item) => (
+                      {COMPOSITION_TIER_OPTIONS.map((item) => (
                         <option key={item} value={item}>
-                          {formatStorageTierLabel(item)}
+                          {formatCompositionTierLabel(item)}
                         </option>
                       ))}
                     </select>
@@ -744,7 +745,7 @@ export function AssetsPageClient() {
                   assetType="token"
                   search={search}
                   standard={standard}
-                  storageTier="all"
+                  compositionTier="all"
                 />
               </TabsContent>
               <TabsContent value="object">
@@ -752,7 +753,7 @@ export function AssetsPageClient() {
                   assetType="object"
                   search={search}
                   standard={standard}
-                  storageTier={storageTier}
+                  compositionTier={compositionTier}
                 />
               </TabsContent>
               <TabsContent value="identity">
@@ -760,7 +761,7 @@ export function AssetsPageClient() {
                   assetType="identity"
                   search={search}
                   standard={standard}
-                  storageTier="all"
+                  compositionTier="all"
                 />
               </TabsContent>
             </TerminalPanelContent>

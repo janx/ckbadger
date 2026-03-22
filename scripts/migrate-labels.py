@@ -246,7 +246,7 @@ def load_overrides():
         "name_map": data.get("overrides", {}),
         "known_scripts": data.get("known_scripts", []),
         "deprecated": set(h.lower() for h in data.get("deprecated", [])),
-        "nft_tiers": data.get("nft_storage_tier_overrides", {}),
+        "nft_tiers": data.get("nft_composition_tier_overrides", {}),
     }
 
 

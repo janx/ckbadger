@@ -297,35 +297,32 @@ pub struct TokenTransferRecord {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum StorageDependencyTier {
+pub enum CompositionTier {
     /// Content stored natively on CKB (inline cell data, ckbfs://, data: URIs).
-    FullyOnCkb,
+    PureCkb,
     /// Content depends on both Bitcoin (btcfs://) and CKB storage.
     /// Objects are always CKB cells, so btcfs:// content is never "fully on Bitcoin" alone.
-    FullyOnCkbAndBtc,
-    DecentralizedDependent,
-    CentralizedDependent,
+    BtcCkb,
+    DecentralizedMixture,
+    CentralizedMixture,
     #[default]
     Unknown,
 }
 
-impl StorageDependencyTier {
+impl CompositionTier {
     pub fn as_str(&self) -> &'static str {
         match self {
-            StorageDependencyTier::FullyOnCkb => "fully_on_ckb",
-            StorageDependencyTier::FullyOnCkbAndBtc => "fully_on_ckb_and_btc",
-            StorageDependencyTier::DecentralizedDependent => "decentralized_dependent",
-            StorageDependencyTier::CentralizedDependent => "centralized_dependent",
-            StorageDependencyTier::Unknown => "unknown",
+            CompositionTier::PureCkb => "pure_ckb",
+            CompositionTier::BtcCkb => "btc_ckb",
+            CompositionTier::DecentralizedMixture => "decentralized_mixture",
+            CompositionTier::CentralizedMixture => "centralized_mixture",
+            CompositionTier::Unknown => "unknown",
         }
     }
 
-    /// Returns true if the tier represents any form of fully on-chain storage.
-    pub fn is_fully_onchain(&self) -> bool {
-        matches!(
-            self,
-            StorageDependencyTier::FullyOnCkb | StorageDependencyTier::FullyOnCkbAndBtc
-        )
+    /// Returns true if the tier represents any form of on-chain storage.
+    pub fn is_onchain(&self) -> bool {
+        matches!(self, CompositionTier::PureCkb | CompositionTier::BtcCkb)
     }
 }
 
@@ -336,14 +333,14 @@ pub struct SporeMediaSource {
     pub scheme: String,
     pub source_location: String,
     #[serde(default)]
-    pub dependency_tier: StorageDependencyTier,
+    pub dependency_tier: CompositionTier,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SporeMediaProfile {
     #[serde(default)]
-    pub tier: StorageDependencyTier,
+    pub tier: CompositionTier,
     #[serde(default)]
     pub sources: Vec<SporeMediaSource>,
     #[serde(default)]
@@ -448,7 +445,7 @@ pub enum ObjectExtra {
         issued: u32,
         configure: u8,
         #[serde(default)]
-        storage_tier: StorageDependencyTier,
+        composition_tier: CompositionTier,
     },
     /// mNFT token (individual item) metadata.
     MnftToken {
@@ -568,13 +565,13 @@ pub struct ClusterAggregate {
     pub live_count: i64,
     pub owner_count: i64,
     #[serde(default)]
-    pub fully_on_ckb_and_btc_count: i64,
+    pub btc_ckb_count: i64,
     #[serde(default)]
-    pub fully_on_ckb_count: i64,
+    pub pure_ckb_count: i64,
     #[serde(default)]
-    pub decentralized_dependent_count: i64,
+    pub decentralized_mixture_count: i64,
     #[serde(default)]
-    pub centralized_dependent_count: i64,
+    pub centralized_mixture_count: i64,
     #[serde(default)]
     pub unknown_count: i64,
 }
@@ -591,13 +588,13 @@ pub struct ObjectCollectionAggregate {
     #[serde(default)]
     pub activities_count: i64,
     #[serde(default)]
-    pub fully_on_ckb_and_btc_count: i64,
+    pub btc_ckb_count: i64,
     #[serde(default)]
-    pub fully_on_ckb_count: i64,
+    pub pure_ckb_count: i64,
     #[serde(default)]
-    pub decentralized_dependent_count: i64,
+    pub decentralized_mixture_count: i64,
     #[serde(default)]
-    pub centralized_dependent_count: i64,
+    pub centralized_mixture_count: i64,
     #[serde(default)]
     pub unknown_count: i64,
 }
@@ -2020,7 +2017,7 @@ mod tests {
             } => {
                 assert_eq!(content_type, "image/png");
                 assert_eq!(content_length, 4096);
-                assert_eq!(media_profile.tier, StorageDependencyTier::Unknown);
+                assert_eq!(media_profile.tier, CompositionTier::Unknown);
             }
             _ => panic!("wrong variant"),
         }
@@ -2102,7 +2099,7 @@ mod tests {
                 total: 100,
                 issued: 42,
                 configure: 0xFF,
-                storage_tier: StorageDependencyTier::FullyOnCkb,
+                composition_tier: CompositionTier::PureCkb,
             },
         };
         let bytes = bincode::serialize(&entry).unwrap();

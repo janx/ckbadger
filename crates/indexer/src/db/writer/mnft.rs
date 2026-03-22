@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    ObjectCollectionAggregate, ObjectEntry, ObjectExtra, ObjectStandard, ObjectTypeIndex,
-    StorageDependencyTier,
+    CompositionTier, ObjectCollectionAggregate, ObjectEntry, ObjectExtra, ObjectStandard,
+    ObjectTypeIndex,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -211,10 +211,12 @@ impl BatchWriter {
     }
 
     /// Get the storage tier for an mNFT class from its ObjectEntry.
-    fn mnft_class_tier(entry: &ObjectEntry) -> StorageDependencyTier {
+    fn mnft_class_tier(entry: &ObjectEntry) -> CompositionTier {
         match &entry.extra {
-            ObjectExtra::MnftClass { storage_tier, .. } => *storage_tier,
-            _ => StorageDependencyTier::Unknown,
+            ObjectExtra::MnftClass {
+                composition_tier, ..
+            } => *composition_tier,
+            _ => CompositionTier::Unknown,
         }
     }
 
@@ -223,18 +225,18 @@ impl BatchWriter {
         &self,
         class_id: &[u8],
         state: &mut MnftBatchState,
-    ) -> Result<StorageDependencyTier> {
+    ) -> Result<CompositionTier> {
         let class_entry = state.get_token(self.store.as_ref(), class_id)?;
         Ok(class_entry
             .as_ref()
             .map(Self::mnft_class_tier)
-            .unwrap_or(StorageDependencyTier::Unknown))
+            .unwrap_or(CompositionTier::Unknown))
     }
 
     fn adjust_collection_tier_count(
         collection_id: &[u8],
         agg: &mut ObjectCollectionAggregate,
-        tier: StorageDependencyTier,
+        tier: CompositionTier,
         delta: i64,
         context: &str,
     ) -> Result<()> {
@@ -242,11 +244,11 @@ impl BatchWriter {
             return Ok(());
         }
         let slot = match tier {
-            StorageDependencyTier::FullyOnCkb => &mut agg.fully_on_ckb_count,
-            StorageDependencyTier::FullyOnCkbAndBtc => &mut agg.fully_on_ckb_and_btc_count,
-            StorageDependencyTier::DecentralizedDependent => &mut agg.decentralized_dependent_count,
-            StorageDependencyTier::CentralizedDependent => &mut agg.centralized_dependent_count,
-            StorageDependencyTier::Unknown => &mut agg.unknown_count,
+            CompositionTier::PureCkb => &mut agg.pure_ckb_count,
+            CompositionTier::BtcCkb => &mut agg.btc_ckb_count,
+            CompositionTier::DecentralizedMixture => &mut agg.decentralized_mixture_count,
+            CompositionTier::CentralizedMixture => &mut agg.centralized_mixture_count,
+            CompositionTier::Unknown => &mut agg.unknown_count,
         };
         let next = slot.checked_add(delta).ok_or_else(|| {
             anyhow::anyhow!(
@@ -338,7 +340,9 @@ impl BatchWriter {
         let existing = state.get_token(self.store.as_ref(), &class.class_id)?;
         let new_tier = analyze_renderer_tier(class.renderer.as_deref());
         let old_tier = existing.as_ref().and_then(|e| match &e.extra {
-            ObjectExtra::MnftClass { storage_tier, .. } => Some(*storage_tier),
+            ObjectExtra::MnftClass {
+                composition_tier, ..
+            } => Some(*composition_tier),
             _ => None,
         });
         let entry = ObjectEntry {
@@ -363,7 +367,7 @@ impl BatchWriter {
                 total: class.total,
                 issued: class.issued,
                 configure: class.configure,
-                storage_tier: new_tier,
+                composition_tier: new_tier,
             },
         };
         batch.put_object(&class.class_id, &entry);

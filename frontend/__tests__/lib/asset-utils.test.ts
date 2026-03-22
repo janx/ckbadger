@@ -5,7 +5,7 @@ import {
   parseActivityCursor,
   formatActivityTimestamp,
   normalizeActivityAction,
-  formatStorageTier,
+  formatCompositionTier,
   formatExpiry,
 } from '@/lib/asset-utils';
 
@@ -76,22 +76,22 @@ describe('normalizeActivityAction', () => {
   });
 });
 
-describe('formatStorageTier', () => {
-  it('formats fully_on_ckb_and_btc', () => {
-    expect(formatStorageTier('fully_on_ckb_and_btc')).toBe('Fully on BTC+CKB');
+describe('formatCompositionTier', () => {
+  it('formats btc_ckb', () => {
+    expect(formatCompositionTier('btc_ckb')).toBe('BTC+CKB');
   });
 
-  it('formats decentralized_dependent', () => {
-    expect(formatStorageTier('decentralized_dependent')).toBe('Decentralized Dependent');
+  it('formats decentralized_mixture', () => {
+    expect(formatCompositionTier('decentralized_mixture')).toBe('Decentralized Mixture');
   });
 
-  it('formats centralized_dependent', () => {
-    expect(formatStorageTier('centralized_dependent')).toBe('Centralized Dependent');
+  it('formats centralized_mixture', () => {
+    expect(formatCompositionTier('centralized_mixture')).toBe('Centralized Mixture');
   });
 
   it('returns Unknown for unrecognized tier', () => {
-    expect(formatStorageTier('unknown')).toBe('Unknown');
-    expect(formatStorageTier('something_else')).toBe('Unknown');
+    expect(formatCompositionTier('unknown')).toBe('Unknown');
+    expect(formatCompositionTier('something_else')).toBe('Unknown');
   });
 });
 

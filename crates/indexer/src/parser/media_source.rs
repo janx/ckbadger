@@ -1,4 +1,4 @@
-use ckbadger_store::types::{SporeMediaProfile, SporeMediaSource, StorageDependencyTier};
+use ckbadger_store::types::{CompositionTier, SporeMediaProfile, SporeMediaSource};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -85,7 +85,7 @@ pub fn analyze_spore_media_profile(
                     uri: format!("ipfs://{trimmed}"),
                     scheme: "ipfs".to_string(),
                     source_location: "payload_cid".to_string(),
-                    dependency_tier: StorageDependencyTier::DecentralizedDependent,
+                    dependency_tier: CompositionTier::DecentralizedMixture,
                 });
                 if normalized_type.contains("image") {
                     has_renderable_image = true;
@@ -108,37 +108,37 @@ pub fn analyze_spore_media_profile(
     }
 }
 
-pub(crate) fn resolve_tier(sources: &[SporeMediaSource]) -> StorageDependencyTier {
+pub(crate) fn resolve_tier(sources: &[SporeMediaSource]) -> CompositionTier {
     if sources
         .iter()
-        .any(|source| source.dependency_tier == StorageDependencyTier::CentralizedDependent)
+        .any(|source| source.dependency_tier == CompositionTier::CentralizedMixture)
     {
-        return StorageDependencyTier::CentralizedDependent;
+        return CompositionTier::CentralizedMixture;
     }
     if sources
         .iter()
-        .any(|source| source.dependency_tier == StorageDependencyTier::DecentralizedDependent)
+        .any(|source| source.dependency_tier == CompositionTier::DecentralizedMixture)
     {
-        return StorageDependencyTier::DecentralizedDependent;
+        return CompositionTier::DecentralizedMixture;
     }
 
     let has_ckb = sources
         .iter()
-        .any(|source| source.dependency_tier == StorageDependencyTier::FullyOnCkb);
+        .any(|source| source.dependency_tier == CompositionTier::PureCkb);
     let has_btc = sources
         .iter()
-        .any(|source| source.dependency_tier == StorageDependencyTier::FullyOnCkbAndBtc);
+        .any(|source| source.dependency_tier == CompositionTier::BtcCkb);
 
     if has_btc {
         // Any btcfs:// source means content spans both Bitcoin and CKB.
         // Objects are CKB cells, so btcfs content is never "fully on Bitcoin" alone.
-        return StorageDependencyTier::FullyOnCkbAndBtc;
+        return CompositionTier::BtcCkb;
     }
     if has_ckb {
-        return StorageDependencyTier::FullyOnCkb;
+        return CompositionTier::PureCkb;
     }
     // No external dependencies — content is stored entirely in the CKB cell.
-    StorageDependencyTier::FullyOnCkb
+    CompositionTier::PureCkb
 }
 
 fn decode_text_payload(content: &[u8]) -> Result<String, String> {
@@ -255,7 +255,7 @@ fn extract_content_type_external_refs(content_type: &str) -> Option<Vec<SporeMed
                         uri: format!("ipfs://{value}"),
                         scheme: "ipfs".to_string(),
                         source_location: "content_type_param".to_string(),
-                        dependency_tier: StorageDependencyTier::DecentralizedDependent,
+                        dependency_tier: CompositionTier::DecentralizedMixture,
                     });
                 }
                 "ar" | "arweave" => {
@@ -263,7 +263,7 @@ fn extract_content_type_external_refs(content_type: &str) -> Option<Vec<SporeMed
                         uri: format!("ar://{value}"),
                         scheme: "ar".to_string(),
                         source_location: "content_type_param".to_string(),
-                        dependency_tier: StorageDependencyTier::DecentralizedDependent,
+                        dependency_tier: CompositionTier::DecentralizedMixture,
                     });
                 }
                 _ => {}
@@ -277,25 +277,25 @@ fn extract_content_type_external_refs(content_type: &str) -> Option<Vec<SporeMed
     }
 }
 
-fn classify_dependency_tier(scheme: &str) -> StorageDependencyTier {
+fn classify_dependency_tier(scheme: &str) -> CompositionTier {
     match scheme {
-        "http" | "https" => StorageDependencyTier::CentralizedDependent,
-        "ipfs" | "ar" => StorageDependencyTier::DecentralizedDependent,
-        "btcfs" => StorageDependencyTier::FullyOnCkbAndBtc,
-        "ckbfs" | "data" => StorageDependencyTier::FullyOnCkb,
-        _ => StorageDependencyTier::Unknown,
+        "http" | "https" => CompositionTier::CentralizedMixture,
+        "ipfs" | "ar" => CompositionTier::DecentralizedMixture,
+        "btcfs" => CompositionTier::BtcCkb,
+        "ckbfs" | "data" => CompositionTier::PureCkb,
+        _ => CompositionTier::Unknown,
     }
 }
 
 /// Analyze an mNFT class renderer URL to determine its storage dependency tier.
 ///
 /// The renderer is a class-level property shared by all tokens in the class.
-/// - `None` or empty → `FullyOnCkb` (no external dependency)
+/// - `None` or empty → `PureCkb` (no external dependency)
 /// - Contains a URI → classified by scheme (http → Centralized, ipfs → Decentralized, etc.)
-pub fn analyze_renderer_tier(renderer: Option<&str>) -> StorageDependencyTier {
+pub fn analyze_renderer_tier(renderer: Option<&str>) -> CompositionTier {
     let url = match renderer {
         Some(s) if !s.trim().is_empty() => s.trim(),
-        _ => return StorageDependencyTier::FullyOnCkb,
+        _ => return CompositionTier::PureCkb,
     };
     let mut sources = Vec::new();
     extract_uri_sources(url, "renderer", &mut sources);
@@ -786,7 +786,7 @@ mod tests {
             None,
             false,
         );
-        assert_eq!(profile.tier, StorageDependencyTier::CentralizedDependent);
+        assert_eq!(profile.tier, CompositionTier::CentralizedMixture);
         assert_eq!(profile.sources.len(), 1);
         assert_eq!(profile.sources[0].scheme, "https");
     }
@@ -799,7 +799,7 @@ mod tests {
             None,
             false,
         );
-        assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkbAndBtc);
+        assert_eq!(profile.tier, CompositionTier::BtcCkb);
         assert!(profile.has_renderable_image);
         assert!(profile.sources.iter().any(|s| s.scheme == "btcfs"));
     }
@@ -808,7 +808,7 @@ mod tests {
     fn classifies_ipfs_as_decentralized_dependent() {
         let profile =
             analyze_spore_media_profile("text/plain", b"ipfs://QmHashValue1234567890", None, false);
-        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
+        assert_eq!(profile.tier, CompositionTier::DecentralizedMixture);
     }
 
     #[test]
@@ -835,7 +835,7 @@ mod tests {
         .to_string();
 
         let profile = analyze_spore_media_profile("dob/0", b"01", Some(&metadata), false);
-        assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkbAndBtc);
+        assert_eq!(profile.tier, CompositionTier::BtcCkb);
         assert!(profile
             .sources
             .iter()
@@ -869,7 +869,7 @@ mod tests {
             None,
             false,
         );
-        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
+        assert_eq!(profile.tier, CompositionTier::DecentralizedMixture);
         assert!(profile.has_renderable_image);
         assert!(profile.sources.iter().any(|s| s.scheme == "ipfs"
             && s.uri
@@ -884,8 +884,8 @@ mod tests {
             None,
             false,
         );
-        // Has IPFS source so tier is DecentralizedDependent (even though binary is on-chain)
-        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
+        // Has IPFS source so tier is DecentralizedMixture (even though binary is on-chain)
+        assert_eq!(profile.tier, CompositionTier::DecentralizedMixture);
         assert!(profile.has_renderable_image);
         assert!(profile.sources.iter().any(|s| s.scheme == "ipfs"
             && s.uri
@@ -896,7 +896,7 @@ mod tests {
     fn ipfs_cid_content_type_without_param_extracts_from_payload() {
         let profile =
             analyze_spore_media_profile("ipfs/cid", b"QmHashValue1234567890abcdef", None, false);
-        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
+        assert_eq!(profile.tier, CompositionTier::DecentralizedMixture);
         assert!(profile
             .sources
             .iter()
@@ -907,7 +907,7 @@ mod tests {
     fn classifies_ckbfs_as_fully_on_ckb() {
         let profile =
             analyze_spore_media_profile("text/plain", b"ckbfs://somecellhash", None, false);
-        assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkb);
+        assert_eq!(profile.tier, CompositionTier::PureCkb);
         assert!(profile.sources.iter().any(|s| s.scheme == "ckbfs"));
     }
 
@@ -915,7 +915,7 @@ mod tests {
     fn classifies_inline_binary_as_fully_on_ckb() {
         let profile =
             analyze_spore_media_profile("image/png", &[0x89, 0x50, 0x4E, 0x47], None, false);
-        assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkb);
+        assert_eq!(profile.tier, CompositionTier::PureCkb);
     }
 
     #[test]
@@ -938,7 +938,7 @@ mod tests {
         .to_string();
 
         let profile = analyze_spore_media_profile("dob/0", b"aabbcc", Some(&metadata), false);
-        assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkbAndBtc);
+        assert_eq!(profile.tier, CompositionTier::BtcCkb);
         assert!(profile.sources.iter().any(|s| s.scheme == "btcfs"));
     }
 
@@ -957,7 +957,7 @@ mod tests {
         .to_string();
 
         let profile = analyze_spore_media_profile("dob/0", b"00", Some(&metadata), false);
-        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
+        assert_eq!(profile.tier, CompositionTier::DecentralizedMixture);
         assert!(profile.sources.iter().any(|s| s.scheme == "ipfs"));
     }
 
@@ -970,40 +970,31 @@ mod tests {
             None,
             false,
         );
-        assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkbAndBtc);
+        assert_eq!(profile.tier, CompositionTier::BtcCkb);
         assert!(profile.sources.iter().any(|s| s.scheme == "ckbfs"));
         assert!(profile.sources.iter().any(|s| s.scheme == "btcfs"));
     }
 
     #[test]
     fn renderer_tier_none_is_fully_on_ckb() {
-        assert_eq!(
-            analyze_renderer_tier(None),
-            StorageDependencyTier::FullyOnCkb
-        );
+        assert_eq!(analyze_renderer_tier(None), CompositionTier::PureCkb);
     }
 
     #[test]
     fn renderer_tier_empty_is_fully_on_ckb() {
-        assert_eq!(
-            analyze_renderer_tier(Some("")),
-            StorageDependencyTier::FullyOnCkb
-        );
-        assert_eq!(
-            analyze_renderer_tier(Some("  ")),
-            StorageDependencyTier::FullyOnCkb
-        );
+        assert_eq!(analyze_renderer_tier(Some("")), CompositionTier::PureCkb);
+        assert_eq!(analyze_renderer_tier(Some("  ")), CompositionTier::PureCkb);
     }
 
     #[test]
     fn renderer_tier_http_is_centralized() {
         assert_eq!(
             analyze_renderer_tier(Some("https://example.com/render")),
-            StorageDependencyTier::CentralizedDependent
+            CompositionTier::CentralizedMixture
         );
         assert_eq!(
             analyze_renderer_tier(Some("http://render.mnft.io/v1")),
-            StorageDependencyTier::CentralizedDependent
+            CompositionTier::CentralizedMixture
         );
     }
 
@@ -1011,7 +1002,7 @@ mod tests {
     fn renderer_tier_ipfs_is_decentralized() {
         assert_eq!(
             analyze_renderer_tier(Some("ipfs://QmHash123")),
-            StorageDependencyTier::DecentralizedDependent
+            CompositionTier::DecentralizedMixture
         );
     }
 
@@ -1019,7 +1010,7 @@ mod tests {
     fn renderer_tier_ckbfs_is_fully_on_ckb() {
         assert_eq!(
             analyze_renderer_tier(Some("ckbfs://cellhash")),
-            StorageDependencyTier::FullyOnCkb
+            CompositionTier::PureCkb
         );
     }
 
@@ -1027,7 +1018,7 @@ mod tests {
     fn renderer_tier_btcfs_is_fully_on_ckb_and_btc() {
         assert_eq!(
             analyze_renderer_tier(Some("btcfs://inscription123")),
-            StorageDependencyTier::FullyOnCkbAndBtc
+            CompositionTier::BtcCkb
         );
     }
 
@@ -1036,7 +1027,7 @@ mod tests {
         // A plain string without a recognized URI scheme is treated as inline content
         assert_eq!(
             analyze_renderer_tier(Some("renderer:v1")),
-            StorageDependencyTier::FullyOnCkb
+            CompositionTier::PureCkb
         );
     }
 }

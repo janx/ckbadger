@@ -19,14 +19,13 @@ use ckbadger_indexer::label_import::run_label_import_bundled;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ActivityEntry, AssetAction, AssetChange, CachedBlockHeader, ClusterAggregate,
-    ClusterDailyDelta, DailyBlockStats, DailyStats, DaoDailySnapshot, DaoDepositCacheEntry,
-    DeepForkInfo, DobDecodedEntry, DobDecodedTrait, EpochStats, HourlyStats,
+    ClusterDailyDelta, CompositionTier, DailyBlockStats, DailyStats, DaoDailySnapshot,
+    DaoDepositCacheEntry, DeepForkInfo, DobDecodedEntry, DobDecodedTrait, EpochStats, HourlyStats,
     IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard, LiveCellInfo,
     MinerStats, ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta,
     ObjectEntry, ObjectExtra, ObjectStandard, OwnerActivityDelta, ProtocolAction, ReorgEvent,
     ScriptDailyDelta, ScriptInfo, ScriptVersionInfo, SporeDailyDelta, SporeMediaProfile,
-    StorageDependencyTier, TokenDailyDelta, TokenInfo, TxActivityBundle, TxIndexEntry,
-    TypeCallEntry,
+    TokenDailyDelta, TokenInfo, TxActivityBundle, TxIndexEntry, TypeCallEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -4989,7 +4988,7 @@ async fn test_cluster_capacity_chart_and_cluster_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["ownedCapacity"], "80");
     assert_eq!(json["ownedKnowledge"], "50");
-    assert_eq!(json["storageProfile"]["tier"], "unknown");
+    assert_eq!(json["composition"]["tier"], "unknown");
 }
 
 #[tokio::test]
@@ -5714,7 +5713,7 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
 }
 
 #[tokio::test]
-async fn test_assets_list_supports_storage_tier_filter_and_onchain_ratio_sort() {
+async fn test_assets_list_supports_composition_tier_filter_and_onchain_ratio_sort() {
     let store = test_store();
     let cluster_onchain = [0x81u8; 32];
     let cluster_centralized = [0x82u8; 32];
@@ -5728,10 +5727,10 @@ async fn test_assets_list_supports_storage_tier_filter_and_onchain_ratio_sort() 
             total_count: 5,
             live_count: 5,
             owner_count: 2,
-            fully_on_ckb_and_btc_count: 0,
-            fully_on_ckb_count: 5,
-            decentralized_dependent_count: 0,
-            centralized_dependent_count: 0,
+            btc_ckb_count: 0,
+            pure_ckb_count: 5,
+            decentralized_mixture_count: 0,
+            centralized_mixture_count: 0,
             unknown_count: 0,
         },
     );
@@ -5743,10 +5742,10 @@ async fn test_assets_list_supports_storage_tier_filter_and_onchain_ratio_sort() 
             total_count: 4,
             live_count: 4,
             owner_count: 2,
-            fully_on_ckb_and_btc_count: 0,
-            fully_on_ckb_count: 0,
-            decentralized_dependent_count: 0,
-            centralized_dependent_count: 4,
+            btc_ckb_count: 0,
+            pure_ckb_count: 0,
+            decentralized_mixture_count: 0,
+            centralized_mixture_count: 4,
             unknown_count: 0,
         },
     );
@@ -5756,7 +5755,7 @@ async fn test_assets_list_supports_storage_tier_filter_and_onchain_ratio_sort() 
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/assets?type=nft&storage_tier=fully_on_ckb")
+        .uri("/api/v1/assets?type=nft&composition_tier=pure_ckb")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -5766,10 +5765,10 @@ async fn test_assets_list_supports_storage_tier_filter_and_onchain_ratio_sort() 
     let rows = json["data"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["name"], "Onchain Cluster");
-    assert_eq!(rows[0]["storageTier"], "fully_on_ckb");
+    assert_eq!(rows[0]["compositionTier"], "pure_ckb");
 
     let request = Request::builder()
-        .uri("/api/v1/assets?type=nft&storage_tier=centralized_dependent")
+        .uri("/api/v1/assets?type=nft&composition_tier=centralized_mixture")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -5779,7 +5778,7 @@ async fn test_assets_list_supports_storage_tier_filter_and_onchain_ratio_sort() 
     let rows = json["data"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["name"], "Centralized Cluster");
-    assert_eq!(rows[0]["storageTier"], "centralized_dependent");
+    assert_eq!(rows[0]["compositionTier"], "centralized_mixture");
 
     let request = Request::builder()
         .uri("/api/v1/assets?type=nft&sort_key=onchain_ratio&sort_direction=desc")
@@ -6328,7 +6327,7 @@ async fn test_assets_nft_collection_detail_enriches_mnft_class_metadata() {
                 total: 500,
                 issued: 128,
                 configure: 9,
-                storage_tier: StorageDependencyTier::FullyOnCkb,
+                composition_tier: CompositionTier::PureCkb,
             },
         },
     );
@@ -7015,7 +7014,7 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
                 total: 1000,
                 issued: 1,
                 configure: 7,
-                storage_tier: StorageDependencyTier::FullyOnCkb,
+                composition_tier: CompositionTier::PureCkb,
             },
         },
     );
@@ -7506,7 +7505,7 @@ async fn test_assets_nft_item_detail_mnft() {
                 total: 500,
                 issued: 128,
                 configure: 9,
-                storage_tier: StorageDependencyTier::FullyOnCkb,
+                composition_tier: CompositionTier::PureCkb,
             },
         },
     );

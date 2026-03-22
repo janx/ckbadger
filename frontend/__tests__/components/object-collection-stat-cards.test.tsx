@@ -16,13 +16,13 @@ describe('ObjectCollectionStatCards', () => {
     render(
       <ObjectCollectionStatCards
         totalCount={10}
-        storageTier="fully_on_ckb_and_btc"
+        compositionTier="btc_ckb"
         storageOnchainRatio="0.95"
       />
     );
 
     expect(screen.getByText('Storage Integrity')).toBeInTheDocument();
-    expect(screen.getByText('Fully on BTC+CKB')).toBeInTheDocument();
+    expect(screen.getByText('BTC+CKB')).toBeInTheDocument();
     expect(screen.getByText(/On-chain ratio: 95\.00%/)).toBeInTheDocument();
   });
 
