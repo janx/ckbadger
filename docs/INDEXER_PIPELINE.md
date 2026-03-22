@@ -389,8 +389,8 @@ for the full design rationale.
   `script_info`, object/identity/fiber state
 - **Class C** (sealed aggregates): flushed once the time bucket/epoch closes — `stats_chain`,
   `stats_dao`, `stats_hodl`, `stats_script`, `stats_token`, `stats_spore`, `stats_object`
-- **Class D** (bulk-disabled): `reorg_undo_log_by_block`, `pending_proposals` — not written during
-  bulk sync; `sync_meta` holds only build metadata and final completion state
+- **Class D** (bulk-disabled): `reorg_undo_log_by_block`, `pending_proposals`, `dob_decoded` — not
+  written during bulk sync; `sync_meta` holds only build metadata and final completion state
 
 ### Bulk-Build Stats Coverage
 
@@ -408,6 +408,29 @@ for the full design rationale.
 - Reorg detection/rollback paths
 - Partial-state recovery flows
 - Live-sync-only metadata such as `pending_proposals`
+- DOB decoding (`dob_decoded` CF) — populated by background worker after sync catches up to tip
+
+### DOB Background Worker
+
+After sync catches up to the chain tip (bulk sync completes), the indexer spawns a background DOB
+decode worker that processes Spore NFTs with DOB0/DOB1 content types:
+
+1. Worker scans `spore_data` CF for undecoded DOB spores
+2. Fetches decoder binaries from CKB RPC (cached to filesystem via `dob-decoder` crate)
+3. Executes decoders in CKB-VM sandbox to extract DNA/trait data
+4. Writes results to `dob_decoded` CF (domain store, Class D — bulk-disabled)
+5. API reads decoded results from `dob_decoded` for spore detail pages
+
+The decoder crate (`crates/dob-decoder/`) handles CKB-VM execution, binary caching, and RPC fetching.
+
+### Bulk-Build Performance Infrastructure
+
+- **BackgroundSampler**: periodic background thread that samples RocksDB stats and system memory
+  (via cross-platform POSIX APIs) on a configurable interval, decoupling stat collection from the
+  hot batch path. Located in `crates/indexer/src/sync/bulk_build/sampler.rs`.
+- **PrefetchChannelHandle**: bounded channel with configurable depth (default 4) for inter-batch
+  block prefetching. Allows up to N batches to be fetched ahead while the current batch is being
+  built. Located in `crates/indexer/src/sync/bulk_build/prefetch.rs`.
 
 ### Bulk-Sync Completion Behavior
 
@@ -418,6 +441,7 @@ When bulk sync completes (transitions from `blocks_remaining > threshold` to `<=
 3. Finalizes the active bulk-sync perf artifact run under `workdir/perf/bulk-sync/<run_id>/`
 4. Invalidates chart caches
 5. Restores normal compaction options and triggers background compaction
+6. Spawns DOB background decode worker
 
 ### Implementation Details
 
@@ -438,6 +462,8 @@ crates/indexer/src/sync/bulk_build/
   sequencer.rs     # Canonical tx-order sequencing + input resolution
   accounting.rs    # Fee/capacity accounting
   materialize.rs   # StoreBatch assembly + flush_rows_to_stores()
+  sampler.rs       # BackgroundSampler — periodic RocksDB + system stats sampling
+  prefetch.rs      # PrefetchChannelHandle — bounded depth-N block prefetching
   owners/
     mod.rs         # ReducerContext, parallel reducer dispatch
     address.rs     # AddressOwner — balances, cell counts, addr_stats
@@ -589,4 +615,4 @@ pub struct MemoryStatsData {
 
 ---
 
-_Last updated: 2026-03-19_
+_Last updated: 2026-03-22_
