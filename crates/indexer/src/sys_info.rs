@@ -99,6 +99,7 @@ pub struct DiskStatsTracker {
     device: String,
     prev_snapshot: Option<DiskStatsSnapshot>,
     prev_timestamp: Option<Instant>,
+    warmup_next: bool,
 }
 
 impl DiskStatsTracker {
@@ -107,6 +108,7 @@ impl DiskStatsTracker {
             device,
             prev_snapshot: None,
             prev_timestamp: None,
+            warmup_next: false,
         }
     }
 
@@ -154,6 +156,13 @@ impl DiskStatsTracker {
             }
         };
 
+        if self.warmup_next {
+            self.prev_snapshot = Some(snapshot);
+            self.prev_timestamp = Some(now);
+            self.warmup_next = false;
+            return DiskWindowSample::Warmup;
+        }
+
         let Some(prev_snapshot) = self.prev_snapshot.as_ref() else {
             self.prev_snapshot = Some(snapshot);
             self.prev_timestamp = Some(now);
@@ -178,12 +187,16 @@ impl DiskStatsTracker {
             match compute_disk_window_metrics(prev_snapshot, &snapshot, window, &self.device) {
                 Ok(metrics) => metrics,
                 Err(reason) => {
+                    self.prev_snapshot = Some(snapshot);
+                    self.prev_timestamp = Some(now);
+                    self.warmup_next = true;
                     return DiskWindowSample::Unavailable { reason };
                 }
             };
 
         self.prev_snapshot = Some(snapshot);
         self.prev_timestamp = Some(now);
+        self.warmup_next = false;
         DiskWindowSample::Sample(metrics)
     }
 }
@@ -932,10 +945,20 @@ fn resolve_scheduler_device(device: &str) -> String {
 /// with Linux-specific procfs windowed disk telemetry.
 /// Never fails (returns defaults on error).
 pub fn read_batch_environment(disk_tracker: &mut DiskStatsTracker) -> BatchEnvironment {
-    match disk_tracker.read_window() {
+    let load_avg_1m = posix_load_avg_1m();
+    let mem_available_mb = read_mem_available_mb();
+    batch_environment_from_disk_sample(load_avg_1m, mem_available_mb, disk_tracker.read_window())
+}
+
+fn batch_environment_from_disk_sample(
+    load_avg_1m: f64,
+    mem_available_mb: u64,
+    sample: DiskWindowSample,
+) -> BatchEnvironment {
+    match sample {
         DiskWindowSample::Warmup => BatchEnvironment {
-            load_avg_1m: posix_load_avg_1m(),
-            mem_available_mb: read_mem_available_mb(),
+            load_avg_1m,
+            mem_available_mb,
             disk_read_mb: 0.0,
             disk_write_mb: 0.0,
             disk_read_mb_s: None,
@@ -946,11 +969,11 @@ pub fn read_batch_environment(disk_tracker: &mut DiskStatsTracker) -> BatchEnvir
             disk_await_ms: None,
             disk_avg_queue_depth: None,
             disk_in_flight: None,
-            disk_state: Some("warmup".to_string()),
+            disk_state: None,
         },
         DiskWindowSample::Sample(metrics) => BatchEnvironment {
-            load_avg_1m: posix_load_avg_1m(),
-            mem_available_mb: read_mem_available_mb(),
+            load_avg_1m,
+            mem_available_mb,
             disk_read_mb: metrics.read_mb,
             disk_write_mb: metrics.write_mb,
             disk_read_mb_s: Some(metrics.read_mb_s),
@@ -972,8 +995,8 @@ pub fn read_batch_environment(disk_tracker: &mut DiskStatsTracker) -> BatchEnvir
             ),
         },
         DiskWindowSample::Unavailable { .. } => BatchEnvironment {
-            load_avg_1m: posix_load_avg_1m(),
-            mem_available_mb: read_mem_available_mb(),
+            load_avg_1m,
+            mem_available_mb,
             disk_read_mb: 0.0,
             disk_write_mb: 0.0,
             disk_read_mb_s: None,
@@ -1223,6 +1246,113 @@ MemAvailable:   45000000 kB
         };
 
         assert!(reason.contains("sda"));
+    }
+
+    #[test]
+    fn test_disk_tracker_recovers_after_backwards_sample() {
+        let warmup = "\
+ 259       0 nvme0n1 100 0 2048 10 200 0 4096 20 1 30 40 0 0 0 0 0
+";
+        let backwards = "\
+ 259       0 nvme0n1 90 0 1024 5 190 0 3072 10 1 20 30 0 0 0 0 0
+";
+        let rearmed = "\
+ 259       0 nvme0n1 105 0 3072 12 205 0 5120 24 2 50 60 0 0 0 0 0
+";
+        let recovered = "\
+ 259       0 nvme0n1 115 0 5120 32 210 0 7168 44 3 150 260 0 0 0 0 0
+";
+
+        let mut tracker = DiskStatsTracker::new("nvme0n1".to_string());
+        let start = Instant::now();
+
+        assert!(matches!(
+            tracker.read_window_from_content(warmup, start),
+            DiskWindowSample::Warmup
+        ));
+
+        let sample = tracker.read_window_from_content(backwards, start + Duration::from_secs(1));
+        let DiskWindowSample::Unavailable { reason } = sample else {
+            panic!("expected unavailable, got {:?}", sample);
+        };
+        assert!(reason.contains("moved backwards"));
+
+        assert!(matches!(
+            tracker.read_window_from_content(rearmed, start + Duration::from_secs(2)),
+            DiskWindowSample::Warmup
+        ));
+
+        let sample = tracker.read_window_from_content(recovered, start + Duration::from_secs(3));
+        let DiskWindowSample::Sample(metrics) = sample else {
+            panic!("expected sample, got {:?}", sample);
+        };
+
+        assert!((metrics.read_mb - 1.0).abs() < f64::EPSILON);
+        assert!((metrics.write_mb - 1.0).abs() < f64::EPSILON);
+        assert!((metrics.read_iops - 10.0).abs() < f64::EPSILON);
+        assert!((metrics.write_iops - 5.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_batch_environment_maps_disk_window_states_without_fake_zeros() {
+        let warmup = batch_environment_from_disk_sample(12.5, 4096, DiskWindowSample::Warmup);
+        assert_eq!(warmup.load_avg_1m, 12.5);
+        assert_eq!(warmup.mem_available_mb, 4096);
+        assert_eq!(warmup.disk_read_mb, 0.0);
+        assert_eq!(warmup.disk_write_mb, 0.0);
+        assert_eq!(warmup.disk_read_mb_s, None);
+        assert_eq!(warmup.disk_write_mb_s, None);
+        assert_eq!(warmup.disk_read_iops, None);
+        assert_eq!(warmup.disk_write_iops, None);
+        assert_eq!(warmup.disk_util_pct, None);
+        assert_eq!(warmup.disk_await_ms, None);
+        assert_eq!(warmup.disk_avg_queue_depth, None);
+        assert_eq!(warmup.disk_in_flight, None);
+        assert_eq!(warmup.disk_state, None);
+
+        let sample = batch_environment_from_disk_sample(
+            12.5,
+            4096,
+            DiskWindowSample::Sample(DiskWindowMetrics {
+                read_mb: 1.25,
+                write_mb: 2.5,
+                read_mb_s: 1.25,
+                write_mb_s: 2.5,
+                read_iops: 10.0,
+                write_iops: 20.0,
+                util_pct: Some(87.5),
+                await_ms: Some(3.5),
+                avg_queue_depth: Some(1.25),
+                in_flight: Some(7),
+                state: DiskTelemetryState::Active,
+            }),
+        );
+        assert_eq!(sample.disk_state, Some("active".to_string()));
+        assert_eq!(sample.disk_read_mb_s, Some(1.25));
+        assert_eq!(sample.disk_write_mb_s, Some(2.5));
+        assert_eq!(sample.disk_read_iops, Some(10.0));
+        assert_eq!(sample.disk_write_iops, Some(20.0));
+        assert_eq!(sample.disk_util_pct, Some(87.5));
+        assert_eq!(sample.disk_await_ms, Some(3.5));
+        assert_eq!(sample.disk_avg_queue_depth, Some(1.25));
+        assert_eq!(sample.disk_in_flight, Some(7));
+
+        let unavailable = batch_environment_from_disk_sample(
+            12.5,
+            4096,
+            DiskWindowSample::Unavailable {
+                reason: "missing device".to_string(),
+            },
+        );
+        assert_eq!(unavailable.disk_state, Some("unavailable".to_string()));
+        assert_eq!(unavailable.disk_read_mb_s, None);
+        assert_eq!(unavailable.disk_write_mb_s, None);
+        assert_eq!(unavailable.disk_read_iops, None);
+        assert_eq!(unavailable.disk_write_iops, None);
+        assert_eq!(unavailable.disk_util_pct, None);
+        assert_eq!(unavailable.disk_await_ms, None);
+        assert_eq!(unavailable.disk_avg_queue_depth, None);
+        assert_eq!(unavailable.disk_in_flight, None);
     }
 
     #[test]
