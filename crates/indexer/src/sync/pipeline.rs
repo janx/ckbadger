@@ -1962,7 +1962,7 @@ impl Indexer {
         let disk_device = crate::sys_info::detect_disk_device(&self.config.domain_data_path);
         let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(disk_device);
         let mut batches_since_last_flush: u32 = 0;
-        let mut last_compaction_checkpoint: Option<Instant> = None;
+        let mut compaction_checkpoint_done = false;
 
         loop {
             if self.shutdown_requested.load(Ordering::SeqCst) {
@@ -2657,22 +2657,33 @@ impl Indexer {
                                 }
                                 batches_since_last_flush = 0;
 
-                                let system_ram_mb =
-                                    self.writer.store().memory_profile().system_ram_bytes
-                                        / (1024 * 1024);
                                 let cp_pending_mb =
                                     compaction_pressure.compaction_pending_bytes / (1024 * 1024);
-                                if cp_pending_mb > system_ram_mb / 5
-                                    && last_compaction_checkpoint
-                                        .is_none_or(|t| t.elapsed() > Duration::from_secs(300))
-                                {
+                                if cp_pending_mb > 6000 && !compaction_checkpoint_done {
                                     info!(
                                         compaction_pending_mb = cp_pending_mb,
-                                        threshold_mb = system_ram_mb / 5,
-                                        "Compaction checkpoint: compacting hot CFs (non-blocking)"
+                                        "Compaction checkpoint: compacting hot CFs"
                                     );
                                     self.writer.store().compact_hot_cfs();
-                                    last_compaction_checkpoint = Some(Instant::now());
+
+                                    // Poll until pressure drains or timeout
+                                    let checkpoint_start = std::time::Instant::now();
+                                    loop {
+                                        let p = self.writer.store().compaction_pressure();
+                                        let pending_mb = p.compaction_pending_bytes / (1024 * 1024);
+                                        if pending_mb < 2000
+                                            || checkpoint_start.elapsed().as_secs() > 120
+                                        {
+                                            info!(
+                                                pending_mb,
+                                                elapsed_s = checkpoint_start.elapsed().as_secs(),
+                                                "Compaction checkpoint complete"
+                                            );
+                                            break;
+                                        }
+                                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                                    }
+                                    compaction_checkpoint_done = true;
                                 }
                             }
                         }

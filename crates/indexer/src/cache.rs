@@ -192,7 +192,7 @@ mod tests {
             adaptive_target_batch_txs: None,
             adaptive_inflight_limit: None,
             adaptive_min_target_batch_txs: None,
-            adaptive_cooldown_until_ms: None,
+            adaptive_cooldown_steps: None,
             adaptive_last_reason: None,
             adaptive_adjustment_seq: None,
             adaptive_backoff_streak: None,

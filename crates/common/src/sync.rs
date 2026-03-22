@@ -154,9 +154,9 @@ pub struct SyncProgressData {
     /// Adaptive minimum target transactions per batch floor in bulk sync.
     #[serde(default)]
     pub adaptive_min_target_batch_txs: Option<u64>,
-    /// Cooldown deadline (epoch ms) before adaptive step-up is allowed.
+    /// Remaining cooldown steps before adaptive step-up is allowed.
     #[serde(default)]
-    pub adaptive_cooldown_until_ms: Option<i64>,
+    pub adaptive_cooldown_steps: Option<u64>,
     /// Last adaptive controller reason, when available.
     #[serde(default)]
     pub adaptive_last_reason: Option<String>,
@@ -705,7 +705,7 @@ mod tests {
             adaptive_target_batch_txs: Some(40_000),
             adaptive_inflight_limit: Some(3),
             adaptive_min_target_batch_txs: Some(10_000),
-            adaptive_cooldown_until_ms: Some(1_700_005_000),
+            adaptive_cooldown_steps: Some(2),
             adaptive_last_reason: Some("pressure_backoff".to_string()),
             adaptive_adjustment_seq: Some(42),
             adaptive_backoff_streak: Some(3),
@@ -736,7 +736,7 @@ mod tests {
         assert_eq!(parsed.adaptive_target_batch_txs, Some(40_000));
         assert_eq!(parsed.adaptive_inflight_limit, Some(3));
         assert_eq!(parsed.adaptive_min_target_batch_txs, Some(10_000));
-        assert_eq!(parsed.adaptive_cooldown_until_ms, Some(1_700_005_000));
+        assert_eq!(parsed.adaptive_cooldown_steps, Some(2));
         assert_eq!(
             parsed.adaptive_last_reason.as_deref(),
             Some("pressure_backoff")
@@ -771,7 +771,7 @@ mod tests {
             adaptive_target_batch_txs: Some(1),
             adaptive_inflight_limit: Some(2),
             adaptive_min_target_batch_txs: Some(1),
-            adaptive_cooldown_until_ms: Some(1),
+            adaptive_cooldown_steps: Some(1),
             adaptive_last_reason: Some("healthy_step_up".to_string()),
             adaptive_adjustment_seq: Some(1),
             adaptive_backoff_streak: Some(0),
@@ -788,7 +788,7 @@ mod tests {
             obj.remove("adaptiveTargetBatchTxs");
             obj.remove("adaptiveInflightLimit");
             obj.remove("adaptiveMinTargetBatchTxs");
-            obj.remove("adaptiveCooldownUntilMs");
+            obj.remove("adaptiveCooldownSteps");
             obj.remove("adaptiveLastReason");
             obj.remove("adaptiveAdjustmentSeq");
             obj.remove("adaptiveBackoffStreak");
@@ -804,7 +804,7 @@ mod tests {
         assert_eq!(parsed.adaptive_target_batch_txs, None);
         assert_eq!(parsed.adaptive_inflight_limit, None);
         assert_eq!(parsed.adaptive_min_target_batch_txs, None);
-        assert_eq!(parsed.adaptive_cooldown_until_ms, None);
+        assert_eq!(parsed.adaptive_cooldown_steps, None);
         assert_eq!(parsed.adaptive_last_reason, None);
         assert_eq!(parsed.adaptive_adjustment_seq, None);
         assert_eq!(parsed.adaptive_backoff_streak, None);
@@ -888,7 +888,7 @@ mod tests {
             adaptive_target_batch_txs: None,
             adaptive_inflight_limit: None,
             adaptive_min_target_batch_txs: None,
-            adaptive_cooldown_until_ms: None,
+            adaptive_cooldown_steps: None,
             adaptive_last_reason: None,
             adaptive_adjustment_seq: None,
             adaptive_backoff_streak: None,

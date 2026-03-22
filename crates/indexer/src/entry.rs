@@ -392,14 +392,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                 adaptive_target_batch_txs: adaptive.as_ref().map(|s| s.target_batch_txs),
                 adaptive_inflight_limit: adaptive.as_ref().map(|s| s.inflight_limit),
                 adaptive_min_target_batch_txs: adaptive.as_ref().map(|s| s.min_target_batch_txs),
-                adaptive_cooldown_until_ms: adaptive.as_ref().and_then(|s| {
-                    let v = s.cooldown_until_ms;
-                    if v > 0 {
-                        Some(v)
-                    } else {
-                        None
-                    }
-                }),
+                adaptive_cooldown_steps: adaptive.as_ref().map(|s| s.cooldown_steps),
                 adaptive_last_reason: adaptive.as_ref().and_then(|s| s.last_reason.clone()),
                 adaptive_adjustment_seq: adaptive.as_ref().map(|s| s.adjustment_seq),
                 adaptive_backoff_streak: adaptive.as_ref().map(|s| s.backoff_streak),

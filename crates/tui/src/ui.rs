@@ -1842,7 +1842,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                                 adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
                                 adaptive_inflight_limit: sync.adaptive_inflight_limit,
                                 adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
-                                adaptive_cooldown_until_ms: sync.adaptive_cooldown_until_ms,
+                                adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
                                 adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
                                 adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
                                 adaptive_last_adjusted_age_secs: sync
@@ -1985,7 +1985,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                                 adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
                                 adaptive_inflight_limit: sync.adaptive_inflight_limit,
                                 adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
-                                adaptive_cooldown_until_ms: sync.adaptive_cooldown_until_ms,
+                                adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
                                 adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
                                 adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
                                 adaptive_last_adjusted_age_secs: sync
@@ -2092,7 +2092,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                             adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
                             adaptive_inflight_limit: sync.adaptive_inflight_limit,
                             adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
-                            adaptive_cooldown_until_ms: sync.adaptive_cooldown_until_ms,
+                            adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
                             adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
                             adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
                             adaptive_last_adjusted_age_secs: sync.adaptive_last_adjusted_age_secs,
@@ -2967,7 +2967,7 @@ struct AdaptiveControlSnapshot<'a> {
     adaptive_target_batch_txs: Option<u64>,
     adaptive_inflight_limit: Option<u64>,
     adaptive_min_target_batch_txs: Option<u64>,
-    adaptive_cooldown_until_ms: Option<i64>,
+    adaptive_cooldown_steps: Option<u64>,
     adaptive_last_reason: Option<&'a str>,
     adaptive_adjustment_seq: Option<u64>,
     adaptive_last_adjusted_age_secs: Option<i64>,
@@ -3038,15 +3038,8 @@ fn adaptive_control_lines(
 
     // Line 2: adjustment history + pipeline reset
     let cooldown_text = snapshot
-        .adaptive_cooldown_until_ms
-        .and_then(|until| {
-            let remaining = until - chrono::Utc::now().timestamp_millis();
-            if remaining > 0 {
-                Some(format!("{:.1}s", remaining as f64 / 1000.0))
-            } else {
-                None
-            }
-        })
+        .adaptive_cooldown_steps
+        .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string());
     let seq_text = snapshot
         .adaptive_adjustment_seq
@@ -5518,7 +5511,7 @@ mod tests {
                 adaptive_target_batch_txs: Some(40_000),
                 adaptive_inflight_limit: Some(3),
                 adaptive_min_target_batch_txs: Some(10_000),
-                adaptive_cooldown_until_ms: None,
+                adaptive_cooldown_steps: Some(2),
                 adaptive_last_reason: Some("pressure_backoff"),
                 adaptive_adjustment_seq: Some(12),
                 adaptive_last_adjusted_age_secs: Some(7),
@@ -5540,8 +5533,6 @@ mod tests {
 
     #[test]
     fn test_adaptive_control_lines_detail_with_reset() {
-        // Use a far-future cooldown deadline so the display shows remaining seconds
-        let future_ms = chrono::Utc::now().timestamp_millis() + 3_500;
         let lines = adaptive_control_lines(
             AdaptiveControlSnapshot {
                 last_batch_blocks: Some(512),
@@ -5549,7 +5540,7 @@ mod tests {
                 adaptive_target_batch_txs: Some(40_000),
                 adaptive_inflight_limit: Some(3),
                 adaptive_min_target_batch_txs: Some(10_000),
-                adaptive_cooldown_until_ms: Some(future_ms),
+                adaptive_cooldown_steps: Some(2),
                 adaptive_last_reason: Some("pressure_backoff"),
                 adaptive_adjustment_seq: Some(12),
                 adaptive_last_adjusted_age_secs: Some(7),
@@ -5565,8 +5556,7 @@ mod tests {
         assert!(text1.contains("batch 512 blk"));
         assert!(text1.contains("target 40K tx"));
         let text2 = line_text(&lines[1]);
-        assert!(text2.contains("cooldown "));
-        assert!(text2.contains("s")); // shows remaining seconds like "3.5s"
+        assert!(text2.contains("cooldown 2"));
         assert!(text2.contains("adj #12"));
         assert!(text2.contains("7s ago"));
         assert!(text2.contains("backoff x3"));
@@ -5582,7 +5572,7 @@ mod tests {
                 adaptive_target_batch_txs: Some(5_000),
                 adaptive_inflight_limit: None,
                 adaptive_min_target_batch_txs: Some(1_000),
-                adaptive_cooldown_until_ms: None,
+                adaptive_cooldown_steps: None,
                 adaptive_last_reason: None,
                 adaptive_adjustment_seq: None,
                 adaptive_last_adjusted_age_secs: None,
