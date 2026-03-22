@@ -225,10 +225,10 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
 
             {/* Stat cards row */}
             <div className="border-base-border mt-4 grid grid-cols-2 gap-3 border-t pt-4 sm:grid-cols-3">
-              {/* Supply card */}
+              {/* Total identities card */}
               <div className="border-base-border rounded border p-3">
                 <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
-                  Supply
+                  Total Identities
                 </div>
                 <div className="text-warning font-mono text-sm font-semibold tabular-nums">
                   {formatNumber(collection.totalCount)}
