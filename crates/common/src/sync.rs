@@ -242,6 +242,24 @@ pub struct BulkBuildProgressData {
     /// Total build (CPU) time for the batch in ms.
     #[serde(default)]
     pub build_ms: Option<f64>,
+    /// Current classified disk pressure state from live sampler telemetry.
+    #[serde(default)]
+    pub disk_state: Option<String>,
+    /// Current disk utilization percentage for the latest valid sampler window.
+    #[serde(default)]
+    pub disk_util_pct: Option<f64>,
+    /// Current disk await in ms for the latest valid sampler window.
+    #[serde(default)]
+    pub disk_await_ms: Option<f64>,
+    /// Current average disk queue depth for the latest valid sampler window.
+    #[serde(default)]
+    pub disk_avg_queue_depth: Option<f64>,
+    /// Current disk write throughput in MB/s for the latest valid sampler window.
+    #[serde(default)]
+    pub disk_write_mb_s: Option<f64>,
+    /// Current disk write IOPS for the latest valid sampler window.
+    #[serde(default)]
+    pub disk_write_iops: Option<f64>,
     /// Sum of all owner data structure memory in bytes.
     #[serde(default)]
     pub owner_memory_bytes: Option<u64>,
@@ -832,6 +850,12 @@ mod tests {
             prefetch_recv_ms: None,
             fetch_ms: Some(120.5),
             build_ms: Some(141.0),
+            disk_state: None,
+            disk_util_pct: None,
+            disk_await_ms: None,
+            disk_avg_queue_depth: None,
+            disk_write_mb_s: None,
+            disk_write_iops: None,
             owner_memory_bytes: Some(1_800_000_000),
             live_cell_count: Some(12_345_678),
             cells_created: Some(5_000),
@@ -873,6 +897,41 @@ mod tests {
         assert_eq!(parsed.prefetch_channel_capacity, Some(4));
         assert_eq!(parsed.flush_channel_pending, Some(2));
         assert_eq!(parsed.flush_channel_capacity, Some(4));
+    }
+
+    #[test]
+    fn bulk_build_progress_json_roundtrips_disk_fields() {
+        let bb = BulkBuildProgressData {
+            batch_count: Some(7),
+            disk_state: Some("active".to_string()),
+            disk_util_pct: Some(72.5),
+            disk_await_ms: None,
+            disk_avg_queue_depth: Some(1.25),
+            disk_write_mb_s: None,
+            disk_write_iops: Some(5_120.0),
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(&bb).unwrap();
+        assert_eq!(value.get("diskState"), Some(&serde_json::json!("active")));
+        assert_eq!(value.get("diskUtilPct"), Some(&serde_json::json!(72.5)));
+        assert_eq!(value.get("diskAwaitMs"), Some(&serde_json::Value::Null));
+        assert_eq!(
+            value.get("diskAvgQueueDepth"),
+            Some(&serde_json::json!(1.25))
+        );
+        assert_eq!(value.get("diskWriteMbS"), Some(&serde_json::Value::Null));
+        assert_eq!(value.get("diskWriteIops"), Some(&serde_json::json!(5120.0)));
+        assert_ne!(value.get("diskAwaitMs"), Some(&serde_json::json!(0.0)));
+        assert_ne!(value.get("diskWriteMbS"), Some(&serde_json::json!(0.0)));
+
+        let parsed: BulkBuildProgressData = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.disk_state.as_deref(), Some("active"));
+        assert_eq!(parsed.disk_util_pct, Some(72.5));
+        assert_eq!(parsed.disk_await_ms, None);
+        assert_eq!(parsed.disk_avg_queue_depth, Some(1.25));
+        assert_eq!(parsed.disk_write_mb_s, None);
+        assert_eq!(parsed.disk_write_iops, Some(5_120.0));
     }
 
     #[test]

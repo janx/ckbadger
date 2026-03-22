@@ -6,7 +6,7 @@ use ckbadger_store::CkbadgerStore;
 
 use crate::sys_info;
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct SamplerSnapshot {
     pub compaction_pending_mb: u64,
     pub l0_files: u64,
@@ -15,6 +15,41 @@ pub(crate) struct SamplerSnapshot {
     pub mem_available_mb: u64,
     pub disk_read_mb: f64,
     pub disk_write_mb: f64,
+    #[allow(dead_code)]
+    pub disk_read_mb_s: Option<f64>,
+    pub disk_write_mb_s: Option<f64>,
+    #[allow(dead_code)]
+    pub disk_read_iops: Option<f64>,
+    pub disk_write_iops: Option<f64>,
+    pub disk_util_pct: Option<f64>,
+    pub disk_await_ms: Option<f64>,
+    pub disk_avg_queue_depth: Option<f64>,
+    #[allow(dead_code)]
+    pub disk_in_flight: Option<u64>,
+    pub disk_state: Option<String>,
+}
+
+impl Default for SamplerSnapshot {
+    fn default() -> Self {
+        Self {
+            compaction_pending_mb: 0,
+            l0_files: 0,
+            imm_memtables: 0,
+            load_avg_1m: 0.0,
+            mem_available_mb: 0,
+            disk_read_mb: 0.0,
+            disk_write_mb: 0.0,
+            disk_read_mb_s: None,
+            disk_write_mb_s: None,
+            disk_read_iops: None,
+            disk_write_iops: None,
+            disk_util_pct: None,
+            disk_await_ms: None,
+            disk_avg_queue_depth: None,
+            disk_in_flight: None,
+            disk_state: Some("unavailable".to_string()),
+        }
+    }
 }
 
 pub(crate) struct BackgroundSampler {
@@ -45,6 +80,15 @@ impl BackgroundSampler {
                         mem_available_mb: env.mem_available_mb,
                         disk_read_mb: env.disk_read_mb,
                         disk_write_mb: env.disk_write_mb,
+                        disk_read_mb_s: env.disk_read_mb_s,
+                        disk_write_mb_s: env.disk_write_mb_s,
+                        disk_read_iops: env.disk_read_iops,
+                        disk_write_iops: env.disk_write_iops,
+                        disk_util_pct: env.disk_util_pct,
+                        disk_await_ms: env.disk_await_ms,
+                        disk_avg_queue_depth: env.disk_avg_queue_depth,
+                        disk_in_flight: env.disk_in_flight,
+                        disk_state: env.disk_state,
                     };
                     if tx.send(snapshot).is_err() {
                         break;
@@ -89,12 +133,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sampler_snapshot_default_is_zeroed() {
+    fn sampler_snapshot_default_marks_disk_unavailable() {
         let snap = SamplerSnapshot::default();
         assert_eq!(snap.l0_files, 0);
         assert_eq!(snap.compaction_pending_mb, 0);
         assert_eq!(snap.load_avg_1m, 0.0);
         assert_eq!(snap.mem_available_mb, 0);
+        assert_eq!(snap.disk_read_mb, 0.0);
+        assert_eq!(snap.disk_write_mb, 0.0);
+        assert_eq!(snap.disk_read_mb_s, None);
+        assert_eq!(snap.disk_write_mb_s, None);
+        assert_eq!(snap.disk_read_iops, None);
+        assert_eq!(snap.disk_write_iops, None);
+        assert_eq!(snap.disk_util_pct, None);
+        assert_eq!(snap.disk_await_ms, None);
+        assert_eq!(snap.disk_avg_queue_depth, None);
+        assert_eq!(snap.disk_in_flight, None);
+        assert_eq!(snap.disk_state.as_deref(), Some("unavailable"));
     }
 
     #[test]

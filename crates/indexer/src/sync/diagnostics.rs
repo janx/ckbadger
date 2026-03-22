@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -329,6 +329,14 @@ pub(crate) struct BulkBuildPerfStats {
     // Flush channel pipeline state
     flush_channel_pending: AtomicU64,
     flush_channel_capacity: AtomicU64,
+    // Live disk telemetry from sampler
+    last_disk_util_bits: AtomicU64,
+    last_disk_await_bits: AtomicU64,
+    last_disk_qd_bits: AtomicU64,
+    last_disk_wr_mb_s_bits: AtomicU64,
+    last_disk_wr_iops_bits: AtomicU64,
+    last_disk_state_code: AtomicU8,
+    last_disk_telemetry_valid: AtomicBool,
 }
 
 impl BulkBuildPerfStats {
@@ -434,6 +442,33 @@ impl BulkBuildPerfStats {
             .store(flush_channel_capacity, Ordering::Relaxed);
     }
 
+    pub(crate) fn record_disk_telemetry(
+        &self,
+        state: Option<&str>,
+        util_pct: Option<f64>,
+        await_ms: Option<f64>,
+        avg_queue_depth: Option<f64>,
+        write_mb_s: Option<f64>,
+        write_iops: Option<f64>,
+    ) {
+        self.last_disk_util_bits
+            .store(opt_f64_to_bits(util_pct), Ordering::Relaxed);
+        self.last_disk_await_bits
+            .store(opt_f64_to_bits(await_ms), Ordering::Relaxed);
+        self.last_disk_qd_bits
+            .store(opt_f64_to_bits(avg_queue_depth), Ordering::Relaxed);
+        self.last_disk_wr_mb_s_bits
+            .store(opt_f64_to_bits(write_mb_s), Ordering::Relaxed);
+        self.last_disk_wr_iops_bits
+            .store(opt_f64_to_bits(write_iops), Ordering::Relaxed);
+        self.last_disk_state_code
+            .store(encode_disk_state(state), Ordering::Relaxed);
+        self.last_disk_telemetry_valid.store(
+            matches!(state, Some("idle" | "active" | "saturated")),
+            Ordering::Relaxed,
+        );
+    }
+
     pub(crate) fn snapshot(&self) -> Option<BulkBuildProgressData> {
         let batch_count = self.batch_count.load(Ordering::Relaxed);
         if batch_count == 0 {
@@ -451,6 +486,26 @@ impl BulkBuildPerfStats {
             } else {
                 (None, None, None, None)
             };
+        let (
+            disk_state,
+            disk_util_pct,
+            disk_await_ms,
+            disk_avg_queue_depth,
+            disk_write_mb_s,
+            disk_write_iops,
+        ) = if self.last_disk_telemetry_valid.load(Ordering::Relaxed) {
+            (
+                decode_disk_state(self.last_disk_state_code.load(Ordering::Relaxed))
+                    .map(str::to_string),
+                opt_f64_from_bits(self.last_disk_util_bits.load(Ordering::Relaxed)),
+                opt_f64_from_bits(self.last_disk_await_bits.load(Ordering::Relaxed)),
+                opt_f64_from_bits(self.last_disk_qd_bits.load(Ordering::Relaxed)),
+                opt_f64_from_bits(self.last_disk_wr_mb_s_bits.load(Ordering::Relaxed)),
+                opt_f64_from_bits(self.last_disk_wr_iops_bits.load(Ordering::Relaxed)),
+            )
+        } else {
+            (None, None, None, None, None, None)
+        };
         Some(BulkBuildProgressData {
             facts_ms: Some(us_to_ms(self.last_facts_us.load(Ordering::Relaxed))),
             resolve_ms: Some(us_to_ms(self.last_resolve_us.load(Ordering::Relaxed))),
@@ -467,6 +522,12 @@ impl BulkBuildPerfStats {
             prefetch_recv_ms: Some(us_to_ms(self.last_prefetch_recv_us.load(Ordering::Relaxed))),
             fetch_ms: Some(us_to_ms(self.last_fetch_us.load(Ordering::Relaxed))),
             build_ms: Some(us_to_ms(self.last_build_us.load(Ordering::Relaxed))),
+            disk_state,
+            disk_util_pct,
+            disk_await_ms,
+            disk_avg_queue_depth,
+            disk_write_mb_s,
+            disk_write_iops,
             owner_memory_bytes: Some(self.owner_memory_bytes.load(Ordering::Relaxed)),
             live_cell_count: Some(self.live_cell_count.load(Ordering::Relaxed)),
             cells_created: Some(self.cells_created.load(Ordering::Relaxed)),
@@ -551,6 +612,39 @@ fn ms_to_us(ms: f64) -> u64 {
 
 fn us_to_ms(us: u64) -> f64 {
     us as f64 / 1000.0
+}
+
+fn opt_f64_to_bits(value: Option<f64>) -> u64 {
+    value.unwrap_or(f64::NAN).to_bits()
+}
+
+fn opt_f64_from_bits(bits: u64) -> Option<f64> {
+    let value = f64::from_bits(bits);
+    if value.is_nan() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn encode_disk_state(state: Option<&str>) -> u8 {
+    match state {
+        Some("idle") => 1,
+        Some("active") => 2,
+        Some("saturated") => 3,
+        Some("unavailable") | None => 4,
+        Some(other) => panic!("unknown disk telemetry state: {other}"),
+    }
+}
+
+fn decode_disk_state(code: u8) -> Option<&'static str> {
+    match code {
+        1 => Some("idle"),
+        2 => Some("active"),
+        3 => Some("saturated"),
+        4 => Some("unavailable"),
+        _ => None,
+    }
 }
 
 // ── RepeatedWarningTracker ──────────────────────────────────────────────
@@ -1155,6 +1249,55 @@ mod tests {
         );
         assert_eq!(snap.flush_channel_pending, Some(3));
         assert_eq!(snap.flush_channel_capacity, Some(4));
+    }
+
+    #[test]
+    fn bulk_build_progress_snapshot_includes_disk_pressure_fields() {
+        let stats = BulkBuildPerfStats::default();
+        stats.record_batch(
+            10.0, 5.0, 8.0, 3.0, 2.0,
+            1.0, // facts, resolve, reduce, history, addr_reduce, activity_stats
+            50.0, 200.0, 3000.0, // flush, fetch, build
+            1000, 500, 100, 80, // owner_mem, live_cells, created, consumed
+            1000, 500, // cumulative_history, cumulative_sealed
+            5000, 1, // batch_block_span, batch_count
+            2.5, 0.8, 3100.0,
+            1500.0, // tx_density, ms_per_block_ema, controllable, target_iteration
+            8.0, 2.0, 40.0, // facts_par_iter, facts_merge, facts_serial_equiv
+            5, 100, 200, // facts_intern_slow, facts_intern_total, facts_cell_count
+            15.0, 3.5, // flush_wait_ms, prefetch_recv_ms
+            2, 4, // prefetch_channel_pending, prefetch_channel_capacity
+            3, 4, // flush_channel_pending, flush_channel_capacity
+        );
+
+        let before = stats
+            .snapshot()
+            .expect("snapshot should exist after batch record");
+        assert_eq!(before.disk_state, None);
+        assert_eq!(before.disk_util_pct, None);
+        assert_eq!(before.disk_await_ms, None);
+        assert_eq!(before.disk_avg_queue_depth, None);
+        assert_eq!(before.disk_write_mb_s, None);
+        assert_eq!(before.disk_write_iops, None);
+
+        stats.record_disk_telemetry(
+            Some("saturated"),
+            Some(94.5),
+            Some(18.25),
+            Some(2.75),
+            Some(712.0),
+            Some(18_400.0),
+        );
+
+        let after = stats
+            .snapshot()
+            .expect("snapshot should still exist after disk update");
+        assert_eq!(after.disk_state.as_deref(), Some("saturated"));
+        assert_eq!(after.disk_util_pct, Some(94.5));
+        assert_eq!(after.disk_await_ms, Some(18.25));
+        assert_eq!(after.disk_avg_queue_depth, Some(2.75));
+        assert_eq!(after.disk_write_mb_s, Some(712.0));
+        assert_eq!(after.disk_write_iops, Some(18_400.0));
     }
 
     #[test]
