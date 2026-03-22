@@ -1,0 +1,9 @@
+name = "CKBFI"
+symbol = "CKBFI"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x576831c9099d199af6f6bf2e95c7e5ca3dcf4e5c0e27a82b44587aef731923c7"

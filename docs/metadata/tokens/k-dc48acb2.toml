@@ -1,0 +1,9 @@
+name = "K"
+symbol = "K"
+decimals = 4
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x702a726f1c8b08e1bb05e2621d2a0d76ad2ad905f1fb33a31b2ae23aaf8f61f1"

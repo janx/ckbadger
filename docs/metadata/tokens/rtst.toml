@@ -1,0 +1,9 @@
+name = "Rebase Test Simple Token"
+symbol = "RTST"
+decimals = 8
+standard = "sudt"
+
+[testnet]
+code_hash = "0x48dbf59b4c7ee1547238021b4869bceedf4eea6b43772e5d66ef8865b6ae7212"
+hash_type = "data"
+args = "0x0466a2e7b55dad9353271614ca3a1b6016d3c6b69e3239c6ba7e37ef1bbe0a0e"

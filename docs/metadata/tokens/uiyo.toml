@@ -1,0 +1,9 @@
+name = "OIUY"
+symbol = "UIYO"
+decimals = 6
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x5106ecd5daef9099fa35b4e94a4ae5a3610e42ffa0a2f5a8547c446a3e678bd6"

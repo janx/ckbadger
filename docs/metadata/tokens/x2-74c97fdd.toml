@@ -1,0 +1,14 @@
+name = "X2"
+symbol = "X2"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x051b90f352fb50f68dd409c6e7633cee8c4cffc36d334efb7f9b122a2173a99a"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x7d92aaa5c4b6ad9abcbf13c865cd66c9ad2e7dc54fc40b5a8b1e181f676b72d6"

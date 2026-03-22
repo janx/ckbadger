@@ -1,0 +1,9 @@
+name = "ROBOT"
+symbol = "ROBOT"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x5f735254e5676f7cc2c3012f4bdc01e7afc1ffc00d76f9879bdc5c2355282785"

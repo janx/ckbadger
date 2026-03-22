@@ -1,0 +1,9 @@
+name = "R-BILLION•DOLLAR•CAT"
+symbol = "R-BILLION•DOLLAR•CAT"
+decimals = 0
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xe46454ebe991132959955af09a0e4b87a0202b7052824730ffdf7ed9a4f9b662"

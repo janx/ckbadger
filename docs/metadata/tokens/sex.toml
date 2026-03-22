@@ -1,0 +1,9 @@
+name = "sex"
+symbol = "sex"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xb0713a9200a1eef82402dcbccf3303bd34481e5313482e9e6a3ab88bc9c0724a"

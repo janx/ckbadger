@@ -1,0 +1,9 @@
+name = "++2++"
+symbol = "++2++"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xe4e717eeb1f35a4bb624639e01736e0012d52dee3e89c4a74ba2d6acbe5afc2d"

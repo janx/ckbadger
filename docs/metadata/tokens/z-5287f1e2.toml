@@ -1,0 +1,14 @@
+name = "Z"
+symbol = "Z"
+decimals = 4
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xb33e13f72f0df35009c835c2c44d0c47b4865aeb08e95266becc86db39d62160"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x347d410a438c97f6a9e0d30ea2238c34c6423460b30ceb93de19288f8547a85e"

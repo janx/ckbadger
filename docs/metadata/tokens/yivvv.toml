@@ -1,0 +1,9 @@
+name = "yivvv"
+symbol = "yivvv"
+decimals = 4
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x087d2a10eff29de781baa627fed5a040c2f0d80a27f528d298a46e578327f11f"

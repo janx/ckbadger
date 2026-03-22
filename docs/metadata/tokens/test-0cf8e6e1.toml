@@ -1,0 +1,14 @@
+name = "TEST_TRC20_JumpY"
+symbol = "TEST"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xe5bf6409179f593b582e3cf78f99f8b3143b8b7746658f56b0cbbf80eb05f518"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xffcdf9eaf9da87f2215b075cded01b775cf66f4ed59d847ce2eb90ffd07ad3d5"

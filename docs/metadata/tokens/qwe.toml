@@ -1,0 +1,9 @@
+name = "QWE"
+symbol = "QWE"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x07d9d2438fd07918479570e8ec42968aa6403d2872d17999b1dca03a5d9021c7"

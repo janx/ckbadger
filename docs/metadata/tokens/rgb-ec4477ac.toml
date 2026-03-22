@@ -1,0 +1,9 @@
+name = "XUDT Test Token"
+symbol = "RGB"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x105011d3ce5413d25df9d9a694bee0db20be318919eb71c56ad0f80c0a156668"

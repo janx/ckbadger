@@ -1,0 +1,9 @@
+name = "Moonbit Test Token"
+symbol = "MTT"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xaa6a56a925321eab8abbd042aa496760a31397985d232d5076c7a6c21ae5b7a8"

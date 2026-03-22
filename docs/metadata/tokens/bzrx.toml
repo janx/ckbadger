@@ -1,0 +1,10 @@
+name = "BZRX"
+symbol = "BZRX"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/bzx-protocol-bzrx-logo.svg?v=013"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xc0ddc82e1a24ccdf637bf19424dfcaa79ccb0dd7bdb1f4fdc7be3457214aee44"

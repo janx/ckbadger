@@ -1,0 +1,9 @@
+name = "BULLX_LeapX"
+symbol = "BULLX"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x69b7dd861c7d74f4ac51395e0064ca5d72260f2913cae1bcba89840f9e845124"

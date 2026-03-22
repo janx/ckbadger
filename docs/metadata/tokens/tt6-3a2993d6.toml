@@ -1,0 +1,10 @@
+name = "Token Test 6"
+symbol = "TT6"
+decimals = 0
+standard = "sudt"
+description = "Token prueba 6"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x29c6ed1ac4389de5f22e6465593f2973940460a88c54d251acb518e1d6ec2dee"

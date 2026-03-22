@@ -1,0 +1,10 @@
+name = "ZZOL"
+symbol = "ZZOL"
+decimals = 6
+standard = "xudt"
+icon = "logo.jpeg"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x3777cb322e9398bf7ec7d5408109dedc5d5030666508212781003c944be793d1"

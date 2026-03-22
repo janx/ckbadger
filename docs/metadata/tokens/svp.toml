@@ -1,0 +1,9 @@
+name = "SVP++_SRC20_LeapX"
+symbol = "SVP++"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x3eb6acc4b1e1db563e18be16fb11d64f1274ae77f55adf48ef4e25efee1a8ae8"

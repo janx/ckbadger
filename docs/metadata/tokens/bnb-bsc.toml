@@ -1,0 +1,10 @@
+name = "Wrapped BNB (ForceBridge from BSC)"
+symbol = "BNB|bsc"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/binance-coin-bnb-logo.svg?v=002"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x578cd6ab8c0800e6fbc17b58633857dac5626883af89f842e79cb8f7af24de75"

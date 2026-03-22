@@ -1,0 +1,10 @@
+name = "StableKoi Token"
+symbol = "KOI"
+decimals = 18
+standard = "sudt"
+icon = "https://app.stablekoi.com/images/tokens/0xd66eb642eE33837531FdA61eb7Ab15B15658BcaB.svg"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x68ab5e63d676ce31c56c73d037f38bc35398d4af94b43f8717832c1c81eb251e"

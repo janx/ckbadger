@@ -1,0 +1,9 @@
+name = "SATS_BRC20_LeapX"
+symbol = "SATS"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xab8e866e4027b5b3304bb15366a73adf8a885d9dca2853c64a2ab9cc2cb5c4a7"

@@ -1,0 +1,9 @@
+name = "FlashPurr"
+symbol = "FlashPurr"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xe7a134786fa8d752464591b83d015eae5dc944269cccb58ac3ee21171d07cc2a"

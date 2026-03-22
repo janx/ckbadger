@@ -1,0 +1,9 @@
+name = "yuchen610517"
+symbol = "qiu@x"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xc2e41cb5778e2c285b8185a3d4d3ad54f380c375559ee95abeec9fe6d3c29d02"

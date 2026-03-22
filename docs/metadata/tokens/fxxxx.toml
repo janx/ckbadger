@@ -1,0 +1,9 @@
+name = "fxxxxxx"
+symbol = "FXXXX"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xf9563d302da153c7f4ddf19fc9a321b77eb4812e2e05c1e29dfefb39d0f886b6"

@@ -1,0 +1,9 @@
+name = "gujbgfv"
+symbol = "gujbgfv"
+decimals = 3
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x088558e1c39d66e2123f88ee8e4ca01d27827ac3a6fbb6144cc064b0690cafcf"

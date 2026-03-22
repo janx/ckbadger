@@ -1,0 +1,9 @@
+name = "Fucking MEMES Refund!@fucking_memes_rnm_refund"
+symbol = "RNMRefund"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x2eed961c7b969b1dbc52a81e83109306bc87b55f7c17c6cba8d75924cb7a4b3c"

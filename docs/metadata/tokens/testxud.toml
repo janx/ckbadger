@@ -1,0 +1,9 @@
+name = "TestXud"
+symbol = "TestXud"
+decimals = 7
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xaecce561a0d5210b6bb4543f5764f035921d896939cd756cd442cb5b1bfbc7e5"

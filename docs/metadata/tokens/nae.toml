@@ -1,0 +1,9 @@
+name = "NEA"
+symbol = "NAE"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x55670268cd1d99f93d55aacd000dc69eda11e739290e8b6501c78fa7f0a90a16"

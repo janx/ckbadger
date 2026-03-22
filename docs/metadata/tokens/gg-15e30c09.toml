@@ -1,0 +1,9 @@
+name = "GG+"
+symbol = "GG++"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x51938ea5b4f1743dde90c8aef7ae03a52b5917fd1f4974019068aa57bd3c93f9"

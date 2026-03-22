@@ -1,0 +1,9 @@
+name = "Prout"
+symbol = "Prout"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x667a54065f4ebb66e6a310d65a007164a2232cb14dd6891b20de95831ee5561c"

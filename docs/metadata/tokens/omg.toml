@@ -1,0 +1,9 @@
+name = "OMG"
+symbol = "OMG"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xebe99001a4c7fe7122d637caa5b85a34b9a85f32a5d1da353695d9ee6546f922"

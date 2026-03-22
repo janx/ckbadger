@@ -1,0 +1,9 @@
+name = "oh fuck wen mint @nomadland"
+symbol = "$ofwm"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xfadc10bbbb8ac098c8a8aa962b67264dec50e64befaffd7225a995a8db04db4f"

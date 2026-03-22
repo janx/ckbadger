@@ -1,0 +1,9 @@
+name = "Mintwave"
+symbol = "MINTWAVE"
+decimals = 6
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x73c6739739174c745e6a5a272c2983cfead48e0e5947f0393a6beb08e5fa4ef9"

@@ -1,0 +1,11 @@
+name = "USDT (Bridged)"
+symbol = "CUSDT"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+description = "USDT is a stablecoin (stable-value cryptocurrency) that mirrors the price of the U.S. dollar, issued by a Hong Kong-based company Tether. The token’s peg to the USD is achieved via maintaining a sum of dollars in reserves that is equal to the number of USDT in circulation.  CKB-USDT is backed 1:1 with the official ETH-USDT, endorsed by Bitpie."
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xf951c4f35aabb9b23dff18b1c7e433801ff6d94430d180335082cc65373d1220"

@@ -1,0 +1,9 @@
+name = "SPORT"
+symbol = "SPORT"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x7bdb4599c563af55c3491bb5159fb79bc59245df1bb8ee468ed5f0183cb9d6a2"

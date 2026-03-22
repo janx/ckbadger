@@ -1,0 +1,12 @@
+name = "InputTypeProxyLock"
+description = "Unlocks when a specific type script appears in transaction inputs."
+
+[[mainnet]]
+code_hash = "0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a"
+data_hash = "0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a"
+hash_type = "data1"
+
+[[testnet]]
+code_hash = "0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a"
+data_hash = "0x5123908965c711b0ffd8aec642f1ede329649bda1ebdca6bd24124d3796f768a"
+hash_type = "data1"

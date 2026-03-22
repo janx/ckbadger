@@ -1,0 +1,9 @@
+name = "R-DOG•GO•TO•THE•MOON"
+symbol = "R-DOG•GO•TO•THE•MOON"
+decimals = 5
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x56c6bf662e9ad86252c3bdfff15d8f44f99125d9110810aecccb74f284a575f4"

@@ -1,0 +1,9 @@
+name = "Albert "
+symbol = "ALBERT"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x08b7f3e2fba2f4dc15504b03ca0cdf9840e07feed718941f06531ff5f020238b"

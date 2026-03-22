@@ -1,0 +1,9 @@
+name = "NBBAAasdaqwe"
+symbol = "NBBAT"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x8d3be1a246c4414966f7a011a88f9fa3e37655a36ed804fc3d05a78cd51c2f00"

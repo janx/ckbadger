@@ -1,0 +1,14 @@
+name = "RGBS"
+symbol = "RGBS"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x7de82d61a7eb2ec82b0dc653e558ba120efcbfbb44dac87c12972d05bf250653"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x37f84a4cbc84df1782b8d42e4252952a057b0d9a3a4dd2bb16a88dc54332fb9e"

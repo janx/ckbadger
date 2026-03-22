@@ -1,0 +1,9 @@
+name = "202405191609"
+symbol = "TST"
+decimals = 8
+standard = "xudt_compatible"
+
+[testnet]
+code_hash = "0x98701eaf939113606a8a70013fd2e8f27b8f1e234acdc329f3d71f9e9d3d3233"
+hash_type = "type"
+args = "0x48629776b593736c56fa5dc9c4148e154958d837ba6e93a9e7030016a6a44380"

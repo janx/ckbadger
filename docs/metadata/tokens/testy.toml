@@ -1,0 +1,9 @@
+name = "testy"
+symbol = "testy"
+decimals = 1
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xaf1feaa6eae42d0fc7d84853d696097809f70b6fae2d924985a09000335f9f06"

@@ -1,0 +1,9 @@
+name = "people"
+symbol = "people"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xaa8e812c3a57afb4e6dc7a5572e98edb64c9297730dce434092eb5f4775d8434"

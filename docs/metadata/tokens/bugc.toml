@@ -1,0 +1,9 @@
+name = "bugC"
+symbol = "bugC"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x45ae39f3dc5771b7e663a598e77e07950450484b52cb7552a1531706f1eef7ae"

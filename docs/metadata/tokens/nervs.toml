@@ -1,0 +1,9 @@
+name = "Nervous"
+symbol = "NERVS"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x5a3827c62fdb81e613698395bf568e9eeeea10d92db086c624ee95d4faa2ed18"

@@ -1,0 +1,8 @@
+name = ".bit Account"
+description = "Unified DID, access from anywhere, use it everywhere."
+website = "https://d.id/id-protocol/bit"
+
+[[mainnet]]
+code_hash = "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918"
+data_hash = "0xef8f439fbb5838e9f935774b640781969929c47f6cc9fcc51be0a5f9e1b43166"
+hash_type = "type"

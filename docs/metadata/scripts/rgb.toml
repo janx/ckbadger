@@ -1,0 +1,12 @@
+name = "RGB++"
+description = "RGB++ Lock"
+
+[[mainnet]]
+code_hash = "0xbc6c568a1a0d0a09f6844dc9d74ddb4343c32143ff25f727c59edf4fb72d6936"
+data_hash = "0x1c629e18b5b072b44c8befe045ce78ea662bac8dafe614e89629e6b688601324"
+hash_type = "type"
+
+[[testnet]]
+code_hash = "0xd07598deec7ce7b5665310386b4abd06a6d48843e953c5cc2112ad0d5a220364"
+data_hash = "0x7e458568bc12ba00bfb10ec1805a485ee1c14b16f4a6930ce1498e2e36e6374a"
+hash_type = "type"

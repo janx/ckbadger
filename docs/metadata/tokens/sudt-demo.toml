@@ -1,0 +1,10 @@
+name = "SUDT Demo"
+symbol = "SUDT Demo"
+decimals = 2
+standard = "sudt"
+description = "This is a demo token for sudt management"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x0312d9de80cfc5af5d5f3eb8df5f2ebecb80c0b9dc5648bc6a005aed92759f6e"

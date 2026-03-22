@@ -1,0 +1,12 @@
+name = "Btc Time Lock"
+description = "A lock require n confirmations of Bitcoin transaction to unlock the cell."
+
+[[mainnet]]
+code_hash = "0x70d64497a075bd651e98ac030455ea200637ee325a12ad08aff03f1a117e5a62"
+data_hash = "0xfac2c0484baf71419420c6abcbd4a54c4f6061eb34fe703e8f254dbeb0439699"
+hash_type = "type"
+
+[[testnet]]
+code_hash = "0x80a09eca26d77cea1f5a69471c59481be7404febf40ee90f886c36a948385b55"
+data_hash = "0xd3db94edf2a2d040fb4f0fc93f21e721ef181719717384598c536fd1cfc3ad58"
+hash_type = "type"

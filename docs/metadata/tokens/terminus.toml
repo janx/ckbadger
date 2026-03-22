@@ -1,0 +1,9 @@
+name = "TERMINUS"
+symbol = "TERMINUS"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x484fa8ee7547caf0fa4424f4c9566ce27a32ed1e6d1364414d6635cb0cb4e876"

@@ -1,0 +1,9 @@
+name = "CAT with wings"
+symbol = "CATWW"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x64c191fa7c6245b57a34c2a981437de9487a9924bf1d3c0a9c91b7c2ebd90c72"

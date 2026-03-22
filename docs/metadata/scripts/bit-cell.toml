@@ -1,0 +1,14 @@
+name = ".bit Cell"
+description = "Unified DID, access from anywhere, use it everywhere."
+website = "https://d.id/id-protocol/bit"
+category = "spore-cluster"
+
+[[mainnet]]
+code_hash = "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33"
+data_hash = "0x45721f0b3b48458087f4316410c4118d4d58b20b9de408073f8f59c745e1d6cd"
+hash_type = "type"
+
+[[testnet]]
+code_hash = "0x0b1f412fbae26853ff7d082d422c2bdd9e2ff94ee8aaec11240a5b34cc6e890f"
+data_hash = "0x076696859964804a0c984062d9c3bfe983f8632e084d9e230cb84a012aa75927"
+hash_type = "type"

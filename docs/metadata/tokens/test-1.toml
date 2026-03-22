@@ -1,0 +1,9 @@
+name = "test-1"
+symbol = "TEST-1"
+decimals = 8
+standard = "xudt_compatible"
+
+[testnet]
+code_hash = "0x98701eaf939113606a8a70013fd2e8f27b8f1e234acdc329f3d71f9e9d3d3233"
+hash_type = "type"
+args = "0x4904f3bf7b8bc433126ac19fbe0994aa358a0a3d762436cf61da67eac911397e"

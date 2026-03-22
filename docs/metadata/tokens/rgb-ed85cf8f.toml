@@ -1,0 +1,9 @@
+name = "RGB++"
+symbol = "RGB++"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xdd82001b1789b5af18da0aa5cede44deee4f04b0939d9b95870fbbedca84c7b6"

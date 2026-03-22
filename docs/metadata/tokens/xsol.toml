@@ -1,0 +1,9 @@
+name = "Test SOL Token"
+symbol = "XSOL"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x5ceca83df9a9efa6675293383c1e3cd66d7ceb68dd482d8641d2cd5c7c3b87a0"

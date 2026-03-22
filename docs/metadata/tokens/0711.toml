@@ -1,0 +1,9 @@
+name = "0711"
+symbol = "0711"
+decimals = 18
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xaf4648af171b6ee612b62452e19fa408fbcec4fe9f42e2f4293220e6a148dccf"

@@ -1,0 +1,9 @@
+name = "gjbgf0"
+symbol = "gjbgf0"
+decimals = 0
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xaf049de7153c2a2289f26610c836f2613f264c877fe96a800ad880e2df945558"

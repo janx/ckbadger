@@ -1,0 +1,9 @@
+name = "btc++"
+symbol = "meme+"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x127e53ad2aa649a745cf36142e179e06b81edb13b51991d6943b1a4f70fdb465"

@@ -1,0 +1,9 @@
+name = "123"
+symbol = "7777"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xbd8470ac6eb21157aa04ebf7cb442eec545bbb6cda943cf7e7f8445709815176"

@@ -1,0 +1,9 @@
+name = "RGBPP"
+symbol = "RGBPP"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x3b8e9838bcb8e4b5824b4945357b136fed07d2ba117f1584ef99fcfc48aca1c5"

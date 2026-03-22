@@ -1,0 +1,9 @@
+name = "GGG TOKEN"
+symbol = "GGG"
+decimals = 18
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xd95dd3446fd8d12554d56ed61c01fca72be0672fb55d19ce88e94677ec7b0022"

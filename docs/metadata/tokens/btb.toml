@@ -1,0 +1,9 @@
+name = "BTB"
+symbol = "BTB"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x7bc1dabc0c9f6a4c53e7610d42aee2409a8a7b9f00905d39d3802f4f33388b7c"

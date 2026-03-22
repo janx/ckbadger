@@ -1,0 +1,9 @@
+name = "BCTK3"
+symbol = "BCTK3"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x94736dc02e61d2fa44a3de3ffca9d70b17e75a8e4e0dfdad4c4e4bf5b75d122b"

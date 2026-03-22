@@ -1,0 +1,9 @@
+name = "Hi Token"
+symbol = "HI"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x0d868dca2d17b0fe6ebe27421874f883c0fb7a2f7e351942d9ed12f9231deb5d"

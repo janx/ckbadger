@@ -1,0 +1,9 @@
+name = "TE2"
+symbol = "TE2"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xb47b12395c9d1eff395821ca43f6e47d073f406c3d9acb510cb1ae62deeb7abc"

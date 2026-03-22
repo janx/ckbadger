@@ -1,0 +1,9 @@
+name = "RGBPP Test Token"
+symbol = "GBB"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x2584651424ab78e88b72ae03c848bac9a1550e9698e7e6013f561578d00cca7d"

@@ -1,0 +1,9 @@
+name = "asdf"
+symbol = "adsf"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x73fdd50c9d9f8dd7dfc476a8b88f35018e74e1666b6154e737c0be49273ca9fe"

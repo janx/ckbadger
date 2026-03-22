@@ -1,0 +1,9 @@
+name = "CKBro"
+symbol = "CKBro"
+decimals = 0
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x596f3f201aad44bee11ce5e7daf04bb6f816b6b38fb1eb5f6fc0a57d0a4e9d12"

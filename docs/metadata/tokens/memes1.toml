@@ -1,0 +1,9 @@
+name = "test memes"
+symbol = "Memes1"
+decimals = 8
+standard = "sudt"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0xa0b8335b644988ea40cb7ede87e1bd3690e6d93e13ab0944548cfc2d119c6fc2"

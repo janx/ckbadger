@@ -1,0 +1,9 @@
+name = "J"
+symbol = "J"
+decimals = 4
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x9ce69d385fffd2794cd6a3841b87da3a4a133c95c9bb4277ae5dcdbc453c2ed5"

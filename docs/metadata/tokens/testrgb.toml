@@ -1,0 +1,9 @@
+name = "RGBTest"
+symbol = "TESTRGB"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x88d3fd36e2bf0a2806cd1d633744df5c984c23d630ba85df39049010e79073c5"

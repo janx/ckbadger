@@ -1,0 +1,9 @@
+name = "DOGE"
+symbol = "DOGE+"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x64e9e1dea73789df9d1ff6b1ac585223b6ef80f5ee5849fddd00d5219dc17464"

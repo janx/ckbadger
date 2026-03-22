@@ -1,0 +1,9 @@
+name = "rgb++"
+symbol = "fomo"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x4157c068af0672c4af8d083074c5406342302a9ee7c1c741f89aaa7d827f53dc"

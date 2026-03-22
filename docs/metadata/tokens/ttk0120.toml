@@ -1,0 +1,9 @@
+name = "TTK0120"
+symbol = "TTK0120"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x0e2cbb5dc254ab386662302fbd5ba0cad2723918bf8aa7466b0ce2461be36e2a"

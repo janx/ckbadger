@@ -1,0 +1,9 @@
+name = "RGBpp1719142345"
+symbol = "TEST 2024"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xa1e524ed8707c448bafaa087e301bf127ee5d87dc9bf910c385f7517bb444d79"

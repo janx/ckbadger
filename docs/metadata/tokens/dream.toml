@@ -1,0 +1,9 @@
+name = "Dream"
+symbol = "Dream"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x258ceeea79d17a5d2be454ee5b1999dc959400036ad85c8d9b3d9ce1fe4c7faa"

@@ -1,0 +1,11 @@
+name = "TALKZ"
+symbol = "TALKZ"
+decimals = 8
+standard = "xudt"
+icon = "logo.png"
+description = "$TALKZ is a premium membership token designed to unlock exclusive opportunities. From priority access to select opportunities, special perks, and more, $TALKZ offers a gateway to unique benefits for those who hold it."
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xa4c9d0555ff3aaa6849cfdb6cdaa38d9f5773a472683b09f8505f49e2bb10aeb"

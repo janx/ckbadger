@@ -1,0 +1,9 @@
+name = "MicroStrategy"
+symbol = "MSTR"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xd6747284a4534db8924756812fa7e1a8a722399273f7da1c6b05a878489c68cc"

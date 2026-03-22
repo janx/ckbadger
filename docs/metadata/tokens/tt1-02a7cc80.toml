@@ -1,0 +1,11 @@
+name = "TokenTT1_Rafa"
+symbol = "TT1"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+description = "Token_pruebas_TT1"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0xa26e6a0efb5fe0e03acff363debeece83cc1bb98eb6f8872a569909c715cf6e2"

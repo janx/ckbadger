@@ -1,0 +1,15 @@
+name = "LTO"
+symbol = "LTO"
+decimals = 8
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/lto-network-lto-logo.svg?v=002"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x33e2afa67434322b1368bf5064b31dc20021bcccc871aa5cc6a5380aa58c59f6"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xbdc8d51cb7faa33b34631dba67109cc7a6dc0528e690880dd0ce7dbc548d74ab"

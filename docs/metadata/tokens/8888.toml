@@ -1,0 +1,9 @@
+name = "8888"
+symbol = "8888"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x9b2d594ecd811c0d6a0370647ae6b024bc2583b164c9b9bdd267a4f00fa80d8d"

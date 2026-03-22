@@ -1,0 +1,11 @@
+name = "YanHaoCoin"
+symbol = "YHC"
+decimals = 18
+standard = "sudt"
+icon = "logo.png"
+description = "A digital coin in the name of YanHao"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x4a3e817cad9ee919dac32660dd9b423f57704f1e7ff6cb8696b5a4d9ac3f51f1"

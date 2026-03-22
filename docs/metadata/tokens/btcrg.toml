@@ -1,0 +1,9 @@
+name = "BitCoinRGB"
+symbol = "BTCRG"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x368583b582f621bcbd8e0cc60a02076522d43c24a5b6ab30ce31b733b6f0ef01"

@@ -1,0 +1,9 @@
+name = "ABC Token"
+symbol = "ABC"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xe229aeccf70c8b9e02338f7984c029ea68b6f3c66b41e7a8c716573f05faf121"

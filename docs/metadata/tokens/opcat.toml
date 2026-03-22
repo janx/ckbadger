@@ -1,0 +1,9 @@
+name = "OPCAT"
+symbol = "OPCAT"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xe2b36a5df84de1e55dcb7f90b75ea92f56fa1899fb5922e34707709e07f5a9ee"

@@ -1,0 +1,9 @@
+name = "D0Z1"
+symbol = "D0Z1"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xa1e64eb9b0879e41df8f170c4d24ae8b85ebe69be723d6941e97091b81636cfc"

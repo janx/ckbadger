@@ -1,0 +1,10 @@
+name = "test11111"
+symbol = "test11111"
+decimals = 10
+standard = "sudt"
+description = "fhjoiwerhf"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x65b8ec2c73e29c3ac5a259eb5c440a25cd752c890bf5f6a2414484dfd25a71de"

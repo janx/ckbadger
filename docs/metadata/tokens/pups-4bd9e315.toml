@@ -1,0 +1,9 @@
+name = "PUPS_BRC20_LeapX"
+symbol = "PUPS"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x10cd8728100dfec967cec0b17fc3cd9a0d46a63ab317f3a99dc8c0cac78f0c09"

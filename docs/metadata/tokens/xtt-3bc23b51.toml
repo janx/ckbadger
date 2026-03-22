@@ -1,0 +1,9 @@
+name = "X Test Token"
+symbol = "XTT"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x84c967c862746aa4bc32b201346e019dd180e2a22e34eac4631e43d3310c25e4"

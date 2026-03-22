@@ -1,0 +1,9 @@
+name = "R-PUPS•WORLD•PEACE"
+symbol = "R-PUPS•WORLD•PEACE"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x7264fa7d94fdc3799f3a007728b0384c08ef28201cffa5c557ddf3e321221dd4"

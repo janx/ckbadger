@@ -1,0 +1,9 @@
+name = "E"
+symbol = "E"
+decimals = 4
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x20bb44d79629f4f5053c88b9c2e78721dd474a63ba4f0635b5c638cb7374a57b"

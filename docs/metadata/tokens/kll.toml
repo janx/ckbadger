@@ -1,0 +1,9 @@
+name = "XUDT Test Token"
+symbol = "KLL"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x55bc260bcee6c161d74b591660d76bf960d3f0a58a68b67ada2d5e7121c22fa2"

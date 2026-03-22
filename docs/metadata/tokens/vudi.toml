@@ -1,0 +1,9 @@
+name = "Babe"
+symbol = "VUDI"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x0804b6b9f4f0f8abc9bf894e3880db31c276e1b3596ae1e998c7efc1385dd163"

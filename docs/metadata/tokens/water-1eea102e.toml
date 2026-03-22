@@ -1,0 +1,9 @@
+name = "WATER"
+symbol = "WATER"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xbd73d379b26e20bb124b6edef6203f426f7892c2e4623145e5fa4714d6ad29c9"

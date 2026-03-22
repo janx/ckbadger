@@ -1,0 +1,14 @@
+name = "++1++"
+symbol = "++1++"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xb6fe5f07b16dfd7d48a89fff84d088cb5e870dce989323e9e25d49424b98395c"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x4e14c1358bf49f8847a0c91f4d5533d4693287cbda9bc8a57334d42ad4ae3305"

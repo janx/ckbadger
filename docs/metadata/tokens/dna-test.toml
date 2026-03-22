@@ -1,0 +1,9 @@
+name = "DNA (RGB++)"
+symbol = "DNA TEST"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xe174ff2d408558a8e9a2e44055ff8b84c1e155395a04c41048c73b5b9720e0fc"

@@ -1,0 +1,9 @@
+name = "SHARE"
+symbol = "SHARE"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x6334c87a720815327bcc7d9c1854e54443bf96dc84baf13b6750515363972539"

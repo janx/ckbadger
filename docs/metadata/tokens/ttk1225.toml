@@ -1,0 +1,9 @@
+name = "TTK1225"
+symbol = "TTK1225"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xaa48c12e8b8f4297d55cc434f85bde1f95b5b1d645e82d4579c9212e6e375ad9"

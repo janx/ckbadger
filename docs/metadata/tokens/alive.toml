@@ -1,0 +1,9 @@
+name = "Test xUDT tokens issued by Alive24"
+symbol = "ALIVE"
+decimals = 6
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x296be9e710c02bfe8bd8771f29ce8f250d4aebc0158893f8c5267940bef389aa"

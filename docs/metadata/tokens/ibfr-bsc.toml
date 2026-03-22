@@ -1,0 +1,10 @@
+name = "Wrapped iBFR (ForceBridge from BSC)"
+symbol = "iBFR|bsc"
+decimals = 18
+standard = "sudt"
+icon = "https://assets.coingecko.com/coins/images/18540/large/buffer.png"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x5e945aa680b40d9388d4988aee0aebdd2ad9185b6c0ebfd408fa974818de8b6a"

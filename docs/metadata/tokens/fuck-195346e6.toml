@@ -1,0 +1,14 @@
+name = "Fuck Scam"
+symbol = "FUCK"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x2eb5fc54b1a4f58d625fa456646412aed2577503b6ff084ced37c960bab6503000"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xf17028fde0ab7a7124fbb342c0a56cac740f017ff2d1be2ecb980c5d11fd185003"

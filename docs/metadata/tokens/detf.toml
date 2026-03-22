@@ -1,0 +1,9 @@
+name = "DETF"
+symbol = "DETF"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x1b7f3b1ee36812f7e905631b3d3b5b0fab318dfec7e94b0620b04eeea7cd1e81"

@@ -1,0 +1,9 @@
+name = "RUN $CKB"
+symbol = "RUN"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xd6f7ba3b7ab253cce76b8e41b52e4ac6f60462fb29b79e4aa0305e97ef88f6c9"

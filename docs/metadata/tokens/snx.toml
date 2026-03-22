@@ -1,0 +1,10 @@
+name = "SNX"
+symbol = "SNX"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/synthetix-network-token-snx-logo.svg?v=002"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xb31800b3c908eaf217a982cb2a0fb8df7ac047485c432634a079a8c158339020"

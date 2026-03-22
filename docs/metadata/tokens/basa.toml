@@ -1,0 +1,9 @@
+name = "basa"
+symbol = "basa"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x65a185ca18636c89c3240fa3e2577907e5b8d370e788241ca4f8d2435915e545"

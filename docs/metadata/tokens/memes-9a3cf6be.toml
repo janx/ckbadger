@@ -1,0 +1,9 @@
+name = "MEMES"
+symbol = "MEMES"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x08ab16c146b92553e42248b59967d64106a4da4c31a4c4166c2416fc3431cc1a"

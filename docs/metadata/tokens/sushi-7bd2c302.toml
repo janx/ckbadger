@@ -1,0 +1,10 @@
+name = "SUSHI"
+symbol = "SUSHI"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/sushiswap-sushi-logo.svg?v=013"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xd7a79519d220983c703fd90083c481fc3144daad7ea05728832cbc021f27c017"

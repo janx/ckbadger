@@ -1,0 +1,9 @@
+name = "TTK2"
+symbol = "TTK2"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x1a3b448c7b150ea32eb270772d92c4faddd1b50d8102cc486a4e19c1ecff5aad"

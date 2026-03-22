@@ -1,0 +1,9 @@
+name = "玩个寄吧"
+symbol = "RNM退钱"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xf66f8864d0bc752129132e868b7c74993e4866619943c5c61970d3c4d04a96a3"

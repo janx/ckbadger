@@ -1,0 +1,9 @@
+name = "egod 2"
+symbol = "Egod2"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x5a88469183ac33ede9a92d1008c29574a5ce79ed4776c26eda55920a53d8cf24"

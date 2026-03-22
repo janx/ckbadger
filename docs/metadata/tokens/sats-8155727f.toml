@@ -1,0 +1,9 @@
+name = "SATS"
+symbol = "SATS"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x613ee68927401021bff3324793b4cd3ea8155f20615a95c34cc9096dd1dcae16"

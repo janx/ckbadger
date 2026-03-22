@@ -1,0 +1,9 @@
+name = "ORANGE"
+symbol = "orng"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x3d394fe0f2bf342c96a4a33c719e57fe8f7e1382725455302bfca84e733fa44c"

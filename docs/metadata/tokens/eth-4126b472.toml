@@ -1,0 +1,9 @@
+name = "ETH++"
+symbol = "ETH++"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x5022ded6b5ae84f25d7b21c57a5735d1ecfaceee61a073b2c4fc2bbe754f4c6e"

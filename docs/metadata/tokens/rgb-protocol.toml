@@ -1,0 +1,11 @@
+name = "RGB++ Protocol"
+symbol = "RGB++ Protocol"
+decimals = 8
+standard = "xudt"
+icon = "logo.png"
+description = "RGB++ Protocol Coin"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x08875c56644d39dd9629d291357d3026debc5d22fa88d924d60ce8f16dd50e70"

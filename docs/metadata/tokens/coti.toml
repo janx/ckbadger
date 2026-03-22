@@ -1,0 +1,10 @@
+name = "COTI"
+symbol = "COTI"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/coti-coti-logo.svg?v=013"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x70746eb3aeeefb93c7024332e3b129ac09dbdfd238e9a0ff7763ae1b2cd8193e"

@@ -1,0 +1,9 @@
+name = "zz56"
+symbol = "zz56"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xf1d944f2f9e2a25217a85e93b676de8a207dbc63e0e6f057afafd1b878a312be"

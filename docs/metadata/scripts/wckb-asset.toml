@@ -1,0 +1,8 @@
+name = "wCKB Asset"
+website = "https://github.com/duanyytop/wckb"
+category = "udt"
+
+[[mainnet]]
+code_hash = "0x42a0b2aacc836c0fc2bbd421a9020de42b8411584190f30be547fdf54214acc3"
+data_hash = "0xe3155dd1d586c022a69f1dd3289cc714d19bf52966310a88c3b8d1b06b9140cf"
+hash_type = "type"

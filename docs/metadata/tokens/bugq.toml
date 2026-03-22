@@ -1,0 +1,9 @@
+name = "bugq"
+symbol = "bugq"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x2a12e024c2c07d2e49b21da0042722aa960afb9551dd673f1ed6384ebf7619a4"

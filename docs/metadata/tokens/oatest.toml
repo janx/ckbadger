@@ -1,0 +1,9 @@
+name = "OA_TEST"
+symbol = "OATEST"
+decimals = 8
+standard = "sudt"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x3f9581eaa846a6d0d47677eb4969fea450d9410aba76b8590c21438fe00ac9c7"

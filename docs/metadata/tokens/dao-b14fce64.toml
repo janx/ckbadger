@@ -1,0 +1,9 @@
+name = "The DAO"
+symbol = "DAO"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x4729d5eb40421e0b0c0d817d7588aa7e10fb31c45e20d5204c3181f05e0d6daf"

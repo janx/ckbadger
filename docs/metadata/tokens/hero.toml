@@ -1,0 +1,9 @@
+name = "my home hero"
+symbol = "hero"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x3596c441e9bfdef0b54088dfd6ddedc80e774128614f72896d6337e4be1e1678"

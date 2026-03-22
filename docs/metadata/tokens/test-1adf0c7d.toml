@@ -1,0 +1,9 @@
+name = "Test Token"
+symbol = "TEST"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x00e3c178dcbf79020545262b3b9c9b30ac381aca527cc5a650b7b104cf68e4d900"

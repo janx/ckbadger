@@ -1,0 +1,9 @@
+name = "SHOCK"
+symbol = "SHOCK"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x48f5a6afa2cb209e9588fb9d8cc5f214f2eeb56b49dc7d831acbe6f22e823fbd"

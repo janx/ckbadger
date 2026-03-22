@@ -1,0 +1,15 @@
+name = "RUSD"
+symbol = "RUSD"
+decimals = 8
+standard = "xudt_compatible"
+icon = "https://raw.githubusercontent.com/stablepp/media-kit/refs/heads/main/stablecoin-RUSD.svg"
+
+[mainnet]
+code_hash = "0x26a33e0815888a4a0614a0b7d09fa951e0993ff21e55905510104a0b1312032b"
+hash_type = "type"
+args = "0x360c9d87b2824c357958c23e8878f686001e88e9527a08ea229e7d9ba7fe39a7"
+
+[testnet]
+code_hash = "0x1142755a044bf2ee358cba9f2da187ce928c91cd4dc8692ded0337efa677d21a"
+hash_type = "type"
+args = "0x878fcc6f1f08d48e87bb1c3b3d5083f23f8a39c5d5c764f253b55b998526439b"

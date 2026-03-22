@@ -1,0 +1,9 @@
+name = "tst2USD"
+symbol = "tst2USD"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x380b1e3fe50d94d534ba290721f733caee6d6fa4c2375b3d14ac0ff3943c5a93"

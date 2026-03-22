@@ -1,0 +1,9 @@
+name = "Yellow"
+symbol = "Y"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xd6598e51fd7a9bb9f1a6257d3e85eee9313a1fb6c3d9be9ab4b95ac29b2f28c9"

@@ -1,0 +1,10 @@
+name = "MDT"
+symbol = "MDT"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/measurable-data-token-mdt-logo.svg?v=013"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xe5738a780a759d2f7a1a4b33999d1a7e05d55e0a88efb6068a963aa84531fdbc"

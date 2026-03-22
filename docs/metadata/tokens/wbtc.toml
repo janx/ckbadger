@@ -1,0 +1,10 @@
+name = "WBTC"
+symbol = "WBTC"
+decimals = 8
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/wrapped-bitcoin-wbtc-logo.svg?v=002"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x0a2117bce7a84cac80e7c5971919d12987e4da58f79e010c6c2f58c7d6e687e1"

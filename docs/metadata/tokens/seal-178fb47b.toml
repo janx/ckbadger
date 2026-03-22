@@ -1,0 +1,11 @@
+name = "Seal"
+symbol = "Seal"
+decimals = 8
+standard = "xudt"
+icon = "logo.png"
+description = "The very first asset released conforming to RGB++ protocol"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x2ae639d6233f9b15545573b8e78f38ff7aa6c7bf8ef6460bf1f12d0a76c09c4e"

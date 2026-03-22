@@ -1,0 +1,10 @@
+name = "MUBTC"
+symbol = "MUBTC"
+decimals = 1
+standard = "sudt"
+description = "for mock"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x94dc982a53fcc0ec9244140570f817d9ab6cc82f74c7d10a125e4858ad72e181"

@@ -1,0 +1,16 @@
+name = "ccBTC"
+symbol = "BTC"
+decimals = 8
+standard = "xudt_compatible"
+icon = "logo.png"
+description = "Cross-Chain Tokens (ccTokens) are the tokens backed 1:1 with native assets like BTC. All ccTokens’ reserves are safeguarded by qualified third-party custodians. "
+
+[mainnet]
+code_hash = "0x092c2c4a26ea475a8e860c29cf00502103add677705e2ccd8d6fe5af3caa5ae3"
+hash_type = "type"
+args = "0x68e64ba4b0daeeec45c1f983d6d574fca370442cafb805bc4265ef74870a4ac8"
+
+[testnet]
+code_hash = "0x98701eaf939113606a8a70013fd2e8f27b8f1e234acdc329f3d71f9e9d3d3233"
+hash_type = "type"
+args = "0x3b6224e621410370887db7e3d95f63d9c760d7f56ee864521403c99e8b4f34b8"

@@ -1,0 +1,9 @@
+name = "AIPEPEKING"
+symbol = "PEPEK"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xd34ab54890cba5f67d059c4c632f717fed656dce3357525af291e6fa05a4f675"

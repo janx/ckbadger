@@ -1,0 +1,9 @@
+name = "TRY"
+symbol = "TRY++"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xade36663e2c91c3f3a383fc7604ac3713d51e40b4804c4780b2a79565deb96f4"

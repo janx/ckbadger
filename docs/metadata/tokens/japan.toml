@@ -1,0 +1,9 @@
+name = "JAPAN"
+symbol = "JAPAN"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xb0ac8ec64688850d779a6e2107f6c2c991740cddc5e2c169c82cc55285f6c9d0"

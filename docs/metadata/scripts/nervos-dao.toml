@@ -1,0 +1,13 @@
+name = "Nervos DAO"
+description = "Nervos DAO is a smart contract with which users can interact the same way as any smart contract on CKB."
+category = "dao"
+
+[[mainnet]]
+code_hash = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"
+data_hash = "0x32064a14ce10d95d4b7343054cc19d73b25b16ae61a6c681011ca781a60c7923"
+hash_type = "type"
+
+[[testnet]]
+code_hash = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"
+data_hash = "0x32064a14ce10d95d4b7343054cc19d73b25b16ae61a6c681011ca781a60c7923"
+hash_type = "type"

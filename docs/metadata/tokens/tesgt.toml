@@ -1,0 +1,9 @@
+name = "tesgt"
+symbol = "tesgt"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xfa260a0f2620a3901957dcfbfe12d7565cb9f16f4af55af2e6d6f02ffe732d41"

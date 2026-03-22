@@ -1,0 +1,9 @@
+name = "Y"
+symbol = "Y"
+decimals = 4
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x374f479c51920902299781ce552382b4cc90cffe7c02e1def781f84c6151a8b3"

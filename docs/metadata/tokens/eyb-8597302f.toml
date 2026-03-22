@@ -1,0 +1,9 @@
+name = "Eyb"
+symbol = "EYB"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xffd5b49162d0d176712bf3acb82547b5d5d968be22e2a854921cb8638be65737"

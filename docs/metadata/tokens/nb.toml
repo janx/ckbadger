@@ -1,0 +1,14 @@
+name = "Network of Bitcoin"
+symbol = "NB"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x03c59f13ef5a394a7f8f722674146e6eccaba443a192b1dc2361e0a481c39267ba"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xf9ab257bb37abdb69a37ec5cbb937fc61a2d3ee3430444ce660fce59a6a12eda"

@@ -1,0 +1,11 @@
+name = "XUDT Test Token20"
+symbol = "XTT20"
+decimals = 8
+standard = "xudt"
+icon = "logo.jpeg"
+description = "Test xUDT description information"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x78f569b97d6a984edd734f3304bf3581d45b5be7338ebb7d840247aab72b896020"

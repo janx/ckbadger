@@ -1,0 +1,9 @@
+name = "DECILM1"
+symbol = "DECILM1"
+decimals = 254
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x8d967bbcfab382ac6944e7834458e644a878a63b820a41cd46c8b569843ffd4d"

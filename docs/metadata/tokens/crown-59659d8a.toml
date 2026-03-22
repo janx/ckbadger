@@ -1,0 +1,9 @@
+name = "Crown"
+symbol = "Crown"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x0d7ee593c30e9ddf5983d5f45ae9290b7786433cb8c552bcf4e47405b1c824dc"

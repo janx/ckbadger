@@ -1,0 +1,9 @@
+name = "pumpTKK"
+symbol = "pumpTKK"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x049de9500789861fa28397f449acc49a7f171872073f3a54823207bd06344ad0"

@@ -1,0 +1,9 @@
+name = "VOB"
+symbol = "VOB"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xb26c61cba06f3f8b14e60b10374c428c02bd942dab06faa282f1d460e0784c0f"

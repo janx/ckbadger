@@ -1,0 +1,9 @@
+name = "THE WIND RISES"
+symbol = "TANG"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x12a0c80e8faa43790cce0d83f28c15411f529b1b7b190b0f73e267f49179b214"

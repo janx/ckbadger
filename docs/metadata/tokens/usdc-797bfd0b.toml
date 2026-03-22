@@ -1,0 +1,10 @@
+name = "USDC"
+symbol = "USDC"
+decimals = 6
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/usd-coin-usdc-logo.svg?v=002"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x5c4ac961a2428137f27271cf2af205e5c55156d26d9ac285ed3170e8c4cc1501"

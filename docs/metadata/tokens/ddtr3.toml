@@ -1,0 +1,10 @@
+name = "TTRD3"
+symbol = "DDTR3"
+decimals = 6
+standard = "xudt"
+description = "zjcaee-record"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xf17a25ffb22cc859dd85113f790848853829b4a91c37423ae2a8ffaa05a35085"

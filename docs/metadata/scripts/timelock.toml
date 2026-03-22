@@ -1,0 +1,12 @@
+name = "TimeLock"
+description = "Since-based lock (time/block/epoch) with additional lock script verification."
+
+[[mainnet]]
+code_hash = "0x6fac4b2e89360a1e692efcddcb3a28656d8446549fb83da6d896db8b714f4451"
+data_hash = "0x6fac4b2e89360a1e692efcddcb3a28656d8446549fb83da6d896db8b714f4451"
+hash_type = "data1"
+
+[[testnet]]
+code_hash = "0x6fac4b2e89360a1e692efcddcb3a28656d8446549fb83da6d896db8b714f4451"
+data_hash = "0x6fac4b2e89360a1e692efcddcb3a28656d8446549fb83da6d896db8b714f4451"
+hash_type = "data1"

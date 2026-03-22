@@ -1,0 +1,10 @@
+name = "JJD"
+symbol = "DDI"
+decimals = 6
+standard = "sudt"
+description = "JJD"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x4996b0e402fe6d75713eea7f58adf8fbb922e3a4a69ac415371aec02a6fc4210"

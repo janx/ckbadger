@@ -1,0 +1,9 @@
+name = "White"
+symbol = "W"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x1339836968475713adaae05313e6da294d88654d8df10f454c9a99e397f1b263"

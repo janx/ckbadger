@@ -1,0 +1,9 @@
+name = "ccmt"
+symbol = "ccmt"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x510d9cdb9ffe7d1bf54f75b96cf806ea1fe1a09348e7c6e2ad21a6c883ec4c92"

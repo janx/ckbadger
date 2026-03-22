@@ -1,0 +1,9 @@
+name = "U"
+symbol = "U"
+decimals = 4
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x6edab46f1f13503fd0830c2f47c5bf29bbf39294d63fe96827f4a8c1bb0ae7b0"

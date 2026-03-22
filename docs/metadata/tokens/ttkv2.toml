@@ -1,0 +1,9 @@
+name = "test for v2"
+symbol = "ttkv2"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x5b8c621a4aaa3bf89e2e57a2df39cf103c90334619956819548fcd819ff92dc3"

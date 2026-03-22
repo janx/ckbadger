@@ -1,0 +1,10 @@
+name = "PPIG"
+symbol = "PPIG"
+decimals = 6
+standard = "sudt"
+icon = "logo.jpg"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x1b528a788ae0f8303b553f0ab1a4e9485d77c2920183342d0d52b03b03ac3a79"

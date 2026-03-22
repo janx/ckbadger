@@ -1,0 +1,9 @@
+name = "V"
+symbol = "V"
+decimals = 4
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xdf794db8ab9cf2f7860c4b025f7d6465ecba09ce5085d42e091804e2c0599e29"

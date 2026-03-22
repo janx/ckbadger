@@ -1,0 +1,9 @@
+name = "ERASE"
+symbol = "THIS"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x1ffcfbb069d7d2ed6ac8b2d3ce7af5f7ad46f771ab995b23e4fde23a7fd7245c"

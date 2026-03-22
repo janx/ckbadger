@@ -1,0 +1,9 @@
+name = "NMSL"
+symbol = "NMSL"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xb628664569e4f5625c1672217fcbb80f9a5cf253db9db7cec4724e59facfc0ad"

@@ -1,0 +1,9 @@
+name = "HelloWorldM"
+symbol = "HWM3"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xa6f18263452e000536804ba019d2a141c9923e7916411b318126631011673dc9"

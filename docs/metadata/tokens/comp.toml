@@ -1,0 +1,10 @@
+name = "COMP"
+symbol = "COMP"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/compound-comp-logo.svg?v=013"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x82a6b63b13d9980c98b17810eb2599dc94c144c0ddd24fd24e8a7881d93323ff"

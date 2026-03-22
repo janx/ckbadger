@@ -1,0 +1,9 @@
+name = "UTXO extended"
+symbol = "UTXOe"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x081e07a9c30d902898efcecc7a2026c7f1c21e158469b0bc8b13491e56154d27"

@@ -1,0 +1,9 @@
+name = "PIIG"
+symbol = "PIIG"
+decimals = 6
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xb44e4d8eae5a29a8c33ed3d64b07973d1602e67391e747a6131eca1dae53fceb"

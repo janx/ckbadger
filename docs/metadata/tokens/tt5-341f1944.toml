@@ -1,0 +1,10 @@
+name = "TT5_Name"
+symbol = "TT5"
+decimals = 8
+standard = "sudt"
+description = "Token de pruebas TT5"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0xd55516fa17f2b78d3a18fbf110085c6519ebc974ba948348933d35727ae5d6be"

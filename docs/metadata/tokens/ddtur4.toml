@@ -1,0 +1,9 @@
+name = "TTRuD4"
+symbol = "DDTuR4"
+decimals = 6
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x7c3f8735f167ab2fb8aeadc1b17bcbefd4811c7218396950e52144d822e2a579"

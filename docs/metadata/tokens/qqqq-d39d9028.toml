@@ -1,0 +1,9 @@
+name = "aqq"
+symbol = "qqqq"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x2918e7582b962f05f9941ec6f1ad0e79e9d45bc170fc6b3e73bad7229a19a619"

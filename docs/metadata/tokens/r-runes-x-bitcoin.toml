@@ -1,0 +1,9 @@
+name = "R-RUNES•X•BITCOIN"
+symbol = "R-RUNES•X•BITCOIN"
+decimals = 0
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x2c341b65d65458110d38b4788fcdfbab3128c2d2c08c561f0a7616974fbb43b5"

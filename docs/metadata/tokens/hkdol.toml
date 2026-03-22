@@ -1,0 +1,9 @@
+name = "HongKongDoll"
+symbol = "HKDOL"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x9e0175cf7511ec91c96f7feb8dda3ca75d5ee69fff6b1e3f042a517ef353391c"

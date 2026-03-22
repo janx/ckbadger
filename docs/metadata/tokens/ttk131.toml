@@ -1,0 +1,9 @@
+name = "TTK131"
+symbol = "TTK131"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x21063d30ad9ba3180494c81632c81cbf4606558d0206291add9dcdb0677e05b3"

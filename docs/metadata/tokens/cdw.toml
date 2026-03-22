@@ -1,0 +1,9 @@
+name = "abc"
+symbol = "cdw"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x9ce7dfb66fcd5a278c199d713348d10d2a9e7968500aec5db722006402e5f036"

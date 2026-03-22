@@ -1,0 +1,9 @@
+name = "XUDT Test Token"
+symbol = "cli_token"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xe091b9fe53d114793234f1fe8c2fcd35b221cf8bf5754cf53f7cdb76327356ca"

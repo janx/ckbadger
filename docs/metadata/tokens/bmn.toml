@@ -1,0 +1,9 @@
+name = "Bat Man"
+symbol = "BMN"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x5ef5ae502771aefdc0135434d61f3cee06c90b4df22d7d325a8e720a7cf76974"

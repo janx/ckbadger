@@ -1,0 +1,15 @@
+name = "JOKER"
+symbol = "JOKER"
+decimals = 8
+standard = "xudt"
+icon = "logo.png"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xcb74eaded089bf39c2165149cad3d526b4321e9a6119c7ae9cf996be3acfeb18"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xbe6ae7cc8a8f1eccc82b0a6b8948fe0b739a1925da6756dcbb7beb869ce1b193"

@@ -1,0 +1,9 @@
+name = "IYK TOK"
+symbol = "IYK"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x96445cad1ee121457d57972c1eb42169e0fa6b804a41b165ddf0e6dd40bf2c1f"

@@ -1,0 +1,9 @@
+name = "FUCKCKB"
+symbol = "FUCKCKB"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x08d315e0e070f1eac422fddd90c85b0dced8161c3927add08c95bf4303c68afa"

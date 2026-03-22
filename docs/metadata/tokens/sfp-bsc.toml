@@ -1,0 +1,10 @@
+name = "Wrapped SFP (ForceBridge from BSC)"
+symbol = "SFP|bsc"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/safepal-sfp-logo.svg?v=017"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xc66b8a7f4869272e1fd0565535cb444c319b6baafd386c5857f08d87e396cfd5"

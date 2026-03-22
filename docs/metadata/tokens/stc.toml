@@ -1,0 +1,9 @@
+name = "SiTa Coin"
+symbol = "STC"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x8fc437325536dbd55c3059211357dd5f61f437c477d1d7b477b0309ddaece1eb"

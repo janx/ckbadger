@@ -1,0 +1,9 @@
+name = "test-on-app"
+symbol = "tapp"
+decimals = 6
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xea1332badb91f6805e4c69344216ce7a79a14e8a5065f63fbe33e0c108ca9c9e"

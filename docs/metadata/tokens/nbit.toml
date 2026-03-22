@@ -1,0 +1,9 @@
+name = "NBIT"
+symbol = "NBIT"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x650f8383f6f27a5ce13b3c1a105dae15e5ba1675e7cbc55f22dc53c7dff5b974"

@@ -1,0 +1,14 @@
+name = "T"
+symbol = "T"
+decimals = 4
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x9be55b1c9fddb2c81917b65fb330947a4832f902b59baab6d22ff084f4d54396"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xb909e1c114c50985f592bc997f141ad344d6cbad71fbb482690325e7c6a36c47"

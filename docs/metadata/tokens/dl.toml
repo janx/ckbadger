@@ -1,0 +1,11 @@
+name = "Digital Land"
+symbol = "DL"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+description = "Digital Land -- Nervos CKB"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xe4222ebdfa2e3a5b90fd406b329887a4f3bbb2198312649cdf64f514bd1142fa"

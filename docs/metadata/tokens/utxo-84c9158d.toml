@@ -1,0 +1,9 @@
+name = "UTXO_SRC20_LeapX"
+symbol = "UTXO"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xc68f7b6834b41837122adcc18672defaa9760ffa440e5926a881ca5e84592a34"

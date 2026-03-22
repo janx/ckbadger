@@ -1,0 +1,9 @@
+name = "R"
+symbol = "R"
+decimals = 4
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x4bb968c74064d714a3303efd9f96e228cca4f06ab39f247194d73cadccca6ab4"

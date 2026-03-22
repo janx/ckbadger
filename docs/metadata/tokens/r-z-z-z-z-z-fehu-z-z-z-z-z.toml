@@ -1,0 +1,9 @@
+name = "R-Z•Z•Z•Z•Z•FEHU•Z•Z•Z•Z•Z"
+symbol = "R-Z•Z•Z•Z•Z•FEHU•Z•Z•Z•Z•Z"
+decimals = 2
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x4910bcc3c526fa622f09ce2f46664e874efcd2d54c11a97ed61eba4d81ed3fb4"

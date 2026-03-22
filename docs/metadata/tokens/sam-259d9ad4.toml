@@ -1,0 +1,11 @@
+name = "Where's Sam?"
+symbol = "$SAM"
+decimals = 0
+standard = "xudt"
+icon = "logo.jpeg"
+description = "This token has been discontinued"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xeea32e04aa3ef56f59efa23ae12f8db88ac193470ca248bff370f95e725ec19a"

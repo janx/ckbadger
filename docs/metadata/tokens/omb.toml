@@ -1,0 +1,9 @@
+name = "Runes"
+symbol = "$omb"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xc6301302d19490e8d7a5e725c7b6cfc95af9d4d09904b224d91c125ec7db6024"

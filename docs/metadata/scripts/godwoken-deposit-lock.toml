@@ -1,0 +1,13 @@
+name = "Godwoken Deposit Lock"
+description = "A layer1 user can join the Rollup by creating a deposit cell."
+website = "https://github.com/godwokenrises/godwoken/tree/develop/gwos#deposit-lock"
+
+[[mainnet]]
+code_hash = "0xff602581f07667eef54232cce850cbca2c418b3418611c132fca849d1edcd775"
+data_hash = "0xf4a3b28cf0a7f4c67f9107f334db8ed5e54f6d390281712c42e3c45752a766ec"
+hash_type = "type"
+
+[[testnet]]
+code_hash = "0x50704b84ecb4c4b12b43c7acb260ddd69171c21b4c0ba15f3c469b7d143f6f18"
+data_hash = "0xf4a3b28cf0a7f4c67f9107f334db8ed5e54f6d390281712c42e3c45752a766ec"
+hash_type = "type"

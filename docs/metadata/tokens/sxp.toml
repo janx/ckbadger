@@ -1,0 +1,10 @@
+name = "SXP"
+symbol = "SXP"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/swipe-sxp-logo.svg?v=002"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xf49a7d57cd50907d28c0e2ae57b559165ce08aa0ff074fb3b277f6dc5eb285ee"

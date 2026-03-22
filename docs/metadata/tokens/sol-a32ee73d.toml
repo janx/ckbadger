@@ -1,0 +1,9 @@
+name = "SOLANA"
+symbol = "SOL++"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x7f0751c37f14c6c06e08b2d294525f73aff4187ffc0db6ba0b4c811c40bfd718"

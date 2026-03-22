@@ -1,0 +1,9 @@
+name = "dogs"
+symbol = "dogs"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x43687207e3d6c037f27384f92ae8becb539a31f61a5bd194dcc39421b231a950"

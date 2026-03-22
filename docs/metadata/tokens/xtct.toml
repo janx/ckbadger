@@ -1,0 +1,9 @@
+name = "XUDT Test C Token"
+symbol = "XTCT"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xdc35671458954c73a425a843a1eb0bcded0cbca239da7571b847ed6add074949"

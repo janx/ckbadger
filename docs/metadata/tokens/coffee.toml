@@ -1,0 +1,11 @@
+name = "Lay2 Coffee Token"
+symbol = "COFFEE"
+decimals = 0
+standard = "sudt"
+icon = "logo.png"
+description = "Lay2 Coffee Token (symbol is COFFEE), which could be exchanged Starbucks coffee coupons on Lay2 shop. Issued to celebrate the first anniversary of Lina, 1,116 tokens in total."
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x6e97feb7c3b16d9e87faeed7f3dc2d612fd9f541770efe999f931928d2ef846a"

@@ -1,0 +1,16 @@
+name = "DRAGON"
+symbol = "DRAGON"
+decimals = 8
+standard = "xudt"
+icon = "logo.png"
+description = "Dragon Coin. "
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x7dc5366303a50d59003770fb9193f2db76997d8b1833e44ac41d11a1be8e7785"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x0de8bf8958dd5fcda833ead2cc2827f3e60b8764b0807fd45c0de805f435a82d"

@@ -1,0 +1,9 @@
+name = "2"
+symbol = "2"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x3a76bff721d067357221a7e536aed48bf124faee589926e2427f1ee65e560215"

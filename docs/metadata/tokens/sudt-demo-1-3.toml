@@ -1,0 +1,10 @@
+name = "SUDT Demo 1/3"
+symbol = "SUDT Demo 1/3"
+decimals = 2
+standard = "sudt"
+description = "A new demo"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0xc4b8ef984b872b778438ce426d57313a11541f7d86d0655aad0eb0324c33a69f"

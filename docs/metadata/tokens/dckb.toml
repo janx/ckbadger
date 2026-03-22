@@ -1,0 +1,11 @@
+name = "dCKB"
+symbol = "dCKB"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+description = "dCKB is a token implemented by NexisDao for NervosDAO. After users deposit CKB in NervosDAO, they can mint the same amount of dCKB at the same time. In this way, there are both the fixed income of NervosDAO and the liquidity of dCKB, and dCKB can be traded freely."
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xe5451c05231e1df43e4b199b5d12dbed820dfbea2769943bb593f874526eeb55"

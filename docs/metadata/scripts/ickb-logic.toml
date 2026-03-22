@@ -1,0 +1,13 @@
+name = "iCKB Logic"
+description = "iCKB Logic tokenizes NervosDAO deposits into the iCKB xUDT token."
+website = "https://ickb.org/"
+
+[[mainnet]]
+code_hash = "0x2a8100ab5990fa055ab1b50891702e1e895c7bd1df6322cd725c1a6115873bd3"
+data_hash = "0x2a8100ab5990fa055ab1b50891702e1e895c7bd1df6322cd725c1a6115873bd3"
+hash_type = "data1"
+
+[[testnet]]
+code_hash = "0x2a8100ab5990fa055ab1b50891702e1e895c7bd1df6322cd725c1a6115873bd3"
+data_hash = "0x2a8100ab5990fa055ab1b50891702e1e895c7bd1df6322cd725c1a6115873bd3"
+hash_type = "data1"

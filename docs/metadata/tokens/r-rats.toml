@@ -1,0 +1,9 @@
+name = "R-rats"
+symbol = "R-rats"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xd0cc95d383b3d315e74b5e2f5d8b2583ec745a47c8dbac2edc99f137b53827c9"

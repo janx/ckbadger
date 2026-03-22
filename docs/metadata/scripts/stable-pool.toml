@@ -1,0 +1,6 @@
+name = "Stable++ Pool"
+
+[[mainnet]]
+code_hash = "0x26622198b66240e437e323e0fecf1c26ba3c8c28a45f03ed3ebb9f7f2bdc0055"
+data_hash = "0x9cf12a6d0977e9e4aeec138ce2eb5b5ffa4ba0a659f119d773690a66d7d3665e"
+hash_type = "type"

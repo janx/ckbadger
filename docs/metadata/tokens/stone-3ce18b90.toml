@@ -1,0 +1,9 @@
+name = "RGBStone"
+symbol = "STONE"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x21ee5e9b53839abc6633c2ad6a034ba8c22f745fdc1090966a626e9d11b3cd11"

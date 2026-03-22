@@ -1,0 +1,9 @@
+name = "RGBN Token"
+symbol = "RGBN"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x03cbf5fa4c13beb154ba85911e8b5d98dc6b8db0d18410846bc7266b7452da58"

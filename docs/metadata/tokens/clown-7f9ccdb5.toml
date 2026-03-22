@@ -1,0 +1,9 @@
+name = "Clown 你寄吧谁啊 @nomadland.io"
+symbol = "Clown"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x3a792221027f37249f2f4d439afd0ee9210faeca8b08f75c47c9e20d08d65ec3"

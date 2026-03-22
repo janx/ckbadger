@@ -1,0 +1,9 @@
+name = "c"
+symbol = "c"
+decimals = 0
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x7a33ecc0e0d8e7d845d4a2cda48e16ed7c3e53f33b62f83b216180946016ab4c"

@@ -1,0 +1,9 @@
+name = "Offspring"
+symbol = "FLY"
+decimals = 2
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x000a8f33804ae36faf894296382f58e11f2e10414b6618dd4d03f75dd4ad2b9d"

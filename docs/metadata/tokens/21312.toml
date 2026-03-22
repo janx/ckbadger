@@ -1,0 +1,9 @@
+name = "12311"
+symbol = "21312"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x5a8e4f828dcecf22b93ae87c0262fc755b526e43492da4cb728934cb2eeb5b4f"

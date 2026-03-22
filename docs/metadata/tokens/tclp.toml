@@ -1,0 +1,9 @@
+name = "TCLP"
+symbol = "TCLP"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x360c8d7ebf864e1e614435b75a9eb100a01cc7801d298cfafa44a31f8c2655ed"

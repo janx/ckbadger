@@ -1,0 +1,13 @@
+name = "Godwoken Stake Lock"
+description = "A block producer is required to provide a stake cell to perform the RollupSubmitBlock action."
+website = "https://github.com/godwokenrises/godwoken/tree/develop/gwos#stake-lock"
+
+[[mainnet]]
+code_hash = "0xb619184ab9142c51b0ee75f4e24bcec3d077eefe513115bad68836d06738fd2c"
+data_hash = "0x107f292ab7eeaaa9d412a2719f6a264985e90f935e557cf895f267909835e8a9"
+hash_type = "type"
+
+[[testnet]]
+code_hash = "0x7f5a09b8bd0e85bcf2ccad96411ccba2f289748a1c16900b0635c2ed9126f288"
+data_hash = "0x107f292ab7eeaaa9d412a2719f6a264985e90f935e557cf895f267909835e8a9"
+hash_type = "type"

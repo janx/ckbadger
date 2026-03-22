@@ -1,0 +1,11 @@
+name = "Gliaswap Test Token"
+symbol = "GLIA"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+description = "Glias dex test token"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x6fe3733cd9df22d05b8a70f7b505d0fb67fb58fb88693217135ff5079713e902"

@@ -1,0 +1,9 @@
+name = "J++"
+symbol = "JJ++"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x2a6f7fb98c6a52d8e442ced38f036f4b8f0678fa71d830da72bc48dc842fe1ae"

@@ -1,0 +1,10 @@
+name = "Wrapped BUSD (ForceBridge from BSC)"
+symbol = "BUSD|bsc"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/binance-usd-busd-logo.svg?v=002"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x69c215249102308356778d58259c91c0f1988f6f5b07aa614921ee1803ea0059"

@@ -1,0 +1,9 @@
+name = "Isomorphics RGB"
+symbol = "ISO++"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xe4d16f7a8b76baa81fa2d34d450f3c98a22371ec3ac42371e4cb11e2fbe4be1d"

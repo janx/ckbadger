@@ -1,0 +1,9 @@
+name = "Web2+Web3=Web5"
+symbol = "Web5"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x04637e56c48ec47cfdaa5d790734c328b60561f32f31805a59a301058802dd7e"

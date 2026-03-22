@@ -1,0 +1,12 @@
+name = "M-NFT Issuer"
+
+[[mainnet]]
+code_hash = "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81"
+data_hash = "0xb274adecfb9c1cc07838359fabff1956bbe202239e77961b84aa617758ec7337"
+hash_type = "type"
+deprecated = true
+
+[[testnet]]
+code_hash = "0xb59879b6ea6fff985223117fa499ce84f8cfb028c4ffdfdf5d3ec19e905a11ed"
+data_hash = "0x3af02bb0be50befa6bb0496442804c5418a1b0a10f415764b613b8c43ef87bbc"
+hash_type = "type"

@@ -1,0 +1,10 @@
+name = "TokenTT2_Rafa"
+symbol = "TT2"
+decimals = 8
+standard = "sudt"
+description = "Token de pruebas TT2"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0xe800105a756262d9b941ea7a5a43d17196d363ecbe451f5482d45e1091974a26"

@@ -1,0 +1,9 @@
+name = "NAIZI"
+symbol = "NAIZI"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xc3616274a5e00140e986be7e9040fa9bf0b21b4037c63201279c6045f33e86c6"

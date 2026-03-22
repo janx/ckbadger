@@ -1,0 +1,10 @@
+name = "UNI"
+symbol = "UNI"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/uniswap-uni-logo.svg?v=013"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xb52927f7f444eb178461d0fa8b62b67c4a043add18e36248c7e9734d8d077a7e"

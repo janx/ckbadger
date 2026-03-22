@@ -1,0 +1,9 @@
+name = "RGB++"
+symbol = "CKBs"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x1e7e6f4dc0f68e7065147e124ba7da3d932d11cc37e6b8d1ae25098b3b957473"

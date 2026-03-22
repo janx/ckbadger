@@ -1,0 +1,11 @@
+name = "laiwanba token"
+symbol = "LWB"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+description = "laiwanba token"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x606f186d1e6d5bc177c85b8ab8e9d9a7db24aa71d45f886fdd85ca1513d5030f"

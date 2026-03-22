@@ -1,0 +1,12 @@
+name = "Quantum-Resistant Lock"
+description = "Quantum resistant lock script on CKB, based on NIST FIPS 205 standard."
+
+[[mainnet]]
+code_hash = "0x302d35982f865ebcbedb9a9360e40530ed32adb8e10b42fbbe70d8312ff7cedf"
+data_hash = "0x49417a0ed39196e8d90d0088ca98bf6b881966ba1c2ea12160ca42141787565e"
+hash_type = "type"
+
+[[testnet]]
+code_hash = "0x147ecbb5c5127d982ee1362d2c2bb4267803da2eb006d150e88af6caaa0a7eaf"
+data_hash = "0x147ecbb5c5127d982ee1362d2c2bb4267803da2eb006d150e88af6caaa0a7eaf"
+hash_type = "data1"

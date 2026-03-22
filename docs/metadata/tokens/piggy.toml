@@ -1,0 +1,9 @@
+name = "piggy"
+symbol = "piggy"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xce0edac53316cb30c9fa6550011c5da344f2759c538b23e018b952aab3f58048"

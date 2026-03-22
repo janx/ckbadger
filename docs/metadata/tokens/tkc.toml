@@ -1,0 +1,11 @@
+name = "ckbtik"
+symbol = "tkc"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+description = "Token Ownr ETH"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0xebed21c4ef67134bc087b48fe68023fdfcc5c12b96c0969c4d485545a00580cf"

@@ -1,0 +1,9 @@
+name = "BitDubai"
+symbol = "DUBAI"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x80a1eebcaa487531240b546d680e7d5e3ed9640bdea4cc85c004b5176b888051"

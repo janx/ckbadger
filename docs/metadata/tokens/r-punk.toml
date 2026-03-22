@@ -1,0 +1,9 @@
+name = "R-punk"
+symbol = "R-punk"
+decimals = 18
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x99d585b611b41eb9ff5f98ba9161719b282fdd6d5e6b81aa2f8b4ca7367751f0"

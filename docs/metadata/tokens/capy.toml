@@ -1,0 +1,9 @@
+name = "Capybara"
+symbol = "Capy"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x27f6ba84d19f482782f83dc488233b648034d7aa250e338c652f57d592976d61"

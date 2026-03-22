@@ -1,0 +1,9 @@
+name = "MONEY"
+symbol = "MONEY"
+decimals = 18
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x5ea9b2ea17c220ecd28bcd80550216d5d4c5334845a7409ec0d7df7a3dfb5e04"

@@ -1,0 +1,9 @@
+name = "Moonbit Token"
+symbol = "MBT6"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x4b5022f3469ed451a62eb5c62830f975a41bc1885f3ccae5dfd6e74848a37b04"

@@ -1,0 +1,14 @@
+name = "RGBPP Test Token"
+symbol = "RTT"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xc718e23b88dfd0e5af7e456b5f39af12ee870435f632f6694e85f9e6b78fba26"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xb5f5f6958a26bfb76fd3d3bedb469dd45f58b315de2cde8d63780462c63eff47"

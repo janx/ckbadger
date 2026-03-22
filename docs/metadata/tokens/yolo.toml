@@ -1,0 +1,9 @@
+name = "YOYO"
+symbol = "YOLO"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x266bf444af7f65bd39ac4d3ca86f11d1ae0746fe2851ef50d4f6f82ab5091bb0"

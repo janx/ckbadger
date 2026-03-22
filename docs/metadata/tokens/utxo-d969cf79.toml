@@ -1,0 +1,9 @@
+name = "UTXO@nomadland.io"
+symbol = "UTXO"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x3f1069090a2a3afd40fe47276113c6f109306b962bf54a15702bf178e4d8973d"

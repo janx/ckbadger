@@ -1,0 +1,9 @@
+name = "RGBR"
+symbol = "RGBR"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x1c36a94dcc4c0e98206943b0bae40e242c816b70633863731eef5f605d9a5abd"

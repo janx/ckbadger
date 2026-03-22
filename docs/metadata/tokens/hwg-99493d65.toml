@@ -1,0 +1,9 @@
+name = "HWG"
+symbol = "HWG++"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x738d526d73d690c51e50d2b16cc0c0ad2f1745bab4f9388cded3975158661b2a"

@@ -1,0 +1,9 @@
+name = "R-MERL"
+symbol = "R-MERL"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xdce8882aded89bcec778e7d41b3abc82850d4fac2f9d312a6878da92ca4ea20f"

@@ -1,0 +1,9 @@
+name = "QL Test Token7"
+symbol = "QLT7"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x5f85a13c404c69dc7f0c1a35559d8c8bd6919e88f008d420a71acc25720d5a70"

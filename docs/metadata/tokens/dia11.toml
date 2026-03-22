@@ -1,0 +1,9 @@
+name = "MAMA"
+symbol = "DIA11"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xc39ac6f6c0c4d824052873ec1fcbbda6048f280b262f23901c53c34394a0fa44"

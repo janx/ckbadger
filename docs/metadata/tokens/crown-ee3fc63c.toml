@@ -1,0 +1,9 @@
+name = "crown"
+symbol = "crown"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xc1404a663f78ea8c60e3d2f8459220fcb6d660a7daf29919703e3f00174d9851"

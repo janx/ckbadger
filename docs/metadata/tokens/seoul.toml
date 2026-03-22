@@ -1,0 +1,9 @@
+name = "SEOUL"
+symbol = "SEOUL"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xfd87fd9fe3cd776bfe66f5c68e925e365f950a5715ebccbd7ea13b69d97d207d"

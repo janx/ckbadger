@@ -1,0 +1,9 @@
+name = "ttt"
+symbol = "20:10"
+decimals = 18
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x3222aa44fc6b8993b178204d7d170d9066ab2ee20b19690c950ca167916932bc"

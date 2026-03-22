@@ -1,0 +1,9 @@
+name = "NIUBI"
+symbol = "NBCKB"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xee342f342526777cabd9a68bfbe0b4930e10052f15d82ddc672fe2188711bf2a"

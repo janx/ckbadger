@@ -1,0 +1,10 @@
+name = "SuperNewToken"
+symbol = "SNB"
+decimals = 4
+standard = "sudt"
+icon = "logo.png"
+
+[testnet]
+code_hash = "0x48dbf59b4c7ee1547238021b4869bceedf4eea6b43772e5d66ef8865b6ae7212"
+hash_type = "data"
+args = "0x6e842ebb7d7fca88495c5f2edb05070198f6f8c798d7b8f1a48226f8f060c693"

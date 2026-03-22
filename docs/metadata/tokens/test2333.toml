@@ -1,0 +1,10 @@
+name = "test2333"
+symbol = "test2333"
+decimals = 18
+standard = "sudt"
+description = "sdfvasdfe"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0xacb39da00a7675a63c0feff9baeac151338394111cdf99fd406fac7bcbbf9bbc"

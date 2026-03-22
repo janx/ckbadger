@@ -1,0 +1,9 @@
+name = "Blue"
+symbol = "B"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x67d8ef47baa7d4719165d5796c10fd884197e5f123a3f486ac719e555e40d447"

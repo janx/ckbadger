@@ -1,0 +1,9 @@
+name = "Super CKB"
+symbol = "SC"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x23201b764fb61e0bf155cf62692adbf442f9b9f82feeed2b7cd969b985cf53a7"

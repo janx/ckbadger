@@ -1,0 +1,9 @@
+name = "ATOM_ARC20_LeapX"
+symbol = "ATOM"
+decimals = 0
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x8b0b99092b4f64d186696e98439f4c30a6106cd85fd4678ac8bab0dfd9a12f6b"

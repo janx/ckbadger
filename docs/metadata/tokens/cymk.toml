@@ -1,0 +1,9 @@
+name = "Cyan-Yellow-Magenta-blacK"
+symbol = "CYMK"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x282671a611cf9ee27ac3d42f6d130e3f7f48f75aae252b99cf8da42af8f3fdf3"

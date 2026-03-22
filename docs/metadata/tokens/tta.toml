@@ -1,0 +1,9 @@
+name = "TTA_Name"
+symbol = "TTA"
+decimals = 0
+standard = "sudt"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x81b6427f13e8302cbbcc4d663d6a8730381c718eb8a4a81740063dee6f3e533a"

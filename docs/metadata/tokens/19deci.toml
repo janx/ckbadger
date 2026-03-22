@@ -1,0 +1,9 @@
+name = "18Deci"
+symbol = "19Deci"
+decimals = 18
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xbec40525fc34f459f0144ec491c2bf8d5fde06a2b09426bece3ed704252096af"

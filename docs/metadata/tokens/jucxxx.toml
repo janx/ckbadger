@@ -1,0 +1,9 @@
+name = "JUCXX Token"
+symbol = "JUCXXX"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x5aae1461acf6de72e9ac6afe44589d8452f8c2b5d99458a883534af66b8b5547"

@@ -1,0 +1,11 @@
+name = "Paxos Standard (Bridged)"
+symbol = "CPAX"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+description = "PAX is a digital dollar. Like other crypto assets, it can move instantaneously, anywhere in the world, any time of any day, and it’s programmable. Unlike other crypto assets, PAX is stable. It is backed 1:1 for the dollar and it’s issued by the Paxos Trust Company, so the funds are carefully protected, audited and regulated.  CKB-PAX is backed 1:1 with the official ETH-PAX, endorsed by Bitpie."
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xa92deeb134132d493d340f2cc4e7b62f930bcd037f0fb7f06b48f931f36f9fc2"

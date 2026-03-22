@@ -1,0 +1,9 @@
+name = "QUARK_ARC20_LeapX"
+symbol = "QUARK"
+decimals = 0
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x5ff9bf46aba21a0c76e2b77436d5eda772d71ec8a1fd7b2c9401e697eaac20c6"

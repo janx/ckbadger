@@ -1,0 +1,10 @@
+name = "ckUSDT-Test"
+symbol = "ckUSDT-Test"
+decimals = 6
+standard = "sudt"
+icon = "logo.png"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x3488f0e6ba1e573fd0a315b13dcd5e58755dfddbc44d0f601b34ba56f249e47f"

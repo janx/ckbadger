@@ -1,0 +1,9 @@
+name = "RGB++12345"
+symbol = "RGB12"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x767c736010b49e17dca11500194aea213731289515c5dd851025bcb4fa2f9dc4"

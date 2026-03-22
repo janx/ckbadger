@@ -1,0 +1,9 @@
+name = "fujitang"
+symbol = "fuji"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xc57b6555cdc9133fb53674a756e26c5b9c3946eaef9a4d107745b74304f815bd"

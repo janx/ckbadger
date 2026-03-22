@@ -1,0 +1,10 @@
+name = "DDL test token"
+symbol = "DDL"
+decimals = 8
+standard = "sudt"
+description = "DDL"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x9961b21d7bff8617f8f28724ea2b19486e8401d8c8517b836c56ea31259a0105"

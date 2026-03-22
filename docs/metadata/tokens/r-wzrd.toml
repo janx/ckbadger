@@ -1,0 +1,9 @@
+name = "R-wzrd"
+symbol = "R-wzrd"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xe8047720bf4701f28460d7826894b5b7883e1f2fa9effbc54ef763816a94c8df"

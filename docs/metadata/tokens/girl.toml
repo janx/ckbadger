@@ -1,0 +1,11 @@
+name = "Girl"
+symbol = "Girl"
+decimals = 8
+standard = "xudt"
+icon = "logo.png"
+description = "Crypto is not just boy’s club, The more $Girl users there are, the more popular crypto becomes."
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xc750bcf7e97690994a05a00832a3a17d35740abe302371530ca91f9c866a721f"

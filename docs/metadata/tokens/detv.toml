@@ -1,0 +1,9 @@
+name = "DETV"
+symbol = "DETV"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x52241233ec657a23731190ebc9d4161f16ddc596f12dcf76535f3a94342431cc"

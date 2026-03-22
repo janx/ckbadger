@@ -1,0 +1,9 @@
+name = "NDX Token"
+symbol = "NDX"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x68d5fe3394a6888a96e4e9e3b04f2fa7f0a2e5f717e59c36d3119a6471c93a1c03"

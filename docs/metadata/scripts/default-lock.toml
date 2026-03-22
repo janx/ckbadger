@@ -1,0 +1,12 @@
+name = "Default Lock"
+description = "SECP256K1/blake160 is the default lock script to verify CKB transaction signature."
+
+[[mainnet]]
+code_hash = "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+data_hash = "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649"
+hash_type = "type"
+
+[[testnet]]
+code_hash = "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+data_hash = "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649"
+hash_type = "type"

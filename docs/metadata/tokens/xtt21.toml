@@ -1,0 +1,10 @@
+name = "XUDT Test Token21"
+symbol = "XTT21"
+decimals = 8
+standard = "xudt"
+icon = "logo.png"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x556f5aaff56a316c64e42e93259e734f82d96dc3639ae061cb456e93d285f1d621"

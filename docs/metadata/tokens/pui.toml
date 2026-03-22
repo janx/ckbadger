@@ -1,0 +1,10 @@
+name = "Puipui"
+symbol = "pui"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x23dfc4f9a696ecb1e9ac2052a218cf90d75692c136404df23674b575c6dc0e5d"

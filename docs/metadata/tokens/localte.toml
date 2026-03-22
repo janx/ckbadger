@@ -1,0 +1,9 @@
+name = "LOCALTE"
+symbol = "LOCALTE"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x68a14ca066720f460b5f554c8f3f90b222df16bf7e7e0ad2ce2aa2c667553d11"

@@ -1,0 +1,9 @@
+name = "TT8_Name"
+symbol = "TT8"
+decimals = 0
+standard = "sudt"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x9d2dab815b9158b2344827749d769fd66e2d3ebdfca32e5628ba0454651851f5"

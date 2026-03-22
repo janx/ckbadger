@@ -1,0 +1,9 @@
+name = "C Test Token"
+symbol = "CT--"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x1a0f0f2a6e166b8e313d379c61a8bedd2301e89bc3a95c3d30e742eccfe70433"

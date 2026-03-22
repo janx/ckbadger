@@ -1,0 +1,9 @@
+name = "Kumamon"
+symbol = "KUMA"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x3078f291ee70c4bae8825c35c56de454d3c879c8d3220e81839d6e921ca4b2bc"

@@ -1,0 +1,9 @@
+name = "-OvO-"
+symbol = "-OvO-"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x16f10e5337adfae7ec7ff6fe689a5a7844ee0f30bb9246942b24d8a9db4b81ae"

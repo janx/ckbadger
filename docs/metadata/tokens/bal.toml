@@ -1,0 +1,10 @@
+name = "BAL"
+symbol = "BAL"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/balancer-bal-logo.svg?v=013"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xcce6d0ac83d2491f8b8bd3875f3577b9e77f08a0396cd2e9274f339eb76e08a4"

@@ -1,0 +1,9 @@
+name = "CKBTC++  without c"
+symbol = "+KBT+"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x69cc2cd622419cac841cea56b7dfa0e8c587140c20d0fe7988a955235553e8a5"

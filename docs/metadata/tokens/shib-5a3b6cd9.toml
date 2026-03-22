@@ -1,0 +1,9 @@
+name = "SHIB"
+symbol = "SHIB"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xc2af4a0dcaac50773f3dc68264160f44993bf0eb9698227f00ff1c5e9ae5b5c2"

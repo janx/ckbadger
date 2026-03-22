@@ -1,0 +1,9 @@
+name = "GDUF"
+symbol = "GDUF"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xdd33c6702730d7e1dfa3411c5e563f732faf7b73ff6a94c033a52cfd48ef6504"

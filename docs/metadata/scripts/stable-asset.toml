@@ -1,0 +1,13 @@
+name = "Stable++ Asset"
+website = "https://www.stablepp.xyz/stablecoin"
+category = "udt"
+
+[[mainnet]]
+code_hash = "0x26a33e0815888a4a0614a0b7d09fa951e0993ff21e55905510104a0b1312032b"
+data_hash = "0xec32ad0c478ab011f9d089a900f3d06c91338a1954e45d9d8152c74859f99945"
+hash_type = "type"
+
+[[testnet]]
+code_hash = "0x1142755a044bf2ee358cba9f2da187ce928c91cd4dc8692ded0337efa677d21a"
+data_hash = "0x94a0675388999ac5eaa7d1b7497fd989f712d2c15a021e61c5848ec4f5e999cf"
+hash_type = "type"

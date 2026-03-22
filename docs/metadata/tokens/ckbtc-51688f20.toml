@@ -1,0 +1,9 @@
+name = "ckbtc"
+symbol = "ckbtc"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xd736bf37e6acaee7d6749f72873cf3d4ee8c90ab6c57e3885e18314d8fca65c3"

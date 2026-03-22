@@ -1,0 +1,9 @@
+name = "DETH"
+symbol = "DETH"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xb669c2c0b7b74ee27616e1a32cf17a44e8657ac6b2d0fede183d61e2981af221"

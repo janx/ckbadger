@@ -1,0 +1,11 @@
+name = "Wrapped CKB"
+symbol = "wCKB"
+decimals = 8
+standard = "xudt_compatible"
+icon = "logo.svg"
+description = "A wrapped CKB"
+
+[mainnet]
+code_hash = "0x42a0b2aacc836c0fc2bbd421a9020de42b8411584190f30be547fdf54214acc3"
+hash_type = "type"
+args = "0x"

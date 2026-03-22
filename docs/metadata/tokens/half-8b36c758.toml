@@ -1,0 +1,9 @@
+name = "Hal Finney"
+symbol = "HALF"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xb24fd72c07e3ab49ad2aed3ca36eb299167f588438541c49c64d31471d9dbab6"

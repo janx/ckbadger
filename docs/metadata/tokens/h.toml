@@ -1,0 +1,9 @@
+name = "H"
+symbol = "H"
+decimals = 4
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x19664e42e83d84e546550993f48a15a3e1b908d3bdabdea3af6253a6352dcda1"

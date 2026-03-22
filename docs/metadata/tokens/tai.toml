@@ -1,0 +1,11 @@
+name = "TAI"
+symbol = "TAI"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+description = "Backed by excess collateral on-chain, Tai is soft-pegged to US Dollar, i.e. 1 Dai = 1 USD."
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x08430183dda1cbd81912c4762a3006a59e2291d5bd43b48bb7fa7544cace9e4a"

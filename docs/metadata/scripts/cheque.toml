@@ -1,0 +1,11 @@
+name = "CHEQUE"
+
+[[mainnet]]
+code_hash = "0xe4d4ecc6e5f9a059bf2f7a82cca292083aebc0c421566a52484fe2ec51a9fb0c"
+data_hash = "0x28f25f0e9dc4ca642b8055ab17b21d38e4d9a4d2e95a18201e7515699ba35ec1"
+hash_type = "type"
+
+[[testnet]]
+code_hash = "0x60d5f39efce409c587cb9ea359cefdead650ca128f0bd9cb3855348f98c70d5b"
+data_hash = "0xbe734faa9ead3cfeef2efba92de6b6bdb5b0cadb6cd36c896081e8cab18e79b9"
+hash_type = "type"

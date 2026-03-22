@@ -1,0 +1,9 @@
+name = "NevDEX Token"
+symbol = "NDX"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xdf559b06fcd5eb5c7e8448f15713116de58a4ac751abb1cdd97f19c59178ad69"

@@ -1,0 +1,16 @@
+name = "iCKB"
+symbol = "iCKB"
+decimals = 8
+standard = "xudt"
+icon = "logo.png"
+description = "The iCKB token is a liquid representation of deposits in the iCKB protocol that allows for fast withdrawals while maintaining the benefits of traditional NervosDAO deposits without the need for re-staking"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xb73b6ab39d79390c6de90a09c96b290c331baf1798ed6f97aed02590929734e800000080"
+
+[testnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xb73b6ab39d79390c6de90a09c96b290c331baf1798ed6f97aed02590929734e800000080"

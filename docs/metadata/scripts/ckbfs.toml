@@ -1,0 +1,28 @@
+name = "CKBFS"
+description = "CKBFS is a protocol designed to describe a witnesses based file storage system."
+website = "https://talk.nervos.org/t/ckbfs-protocol-a-standard-for-witnesses-based-content-storage-system/8342"
+category = "ckbfs"
+
+[[mainnet]]
+code_hash = "0x31e6376287d223b8c0410d562fb422f04d1d617b2947596a14c3d2efb7218d3a"
+data_hash = "0x31e6376287d223b8c0410d562fb422f04d1d617b2947596a14c3d2efb7218d3a"
+hash_type = "data1"
+tag = "v2"
+
+[[mainnet]]
+code_hash = "0xb5d13ffe0547c78021c01fe24dce2e959a1ed8edbca3cb93dd2e9f57fb56d695"
+data_hash = "0xb5d13ffe0547c78021c01fe24dce2e959a1ed8edbca3cb93dd2e9f57fb56d695"
+hash_type = "data1"
+tag = "v3"
+
+[[testnet]]
+code_hash = "0x31e6376287d223b8c0410d562fb422f04d1d617b2947596a14c3d2efb7218d3a"
+data_hash = "0x31e6376287d223b8c0410d562fb422f04d1d617b2947596a14c3d2efb7218d3a"
+hash_type = "data1"
+tag = "v2"
+
+[[testnet]]
+code_hash = "0xb5d13ffe0547c78021c01fe24dce2e959a1ed8edbca3cb93dd2e9f57fb56d695"
+data_hash = "0xb5d13ffe0547c78021c01fe24dce2e959a1ed8edbca3cb93dd2e9f57fb56d695"
+hash_type = "data1"
+tag = "v3"

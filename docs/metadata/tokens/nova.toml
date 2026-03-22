@@ -1,0 +1,9 @@
+name = "Nova"
+symbol = "NOVA"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x45df8a3400df3abc6a83cf84bf61328152d610ce67e17399f8fa51bd9f604095"

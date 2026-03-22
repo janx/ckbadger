@@ -1,0 +1,12 @@
+name = "TypeBurnLock"
+description = "Unlocks when a specific type script is burned (appears in inputs but not outputs)."
+
+[[mainnet]]
+code_hash = "0xff78bae0abf17d7a404c0be0f9ad9c9185b3f88dcc60403453d5ba8e1f22f53a"
+data_hash = "0xff78bae0abf17d7a404c0be0f9ad9c9185b3f88dcc60403453d5ba8e1f22f53a"
+hash_type = "data1"
+
+[[testnet]]
+code_hash = "0xff78bae0abf17d7a404c0be0f9ad9c9185b3f88dcc60403453d5ba8e1f22f53a"
+data_hash = "0xff78bae0abf17d7a404c0be0f9ad9c9185b3f88dcc60403453d5ba8e1f22f53a"
+hash_type = "data1"

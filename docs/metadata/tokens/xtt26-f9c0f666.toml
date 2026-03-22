@@ -1,0 +1,9 @@
+name = "XTT26"
+symbol = "XTT26"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x44b83bbd8ae0dfa9dac0cdc29160e0eff1673b8d5a68f5a7507114cff4c1c696"

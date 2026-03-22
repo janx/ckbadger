@@ -1,0 +1,9 @@
+name = "Cosmic Dust"
+symbol = "DUST"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xac03c4969575e5c7bdedd3240d3af39aac4a3fa9e6a84b6f7f5d643656a6198d"

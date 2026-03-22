@@ -1,0 +1,10 @@
+name = "BAND"
+symbol = "BAND"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/band-protocol-band-logo.svg?v=013"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xf7d2b6a5e6c9ec564ce11e30e845d7e4ed9fd873eb3a426e9991d4a780d7c35b"

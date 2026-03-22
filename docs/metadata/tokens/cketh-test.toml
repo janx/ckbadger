@@ -1,0 +1,10 @@
+name = "ckETH-Test"
+symbol = "ckETH-Test"
+decimals = 18
+standard = "sudt"
+icon = "logo.png"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x0667f56ee96bc20f5fc67cd1476c9bd9aa8f04f2154fa280ba04f7e603870e64"

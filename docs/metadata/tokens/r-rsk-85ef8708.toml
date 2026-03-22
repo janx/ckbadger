@@ -1,0 +1,9 @@
+name = "R-RSK "
+symbol = "R-RSK "
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x053e9dbebc0de2e7aacb4c67980bb6d056f153068f0d7d84a5ce3dfadd1bcd4c"

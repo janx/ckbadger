@@ -1,0 +1,10 @@
+name = "Wrapped ADA (ForceBridge from BSC)"
+symbol = "ADA|bsc"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/cardano-ada-logo.svg?v=002"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x0353c4ffdcbda18f934a95341575781f3aaf7b68d35151997ff0967cfa0b9866"

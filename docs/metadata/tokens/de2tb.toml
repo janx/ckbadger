@@ -1,0 +1,9 @@
+name = "DE2TB"
+symbol = "DE2TB"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xc29e5ad965eb91549ccd0c71ba1081064b585eff1ace7b008b37365b7c87984b"

@@ -1,0 +1,10 @@
+name = "Name_TT7"
+symbol = "TT7"
+decimals = 3
+standard = "sudt"
+description = "Description_TT7"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0xd0f6795654aef2574e7fdeaa45735d97d709a035a61cf64aaf0b0e86cbbf32ec"

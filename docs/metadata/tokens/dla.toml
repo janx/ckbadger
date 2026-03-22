@@ -1,0 +1,9 @@
+name = "DLA"
+symbol = "DLA"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xf3207021701d31e08d3f45d195d9ba98b46f9c93bf6d335c24e89d88908eac3b"

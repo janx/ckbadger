@@ -1,0 +1,9 @@
+name = "HEYHEY3 Token"
+symbol = "OKOK3"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xbe38ea657919bdfafd3893c6871e17e17ada3d8ba8a1a63df12b28a6a48cba67"

@@ -1,0 +1,10 @@
+name = "txr"
+symbol = "txr"
+decimals = 3
+standard = "sudt"
+description = "xrb"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0xcd26c63b9beed42fa3f660c613efb3b101048a5689db93f21f17da245f78a1a8"

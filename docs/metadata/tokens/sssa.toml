@@ -1,0 +1,9 @@
+name = "SYM"
+symbol = "sssa"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x874e27eed884233f151cdb2f6057d110bb6663217834ff0ef99ce4da1765a1c8"

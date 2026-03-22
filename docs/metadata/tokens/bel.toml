@@ -1,0 +1,10 @@
+name = "BEL"
+symbol = "BEL"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/belacoin-bela-logo.svg?v=013"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xbceed8fd2b30c9e246035890196fed4218e5bff472786f74c19d9b156607070b"

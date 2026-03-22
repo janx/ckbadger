@@ -1,0 +1,9 @@
+name = "MEME"
+symbol = "ME++"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xa20a2e8725ab9d6fa56a70de182016b62b35f5bd3fb436aa3ebbf17297d7d713"

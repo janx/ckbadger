@@ -1,0 +1,11 @@
+name = "CXUDT"
+symbol = "CXUDT"
+decimals = 18
+standard = "xudt"
+icon = "logo.jpeg"
+description = "1234"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x277f239329fd6f81b30a97e23a1d25cac8ac696bf5b522a37bd9f1e256e51a70"

@@ -1,0 +1,16 @@
+name = "SAM"
+symbol = "SAM"
+decimals = 8
+standard = "xudt"
+icon = "logo.png"
+description = "SAM Token: A meme token inspired by the mysterious disappearance of the Findora Fractal CEO, $SAM symbolizes overpromised dreams and vanishing acts. Playfully elusive, just like its namesake."
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xe9fff91e16a5cf0e2073dffe0372034197e961c3fcda88dbd641a5f107f98727"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x95f97ebadf397b113bd57923d63b057298c584f87ac29797fa1859c72ba74e7e"

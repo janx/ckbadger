@@ -1,0 +1,9 @@
+name = "BTD"
+symbol = "BTD"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x942b756227c344151bdba4c6871dfb8230f77fd491e81b11cce604f701a5196b"

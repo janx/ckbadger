@@ -1,0 +1,9 @@
+name = "E god 5"
+symbol = "E555"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x2bbaf9632cf26e9b68044d06b2f31f1a0840531f006fdbd9d185afe240975efe"

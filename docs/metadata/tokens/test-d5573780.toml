@@ -1,0 +1,9 @@
+name = "TEST_Jump"
+symbol = "TEST"
+decimals = 18
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xa5c9d316aee482d5762b2cd84ca9c04f94fef1eaeb0f15594ef2d3a14379600a"

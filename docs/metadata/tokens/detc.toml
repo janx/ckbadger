@@ -1,0 +1,9 @@
+name = "DETC"
+symbol = "DETC"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x00b7c4660732aec8f57b78b12655d3b0a810609fa0faad751a76d8ad04e49b5e"

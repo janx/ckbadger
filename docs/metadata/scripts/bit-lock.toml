@@ -1,0 +1,8 @@
+name = ".bit Lock"
+description = "Unified DID, access from anywhere, use it everywhere."
+website = "https://d.id/id-protocol/bit"
+
+[[mainnet]]
+code_hash = "0x9376c3b5811942960a846691e16e477cf43d7c7fa654067c9948dfcd09a32137"
+data_hash = "0x1e78d78de1b8e1c0ad45459a1caddf2c27dde8a3399d2736bd148e3d9d9e9200"
+hash_type = "type"

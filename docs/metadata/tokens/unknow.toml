@@ -1,0 +1,9 @@
+name = "UNKNOW"
+symbol = "UNKNOW"
+decimals = 1
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x7d32fd5a3dfef58e49ed2dbb5f1dde71afae0728b4c69193dc3a92b56590f36f"

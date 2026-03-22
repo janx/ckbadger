@@ -1,0 +1,9 @@
+name = "Poi"
+symbol = "IOP2"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x3cfa96e7e007127395ef7cbac2f1079b768e4a5ae376d4dbc935f27569aa2838"

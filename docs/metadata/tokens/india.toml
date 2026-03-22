@@ -1,0 +1,9 @@
+name = "INDIA"
+symbol = "INDIA"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x6f00a7f594945d332e04664f66e0dd175aff1020c22a62faa1753631360ef60b"

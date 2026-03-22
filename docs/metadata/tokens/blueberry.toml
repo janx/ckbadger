@@ -1,0 +1,9 @@
+name = "BLUEBERRY"
+symbol = "BLUEBERRY"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x230c3e352b648496ba12a9da19b4aab290ce6a85f59ac6b440f44ce1979431f3"

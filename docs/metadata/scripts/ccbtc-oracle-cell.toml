@@ -1,0 +1,7 @@
+name = "ccBTC Oracle Cell"
+description = "Oracle price cell type script carrying ccBTC and CKB feeds."
+
+[[mainnet]]
+code_hash = "0x92156e93acbad7b1ac26c6364efed9bdd5a4f866cecfdf6217e2ea4374f325f0"
+data_hash = "0x0b4a6b4bc17e0ed1e3537770eed2cabdd8dd476493251b0d0fbe27b8e5b5c9b8"
+hash_type = "type"

@@ -1,0 +1,9 @@
+name = "12345"
+symbol = "12345"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x04e16e426a292bf0efa417cd9d5afc191bc8a86c15dbd85cc0f49b57370d93fa"

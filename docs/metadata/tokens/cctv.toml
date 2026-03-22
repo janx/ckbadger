@@ -1,0 +1,14 @@
+name = "CCTV"
+symbol = "CCTV"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x26a760e83a6e66a8769ae5ea073b79e48e9132ca4941aaa9279d6b3b4aab6968"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xee73e3ec9b4b5925edcff1c216e421181b4b319d67925a0b093d4f26843dbb39"

@@ -1,0 +1,9 @@
+name = "DDyR4"
+symbol = "DDyR4"
+decimals = 6
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xd1f2ea92fef6a444cd95c90a3e37042a1896a9279c42b44892867b1d578b540d"

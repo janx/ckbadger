@@ -1,0 +1,9 @@
+name = "我是耐心漢人博主之日更創作的第1天 1.aaa.com"
+symbol = "我是耐心漢人博主之日更創作的第1天 1.aaa.com"
+decimals = 0
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x07a2e644ff9f56dde1ff22110bd99155d837dcc1666d47a25eed0774849d443d"

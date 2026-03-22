@@ -1,0 +1,9 @@
+name = "DETAA"
+symbol = "DETAA"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x40ae7ba851a3f08ee3597f13a177026b44c302b5898232cf469646e170d0714c"

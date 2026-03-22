@@ -1,0 +1,9 @@
+name = "zuka"
+symbol = "ZU"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x51d0e633ebe4baa44030c43b5a439baf544e6e5fe59c112a6a973eedb5ebf9cd"

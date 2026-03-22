@@ -1,0 +1,14 @@
+name = "A"
+symbol = "A"
+decimals = 4
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xccf3c59d3c6c6072c0162304d921a95c3c2c96fbbe5f23e7099cb4e627a692b6"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xae175fe7588e791ee2a608fc7eb09234f57eae1adb099a1442e64d6cb733b2b5"

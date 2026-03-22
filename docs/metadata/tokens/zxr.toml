@@ -1,0 +1,10 @@
+name = "zxr"
+symbol = "zxr"
+decimals = 0
+standard = "sudt"
+description = "xxxx"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x7d8f838203a42ecad21ea1a7d1574c4e4a86a3564be8fafd20d4b3b4af059412"

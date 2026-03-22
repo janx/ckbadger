@@ -1,0 +1,9 @@
+name = "LXLXLXLXLX"
+symbol = "LXXX"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x6535cce73cac56314982f737043a0504da0acc24fa59ebf993db19d5d0f6c1ef"

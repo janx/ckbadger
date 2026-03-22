@@ -1,0 +1,9 @@
+name = "Test HH"
+symbol = "TestH"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x5395e6cda07f5ea9ed792dce6eac065dd33c6b41f4780af90027ab59bc1f9fa6"

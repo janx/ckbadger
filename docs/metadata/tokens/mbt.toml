@@ -1,0 +1,10 @@
+name = "MrBox Token"
+symbol = "MBT"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x49c3aae242fa88cc28e2493426779178dd4c3dc8d726c53be45774954aedfb9e"

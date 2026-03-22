@@ -1,0 +1,9 @@
+name = "TestCoinToken"
+symbol = "TCT"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x6568179030b346c2ba5a102a5efc70a89a8447f3f856945607df295bcf35e0bd"

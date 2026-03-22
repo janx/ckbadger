@@ -1,0 +1,9 @@
+name = "name"
+symbol = "UDT"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xa51f0a9e23d058943973af17aaae8590cf486359c76bd10868a8bffa27ae6f49"

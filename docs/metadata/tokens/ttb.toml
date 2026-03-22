@@ -1,0 +1,10 @@
+name = "TTB_Name"
+symbol = "TTB"
+decimals = 0
+standard = "sudt"
+description = "Description_TTB"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0xe263291016616d0c274fe920e3c15a9d190a7dd7b3470ffafa185b970c3c485b"

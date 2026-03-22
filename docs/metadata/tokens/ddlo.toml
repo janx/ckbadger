@@ -1,0 +1,10 @@
+name = "DDLO"
+symbol = "DDLO"
+decimals = 6
+standard = "xudt"
+description = "zjcaee"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x5a4df40a0573079ae70559b06c68ed024654553ce19d4276d8079085f500ae61"

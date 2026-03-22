@@ -1,0 +1,9 @@
+name = "MSTR"
+symbol = "MSTR"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xa40a4abe34915f6c2436553fb949ad7d125123fb87ead79235ce34550e8bb3e2"

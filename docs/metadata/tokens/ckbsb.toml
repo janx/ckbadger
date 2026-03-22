@@ -1,0 +1,9 @@
+name = "Cipher is an arrogant SB"
+symbol = "CKBSB"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xe164f9d23e450d815c639d0699121bb3ae3e8b10863a006ee93f8e76c2fe5694"

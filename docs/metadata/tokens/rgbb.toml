@@ -1,0 +1,9 @@
+name = "RGBB+"
+symbol = "RGBB+"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xe8ebb75b84c6c199e9e952e3c4251e744f51270b2e7d304bd39d3fd079696c40"

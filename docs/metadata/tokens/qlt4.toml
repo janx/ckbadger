@@ -1,0 +1,9 @@
+name = "QL Test Token4"
+symbol = "QLT4"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x554740d8dcbaa0718d44c3fe3bdbae66b0c5e155186b842d2a558a2fd8c4251c"

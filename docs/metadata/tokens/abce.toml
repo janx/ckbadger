@@ -1,0 +1,9 @@
+name = "dbca"
+symbol = "abce"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x43526120e3bbe8b4d0461ec5f22bf3a6140a47a8dfb41fec5412cd78e0806915"

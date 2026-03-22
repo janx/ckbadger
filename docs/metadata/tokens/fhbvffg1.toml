@@ -1,0 +1,9 @@
+name = "fhbvffg1"
+symbol = "fhbvffg1"
+decimals = 0
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xa95e0c0acd6b31cc15a9f163917e6ebb8d8d98b58a88e8d24ded53b7143cd828"

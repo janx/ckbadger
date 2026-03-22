@@ -1,0 +1,14 @@
+name = "did:ckb"
+description = "Decentralized Identifier (DID) method specification that utilizes the Nervos CKB (Common Knowledge Base) blockchain for creating, updating, and deactivating DIDs."
+website = "https://web5.fans"
+category = "web5-did"
+
+[[mainnet]]
+code_hash = "0x4a06164dc34dccade5afe3e847a97b6db743e79f5477fa3295acf02849c5984a"
+data_hash = "0x079bb8c1dfb249f60d932f4b1a60fa5cb2a36af3653ac09464f262e2f3f682a9"
+hash_type = "type"
+
+[[testnet]]
+code_hash = "0x510150477b10d6ab551a509b71265f3164e9fd4137fcb5a4322f49f03092c7c5"
+data_hash = "0x079bb8c1dfb249f60d932f4b1a60fa5cb2a36af3653ac09464f262e2f3f682a9"
+hash_type = "type"

@@ -1,0 +1,14 @@
+name = "COTA Registry"
+description = "A Compact Token Aggregator Standard for Extremely Low Cost NFTs and FTs"
+website = "https://www.cotadev.io/"
+
+[[mainnet]]
+code_hash = "0x90ca618be6c15f5857d3cbd09f9f24ca6770af047ba9ee70989ec3b229419ac7"
+data_hash = "0x63d7d30b877bbe94692825e0ba587a44ac3a404655b5191110ac0cdee598aa7e"
+hash_type = "type"
+deprecated = true
+
+[[testnet]]
+code_hash = "0x9302db6cc1344b81a5efee06962abcb40427ecfcbe69d471b01b2658ed948075"
+data_hash = "0x07f7a67b58ab7ffef08fd0d33fd6f0a1286081486963ac6181f21802949f0b4f"
+hash_type = "type"

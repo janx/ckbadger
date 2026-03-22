@@ -1,0 +1,9 @@
+name = "DNA (RGB++)"
+symbol = "DNA"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x9b4db5321f0feb8eb33a2cb4721626d65eea5950c8a438a20425b677e4d52d73"

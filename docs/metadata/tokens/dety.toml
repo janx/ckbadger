@@ -1,0 +1,9 @@
+name = "DETY"
+symbol = "DETY"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xb1b9a207eee2db10a09bcbd2a436e9fc9cdfce00467df3d0c569e1a23c8410d4"

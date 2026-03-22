@@ -1,0 +1,9 @@
+name = "fuffhbg"
+symbol = "fuffhbg"
+decimals = 12
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x3a5fb1970d7f94277432edcd603f92aaf1cda045d49710f331cd33909d211651"

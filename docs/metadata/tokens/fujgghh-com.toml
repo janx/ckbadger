@@ -1,0 +1,9 @@
+name = "fujgghh.com"
+symbol = "fujgghh.com"
+decimals = 3
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x82608231ca68ab2b414ec18c5716f3edf7eecc30e85a68bc69cc222e3d4bcaff"

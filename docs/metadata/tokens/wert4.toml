@@ -1,0 +1,9 @@
+name = "WERT4"
+symbol = "WERT4"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x2781f848d34dcebb864e5ea0801aea6f65654cf8d7126e619e8b3d12f6fd24b0"

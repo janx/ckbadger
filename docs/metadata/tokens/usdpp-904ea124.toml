@@ -1,0 +1,9 @@
+name = "USDPP"
+symbol = "USDPP"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x858b05c0a193d5df6abdcf5a22c82cbdc7e2a084b0698f3cd65e2020327858d0"

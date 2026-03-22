@@ -1,0 +1,9 @@
+name = "LPTC"
+symbol = "LPTC"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x110c4ca81e1e45fcd29ef9fdf4d55e8fd65fa41405a61e3faadad3b6e6ca197b"

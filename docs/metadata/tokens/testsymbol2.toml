@@ -1,0 +1,9 @@
+name = "TestName2"
+symbol = "TestSymbol2"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x086a02ccfa584494f50a35742f784e4673f2daaa39aa3eaf9124a75f403deeeb00000000000000010000"

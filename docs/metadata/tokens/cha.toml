@@ -1,0 +1,10 @@
+name = "The Charlie Show"
+symbol = "CHA"
+decimals = 6
+standard = "xudt"
+icon = "logo.jpeg"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xdc2ff3f0782ad23fe33d87eef6daa25b42af418fcb0b6b7f1b5ce4aa6d648327"

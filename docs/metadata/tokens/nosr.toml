@@ -1,0 +1,9 @@
+name = "nosr"
+symbol = "nosr"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x01a7e1f8d126407938f73d5bfaea7356b576c3921a61474b43b09906062b663f"

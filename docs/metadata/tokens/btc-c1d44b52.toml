@@ -1,0 +1,9 @@
+name = "BTC"
+symbol = "BTC"
+decimals = 0
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x54aa0ca2fc1c0c51a71e6f7cc3b3c1a541bf02278a0ecb9d88d51989b07739d2"

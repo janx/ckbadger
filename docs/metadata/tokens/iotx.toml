@@ -1,0 +1,10 @@
+name = "IOTX"
+symbol = "IOTX"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/iotex-iotx-logo.svg?v=002"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x8049b09170892d1b04b24c9c185704149d915ab29d6640a1c74bf85e823738f5"

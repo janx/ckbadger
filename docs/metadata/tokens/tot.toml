@@ -1,0 +1,9 @@
+name = "TOT"
+symbol = "TOT"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x3f71594253daab6bbeb7fb03284b2572f6098f57bc1bf8f428d873f234f067b3"

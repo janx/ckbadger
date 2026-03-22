@@ -1,0 +1,13 @@
+name = "Simple UDT"
+description = "Simple UDT provides a way for dapp developers to issue custom tokens on Nervos CKB."
+category = "udt"
+
+[[mainnet]]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+data_hash = "0xe1e354d6d643ad42724d40967e334984534e0367405c5ae42a9d7d63d77df419"
+hash_type = "type"
+
+[[testnet]]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+data_hash = "0xe1e354d6d643ad42724d40967e334984534e0367405c5ae42a9d7d63d77df419"
+hash_type = "type"

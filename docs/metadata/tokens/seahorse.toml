@@ -1,0 +1,9 @@
+name = "SEAHORSE Token"
+symbol = "SEAHORSE"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xcf2c1f90502d7c33f837f6d056bb0ba55ec3f02796fe0270de92f9427e4ef55a"

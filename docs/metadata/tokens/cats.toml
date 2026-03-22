@@ -1,0 +1,9 @@
+name = "CAT"
+symbol = "CATS"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x78b32b3501d7dbcd939aee9515c0210408a460a8e4ef7799dd1e698ba02ab3fa"

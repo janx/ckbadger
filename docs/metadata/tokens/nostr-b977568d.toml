@@ -1,0 +1,9 @@
+name = "Nostr Binding"
+symbol = "Nostr"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x57437f200f384bfe37f3251e10f409221bd2ccb2ab36242770f12094362f2717"

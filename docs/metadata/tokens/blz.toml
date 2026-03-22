@@ -1,0 +1,10 @@
+name = "BLZ"
+symbol = "BLZ"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/bluzelle-blz-logo.svg?v=002"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xda58dca6d334b837dbeb1da27e3ee45039890555bbcadbbd59fa1f32faaa5d5b"

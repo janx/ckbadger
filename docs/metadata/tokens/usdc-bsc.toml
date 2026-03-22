@@ -1,0 +1,10 @@
+name = "Wrapped USDC (ForceBridge from BSC)"
+symbol = "USDC|bsc"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/usd-coin-usdc-logo.svg?v=002"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xcedd0f67f2d218ab992284ab343c2e729d2a124a1612592deaa9f8b8f8a581dd"

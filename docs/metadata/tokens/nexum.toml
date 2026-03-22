@@ -1,0 +1,9 @@
+name = "NEXUM"
+symbol = "NEXUM"
+decimals = 18
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xa4d44407f13523152e0a4f61c38de5477cc439e456308d25f34499d314021fb0"

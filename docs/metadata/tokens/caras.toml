@@ -1,0 +1,11 @@
+name = "Caras Coin"
+symbol = "CARAS"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+description = "Tutorial coin by Jonathan Caras"
+
+[testnet]
+code_hash = "0x48dbf59b4c7ee1547238021b4869bceedf4eea6b43772e5d66ef8865b6ae7212"
+hash_type = "data"
+args = "0x53d22825d8e8e0057b43c6dfb57133e054db159a2497c81e78a9dfbcdba0208f"

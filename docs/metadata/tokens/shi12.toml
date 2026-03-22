@@ -1,0 +1,9 @@
+name = "Shitcoin 12"
+symbol = "Shi12"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xb0664d0ffd7986ed3d8a8ce61b30afd7124f32963d77f87cebcdfa15b8c4ae49"

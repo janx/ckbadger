@@ -1,0 +1,9 @@
+name = "Ed"
+symbol = "XFG"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xfe8d3c91fa69c7ce02e2f809038015b8aced4319f923da8f5b78f0054211ad6a"

@@ -1,0 +1,9 @@
+name = "USDT Token"
+symbol = "USDT"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x6af30bab19ec3a07b75936e7742756bbac95c8111e1b4882dfd4130476ddee5c00"

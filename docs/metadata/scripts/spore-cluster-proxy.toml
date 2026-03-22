@@ -1,0 +1,7 @@
+name = "Spore Cluster Proxy"
+
+[[testnet]]
+code_hash = "0x4349889bda064adab8f49f7dd8810d217917f7df28e9b2a1df0b74442399670a"
+data_hash = "0x4349889bda064adab8f49f7dd8810d217917f7df28e9b2a1df0b74442399670a"
+hash_type = "data1"
+tag = "v2 preview"

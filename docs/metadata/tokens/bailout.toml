@@ -1,0 +1,9 @@
+name = "BAILOUT"
+symbol = "BAILOUT"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x723f7503407397d0a05d389b2c8dfc30c56572a6d31ce7d8a27b09fc387cd2c4"

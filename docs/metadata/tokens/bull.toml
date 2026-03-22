@@ -1,0 +1,9 @@
+name = "BULL"
+symbol = "BULL"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x42b98a7c9d1b3c1f93d5469a9ed4ef3439d7aa9447a6e88b96d2dc15cf04edcd"

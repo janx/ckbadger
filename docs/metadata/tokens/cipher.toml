@@ -1,0 +1,11 @@
+name = "CIPHER"
+symbol = "CIPHER"
+decimals = 8
+standard = "xudt"
+icon = "logo.png"
+description = "The $cipher token is the community's playful tribute to the mastermind behind RGB++. Just to be clear, it has no official connection to Cypher. At its heart, it's a meme token with zero utility... for now! But knowing this community, you can bet they’ll cook up some exciting features and surprises soon enough!"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x8cf5882cb4a2e26e5a041ead3c05b8c9dcf78ac4dcc4254bb2e9be9f3c5c9d8b"

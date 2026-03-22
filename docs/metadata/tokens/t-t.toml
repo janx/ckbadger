@@ -1,0 +1,9 @@
+name = "TESTT"
+symbol = "T++T"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x51a3ceb794a5d9672ced3169ee5ea760976cd3d23cc6afec89b732f1220998e4"

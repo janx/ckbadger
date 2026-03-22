@@ -1,0 +1,9 @@
+name = "Reward Token"
+symbol = "REW"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x16d5563e71a5044163cbcf7174823f9990e84b6bf11148652cd9a98bf9f59dff"

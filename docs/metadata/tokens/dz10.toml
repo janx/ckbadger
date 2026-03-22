@@ -1,0 +1,9 @@
+name = "DZ10"
+symbol = "DZ10"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x57db482d22e3859e26e3b997895448e076c1a85382d29fd29fcc924b69c47363"

@@ -1,0 +1,9 @@
+name = "RGB++_Jump"
+symbol = "RGB++"
+decimals = 18
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x3ececddefdca34d6e23094d5c4bc886c9c403b966a511cec3bd155b0e48bce75"

@@ -1,0 +1,9 @@
+name = "小美人"
+symbol = "XMR"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x2a03d9396ec32b6a212fd15a3ced7b8404bd0ef41ad2ad63f069fd82a0ead89f"

@@ -1,0 +1,10 @@
+name = "DOULOU"
+symbol = "DOB"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x3ab7b687f40465c189529ea29144fd2865638808f46600fdea50612c4920872c"

@@ -1,0 +1,9 @@
+name = "ORDI_BRC20_LeapX"
+symbol = "ORDI"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x168016eef6582834fdc82062439d5ec911e7e1fd84ce30530b72a163f03f30ce"

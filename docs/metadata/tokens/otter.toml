@@ -1,0 +1,10 @@
+name = "@PalofSeal"
+symbol = "Otter"
+decimals = 8
+standard = "xudt"
+icon = "logo.png"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x0a5c9645b871a28af6d8040ff43a8ea62a6f12a4c131c0bbdc3a20a0e46ff292"

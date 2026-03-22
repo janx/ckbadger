@@ -1,0 +1,9 @@
+name = "NQBT2"
+symbol = "NQBT2"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x33f92ebc1a162751a43a9031eb528e8de40f7742a818c42e467ce18ad8c3feae"

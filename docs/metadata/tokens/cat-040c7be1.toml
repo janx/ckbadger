@@ -1,0 +1,9 @@
+name = "cat"
+symbol = "cat"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x378c9f798aa43c44759428bc4a3a9f83d3fbd9baf6c95b1e9d17dd13f68fc91c"

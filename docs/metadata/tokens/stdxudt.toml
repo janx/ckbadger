@@ -1,0 +1,9 @@
+name = "Standard xUDT"
+symbol = "stdXUDT"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xd6a87409dc457892c32b22553bc212696e41fbd3b4af3ea3103143e837268f87"

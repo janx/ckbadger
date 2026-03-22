@@ -1,0 +1,9 @@
+name = "WERT"
+symbol = "WERT"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xdc724bf18cab5cdd60b75466f93eb2d9a5973e9d1f04d29b2a80aff2be75166a"

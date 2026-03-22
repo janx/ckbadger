@@ -1,0 +1,9 @@
+name = "TT6_Name"
+symbol = "TT6"
+decimals = 3
+standard = "sudt"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x8a46673e67316f6556c29505aa9ac45cd10fd41be0d46f0174fd25320b32e037"

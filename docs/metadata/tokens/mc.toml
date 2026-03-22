@@ -1,0 +1,11 @@
+name = "Michi"
+symbol = "MC"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+description = "The first RC token"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x894c13553e51325941d73b5303c8785ac74b8d8ffebed50b73ddce60f50feeef"

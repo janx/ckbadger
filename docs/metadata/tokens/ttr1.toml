@@ -1,0 +1,9 @@
+name = "PPPP"
+symbol = "TTR1"
+decimals = 6
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x76d99bb6ff16f03e1dfa74bf95f0b4bef9d5eab0a2bb4604e6339e3977980741"

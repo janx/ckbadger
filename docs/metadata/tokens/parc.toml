@@ -1,0 +1,11 @@
+name = "Parvenu Coin"
+symbol = "PARC"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+description = "Everybody in coincircle has a parvenu dream，may the dreams come ture."
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x430e784ea11245a5c7c6687929755bedb46de6654f78f6b9f87bd89ea519708e"

@@ -1,0 +1,10 @@
+name = "BAT"
+symbol = "BAT"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/basic-attention-token-bat-logo.svg?v=002"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0xe183387147be24ecb3ba04eb480b6042803b1c93954f9c5a0e5a506cd5571b6b"

@@ -1,0 +1,9 @@
+name = "VIO"
+symbol = "VIO"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x821668737de07d57c84d25c7c0d99263f9707ecafa574b1ee4d2cd87d2d77078"

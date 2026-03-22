@@ -1,0 +1,9 @@
+name = "fuck coin"
+symbol = "fuck"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xf41170ead44b902590f9530f28836ef0336f2543da52bbf244fd6654749ca38d"

@@ -1,0 +1,11 @@
+name = "YokaiSwap Token"
+symbol = "YOK"
+decimals = 18
+standard = "sudt"
+icon = "https://tokens.yokaiswap.com/images/0xb02c930C2825A960A50ba4Ab005e8264498b64a0.png"
+description = "YokaiSwap is a next generation interoperable, decentralized trading platform and the first to come from the Nervos network."
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x656edac5463ef828a1a95f214b56adfe8f37da148fbc7ff424905e5264297c70"

@@ -1,0 +1,9 @@
+name = "The Banana Game"
+symbol = "Banana"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x0b9531a7a437a5c96e3c3bff62f8316bfe8ebc12f6382f354e4113f1069fe6d1"

@@ -1,0 +1,9 @@
+name = "assdd"
+symbol = "assdd"
+decimals = 3
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x826cff1b4fc4a7c1cd36a2cddfc2b734b5f484b0e0119162f17fd98d8f3b7cff"

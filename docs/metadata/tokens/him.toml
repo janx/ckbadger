@@ -1,0 +1,9 @@
+name = "Himgajria"
+symbol = "HIM"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xe2555c2d509fa1df91841269f21b8cd805245203528b42d5bc02235ab562e8b3"

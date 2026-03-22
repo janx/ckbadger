@@ -1,0 +1,9 @@
+name = "TEE"
+symbol = "TEE"
+decimals = 9
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x6bfc0a681c271af9e0abf9d65442d983461b6d8d0895d4f7b35f8e18d0ce5607"

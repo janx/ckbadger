@@ -1,0 +1,9 @@
+name = "WANJIACOIN"
+symbol = "WANJIA"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x850bd65904b7811ff83492a81a29f12ac9f5ce3b80f48b9de04eb5fe9eb30e4c"

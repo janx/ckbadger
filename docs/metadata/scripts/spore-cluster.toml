@@ -1,0 +1,19 @@
+name = "Spore Cluster"
+category = "spore-cluster"
+
+[[mainnet]]
+code_hash = "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075"
+data_hash = "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075"
+hash_type = "data1"
+
+[[testnet]]
+code_hash = "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080"
+data_hash = "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080"
+hash_type = "data1"
+tag = "v1 latest"
+
+[[testnet]]
+code_hash = "0x0bbe768b519d8ea7b96d58f1182eb7e6ef96c541fbd9526975077ee09f049058"
+data_hash = "0x0bbe768b519d8ea7b96d58f1182eb7e6ef96c541fbd9526975077ee09f049058"
+hash_type = "data1"
+tag = "v2 preview"

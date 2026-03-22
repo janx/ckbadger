@@ -1,0 +1,9 @@
+name = "MOON"
+symbol = "MOON"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x95d165f55dae0367d0cc91d2a5a597c7d25996e34b659c7ae962b72ad7888398"

@@ -1,0 +1,9 @@
+name = "PIONEX"
+symbol = "PIONEX"
+decimals = 6
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xf61e4680f292d2d4f48abd55cf56dce8fd88ec2104349080a0c0d7932b3ad3dd"

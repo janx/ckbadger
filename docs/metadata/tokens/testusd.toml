@@ -1,0 +1,9 @@
+name = "testUSD"
+symbol = "testUSD"
+decimals = 6
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x7d37e4694fffd528f77917ee0d890e97a49cd0354f8e27300a1c7b0b4dd83889"

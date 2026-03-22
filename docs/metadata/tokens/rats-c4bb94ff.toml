@@ -1,0 +1,9 @@
+name = "RATS_BRC20_LeapX"
+symbol = "RATS"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x009dc73a697c47780b33d83e36ef128255de70b0f796e5c4078e942bd3a90c81"

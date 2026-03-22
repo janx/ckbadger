@@ -1,0 +1,9 @@
+name = "aaa--"
+symbol = "aaa--"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xe070b590b579409d1515d5e6947c797b4f8e2c3d692ba07c2a0c9019ef77bab7"

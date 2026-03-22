@@ -1,0 +1,9 @@
+name = "testq"
+symbol = "testq"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xa630132a1803a6f7ef31701ff69949727501a580c8d9a8f2cb04e7f26607af28"

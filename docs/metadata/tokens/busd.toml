@@ -1,0 +1,10 @@
+name = "BUSD"
+symbol = "BUSD"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/binance-usd-busd-logo.svg?v=002"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x232678824938dfd87a049122c4e244af88dad7faa79a262362f5bc5356ee4c64"

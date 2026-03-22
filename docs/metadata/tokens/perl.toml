@@ -1,0 +1,10 @@
+name = "PERL"
+symbol = "PERL"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/perlin-perl-logo.svg?v=002"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x34ae46f1112be6a0f3d17bdf34d64e8508c4e6a6c23ae352d0915e24ac767224"

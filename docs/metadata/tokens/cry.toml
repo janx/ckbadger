@@ -1,0 +1,9 @@
+name = "CRAZY"
+symbol = "CRY++"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x56879ba26554974652ecbf63146b0d2a50514810202319f4f92ea19baa8a5312"

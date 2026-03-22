@@ -1,0 +1,9 @@
+name = "NUANTREE"
+symbol = "TREE"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x69e912c9052a4572562aaf0b368621ab296db772a6d75e9a8ec7f25cefa773fb"

@@ -1,0 +1,9 @@
+name = "XUDT Test Token"
+symbol = "RFSSSS"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xbdcfe9552e286770cde1e933dfaf21bb7f5a3e44465d758c6b2dafad39f9f3fb"

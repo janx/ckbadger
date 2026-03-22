@@ -1,0 +1,7 @@
+name = "Force Bridge"
+website = "https://forcebridge.com/"
+
+[[mainnet]]
+code_hash = "0x9f3aeaf2fc439549cbc870c653374943af96a0658bd6b51be8d8983183e6f52f"
+data_hash = "0x1bf147d1c95a5ad51016bd426c33f364257e685af54df26fc69ec40e3ae267d1"
+hash_type = "type"

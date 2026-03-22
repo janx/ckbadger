@@ -1,0 +1,9 @@
+name = "zzzz1"
+symbol = "zzzz1"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x625c1db5d6ff187f722427d3a2f32493183cea07b1e51f94fdfea1fc872dbf4b"

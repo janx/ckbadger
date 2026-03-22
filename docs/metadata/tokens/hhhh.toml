@@ -1,0 +1,9 @@
+name = "hahahaha"
+symbol = "HHHH"
+decimals = 8
+standard = "sudt"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x5cae14975e307606f9573165ef6e51646bce9116951964613182221d4af8a340"

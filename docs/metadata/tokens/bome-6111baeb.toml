@@ -1,0 +1,9 @@
+name = "BOME"
+symbol = "$BOME"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x28b9280d64f54595bd6d5b8a671efc3f866be5462c39f146087d840a2804a12a"

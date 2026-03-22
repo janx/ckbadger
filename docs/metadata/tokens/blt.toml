@@ -1,0 +1,9 @@
+name = "Bridge Lock Test"
+symbol = "BLT"
+decimals = 18
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xb38331eb09ae54254ab726de51bc21fc0512cd1f28a192b54a7f4700d5d76d67"

@@ -1,0 +1,9 @@
+name = "Shitcoin 96"
+symbol = "Shi96"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x50e141065cf455b9c5b419afe10f33d58b6f0c87f98e79ed57b5821be6033dac"

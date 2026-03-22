@@ -1,0 +1,10 @@
+name = "YFI"
+symbol = "YFI"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/yearn-finance-yfi-logo.svg?v=013"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x7658a43a8ae5f3f9d24c2001815617a31c29a4131bf2d2a67a4006f553116e11"

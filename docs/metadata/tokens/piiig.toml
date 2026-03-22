@@ -1,0 +1,9 @@
+name = "PIIIG"
+symbol = "PIIIG"
+decimals = 6
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xb81041819176885ee19ead7fc65b1e6f6a665e6b61ec9db3d41a1b8198cae732"

@@ -1,0 +1,14 @@
+name = "R-ETH"
+symbol = "R-ETH"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xe098e2040db4852e7908deac1a6b7f0dfeff7c7a0204258cdee609f63935e224"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x7bd58ab5180878b6d1bd00d0651458046c4029448f65bba6b3ac2ca358a6d4c9"

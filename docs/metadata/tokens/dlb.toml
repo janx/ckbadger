@@ -1,0 +1,9 @@
+name = "DLB"
+symbol = "DLB"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xe8109a0f7e3dc3872e7aacde9b8ab01f6c118c19ea97563ddfc706bf8aef4543"

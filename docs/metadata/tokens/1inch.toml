@@ -1,0 +1,10 @@
+name = "1INCH"
+symbol = "1INCH"
+decimals = 18
+standard = "sudt"
+icon = "https://cryptologos.cc/logos/1inch-1inch-logo.svg?v=013"
+
+[mainnet]
+code_hash = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5"
+hash_type = "type"
+args = "0x5bea7b77283ac8a20bd4e848a67c68349a3880b67278a5565bbbc242a26d3e29"

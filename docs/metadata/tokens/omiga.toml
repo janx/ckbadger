@@ -1,0 +1,9 @@
+name = "OMIGA"
+symbol = "OMIGA"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x4750dcbc2e79f5ee9fb49537937efba45254ff0a79cc76b049d988d6d782a9b3"

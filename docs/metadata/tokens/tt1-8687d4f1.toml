@@ -1,0 +1,11 @@
+name = "TokenTest2"
+symbol = "TT1"
+decimals = 8
+standard = "sudt"
+icon = "logo.png"
+description = "Token Test TmC 2.0"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x246d249c3d73083a78649c8d1cdc8118a96817c5d8b7540ad02d035a589043fb"

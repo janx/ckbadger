@@ -1,0 +1,9 @@
+name = "ROCK FOR PEACE AND LOVE"
+symbol = "ROCK"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xcbf150026f2c2e2f7c28693dd27d180416a09dd4798b3c2bbc7a0aa2b0bb06a8"

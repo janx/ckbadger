@@ -1,0 +1,9 @@
+name = "RORO_SRC20_LeapX"
+symbol = "RORO"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x995d41cdb9a02f6eaae22b6d3c9865d099e06eaf419b820f2e3dac481b0aff57"

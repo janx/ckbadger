@@ -1,0 +1,9 @@
+name = "ordi"
+symbol = "ordi"
+decimals = 18
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xd5ea08398a710bef98bb61c82d2864d9fa9caec0524a96c1adee9359c8ef4158"

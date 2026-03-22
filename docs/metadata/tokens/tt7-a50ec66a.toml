@@ -1,0 +1,11 @@
+name = "Token Test 7"
+symbol = "TT7"
+decimals = 0
+standard = "sudt"
+icon = "logo.png"
+description = "Token prueba 7"
+
+[testnet]
+code_hash = "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4"
+hash_type = "type"
+args = "0x66b567200e6cc419aae365b1ef1c2cfd54dde104f9842330c94622b579400d13"

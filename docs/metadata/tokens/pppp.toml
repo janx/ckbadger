@@ -1,0 +1,9 @@
+name = "PP Plus Plus"
+symbol = "PPPP"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xc97c8e2e6077b3e387eb9b7fd7af8bc9823e274e6a36f2c2f8c6e9e77ea583b1"

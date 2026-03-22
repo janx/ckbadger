@@ -1,0 +1,9 @@
+name = "asdf369"
+symbol = "asdf369"
+decimals = 0
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0xb4c7f787cd3964639817c624cdf2fc877913515193aaa82a35f1f7a9a2dbbf32"

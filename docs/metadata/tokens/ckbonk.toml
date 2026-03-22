@@ -1,0 +1,11 @@
+name = "CKBonk"
+symbol = "CKBonk"
+decimals = 8
+standard = "xudt"
+icon = "logo.png"
+description = "Because why not? It’s a meme token on Nervos, built for laughs and chaos. Don’t overthink it, just bonk. 🚀"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0xa721a1a0dfcbb39e01e576008b2adcdacd041f9fb14975043eb018b0c96f6bfc"

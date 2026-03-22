@@ -1,0 +1,10 @@
+name = "Shib Coin"
+symbol = "SHIB"
+decimals = 6
+standard = "xudt"
+icon = "logo.jpeg"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x3db468cab349f1cf7204b4c7d3e68600a420f1480123f60a1e1e04f3eb9bb0f7"

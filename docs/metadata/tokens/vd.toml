@@ -1,0 +1,9 @@
+name = "VVVD-Test new ct"
+symbol = "VD"
+decimals = 8
+standard = "xudt"
+
+[testnet]
+code_hash = "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb"
+hash_type = "type"
+args = "0x931303bbcbfef2565eb74a2d0a36322f2bdb4cf53ad00dbffbdd762c3acec9b9"

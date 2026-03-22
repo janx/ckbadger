@@ -1,0 +1,9 @@
+name = "brett"
+symbol = "brett"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x58e2cd013f12781411372c0e9f4273836c7680b6df02a0f5be71a9fc9bddd23f"
