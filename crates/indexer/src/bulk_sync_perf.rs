@@ -36,7 +36,7 @@ pub struct BatchSample {
     pub inputs: u64,
     pub parse_ms: f64,
     pub precompute_ms: f64,
-    pub write_ms: f64,
+    pub build_ms: f64,
     pub prefetch_ms: f64,
     pub finalize_ms: f64,
     pub t1_ms: f64,
@@ -109,7 +109,7 @@ impl BatchSample {
             inputs: 0,
             parse_ms: 0.0,
             precompute_ms: 0.0,
-            write_ms: 0.0,
+            build_ms: 0.0,
             prefetch_ms: 0.0,
             finalize_ms: 0.0,
             t1_ms: 0.0,
@@ -885,7 +885,7 @@ impl BulkSyncPerfRun {
         // Pipeline phases
         let parse = sum_ms(|s| s.parse_ms);
         let precompute = sum_ms(|s| s.precompute_ms);
-        let write = sum_ms(|s| s.write_ms);
+        let build = sum_ms(|s| s.build_ms);
         let prefetch = sum_ms(|s| s.prefetch_ms);
         let finalize_batch = sum_ms(|s| s.finalize_ms);
 
@@ -916,8 +916,8 @@ impl BulkSyncPerfRun {
         if parse > 0.01 || precompute > 0.01 {
             phases.push(("parse+precompute", parse + precompute));
         }
-        if write > 0.01 {
-            phases.push(("write", write));
+        if build > 0.01 {
+            phases.push(("build", build));
         }
         if prefetch > 0.01 {
             phases.push(("prefetch", prefetch));
@@ -1545,7 +1545,7 @@ mod tests {
         assert!(!samples.contains("\"nft_dotbit_witness_parse_ms\""));
         assert!(!samples.contains("\"nft_output_scan_ms\""));
         assert!(!samples.contains("\"nft_input_scan_ms\""));
-        assert!(samples.contains("\"write_ms\""));
+        assert!(samples.contains("\"build_ms\""));
         assert!(samples.contains("\"t1_ms\""));
         assert!(samples.contains("\"t_act_ms\""));
     }
@@ -1561,7 +1561,7 @@ mod tests {
             inputs: 321,
             parse_ms: 11.0,
             precompute_ms: 22.0,
-            write_ms: 44.0,
+            build_ms: 44.0,
             t1_ms: 55.0,
             t_act_ms: 66.0,
             ..test_batch_sample(10, 1.0, 40.0, 100, 4, 1)
@@ -1572,7 +1572,7 @@ mod tests {
         let metrics = std::fs::read_to_string(dir.path().join("run-1/metrics.env")).unwrap();
         assert!(!metrics.contains("\ntxs="));
         assert!(!metrics.contains("\nparse_ms="));
-        assert!(!metrics.contains("\nwrite_ms="));
+        assert!(!metrics.contains("\nbuild_ms="));
 
         let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
         assert!(!report.contains("nft_precompute_ms"));

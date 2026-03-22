@@ -1937,12 +1937,7 @@ impl Indexer {
         let mut consecutive_idle_timeouts: u64 = 0;
 
         // Resolve disk device once for per-batch I/O delta tracking
-        let disk_device = {
-            let mounts = std::fs::read_to_string("/proc/mounts").unwrap_or_default();
-            crate::sys_info::parse_mount_info(&mounts, &self.config.domain_data_path)
-                .map(|(dev, _fs)| dev)
-                .unwrap_or_default()
-        };
+        let disk_device = crate::sys_info::detect_disk_device(&self.config.domain_data_path);
         let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(disk_device);
         let mut batches_since_last_flush: u32 = 0;
         let mut compaction_checkpoint_done = false;
@@ -2571,7 +2566,7 @@ impl Indexer {
                             inputs: write_metrics.inputs,
                             parse_ms: parser_perf_sample.parse_ms,
                             precompute_ms: parser_perf_sample.precompute_ms,
-                            write_ms: write_metrics.write_ms,
+                            build_ms: write_metrics.write_ms,
                             prefetch_ms: write_metrics.prefetch_ms,
                             finalize_ms: write_metrics.finalize_ms,
                             t1_ms: write_metrics.t1_ms,

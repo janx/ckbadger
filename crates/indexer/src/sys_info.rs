@@ -158,10 +158,13 @@ pub fn parse_diskstats(content: &str, device: &str) -> Option<(u64, u64)> {
     None
 }
 
-/// Resolve (device_short_name, filesystem) for a path from /proc/mounts content.
+/// Resolve (device_display_name, filesystem) for a path from /proc/mounts content.
 ///
-/// Picks the longest matching mount point and strips partition suffix from
-/// device name: /dev/nvme0n1p2 -> nvme0n1, /dev/sda1 -> sda.
+/// Used for environment metadata display. Picks the longest matching mount
+/// point and strips partition suffix for readability:
+///   /dev/nvme0n1p2 -> nvme0n1, /dev/sda1 -> sda
+///
+/// For `/proc/diskstats` I/O tracking, use `resolve_diskstats_device()` instead.
 pub fn parse_mount_info(mounts: &str, path: &str) -> Option<(String, String)> {
     let mut best_mount: Option<(&str, &str, usize)> = None; // (device, fs, mount_len)
 
@@ -192,16 +195,14 @@ pub fn parse_mount_info(mounts: &str, path: &str) -> Option<(String, String)> {
     Some((short_name, fs.to_string()))
 }
 
-/// Strip partition suffix from device path:
+/// Strip partition suffix from device path for display purposes:
 /// /dev/nvme0n1p2 -> nvme0n1, /dev/sda1 -> sda
 fn strip_partition_suffix(device: &str) -> String {
-    // Get the basename
     let basename = device.rsplit('/').next().unwrap_or(device);
 
     // NVMe: nvme0n1p2 -> nvme0n1 (strip pN suffix)
     if basename.starts_with("nvme") {
         if let Some(pos) = basename.rfind('p') {
-            // Ensure what follows 'p' is a digit (partition number)
             let after_p = &basename[pos + 1..];
             if !after_p.is_empty() && after_p.chars().all(|c| c.is_ascii_digit()) {
                 return basename[..pos].to_string();
@@ -217,6 +218,144 @@ fn strip_partition_suffix(device: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+/// Parsed mount entry from `/proc/self/mountinfo`.
+struct MountInfoEntry {
+    major: u32,
+    minor: u32,
+    source_device: String,
+}
+
+/// Resolve the `/proc/diskstats` device name for a filesystem path.
+///
+/// Two strategies:
+///   1. Match major:minor from mountinfo against diskstats (works for ext4/xfs
+///      on raw partitions where the FS device ID is the block device ID).
+///   2. Match the source device name from mountinfo against diskstats names
+///      (handles btrfs/LUKS/LVM where the FS reports a virtual device ID).
+///
+/// All arguments are file contents passed as strings for testability.
+pub fn resolve_diskstats_device(mountinfo: &str, diskstats: &str, path: &str) -> Option<String> {
+    let entry = parse_mountinfo_entry(mountinfo, path)?;
+
+    // Primary: major:minor match (ext4/xfs on raw partition)
+    if let Some(name) = find_diskstats_device_by_id(diskstats, entry.major, entry.minor) {
+        return Some(name);
+    }
+
+    // Fallback for virtual dev_ids (btrfs subvolumes, etc.):
+    // match source device basename against diskstats names.
+    let basename = entry.source_device.rsplit('/').next().unwrap_or("");
+    if !basename.is_empty() && find_diskstats_device_by_name(diskstats, basename).is_some() {
+        return Some(basename.to_string());
+    }
+
+    None
+}
+
+/// Parse `/proc/self/mountinfo` to find the mount entry for `path`.
+///
+/// Format: `mount_id parent_id major:minor root mount_point opts ... - fs_type source super_opts`
+fn parse_mountinfo_entry(mountinfo: &str, path: &str) -> Option<MountInfoEntry> {
+    let mut best: Option<(&str, &str, usize)> = None; // (dev_id, full_line, mount_len)
+
+    for line in mountinfo.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 5 {
+            continue;
+        }
+        let mount_point = fields[4];
+
+        if path.starts_with(mount_point)
+            && (path.len() == mount_point.len()
+                || mount_point == "/"
+                || path.as_bytes().get(mount_point.len()) == Some(&b'/'))
+        {
+            let mount_len = mount_point.len();
+            if best.is_none() || mount_len > best.unwrap().2 {
+                best = Some((fields[2], line, mount_len));
+            }
+        }
+    }
+
+    let (dev_id, line, _) = best?;
+    let (major_s, minor_s) = dev_id.split_once(':')?;
+    let major = major_s.parse().ok()?;
+    let minor = minor_s.parse().ok()?;
+
+    // Extract source device: field after "- fs_type" separator
+    let source_device = line
+        .split_once(" - ")
+        .and_then(|(_, rest)| rest.split_whitespace().nth(1))
+        .unwrap_or("")
+        .to_string();
+
+    Some(MountInfoEntry {
+        major,
+        minor,
+        source_device,
+    })
+}
+
+/// Scan `/proc/diskstats` for the device with matching major:minor numbers.
+fn find_diskstats_device_by_id(diskstats: &str, major: u32, minor: u32) -> Option<String> {
+    for line in diskstats.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() >= 3 {
+            let Ok(m) = fields[0].parse::<u32>() else {
+                continue;
+            };
+            let Ok(n) = fields[1].parse::<u32>() else {
+                continue;
+            };
+            if m == major && n == minor {
+                return Some(fields[2].to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Check if a device name exists in `/proc/diskstats`.
+fn find_diskstats_device_by_name(diskstats: &str, name: &str) -> Option<()> {
+    for line in diskstats.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() >= 3 && fields[2] == name {
+            return Some(());
+        }
+    }
+    None
+}
+
+/// High-level: detect the `/proc/diskstats` device name for a data path.
+///
+/// Reads `/proc/self/mountinfo` and `/proc/diskstats`, using major:minor
+/// matching with fallback to source device name matching. For device-mapper
+/// paths (`/dev/mapper/*`), follows the symlink to resolve the `dm-N` name.
+/// Never fails (returns empty string on any resolution failure).
+pub fn detect_disk_device(data_path: &str) -> String {
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+    let diskstats = fs::read_to_string("/proc/diskstats").unwrap_or_default();
+
+    // Try pure resolution (major:minor or source device basename)
+    if let Some(device) = resolve_diskstats_device(&mountinfo, &diskstats, data_path) {
+        return device;
+    }
+
+    // Fallback: source device may be a symlink (/dev/mapper/luks-... -> ../dm-0).
+    // Follow it and check if the target appears in diskstats.
+    if let Some(entry) = parse_mountinfo_entry(&mountinfo, data_path) {
+        if let Ok(target) = fs::read_link(&entry.source_device) {
+            if let Some(name) = target.file_name().and_then(|n| n.to_str()) {
+                if find_diskstats_device_by_name(&diskstats, name).is_some() {
+                    return name.to_string();
+                }
+            }
+        }
+    }
+
+    String::new()
 }
 
 /// Read /sys/block/{device}/queue/scheduler, extract bracketed active scheduler.
@@ -429,5 +568,92 @@ MemAvailable:   45000000 kB
         let (read_mb, write_mb) = tracker.read_delta_from_content(content);
         assert_eq!(read_mb, 0.0);
         assert_eq!(write_mb, 0.0);
+    }
+
+    #[test]
+    fn test_resolve_diskstats_device_nvme_direct() {
+        // ext4 on raw NVMe partition: major:minor match
+        let mountinfo = "36 1 259:2 / /home rw - ext4 /dev/nvme0n1p2 rw\n";
+        let diskstats = "\
+ 259       0 nvme0n1 100 0 500000 0 200 0 300000 0 0 0 0 0 0 0 0 0
+ 259       2 nvme0n1p2 80 0 400000 0 180 0 280000 0 0 0 0 0 0 0 0 0
+";
+        assert_eq!(
+            resolve_diskstats_device(mountinfo, diskstats, "/home/user/data"),
+            Some("nvme0n1p2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_diskstats_device_dm_direct() {
+        // ext4 on dm device where major:minor matches directly
+        let mountinfo = "42 1 253:0 / /data rw - ext4 /dev/dm-0 rw\n";
+        let diskstats = "\
+ 253       0 dm-0 80 0 400000 0 180 0 280000 0 0 0 0 0 0 0 0 0
+";
+        assert_eq!(
+            resolve_diskstats_device(mountinfo, diskstats, "/data/ckbadger"),
+            Some("dm-0".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_diskstats_device_btrfs_virtual_devid_falls_back_to_source() {
+        // btrfs subvolume: dev_id 0:27 is virtual (not in diskstats).
+        // Fallback matches source device basename "sda1" in diskstats.
+        let mountinfo = "42 1 0:27 /@home /home rw - btrfs /dev/sda1 rw,compress=zstd:3\n";
+        let diskstats = "\
+   8       0 sda 100 0 200 0 300 0 400 0 0 0 0 0 0 0 0 0
+   8       1 sda1 80 0 150 0 250 0 350 0 0 0 0 0 0 0 0 0
+";
+        assert_eq!(
+            resolve_diskstats_device(mountinfo, diskstats, "/home/user/data"),
+            Some("sda1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_diskstats_device_btrfs_luks_source_not_in_diskstats() {
+        // btrfs on LUKS: dev_id 0:27 virtual, source is /dev/mapper/luks-...
+        // which is NOT in diskstats. Pure resolution returns None;
+        // detect_disk_device() would follow the symlink as a final fallback.
+        let mountinfo = "42 1 0:27 /@home /home rw - btrfs /dev/mapper/luks-abc123 rw\n";
+        let diskstats = "\
+ 259       0 nvme0n1 100 0 500000 0 200 0 300000 0 0 0 0 0 0 0 0 0
+ 253       0 dm-0 80 0 400000 0 180 0 280000 0 0 0 0 0 0 0 0 0
+";
+        // Pure function returns None because neither dev_id 0:27 nor
+        // "luks-abc123" exist in diskstats. detect_disk_device() handles
+        // this by following the /dev/mapper/luks-... symlink to dm-0.
+        assert_eq!(
+            resolve_diskstats_device(mountinfo, diskstats, "/home/data"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_resolve_diskstats_device_longest_mount_match() {
+        let mountinfo = "\
+30 1 8:1 / / rw - ext4 /dev/sda1 rw
+40 30 259:2 / /data rw - btrfs /dev/nvme0n1p2 rw
+";
+        let diskstats = "\
+   8       1 sda1 100 0 200 0 300 0 400 0 0 0 0 0 0 0 0 0
+ 259       2 nvme0n1p2 50 0 100 0 60 0 120 0 0 0 0 0 0 0 0 0
+";
+        assert_eq!(
+            resolve_diskstats_device(mountinfo, diskstats, "/data/ckbadger"),
+            Some("nvme0n1p2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_diskstats_device_no_mount_found() {
+        let mountinfo = "36 1 259:2 / /other rw - ext4 /dev/sda1 rw\n";
+        let diskstats = " 259 0 nvme0n1 100 0 200 0 300 0 400 0 0 0 0 0 0 0 0 0\n";
+        assert_eq!(
+            resolve_diskstats_device(mountinfo, diskstats, "/mnt/data"),
+            None
+        );
     }
 }

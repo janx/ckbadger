@@ -24,7 +24,7 @@ pub(crate) struct BackgroundSampler {
 }
 
 impl BackgroundSampler {
-    pub(crate) fn new(store: Arc<CkbadgerStore>, interval: Duration) -> Self {
+    pub(crate) fn new(store: Arc<CkbadgerStore>, interval: Duration, disk_device: String) -> Self {
         let (tx, rx) = tokio::sync::watch::channel(SamplerSnapshot::default());
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_flag = Arc::clone(&shutdown);
@@ -32,7 +32,7 @@ impl BackgroundSampler {
         let handle = std::thread::Builder::new()
             .name("bg-sampler".into())
             .spawn(move || {
-                let mut disk_tracker = sys_info::DiskStatsTracker::new(String::new());
+                let mut disk_tracker = sys_info::DiskStatsTracker::new(disk_device);
                 while !shutdown_flag.load(Ordering::Relaxed) {
                     std::thread::sleep(interval);
                     let stats = store.memory_stats();
@@ -62,6 +62,12 @@ impl BackgroundSampler {
 
     pub(crate) fn latest(&self) -> SamplerSnapshot {
         self.latest_rx.borrow().clone()
+    }
+
+    /// Clone the watch receiver so another component (e.g. prefetch worker)
+    /// can read the latest snapshot independently.
+    pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<SamplerSnapshot> {
+        self.latest_rx.clone()
     }
 
     pub(crate) fn shutdown(mut self) {

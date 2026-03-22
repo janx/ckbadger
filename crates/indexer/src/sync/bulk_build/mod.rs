@@ -111,9 +111,11 @@ impl BulkBuildEngine {
             indexer.writer.store().as_ref(),
             indexer.append_only_store.as_ref(),
         );
+        let disk_device = crate::sys_info::detect_disk_device(&indexer.config.domain_data_path);
         let sampler = sampler::BackgroundSampler::new(
             indexer.writer.store().clone(),
             std::time::Duration::from_millis(200),
+            disk_device,
         );
         let token_info_cache = preload_token_info_cache(indexer.writer.store().as_ref())?;
         let fetch_pool = std::sync::Arc::new(
@@ -149,6 +151,7 @@ impl BulkBuildEngine {
             prefetch_start,
             initial_handoff,
             configured_batch_size,
+            sampler.subscribe(),
         );
         // Bounded flush channel: the build loop sends PendingFlush into
         // a channel. A dedicated worker drains it serially, committing
@@ -279,7 +282,7 @@ impl BulkBuildEngine {
                     batch_stats.cells_consumed
                 )
             })?;
-            sample.write_ms = build_elapsed.as_secs_f64() * 1000.0;
+            sample.build_ms = build_elapsed.as_secs_f64() * 1000.0;
             sample.fetch_ms = fetch_elapsed.as_secs_f64() * 1000.0;
             sample.facts_ms = build_timings.facts_ms;
             sample.resolve_ms = build_timings.resolve_ms;
@@ -450,7 +453,14 @@ impl BulkBuildEngine {
         let finalize_started = Instant::now();
 
         // Shut down prefetch worker before draining flush channel.
-        let _prefetch_stats = prefetch.close_and_wait().await?;
+        let prefetch_stats = prefetch.close_and_wait().await?;
+        info!(
+            total_fetches = prefetch_stats.total_fetches,
+            total_blocks = prefetch_stats.total_blocks,
+            disk_throttle_count = prefetch_stats.disk_throttle_count,
+            exit_reason = ?prefetch_stats.exit_reason,
+            "Prefetch worker finished"
+        );
 
         // Phase 0: close channel and drain all queued flushes.
         indexer
