@@ -1858,27 +1858,6 @@ impl CkbadgerStore {
         Ok(())
     }
 
-    /// Compact the highest-write column families to reclaim space and reduce
-    /// L0 file count.  Intended for mid-bulk-sync pressure relief, not routine use.
-    pub fn compact_hot_cfs(&self) {
-        let hot_cfs: &[&str] = &[
-            CF_ACTIVITIES,
-            CF_LIVE_CELLS,
-            CF_CONSUMED_CELLS,
-            CF_CELL_BY_LOCK,
-            CF_ADDR_TXS,
-            CF_TX_INDEX,
-        ];
-        let started = std::time::Instant::now();
-        for &cf_name in hot_cfs {
-            if let Some(cf) = self.db.cf_handle(cf_name) {
-                self.db.compact_range_cf(cf, None::<&[u8]>, None::<&[u8]>);
-            }
-        }
-        let elapsed_ms = started.elapsed().as_millis();
-        info!(elapsed_ms, cfs = hot_cfs.len(), "Compacted hot CFs");
-    }
-
     /// Disable auto-compactions on all column families.
     /// Call during bulk sync to avoid compaction competing with writes.
     pub fn disable_auto_compactions(&self) {

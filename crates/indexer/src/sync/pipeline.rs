@@ -1892,7 +1892,6 @@ impl Indexer {
         let disk_device = crate::sys_info::detect_disk_device(&self.config.domain_data_path);
         let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(disk_device);
         let mut batches_since_last_flush: u32 = 0;
-        let mut compaction_checkpoint_done = false;
 
         loop {
             if self.shutdown_requested.load(Ordering::SeqCst) {
@@ -2566,7 +2565,7 @@ impl Indexer {
                         self.check_bulk_sync_completion().await;
                         self.ensure_compaction_mode(blocks_remaining);
 
-                        // Memory-pressure flush + compaction checkpoint
+                        // Memory-pressure flush
                         batches_since_last_flush += 1;
                         if self.writer.store().is_bulk_sync_mode() {
                             let mem_flush_threshold_mb =
@@ -2585,39 +2584,6 @@ impl Indexer {
                                     warn!(error = %e, "Memory-pressure flush failed");
                                 }
                                 batches_since_last_flush = 0;
-
-                                let cp_pending = compaction_pressure.compaction_pending_bytes;
-                                let mem_profile = self.writer.store().memory_profile();
-                                let cp_trigger = mem_profile.severe_compaction_pending_bytes_bulk;
-                                let cp_drain_target = mem_profile.drain_pending_bytes_threshold;
-                                if cp_pending > cp_trigger && !compaction_checkpoint_done {
-                                    info!(
-                                        compaction_pending_mb = cp_pending / (1024 * 1024),
-                                        trigger_mb = cp_trigger / (1024 * 1024),
-                                        drain_target_mb = cp_drain_target / (1024 * 1024),
-                                        "Compaction checkpoint: compacting hot CFs"
-                                    );
-                                    self.writer.store().compact_hot_cfs();
-
-                                    // Poll until pressure drains or timeout
-                                    let checkpoint_start = std::time::Instant::now();
-                                    loop {
-                                        let p = self.writer.store().compaction_pressure();
-                                        if p.compaction_pending_bytes < cp_drain_target
-                                            || checkpoint_start.elapsed().as_secs() > 120
-                                        {
-                                            info!(
-                                                pending_mb =
-                                                    p.compaction_pending_bytes / (1024 * 1024),
-                                                elapsed_s = checkpoint_start.elapsed().as_secs(),
-                                                "Compaction checkpoint complete"
-                                            );
-                                            break;
-                                        }
-                                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                                    }
-                                    compaction_checkpoint_done = true;
-                                }
                             }
                         }
                     }
