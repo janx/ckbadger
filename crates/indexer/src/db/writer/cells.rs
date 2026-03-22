@@ -182,7 +182,7 @@ impl BatchWriter {
                         *output_index,
                     );
                 }
-                if !cell.data_hash.is_empty() {
+                if cell.data_size > 0 {
                     domain_batch.put_cell_by_data_hash(
                         &cell.data_hash,
                         info.created_at_block,
@@ -450,10 +450,10 @@ mod tests {
                     data_size: cell.data_size,
                     occupied_capacity: occupied_capacity_from_parsed_cell(cell),
                     udt_amount,
-                    data_hash: if cell.data_hash.is_empty() {
-                        None
-                    } else {
+                    data_hash: if cell.data_size > 0 {
                         Some(cell.data_hash.to_vec())
+                    } else {
+                        None
                     },
                 },
                 created_at_block,

@@ -344,7 +344,10 @@ impl BatchWriter {
         let mut all_blocks: HashSet<i64> = HashSet::new();
         for ctx in contexts {
             for (_, _, _, deposit_block, status) in ctx.consumed_deposits() {
-                if *status == 1 {
+                if *status == 0 {
+                    // Phase-1 withdraw request: need AR at the request block
+                    all_blocks.insert(ctx.block_number());
+                } else if *status == 1 {
                     all_blocks.insert(*deposit_block);
                 }
             }
@@ -457,6 +460,20 @@ impl BatchWriter {
                     entry.withdraw_request_block = Some(ctx.block_number());
                     entry.withdraw_request_tx = Some(new_tx_hash.clone());
                     entry.withdraw_request_output_index = Some(*new_output_index);
+                    entry.withdraw_request_ar = dao_fields
+                        .get(&ctx.block_number())
+                        .and_then(|dao| extract_ar_from_dao(dao))
+                        .map(i64::try_from)
+                        .transpose()
+                        .map_err(|_| {
+                            anyhow!(
+                                "DAO withdraw request AR exceeds i64 range: block={}, consuming_tx=0x{}, deposit_outpoint=0x{}:{}",
+                                ctx.block_number(),
+                                hex::encode(ctx.consuming_tx_hash()),
+                                hex::encode(original_tx_hash),
+                                original_output_index
+                            )
+                        })?;
                     batch.put_dao_deposit(&outpoint_key, &entry);
                     batch.put_dao_by_withdraw_tx(new_tx_hash, *new_output_index, &outpoint_key);
                     // Propagate phase1 update to pending map so a hypothetical

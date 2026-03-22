@@ -31,9 +31,17 @@ pub fn is_genesis_special_burn_cell(lock_args: &[u8], created_at_block: i64) -> 
 }
 
 pub fn calculate_estimated_apc(total_issuance: u64, secondary_burnt: u128) -> f64 {
-    let circulating = (total_issuance as u128)
-        .saturating_sub(GENESIS_BURNT)
-        .saturating_sub(secondary_burnt);
+    let total = total_issuance as u128;
+    assert!(
+        total >= GENESIS_BURNT,
+        "total_issuance ({total}) < GENESIS_BURNT ({GENESIS_BURNT}): corrupt DAO data"
+    );
+    let after_genesis = total - GENESIS_BURNT;
+    assert!(
+        after_genesis >= secondary_burnt,
+        "circulating underflow: total_issuance={total}, genesis_burnt={GENESIS_BURNT}, secondary_burnt={secondary_burnt}"
+    );
+    let circulating = after_genesis - secondary_burnt;
 
     if circulating > 0 {
         (SECONDARY_ISSUANCE_PER_YEAR as f64 / circulating as f64) * 100.0
@@ -79,9 +87,9 @@ mod tests {
     }
 
     #[test]
-    fn test_apc_zero_circulating() {
-        let apc = calculate_estimated_apc(0, 0);
-        assert_eq!(apc, 0.0);
+    #[should_panic(expected = "total_issuance (0) < GENESIS_BURNT")]
+    fn test_apc_zero_issuance_panics() {
+        calculate_estimated_apc(0, 0);
     }
 
     #[test]

@@ -1938,13 +1938,12 @@ impl Indexer {
                     parser_perf_sample,
                 })) => {
                     consecutive_idle_timeouts = 0;
-                    atomic_checked_sub_u64(
-                        &parse_tx_pending_txs_for_writer,
-                        parsed_batch_tx_count_u64,
-                    );
                     let recv_wait_ms = t_recv.elapsed().as_secs_f64() * 1000.0;
                     let current_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
                     if batch_epoch != current_epoch {
+                        // Stale batch from a previous pipeline epoch — skip it
+                        // without decrementing the counter (which was already
+                        // reset to 0 by the drain that bumped the epoch).
                         debug!(
                             batch_epoch,
                             current_epoch,
@@ -1954,6 +1953,10 @@ impl Indexer {
                         );
                         continue;
                     }
+                    atomic_checked_sub_u64(
+                        &parse_tx_pending_txs_for_writer,
+                        parsed_batch_tx_count_u64,
+                    );
                     let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
                     let expected_start = next_start_block_from_db_tip(
                         db_tip,

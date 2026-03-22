@@ -1368,8 +1368,11 @@ impl Indexer {
             self.writer
                 .insert_transactions_batch(&txs_for_batch, &mut data_batch)?;
         }
+        // Cell payloads go into the append-only store. Build the batch now
+        // but defer its commit until just before the domain batch commit so
+        // that a crash between the two commits is as narrow as possible.
+        let mut cells_batch = StoreBatch::new(&self.append_only_store);
         if !all_cells.is_empty() {
-            let mut cells_batch = StoreBatch::new(&self.append_only_store);
             self.writer.insert_cells_batch(
                 &all_cells,
                 &batch_cell_infos,
@@ -1377,9 +1380,6 @@ impl Indexer {
                 &mut cells_batch,
                 false,
             )?;
-            if !cells_batch.is_empty() {
-                cells_batch.commit()?;
-            }
         }
         if !all_consumptions.is_empty() {
             self.writer.consume_cells_batch_preloaded(
@@ -2946,6 +2946,16 @@ impl Indexer {
                 bulk_sync_mode,
                 "Atomic domain batch commit start"
             );
+            // Commit append-only cell payloads immediately before the domain
+            // batch to minimise the non-atomic window between the two stores.
+            if !cells_batch.is_empty() {
+                cells_batch.commit().with_context(|| {
+                    format!(
+                        "append-only cell payload commit failed for blocks {}-{}",
+                        first_block, last_block
+                    )
+                })?;
+            }
             data_batch.commit().with_context(|| {
                 format!(
                     "atomic domain commit failed for blocks {}-{}",

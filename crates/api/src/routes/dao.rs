@@ -1020,14 +1020,18 @@ async fn calculate_compensation(
     let free = capacity
         .checked_sub(occupied)
         .ok_or_else(|| ApiError::bad_request("Capacity must be at least 102 CKB"))?;
-    let compensation = if ar_deposit > 0 {
-        let gross = free * ar_withdraw as u128 / ar_deposit as u128;
-        gross
-            .checked_sub(free)
-            .ok_or_else(|| ApiError::internal("DAO compensation underflow"))?
-    } else {
-        0
-    };
+    if ar_deposit == 0 {
+        return Err(ApiError::bad_request(
+            "Invalid zero deposit AR — corrupt block header data",
+        ));
+    }
+    let gross = free
+        .checked_mul(ar_withdraw as u128)
+        .ok_or_else(|| ApiError::internal("DAO compensation multiply overflow"))?
+        / ar_deposit as u128;
+    let compensation = gross
+        .checked_sub(free)
+        .ok_or_else(|| ApiError::internal("DAO compensation underflow"))?;
 
     let total = capacity + compensation;
 
