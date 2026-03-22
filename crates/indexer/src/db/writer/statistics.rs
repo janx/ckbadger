@@ -250,8 +250,8 @@ impl BatchWriter {
                     let bt_count = block_time.map(|(_, c)| c).unwrap_or(0);
                     s.avg_block_time_ms = match s.avg_block_time_ms {
                         Some(existing_avg) => {
-                            let prev_count = s.blocks_count as i64;
-                            let new_total = s.blocks_count as i64 + bt_count as i64;
+                            let prev_count = (s.blocks_count as i64 - 1).max(0);
+                            let new_total = prev_count + bt_count as i64;
                             if new_total > 0 {
                                 Some(
                                     (existing_avg * prev_count + new_avg * bt_count as i64)

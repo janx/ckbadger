@@ -123,7 +123,7 @@ fn resolve_consumed_stats(
         for input in &tx.inputs {
             let key = (
                 input.previous_tx_hash.to_vec(),
-                parsed_input_outpoint_index_i16(input.previous_output_index, "stats"),
+                parsed_input_outpoint_index_i16(input.previous_output_index, "stats")?,
             );
             let info = input_cell_info
                 .get(&key)
@@ -235,7 +235,7 @@ fn tx_slice_claimed_dao_compensation(
         for input in &tx.inputs {
             let key = (
                 input.previous_tx_hash.to_vec(),
-                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
+                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?,
             );
             if let Some(compensation) = dao_compensations.get(&key) {
                 claimed = claimed
@@ -1119,21 +1119,15 @@ impl Indexer {
         );
         ensure_pipeline_bulk_path_disabled(bulk_sync_mode, first_block, last_block, chain_tip)?;
 
-        let all_input_outpoints: Vec<(Vec<u8>, i16)> = all_tx_data
-            .iter()
-            .filter(|tx| !tx.is_cellbase)
-            .flat_map(|tx| {
-                tx.inputs.iter().map(|input| {
-                    (
-                        input.previous_tx_hash.to_vec(),
-                        parsed_input_outpoint_index_i16(
-                            input.previous_output_index,
-                            "sync_indexer",
-                        ),
-                    )
-                })
-            })
-            .collect();
+        let mut all_input_outpoints: Vec<(Vec<u8>, i16)> = Vec::new();
+        for tx in all_tx_data.iter().filter(|tx| !tx.is_cellbase) {
+            for input in &tx.inputs {
+                all_input_outpoints.push((
+                    input.previous_tx_hash.to_vec(),
+                    parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?,
+                ));
+            }
+        }
         let unresolved_outpoints = collect_missing_input_outpoints(
             &all_input_outpoints,
             &input_cell_info,
@@ -1195,24 +1189,31 @@ impl Indexer {
                         parsed_input_outpoint_index_i16(
                             input.previous_output_index,
                             "sync_indexer",
-                        ),
+                        )?,
                     );
                     let info = input_cell_info
                         .get(&key)
                         .or_else(|| batch_cell_infos.get(&key));
-                    if let Some(info) = info {
-                        all_consumptions.push((
-                            input.previous_tx_hash.as_slice(),
-                            parsed_input_outpoint_index_i16(
-                                input.previous_output_index,
-                                "sync_indexer",
-                            ),
-                            info.created_at_block,
-                            tx_data.hash.as_slice(),
-                            tx_data.block_number,
-                            input_index_i16,
-                        ));
-                    }
+                    let info = info.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "missing input cell info for consumption: tx=0x{}, input_prev_tx=0x{}, output_index={}, block={}",
+                            hex::encode(tx_data.hash),
+                            hex::encode(input.previous_tx_hash),
+                            input.previous_output_index,
+                            tx_data.block_number
+                        )
+                    })?;
+                    all_consumptions.push((
+                        input.previous_tx_hash.as_slice(),
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "sync_indexer",
+                        )?,
+                        info.created_at_block,
+                        tx_data.hash.as_slice(),
+                        tx_data.block_number,
+                        input_index_i16,
+                    ));
                 }
             }
         }
@@ -1271,14 +1272,21 @@ impl Indexer {
                         parsed_input_outpoint_index_i16(
                             input.previous_output_index,
                             "sync_indexer",
-                        ),
+                        )?,
                     );
                     let info = input_cell_info
                         .get(&key)
                         .or_else(|| batch_cell_infos.get(&key));
-                    if let Some(info) = info {
-                        touched.insert(info.lock_script_hash.clone());
-                    }
+                    let info = info.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "missing input cell info for addr_txs: tx=0x{}, input_prev_tx=0x{}, output_index={}, block={}",
+                            hex::encode(tx_data.hash),
+                            hex::encode(input.previous_tx_hash),
+                            input.previous_output_index,
+                            tx_data.block_number
+                        )
+                    })?;
+                    touched.insert(info.lock_script_hash.clone());
                 }
             }
             for lock_hash in touched {
@@ -1548,7 +1556,7 @@ impl Indexer {
                             parsed_input_outpoint_index_i16(
                                 input.previous_output_index,
                                 "sync_indexer",
-                            ),
+                            )?,
                         ));
                     }
                 }
@@ -1651,7 +1659,7 @@ impl Indexer {
                                 parsed_input_outpoint_index_i16(
                                     input.previous_output_index,
                                     "sync_indexer",
-                                ),
+                                )?,
                             );
                             if let Some(deposit_info) = consumed_dao_map
                                 .get(&key)
@@ -2573,21 +2581,15 @@ impl Indexer {
         // Pre-build consumed DAO deposit map for delta computation
         let dao_code_hash_for_stats =
             crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
-        let all_input_outpoints_for_dao: Vec<(Vec<u8>, i16)> = all_tx_data
-            .iter()
-            .filter(|tx| !tx.is_cellbase)
-            .flat_map(|tx| {
-                tx.inputs.iter().map(|input| {
-                    (
-                        input.previous_tx_hash.to_vec(),
-                        parsed_input_outpoint_index_i16(
-                            input.previous_output_index,
-                            "sync_indexer",
-                        ),
-                    )
-                })
-            })
-            .collect();
+        let mut all_input_outpoints_for_dao: Vec<(Vec<u8>, i16)> = Vec::new();
+        for tx in all_tx_data.iter().filter(|tx| !tx.is_cellbase) {
+            for input in &tx.inputs {
+                all_input_outpoints_for_dao.push((
+                    input.previous_tx_hash.to_vec(),
+                    parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?,
+                ));
+            }
+        }
         let consumed_dao_for_stats = if !all_input_outpoints_for_dao.is_empty() {
             let unique: Vec<(Vec<u8>, i16)> = {
                 let mut seen = HashSet::new();
@@ -2624,7 +2626,7 @@ impl Indexer {
                         parsed_input_outpoint_index_i16(
                             input.previous_output_index,
                             "sync_indexer",
-                        ),
+                        )?,
                     );
                     if let Some(info) = input_cell_info
                         .get(&key)

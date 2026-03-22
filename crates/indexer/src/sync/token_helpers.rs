@@ -535,7 +535,7 @@ pub(crate) fn load_activity_token_info_cache(
         for input in &tx.inputs {
             let key = (
                 input.previous_tx_hash.to_vec(),
-                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
+                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?,
             );
             let cell_info = input_cell_info
                 .get(&key)

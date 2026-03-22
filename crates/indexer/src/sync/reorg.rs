@@ -73,7 +73,7 @@ impl Indexer {
                             parsed_input_outpoint_index_i16(
                                 input.previous_output_index,
                                 "sync_indexer",
-                            ),
+                            )?,
                         );
                         let info = input_cell_info
                             .get(&key)
@@ -205,7 +205,7 @@ impl Indexer {
                             parsed_input_outpoint_index_i16(
                                 input.previous_output_index,
                                 "cell_dist_tracker",
-                            ),
+                            )?,
                         );
                         let info = input_cell_info
                             .get(&key)

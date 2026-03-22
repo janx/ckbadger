@@ -459,7 +459,7 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
         for input in &tx_data.inputs {
             let outpoint = (
                 input.previous_tx_hash.to_vec(),
-                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
+                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?,
             );
             if let Some((_, _, _, _, status)) = consumed_dao_map.get(&outpoint) {
                 if *status == 1 {
@@ -477,7 +477,7 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
         for input in &tx_data.inputs {
             let outpoint = (
                 input.previous_tx_hash.to_vec(),
-                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
+                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?,
             );
             let mut maybe_cap: Option<i64> = same_batch_dao_map.get(&outpoint).copied();
             if maybe_cap.is_none() {

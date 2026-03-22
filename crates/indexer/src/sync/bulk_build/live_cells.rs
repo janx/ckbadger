@@ -35,14 +35,14 @@ impl LiveCellOwner {
         protocol_facts: Option<CellProtocolFacts>,
     ) -> Result<()> {
         let outpoint = slot.outpoint;
-        if let Some(facts) = protocol_facts {
-            self.protocol_facts.insert(outpoint, facts);
-        }
         if self.live.insert(outpoint, slot).is_some() {
             return Err(anyhow!(
                 "duplicate live output insertion: outpoint={}",
                 format_outpoint(&outpoint)
             ));
+        }
+        if let Some(facts) = protocol_facts {
+            self.protocol_facts.insert(outpoint, facts);
         }
         Ok(())
     }

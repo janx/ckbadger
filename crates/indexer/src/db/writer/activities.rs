@@ -591,17 +591,24 @@ fn build_tx_activity_bundle<S: BuildHasher>(
 
         bundle_owners.push(OwnerActivityDelta {
             lock_hash: lock_hash.clone(),
-            lock_code_hash: accum
-                .lock_code_hash
-                .clone()
-                .expect("owner lock_code_hash must be recorded"),
-            lock_hash_type: accum
-                .lock_hash_type
-                .expect("owner lock_hash_type must be recorded"),
-            lock_args: accum
-                .lock_args
-                .clone()
-                .expect("owner lock_args must be recorded"),
+            lock_code_hash: accum.lock_code_hash.clone().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "owner lock_code_hash must be recorded for lock_hash=0x{}",
+                    hex::encode(lock_hash)
+                )
+            })?,
+            lock_hash_type: accum.lock_hash_type.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "owner lock_hash_type must be recorded for lock_hash=0x{}",
+                    hex::encode(lock_hash)
+                )
+            })?,
+            lock_args: accum.lock_args.clone().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "owner lock_args must be recorded for lock_hash=0x{}",
+                    hex::encode(lock_hash)
+                )
+            })?,
             ckb_delta,
             used_delta,
             has_type_script: accum.has_type_script,

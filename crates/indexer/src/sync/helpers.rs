@@ -115,15 +115,18 @@ pub(crate) fn decode_adaptive_batch_reason(reason_code: u8) -> Option<&'static s
 // Outpoint / index helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn parsed_input_outpoint_index_i16(previous_output_index: i32, context: &str) -> i16 {
+pub(crate) fn parsed_input_outpoint_index_i16(
+    previous_output_index: i32,
+    context: &str,
+) -> Result<i16> {
     if previous_output_index < 0 {
-        panic!(
+        return Err(anyhow!(
             "negative input previous_output_index while indexing outpoint: context={}, previous_output_index={}",
             context, previous_output_index
-        );
+        ));
     }
-    i16::try_from(previous_output_index).unwrap_or_else(|_| {
-        panic!(
+    i16::try_from(previous_output_index).map_err(|_| {
+        anyhow!(
             "input previous_output_index exceeds i16 range while indexing outpoint: context={}, previous_output_index={}",
             context, previous_output_index
         )
@@ -328,23 +331,21 @@ mod tests {
 
     #[test]
     fn test_parsed_input_outpoint_index_i16_accepts_non_negative_i16_range() {
-        assert_eq!(parsed_input_outpoint_index_i16(0, "unit-test"), 0);
+        assert_eq!(parsed_input_outpoint_index_i16(0, "unit-test").unwrap(), 0);
         assert_eq!(
-            parsed_input_outpoint_index_i16(i16::MAX as i32, "unit-test"),
+            parsed_input_outpoint_index_i16(i16::MAX as i32, "unit-test").unwrap(),
             i16::MAX
         );
     }
 
     #[test]
-    #[should_panic(expected = "negative input previous_output_index")]
     fn test_parsed_input_outpoint_index_i16_rejects_negative() {
-        let _ = parsed_input_outpoint_index_i16(-1, "unit-test");
+        assert!(parsed_input_outpoint_index_i16(-1, "unit-test").is_err());
     }
 
     #[test]
-    #[should_panic(expected = "input previous_output_index exceeds i16 range")]
     fn test_parsed_input_outpoint_index_i16_rejects_overflow() {
-        let _ = parsed_input_outpoint_index_i16(i16::MAX as i32 + 1, "unit-test");
+        assert!(parsed_input_outpoint_index_i16(i16::MAX as i32 + 1, "unit-test").is_err());
     }
 
     #[test]

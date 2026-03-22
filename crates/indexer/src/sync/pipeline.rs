@@ -1317,13 +1317,23 @@ impl Indexer {
                     if !tx_data.is_cellbase {
                         let mut has_dao_input = false;
                         for input in &tx_data.inputs {
-                            let key = (
-                                input.previous_tx_hash.to_vec(),
-                                parsed_input_outpoint_index_i16(
-                                    input.previous_output_index,
-                                    "sync_indexer",
-                                ),
-                            );
+                            let output_index = match parsed_input_outpoint_index_i16(
+                                input.previous_output_index,
+                                "sync_indexer",
+                            ) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    record_worker_exit_reason(
+                                        &parser_exit_reason_for_parser,
+                                        format!(
+                                            "parsed_input_outpoint_index_i16 failed for range {}-{}: {}",
+                                            start_block, end_block, e
+                                        ),
+                                    );
+                                    return;
+                                }
+                            };
+                            let key = (input.previous_tx_hash.to_vec(), output_index);
                             if let Some(info) = input_cell_info.get(&key) {
                                 tx_data.total_input_capacity += info.capacity;
                                 if info.type_code_hash.as_deref() == Some(dao_code_hash.as_slice())
@@ -1584,13 +1594,23 @@ impl Indexer {
 
                     if !tx_data.is_cellbase {
                         for input in &tx_data.inputs {
-                            let key = (
-                                input.previous_tx_hash.to_vec(),
-                                parsed_input_outpoint_index_i16(
-                                    input.previous_output_index,
-                                    "sync_indexer",
-                                ),
-                            );
+                            let output_index = match parsed_input_outpoint_index_i16(
+                                input.previous_output_index,
+                                "sync_indexer",
+                            ) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    record_worker_exit_reason(
+                                        &parser_exit_reason_for_parser,
+                                        format!(
+                                            "parsed_input_outpoint_index_i16 failed for range {}-{}: {}",
+                                            start_block, end_block, e
+                                        ),
+                                    );
+                                    return;
+                                }
+                            };
+                            let key = (input.previous_tx_hash.to_vec(), output_index);
                             let info = input_cell_info
                                 .get(&key)
                                 .or_else(|| batch_cell_infos.get(&key));

@@ -351,7 +351,11 @@ pub(crate) fn persist_bulk_sync_completion_status(
 
 pub(super) fn mempool_short_tx_id(tx_hash: &str) -> &str {
     // Node-provided tx hashes are always "0x" + 64 hex chars; skip prefix, take first 20.
-    &tx_hash[2..22]
+    if tx_hash.len() >= 22 {
+        &tx_hash[2..22]
+    } else {
+        tx_hash
+    }
 }
 
 const STARTUP_CONTINUITY_WINDOW_BLOCKS: i64 = 512;

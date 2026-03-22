@@ -191,12 +191,15 @@ impl ProtocolDetector for StableppDetector {
         &self,
         tx: &TxView<'_>,
         _owner_lock_hash: &[u8],
-        _accum: &OwnerAccum,
+        accum: &OwnerAccum,
         asset_changes: &[AssetChange],
         type_calls: &[TypeCallEntry],
         lock_calls: &[LockCallEntry],
     ) -> Vec<ProtocolAction> {
         if !self.has_stablepp_scripts(tx, type_calls, lock_calls) {
+            return vec![];
+        }
+        if accum.input_capacity == 0 {
             return vec![];
         }
 
