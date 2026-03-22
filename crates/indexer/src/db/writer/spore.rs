@@ -582,6 +582,7 @@ impl BatchWriter {
                 &spore.content_type,
                 &spore.content,
                 cluster_description.as_deref(),
+                false,
             )
         };
         let new_live_tier = media_profile.tier;

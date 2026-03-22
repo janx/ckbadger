@@ -28,6 +28,7 @@ pub fn analyze_spore_media_profile(
     content_type: &str,
     content: &[u8],
     cluster_description: Option<&str>,
+    skip_dob_decode: bool,
 ) -> SporeMediaProfile {
     let normalized_type = content_type.trim().to_ascii_lowercase();
     let mut sources = Vec::new();
@@ -52,12 +53,16 @@ pub fn analyze_spore_media_profile(
         match decode_text_payload(content) {
             Ok(text) => {
                 if normalized_type.starts_with("dob/") {
-                    let (mut dob_sources, dob_rendered) =
-                        extract_dob_media_sources(&text, cluster_description, &mut issues);
-                    sources.append(&mut dob_sources);
-                    if dob_rendered {
-                        has_renderable_image = true;
+                    if !skip_dob_decode {
+                        let (mut dob_sources, dob_rendered) =
+                            extract_dob_media_sources(&text, cluster_description, &mut issues);
+                        sources.append(&mut dob_sources);
+                        if dob_rendered {
+                            has_renderable_image = true;
+                        }
                     }
+                    // When skipped, DOB media sources will be backfilled
+                    // by the background DOB decode worker after sync.
                 } else {
                     extract_uri_sources(&text, "payload_text", &mut sources);
                     if text.to_ascii_lowercase().contains("<svg") {
@@ -771,8 +776,12 @@ mod tests {
 
     #[test]
     fn classifies_http_as_centralized_dependency() {
-        let profile =
-            analyze_spore_media_profile("text/plain", b"https://cdn.example.com/image.png", None);
+        let profile = analyze_spore_media_profile(
+            "text/plain",
+            b"https://cdn.example.com/image.png",
+            None,
+            false,
+        );
         assert_eq!(profile.tier, StorageDependencyTier::CentralizedDependent);
         assert_eq!(profile.sources.len(), 1);
         assert_eq!(profile.sources[0].scheme, "https");
@@ -784,6 +793,7 @@ mod tests {
             "image/svg+xml",
             br#"<svg><image href="btcfs://abcd1234i0" /></svg>"#,
             None,
+            false,
         );
         assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkbAndBtc);
         assert!(profile.has_renderable_image);
@@ -793,7 +803,7 @@ mod tests {
     #[test]
     fn classifies_ipfs_as_decentralized_dependent() {
         let profile =
-            analyze_spore_media_profile("text/plain", b"ipfs://QmHashValue1234567890", None);
+            analyze_spore_media_profile("text/plain", b"ipfs://QmHashValue1234567890", None, false);
         assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
     }
 
@@ -820,7 +830,7 @@ mod tests {
         })
         .to_string();
 
-        let profile = analyze_spore_media_profile("dob/0", b"01", Some(&metadata));
+        let profile = analyze_spore_media_profile("dob/0", b"01", Some(&metadata), false);
         assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkbAndBtc);
         assert!(profile
             .sources
@@ -853,6 +863,7 @@ mod tests {
             "ipfs/image;ipfs=QmTndjp4f6Z9vnM59AgYGHjep841FVE98EXEeWvWjETmSL",
             b"QmTndjp4f6Z9vnM59AgYGHjep841FVE98EXEeWvWjETmSL",
             None,
+            false,
         );
         assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
         assert!(profile.has_renderable_image);
@@ -867,6 +878,7 @@ mod tests {
             "image/png;ipfs=QmcT5YhBVpqHLGUwPkAtfmhsPUUxsXEihQXdFGDfTjUEeE",
             b"\x89PNG\r\n\x1a\n",
             None,
+            false,
         );
         // Has IPFS source so tier is DecentralizedDependent (even though binary is on-chain)
         assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
@@ -878,7 +890,8 @@ mod tests {
 
     #[test]
     fn ipfs_cid_content_type_without_param_extracts_from_payload() {
-        let profile = analyze_spore_media_profile("ipfs/cid", b"QmHashValue1234567890abcdef", None);
+        let profile =
+            analyze_spore_media_profile("ipfs/cid", b"QmHashValue1234567890abcdef", None, false);
         assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
         assert!(profile
             .sources
@@ -888,14 +901,16 @@ mod tests {
 
     #[test]
     fn classifies_ckbfs_as_fully_on_ckb() {
-        let profile = analyze_spore_media_profile("text/plain", b"ckbfs://somecellhash", None);
+        let profile =
+            analyze_spore_media_profile("text/plain", b"ckbfs://somecellhash", None, false);
         assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkb);
         assert!(profile.sources.iter().any(|s| s.scheme == "ckbfs"));
     }
 
     #[test]
     fn classifies_inline_binary_as_fully_on_ckb() {
-        let profile = analyze_spore_media_profile("image/png", &[0x89, 0x50, 0x4E, 0x47], None);
+        let profile =
+            analyze_spore_media_profile("image/png", &[0x89, 0x50, 0x4E, 0x47], None, false);
         assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkb);
     }
 
@@ -918,7 +933,7 @@ mod tests {
         })
         .to_string();
 
-        let profile = analyze_spore_media_profile("dob/0", b"aabbcc", Some(&metadata));
+        let profile = analyze_spore_media_profile("dob/0", b"aabbcc", Some(&metadata), false);
         assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkbAndBtc);
         assert!(profile.sources.iter().any(|s| s.scheme == "btcfs"));
     }
@@ -937,7 +952,7 @@ mod tests {
         })
         .to_string();
 
-        let profile = analyze_spore_media_profile("dob/0", b"00", Some(&metadata));
+        let profile = analyze_spore_media_profile("dob/0", b"00", Some(&metadata), false);
         assert_eq!(profile.tier, StorageDependencyTier::DecentralizedDependent);
         assert!(profile.sources.iter().any(|s| s.scheme == "ipfs"));
     }
@@ -949,6 +964,7 @@ mod tests {
             "text/plain",
             b"ckbfs://cellhash123 btcfs://inscriptioni0",
             None,
+            false,
         );
         assert_eq!(profile.tier, StorageDependencyTier::FullyOnCkbAndBtc);
         assert!(profile.sources.iter().any(|s| s.scheme == "ckbfs"));

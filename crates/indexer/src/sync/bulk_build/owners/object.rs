@@ -772,6 +772,7 @@ impl ObjectOwner {
             &spore.content_type,
             &spore.content,
             cluster_description.as_deref(),
+            true, // skip DOB decode during bulk sync; backfilled by background worker
         );
         let new_tier = media_profile.tier;
 
