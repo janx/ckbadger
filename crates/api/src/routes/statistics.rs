@@ -8,7 +8,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_common::dao::GENESIS_BURNT;
-use ckbadger_common::sync::{format_duration_smart, SyncProgressData};
+use ckbadger_common::sync::{format_duration_smart, BackgroundTaskEntry, SyncProgressData};
 use ckbadger_store::types::{DailyAddressCohort, DailyCellDistribution};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -137,6 +137,8 @@ pub struct NetworkStats {
     pub knowledge_size: Option<String>,
     pub circulating_supply: Option<String>,
     pub dao_locked: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_background_tasks: Option<Vec<BackgroundTaskEntry>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,20 +168,34 @@ pub struct CapacityCategory {
 }
 
 async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<NetworkStats> {
-    if let Some(cached) = state
+    let mut stats = if let Some(cached) = state
         .cache
         .get::<NetworkStats>(CacheKeys::NETWORK_STATS)
         .await
     {
-        return ok(cached);
-    }
+        cached
+    } else {
+        let fresh = fetch_network_stats_from_db(&state).await?;
+        state
+            .cache
+            .set(CacheKeys::NETWORK_STATS, &fresh, CacheTtl::NETWORK_STATS)
+            .await;
+        fresh
+    };
 
-    let stats = fetch_network_stats_from_db(&state).await?;
-
-    state
-        .cache
-        .set(CacheKeys::NETWORK_STATS, &stats, CacheTtl::NETWORK_STATS)
-        .await;
+    // Inject live background-task status after cache so it is never stale.
+    let api_bg_tasks = {
+        let data = state
+            .background_tasks
+            .read()
+            .expect("background tasks lock poisoned");
+        if data.tasks.is_empty() {
+            None
+        } else {
+            Some(data.tasks.clone())
+        }
+    };
+    stats.api_background_tasks = api_bg_tasks;
 
     ok(stats)
 }
@@ -2282,6 +2298,7 @@ async fn fetch_network_stats_from_db(
         knowledge_size,
         circulating_supply,
         dao_locked,
+        api_background_tasks: None,
     })
 }
 
