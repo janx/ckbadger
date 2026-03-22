@@ -14,10 +14,11 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Capacity } from '@/components/ui/capacity';
-import { HMultiplier } from '@/components/ui/h-multiplier';
+import { CapacityUtilization } from '@/components/ui/capacity-utilization';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
 import { HelpPopover } from '@/components/ui/help-popover';
+import { HMulHelpPopover, computeHMulValue, formatHMulValue } from '@/components/ui/hmul-info';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api } from '@/lib/api';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
@@ -626,6 +627,11 @@ export default function ScriptDetailPage({
   const selectedVersionUsage = selectedVersion
     ? usageByCodeHash.get(selectedVersion.codeHash)
     : undefined;
+  const selectedVersionHMul = computeHMulValue(
+    selectedVersionUsage?.ownedCapacitySum,
+    selectedVersionUsage?.ownedKnowledgeSum
+  );
+  const selectedVersionHMulLabel = formatHMulValue(selectedVersionHMul) ?? '-';
   const selectedVersionCellsData = useMemo(() => {
     const total = selectedVersionUsage?.liveCellsCount ?? 0;
     const merged = new Map<
@@ -1736,13 +1742,26 @@ export default function ScriptDetailPage({
               </TerminalPanelContent>
             </TerminalPanel>
             <TerminalPanel>
-              <TerminalPanelHeader indicator="none">Usage</TerminalPanelHeader>
+              <TerminalPanelHeader
+                indicator="none"
+                actions={
+                  <div className="flex items-center gap-2">
+                    <span className="text-gold font-mono text-xs tabular-nums">
+                      HMul: {selectedVersionHMulLabel}
+                    </span>
+                    <HMulHelpPopover align="end" />
+                  </div>
+                }
+              >
+                Usage
+              </TerminalPanelHeader>
               <TerminalPanelContent padding="none">
                 {selectedVersionUsage && (
                   <div className="border-base-border border-b px-4 py-4">
-                    <HMultiplier
+                    <CapacityUtilization
                       totalCapacity={selectedVersionUsage.ownedCapacitySum}
                       commonKnowledgeSize={selectedVersionUsage.ownedKnowledgeSum}
+                      totalLabel="Owned Capacity"
                     />
                   </div>
                 )}

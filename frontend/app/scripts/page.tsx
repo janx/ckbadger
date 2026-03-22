@@ -178,9 +178,6 @@ export default function ScriptsPage() {
                         <div className="w-24 shrink-0">
                           <div className="bg-base-elevated ml-auto h-4 w-14 rounded" />
                         </div>
-                        <div className="w-24 shrink-0">
-                          <div className="bg-base-elevated ml-auto h-4 w-14 rounded" />
-                        </div>
                       </div>
                       <div className="w-28 shrink-0">
                         <div className="bg-base-elevated ml-auto h-4 w-20 rounded" />
@@ -218,7 +215,6 @@ export default function ScriptsPage() {
                   <div className="hidden xl:contents">
                     {renderSortHeader('liveCells', 'Live Cells', 'w-24 shrink-0', 'right')}
                     {renderSortHeader('cells', 'Total Cells', 'w-24 shrink-0', 'right')}
-                    <div className="w-24 shrink-0 text-right">Deployed</div>
                   </div>
                   {renderSortHeader('used', 'Used (CKB)', 'w-28 shrink-0', 'right')}
                   {renderSortHeader('capacity', 'Capacity (CKB)', 'w-28 shrink-0', 'right')}
@@ -276,18 +272,6 @@ export default function ScriptsPage() {
                           {script.cellsCount != null
                             ? new Intl.NumberFormat().format(script.cellsCount)
                             : '-'}
-                        </div>
-                        <div className="text-text-dim w-24 shrink-0 text-right font-mono tabular-nums">
-                          {script.deployedAt != null ? (
-                            <AppLink
-                              href={`/blocks/${script.deployedAt}`}
-                              className="hover:text-emphasis hover:underline"
-                            >
-                              #{new Intl.NumberFormat().format(script.deployedAt)}
-                            </AppLink>
-                          ) : (
-                            '-'
-                          )}
                         </div>
                       </div>
                       <div className="text-text w-28 shrink-0 text-right font-mono">

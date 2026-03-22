@@ -547,6 +547,18 @@ describe('ScriptDetailPage', () => {
         'Historical common knowledge and free live capacity for the selected version.'
       )
     ).toBeInTheDocument();
+    const usagePanel = findNearestContainer(screen.getByText('Usage'), (element) => {
+      const queries = within(element);
+      return (
+        queries.queryByText('Usage') !== null &&
+        queries.queryByText('Owned Capacity') !== null &&
+        queries.queryByText(/^Free Capacity:/) !== null
+      );
+    });
+    expect(within(usagePanel).getByText(/HMul:/)).toBeInTheDocument();
+    expect(within(usagePanel).getByRole('button', { name: 'Explain HMul' })).toBeInTheDocument();
+    expect(within(usagePanel).getByText('Owned Capacity')).toBeInTheDocument();
+    expect(within(usagePanel).getByText(/^Free Capacity:/)).toBeInTheDocument();
     expect(
       screen.getByText('Live cells currently using the selected version.')
     ).toBeInTheDocument();

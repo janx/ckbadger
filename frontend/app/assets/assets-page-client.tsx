@@ -17,6 +17,7 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { HMulHelpPopover } from '@/components/ui/hmul-info';
 import { api, Asset } from '@/lib/api';
 import {
   getClusterDetailHref,
@@ -340,7 +341,10 @@ function AssetTable({
         <div className="hidden xl:contents">
           {assetType === 'token' &&
             renderSortHeader('supply', 'Circulation', capacityColumnClass, 'right')}
-          {renderSortHeader('hMultiplier', 'HM', capacityColumnClass, 'right')}
+          <div className={`${capacityColumnClass} flex items-center justify-end gap-1`}>
+            {renderSortHeader('hMultiplier', 'HMul', 'w-auto shrink-0', 'right')}
+            <HMulHelpPopover align="end" />
+          </div>
           {renderSortHeader('used', 'Used', capacityColumnClass, 'right')}
         </div>
         {renderSortHeader('capacity', 'Capacity', capacityColumnClass, 'right')}
@@ -448,7 +452,7 @@ function AssetTable({
               className={`${capacityColumnClass} text-text hidden font-mono tabular-nums xl:block`}
             >
               {asset.hMultiplier != null ? (
-                <span title={`H-Multiplier: capacity / used = ×${asset.hMultiplier.toFixed(2)}`}>
+                <span title={`HMul: ×${asset.hMultiplier.toFixed(2)}`}>
                   ×{asset.hMultiplier.toFixed(2)}
                 </span>
               ) : (

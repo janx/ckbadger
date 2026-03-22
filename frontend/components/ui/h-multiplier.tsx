@@ -1,5 +1,6 @@
 'use client';
 
+import { HMulHelpPopover } from '@/components/ui/hmul-info';
 import { formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 
 interface HMultiplierProps {
@@ -20,7 +21,7 @@ function parseBigInt(value: string): bigint | null {
 export function HMultiplier({
   totalCapacity,
   commonKnowledgeSize,
-  totalLabel = 'Cells Capacity',
+  totalLabel = 'Owned Capacity',
   className,
 }: HMultiplierProps) {
   const zero = BigInt(0);
@@ -62,7 +63,10 @@ export function HMultiplier({
         >
           Common Knowledge: {formatCkbCompact(used.toString()).value} CKB
         </span>
-        <span className="text-gold font-mono text-xs tabular-nums">HMul: {hmul.toFixed(2)}x</span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="text-gold font-mono text-xs tabular-nums">HMul: {hmul.toFixed(2)}x</span>
+          <HMulHelpPopover align="end" />
+        </span>
       </div>
     </div>
   );

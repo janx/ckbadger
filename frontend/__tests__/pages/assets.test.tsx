@@ -655,14 +655,15 @@ describe('AssetsPage', () => {
     }
   });
 
-  it('renders the HM column and supports sorting by HM', async () => {
+  it('renders the HMul column and supports sorting by HMul', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(sortableTokenAssets);
     render(<AssetsPage />);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Sort by HM' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by HMul' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Explain HMul' })).toBeInTheDocument();
       expect(screen.getByText('×2.00')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by HM' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by HMul' }));
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
         expect.objectContaining({ sortKey: 'hMultiplier', sortDirection: 'desc' })

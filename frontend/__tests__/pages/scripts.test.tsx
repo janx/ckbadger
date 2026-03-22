@@ -106,7 +106,9 @@ describe('ScriptsPage', () => {
     expect(screen.getAllByText('lock')[0]).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sort by Live Cells' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sort by Total Cells' })).toBeInTheDocument();
-    expect(screen.getByText('Deployed')).toBeInTheDocument();
+    expect(screen.queryByText('Deployed')).toBeNull();
+    expect(screen.queryByRole('link', { name: '#0' })).toBeNull();
+    expect(screen.queryByRole('link', { name: '#100' })).toBeNull();
     expect(screen.getByText('Capacity (CKB)')).toBeInTheDocument();
     expect(screen.queryByText('Utilization Ratio')).toBeNull();
     expect(screen.getByRole('button', { name: 'Sort by Used (CKB)' })).toBeInTheDocument();
