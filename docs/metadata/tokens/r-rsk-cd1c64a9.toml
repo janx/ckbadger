@@ -1,5 +1,5 @@
-name = "R-RSK"
-symbol = "R-RSK"
+name = "R-\u007FRSK"
+symbol = "R-\u007FRSK"
 decimals = 18
 standard = "xudt"
 

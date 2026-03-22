@@ -50,12 +50,18 @@ def is_zero_hash(h: str) -> bool:
 
 def escape_toml_string(s: str) -> str:
     """Escape a string for TOML double-quoted value."""
-    s = s.replace("\\", "\\\\")
-    s = s.replace('"', '\\"')
-    s = s.replace("\n", "\\n")
-    s = s.replace("\r", "\\r")
-    s = s.replace("\t", "\\t")
-    return s
+    result = []
+    for c in s:
+        if c == '\\': result.append('\\\\')
+        elif c == '"': result.append('\\"')
+        elif c == '\n': result.append('\\n')
+        elif c == '\r': result.append('\\r')
+        elif c == '\t': result.append('\\t')
+        elif ord(c) < 0x20 or ord(c) == 0x7F:
+            result.append(f'\\u{ord(c):04X}')
+        else:
+            result.append(c)
+    return ''.join(result)
 
 
 def toml_str(val: str) -> str:

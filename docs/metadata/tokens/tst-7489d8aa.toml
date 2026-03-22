@@ -1,5 +1,5 @@
 name = "tes"
-symbol = "TST"
+symbol = "\u0003TST"
 decimals = 8
 standard = "xudt_compatible"
 
