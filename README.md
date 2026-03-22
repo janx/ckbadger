@@ -142,7 +142,7 @@ ckbadger-v0.1.0-linux-x86_64/
 │   └── ckbadger               # Single binary
 └── share/
     ├── frontend/              # Static web assets
-    └── token-labels/          # Default token label data
+    └── metadata/              # Bundled token/script metadata
 ```
 
 ### Usage
@@ -214,8 +214,7 @@ level = "info"
 ```
 ./
 ├── ckbadger.toml              # Sole configuration file
-├── token-labels/              # Optional: overrides share/token-labels
-├── labels.toml                # Optional: overrides imported label info
+├── metadata/              # Optional: local metadata overrides
 ├── data/
 │   ├── domain/                # Mutable canonical state (RocksDB)
 │   └── append-only/           # Immutable history (RocksDB)
@@ -589,7 +588,7 @@ ckbadger/
 ├── docs/                   # Documentation & references
 │   ├── rfcs/               # [submodule] CKB RFCs - protocol specs
 │   ├── docs.nervos.org/    # [submodule] Official Nervos docs
-│   ├── token-labels/       # [submodule] Known token metadata
+│   ├── metadata/           # Bundled token/script metadata (compiled in)
 │   └── plans/              # Design documents and implementation plans
 ├── .github/workflows/      # CI/CD pipelines
 └── Makefile                # Dev shortcuts
@@ -635,12 +634,7 @@ cd frontend && pnpm install && pnpm dev
 ckbadger label-import
 ```
 
-Token labels lookup order:
-
-1. `<work_dir>/token-labels/` (if exists)
-2. `<install_dir>/share/token-labels/` (default)
-
-Optional `labels.toml` in work directory can override imported label info (script name overrides, NFT storage tiers, deprecated entries).
+Labels are bundled at compile time from `docs/metadata/`. Optional workdir override: place TOML files in `<work_dir>/metadata/`.
 
 `label_import` also auto-runs when the indexer starts.
 

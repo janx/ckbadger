@@ -4,9 +4,6 @@
 [submodule "docs/rfcs"]
 	path = docs/rfcs
 	url = https://github.com/nervosnetwork/rfcs.git
-[submodule "docs/token-labels"]
-	path = docs/token-labels
-	url = https://github.com/appfi5/ckb-labels.git
 [submodule "docs/dob-cookbook"]
 	path = docs/dob-cookbook
 	url = https://github.com/sporeprotocol/dob-cookbook.git

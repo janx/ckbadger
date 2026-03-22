@@ -187,7 +187,7 @@ Sync progress and memory stats are stored in RocksDB (`get_sync_tip()`/`get_sync
 
 ## Label Import
 
-`label_import` auto-runs on indexer start if `token-labels/information/` exists in the workdir, or bundled/share token labels are available. Manual: `ckbadger label-import`.
+`label_import` auto-runs on indexer start. Labels are bundled at compile time from `docs/metadata/`. Optional workdir override: place TOML files in `<work_dir>/metadata/`. Manual: `ckbadger label-import`.
 
 ## ckbadger-store (Embedded Storage Engine)
 
