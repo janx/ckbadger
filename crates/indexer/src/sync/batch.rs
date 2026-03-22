@@ -2273,6 +2273,21 @@ impl Indexer {
                                     false,
                                 );
                             }
+                        } else if let Some(info) = input_cell_info
+                            .get(&key)
+                            .or_else(|| batch_cell_infos.get(&key))
+                        {
+                            if let Some(tch) = info.type_code_hash.as_ref() {
+                                if SporeParser::is_spore_type_script(tch) {
+                                    bail!(
+                                        "spore outpoint-id mapping missing for consumed spore cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
+                                        block_number,
+                                        hex::encode(consuming_tx_hash),
+                                        hex::encode(&key.0),
+                                        key.1
+                                    );
+                                }
+                            }
                         }
                         if let Some(token_id) = mnft_map.get(&key) {
                             let should_consume = should_consume_grouped_mnft_token(
@@ -2296,6 +2311,21 @@ impl Indexer {
                                         *ctx_tx_idx,
                                         *ctx_ts_ms,
                                         false,
+                                    );
+                                }
+                            }
+                        } else if let Some(info) = input_cell_info
+                            .get(&key)
+                            .or_else(|| batch_cell_infos.get(&key))
+                        {
+                            if let Some(tch) = info.type_code_hash.as_ref() {
+                                if MnftParser::is_token_type_script(tch) {
+                                    bail!(
+                                        "mNFT outpoint-id mapping missing for consumed mNFT cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
+                                        block_number,
+                                        hex::encode(consuming_tx_hash),
+                                        hex::encode(&key.0),
+                                        key.1
                                     );
                                 }
                             }
@@ -2948,6 +2978,14 @@ impl Indexer {
             );
             // Commit append-only cell payloads immediately before the domain
             // batch to minimise the non-atomic window between the two stores.
+            //
+            // SAFETY: append-only commits first because orphan cell payloads (crash
+            // after CF_CELLS commit, before domain commit) are inert — content-addressed
+            // by outpoint, never referenced until the domain batch also lands, and
+            // overwritten with identical data on re-sync.  The reverse order (domain
+            // first) would leave live_cell_markers pointing at missing payloads,
+            // breaking cross-store reads.  Startup cleanup only inspects domain state;
+            // orphan payloads in CF_CELLS are harmless and require no rollback.
             if !cells_batch.is_empty() {
                 cells_batch.commit().with_context(|| {
                     format!(

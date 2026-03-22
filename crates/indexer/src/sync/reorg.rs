@@ -77,29 +77,36 @@ impl Indexer {
                         );
                         let info = input_cell_info
                             .get(&key)
-                            .or_else(|| batch_cell_infos.get(&key));
-                        if let Some(info) = info {
-                            let lock_hash = &info.cell.lock_script_hash;
-                            let old_live = live_cells_by_lock.get(lock_hash).copied().unwrap_or(0);
-                            let new_live = old_live.checked_add(-1).ok_or_else(|| {
+                            .or_else(|| batch_cell_infos.get(&key))
+                            .ok_or_else(|| {
                                 anyhow!(
-                                    "holder_count live_cells overflow (consume) in HODL tracker: lock_hash=0x{}, old_live={}",
-                                    hex::encode(lock_hash),
-                                    old_live
+                                    "missing input cell info in HODL tracker: block={}, tx_hash=0x{}, prev_outpoint=0x{}:{}",
+                                    parsed.number,
+                                    hex::encode(tx_data.hash),
+                                    hex::encode(input.previous_tx_hash),
+                                    input.previous_output_index
                                 )
                             })?;
-                            if new_live < 0 {
-                                anyhow::bail!(
-                                    "holder_count live_cells underflow in HODL tracker: lock_hash=0x{}, old_live={}, new_live={}",
-                                    hex::encode(lock_hash),
-                                    old_live,
-                                    new_live
-                                );
-                            }
-                            tracker.update_holder_count(old_live, new_live)?;
-                            live_cells_by_lock.insert(lock_hash.clone(), new_live);
-                            tracker.cell_consumed(info.created_at_block, info.capacity)?;
+                        let lock_hash = &info.cell.lock_script_hash;
+                        let old_live = live_cells_by_lock.get(lock_hash).copied().unwrap_or(0);
+                        let new_live = old_live.checked_add(-1).ok_or_else(|| {
+                            anyhow!(
+                                "holder_count live_cells overflow (consume) in HODL tracker: lock_hash=0x{}, old_live={}",
+                                hex::encode(lock_hash),
+                                old_live
+                            )
+                        })?;
+                        if new_live < 0 {
+                            anyhow::bail!(
+                                "holder_count live_cells underflow in HODL tracker: lock_hash=0x{}, old_live={}, new_live={}",
+                                hex::encode(lock_hash),
+                                old_live,
+                                new_live
+                            );
                         }
+                        tracker.update_holder_count(old_live, new_live)?;
+                        live_cells_by_lock.insert(lock_hash.clone(), new_live);
+                        tracker.cell_consumed(info.created_at_block, info.capacity)?;
                     }
                 }
                 // Cell creates — update holder count then age tracker
@@ -209,15 +216,22 @@ impl Indexer {
                         );
                         let info = input_cell_info
                             .get(&key)
-                            .or_else(|| batch_cell_infos.get(&key));
-                        if let Some(info) = info {
-                            tracker.cell_consumed(info.occupied_capacity)?;
+                            .or_else(|| batch_cell_infos.get(&key))
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "missing input cell info in cell distribution tracker: block={}, tx_hash=0x{}, prev_outpoint=0x{}:{}",
+                                    parsed.number,
+                                    hex::encode(tx_data.hash),
+                                    hex::encode(input.previous_tx_hash),
+                                    input.previous_output_index
+                                )
+                            })?;
+                        tracker.cell_consumed(info.occupied_capacity)?;
 
-                            let lock_hash = &info.cell.lock_script_hash;
-                            let entry = tx_addr_deltas.entry(lock_hash.clone()).or_insert((0, 0));
-                            entry.0 -= info.occupied_capacity as i128; // used_capacity_delta
-                            entry.1 -= info.capacity as i128; // balance_delta
-                        }
+                        let lock_hash = &info.cell.lock_script_hash;
+                        let entry = tx_addr_deltas.entry(lock_hash.clone()).or_insert((0, 0));
+                        entry.0 -= info.occupied_capacity as i128; // used_capacity_delta
+                        entry.1 -= info.capacity as i128; // balance_delta
                     }
                 }
 
