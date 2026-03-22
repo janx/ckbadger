@@ -45,6 +45,7 @@ pub(crate) mod interner;
 pub(crate) mod live_cells;
 pub(crate) mod materialize;
 pub(crate) mod owners;
+#[allow(dead_code)]
 pub(crate) mod prefetch;
 pub(crate) mod sampler;
 pub(crate) mod sequencer;
@@ -57,7 +58,6 @@ const BULK_BUILD_MS_PER_BLOCK_ALPHA: f64 = 0.5;
 const BULK_BUILD_INITIAL_MS_PER_BLOCK: f64 = 0.05;
 const BULK_BUILD_MAX_STEP_RATIO: f64 = 2.0;
 const FLUSH_CHANNEL_DEPTH: usize = 4;
-const PREFETCH_DEPTH: usize = 4;
 
 #[derive(Default)]
 pub(crate) struct BulkBuildEngine;
@@ -134,25 +134,14 @@ impl BulkBuildEngine {
         let mut batch_block_span = configured_batch_size;
         let mut ms_per_block_ema: f64 = BULK_BUILD_INITIAL_MS_PER_BLOCK;
         let mut batch_count: u64 = 0;
-        // Compute initial handoff_target for the prefetch worker.
-        let initial_chain_tip = ckb_store
-            .tip_number()
-            .ok_or_else(|| anyhow!("failed to get chain tip from CKB RocksDB for prefetch init"))?;
-        let initial_handoff = initial_chain_tip.saturating_sub(indexer.config.bulk_sync_threshold);
-        let prefetch_start = if indexer.progress.current() == 0 {
-            0
-        } else {
-            indexer.progress.current() + 1
-        };
-        let mut prefetch = prefetch::PrefetchChannelHandle::new(
-            PREFETCH_DEPTH,
-            ckb_store.clone(),
-            Arc::clone(&fetch_pool),
-            prefetch_start,
-            initial_handoff,
-            configured_batch_size,
-            sampler.subscribe(),
-        );
+        // Pre-fetched blocks from the previous iteration's background fetch.
+        // None on first iteration; populated when the next batch is fetched
+        // concurrently with the current batch's CPU-bound processing.
+        let mut prefetched_blocks: Option<(
+            Vec<binary_facts::RawCkbBlock>,
+            std::time::Duration,
+            u64,
+        )> = None;
         // Bounded flush channel: the build loop sends PendingFlush into
         // a channel. A dedicated worker drains it serially, committing
         // each batch to RocksDB. Build only blocks when the channel is
@@ -183,33 +172,111 @@ impl BulkBuildEngine {
                 break;
             }
 
-            // Receive next batch from prefetch pipeline.
-            let recv_started = Instant::now();
-            let prefetch_result = match prefetch.recv().await {
-                Ok(result) => result,
-                Err(e) => {
-                    info!(error = %e, "prefetch channel closed, ending bulk build loop");
-                    break;
-                }
+            // Fresh DB: progress.current() == 0 means "no blocks processed yet",
+            // not "block 0 has been processed". On the first batch, start from
+            // genesis (block 0). After the first batch, current() reflects the
+            // last completed block, so start from current + 1.
+            let start_block = if current_block == 0 && batch_count == 0 {
+                0
+            } else {
+                current_block.checked_add(1).ok_or_else(|| {
+                    anyhow!(
+                        "bulk build start block overflow: current_block={}",
+                        current_block
+                    )
+                })?
             };
-            let prefetch_recv_elapsed = recv_started.elapsed();
+            let handoff_target = chain_tip.saturating_sub(indexer.config.bulk_sync_threshold);
+            if start_block > handoff_target {
+                break;
+            }
 
-            let (blocks, fetch_elapsed, effective_end) = (
-                prefetch_result.blocks,
-                prefetch_result.fetch_elapsed,
-                prefetch_result.effective_end,
+            let end_block = std::cmp::min(
+                start_block
+                    .checked_add(batch_block_span.saturating_sub(1))
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "bulk build end block overflow: start_block={} batch_block_span={}",
+                            start_block,
+                            batch_block_span
+                        )
+                    })?,
+                handoff_target,
             );
+
+            // Use prefetched blocks from previous iteration if available,
+            // otherwise fetch synchronously (first iteration or after no prefetch).
+            // effective_end tracks the actual last block in the fetched data,
+            // which may be less than end_block if the prefetch used a stale
+            // handoff_target (tip advanced between iterations).
+            let (blocks, fetch_elapsed, effective_end) =
+                if let Some((blocks, elapsed, prefetched_end)) = prefetched_blocks.take() {
+                    (blocks, elapsed, prefetched_end)
+                } else {
+                    let fetch_started = Instant::now();
+                    let store = ckb_store.clone();
+                    let s = start_block;
+                    let e = end_block;
+                    let blocks = tokio::task::spawn_blocking(move || {
+                        Indexer::fetch_blocks_direct_binary(&store, s, e, None)
+                    })
+                    .await
+                    .map_err(|e| anyhow!("bulk build fetch task panicked: {}", e))??;
+                    (blocks, fetch_started.elapsed(), end_block)
+                };
+
+            // Compute next batch boundaries and spawn a background prefetch.
+            // Uses effective_end (actual fetched range) rather than end_block
+            // (desired range) to avoid gaps when the tip advances between
+            // iterations and the prefetch used a stale handoff_target.
+            // Note: batch_block_span here may be stale (not yet updated by
+            // adaptive sizing below), so the prefetch range may over- or
+            // under-fetch. This is acceptable: effective_end corrects for it
+            // on the next iteration, and moving the prefetch after adaptive
+            // sizing would eliminate the fetch/compute overlap benefit.
+            let next_start = effective_end.saturating_add(1);
+            let next_end = std::cmp::min(
+                next_start.saturating_add(batch_block_span.saturating_sub(1)),
+                handoff_target,
+            );
+            let prefetch_handle = if next_start <= handoff_target {
+                let store = ckb_store.clone();
+                let pool = Arc::clone(&fetch_pool);
+                Some(tokio::task::spawn_blocking(move || {
+                    let started = Instant::now();
+                    let blocks = Indexer::fetch_blocks_direct_binary(
+                        &store,
+                        next_start,
+                        next_end,
+                        Some(&pool),
+                    )?;
+                    Ok::<_, anyhow::Error>((blocks, started.elapsed(), next_end))
+                }))
+            } else {
+                None
+            };
 
             let build_started = Instant::now();
             let (batch_stats, build_timings, pending_flush) =
                 runtime.apply_blocks(&blocks, indexer.config.is_mainnet(), &token_info_cache)?;
             let build_elapsed = build_started.elapsed();
 
-            // controllable_ms: build + prefetch_recv. Excludes flush_wait because
+            // Collect prefetched next batch (typically already done since build >> fetch).
+            let collect_started = Instant::now();
+            if let Some(handle) = prefetch_handle {
+                prefetched_blocks = Some(
+                    handle
+                        .await
+                        .map_err(|e| anyhow!("bulk build prefetch task panicked: {}", e))??,
+                );
+            }
+            let prefetch_collect_elapsed = collect_started.elapsed();
+
+            // controllable_ms: build + prefetch_collect. Excludes flush_wait because
             // flush depends on RocksDB compaction, not batch size. Including flush_wait
             // would create a positive feedback loop (slow flush → shrink batch → faster
             // build → longer flush wait → shrink more → drives to minimum floor).
-            let controllable_ms = (build_elapsed + prefetch_recv_elapsed).as_secs_f64() * 1000.0;
+            let controllable_ms = (build_elapsed + prefetch_collect_elapsed).as_secs_f64() * 1000.0;
 
             // Read the most recent flush_ms from the worker (non-blocking).
             prev_flush_ms = flush_channel.last_flush_ms();
@@ -235,8 +302,8 @@ impl BulkBuildEngine {
 
             let last_block_number = batch_stats.last_block_number.ok_or_else(|| {
                 anyhow!(
-                    "bulk build batch missing last block number: current_block={} effective_end={}",
-                    current_block,
+                    "bulk build batch missing last block number: start_block={} effective_end={}",
+                    start_block,
                     effective_end
                 )
             })?;
@@ -301,8 +368,7 @@ impl BulkBuildEngine {
             sample.flush_wait_ms = flush_wait_elapsed.as_secs_f64() * 1000.0;
             sample.flush_channel_depth = FLUSH_CHANNEL_DEPTH as u64;
             sample.flush_channel_pending = flush_channel_pending;
-            sample.prefetch_recv_ms = prefetch_recv_elapsed.as_secs_f64() * 1000.0;
-            sample.prefetch_depth = PREFETCH_DEPTH as u64;
+            sample.prefetch_collect_ms = prefetch_collect_elapsed.as_secs_f64() * 1000.0;
             sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
             // Cumulative row counts: tracks rows sent to flush channel.
@@ -349,7 +415,7 @@ impl BulkBuildEngine {
                 build_timings.facts_breakdown.intern_total_count,
                 build_timings.facts_breakdown.cell_count,
                 flush_wait_elapsed.as_secs_f64() * 1000.0,
-                prefetch_recv_elapsed.as_secs_f64() * 1000.0,
+                prefetch_collect_elapsed.as_secs_f64() * 1000.0,
                 flush_channel_pending,
                 FLUSH_CHANNEL_DEPTH as u64,
             );
@@ -364,6 +430,7 @@ impl BulkBuildEngine {
             };
             info!(
                 run_id = %indexer.run_id,
+                start_block,
                 end_block = effective_end,
                 blocks = batch_stats.block_count,
                 txs = batch_stats.tx_count,
@@ -432,8 +499,6 @@ impl BulkBuildEngine {
                     .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
             }
 
-            prefetch.update_span(batch_block_span);
-
             // Periodic memory summary every 10 batches
             if batch_count.is_multiple_of(10) {
                 let mem = runtime.memory_breakdown_bytes();
@@ -451,16 +516,6 @@ impl BulkBuildEngine {
         // The progress monitor (entry.rs, 10s polling) reads these atomics and
         // publishes to RocksDB so the TUI can display a finalize checklist.
         let finalize_started = Instant::now();
-
-        // Shut down prefetch worker before draining flush channel.
-        let prefetch_stats = prefetch.close_and_wait().await?;
-        info!(
-            total_fetches = prefetch_stats.total_fetches,
-            total_blocks = prefetch_stats.total_blocks,
-            disk_throttle_count = prefetch_stats.disk_throttle_count,
-            exit_reason = ?prefetch_stats.exit_reason,
-            "Prefetch worker finished"
-        );
 
         // Phase 0: close channel and drain all queued flushes.
         indexer

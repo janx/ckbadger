@@ -66,6 +66,7 @@ impl BackgroundSampler {
 
     /// Clone the watch receiver so another component (e.g. prefetch worker)
     /// can read the latest snapshot independently.
+    #[allow(dead_code)]
     pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<SamplerSnapshot> {
         self.latest_rx.clone()
     }
