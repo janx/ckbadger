@@ -68,6 +68,6 @@ frontend/tsconfig.tsbuildinfo
 .sisyphus
 .claude
 .worktrees/
-docs/plans/
-docs/superpowers/
+docs/plans/*
+docs/superpowers/*
 .gstack/
