@@ -395,6 +395,33 @@ impl CkbadgerStore {
         Ok(results)
     }
 
+    /// Count total undecoded DOB spores. Full CF scan with deserialization.
+    /// One-time startup cost — called once when DOB decode worker begins.
+    pub fn count_undecoded_dob_spores(&self) -> anyhow::Result<u64> {
+        use crate::types::{ObjectEntry, ObjectExtra};
+
+        let iter = self.iterator_cf(self.cf_spore_data(), rocksdb::IteratorMode::Start);
+        let mut count: u64 = 0;
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate spore_data in count_undecoded_dob_spores: {}",
+                    e
+                )
+            })?;
+            let entry: ObjectEntry = bincode::deserialize(&value)?;
+            if let ObjectExtra::Spore { content_type, .. } = &entry.extra {
+                if content_type.to_ascii_lowercase().starts_with("dob/")
+                    && self.get_cf(self.cf_dob_decoded(), &key)?.is_none()
+                {
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+
     pub fn get_spore_daily_delta(
         &self,
         spore_id: &[u8],
@@ -729,5 +756,67 @@ mod tests {
             .unwrap();
         assert_eq!(spore_ranged.len(), 1);
         assert_eq!(spore_ranged[0].0, 20260219);
+    }
+
+    #[test]
+    fn test_count_undecoded_dob_spores_empty_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let count = store.count_undecoded_dob_spores().unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_count_undecoded_dob_spores_with_mixed_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let make_spore = |content_type: &str| ObjectEntry {
+            standard: crate::types::ObjectStandard::Spore,
+            collection_id: None,
+            token_id: None,
+            owner_lock_hash: None,
+            name: None,
+            description: None,
+            is_live: true,
+            created_at_block: 0,
+            created_at_tx: vec![0u8; 32],
+            extra: ObjectExtra::Spore {
+                content_type: content_type.to_string(),
+                content_length: 0,
+                media_profile: Default::default(),
+            },
+        };
+
+        let spore_a = [0x01u8; 32]; // dob/0, undecoded
+        let spore_b = [0x02u8; 32]; // dob/1, undecoded
+        let spore_c = [0x03u8; 32]; // dob/0, already decoded
+        let spore_d = [0x04u8; 32]; // text/plain, not DOB
+
+        for (id, ct) in [
+            (&spore_a, "dob/0"),
+            (&spore_b, "dob/1"),
+            (&spore_c, "dob/0"),
+            (&spore_d, "text/plain"),
+        ] {
+            let value = bincode::serialize(&make_spore(ct)).unwrap();
+            store.put_cf(store.cf_spore_data(), id, &value).unwrap();
+        }
+
+        // Mark spore_c as decoded
+        let decoded_entry = crate::types::DobDecodedEntry {
+            traits: vec![],
+            svg_markup: None,
+            media_sources: vec![],
+            decoded_at: 1711100000,
+        };
+        let decoded_value = bincode::serialize(&decoded_entry).unwrap();
+        store
+            .put_cf(store.cf_dob_decoded(), &spore_c, &decoded_value)
+            .unwrap();
+
+        // Count should be 2 (spore_a and spore_b)
+        let count = store.count_undecoded_dob_spores().unwrap();
+        assert_eq!(count, 2);
     }
 }
