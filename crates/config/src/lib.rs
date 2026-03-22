@@ -70,6 +70,12 @@ pub struct StoreConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_budget_gb: Option<u64>,
     pub direct_io_reads: bool,
+    #[serde(default = "default_decoder_cache_path")]
+    pub decoder_cache_path: String,
+}
+
+fn default_decoder_cache_path() -> String {
+    "data/decoder-cache".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -148,6 +154,7 @@ impl Default for StoreConfig {
             append_only_data_path: "data/append-only".to_string(),
             memory_budget_gb: None,
             direct_io_reads: true,
+            decoder_cache_path: default_decoder_cache_path(),
         }
     }
 }
@@ -730,6 +737,7 @@ data_path = "/var/lib/ckb/data/db"
             append_only_data_path: "/ssd/append-only".to_string(),
             memory_budget_gb: Some(32),
             direct_io_reads: false,
+            decoder_cache_path: default_decoder_cache_path(),
         };
 
         let resolved = resolve_store_paths(root, &store);
