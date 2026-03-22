@@ -2,12 +2,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Timelike, Utc};
-use ckbadger_common::LabelImportConfig;
 use dashmap::DashMap;
 use rayon::prelude::*;
 use tracing::{debug, info, warn};
@@ -43,7 +41,7 @@ use super::nft_helpers::*;
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
-    BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData, TxData,
+    AddressBalanceDelta, BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData, TxData,
     UnresolvedLocalProbeSummary, UnresolvedRpcProbeSummary,
 };
 use super::undo::*;
@@ -1087,65 +1085,6 @@ impl Indexer {
         }
     }
 
-    pub(crate) fn maybe_start_label_import(&self) {
-        if self.label_import_started.swap(true, Ordering::SeqCst) {
-            debug!("Label import already started in this process, skipping");
-            return;
-        }
-
-        let token_labels_path = self.config.token_labels_path.clone();
-        let has_fs_labels = !token_labels_path.is_empty()
-            && std::path::Path::new(&token_labels_path)
-                .join("information")
-                .exists();
-        let network = self.config.network.clone();
-
-        let core_store = Arc::clone(self.writer.store());
-
-        if has_fs_labels {
-            let config = LabelImportConfig {
-                token_labels_path,
-                ..Default::default()
-            };
-            tokio::spawn(async move {
-                let result = tokio::task::spawn_blocking(move || {
-                    crate::label_import::run_label_import_staged(core_store.as_ref(), &config)
-                })
-                .await;
-
-                match result {
-                    Ok(Ok(summary)) => info!(
-                        "Background label import finished: {} UDT, {} scripts, {} errors",
-                        summary.udt_labels_imported,
-                        summary.script_labels_imported,
-                        summary.errors.len()
-                    ),
-                    Ok(Err(e)) => warn!("Background label import failed: {}", e),
-                    Err(e) => warn!("Background label import task panicked: {}", e),
-                }
-            });
-        } else {
-            info!("No filesystem token-labels found, using bundled label data");
-            tokio::spawn(async move {
-                let result = tokio::task::spawn_blocking(move || {
-                    crate::label_import::run_label_import_bundled(core_store.as_ref(), &network)
-                })
-                .await;
-
-                match result {
-                    Ok(Ok(summary)) => info!(
-                        "Background bundled label import finished: {} UDT, {} scripts, {} errors",
-                        summary.udt_labels_imported,
-                        summary.script_labels_imported,
-                        summary.errors.len()
-                    ),
-                    Ok(Err(e)) => warn!("Background bundled label import failed: {}", e),
-                    Err(e) => warn!("Background bundled label import task panicked: {}", e),
-                }
-            });
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn write_parsed_batch(
         &self,
@@ -1154,7 +1093,7 @@ impl Indexer {
         all_tx_data: Vec<TxData>,
         input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-        address_balance_changes: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
+        address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
         script_usage_changes: ScriptUsageChanges,
         script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
         token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
@@ -1352,14 +1291,6 @@ impl Indexer {
             }
         }
 
-        let changes_ref: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> =
-            address_balance_changes
-                .iter()
-                .map(|(k, (a, b, c, d, e, f, g))| {
-                    (k.clone(), (*a, *b, *c, *d, *e, f.as_slice(), *g))
-                })
-                .collect();
-
         let block_refs: Vec<&crate::parser::block::ParsedBlock> =
             all_parsed_blocks.iter().collect();
         // Pass 4: Proposals (iterates all_parsed_blocks, spawns background cache task)
@@ -1453,8 +1384,8 @@ impl Indexer {
         }
 
         // Parallel DB reads for address balances and script usage
-        let lock_hash_keys: Vec<&Vec<u8>> = if !changes_ref.is_empty() {
-            changes_ref.keys().collect()
+        let lock_hash_keys: Vec<&Vec<u8>> = if !address_balance_changes.is_empty() {
+            address_balance_changes.keys().collect()
         } else {
             vec![]
         };
@@ -1500,10 +1431,10 @@ impl Indexer {
             });
             if let Some(existing) = existing_balances {
                 let existing = existing?;
-                batch_new_addresses = count_new_addresses(&changes_ref, &existing);
+                batch_new_addresses = count_new_addresses(&address_balance_changes, &existing);
                 self.writer.apply_address_balance_deltas(
                     &existing,
-                    &changes_ref,
+                    &address_balance_changes,
                     &mut data_batch,
                 )?;
             }
@@ -1978,7 +1909,6 @@ impl Indexer {
 
         // Group C: NFT/Spore processing
         {
-            let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
             let mut batch_mnft_token_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
             let mut batch_mnft_last_output_tx_index: HashMap<Vec<u8>, usize> = HashMap::new();
             let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
@@ -2028,7 +1958,6 @@ impl Indexer {
                                 hex::encode(tx_data.hash)
                             )
                         })?;
-                        batch_spore_ids.insert(spore.spore_id.clone());
                         self.writer.insert_spore_cell(
                             spore,
                             &tx_data.hash,
@@ -2318,25 +2247,23 @@ impl Indexer {
                     let key = (all_prev_tx_hashes[i].clone(), all_prev_indices[i]);
                     if !bulk_sync_active {
                         if let Some(spore_id) = spore_map.get(&key) {
-                            if !batch_spore_ids.contains(spore_id) {
-                                if let Some(coll_id) = self.writer.consume_spore(
-                                    spore_id,
-                                    *block_number,
+                            if let Some(coll_id) = self.writer.consume_spore(
+                                spore_id,
+                                *block_number,
+                                consuming_tx_hash,
+                                &mut data_batch,
+                                &mut spore_state,
+                            )? {
+                                object_activity_acc.record(
+                                    &coll_id,
                                     consuming_tx_hash,
-                                    &mut data_batch,
-                                    &mut spore_state,
-                                )? {
-                                    object_activity_acc.record(
-                                        &coll_id,
-                                        consuming_tx_hash,
-                                        spore_id,
-                                        block_hash,
-                                        *block_number,
-                                        *ctx_tx_idx,
-                                        *ctx_ts_ms,
-                                        false,
-                                    );
-                                }
+                                    spore_id,
+                                    block_hash,
+                                    *block_number,
+                                    *ctx_tx_idx,
+                                    *ctx_ts_ms,
+                                    false,
+                                );
                             }
                         }
                         if let Some(token_id) = mnft_map.get(&key) {
@@ -2999,7 +2926,6 @@ impl Indexer {
                 &all_tx_data,
                 &input_cell_info,
                 &batch_cell_infos,
-                &address_balance_changes,
                 &prefetched_address_balances,
                 &mut data_batch,
             )?;
@@ -3008,7 +2934,6 @@ impl Indexer {
                 &all_tx_data,
                 &input_cell_info,
                 &batch_cell_infos,
-                &address_balance_changes,
                 &prefetched_address_balances,
                 &mut data_batch,
             )?;
@@ -3353,6 +3278,7 @@ impl Indexer {
 mod tests {
     use super::*;
     use ckbadger_store::LiveCellInfo;
+    use std::sync::Arc;
 
     fn dummy_live_cell_info() -> LiveCellInfo {
         LiveCellInfo {

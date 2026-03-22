@@ -41,7 +41,7 @@ use super::indexer::{
 };
 use super::sync_mode::*;
 use super::token_helpers::*;
-use super::types::{CachedCellInfo, ReorgAction, TxData};
+use super::types::{AddressBalanceDelta, CachedCellInfo, ReorgAction, TxData};
 use super::undo::*;
 use crate::bulk_sync_perf::BatchSample;
 
@@ -560,7 +560,7 @@ impl Indexer {
             all_tx_data: Vec<TxData>,
             input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-            address_balance_changes: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
+            address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
             script_usage_changes: ScriptUsageChanges,
             script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
             token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
@@ -1376,10 +1376,8 @@ impl Indexer {
 
                 // Pass 3: cell_cache update + address_balance_changes + script_usage_changes
                 let cache_balance_and_script_started = Instant::now();
-                let mut address_balance_changes: HashMap<
-                    Vec<u8>,
-                    (i128, i32, i32, i64, i64, Vec<u8>, i128),
-                > = HashMap::new();
+                let mut address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta> =
+                    HashMap::new();
                 let mut script_usage_changes: ScriptUsageChanges = HashMap::new();
                 let mut script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)> =
                     HashMap::new();
@@ -1788,22 +1786,26 @@ impl Indexer {
                             tx_cells_consumed.get(&lock_hash).copied().unwrap_or(0);
                         let occupied_change =
                             tx_occupied_changes.get(&lock_hash).copied().unwrap_or(0);
-                        let entry = address_balance_changes.entry(lock_hash.clone()).or_insert((
-                            0,
-                            0,
-                            0,
-                            0,
-                            tx_data.block_number,
-                            tx_data.hash.to_vec(),
-                            0,
-                        ));
-                        entry.0 += balance_change;
-                        entry.1 += cells_created - cells_consumed;
-                        entry.2 += cells_created;
-                        entry.3 += 1;
-                        entry.4 = tx_data.block_number;
-                        entry.5 = tx_data.hash.to_vec();
-                        entry.6 += occupied_change;
+                        let entry = address_balance_changes.entry(lock_hash.clone()).or_insert(
+                            AddressBalanceDelta {
+                                balance_delta: 0,
+                                live_delta: 0,
+                                total_delta: 0,
+                                tx_delta: 0,
+                                used_delta: 0,
+                                first_seen_block: tx_data.block_number,
+                                first_seen_tx: tx_data.hash.to_vec(),
+                                last_activity_block: tx_data.block_number,
+                                last_activity_tx: tx_data.hash.to_vec(),
+                            },
+                        );
+                        entry.balance_delta += balance_change;
+                        entry.live_delta += cells_created - cells_consumed;
+                        entry.total_delta += cells_created;
+                        entry.tx_delta += 1;
+                        entry.last_activity_block = tx_data.block_number;
+                        entry.last_activity_tx = tx_data.hash.to_vec();
+                        entry.used_delta += occupied_change;
                     }
                 }
                 // NOTE: Do NOT clear cell_cache here. In pipeline mode, parser

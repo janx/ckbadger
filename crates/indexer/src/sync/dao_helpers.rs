@@ -76,13 +76,13 @@ pub(crate) type DaoSameBatchMap = HashMap<(Vec<u8>, i16), i64>;
 // ---------------------------------------------------------------------------
 
 pub(crate) fn count_new_addresses(
-    changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)>,
+    changes: &HashMap<Vec<u8>, crate::sync::types::AddressBalanceDelta>,
     existing: &HashMap<Vec<u8>, Option<AddressBalance>>,
 ) -> i64 {
     changes
         .iter()
-        .filter(|(lock_hash, (_, live_delta, _, _, _, _, _))| {
-            if *live_delta <= 0 {
+        .filter(|(lock_hash, delta)| {
+            if delta.live_delta <= 0 {
                 return false;
             }
             let prev_live = existing
@@ -806,15 +806,56 @@ mod tests {
 
     #[test]
     fn test_count_new_addresses_counts_only_first_live_transitions() {
-        let mut changes: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> = HashMap::new();
+        use crate::sync::types::AddressBalanceDelta;
+
+        let mut changes: HashMap<Vec<u8>, AddressBalanceDelta> = HashMap::new();
         let addr_new = vec![0x11; 32];
         let addr_existing_live = vec![0x22; 32];
         let addr_existing_zero = vec![0x33; 32];
-        let tx_hash = [0xAA; 32];
+        let tx_hash = vec![0xAA; 32];
 
-        changes.insert(addr_new.clone(), (100, 1, 1, 1, 1, &tx_hash, 10));
-        changes.insert(addr_existing_live.clone(), (50, 1, 1, 1, 1, &tx_hash, 5));
-        changes.insert(addr_existing_zero.clone(), (70, 2, 2, 1, 1, &tx_hash, 7));
+        changes.insert(
+            addr_new.clone(),
+            AddressBalanceDelta {
+                balance_delta: 100,
+                live_delta: 1,
+                total_delta: 1,
+                tx_delta: 1,
+                used_delta: 10,
+                first_seen_block: 1,
+                first_seen_tx: tx_hash.clone(),
+                last_activity_block: 1,
+                last_activity_tx: tx_hash.clone(),
+            },
+        );
+        changes.insert(
+            addr_existing_live.clone(),
+            AddressBalanceDelta {
+                balance_delta: 50,
+                live_delta: 1,
+                total_delta: 1,
+                tx_delta: 1,
+                used_delta: 5,
+                first_seen_block: 1,
+                first_seen_tx: tx_hash.clone(),
+                last_activity_block: 1,
+                last_activity_tx: tx_hash.clone(),
+            },
+        );
+        changes.insert(
+            addr_existing_zero.clone(),
+            AddressBalanceDelta {
+                balance_delta: 70,
+                live_delta: 2,
+                total_delta: 2,
+                tx_delta: 1,
+                used_delta: 7,
+                first_seen_block: 1,
+                first_seen_tx: tx_hash.clone(),
+                last_activity_block: 1,
+                last_activity_tx: tx_hash,
+            },
+        );
 
         let mut existing: HashMap<Vec<u8>, Option<AddressBalance>> = HashMap::new();
         existing.insert(
@@ -837,10 +878,38 @@ mod tests {
 
     #[test]
     fn test_count_new_addresses_ignores_non_positive_live_delta() {
-        let mut changes: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> = HashMap::new();
-        let tx_hash = [0xBB; 32];
-        changes.insert(vec![0x44; 32], (0, 0, 0, 1, 1, &tx_hash, 0));
-        changes.insert(vec![0x55; 32], (-10, -1, 0, 1, 1, &tx_hash, -2));
+        use crate::sync::types::AddressBalanceDelta;
+
+        let mut changes: HashMap<Vec<u8>, AddressBalanceDelta> = HashMap::new();
+        let tx_hash = vec![0xBB; 32];
+        changes.insert(
+            vec![0x44; 32],
+            AddressBalanceDelta {
+                balance_delta: 0,
+                live_delta: 0,
+                total_delta: 0,
+                tx_delta: 1,
+                used_delta: 0,
+                first_seen_block: 1,
+                first_seen_tx: tx_hash.clone(),
+                last_activity_block: 1,
+                last_activity_tx: tx_hash.clone(),
+            },
+        );
+        changes.insert(
+            vec![0x55; 32],
+            AddressBalanceDelta {
+                balance_delta: -10,
+                live_delta: -1,
+                total_delta: 0,
+                tx_delta: 1,
+                used_delta: -2,
+                first_seen_block: 1,
+                first_seen_tx: tx_hash.clone(),
+                last_activity_block: 1,
+                last_activity_tx: tx_hash,
+            },
+        );
 
         let existing: HashMap<Vec<u8>, Option<AddressBalance>> = HashMap::new();
         assert_eq!(count_new_addresses(&changes, &existing), 0);

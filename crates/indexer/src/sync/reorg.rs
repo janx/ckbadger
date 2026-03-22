@@ -33,6 +33,10 @@ impl Indexer {
     }
 
     /// Prepare HODL wave tracker updates into the provided domain batch.
+    ///
+    /// Holder count and cell age changes are applied per-tx within the per-block
+    /// loop so that day-boundary snapshots reflect only the state up to that
+    /// block, not the entire batch (matching bulk-build behavior).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_hodl_wave_batch(
         &self,
@@ -40,49 +44,16 @@ impl Indexer {
         all_tx_data: &[TxData],
         input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-        address_balance_changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
         prefetched_balances: &HashMap<Vec<u8>, Option<AddressBalance>>,
         batch: &mut StoreBatch<'_>,
     ) -> Result<crate::db::writer::hodl_wave::HodlWaveTracker> {
         let mut tracker = self.hodl_tracker.lock().unwrap().clone();
 
-        for (
-            lock_hash,
-            (
-                _balance_delta,
-                live_delta,
-                _total_delta,
-                _tx_delta,
-                _block_num,
-                _tx_hash,
-                _used_delta,
-            ),
-        ) in address_balance_changes
-        {
-            let old_live = prefetched_balances
-                .get(lock_hash)
-                .and_then(|entry| entry.as_ref())
-                .map(|balance| balance.live_cells_count)
-                .unwrap_or(0);
-            let new_live = old_live.checked_add(*live_delta).ok_or_else(|| {
-                anyhow!(
-                    "holder_count live_cells overflow while preparing HODL tracker batch: lock_hash=0x{}, old_live={}, live_delta={}",
-                    hex::encode(lock_hash),
-                    old_live,
-                    live_delta
-                )
-            })?;
-            if new_live < 0 {
-                anyhow::bail!(
-                    "holder_count live_cells underflow while preparing HODL tracker batch: lock_hash=0x{}, old_live={}, live_delta={}, new_live={}",
-                    hex::encode(lock_hash),
-                    old_live,
-                    live_delta,
-                    new_live
-                );
-            }
-            tracker.update_holder_count(old_live, new_live)?;
-        }
+        // Running map of live cell counts per lock_hash, initialized from DB.
+        let mut live_cells_by_lock: HashMap<Vec<u8>, i32> = prefetched_balances
+            .iter()
+            .filter_map(|(k, v)| v.as_ref().map(|b| (k.clone(), b.live_cells_count)))
+            .collect();
 
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
@@ -94,11 +65,7 @@ impl Indexer {
             block_tx_idx += tx_count;
 
             for tx_data in tx_slice {
-                // Cell creates
-                for cell in &tx_data.cells {
-                    tracker.cell_created(block_date, cell.capacity);
-                }
-                // Cell consumes
+                // Cell consumes — update holder count then age tracker
                 if !tx_data.is_cellbase {
                     for input in &tx_data.inputs {
                         let key = (
@@ -112,9 +79,43 @@ impl Indexer {
                             .get(&key)
                             .or_else(|| batch_cell_infos.get(&key));
                         if let Some(info) = info {
+                            let lock_hash = &info.cell.lock_script_hash;
+                            let old_live = live_cells_by_lock.get(lock_hash).copied().unwrap_or(0);
+                            let new_live = old_live.checked_add(-1).ok_or_else(|| {
+                                anyhow!(
+                                    "holder_count live_cells overflow (consume) in HODL tracker: lock_hash=0x{}, old_live={}",
+                                    hex::encode(lock_hash),
+                                    old_live
+                                )
+                            })?;
+                            if new_live < 0 {
+                                anyhow::bail!(
+                                    "holder_count live_cells underflow in HODL tracker: lock_hash=0x{}, old_live={}, new_live={}",
+                                    hex::encode(lock_hash),
+                                    old_live,
+                                    new_live
+                                );
+                            }
+                            tracker.update_holder_count(old_live, new_live)?;
+                            live_cells_by_lock.insert(lock_hash.clone(), new_live);
                             tracker.cell_consumed(info.created_at_block, info.capacity)?;
                         }
                     }
+                }
+                // Cell creates — update holder count then age tracker
+                for cell in &tx_data.cells {
+                    let lock_hash = &cell.lock_script_hash;
+                    let old_live = live_cells_by_lock.get(lock_hash).copied().unwrap_or(0);
+                    let new_live = old_live.checked_add(1).ok_or_else(|| {
+                        anyhow!(
+                            "holder_count live_cells overflow (create) in HODL tracker: lock_hash=0x{}, old_live={}",
+                            hex::encode(lock_hash),
+                            old_live
+                        )
+                    })?;
+                    tracker.update_holder_count(old_live, new_live)?;
+                    live_cells_by_lock.insert(lock_hash.clone(), new_live);
+                    tracker.cell_created(block_date, cell.capacity);
                 }
             }
 
@@ -139,6 +140,10 @@ impl Indexer {
     }
 
     /// Prepare cell distribution tracker updates into the provided domain batch.
+    ///
+    /// Cohort deltas are applied per-tx within the per-block loop so that
+    /// day-boundary snapshots reflect only the state up to that block, not
+    /// the entire batch (matching bulk-build behavior).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_cell_distribution_batch(
         &self,
@@ -146,29 +151,33 @@ impl Indexer {
         all_tx_data: &[TxData],
         input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-        address_balance_changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
         prefetched_balances: &HashMap<Vec<u8>, Option<AddressBalance>>,
         batch: &mut StoreBatch<'_>,
     ) -> Result<crate::db::writer::cell_distribution::CellDistributionTracker> {
         let mut tracker = self.cell_dist_tracker.lock().unwrap().clone();
 
-        for parsed in all_parsed_blocks {
-            let block_date = ckbadger_common::block_date(parsed.timestamp);
-            tracker.record_block_date(parsed.number, block_date);
-        }
-
-        tracker.update_cohort_deltas(address_balance_changes, prefetched_balances);
+        // Running map of first_seen_block per address.
+        // For existing addresses: from prefetched DB state.
+        // For new addresses: set to the block where they first appear in this batch.
+        let mut first_seen_by_lock: HashMap<Vec<u8>, i64> = prefetched_balances
+            .iter()
+            .filter_map(|(k, v)| v.as_ref().map(|b| (k.clone(), b.first_seen_block)))
+            .collect();
 
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
+            tracker.record_block_date(parsed.number, block_date);
 
             let tx_count = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
             block_tx_idx += tx_count;
 
             for tx_data in tx_slice {
-                // Cell creates — compute occupied capacity from cell fields
+                // Compute per-address balance and used_capacity deltas for this tx
+                let mut tx_addr_deltas: HashMap<Vec<u8>, (i128, i128)> = HashMap::new();
+
+                // Cell creates
                 for cell in &tx_data.cells {
                     let occ = occupied_capacity_shannons_i64(
                         cell.lock_args.len(),
@@ -176,7 +185,18 @@ impl Indexer {
                         cell.data_size,
                     );
                     tracker.cell_created(occ);
+
+                    let lock_hash = &cell.lock_script_hash;
+                    let entry = tx_addr_deltas.entry(lock_hash.clone()).or_insert((0, 0));
+                    entry.0 += occ as i128; // used_capacity_delta
+                    entry.1 += cell.capacity as i128; // balance_delta
+
+                    // Track first_seen for new addresses
+                    first_seen_by_lock
+                        .entry(lock_hash.clone())
+                        .or_insert(parsed.number);
                 }
+
                 // Cell consumes
                 if !tx_data.is_cellbase {
                     for input in &tx_data.inputs {
@@ -192,8 +212,22 @@ impl Indexer {
                             .or_else(|| batch_cell_infos.get(&key));
                         if let Some(info) = info {
                             tracker.cell_consumed(info.occupied_capacity)?;
+
+                            let lock_hash = &info.cell.lock_script_hash;
+                            let entry = tx_addr_deltas.entry(lock_hash.clone()).or_insert((0, 0));
+                            entry.0 -= info.occupied_capacity as i128; // used_capacity_delta
+                            entry.1 -= info.capacity as i128; // balance_delta
                         }
                     }
+                }
+
+                // Apply cohort deltas for this tx
+                for (lock_hash, (used_delta, balance_delta)) in &tx_addr_deltas {
+                    let first_seen_block = first_seen_by_lock
+                        .get(lock_hash)
+                        .copied()
+                        .unwrap_or(parsed.number);
+                    tracker.apply_cohort_delta(first_seen_block, *used_delta, *balance_delta)?;
                 }
             }
 

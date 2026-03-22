@@ -4,7 +4,7 @@
 //! snapshot for the size distribution chart. The same tracker also owns block→date
 //! transitions plus cohort accumulation for address retention snapshots.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use anyhow::{bail, Result};
 use chrono::NaiveDate;
@@ -222,39 +222,6 @@ impl CellDistributionTracker {
         DailyCellDistribution {
             size_bucket_counts: self.count_by_bucket,
             size_bucket_capacities: self.total_capacity_by_bucket,
-        }
-    }
-
-    /// Update cohort accumulator from address balance changes in this batch.
-    ///
-    /// For each changed address, determine cohort month from first_seen_block
-    /// (existing addresses: from prefetched AddressBalance, new addresses: last_block from changes).
-    /// Apply balance and used_capacity deltas.
-    pub fn update_cohort_deltas(
-        &mut self,
-        changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
-        prefetched_balances: &HashMap<Vec<u8>, Option<ckbadger_store::types::AddressBalance>>,
-    ) {
-        for (
-            lock_hash,
-            &(balance_delta, _live, _created, _tx, last_block, ref _tx_hash, used_delta),
-        ) in changes
-        {
-            let first_seen_block = prefetched_balances
-                .get(lock_hash)
-                .and_then(|opt| opt.as_ref())
-                .map(|bal| bal.first_seen_block)
-                .unwrap_or(last_block); // new address
-
-            let cohort_date = match self.block_number_to_date(first_seen_block) {
-                Some(d) => d,
-                None => continue,
-            };
-            let cohort_month = cohort_date.format("%Y-%m").to_string();
-
-            let entry = self.cohort_accum.entry(cohort_month).or_insert((0, 0));
-            entry.0 += used_delta;
-            entry.1 += balance_delta;
         }
     }
 
@@ -569,23 +536,10 @@ mod tests {
         let jan15 = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
         tracker.record_block_date(100, jan15);
 
-        let mut changes = HashMap::new();
-        changes.insert(
-            vec![0xAA; 32],
-            (
-                500_00000000i128,
-                1i32,
-                1i32,
-                1i64,
-                100i64,
-                vec![0x01; 32],
-                61_00000000i128,
-            ),
-        );
-
-        let prefetched: HashMap<Vec<u8>, Option<ckbadger_store::types::AddressBalance>> =
-            HashMap::new();
-        tracker.update_cohort_deltas(&changes, &prefetched);
+        // New address first seen at block 100: used=61 CKB, balance=500 CKB
+        tracker
+            .apply_cohort_delta(100, 61_00000000, 500_00000000)
+            .unwrap();
 
         let snapshot = tracker.cohort_snapshot();
         assert_eq!(snapshot.cohorts.len(), 1);
@@ -602,30 +556,10 @@ mod tests {
         tracker.record_block_date(50, dec01);
         tracker.record_block_date(100, jan15);
 
-        let mut changes = HashMap::new();
-        changes.insert(
-            vec![0xBB; 32],
-            (
-                100_00000000i128,
-                1i32,
-                1i32,
-                1i64,
-                100i64,
-                vec![0x02; 32],
-                61_00000000i128,
-            ),
-        );
-
-        let mut prefetched = HashMap::new();
-        prefetched.insert(
-            vec![0xBB; 32],
-            Some(ckbadger_store::types::AddressBalance {
-                first_seen_block: 50,
-                ..Default::default()
-            }),
-        );
-
-        tracker.update_cohort_deltas(&changes, &prefetched);
+        // Existing address first seen at block 50 (Dec 2023), activity at block 100
+        tracker
+            .apply_cohort_delta(50, 61_00000000, 100_00000000)
+            .unwrap();
 
         let snapshot = tracker.cohort_snapshot();
         assert_eq!(snapshot.cohorts.len(), 1);
@@ -655,12 +589,7 @@ mod tests {
         let jan15 = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
         tracker.record_block_date(100, jan15);
 
-        let mut changes = HashMap::new();
-        changes.insert(
-            vec![0xCC; 32],
-            (1000i128, 1i32, 1i32, 1i64, 100i64, vec![0x03; 32], 500i128),
-        );
-        tracker.update_cohort_deltas(&changes, &HashMap::new());
+        tracker.apply_cohort_delta(100, 500, 1000).unwrap();
 
         let state = tracker.to_state();
         assert_eq!(state.cohort_accum.len(), 1);
@@ -677,37 +606,15 @@ mod tests {
         let jan15 = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
         tracker.record_block_date(100, jan15);
 
-        // Add then subtract — both used_capacity and balance become zero
-        let mut changes = HashMap::new();
-        changes.insert(
-            vec![0xDD; 32],
-            (
-                500_00000000i128,
-                1i32,
-                1i32,
-                1i64,
-                100i64,
-                vec![0x04; 32],
-                61_00000000i128,
-            ),
-        );
-        tracker.update_cohort_deltas(&changes, &HashMap::new());
+        // Add — used=61 CKB, balance=500 CKB
+        tracker
+            .apply_cohort_delta(100, 61_00000000, 500_00000000)
+            .unwrap();
 
         // Now subtract (simulate address going to zero)
-        let mut changes2 = HashMap::new();
-        changes2.insert(
-            vec![0xDD; 32],
-            (
-                -500_00000000i128,
-                -1i32,
-                0i32,
-                0i64,
-                100i64,
-                vec![0x05; 32],
-                -61_00000000i128,
-            ),
-        );
-        tracker.update_cohort_deltas(&changes2, &HashMap::new());
+        tracker
+            .apply_cohort_delta(100, -61_00000000, -500_00000000)
+            .unwrap();
 
         let snapshot = tracker.cohort_snapshot();
         // Both used_capacity=0 and balance=0 means entry is filtered out

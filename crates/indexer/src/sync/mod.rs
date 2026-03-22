@@ -12,7 +12,7 @@ mod progress;
 mod reorg;
 mod sync_mode;
 mod token_helpers;
-pub(crate) mod types;
+pub mod types;
 pub(crate) mod undo;
 
 #[doc(hidden)]

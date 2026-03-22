@@ -310,7 +310,6 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     )
     .await?;
     let indexer = Arc::new(indexer);
-    indexer.mark_label_import_started();
 
     let (_cycles_tx, _cycles_result_store) =
         spawn_cycles_task_worker(store.clone(), config.ckb_rpc_url.clone());

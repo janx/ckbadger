@@ -386,7 +386,6 @@ pub struct Indexer {
     pub(crate) incident_dir: PathBuf,
     pub(crate) bulk_sync_perf_run: std::sync::Mutex<Option<BulkSyncPerfRun>>,
     pub(crate) shutdown_requested: Arc<AtomicBool>,
-    pub(crate) label_import_started: std::sync::atomic::AtomicBool,
     pub(crate) ckb_store: Option<Arc<CkbChainReader>>,
     pub(crate) hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
     pub(crate) cell_dist_tracker: std::sync::Mutex<CellDistributionTracker>,
@@ -494,7 +493,6 @@ impl Indexer {
             incident_dir,
             bulk_sync_perf_run: std::sync::Mutex::new(None),
             shutdown_requested: Arc::new(AtomicBool::new(false)),
-            label_import_started: std::sync::atomic::AtomicBool::new(false),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
             cell_dist_tracker: std::sync::Mutex::new(cell_dist_tracker),
@@ -519,10 +517,6 @@ impl Indexer {
 
     pub fn shutdown_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.shutdown_requested)
-    }
-
-    pub fn mark_label_import_started(&self) {
-        self.label_import_started.store(true, Ordering::SeqCst);
     }
 
     pub fn is_bulk_sync_active(&self) -> bool {
@@ -1234,8 +1228,6 @@ impl Indexer {
         self.reconcile_hodl_tracker_with_tip(actual_start)?;
         self.reconcile_cell_dist_tracker_with_tip(actual_start)?;
         self.start_bulk_sync_perf_run(bulk_sync_mode)?;
-
-        self.maybe_start_label_import();
 
         // Periodic 24h transfer refresh
         let store_for_task = Arc::clone(self.writer.store());

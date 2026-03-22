@@ -107,6 +107,30 @@ pub(crate) struct TxData {
     pub(crate) timestamp: DateTime<Utc>,
 }
 
+// ── Address balance delta (accumulated per-batch) ─────────────────────
+
+/// Per-address accumulated changes within a single pipeline batch.
+///
+/// Tracks both first-seen and last-activity tx references so that new
+/// addresses get correct `first_seen_*` values even when the batch
+/// contains multiple transactions touching the same address.
+#[derive(Debug, Clone)]
+pub struct AddressBalanceDelta {
+    pub balance_delta: i128,
+    pub live_delta: i32,
+    pub total_delta: i32,
+    pub tx_delta: i64,
+    pub used_delta: i128,
+    /// Block number of the first transaction touching this address in the batch.
+    pub first_seen_block: i64,
+    /// Tx hash of the first transaction touching this address in the batch.
+    pub first_seen_tx: Vec<u8>,
+    /// Block number of the last transaction touching this address in the batch.
+    pub last_activity_block: i64,
+    /// Tx hash of the last transaction touching this address in the batch.
+    pub last_activity_tx: Vec<u8>,
+}
+
 // ── Batch write metrics ────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Default)]

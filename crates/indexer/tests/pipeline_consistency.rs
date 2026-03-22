@@ -455,24 +455,55 @@ fn test_script_usage_cell_consumption() {
     assert_eq!(info.lock_owned_knowledge_sum, 0);
 }
 
+fn make_addr_delta(
+    balance_delta: i128,
+    live_delta: i32,
+    total_delta: i32,
+    tx_delta: i64,
+    block_num: i64,
+    tx_hash: &[u8],
+    used_delta: i128,
+) -> ckbadger_indexer::sync::types::AddressBalanceDelta {
+    ckbadger_indexer::sync::types::AddressBalanceDelta {
+        balance_delta,
+        live_delta,
+        total_delta,
+        tx_delta,
+        used_delta,
+        first_seen_block: block_num,
+        first_seen_tx: tx_hash.to_vec(),
+        last_activity_block: block_num,
+        last_activity_tx: tx_hash.to_vec(),
+    }
+}
+
+fn apply_addr_changes(
+    store: &CkbadgerStore,
+    writer: &ckbadger_indexer::db::BatchWriter,
+    changes: &HashMap<Vec<u8>, ckbadger_indexer::sync::types::AddressBalanceDelta>,
+) -> anyhow::Result<()> {
+    let keys: Vec<&Vec<u8>> = changes.keys().collect();
+    let existing = writer.read_address_balances(&keys)?;
+    let mut batch = StoreBatch::new(store);
+    writer.apply_address_balance_deltas(&existing, changes, &mut batch)?;
+    batch.commit()?;
+    Ok(())
+}
+
 #[test]
 fn test_address_balance_update_receive() {
     let (store, writer) = setup_store();
     let lock_hash = vec![0xAAu8; 32];
     let tx_hash = vec![0x01u8; 32];
 
-    let changes: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> = [(
+    let changes: HashMap<Vec<u8>, _> = [(
         lock_hash.clone(),
-        (100_00000000, 1, 1, 1, 1000, tx_hash.as_slice(), 0),
+        make_addr_delta(100_00000000, 1, 1, 1, 1000, &tx_hash, 0),
     )]
     .into_iter()
     .collect();
 
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .update_address_balances_batch(&changes, &mut batch)
-        .unwrap();
-    batch.commit().unwrap();
+    apply_addr_changes(&store, &writer, &changes).unwrap();
 
     let balance = store.get_addr_balance(&lock_hash).unwrap();
     assert!(balance.is_some());
@@ -489,29 +520,21 @@ fn test_address_balance_update_send() {
     let tx_hash1 = vec![0x01u8; 32];
     let tx_hash2 = vec![0x02u8; 32];
 
-    let receive: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> = [(
+    let receive: HashMap<Vec<u8>, _> = [(
         lock_hash.clone(),
-        (100_00000000, 1, 1, 1, 1000, tx_hash1.as_slice(), 0),
+        make_addr_delta(100_00000000, 1, 1, 1, 1000, &tx_hash1, 0),
     )]
     .into_iter()
     .collect();
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .update_address_balances_batch(&receive, &mut batch)
-        .unwrap();
-    batch.commit().unwrap();
+    apply_addr_changes(&store, &writer, &receive).unwrap();
 
-    let send: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> = [(
+    let send: HashMap<Vec<u8>, _> = [(
         lock_hash.clone(),
-        (-30_00000000, 0, 1, 1, 2000, tx_hash2.as_slice(), 0),
+        make_addr_delta(-30_00000000, 0, 1, 1, 2000, &tx_hash2, 0),
     )]
     .into_iter()
     .collect();
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .update_address_balances_batch(&send, &mut batch)
-        .unwrap();
-    batch.commit().unwrap();
+    apply_addr_changes(&store, &writer, &send).unwrap();
 
     let balance = store.get_addr_balance(&lock_hash).unwrap();
     let balance = balance.unwrap();
@@ -528,41 +551,25 @@ fn test_address_balance_used_delta_applied() {
     let tx_hash2 = vec![0x02u8; 32];
 
     // Receive: creates a cell with 6100 CKB occupied
-    let receive: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> = [(
+    let receive: HashMap<Vec<u8>, _> = [(
         lock_hash.clone(),
-        (
-            100_00000000,
-            1,
-            1,
-            1,
-            1000,
-            tx_hash1.as_slice(),
-            6100_00000000,
-        ),
+        make_addr_delta(100_00000000, 1, 1, 1, 1000, &tx_hash1, 6100_00000000),
     )]
     .into_iter()
     .collect();
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .update_address_balances_batch(&receive, &mut batch)
-        .unwrap();
-    batch.commit().unwrap();
+    apply_addr_changes(&store, &writer, &receive).unwrap();
 
     let balance = store.get_addr_balance(&lock_hash).unwrap().unwrap();
     assert_eq!(balance.used_capacity, 6100_00000000);
 
     // Consume old cell (-6100) and create new smaller cell (+4100)
-    let update: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> = [(
+    let update: HashMap<Vec<u8>, _> = [(
         lock_hash.clone(),
-        (0, 0, 1, 1, 2000, tx_hash2.as_slice(), -2000_00000000),
+        make_addr_delta(0, 0, 1, 1, 2000, &tx_hash2, -2000_00000000),
     )]
     .into_iter()
     .collect();
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .update_address_balances_batch(&update, &mut batch)
-        .unwrap();
-    batch.commit().unwrap();
+    apply_addr_changes(&store, &writer, &update).unwrap();
 
     let balance = store.get_addr_balance(&lock_hash).unwrap().unwrap();
     assert_eq!(balance.used_capacity, 4100_00000000);
@@ -576,24 +583,13 @@ fn test_address_balance_used_underflow_errors() {
 
     // Apply a negative used_delta larger than what exists (0)
     // Should fail fast instead of silently clamping.
-    let changes: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> = [(
+    let changes: HashMap<Vec<u8>, _> = [(
         lock_hash.clone(),
-        (
-            100_00000000,
-            1,
-            1,
-            1,
-            1000,
-            tx_hash.as_slice(),
-            -9999_00000000,
-        ),
+        make_addr_delta(100_00000000, 1, 1, 1, 1000, &tx_hash, -9999_00000000),
     )]
     .into_iter()
     .collect();
-    let mut batch = StoreBatch::new(&store);
-    let err = writer
-        .update_address_balances_batch(&changes, &mut batch)
-        .unwrap_err();
+    let err = apply_addr_changes(&store, &writer, &changes).unwrap_err();
     assert!(err.to_string().contains("underflow"));
 }
 

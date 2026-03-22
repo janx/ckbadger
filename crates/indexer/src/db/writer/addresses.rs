@@ -127,66 +127,62 @@ impl BatchWriter {
     pub fn apply_address_balance_deltas(
         &self,
         existing: &HashMap<Vec<u8>, Option<AddressBalance>>,
-        changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)>,
+        changes: &HashMap<Vec<u8>, crate::sync::types::AddressBalanceDelta>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if changes.is_empty() {
             return Ok(());
         }
 
-        for (
-            lock_hash,
-            (balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash, used_delta),
-        ) in changes
-        {
+        for (lock_hash, delta) in changes {
             let prev = existing.get(lock_hash).and_then(|o| o.as_ref());
 
             let updated = match prev {
                 Some(bal) => {
                     let mut bal = bal.clone();
-                    let next_balance = bal.balance + *balance_delta;
+                    let next_balance = bal.balance + delta.balance_delta;
                     if next_balance < 0 {
                         bail!(
                             "address balance underflow: lock_hash=0x{}, balance={}, delta={}",
                             hex::encode(lock_hash),
                             bal.balance,
-                            balance_delta
+                            delta.balance_delta
                         );
                     }
-                    let next_used = bal.used_capacity + *used_delta;
+                    let next_used = bal.used_capacity + delta.used_delta;
                     if next_used < 0 {
                         bail!(
                             "address used capacity underflow: lock_hash=0x{}, used_capacity={}, delta={}",
                             hex::encode(lock_hash),
                             bal.used_capacity,
-                            used_delta
+                            delta.used_delta
                         );
                     }
-                    let next_live_cells = bal.live_cells_count + *live_delta;
+                    let next_live_cells = bal.live_cells_count + delta.live_delta;
                     if next_live_cells < 0 {
                         bail!(
                             "address live_cells_count underflow: lock_hash=0x{}, live_cells_count={}, delta={}",
                             hex::encode(lock_hash),
                             bal.live_cells_count,
-                            live_delta
+                            delta.live_delta
                         );
                     }
-                    let next_total_cells = bal.total_cells_count + *total_delta as i64;
+                    let next_total_cells = bal.total_cells_count + delta.total_delta as i64;
                     if next_total_cells < 0 {
                         bail!(
                             "address total_cells_count underflow: lock_hash=0x{}, total_cells_count={}, delta={}",
                             hex::encode(lock_hash),
                             bal.total_cells_count,
-                            total_delta
+                            delta.total_delta
                         );
                     }
-                    let next_txs_count = bal.txs_count + tx_delta;
+                    let next_txs_count = bal.txs_count + delta.tx_delta;
                     if next_txs_count < 0 {
                         bail!(
                             "address txs_count underflow: lock_hash=0x{}, txs_count={}, delta={}",
                             hex::encode(lock_hash),
                             bal.txs_count,
-                            tx_delta
+                            delta.tx_delta
                         );
                     }
                     bal.balance = next_balance;
@@ -194,37 +190,37 @@ impl BatchWriter {
                     bal.live_cells_count = next_live_cells;
                     bal.total_cells_count = next_total_cells;
                     bal.txs_count = next_txs_count;
-                    bal.last_activity_block = *block_num;
-                    bal.last_activity_tx = tx_hash.to_vec();
+                    bal.last_activity_block = delta.last_activity_block;
+                    bal.last_activity_tx = delta.last_activity_tx.clone();
                     bal
                 }
                 None => {
-                    if *balance_delta < 0
-                        || *used_delta < 0
-                        || *live_delta < 0
-                        || *total_delta < 0
-                        || *tx_delta < 0
+                    if delta.balance_delta < 0
+                        || delta.used_delta < 0
+                        || delta.live_delta < 0
+                        || delta.total_delta < 0
+                        || delta.tx_delta < 0
                     {
                         bail!(
                             "address delta underflow for unseen address: lock_hash=0x{}, balance_delta={}, used_delta={}, live_delta={}, total_delta={}, tx_delta={}",
                             hex::encode(lock_hash),
-                            balance_delta,
-                            used_delta,
-                            live_delta,
-                            total_delta,
-                            tx_delta
+                            delta.balance_delta,
+                            delta.used_delta,
+                            delta.live_delta,
+                            delta.total_delta,
+                            delta.tx_delta
                         );
                     }
                     AddressBalance {
-                        balance: *balance_delta,
-                        used_capacity: *used_delta,
-                        live_cells_count: *live_delta,
-                        total_cells_count: *total_delta as i64,
-                        txs_count: *tx_delta,
-                        first_seen_block: *block_num,
-                        first_seen_tx: tx_hash.to_vec(),
-                        last_activity_block: *block_num,
-                        last_activity_tx: tx_hash.to_vec(),
+                        balance: delta.balance_delta,
+                        used_capacity: delta.used_delta,
+                        live_cells_count: delta.live_delta,
+                        total_cells_count: delta.total_delta as i64,
+                        txs_count: delta.tx_delta,
+                        first_seen_block: delta.first_seen_block,
+                        first_seen_tx: delta.first_seen_tx.clone(),
+                        last_activity_block: delta.last_activity_block,
+                        last_activity_tx: delta.last_activity_tx.clone(),
                     }
                 }
             };
@@ -233,20 +229,6 @@ impl BatchWriter {
         }
 
         Ok(())
-    }
-
-    pub fn update_address_balances_batch(
-        &self,
-        changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)>,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        if changes.is_empty() {
-            return Ok(());
-        }
-
-        let keys_vec: Vec<&Vec<u8>> = changes.keys().collect();
-        let existing = self.read_address_balances(&keys_vec)?;
-        self.apply_address_balance_deltas(&existing, changes, batch)
     }
 
     pub fn read_script_info(
