@@ -196,6 +196,9 @@ impl BulkReducer for ScriptOwner {
                     if info.name.is_none() {
                         info.name = existing.name;
                     }
+                    if !info.deprecated {
+                        info.deprecated = existing.deprecated;
+                    }
                     if info.category.is_none() {
                         info.category = existing.category;
                     }
@@ -798,5 +801,64 @@ mod tests {
         assert_eq!(type_info.type_owned_capacity_sum, 0);
         assert_eq!(type_info.type_used_capacity_sum, 142_00000000);
         assert_eq!(type_info.type_owned_knowledge_sum, 0);
+    }
+
+    #[test]
+    fn script_owner_materialize_final_preserves_existing_deprecated_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain_path = dir.path().join("domain");
+        let append_path = dir.path().join("append-only");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+
+        let domain_store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
+
+        let code_hash = vec![0x44; 32];
+        domain_store
+            .put_script_info_direct(
+                &code_hash,
+                &ScriptInfo {
+                    code_hash: code_hash.clone(),
+                    hash_type: 1,
+                    name: Some("PW Lock".to_string()),
+                    deprecated: true,
+                    description: Some("deprecated ethereum-compatible lock".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let mut owner = ScriptOwner::default();
+        owner.infos.insert(
+            code_hash.clone(),
+            ScriptInfo {
+                code_hash: code_hash.clone(),
+                hash_type: 1,
+                cells_count: 1,
+                capacity_used: 100_00000000,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                lock_capacity_sum: 100_00000000,
+                lock_owned_capacity_sum: 100_00000000,
+                lock_used_capacity_sum: 61_00000000,
+                lock_owned_knowledge_sum: 61_00000000,
+                ..Default::default()
+            },
+        );
+
+        let mut materializer = Materializer::new(&domain_store, &append_store);
+        owner.materialize_final(&mut materializer).unwrap();
+        let _ = materializer.finish();
+
+        let updated = domain_store.get_script_info(&code_hash).unwrap().unwrap();
+        assert_eq!(updated.name.as_deref(), Some("PW Lock"));
+        assert!(updated.deprecated);
+        assert_eq!(
+            updated.description.as_deref(),
+            Some("deprecated ethereum-compatible lock")
+        );
+        assert_eq!(updated.lock_cells_count, 1);
+        assert_eq!(updated.lock_live_cells_count, 1);
     }
 }

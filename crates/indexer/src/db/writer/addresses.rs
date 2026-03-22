@@ -75,6 +75,7 @@ fn overlay_script_metadata(
 ) -> ckbadger_store::types::ScriptInfo {
     base.hash_type = fresh.hash_type;
     base.name = fresh.name.clone();
+    base.deprecated = fresh.deprecated;
     base.category = fresh.category.clone();
     base.website = fresh.website.clone();
     base.description = fresh.description.clone();
@@ -795,6 +796,7 @@ mod tests {
             code_hash: code_hash.clone(),
             hash_type: 1,
             name: Some("Default Lock".to_string()),
+            deprecated: true,
             description: Some("mainnet default lock".to_string()),
             ..Default::default()
         };
@@ -813,6 +815,7 @@ mod tests {
         let updated = store.get_script_info(&code_hash).unwrap().unwrap();
         assert_eq!(updated.hash_type, 1);
         assert_eq!(updated.name.as_deref(), Some("Default Lock"));
+        assert!(updated.deprecated);
         assert_eq!(updated.description.as_deref(), Some("mainnet default lock"));
         // Correctness fields (dep_type_hash, dep_data_hash, code_cell_tx_hash,
         // code_cell_output_index) are NOT overlaid from existing records. Label import
