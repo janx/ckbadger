@@ -461,12 +461,11 @@ impl BulkBuildPerfStats {
             .store(opt_f64_to_bits(write_mb_s), Ordering::Relaxed);
         self.last_disk_wr_iops_bits
             .store(opt_f64_to_bits(write_iops), Ordering::Relaxed);
+        let state_code = encode_disk_state(state);
         self.last_disk_state_code
-            .store(encode_disk_state(state), Ordering::Relaxed);
-        self.last_disk_telemetry_valid.store(
-            matches!(state, Some("idle" | "active" | "saturated")),
-            Ordering::Relaxed,
-        );
+            .store(state_code, Ordering::Relaxed);
+        self.last_disk_telemetry_valid
+            .store(decode_disk_state(state_code).is_some(), Ordering::Relaxed);
     }
 
     pub(crate) fn snapshot(&self) -> Option<BulkBuildProgressData> {
@@ -1298,6 +1297,38 @@ mod tests {
         assert_eq!(after.disk_avg_queue_depth, Some(2.75));
         assert_eq!(after.disk_write_mb_s, Some(712.0));
         assert_eq!(after.disk_write_iops, Some(18_400.0));
+    }
+
+    #[test]
+    fn bulk_build_progress_snapshot_threads_unavailable_disk_state() {
+        let stats = BulkBuildPerfStats::default();
+        stats.record_batch(
+            10.0, 5.0, 8.0, 3.0, 2.0,
+            1.0, // facts, resolve, reduce, history, addr_reduce, activity_stats
+            50.0, 200.0, 3000.0, // flush, fetch, build
+            1000, 500, 100, 80, // owner_mem, live_cells, created, consumed
+            1000, 500, // cumulative_history, cumulative_sealed
+            5000, 1, // batch_block_span, batch_count
+            2.5, 0.8, 3100.0,
+            1500.0, // tx_density, ms_per_block_ema, controllable, target_iteration
+            8.0, 2.0, 40.0, // facts_par_iter, facts_merge, facts_serial_equiv
+            5, 100, 200, // facts_intern_slow, facts_intern_total, facts_cell_count
+            15.0, 3.5, // flush_wait_ms, prefetch_recv_ms
+            2, 4, // prefetch_channel_pending, prefetch_channel_capacity
+            3, 4, // flush_channel_pending, flush_channel_capacity
+        );
+
+        stats.record_disk_telemetry(Some("unavailable"), None, None, None, None, None);
+
+        let snap = stats
+            .snapshot()
+            .expect("snapshot should exist after batch record");
+        assert_eq!(snap.disk_state.as_deref(), Some("unavailable"));
+        assert_eq!(snap.disk_util_pct, None);
+        assert_eq!(snap.disk_await_ms, None);
+        assert_eq!(snap.disk_avg_queue_depth, None);
+        assert_eq!(snap.disk_write_mb_s, None);
+        assert_eq!(snap.disk_write_iops, None);
     }
 
     #[test]

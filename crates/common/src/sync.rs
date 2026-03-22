@@ -935,6 +935,40 @@ mod tests {
     }
 
     #[test]
+    fn bulk_build_progress_deserializes_when_disk_fields_are_fully_absent() {
+        let mut value = serde_json::to_value(BulkBuildProgressData {
+            batch_count: Some(7),
+            disk_state: Some("unavailable".to_string()),
+            disk_util_pct: Some(72.5),
+            disk_await_ms: Some(4.5),
+            disk_avg_queue_depth: Some(1.25),
+            disk_write_mb_s: Some(128.0),
+            disk_write_iops: Some(5_120.0),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let obj = value
+            .as_object_mut()
+            .expect("bulk build progress should serialize to an object");
+        obj.remove("diskState");
+        obj.remove("diskUtilPct");
+        obj.remove("diskAwaitMs");
+        obj.remove("diskAvgQueueDepth");
+        obj.remove("diskWriteMbS");
+        obj.remove("diskWriteIops");
+
+        let parsed: BulkBuildProgressData = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.batch_count, Some(7));
+        assert_eq!(parsed.disk_state, None);
+        assert_eq!(parsed.disk_util_pct, None);
+        assert_eq!(parsed.disk_await_ms, None);
+        assert_eq!(parsed.disk_avg_queue_depth, None);
+        assert_eq!(parsed.disk_write_mb_s, None);
+        assert_eq!(parsed.disk_write_iops, None);
+    }
+
+    #[test]
     fn test_sync_progress_deserialize_without_bulk_build_field() {
         let mut value = serde_json::to_value(SyncProgressData {
             current_block: 100,
