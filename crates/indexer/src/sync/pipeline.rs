@@ -750,101 +750,31 @@ impl Indexer {
                 };
                 let fetch_elapsed = fetch_started.elapsed();
 
-                // Split into sub-batches if too many transactions.
-                // IMPORTANT: move blocks into sub-batches to avoid cloning large vectors.
-                let max_txs = adaptive_sub_batch_tx_cap(
-                    adaptive_snapshot.target_batch_txs,
-                    adaptive_snapshot.min_target_batch_txs,
-                );
-                let max_inputs = adaptive_sub_batch_input_cap(
-                    adaptive_snapshot.target_batch_txs,
-                    adaptive_snapshot.min_target_batch_txs,
-                );
-                let mut send_failed_reason: Option<String> = None;
-                let tx_counts: Vec<usize> = blocks
+                let batch_tx_count: usize = blocks
                     .iter()
                     .map(|block| block.block.transactions.len())
-                    .collect();
-                let input_counts: Vec<usize> = blocks
-                    .iter()
-                    .map(|block| {
-                        block
-                            .block
-                            .transactions
-                            .iter()
-                            .map(|tx| tx.inputs.len())
-                            .sum::<usize>()
-                    })
-                    .collect();
+                    .sum();
                 adaptive_batch_controller_for_fetcher
-                    .observe_tx_density(tx_counts.iter().sum(), tx_counts.len());
-                let sub_batch_plan =
-                    plan_fetch_sub_batches(&tx_counts, &input_counts, max_txs, max_inputs);
-                let mut block_iter = blocks.into_iter();
-                let mut sub_start_block = start_block;
+                    .observe_tx_density(batch_tx_count, blocks.len());
 
-                for (idx, (sub_block_count, sub_txs, sub_inputs)) in
-                    sub_batch_plan.into_iter().enumerate()
+                if fetch_tx
+                    .send((
+                        fetch_cycle_epoch,
+                        start_block,
+                        end_block,
+                        chain_tip,
+                        Arc::new(blocks),
+                    ))
+                    .await
+                    .is_err()
                 {
-                    let sub_blocks: Vec<_> = block_iter.by_ref().take(sub_block_count).collect();
-                    if sub_blocks.len() != sub_block_count {
-                        error!(
-                            expected = sub_block_count,
-                            actual = sub_blocks.len(),
-                            "Fetcher: planned sub-batch size mismatch"
-                        );
-                        send_failed_reason = Some(format!(
-                            "planned sub-batch size mismatch: expected={}, actual={}, range={}-{}",
-                            sub_block_count,
-                            sub_blocks.len(),
-                            start_block,
-                            end_block
-                        ));
-                        break;
-                    }
-
-                    let sub_end_block = sub_start_block + sub_blocks.len() as u64 - 1;
-                    if idx > 0 {
-                        debug!(
-                            sub_start_block,
-                            sub_end_block,
-                            txs = sub_txs,
-                            inputs = sub_inputs,
-                            "Fetcher: sending sub-batch"
-                        );
-                    }
-
-                    if fetch_tx
-                        .send((
-                            fetch_cycle_epoch,
-                            sub_start_block,
-                            sub_end_block,
-                            chain_tip,
-                            Arc::new(sub_blocks),
-                        ))
-                        .await
-                        .is_err()
-                    {
-                        send_failed_reason = Some(format!(
-                            "failed to send fetched sub-batch to parser: sub_range={}-{}, chain_tip={}, pipeline_epoch={}",
-                            sub_start_block, sub_end_block, chain_tip, fetch_cycle_epoch
-                        ));
-                        break;
-                    }
-
-                    sub_start_block = sub_end_block + 1;
-                }
-
-                if send_failed_reason.is_none() && block_iter.next().is_some() {
-                    error!("Fetcher: leftover blocks after planned sub-batch splitting");
-                    send_failed_reason = Some(format!(
-                        "leftover blocks after planned sub-batch splitting: range={}-{}",
-                        start_block, end_block
-                    ));
-                }
-
-                if let Some(reason) = send_failed_reason {
-                    record_worker_exit_reason(&fetcher_exit_reason_for_fetcher, reason);
+                    record_worker_exit_reason(
+                        &fetcher_exit_reason_for_fetcher,
+                        format!(
+                            "failed to send fetched batch to parser: range={}-{}, chain_tip={}, pipeline_epoch={}",
+                            start_block, end_block, chain_tip, fetch_cycle_epoch
+                        ),
+                    );
                     break;
                 }
 
@@ -2498,7 +2428,6 @@ impl Indexer {
                         let parse_queue_capacity_txs = parse_queue_capacity_txs(
                             parse_tx_for_writer_depth.max_capacity(),
                             adaptive_snapshot_before.target_batch_txs,
-                            adaptive_snapshot_before.min_target_batch_txs,
                         );
                         let queue_pressure = build_queue_pressure_snapshot(
                             parse_queue_pending_txs,
@@ -2657,11 +2586,15 @@ impl Indexer {
                                 }
                                 batches_since_last_flush = 0;
 
-                                let cp_pending_mb =
-                                    compaction_pressure.compaction_pending_bytes / (1024 * 1024);
-                                if cp_pending_mb > 6000 && !compaction_checkpoint_done {
+                                let cp_pending = compaction_pressure.compaction_pending_bytes;
+                                let mem_profile = self.writer.store().memory_profile();
+                                let cp_trigger = mem_profile.severe_compaction_pending_bytes_bulk;
+                                let cp_drain_target = mem_profile.drain_pending_bytes_threshold;
+                                if cp_pending > cp_trigger && !compaction_checkpoint_done {
                                     info!(
-                                        compaction_pending_mb = cp_pending_mb,
+                                        compaction_pending_mb = cp_pending / (1024 * 1024),
+                                        trigger_mb = cp_trigger / (1024 * 1024),
+                                        drain_target_mb = cp_drain_target / (1024 * 1024),
                                         "Compaction checkpoint: compacting hot CFs"
                                     );
                                     self.writer.store().compact_hot_cfs();
@@ -2670,12 +2603,12 @@ impl Indexer {
                                     let checkpoint_start = std::time::Instant::now();
                                     loop {
                                         let p = self.writer.store().compaction_pressure();
-                                        let pending_mb = p.compaction_pending_bytes / (1024 * 1024);
-                                        if pending_mb < 2000
+                                        if p.compaction_pending_bytes < cp_drain_target
                                             || checkpoint_start.elapsed().as_secs() > 120
                                         {
                                             info!(
-                                                pending_mb,
+                                                pending_mb =
+                                                    p.compaction_pending_bytes / (1024 * 1024),
                                                 elapsed_s = checkpoint_start.elapsed().as_secs(),
                                                 "Compaction checkpoint complete"
                                             );

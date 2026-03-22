@@ -658,17 +658,11 @@ pub(crate) fn build_queue_pressure_snapshot(
 pub(crate) fn parse_queue_capacity_txs(
     queue_capacity_batches: usize,
     target_batch_txs: u64,
-    min_target_batch_txs: u64,
 ) -> u64 {
     let queue_capacity_batches =
         u64::try_from(queue_capacity_batches).expect("parse queue capacity exceeds u64");
-    let per_batch_tx_cap = u64::try_from(super::adaptive::adaptive_sub_batch_tx_cap(
-        target_batch_txs,
-        min_target_batch_txs,
-    ))
-    .expect("adaptive sub-batch tx cap exceeds u64");
     queue_capacity_batches
-        .checked_mul(per_batch_tx_cap)
+        .checked_mul(target_batch_txs)
         .expect("parse queue tx capacity overflow")
 }
 
@@ -849,24 +843,15 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_queue_capacity_txs_uses_sub_batch_cap() {
-        use super::super::adaptive::ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS;
-        assert_eq!(
-            parse_queue_capacity_txs(8, 40_000, ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS),
-            320_000
-        );
-    }
-
-    #[test]
-    fn test_parse_queue_capacity_txs_respects_floor() {
-        assert_eq!(parse_queue_capacity_txs(4, 2_500, 8_000), 32_000);
+    fn test_parse_queue_capacity_txs() {
+        assert_eq!(parse_queue_capacity_txs(8, 40_000), 320_000);
     }
 
     #[test]
     #[should_panic(expected = "parse queue tx capacity overflow")]
     fn test_parse_queue_capacity_txs_panics_on_overflow() {
         use super::super::adaptive::ADAPTIVE_BATCH_MAX_TXS;
-        let _ = parse_queue_capacity_txs(usize::MAX, ADAPTIVE_BATCH_MAX_TXS, 10_000);
+        let _ = parse_queue_capacity_txs(usize::MAX, ADAPTIVE_BATCH_MAX_TXS);
     }
 
     #[tokio::test]
