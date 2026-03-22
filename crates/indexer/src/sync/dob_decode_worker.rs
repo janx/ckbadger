@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use futures::stream::{self, StreamExt};
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
@@ -30,6 +31,7 @@ use crate::rpc::{parse_hex_to_bytes, CkbRpcClient};
 
 const BATCH_SIZE: usize = 500;
 const MAX_MEDIA_SOURCES: usize = 24;
+const DECODE_CONCURRENCY: usize = 8;
 
 /// Background worker that decodes DOB spores via CKB-VM after sync catches up.
 pub struct DobDecodeWorker {
@@ -41,6 +43,10 @@ pub struct DobDecodeWorker {
     decoder_cache: Arc<DecoderBinaryCache>,
     /// CKB RPC endpoint URL for fetching decoder binaries.
     rpc_url: String,
+    /// Reusable RPC client for CKB node calls (connection-pooled).
+    rpc_client: CkbRpcClient,
+    /// Reusable HTTP client for decoder binary fetches (connection-pooled).
+    http_client: reqwest::Client,
     /// Cooperative shutdown flag.
     shutdown: Arc<AtomicBool>,
 }
@@ -53,11 +59,19 @@ impl DobDecodeWorker {
         rpc_url: String,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
+        let rpc_client = CkbRpcClient::new(&rpc_url);
+        let http_client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .expect("failed to build HTTP client");
         Self {
             store,
             append_only_store,
             decoder_cache,
             rpc_url,
+            rpc_client,
+            http_client,
             shutdown,
         }
     }
@@ -66,16 +80,14 @@ impl DobDecodeWorker {
     pub async fn run(&self) -> Result<()> {
         info!("DOB decode worker started");
 
-        // Get total for progress tracking (one-time scan).
-        let total = self.store.count_undecoded_dob_spores()?;
         let start = std::time::Instant::now();
 
         self.store.update_background_task("dob_decode", |entry| {
             entry.state = ckbadger_common::BackgroundTaskState::Running;
             entry.started_at = Some(chrono::Utc::now().timestamp());
             entry.progress_current = Some(0);
-            entry.progress_total = Some(total);
-            entry.message = Some(format!("{} undecoded spores", total));
+            entry.progress_total = None;
+            entry.message = Some("Starting DOB decode".to_string());
         })?;
 
         let mut cursor: Option<Vec<u8>> = None;
@@ -113,63 +125,96 @@ impl DobDecodeWorker {
             let batch_len = batch_entries.len();
             debug!(batch_size = batch_len, "processing DOB decode batch");
 
-            for (spore_id, content_type, collection_id) in &batch_entries {
-                if self.shutdown.load(Ordering::Relaxed) {
-                    info!(
-                        total_decoded,
-                        total_skipped, "DOB decode worker shutting down mid-batch"
-                    );
-                    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                    let _ = self.store.update_background_task("dob_decode", |entry| {
-                        entry.state = ckbadger_common::BackgroundTaskState::Completed;
-                        entry.progress_current = Some(total_decoded + total_skipped);
-                        entry.elapsed_ms = Some(elapsed_ms);
-                        entry.message = Some("Shutdown requested".to_string());
-                    });
-                    return Ok(());
-                }
+            // Advance cursor before consuming the batch
+            if let Some((last_key, _, _)) = batch_entries.last() {
+                cursor = Some(last_key.clone());
+            }
 
-                match self
-                    .decode_single_spore(spore_id, content_type, collection_id.as_deref())
-                    .await
-                {
-                    Ok(entry) => {
-                        // Write the decode result
-                        let mut store_batch = StoreBatch::new(&self.store);
-                        store_batch.put_dob_decoded(spore_id, &entry);
-                        store_batch.commit()?;
+            // Decode spores concurrently within the batch
+            let ctx = Arc::new(DecodeContext {
+                store: Arc::clone(&self.store),
+                append_only_store: Arc::clone(&self.append_only_store),
+                decoder_cache: Arc::clone(&self.decoder_cache),
+                rpc_client: self.rpc_client.clone(),
+                http_client: self.http_client.clone(),
+                rpc_url: self.rpc_url.clone(),
+            });
 
-                        // Update spore media profile if new media sources were found
-                        if !entry.media_sources.is_empty() {
-                            if let Err(e) =
-                                self.update_spore_media_profile(spore_id, &entry.media_sources)
-                            {
-                                warn!(
-                                    spore_id = hex::encode(spore_id),
-                                    error = %e,
-                                    "failed to update spore media profile after DOB decode"
-                                );
-                            }
+            let decode_futures =
+                batch_entries
+                    .into_iter()
+                    .map(|(spore_id, content_type, collection_id)| {
+                        let ctx = Arc::clone(&ctx);
+
+                        async move {
+                            let result = decode_single_spore(
+                                &spore_id,
+                                &content_type,
+                                collection_id.as_deref(),
+                                &ctx,
+                            )
+                            .await;
+                            (spore_id, result)
                         }
+                    });
 
-                        total_decoded += 1;
+            let results: Vec<_> = stream::iter(decode_futures)
+                .buffer_unordered(DECODE_CONCURRENCY)
+                .collect()
+                .await;
+
+            // Separate successes from failures
+            let mut decoded_results: Vec<(Vec<u8>, DobDecodedEntry)> = Vec::new();
+            let mut batch_skipped: u64 = 0;
+
+            for (spore_id, result) in results {
+                match result {
+                    Ok(entry) => {
                         debug!(
-                            spore_id = hex::encode(spore_id),
+                            spore_id = hex::encode(&spore_id),
                             traits = entry.traits.len(),
                             media_sources = entry.media_sources.len(),
                             "decoded DOB spore"
                         );
+                        decoded_results.push((spore_id, entry));
                     }
                     Err(e) => {
-                        total_skipped += 1;
+                        batch_skipped += 1;
                         debug!(
-                            spore_id = hex::encode(spore_id),
+                            spore_id = hex::encode(&spore_id),
                             error = %e,
                             "skipping DOB spore decode"
                         );
                     }
                 }
             }
+
+            // Batch-write all decoded results (single commit)
+            if !decoded_results.is_empty() {
+                let mut store_batch = StoreBatch::new(&self.store);
+                for (spore_id, entry) in &decoded_results {
+                    store_batch.put_dob_decoded(spore_id, entry);
+                }
+                store_batch.commit()?;
+
+                // Update media profiles (sequential — may touch same cluster aggregate)
+                for (spore_id, entry) in &decoded_results {
+                    if !entry.media_sources.is_empty() {
+                        if let Err(e) =
+                            self.update_spore_media_profile(spore_id, &entry.media_sources)
+                        {
+                            warn!(
+                                spore_id = hex::encode(spore_id),
+                                error = %e,
+                                "failed to update spore media profile after DOB decode"
+                            );
+                        }
+                    }
+                }
+            }
+
+            total_decoded += decoded_results.len() as u64;
+            total_skipped += batch_skipped;
 
             // Update progress at batch boundary
             let elapsed = start.elapsed();
@@ -180,26 +225,16 @@ impl DobDecodeWorker {
             } else {
                 0.0
             };
-            let eta = if rate > 0.0 && total > processed {
-                Some((total - processed) as f64 / rate)
-            } else {
-                None
-            };
             let _ = self.store.update_background_task("dob_decode", |entry| {
                 entry.progress_current = Some(processed);
                 entry.elapsed_ms = Some(elapsed_ms);
                 entry.rate = Some(rate);
-                entry.eta_seconds = eta;
+                entry.eta_seconds = None;
                 entry.message = Some(format!(
                     "Decoded {}, skipped {}",
                     total_decoded, total_skipped
                 ));
             });
-
-            // Advance cursor to last key in batch
-            if let Some((last_key, _, _)) = batch_entries.last() {
-                cursor = Some(last_key.clone());
-            }
 
             // If we got fewer than BATCH_SIZE, we've reached the end
             if batch_len < BATCH_SIZE {
@@ -225,147 +260,6 @@ impl DobDecodeWorker {
         });
 
         Ok(())
-    }
-
-    /// Decode a single DOB spore by loading its cluster metadata, fetching
-    /// the decoder binary, and executing it in CKB-VM.
-    async fn decode_single_spore(
-        &self,
-        spore_id: &[u8],
-        content_type: &str,
-        collection_id: Option<&[u8]>,
-    ) -> Result<DobDecodedEntry> {
-        // Load cluster entry for DOB metadata
-        let cluster_id = collection_id
-            .context("DOB spore has no collection_id — cannot resolve cluster metadata")?;
-
-        let cluster_entry = self.store.get_spore(cluster_id)?.with_context(|| {
-            format!(
-                "cluster entry not found for cluster_id=0x{}",
-                hex::encode(cluster_id)
-            )
-        })?;
-
-        let cluster_description = cluster_entry
-            .description
-            .as_deref()
-            .context("cluster entry has no description")?;
-
-        let metadata: Value = serde_json::from_str(cluster_description)
-            .context("cluster description is not valid JSON")?;
-
-        // Extract DNA hex from the spore cell's on-chain content.
-        let dna_hex = extract_dna_from_spore(spore_id, &self.store, &self.rpc_url).await?;
-
-        // Parse decoder reference from cluster DOB metadata
-        let dob_obj = metadata
-            .get("dob")
-            .context("cluster metadata missing 'dob' field")?;
-
-        let decoder_ref = parse_decoder_ref(dob_obj)?;
-        let pattern_json = extract_pattern_json(dob_obj)?;
-
-        // Fetch decoder binary (from cache or chain)
-        let decoder_binary = self.load_decoder_binary(&decoder_ref).await?;
-
-        // Determine DOB version from content type
-        let dob_version = parse_dob_version(content_type);
-
-        // Execute decoder
-        let decoded = match dob_version {
-            0 => ckbadger_dob_decoder::decode_dob0(&decoder_binary, &dna_hex, &pattern_json)?,
-            1 => {
-                // DOB/1 uses a chain of decoders; for now we support single-decoder DOB/1
-                let decoders: Vec<(&[u8], &str)> =
-                    vec![(decoder_binary.as_slice(), pattern_json.as_str())];
-                ckbadger_dob_decoder::decode_dob1_chain(&decoders, &dna_hex)?
-            }
-            v => bail!("unsupported DOB version: {v}"),
-        };
-
-        // Convert DobTrait -> DobDecodedTrait
-        let traits: Vec<DobDecodedTrait> = decoded
-            .traits
-            .iter()
-            .map(|t| DobDecodedTrait {
-                name: t.name.clone(),
-                value: format_trait_value(&t.value),
-            })
-            .collect();
-
-        // Extract media sources from decoded trait values
-        let media_sources = extract_media_sources_from_traits(&decoded.traits);
-
-        // Check if any SVG markup was produced (DOB/1 rendering)
-        let svg_markup = if decoded.raw_output.to_ascii_lowercase().contains("<svg") {
-            Some(decoded.raw_output.clone())
-        } else {
-            None
-        };
-
-        Ok(DobDecodedEntry {
-            traits,
-            svg_markup,
-            media_sources,
-            decoded_at: chrono::Utc::now().timestamp(),
-        })
-    }
-
-    async fn load_decoder_binary(&self, decoder_ref: &DecoderRef) -> Result<Vec<u8>> {
-        match decoder_ref {
-            DecoderRef::CodeHash(code_hash) => {
-                let cache_key = DecoderBinaryCache::code_hash_key(code_hash);
-                if let Some(binary) = self.decoder_cache.get(&cache_key) {
-                    return Ok(binary);
-                }
-
-                let (tx_hash, output_index, _) = self
-                    .store
-                    .find_any_cell_by_data_hash(code_hash, self.append_only_store.as_ref())
-                    .with_context(|| {
-                        format!(
-                            "failed to resolve decoder code cell from local data-hash index: code_hash=0x{}",
-                            hex::encode(code_hash)
-                        )
-                    })?
-                    .with_context(|| {
-                        format!(
-                            "decoder code cell missing from local data-hash index: code_hash=0x{}",
-                            hex::encode(code_hash)
-                        )
-                    })?;
-
-                let binary =
-                    fetch_output_data_by_outpoint(&tx_hash, output_index, &self.rpc_url)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "failed to fetch decoder binary via resolved code cell: code_hash=0x{}, tx_hash=0x{}, output_index={}",
-                                hex::encode(code_hash),
-                                hex::encode(&tx_hash),
-                                output_index
-                            )
-                        })?;
-
-                verify_blake2b_hash(&binary, code_hash).with_context(|| {
-                    format!(
-                        "resolved decoder binary hash mismatch: code_hash=0x{}, tx_hash=0x{}, output_index={}",
-                        hex::encode(code_hash),
-                        hex::encode(&tx_hash),
-                        output_index
-                    )
-                })?;
-
-                self.decoder_cache
-                    .put(&cache_key, &binary)
-                    .context("failed to cache resolved decoder binary")?;
-
-                Ok(binary)
-            }
-            DecoderRef::TypeId(_) => {
-                fetch_decoder_binary(decoder_ref, &self.rpc_url, &self.decoder_cache).await
-            }
-        }
     }
 
     /// After decoding, update the spore's media profile with newly discovered
@@ -502,6 +396,167 @@ impl DobDecodeWorker {
     }
 }
 
+/// Shared resources for concurrent decode tasks.
+struct DecodeContext {
+    store: Arc<CkbadgerStore>,
+    append_only_store: Arc<CkbadgerStore>,
+    decoder_cache: Arc<DecoderBinaryCache>,
+    rpc_client: CkbRpcClient,
+    http_client: reqwest::Client,
+    rpc_url: String,
+}
+
+/// Decode a single DOB spore. Standalone function for concurrent use.
+///
+/// Loads cluster metadata, fetches the decoder binary, and executes it
+/// in CKB-VM on a blocking thread.
+async fn decode_single_spore(
+    spore_id: &[u8],
+    content_type: &str,
+    collection_id: Option<&[u8]>,
+    ctx: &DecodeContext,
+) -> Result<DobDecodedEntry> {
+    // Load cluster entry for DOB metadata
+    let cluster_id = collection_id
+        .context("DOB spore has no collection_id — cannot resolve cluster metadata")?;
+
+    let cluster_entry = ctx.store.get_spore(cluster_id)?.with_context(|| {
+        format!(
+            "cluster entry not found for cluster_id=0x{}",
+            hex::encode(cluster_id)
+        )
+    })?;
+
+    let cluster_description = cluster_entry
+        .description
+        .as_deref()
+        .context("cluster entry has no description")?;
+
+    let metadata: Value = serde_json::from_str(cluster_description)
+        .context("cluster description is not valid JSON")?;
+
+    // Extract DNA hex from the spore cell's on-chain content.
+    let dna_hex = extract_dna_from_spore(spore_id, &ctx.store, &ctx.rpc_client).await?;
+
+    // Parse decoder reference from cluster DOB metadata
+    let dob_obj = metadata
+        .get("dob")
+        .context("cluster metadata missing 'dob' field")?;
+
+    let decoder_ref = parse_decoder_ref(dob_obj)?;
+    let pattern_json = extract_pattern_json(dob_obj)?;
+
+    // Fetch decoder binary (from cache or chain)
+    let decoder_binary = load_decoder_binary(&decoder_ref, ctx).await?;
+
+    // Determine DOB version from content type
+    let dob_version = parse_dob_version(content_type);
+
+    // Execute decoder on a blocking thread (CKB-VM is CPU-bound)
+    let decoded = tokio::task::spawn_blocking(move || match dob_version {
+        0 => ckbadger_dob_decoder::decode_dob0(&decoder_binary, &dna_hex, &pattern_json),
+        1 => {
+            let decoders: Vec<(&[u8], &str)> =
+                vec![(decoder_binary.as_slice(), pattern_json.as_str())];
+            ckbadger_dob_decoder::decode_dob1_chain(&decoders, &dna_hex)
+        }
+        v => Err(anyhow::anyhow!("unsupported DOB version: {v}")),
+    })
+    .await
+    .context("CKB-VM spawn_blocking panicked")??;
+
+    // Convert DobTrait -> DobDecodedTrait
+    let traits: Vec<DobDecodedTrait> = decoded
+        .traits
+        .iter()
+        .map(|t| DobDecodedTrait {
+            name: t.name.clone(),
+            value: format_trait_value(&t.value),
+        })
+        .collect();
+
+    // Extract media sources from decoded trait values
+    let media_sources = extract_media_sources_from_traits(&decoded.traits);
+
+    // Check if any SVG markup was produced (DOB/1 rendering)
+    let svg_markup = if decoded.raw_output.to_ascii_lowercase().contains("<svg") {
+        Some(decoded.raw_output.clone())
+    } else {
+        None
+    };
+
+    Ok(DobDecodedEntry {
+        traits,
+        svg_markup,
+        media_sources,
+        decoded_at: chrono::Utc::now().timestamp(),
+    })
+}
+
+/// Load a decoder binary from cache or chain. Standalone for concurrent use.
+async fn load_decoder_binary(decoder_ref: &DecoderRef, ctx: &DecodeContext) -> Result<Vec<u8>> {
+    match decoder_ref {
+        DecoderRef::CodeHash(code_hash) => {
+            let cache_key = DecoderBinaryCache::code_hash_key(code_hash);
+            if let Some(binary) = ctx.decoder_cache.get(&cache_key) {
+                return Ok(Arc::try_unwrap(binary).unwrap_or_else(|arc| (*arc).clone()));
+            }
+
+            let (tx_hash, output_index, _) = ctx
+                .store
+                .find_any_cell_by_data_hash(code_hash, ctx.append_only_store.as_ref())
+                .with_context(|| {
+                    format!(
+                        "failed to resolve decoder code cell from local data-hash index: code_hash=0x{}",
+                        hex::encode(code_hash)
+                    )
+                })?
+                .with_context(|| {
+                    format!(
+                        "decoder code cell missing from local data-hash index: code_hash=0x{}",
+                        hex::encode(code_hash)
+                    )
+                })?;
+
+            let binary =
+                fetch_output_data_by_outpoint(&tx_hash, output_index, &ctx.rpc_client)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to fetch decoder binary via resolved code cell: code_hash=0x{}, tx_hash=0x{}, output_index={}",
+                            hex::encode(code_hash),
+                            hex::encode(&tx_hash),
+                            output_index
+                        )
+                    })?;
+
+            verify_blake2b_hash(&binary, code_hash).with_context(|| {
+                format!(
+                    "resolved decoder binary hash mismatch: code_hash=0x{}, tx_hash=0x{}, output_index={}",
+                    hex::encode(code_hash),
+                    hex::encode(&tx_hash),
+                    output_index
+                )
+            })?;
+
+            ctx.decoder_cache
+                .put(&cache_key, &binary)
+                .context("failed to cache resolved decoder binary")?;
+
+            Ok(binary)
+        }
+        DecoderRef::TypeId(_) => {
+            fetch_decoder_binary(
+                decoder_ref,
+                &ctx.rpc_url,
+                &ctx.decoder_cache,
+                &ctx.http_client,
+            )
+            .await
+        }
+    }
+}
+
 /// Extract DNA hex from a spore's on-chain cell content.
 ///
 /// 1. Look up the spore's outpoint (tx_hash, output_index) from the domain store.
@@ -511,7 +566,7 @@ impl DobDecodeWorker {
 async fn extract_dna_from_spore(
     spore_id: &[u8],
     store: &CkbadgerStore,
-    rpc_url: &str,
+    rpc_client: &CkbRpcClient,
 ) -> Result<String> {
     // Step 1: Find the spore's outpoint (most recent first).
     let outpoints = store
@@ -528,7 +583,7 @@ async fn extract_dna_from_spore(
         .with_context(|| format!("no outpoint found for spore_id=0x{}", hex::encode(spore_id)))?;
 
     // Step 2: Fetch the spore cell data from CKB node via RPC.
-    let output_data = fetch_output_data_by_outpoint(tx_hash, *output_index, rpc_url)
+    let output_data = fetch_output_data_by_outpoint(tx_hash, *output_index, rpc_client)
         .await
         .with_context(|| {
             format!(
@@ -562,11 +617,10 @@ async fn extract_dna_from_spore(
 async fn fetch_output_data_by_outpoint(
     tx_hash: &[u8],
     output_index: i16,
-    rpc_url: &str,
+    rpc_client: &CkbRpcClient,
 ) -> Result<Vec<u8>> {
     let tx_hash_hex = format!("0x{}", hex::encode(tx_hash));
-    let rpc = CkbRpcClient::new(rpc_url);
-    let tx_with_status = rpc
+    let tx_with_status = rpc_client
         .get_transaction(&tx_hash_hex)
         .await
         .with_context(|| format!("RPC get_transaction failed for tx_hash={}", tx_hash_hex))?
@@ -1069,7 +1123,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let spore_id = [0x11u8; 32];
-        let result = extract_dna_from_spore(&spore_id, &store, "http://localhost:9999").await;
+        let rpc_client = CkbRpcClient::new("http://localhost:9999");
+        let result = extract_dna_from_spore(&spore_id, &store, &rpc_client).await;
         assert!(result.is_err());
         assert!(
             result
@@ -1090,7 +1145,6 @@ mod tests {
         let append_only_store =
             Arc::new(CkbadgerStore::open_append_only(append_only_dir.path()).unwrap());
         let decoder_cache = Arc::new(DecoderBinaryCache::new(cache_dir.path()).unwrap());
-        let shutdown = Arc::new(AtomicBool::new(false));
 
         let decoder_binary = b"test decoder binary".to_vec();
         let mut hasher = ckb_hash::new_blake2b();
@@ -1177,21 +1231,21 @@ mod tests {
             .mount(&server)
             .await;
 
-        let worker = DobDecodeWorker::new(
+        let ctx = DecodeContext {
             store,
             append_only_store,
-            decoder_cache.clone(),
-            server.uri(),
-            shutdown,
-        );
+            decoder_cache: decoder_cache.clone(),
+            rpc_client: CkbRpcClient::new(server.uri()),
+            http_client: reqwest::Client::new(),
+            rpc_url: server.uri(),
+        };
 
-        let loaded = worker
-            .load_decoder_binary(&DecoderRef::CodeHash(code_hash.clone()))
+        let loaded = load_decoder_binary(&DecoderRef::CodeHash(code_hash.clone()), &ctx)
             .await
             .unwrap();
         assert_eq!(loaded, decoder_binary);
 
         let cache_key = DecoderBinaryCache::code_hash_key(&code_hash);
-        assert_eq!(decoder_cache.get(&cache_key).unwrap(), decoder_binary);
+        assert_eq!(*decoder_cache.get(&cache_key).unwrap(), decoder_binary);
     }
 }

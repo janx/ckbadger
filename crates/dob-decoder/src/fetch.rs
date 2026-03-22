@@ -5,6 +5,8 @@
 //! - **TypeId**: query the CKB indexer RPC for a live cell with the TypeID
 //!   type script and read its data
 
+use std::sync::Arc;
+
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use tracing::{debug, warn};
@@ -30,6 +32,7 @@ pub async fn fetch_decoder_binary(
     decoder_ref: &DecoderRef,
     rpc_url: &str,
     cache: &DecoderBinaryCache,
+    client: &reqwest::Client,
 ) -> Result<Vec<u8>> {
     let cache_key = match decoder_ref {
         DecoderRef::CodeHash(hash) => DecoderBinaryCache::code_hash_key(hash),
@@ -39,16 +42,14 @@ pub async fn fetch_decoder_binary(
     // Cache hit — return immediately
     if let Some(binary) = cache.get(&cache_key) {
         debug!(key = %cache_key, "decoder binary cache hit");
-        return Ok(binary);
+        return Ok(Arc::try_unwrap(binary).unwrap_or_else(|arc| (*arc).clone()));
     }
 
     debug!(key = %cache_key, "decoder binary cache miss, fetching from chain");
 
-    let client = reqwest::Client::new();
-
     let binary = match decoder_ref {
-        DecoderRef::CodeHash(hash) => fetch_by_code_hash(hash, rpc_url, &client).await?,
-        DecoderRef::TypeId(hash) => fetch_by_type_id(hash, rpc_url, &client).await?,
+        DecoderRef::CodeHash(hash) => fetch_by_code_hash(hash, rpc_url, client).await?,
+        DecoderRef::TypeId(hash) => fetch_by_type_id(hash, rpc_url, client).await?,
     };
 
     cache
@@ -298,10 +299,12 @@ mod tests {
             .build()
             .unwrap();
 
+        let client = reqwest::Client::new();
         let result = rt.block_on(fetch_decoder_binary(
             &DecoderRef::CodeHash(hash),
             "http://127.0.0.1:9999", // unreachable, should not be called
             &cache,
+            &client,
         ));
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), binary);

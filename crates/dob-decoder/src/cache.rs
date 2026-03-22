@@ -10,7 +10,7 @@ use tracing::info;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Disk-backed cache for decoder RISC-V binaries with in-memory promotion.
 ///
@@ -19,7 +19,7 @@ use std::sync::Mutex;
 /// restarts, disk hits are promoted back into the in-memory map.
 pub struct DecoderBinaryCache {
     cache_dir: PathBuf,
-    memory: Mutex<HashMap<String, Vec<u8>>>,
+    memory: Mutex<HashMap<String, Arc<Vec<u8>>>>,
 }
 
 impl DecoderBinaryCache {
@@ -40,21 +40,22 @@ impl DecoderBinaryCache {
     ///
     /// Checks the in-memory map first, then falls back to disk. On a disk
     /// hit the binary is promoted into memory for subsequent lookups.
-    pub fn get(&self, key: &str) -> Option<Vec<u8>> {
+    pub fn get(&self, key: &str) -> Option<Arc<Vec<u8>>> {
         // Fast path: in-memory hit
         {
             let mem = self.memory.lock().unwrap();
             if let Some(data) = mem.get(key) {
-                return Some(data.clone());
+                return Some(Arc::clone(data));
             }
         }
 
         // Slow path: disk hit — promote to memory
         let path = self.disk_path(key);
         if let Ok(data) = fs::read(&path) {
+            let arc = Arc::new(data);
             let mut mem = self.memory.lock().unwrap();
-            mem.insert(key.to_string(), data.clone());
-            Some(data)
+            mem.insert(key.to_string(), Arc::clone(&arc));
+            Some(arc)
         } else {
             None
         }
@@ -67,7 +68,7 @@ impl DecoderBinaryCache {
             .with_context(|| format!("failed to write cache file: {}", path.display()))?;
 
         let mut mem = self.memory.lock().unwrap();
-        mem.insert(key.to_string(), binary.to_vec());
+        mem.insert(key.to_string(), Arc::new(binary.to_vec()));
 
         info!(key, bytes = binary.len(), "cached decoder binary");
         Ok(())
@@ -106,7 +107,7 @@ mod tests {
         cache.put(key, &data).unwrap();
 
         let retrieved = cache.get(key).unwrap();
-        assert_eq!(retrieved, data);
+        assert_eq!(*retrieved, data);
     }
 
     #[test]
@@ -125,7 +126,7 @@ mod tests {
         {
             let cache = DecoderBinaryCache::new(dir.path()).unwrap();
             let retrieved = cache.get(key).unwrap();
-            assert_eq!(retrieved, data);
+            assert_eq!(*retrieved, data);
         }
     }
 
