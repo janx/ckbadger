@@ -3,6 +3,7 @@ mod batch;
 pub(crate) mod bulk_build;
 pub(crate) mod dao_helpers;
 mod diagnostics;
+pub mod dob_decode_worker;
 mod helpers;
 mod indexer;
 mod nft_helpers;

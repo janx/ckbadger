@@ -108,7 +108,7 @@ pub fn analyze_spore_media_profile(
     }
 }
 
-fn resolve_tier(sources: &[SporeMediaSource]) -> StorageDependencyTier {
+pub(crate) fn resolve_tier(sources: &[SporeMediaSource]) -> StorageDependencyTier {
     if sources
         .iter()
         .any(|source| source.dependency_tier == StorageDependencyTier::CentralizedDependent)
@@ -161,7 +161,7 @@ fn is_text_like_content_type(content_type: &str) -> bool {
         || content_type.contains("svg")
 }
 
-fn uri_seems_image(uri: &str) -> bool {
+pub(crate) fn uri_seems_image(uri: &str) -> bool {
     let normalized = uri.trim().to_ascii_lowercase();
     normalized.starts_with("data:image/")
         || normalized.ends_with(".png")
@@ -302,7 +302,11 @@ pub fn analyze_renderer_tier(renderer: Option<&str>) -> StorageDependencyTier {
     resolve_tier(&sources)
 }
 
-fn extract_uri_sources(text: &str, source_location: &str, out: &mut Vec<SporeMediaSource>) {
+pub(crate) fn extract_uri_sources(
+    text: &str,
+    source_location: &str,
+    out: &mut Vec<SporeMediaSource>,
+) {
     let normalized = text.to_ascii_lowercase();
     let schemes = [
         "https://", "http://", "ipfs://", "ar://", "btcfs://", "ckbfs://", "data:",
