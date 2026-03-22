@@ -394,34 +394,32 @@ fn load_script_labels(base_path: &str) -> Result<Vec<ScriptLabelInfo>> {
 
     let script_path = Path::new(base_path).join("information").join("script");
 
-    if !script_path.exists() {
-        return Ok(scripts);
-    }
+    if script_path.exists() {
+        let entries = std::fs::read_dir(&script_path)?;
 
-    let entries = std::fs::read_dir(&script_path)?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
+            let index_path = path.join("index.json");
+            if !index_path.exists() {
+                continue;
+            }
 
-        let index_path = path.join("index.json");
-        if !index_path.exists() {
-            continue;
-        }
-
-        match std::fs::read_to_string(&index_path) {
-            Ok(content) => match serde_json::from_str::<ScriptLabelInfo>(&content) {
-                Ok(script) => {
-                    scripts.push(script);
-                }
+            match std::fs::read_to_string(&index_path) {
+                Ok(content) => match serde_json::from_str::<ScriptLabelInfo>(&content) {
+                    Ok(script) => {
+                        scripts.push(script);
+                    }
+                    Err(e) => {
+                        debug!("Failed to parse {:?}: {}", index_path, e);
+                    }
+                },
                 Err(e) => {
-                    debug!("Failed to parse {:?}: {}", index_path, e);
+                    debug!("Failed to read {:?}: {}", index_path, e);
                 }
-            },
-            Err(e) => {
-                debug!("Failed to read {:?}: {}", index_path, e);
             }
         }
     }
@@ -942,6 +940,64 @@ mod tests {
     }
 
     #[test]
+    fn test_run_label_import_staged_imports_known_scripts_from_overrides_without_script_dir() {
+        let dir = TempDir::new().unwrap();
+        let labels_root = dir.path().join("token-labels");
+        std::fs::create_dir_all(labels_root.join("information")).unwrap();
+        std::fs::write(
+            dir.path().join("script-name-overrides.json"),
+            r#"{
+  "overrides": {},
+  "known_scripts": [
+    {
+      "name": "Godwoken Custodian Lock",
+      "description": "Rollup uses the custodian lock to hold the deposited assets.",
+      "rfc": "",
+      "website": "https://github.com/godwokenrises/godwoken/tree/develop/gwos#custodian-lock",
+      "sourceUrl": "https://github.com/godwokenrises/godwoken/tree/develop/gwos/contracts/custodian-lock",
+      "decoderType": "",
+      "deployments": {
+        "mainnet": [
+          {
+            "tag": "legacy",
+            "deprecated": false,
+            "hashType": "type",
+            "dataHash": "0xe070f51c535eea3f9ab266ccaf0612f78c20ecdab2b87cfa593dd13aae9b2a2e",
+            "typeHash": "0x45c112df97daece27c4afa02b24b15f64403bdfd45ab2e0e88c9fb2a24796b1d",
+            "codeHash": "0x45c112df97daece27c4afa02b24b15f64403bdfd45ab2e0e88c9fb2a24796b1d"
+          }
+        ],
+        "testnet": []
+      }
+    }
+  ],
+  "deprecated": []
+}"#,
+        )
+        .unwrap();
+
+        let store = CkbadgerStore::open_domain(dir.path().join("store")).unwrap();
+        let config = LabelImportConfig {
+            token_labels_path: labels_root.to_string_lossy().to_string(),
+            network: "mainnet".to_string(),
+            import_udt: false,
+            import_scripts: true,
+        };
+
+        let result = run_label_import_staged(&store, &config).unwrap();
+        assert_eq!(result.script_labels_imported, 1);
+
+        let legacy_code_hash =
+            hex::decode("45c112df97daece27c4afa02b24b15f64403bdfd45ab2e0e88c9fb2a24796b1d")
+                .unwrap();
+        let legacy = store
+            .get_script_info(&legacy_code_hash)
+            .unwrap()
+            .expect("override-known script should be imported without script dir");
+        assert_eq!(legacy.name.as_deref(), Some("Godwoken Custodian Lock"));
+    }
+
+    #[test]
     fn test_import_pseudo_script_with_zero_data_hash_succeeds() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
@@ -1218,6 +1274,39 @@ mod tests {
         assert_eq!(
             spv.description.as_deref(),
             Some("Bitcoin SPV light-client type script used by RGB++ flows.")
+        );
+    }
+
+    #[test]
+    fn test_run_label_import_bundled_imports_legacy_godwoken_custodian_lock() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        super::run_label_import_bundled(&store, "mainnet").unwrap();
+
+        let legacy_code_hash =
+            hex::decode("45c112df97daece27c4afa02b24b15f64403bdfd45ab2e0e88c9fb2a24796b1d")
+                .unwrap();
+        let legacy = store
+            .get_script_info(&legacy_code_hash)
+            .unwrap()
+            .expect("legacy Godwoken custodian lock should be imported");
+        assert_eq!(legacy.name.as_deref(), Some("Godwoken Custodian Lock"));
+        assert_eq!(
+            legacy.description.as_deref(),
+            Some("Rollup uses the custodian lock to hold the deposited assets.")
+        );
+
+        let legacy_version_hash =
+            hex::decode("e070f51c535eea3f9ab266ccaf0612f78c20ecdab2b87cfa593dd13aae9b2a2e")
+                .unwrap();
+        let legacy_version = store
+            .get_script_version(&legacy_version_hash)
+            .unwrap()
+            .expect("legacy Godwoken custodian lock version should be imported");
+        assert_eq!(
+            legacy_version.name.as_deref(),
+            Some("Godwoken Custodian Lock")
         );
     }
 }
