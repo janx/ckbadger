@@ -678,6 +678,8 @@ pub struct ScriptInfo {
     pub code_hash: Vec<u8>,
     pub hash_type: u8,
     pub name: Option<String>,
+    #[serde(default)]
+    pub deprecated: bool,
     pub category: Option<String>,
     pub website: Option<String>,
     pub description: Option<String>,
@@ -721,6 +723,8 @@ pub struct ScriptInfo {
 pub struct ScriptVersionInfo {
     pub version_hash: Vec<u8>,
     pub name: Option<String>,
+    #[serde(default)]
+    pub deprecated: bool,
     pub category: Option<String>,
     pub website: Option<String>,
     pub description: Option<String>,

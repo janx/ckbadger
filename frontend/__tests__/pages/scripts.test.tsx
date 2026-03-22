@@ -114,6 +114,29 @@ describe('ScriptsPage', () => {
     expect(screen.getByRole('button', { name: 'Sort by Used (CKB)' })).toBeInTheDocument();
   });
 
+  it('shows deprecated badge for deprecated known scripts', async () => {
+    vi.mocked(api.getScripts).mockResolvedValue({
+      ...mockScriptsResponse,
+      data: [
+        {
+          ...mockScriptsResponse.data[0],
+          name: 'PW Lock',
+          description: 'Ethereum wallet compatible lock',
+          deprecated: true,
+        },
+      ],
+      total: 1,
+    });
+
+    render(<ScriptsPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('link', { name: 'PW Lock' }).length).toBeGreaterThan(0);
+    });
+
+    expect(screen.getAllByText('Deprecated').length).toBeGreaterThan(0);
+  });
+
   it('supports sorting by common knowledge size', async () => {
     vi.mocked(api.getScripts)
       .mockResolvedValueOnce(mockScriptsResponse)

@@ -371,7 +371,7 @@ export default function ScriptDetailPage({
       dataHash: codeHashLookup.deploymentDataHash ?? null,
       typeHash: codeHashLookup.deploymentTypeHash ?? null,
       tag: null,
-      deprecated: false,
+      deprecated: codeHashLookup.deprecated ?? false,
       isSystem: false,
       codeCellTxHash: codeHashLookup.codeCellTxHash,
       codeCellOutputIndex: codeHashLookup.codeCellOutputIndex,
@@ -937,6 +937,9 @@ export default function ScriptDetailPage({
         Copy
       </button>
       {selected && <Badge variant="green">Selected</Badge>}
+      {versionRow.deployments.some((deployment) => deployment.deprecated) && (
+        <Badge variant="red">Deprecated</Badge>
+      )}
     </div>
   );
 
@@ -976,6 +979,16 @@ export default function ScriptDetailPage({
     ) : (
       <span className="text-text-dim font-mono text-xs">-</span>
     );
+
+  const renderDeploymentBadges = (
+    deployment: (typeof selectedVersionDeploymentRows)[number]['deployment'],
+    codeCell: (typeof selectedVersionDeploymentRows)[number]['codeCell']
+  ) => (
+    <div className="flex flex-wrap items-center gap-2">
+      {renderDeploymentStatus(codeCell)}
+      {deployment.deprecated && <Badge variant="red">Deprecated</Badge>}
+    </div>
+  );
 
   const renderGovernance = (
     codeCell: (typeof selectedVersionDeploymentRows)[number]['codeCell']
@@ -1178,6 +1191,7 @@ export default function ScriptDetailPage({
           badge={
             <div className="flex items-center gap-2">
               {!isKnownScript && <Badge variant="gray">UNLABELED</Badge>}
+              {scriptInfo.deprecated && <Badge variant="red">Deprecated</Badge>}
               {inferredScriptKind && (
                 <Badge variant="neutral">{inferredScriptKind.toUpperCase()}</Badge>
               )}
@@ -1522,7 +1536,9 @@ export default function ScriptDetailPage({
                                     )}
                                   </div>
                                 </div>
-                                <div className="pt-4">{renderDeploymentStatus(codeCell)}</div>
+                                <div className="pt-4">
+                                  {renderDeploymentBadges(deployment, codeCell)}
+                                </div>
                               </div>
                               <div>
                                 <div className="text-text-dim font-mono text-[10px] uppercase tracking-wide">
@@ -1626,7 +1642,7 @@ export default function ScriptDetailPage({
                                     Unavailable
                                   </span>
                                 )}
-                                <div>{renderDeploymentStatus(codeCell)}</div>
+                                <div>{renderDeploymentBadges(deployment, codeCell)}</div>
                               </div>
                               <div className="min-w-0 space-y-2">{renderGovernance(codeCell)}</div>
                               {renderDeploymentReferences(references)}
@@ -1708,7 +1724,9 @@ export default function ScriptDetailPage({
                                   </span>
                                 )}
                               </div>
-                              <div className="pt-0.5">{renderDeploymentStatus(codeCell)}</div>
+                              <div className="pt-0.5">
+                                {renderDeploymentBadges(deployment, codeCell)}
+                              </div>
                               <div className="min-w-0 space-y-2">{renderGovernance(codeCell)}</div>
                               {renderDeploymentReferences(references)}
                               {renderDeploymentTimestamp(deployment, codeCell)}

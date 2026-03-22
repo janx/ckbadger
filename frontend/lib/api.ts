@@ -1299,6 +1299,7 @@ interface ScriptLookupInfo {
   referenceHash?: string;
   codeHash: string;
   name: string;
+  deprecated?: boolean;
   scriptKind: string | null;
   decoderType: string | null;
   hashType: string | null;

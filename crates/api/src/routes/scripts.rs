@@ -185,6 +185,7 @@ pub struct ScriptLookupInfo {
     pub reference_hash: String,
     pub code_hash: String,
     pub name: String,
+    pub deprecated: bool,
     pub script_kind: Option<String>,
     pub decoder_type: Option<String>,
     pub hash_type: Option<String>,
@@ -428,6 +429,7 @@ fn fallback_script_version_info(
     Ok(ckbadger_store::types::ScriptVersionInfo {
         version_hash: version_hash.to_vec(),
         name: fallback.name,
+        deprecated: fallback.deprecated,
         category: fallback.category,
         website: fallback.website,
         description: fallback.description,
@@ -777,7 +779,7 @@ fn script_info_to_response(
             .as_ref()
             .map(|h| format!("0x{}", hex::encode(h))),
         tag: None,
-        deprecated: false,
+        deprecated: info.deprecated,
         is_system: false,
         code_cell_tx_hash,
         code_cell_output_index,
@@ -868,6 +870,11 @@ async fn lookup_scripts(
                             .name
                             .clone()
                             .unwrap_or_else(|| "Unknown".to_string()),
+                        deprecated: version_info.deprecated
+                            || script_info
+                                .as_ref()
+                                .map(|info| info.deprecated)
+                                .unwrap_or(false),
                         script_kind: version_script_kind(&version_info),
                         decoder_type: version_info.category.clone(),
                         hash_type,
@@ -898,6 +905,7 @@ async fn lookup_scripts(
                         reference_hash: reference_hash_hex.clone(),
                         code_hash: reference_hash_hex.clone(),
                         name: "Ambiguous Script Reference".to_string(),
+                        deprecated: false,
                         script_kind: None,
                         decoder_type: None,
                         hash_type: None,
@@ -1271,7 +1279,11 @@ async fn get_script(
                 data_hash: data_hash.clone(),
                 type_hash: type_hash.clone(),
                 tag: None,
-                deprecated: false,
+                deprecated: version_info.deprecated
+                    || script_info
+                        .as_ref()
+                        .map(|info| info.deprecated)
+                        .unwrap_or(false),
                 is_system: false,
                 code_cell_tx_hash: None,
                 code_cell_output_index: None,
@@ -1309,7 +1321,11 @@ async fn get_script(
                 data_hash: data_hash.clone(),
                 type_hash: type_hash.clone(),
                 tag: None,
-                deprecated: false,
+                deprecated: version_info.deprecated
+                    || script_info
+                        .as_ref()
+                        .map(|info| info.deprecated)
+                        .unwrap_or(false),
                 is_system: false,
                 code_cell_tx_hash: Some(format!("0x{}", hex::encode(tx_hash))),
                 code_cell_output_index: Some(i32::from(*output_index)),

@@ -191,6 +191,9 @@ pub fn merge_script_info_for_reference(
             })
             .or_else(|| preferred.name.clone());
     }
+    if !merged.deprecated {
+        merged.deprecated = related.iter().any(|info| info.deprecated);
+    }
 
     if merged.description.is_none() {
         merged.description = preferred.description.clone();

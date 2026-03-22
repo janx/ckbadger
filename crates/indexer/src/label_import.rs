@@ -519,9 +519,7 @@ fn upsert_script_label(
                 .chain(script.deployments.testnet.iter())
                 .collect();
             for deployment in all_deployments {
-                if !deployment.deprecated {
-                    import_single_deployment(store, script, deployment)?;
-                }
+                import_single_deployment(store, script, deployment)?;
             }
             return Ok(());
         }
@@ -534,6 +532,7 @@ fn upsert_script_label(
             if let Ok(Some(mut info)) = store.get_script_info(&code_hash) {
                 if info.name.as_deref() == Some(&script.name) {
                     info.name = None;
+                    info.deprecated = false;
                     info.description = None;
                     info.website = None;
                     store.put_script_info_direct(&code_hash, &info)?;
@@ -547,6 +546,7 @@ fn upsert_script_label(
                     if version_info.name.as_deref() == Some(&script.name) {
                         store.delete_script_version_by_label(&script.name, &data_hash)?;
                         version_info.name = None;
+                        version_info.deprecated = false;
                         version_info.category = None;
                         version_info.description = None;
                         version_info.website = None;
@@ -558,9 +558,7 @@ fn upsert_script_label(
     }
 
     for deployment in active {
-        if !deployment.deprecated {
-            import_single_deployment(store, script, deployment)?;
-        }
+        import_single_deployment(store, script, deployment)?;
     }
     Ok(())
 }
@@ -591,6 +589,7 @@ fn import_single_deployment(
     // code_cell_tx_hash, code_cell_output_index) — those are resolved by the sync
     // pipeline from actual chain data via script_references and script_versions CFs.
     info.name = Some(script.name.clone());
+    info.deprecated = deployment.deprecated;
     info.category = script.decoder_type.clone();
     info.description = Some(script.description.clone());
     info.website = Some(script.website.clone());
@@ -627,6 +626,7 @@ fn import_single_deployment(
         }
     }
     version_info.name = Some(script.name.clone());
+    version_info.deprecated = deployment.deprecated;
     version_info.category = script.decoder_type.clone();
     version_info.description = Some(script.description.clone());
     version_info.website = Some(script.website.clone());
@@ -982,6 +982,58 @@ mod tests {
         // No version entry (no real dataHash to key on).
         let zero_hash = vec![0u8; 32];
         assert!(store.get_script_version(&zero_hash).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_imports_deprecated_active_network_script_deployments() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        let script = ScriptLabelInfo {
+            name: "Deprecated Script".to_string(),
+            description: "deprecated but still named".to_string(),
+            _rfc: String::new(),
+            website: String::new(),
+            _source_url: String::new(),
+            decoder_type: Some("lock".to_string()),
+            deployments: ScriptDeployments {
+                mainnet: vec![ScriptDeployment {
+                    _tag: None,
+                    deprecated: true,
+                    hash_type: "type".to_string(),
+                    data_hash: "0xd6a5a0edb152e88e8bbc702e164441cb3890fae35da672b408d28ca9a1bde3ee"
+                        .to_string(),
+                    _type_hash:
+                        "0xbf43c3602455798c1a61a596e0d95278864c552fafe231c063b3fabf97a8febc"
+                            .to_string(),
+                    code_hash: "0xbf43c3602455798c1a61a596e0d95278864c552fafe231c063b3fabf97a8febc"
+                        .to_string(),
+                }],
+                testnet: vec![],
+            },
+        };
+
+        upsert_script_label(&store, &script, "mainnet").unwrap();
+
+        let code_hash =
+            hex::decode("bf43c3602455798c1a61a596e0d95278864c552fafe231c063b3fabf97a8febc")
+                .unwrap();
+        let script_info = store.get_script_info(&code_hash).unwrap().unwrap();
+        assert_eq!(script_info.name.as_deref(), Some("Deprecated Script"));
+
+        let version_hash =
+            hex::decode("d6a5a0edb152e88e8bbc702e164441cb3890fae35da672b408d28ca9a1bde3ee")
+                .unwrap();
+        let version_info = store.get_script_version(&version_hash).unwrap().unwrap();
+        assert_eq!(version_info.name.as_deref(), Some("Deprecated Script"));
+        assert!(script_info.deprecated);
+        assert!(version_info.deprecated);
+        assert_eq!(
+            store
+                .list_script_version_hashes_by_label("Deprecated Script")
+                .unwrap(),
+            vec![version_hash]
+        );
     }
 
     #[test]

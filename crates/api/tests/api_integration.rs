@@ -14,6 +14,7 @@ use ckbadger_api::routes::api_routes;
 use ckbadger_api::utils::address::compute_script_hash;
 use ckbadger_api::ws::WsManager;
 use ckbadger_api::{create_router, AppConfig, AppState, CleanupPathGuard};
+use ckbadger_indexer::label_import::run_label_import_bundled;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ActivityEntry, AssetAction, AssetChange, CachedBlockHeader, ClusterAggregate,
@@ -5467,6 +5468,64 @@ async fn test_spore_decode_endpoint_returns_decoded_from_cache() {
 }
 
 #[tokio::test]
+async fn test_spore_decode_endpoint_non_dob_returns_pending_with_content_type() {
+    let store = test_store();
+    let spore_id = [0x66u8; 32];
+    let spore_id_hex = format!("0x{}", hex::encode(spore_id));
+
+    let spore_entry = ObjectEntry {
+        standard: ObjectStandard::Spore,
+        collection_id: None,
+        token_id: None,
+        owner_lock_hash: Some(vec![0xAA; 32]),
+        name: None,
+        description: None,
+        is_live: true,
+        created_at_block: 500,
+        created_at_tx: vec![0xCC; 32],
+        extra: ObjectExtra::Spore {
+            content_type: "image/png".to_string(),
+            content_length: 4096,
+            media_profile: SporeMediaProfile::default(),
+        },
+    };
+    store.put_spore_direct(&spore_id, &spore_entry).unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/spore/objects/{}/decode", spore_id_hex))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "pending");
+    assert_eq!(json["sporeId"], spore_id_hex);
+    assert_eq!(json["contentType"], "image/png");
+    assert_eq!(json["traits"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn test_spore_decode_endpoint_returns_not_found_for_missing_spore() {
+    let store = test_store();
+    let missing_id_hex = format!("0x{}", hex::encode([0x99u8; 32]));
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/spore/objects/{}/decode", missing_id_hex))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn test_assets_nft_includes_spore_cluster_name_when_aggregate_name_missing() {
     let store = test_store();
 
@@ -9340,6 +9399,47 @@ async fn test_scripts_list_reads_from_derived_store() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["name"], "CoreOnlyScript");
+}
+
+#[tokio::test]
+async fn test_deprecated_script_labels_resolve_by_name_and_api_flag() {
+    let store = test_store();
+    run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let pw_lock_data_hash = "0xd6a5a0edb152e88e8bbc702e164441cb3890fae35da672b408d28ca9a1bde3ee";
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            r#"{{"codeHashes":["{}"]}}"#,
+            pw_lock_data_hash
+        )))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json[pw_lock_data_hash]["name"], "PW Lock");
+    assert_eq!(json[pw_lock_data_hash]["deprecated"], true);
+    assert_eq!(json[pw_lock_data_hash]["resolutionState"], "resolved");
+
+    let request = Request::builder()
+        .uri("/api/v1/scripts/PW%20Lock")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let items = json.as_array().unwrap();
+
+    assert!(!items.is_empty());
+    assert_eq!(items[0]["name"], "PW Lock");
+    assert_eq!(items[0]["deprecated"], true);
 }
 
 #[tokio::test]

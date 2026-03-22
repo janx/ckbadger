@@ -679,4 +679,28 @@ describe('ScriptDetailPage', () => {
     expect(screen.queryByText('Deployed At')).toBeNull();
     expect(screen.queryByText('Common Knowledge Size')).toBeNull();
   });
+
+  it('shows deprecated badges for known deprecated scripts in the header and tables', async () => {
+    vi.mocked(api.getScript).mockResolvedValue(
+      mockDeployments.map((deployment) => ({
+        ...deployment,
+        name: 'PW Lock',
+        description: 'Ethereum wallet compatible lock',
+        deprecated: true,
+      }))
+    );
+    vi.mocked(api.getScriptUsage).mockResolvedValue({
+      ...mockUsage,
+      name: 'PW Lock',
+    });
+
+    render(<ScriptDetailPage name="PW Lock" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('PW Lock')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('Unlabeled Script')).toBeNull();
+    expect(screen.getAllByText('Deprecated').length).toBeGreaterThan(1);
+  });
 });

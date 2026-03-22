@@ -224,22 +224,25 @@ export default function ScriptsPage() {
                     {/* Table layout (md+) */}
                     <div className="hidden items-center md:flex">
                       <div className="w-44 shrink-0">
-                        {hasKnownScriptName(script.name) ? (
-                          <AppLink
-                            href={getScriptHref(script)}
-                            className="text-emphasis font-medium hover:underline"
-                          >
-                            {script.name!.trim()}
-                          </AppLink>
-                        ) : (
-                          <AppLink
-                            href={getScriptHref(script)}
-                            className="hover:text-emphasis text-text font-medium hover:underline"
-                            title={getScriptRefFull(script)}
-                          >
-                            {UNLABELED_SCRIPT_LABEL}
-                          </AppLink>
-                        )}
+                        <div className="flex flex-wrap items-center gap-2">
+                          {hasKnownScriptName(script.name) ? (
+                            <AppLink
+                              href={getScriptHref(script)}
+                              className="text-emphasis font-medium hover:underline"
+                            >
+                              {script.name!.trim()}
+                            </AppLink>
+                          ) : (
+                            <AppLink
+                              href={getScriptHref(script)}
+                              className="hover:text-emphasis text-text font-medium hover:underline"
+                              title={getScriptRefFull(script)}
+                            >
+                              {UNLABELED_SCRIPT_LABEL}
+                            </AppLink>
+                          )}
+                          {script.deprecated && <Badge variant="red">Deprecated</Badge>}
+                        </div>
                       </div>
                       <div className="w-16 shrink-0">
                         {script.scriptKind ? (
@@ -298,14 +301,17 @@ export default function ScriptsPage() {
                     {/* Card layout (<md) */}
                     <div className="space-y-1.5 md:hidden">
                       <div className="flex items-center justify-between gap-2">
-                        <AppLink
-                          href={getScriptHref(script)}
-                          className="text-emphasis font-medium hover:underline"
-                        >
-                          {hasKnownScriptName(script.name)
-                            ? script.name!.trim()
-                            : UNLABELED_SCRIPT_LABEL}
-                        </AppLink>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <AppLink
+                            href={getScriptHref(script)}
+                            className="text-emphasis font-medium hover:underline"
+                          >
+                            {hasKnownScriptName(script.name)
+                              ? script.name!.trim()
+                              : UNLABELED_SCRIPT_LABEL}
+                          </AppLink>
+                          {script.deprecated && <Badge variant="red">Deprecated</Badge>}
+                        </div>
                         {script.scriptKind && (
                           <Badge variant={script.scriptKind === 'lock' ? 'blue' : 'purple'}>
                             {script.scriptKind}
