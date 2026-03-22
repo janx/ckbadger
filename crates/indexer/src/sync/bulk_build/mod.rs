@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -4261,11 +4262,20 @@ pub(crate) fn unique_temp_test_dir(prefix: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
+    static UNIQUE_TEMP_TEST_DIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let sequence = UNIQUE_TEMP_TEST_DIR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    build_unique_temp_test_dir(prefix, std::process::id(), nanos, sequence)
+}
+
+fn build_unique_temp_test_dir(
+    prefix: &str,
+    process_id: u32,
+    nanos: u128,
+    sequence: u64,
+) -> PathBuf {
     std::env::temp_dir().join(format!(
-        "ckbadger-{}-{}-{}",
-        prefix,
-        std::process::id(),
-        nanos
+        "ckbadger-{}-{}-{}-{}",
+        prefix, process_id, nanos, sequence
     ))
 }
 
@@ -4303,6 +4313,14 @@ mod tests {
         std::fs::create_dir_all(&root).expect("create test dir");
         let store = CkbadgerStore::open_domain(&root).expect("open test domain store");
         (store, root)
+    }
+
+    #[test]
+    fn unique_temp_test_dir_builder_avoids_same_timestamp_collisions() {
+        let first = build_unique_temp_test_dir("bulk-build-core-owners", 42, 123456789, 0);
+        let second = build_unique_temp_test_dir("bulk-build-core-owners", 42, 123456789, 1);
+
+        assert_ne!(first, second);
     }
 
     fn fixture_lock_script(args_hex: &str) -> Script {

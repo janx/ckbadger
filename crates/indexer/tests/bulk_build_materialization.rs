@@ -1,10 +1,11 @@
+use ckbadger_common::dao::{GENESIS_BURNT, SHANNON};
 use ckbadger_indexer::parser::spore::{
     CLUSTER_CODE_HASH_MAINNET_V2, SPORE_CODE_HASH_MAINNET_DID, SPORE_CODE_HASH_MAINNET_V2,
 };
 use ckbadger_indexer::parser::ScriptParser;
 use ckbadger_indexer::rpc::{
-    BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
-    TransactionView,
+    BlockResponseWithCycles, BlockView, CellInput, CellOutput, DaoField, HeaderView, OutPoint,
+    Script, TransactionView,
 };
 use ckbadger_indexer::sync::{
     materialize_bulk_artifacts_for_test, materialize_bulk_artifacts_from_batches_for_test,
@@ -63,8 +64,9 @@ fn fixture_lock_script_with_args(args_hex: &str) -> Script {
 fn fixture_header_with_ar(number: u64, hash_byte: u8, ar: u64, timestamp_ms: i64) -> HeaderView {
     let mut header = fixture_header_with_timestamp(number, hash_byte, timestamp_ms);
     let mut dao = [0u8; 32];
-    // C (total_issuance) — must be > U for split_secondary_issuance validation
-    let c: u64 = 1_000_000_000_000_000;
+    // C (total_issuance) — must be > U for split_secondary_issuance validation and
+    // at least genesis issuance for latest DAO statistics/APC validation.
+    let c: u64 = 33_600_000_000 * SHANNON;
     dao[0..8].copy_from_slice(&c.to_le_bytes());
     // AR (accumulated rate)
     dao[8..16].copy_from_slice(&ar.to_le_bytes());
@@ -81,6 +83,19 @@ fn fixture_dao_type_script() -> Script {
         hash_type: "type".to_string(),
         args: "0x".to_string(),
     }
+}
+
+#[test]
+fn fixture_header_with_ar_uses_total_issuance_above_genesis_burn() {
+    let header = fixture_header_with_ar(100, 0xaa, 10_000_000_000_000_000, 1_710_000_000_000);
+    let dao = DaoField::from_hex(&header.dao).expect("parse dao field");
+
+    assert!(
+        u128::from(dao.total_issuance) >= GENESIS_BURNT,
+        "fixture dao total issuance {} must be >= genesis burnt {}",
+        dao.total_issuance,
+        GENESIS_BURNT
+    );
 }
 
 fn bulk_build_dao_activity_fixture() -> Vec<BlockResponseWithCycles> {

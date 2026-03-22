@@ -482,6 +482,66 @@ describe('ActivitiesStreamExplorer', () => {
     expect(screen.getAllByText('#980').length).toBeGreaterThan(0);
   });
 
+  it('clears the row highlight timeout on unmount', async () => {
+    Object.defineProperty(window, 'scrollY', {
+      value: 500,
+      writable: true,
+      configurable: true,
+    });
+
+    const setTimeoutSpy = vi.spyOn(window, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');
+
+    vi.mocked(api.getGlobalActivities)
+      .mockResolvedValueOnce({
+        data: [
+          makeActivity({
+            address: 'ckb1qold11111111111111111111111111111111111111111111',
+            txHash: '0xolder-head',
+            ckbDelta: '100000000',
+            blockNumber: 900,
+          }),
+        ],
+        limit: DEFAULT_PAGE_SIZE,
+        hasMore: false,
+        nextCursor: null,
+      })
+      .mockResolvedValueOnce({
+        data: [
+          makeActivity({
+            address: 'ckb1qnew11111111111111111111111111111111111111111111',
+            txHash: '0xnew-head',
+            ckbDelta: '400000000',
+            blockNumber: 901,
+          }),
+          makeActivity({
+            address: 'ckb1qold11111111111111111111111111111111111111111111',
+            txHash: '0xolder-head',
+            ckbDelta: '100000000',
+            blockNumber: 900,
+          }),
+        ],
+        limit: DEFAULT_PAGE_SIZE,
+        hasMore: false,
+        nextCursor: null,
+      });
+
+    const { unmount } = render(<ActivitiesStreamExplorer />);
+
+    expect(await screen.findByText('+1.00000000 CKB')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: '1 new activity' }));
+
+    const highlightTimerIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 2_000);
+    expect(highlightTimerIndex).toBeGreaterThanOrEqual(0);
+
+    const highlightTimerHandle = setTimeoutSpy.mock.results[highlightTimerIndex]?.value;
+    expect(highlightTimerHandle).toBeDefined();
+
+    unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(highlightTimerHandle);
+  });
+
   it('shows a soft head refresh warning without clearing visible rows', async () => {
     vi.mocked(api.getGlobalActivities)
       .mockResolvedValueOnce({

@@ -795,6 +795,21 @@ export function ActivitiesStreamExplorer() {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
 
+  const clearHighlightTimer = () => {
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = null;
+    }
+  };
+
+  const scheduleHighlightReset = () => {
+    clearHighlightTimer();
+    highlightTimerRef.current = window.setTimeout(() => {
+      setHighlightedKeys(new Set());
+      highlightTimerRef.current = null;
+    }, ROW_HIGHLIGHT_DURATION_MS);
+  };
+
   const {
     data,
     error,
@@ -848,14 +863,13 @@ export function ActivitiesStreamExplorer() {
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
+  useEffect(() => () => clearHighlightTimer(), []);
+
   useEffect(() => {
     setPrependedItems([]);
     setPendingNewItems([]);
     setHighlightedKeys(new Set());
-    if (highlightTimerRef.current) {
-      window.clearTimeout(highlightTimerRef.current);
-      highlightTimerRef.current = null;
-    }
+    clearHighlightTimer();
     safeWindowScrollTo({ top: 0 });
   }, [selectedFilter]);
 
@@ -873,13 +887,7 @@ export function ActivitiesStreamExplorer() {
     if (isNearTop) {
       setPrependedItems((current) => mergeUniqueActivities(fresh, current));
       setHighlightedKeys((current) => new Set([...current, ...freshKeys]));
-      if (highlightTimerRef.current) {
-        window.clearTimeout(highlightTimerRef.current);
-      }
-      highlightTimerRef.current = window.setTimeout(() => {
-        setHighlightedKeys(new Set());
-        highlightTimerRef.current = null;
-      }, ROW_HIGHLIGHT_DURATION_MS);
+      scheduleHighlightReset();
       return;
     }
 
@@ -920,13 +928,7 @@ export function ActivitiesStreamExplorer() {
     setPrependedItems((current) => mergeUniqueActivities(pendingNewItems, current));
     setPendingNewItems([]);
     setHighlightedKeys((current) => new Set([...current, ...freshKeys]));
-    if (highlightTimerRef.current) {
-      window.clearTimeout(highlightTimerRef.current);
-    }
-    highlightTimerRef.current = window.setTimeout(() => {
-      setHighlightedKeys(new Set());
-      highlightTimerRef.current = null;
-    }, ROW_HIGHLIGHT_DURATION_MS);
+    scheduleHighlightReset();
     safeScrollIntoView(topAnchorRef.current, { behavior: 'smooth', block: 'start' });
   };
 
