@@ -1,0 +1,1 @@
+//! Decoder binary disk cache.
