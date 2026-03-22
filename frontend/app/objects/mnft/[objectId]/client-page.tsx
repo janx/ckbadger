@@ -12,8 +12,7 @@ import {
   TerminalPanelFooter,
   TerminalPanelHeader,
 } from '@/components/ui/terminal-panel';
-import { PageHeader, Badge } from '@/components/ui/page-header';
-import { DataField, DataGrid } from '@/components/ui/data-field';
+import { Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { Address } from '@/components/ui/address';
 import { api } from '@/lib/api';
@@ -40,6 +39,21 @@ function decodeTokenConfigure(configure: number): string {
   if ((configure & 0b00001000) !== 0) flags.push('reserved_3');
   return flags.length > 0 ? flags.join(', ') : 'none';
 }
+
+function lifecycleEventColor(event: string): {
+  dot: string;
+  text: string;
+  line: string;
+} {
+  const e = event.toLowerCase();
+  if (e === 'mint')
+    return { dot: 'bg-positive', text: 'text-positive', line: 'border-positive/30' };
+  if (e === 'burned')
+    return { dot: 'bg-negative', text: 'text-negative', line: 'border-negative/30' };
+  if (e === 'live') return { dot: 'bg-info', text: 'text-info', line: 'border-info/30' };
+  return { dot: 'bg-text-dim', text: 'text-text-dim', line: 'border-base-border' };
+}
+
 export interface MnftItemDetailPageProps {
   objectId: string;
 }
@@ -136,189 +150,265 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
-        <div className="mb-6 flex items-center gap-4">
+        {/* Breadcrumb */}
+        <nav className="text-text-dim mb-6 flex items-center gap-1.5 font-mono text-sm">
+          <Link href="/assets?type=object" className="hover:text-emphasis transition-colors">
+            Objects
+          </Link>
+          <span>&rsaquo;</span>
           <Link
             href={`/classes/${detail.class.classId}`}
-            className="hover:text-emphasis text-text-dim text-sm transition-colors"
+            className="hover:text-emphasis transition-colors"
           >
-            ← Back to Class
+            {detail.class.name || 'Class'}
           </Link>
-          <Link
-            href="/assets?type=object"
-            className="hover:text-emphasis text-text-dim text-sm transition-colors"
-          >
-            Back to Objects
-          </Link>
-        </div>
-        <PageHeader
-          title={
-            detail.class.name
-              ? `${detail.class.name} #${formatNumber(detail.tokenIndex)}`
-              : `mNFT #${formatNumber(detail.tokenIndex)}`
-          }
-          badge={
-            detail.isLive ? (
-              <Badge variant="green">Live</Badge>
-            ) : (
-              <Badge variant="red">Burned</Badge>
-            )
-          }
-        />
-        <div className="space-y-6">
-          <TerminalPanel>
-            <TerminalPanelHeader indicator="active">Asset Snapshot</TerminalPanelHeader>
-            <TerminalPanelContent>
-              <DataGrid columns={2}>
-                <DataField label="Standard">
-                  <span className="text-text-bright font-mono">
-                    {detail.standard.toUpperCase()}
-                  </span>
-                </DataField>
-                <DataField label="Token Index">
-                  <span className="text-text-bright font-mono">
-                    #{formatNumber(detail.tokenIndex)}
-                  </span>
-                </DataField>
-                <DataField label="Status">
-                  {detail.isLive ? (
-                    <Badge variant="green">Live</Badge>
-                  ) : (
-                    <Badge variant="red">Burned</Badge>
-                  )}
-                </DataField>
-                <DataField label="Created Block">
-                  <Link
-                    href={`/blocks/${detail.createdAtBlock}`}
-                    className="text-emphasis font-mono hover:underline"
-                  >
-                    #{formatNumber(detail.createdAtBlock)}
-                  </Link>
-                </DataField>
-              </DataGrid>
-            </TerminalPanelContent>
-          </TerminalPanel>
-          <TerminalPanel>
-            <TerminalPanelHeader indicator="active">Identity Graph</TerminalPanelHeader>
-            <TerminalPanelContent>
-              <DataGrid columns={1}>
-                <DataField label="Issuer ID" layout="vertical" valueClassName="w-full">
-                  <HexDisplay value={detail.issuer.issuerId} truncate={false} />
-                </DataField>
-                <DataField label="Class ID" layout="vertical" valueClassName="w-full">
-                  <Link href={`/classes/${detail.class.classId}`} className="hover:underline">
-                    <HexDisplay value={detail.class.classId} truncate={false} />
-                  </Link>
-                </DataField>
-                <DataField label="Token ID" layout="vertical" valueClassName="w-full">
-                  <HexDisplay value={detail.nftId} truncate={false} />
-                </DataField>
-              </DataGrid>
-            </TerminalPanelContent>
-          </TerminalPanel>
-          <TerminalPanel>
-            <TerminalPanelHeader indicator="active">On-chain State</TerminalPanelHeader>
-            <TerminalPanelContent>
-              <DataGrid columns={1}>
-                <DataField label="State">
-                  <span className="text-text-bright font-mono">
-                    {decodeTokenState(detail.state)}
-                  </span>
-                </DataField>
-                <DataField label="Configure">
-                  <span className="text-text-bright font-mono">
-                    {decodeTokenConfigure(detail.configure)}
-                  </span>
-                </DataField>
-                <DataField label="Characteristic" layout="vertical" valueClassName="w-full">
-                  <HexDisplay value={detail.characteristicHex} truncate={false} />
-                </DataField>
-              </DataGrid>
-            </TerminalPanelContent>
-          </TerminalPanel>
-          <TerminalPanel>
-            <TerminalPanelHeader indicator="active">Ownership & Live Cell</TerminalPanelHeader>
-            <TerminalPanelContent>
-              <DataGrid columns={1}>
-                <DataField label="Owner" layout="vertical" valueClassName="w-full">
-                  {ownerAddress ? (
-                    <Address address={ownerAddress} truncate={false} />
-                  ) : detail.ownerLockHash ? (
-                    <Link href={`/address/${detail.ownerLockHash}`} className="hover:underline">
-                      <HexDisplay value={detail.ownerLockHash} truncate={false} />
-                    </Link>
-                  ) : (
-                    <span className="text-text-dim font-mono">Unavailable</span>
-                  )}
-                </DataField>
-                <DataField label="Owner Lock Hash" layout="vertical" valueClassName="w-full">
-                  {detail.ownerLockHash ? (
-                    <Link href={`/address/${detail.ownerLockHash}`} className="hover:underline">
-                      <HexDisplay value={detail.ownerLockHash} truncate={false} />
-                    </Link>
-                  ) : (
-                    <span className="text-text-dim font-mono">Unavailable</span>
-                  )}
-                </DataField>
-                <DataField label="Live Outpoint">
-                  {detail.txHash !== null && detail.outputIndex !== null ? (
-                    <Link
-                      href={`/cell/${detail.txHash}-${detail.outputIndex}`}
-                      className="text-emphasis font-mono hover:underline"
-                    >
-                      <HexDisplay value={detail.txHash} size="sm" />-{detail.outputIndex}
-                    </Link>
-                  ) : (
-                    <span className="text-text-dim font-mono">No live outpoint</span>
-                  )}
-                </DataField>
-              </DataGrid>
-            </TerminalPanelContent>
-          </TerminalPanel>
-          <TerminalPanel>
-            <TerminalPanelHeader indicator="active">Class Context</TerminalPanelHeader>
-            <TerminalPanelContent>
-              <DataGrid columns={1}>
-                <DataField label="Class Name">
-                  <span className="text-text-bright font-mono">
-                    {detail.class.name || 'Unnamed Class'}
-                  </span>
-                </DataField>
-                <DataField label="Class Description">
-                  <span className="text-text">{detail.class.description || 'None'}</span>
-                </DataField>
-                <DataField label="Renderer">
-                  <span className="text-text font-mono">{detail.class.renderer || 'None'}</span>
-                </DataField>
-                <DataField label="Issued / Total">
-                  <span className="text-text-bright font-mono">
-                    {formatNumber(detail.class.issued)} / {formatNumber(detail.class.total)}
-                  </span>
-                </DataField>
-                <DataField label="Issuer Name">
-                  <span className="text-text-bright font-mono">
-                    {detail.issuer.name || 'Unnamed Issuer'}
-                  </span>
-                </DataField>
-                <DataField label="Issuer Counts">
-                  <span className="text-text-bright font-mono">
-                    classes {formatNumber(detail.issuer.classCount)} / sets{' '}
-                    {formatNumber(detail.issuer.setCount)}
-                  </span>
-                </DataField>
-              </DataGrid>
-            </TerminalPanelContent>
-          </TerminalPanel>
-          <TerminalPanel>
-            <TerminalPanelHeader indicator="active">Lifecycle</TerminalPanelHeader>
-            <TerminalPanelContent>
-              <div className="space-y-2">
-                {detail.lifecycle.map((event, index) => (
+          <span>&rsaquo;</span>
+          <span className="text-text">#{formatNumber(detail.tokenIndex)}</span>
+        </nav>
+
+        {/* mNFT Overview */}
+        <TerminalPanel className="mb-6">
+          <TerminalPanelHeader indicator="active">mNFT Overview</TerminalPanelHeader>
+          <TerminalPanelContent>
+            {/* Title + badge */}
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-text-bright font-mono text-2xl font-bold">
+                {detail.class.name
+                  ? `${detail.class.name} #${formatNumber(detail.tokenIndex)}`
+                  : `mNFT #${formatNumber(detail.tokenIndex)}`}
+              </h1>
+              {detail.isLive ? (
+                <Badge variant="green">Live</Badge>
+              ) : (
+                <Badge variant="red">Burned</Badge>
+              )}
+            </div>
+
+            {/* Token ID */}
+            <div className="mt-3 flex flex-wrap items-baseline gap-2 font-mono text-sm">
+              <span className="text-text-dim text-xs uppercase tracking-wider">token id</span>
+              <HexDisplay value={detail.nftId} truncate={false} size="sm" />
+            </div>
+
+            {/* Cell */}
+            <div className="mt-1.5 flex flex-wrap items-baseline gap-2 font-mono text-sm">
+              <span className="text-text-dim text-xs uppercase tracking-wider">cell</span>
+              {detail.txHash !== null && detail.outputIndex !== null ? (
+                <Link
+                  href={`/cell/${detail.txHash}-${detail.outputIndex}`}
+                  className="hover:underline"
+                >
+                  <HexDisplay value={detail.txHash} size="sm" startChars={14} endChars={10} />
+                  <span className="text-text-dim">-{detail.outputIndex}</span>
+                </Link>
+              ) : (
+                <span className="text-text-dim">no live outpoint</span>
+              )}
+            </div>
+
+            {/* Owner */}
+            <div className="mt-1.5 flex flex-wrap items-baseline gap-2 font-mono text-sm">
+              <span className="text-text-dim text-xs uppercase tracking-wider">owner</span>
+              {ownerAddress ? (
+                <Address address={ownerAddress} truncate={false} />
+              ) : detail.ownerLockHash ? (
+                <Link href={`/address/${detail.ownerLockHash}`} className="hover:underline">
+                  <HexDisplay
+                    value={detail.ownerLockHash}
+                    size="sm"
+                    startChars={14}
+                    endChars={10}
+                  />
+                </Link>
+              ) : (
+                <span className="text-text-dim">unavailable</span>
+              )}
+            </div>
+
+            {/* Lock Hash */}
+            {detail.ownerLockHash && (
+              <div className="mt-1.5 flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                <span className="text-text-dim text-xs uppercase tracking-wider">lock hash</span>
+                <Link href={`/address/${detail.ownerLockHash}`} className="hover:underline">
+                  <HexDisplay
+                    value={detail.ownerLockHash}
+                    size="sm"
+                    startChars={14}
+                    endChars={10}
+                  />
+                </Link>
+              </div>
+            )}
+
+            {/* Stat cards row */}
+            <div className="border-base-border mt-4 grid grid-cols-2 gap-3 border-t pt-4 sm:grid-cols-3">
+              {/* Standard */}
+              <div className="border-base-border rounded border p-3">
+                <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+                  Standard
+                </div>
+                <div className="text-text-bright font-mono text-sm font-semibold">
+                  {detail.standard.toUpperCase()}
+                </div>
+              </div>
+
+              {/* Class */}
+              <div className="border-base-border rounded border p-3">
+                <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+                  Class
+                </div>
+                <Link
+                  href={`/classes/${detail.class.classId}`}
+                  className="text-text-bright font-mono text-sm font-semibold hover:underline"
+                >
+                  {detail.class.name || 'Unnamed'}
+                </Link>
+                <div className="text-text-dim font-mono text-xs">
+                  {formatNumber(detail.class.issued)} / {formatNumber(detail.class.total)} items
+                </div>
+              </div>
+
+              {/* Created */}
+              <div className="border-base-border rounded border p-3">
+                <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+                  Created
+                </div>
+                <Link
+                  href={`/blocks/${detail.createdAtBlock}`}
+                  className="text-text-bright font-mono text-sm font-semibold tabular-nums hover:underline"
+                >
+                  #{formatNumber(detail.createdAtBlock)}
+                </Link>
+              </div>
+            </div>
+          </TerminalPanelContent>
+        </TerminalPanel>
+
+        {/* Token Properties */}
+        <TerminalPanel className="mb-6">
+          <TerminalPanelHeader indicator="active">Token Properties</TerminalPanelHeader>
+          <TerminalPanelContent>
+            {/* State + Configure cards */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
+                <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                  State
+                </div>
+                <div className="text-text-bright mt-1 font-mono text-sm">
+                  {decodeTokenState(detail.state)}
+                </div>
+              </div>
+              <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
+                <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                  Configure
+                </div>
+                <div className="text-text-bright mt-1 font-mono text-sm">
+                  {decodeTokenConfigure(detail.configure)}
+                </div>
+              </div>
+            </div>
+
+            {/* Identity IDs */}
+            <div className="mt-4 space-y-2">
+              <div className="flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                <span className="text-text-dim text-xs uppercase tracking-wider">issuer id</span>
+                <HexDisplay value={detail.issuer.issuerId} truncate={false} size="sm" />
+              </div>
+              <div className="flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                <span className="text-text-dim text-xs uppercase tracking-wider">class id</span>
+                <Link href={`/classes/${detail.class.classId}`} className="hover:underline">
+                  <HexDisplay value={detail.class.classId} truncate={false} size="sm" />
+                </Link>
+              </div>
+              <div className="flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                <span className="text-text-dim text-xs uppercase tracking-wider">token id</span>
+                <HexDisplay value={detail.nftId} truncate={false} size="sm" />
+              </div>
+            </div>
+
+            {/* Characteristic */}
+            {detail.characteristicHex && (
+              <div className="border-base-border mt-4 border-t pt-4">
+                <div className="text-text-dim mb-1 font-mono text-[10px] uppercase tracking-wider">
+                  Characteristic
+                </div>
+                <HexDisplay value={detail.characteristicHex} truncate={false} size="sm" />
+              </div>
+            )}
+          </TerminalPanelContent>
+        </TerminalPanel>
+
+        {/* Issuer & Class */}
+        <TerminalPanel className="mb-6">
+          <TerminalPanelHeader indicator="active">Issuer & Class</TerminalPanelHeader>
+          <TerminalPanelContent>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {/* Class card */}
+              <div className="border-base-border bg-base-surface/40 rounded border p-3">
+                <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+                  Class
+                </div>
+                <Link
+                  href={`/classes/${detail.class.classId}`}
+                  className="text-text-bright font-mono text-sm font-semibold hover:underline"
+                >
+                  {detail.class.name || 'Unnamed Class'}
+                </Link>
+                {detail.class.description && (
+                  <div className="text-text-dim mt-1 text-xs leading-relaxed">
+                    {detail.class.description}
+                  </div>
+                )}
+                {detail.class.renderer && (
+                  <div className="text-text-dim mt-1 font-mono text-xs">
+                    renderer: {detail.class.renderer}
+                  </div>
+                )}
+                <div className="text-text-dim mt-1 font-mono text-xs">
+                  {formatNumber(detail.class.issued)} / {formatNumber(detail.class.total)} issued
+                </div>
+              </div>
+
+              {/* Issuer card */}
+              <div className="border-base-border bg-base-surface/40 rounded border p-3">
+                <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+                  Issuer
+                </div>
+                <div className="text-text-bright font-mono text-sm font-semibold">
+                  {detail.issuer.name || 'Unnamed Issuer'}
+                </div>
+                <div className="text-text-dim mt-1 font-mono text-xs">
+                  classes: {formatNumber(detail.issuer.classCount)} / sets:{' '}
+                  {formatNumber(detail.issuer.setCount)}
+                </div>
+              </div>
+            </div>
+          </TerminalPanelContent>
+        </TerminalPanel>
+
+        {/* Lifecycle */}
+        <TerminalPanel className="mb-6">
+          <TerminalPanelHeader indicator="active">Lifecycle</TerminalPanelHeader>
+          <TerminalPanelContent>
+            <div className="relative ml-4">
+              {detail.lifecycle.map((event, index) => {
+                const isLast = index === detail.lifecycle.length - 1;
+                const color = lifecycleEventColor(event.event);
+                return (
                   <div
                     key={`${event.event}-${index}`}
-                    className="border-base-border bg-base-surface/40 rounded border p-3"
+                    className={`relative pb-4 pl-6 ${!isLast ? `border-l-2 ${color.line}` : ''}`}
                   >
-                    <div className="mb-1 flex items-center justify-between gap-3">
-                      <span className="text-text-dim font-mono text-xs uppercase tracking-wider">
+                    {/* Dot */}
+                    <div
+                      className={`absolute -left-[7px] top-0.5 h-3 w-3 rounded-full ${color.dot} ring-base-bg ring-2`}
+                    />
+
+                    {/* Content */}
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span
+                        className={`font-mono text-xs font-semibold uppercase tracking-wider ${color.text}`}
+                      >
                         {event.event}
                       </span>
                       {event.blockNumber !== null && (
@@ -329,58 +419,68 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
                           #{formatNumber(event.blockNumber)}
                         </Link>
                       )}
+                      {event.txHash !== null && event.outputIndex !== null && (
+                        <Link
+                          href={`/cell/${event.txHash}-${event.outputIndex}`}
+                          className="text-emphasis font-mono text-xs hover:underline"
+                        >
+                          <HexDisplay value={event.txHash} size="sm" />-{event.outputIndex}
+                        </Link>
+                      )}
                     </div>
-                    {event.txHash !== null && event.outputIndex !== null && (
-                      <Link
-                        href={`/cell/${event.txHash}-${event.outputIndex}`}
-                        className="text-emphasis font-mono text-xs hover:underline"
-                      >
-                        <HexDisplay value={event.txHash} size="sm" />-{event.outputIndex}
-                      </Link>
-                    )}
                     {event.note && <div className="text-text-dim mt-1 text-xs">{event.note}</div>}
                   </div>
-                ))}
-              </div>
-            </TerminalPanelContent>
-          </TerminalPanel>
-          <TerminalPanel>
-            <TerminalPanelHeader indicator="active">Activities</TerminalPanelHeader>
-            <TerminalPanelContent>
-              {isActivitiesLoading ? (
-                <div className="text-text-dim py-2 text-sm">Loading activities...</div>
-              ) : !itemActivities?.data?.length ? (
-                <div className="text-text-dim py-2 text-sm">No related activities found.</div>
-              ) : (
-                <div className="space-y-2">
-                  {itemActivities.data.map((activity) => (
-                    <ObjectActivityCard
-                      key={`${activity.blockNumber}-${activity.txIndex}-${activity.txHash}`}
-                      txHash={activity.txHash}
-                      blockNumber={activity.blockNumber}
-                      txIndex={activity.txIndex}
-                      actions={activity.actions}
-                      badgeActions
-                    />
-                  ))}
+                );
+              })}
+
+              {/* Current state indicator (if live) */}
+              {detail.isLive && (
+                <div className="relative pl-6">
+                  <div className="border-info ring-base-bg absolute -left-[7px] top-0.5 h-3 w-3 rounded-full border-2 bg-transparent ring-2" />
+                  <span className="text-text-dim font-mono text-xs italic">current state</span>
                 </div>
               )}
-            </TerminalPanelContent>
-            <TerminalPanelFooter>
-              <CursorPagination
-                total={itemActivities?.total ?? undefined}
-                totalLabel="activities"
-                pageSize={DEFAULT_PAGE_SIZE}
-                page={activityCursorHistory.length + 1}
-                currentCount={itemActivities?.data?.length ?? 0}
-                hasMore={itemActivities?.hasMore ?? false}
-                hasPrevious={activityCursorHistory.length > 0}
-                onNext={() => goToNextActivityPage(itemActivities?.nextCursor)}
-                onPrevious={goToPreviousActivityPage}
-              />
-            </TerminalPanelFooter>
-          </TerminalPanel>
-        </div>
+            </div>
+          </TerminalPanelContent>
+        </TerminalPanel>
+
+        {/* Activities */}
+        <TerminalPanel>
+          <TerminalPanelHeader indicator="active">Activities</TerminalPanelHeader>
+          <TerminalPanelContent>
+            {isActivitiesLoading ? (
+              <div className="text-text-dim py-2 text-sm">Loading activities...</div>
+            ) : !itemActivities?.data?.length ? (
+              <div className="text-text-dim py-2 text-sm">No related activities found.</div>
+            ) : (
+              <div className="space-y-2">
+                {itemActivities.data.map((activity) => (
+                  <ObjectActivityCard
+                    key={`${activity.blockNumber}-${activity.txIndex}-${activity.txHash}`}
+                    txHash={activity.txHash}
+                    blockNumber={activity.blockNumber}
+                    txIndex={activity.txIndex}
+                    actions={activity.actions}
+                    badgeActions
+                  />
+                ))}
+              </div>
+            )}
+          </TerminalPanelContent>
+          <TerminalPanelFooter>
+            <CursorPagination
+              total={itemActivities?.total ?? undefined}
+              totalLabel="activities"
+              pageSize={DEFAULT_PAGE_SIZE}
+              page={activityCursorHistory.length + 1}
+              currentCount={itemActivities?.data?.length ?? 0}
+              hasMore={itemActivities?.hasMore ?? false}
+              hasPrevious={activityCursorHistory.length > 0}
+              onNext={() => goToNextActivityPage(itemActivities?.nextCursor)}
+              onPrevious={goToPreviousActivityPage}
+            />
+          </TerminalPanelFooter>
+        </TerminalPanel>
       </main>
     </div>
   );

@@ -103,18 +103,17 @@ describe('MnftItemDetailPage', () => {
       expect(screen.getByText('Class A #99')).toBeInTheDocument();
     });
 
-    expect(screen.getByRole('link', { name: /Back to Class/ })).toHaveAttribute(
-      'href',
-      '/classes/0xclass'
-    );
-    expect(screen.getByRole('link', { name: /Back to Objects/ })).toHaveAttribute(
+    // Breadcrumb navigation
+    const breadcrumb = screen.getByRole('navigation');
+    expect(breadcrumb).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /^Objects$/ })).toHaveAttribute(
       'href',
       '/assets?type=object'
     );
     expect(screen.getByText('M-NFT')).toBeInTheDocument();
     expect(screen.getByText('locked')).toBeInTheDocument();
     expect(screen.getByText('transferable, burnable')).toBeInTheDocument();
-    expect(screen.getByText('Class A')).toBeInTheDocument();
+    expect(screen.getAllByText('Class A').length).toBeGreaterThan(0);
     expect(screen.getByText('Issuer A')).toBeInTheDocument();
     expect(
       screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/blocks/123')
