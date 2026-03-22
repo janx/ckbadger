@@ -3201,7 +3201,7 @@ fn visible_background_tasks(tasks: &[BackgroundTaskEntry]) -> Vec<&BackgroundTas
 }
 
 fn build_task_row(task: &BackgroundTaskEntry) -> Row<'static> {
-    let name = Cell::from(task.name.clone());
+    let name_cell = Cell::from(task.name.clone());
 
     let (state_text, state_color) = match task.state {
         BackgroundTaskState::Waiting => ("Waiting", Color::DarkGray),
@@ -3209,27 +3209,61 @@ fn build_task_row(task: &BackgroundTaskEntry) -> Row<'static> {
         BackgroundTaskState::Completed => ("Completed", CYAN),
         BackgroundTaskState::Failed => ("Failed", ERROR_RED),
     };
-    let state = Cell::from(Span::styled(state_text, Style::default().fg(state_color)));
+    let state_cell = Cell::from(Span::styled(state_text, Style::default().fg(state_color)));
 
+    // C1: Failed state displays truncated error message
     let progress_text = match (task.progress_current, task.progress_total) {
         (Some(cur), Some(total)) => format!("{}/{}", cur, total),
+        _ if task.state == BackgroundTaskState::Failed => task
+            .error
+            .as_deref()
+            .map(|e| {
+                if e.len() > 30 {
+                    format!("{}...", &e[..27])
+                } else {
+                    e.to_string()
+                }
+            })
+            .unwrap_or_else(|| "\u{2014}".to_string()),
         _ => task.message.as_deref().unwrap_or("\u{2014}").to_string(),
     };
-    let progress = Cell::from(progress_text);
+    let progress_cell = Cell::from(progress_text);
 
     let rate_text = match task.rate {
         Some(r) => format!("{:.1}/s", r),
         None => "\u{2014}".to_string(),
     };
-    let rate = Cell::from(rate_text);
+    let rate_cell = Cell::from(rate_text);
 
-    let elapsed_text = match task.elapsed_ms {
+    // I2: Sub-second elapsed shows milliseconds instead of "0s"
+    let mut elapsed_text = match task.elapsed_ms {
+        Some(ms) if ms < 1000.0 => format!("{:.0}ms", ms),
         Some(ms) => format_duration_smart(ms / 1000.0),
         None => "\u{2014}".to_string(),
     };
-    let elapsed = Cell::from(elapsed_text);
 
-    Row::new(vec![name, state, progress, rate, elapsed])
+    // I1: Append ETA for Running tasks when available
+    if task.state == BackgroundTaskState::Running {
+        if let Some(eta) = task.eta_seconds {
+            elapsed_text = format!("{} ({})", elapsed_text, format_duration_smart(eta));
+        }
+    }
+
+    let elapsed_cell = Cell::from(elapsed_text);
+
+    // S1: Dim entire row for Waiting tasks
+    let row = Row::new(vec![
+        name_cell,
+        state_cell,
+        progress_cell,
+        rate_cell,
+        elapsed_cell,
+    ]);
+    if task.state == BackgroundTaskState::Waiting {
+        row.style(Style::default().fg(Color::DarkGray))
+    } else {
+        row
+    }
 }
 
 fn draw_background_tasks(f: &mut Frame, app: &App, area: Rect) {
