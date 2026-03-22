@@ -13,6 +13,7 @@ ckbadger-common = { path = "../common" }
 ckb-store-reader = { path = "../ckb-store-reader" }
 ckbadger-store = { path = "../ckbadger-store" }
 ckbadger-indexer = { path = "../indexer" }
+ckbadger-dob-decoder = { path = "../dob-decoder" }
 
 # Async runtime
 tokio = { workspace = true }

@@ -62,6 +62,15 @@ impl CkbadgerStore {
         self.put_cf(self.cf_spore_data(), id, &value)
     }
 
+    pub fn put_dob_decoded_direct(
+        &self,
+        spore_id: &[u8],
+        entry: &crate::types::DobDecodedEntry,
+    ) -> anyhow::Result<()> {
+        let value = bincode::serialize(entry)?;
+        self.put_cf(self.cf_dob_decoded(), spore_id, &value)
+    }
+
     /// List all spores.
     pub fn list_spores(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, ObjectEntry)>> {
         let iter = self.iterator_cf(self.cf_spore_data(), rocksdb::IteratorMode::Start);

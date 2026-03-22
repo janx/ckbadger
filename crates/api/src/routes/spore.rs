@@ -4,7 +4,6 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -266,10 +265,13 @@ pub struct DobTraitResponse {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SporeDobDecodeResponse {
+    pub status: String,
     pub spore_id: String,
     pub content_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dna_hex: Option<String>,
     pub traits: Vec<DobTraitResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub svg_markup: Option<String>,
     pub issues: Vec<String>,
 }
@@ -330,564 +332,6 @@ fn spore_to_response(
         owned_knowledge: owned_knowledge.map(|v| v.to_string()),
         media_profile,
     }
-}
-
-#[derive(Debug, Clone)]
-struct Dob0PatternElement {
-    trait_name: String,
-    dna_offset: usize,
-    dna_length: usize,
-    pattern_type: String,
-    trait_args: Option<Value>,
-    dob_type: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct Dob1PatternElement {
-    image_name: String,
-    svg_fields: String,
-    trait_name: String,
-    pattern_type: String,
-    trait_args: Option<Value>,
-}
-
-fn clean_hex(raw: &str) -> Option<String> {
-    let mut normalized = raw.trim().to_ascii_lowercase();
-    if let Some(stripped) = normalized.strip_prefix("0x") {
-        normalized = stripped.to_string();
-    }
-    normalized.retain(|c| !c.is_whitespace());
-    if normalized.is_empty() || !normalized.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-    if normalized.len() % 2 == 1 {
-        return Some(format!("0{normalized}"));
-    }
-    Some(normalized)
-}
-
-fn json_to_usize(value: &Value) -> Option<usize> {
-    value.as_u64().and_then(|v| usize::try_from(v).ok())
-}
-
-fn format_json_value(value: &Value) -> String {
-    match value {
-        Value::Null => "-".to_string(),
-        Value::String(s) => s.clone(),
-        Value::Bool(v) => v.to_string(),
-        Value::Number(v) => v.to_string(),
-        _ => serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
-    }
-}
-
-fn parse_le_modulo(bytes: &[u8], modulo: usize) -> usize {
-    if modulo == 0 {
-        return 0;
-    }
-    let m = modulo as u128;
-    let mut acc: u128 = 0;
-    let mut factor: u128 = 1 % m;
-    for b in bytes {
-        acc = (acc + (((*b as u128 % m) * factor) % m)) % m;
-        factor = (factor * 256) % m;
-    }
-    acc as usize
-}
-
-fn parse_le_u128(bytes: &[u8]) -> Option<u128> {
-    if bytes.len() > 16 {
-        return None;
-    }
-    let mut value: u128 = 0;
-    for (idx, b) in bytes.iter().enumerate() {
-        value |= (*b as u128) << (idx * 8);
-    }
-    Some(value)
-}
-
-fn read_molecule_bytes_field(data: &[u8], start: usize, end: usize) -> Option<Vec<u8>> {
-    if start >= end || start + 4 > data.len() {
-        return None;
-    }
-    let len = u32::from_le_bytes(data[start..start + 4].try_into().ok()?) as usize;
-    let value_start = start + 4;
-    let value_end = value_start.checked_add(len)?;
-    if value_end > data.len() || value_end > end {
-        return None;
-    }
-    Some(data[value_start..value_end].to_vec())
-}
-
-fn parse_spore_content_from_output_data(data_hex: &str) -> Option<(String, Vec<u8>)> {
-    let raw = clean_hex(data_hex)?;
-    let data = hex::decode(raw).ok()?;
-    if data.len() < 16 {
-        return None;
-    }
-
-    let total_size = u32::from_le_bytes(data[0..4].try_into().ok()?) as usize;
-    if total_size < 16 || data.len() < total_size {
-        return None;
-    }
-
-    let offset_content_type = u32::from_le_bytes(data[4..8].try_into().ok()?) as usize;
-    let offset_content = u32::from_le_bytes(data[8..12].try_into().ok()?) as usize;
-    let offset_cluster_id = u32::from_le_bytes(data[12..16].try_into().ok()?) as usize;
-    if !(16 <= offset_content_type
-        && offset_content_type <= offset_content
-        && offset_content <= offset_cluster_id
-        && offset_cluster_id <= total_size)
-    {
-        return None;
-    }
-
-    let content_type_bytes = read_molecule_bytes_field(&data, offset_content_type, offset_content)?;
-    let content_bytes = read_molecule_bytes_field(&data, offset_content, offset_cluster_id)?;
-    let content_type = String::from_utf8_lossy(&content_type_bytes)
-        .replace('\0', "")
-        .trim()
-        .to_string();
-    Some((content_type, content_bytes))
-}
-
-fn parse_dna_hex_from_content_text(content_text: &str) -> Option<String> {
-    let trimmed = content_text.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let extract_from_json = |value: &Value| -> Option<String> {
-        match value {
-            Value::String(s) => clean_hex(s),
-            Value::Array(items) => items.first().and_then(|v| v.as_str()).and_then(clean_hex),
-            Value::Object(map) => map.get("dna").and_then(|v| v.as_str()).and_then(clean_hex),
-            _ => None,
-        }
-    };
-
-    if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
-        return extract_from_json(&parsed);
-    }
-
-    clean_hex(trimmed)
-}
-
-fn normalize_dob0_pattern_element(value: &Value) -> Option<Dob0PatternElement> {
-    if let Value::Array(items) = value {
-        let trait_name = items.first()?.as_str()?.to_string();
-        let dob_type = items.get(1).and_then(|v| v.as_str()).map(|s| s.to_string());
-        let dna_offset = json_to_usize(items.get(2)?)?;
-        let dna_length = json_to_usize(items.get(3)?)?;
-        let pattern_type = items
-            .get(4)
-            .and_then(|v| v.as_str())
-            .unwrap_or("raw")
-            .to_string();
-        let trait_args = items.get(5).cloned();
-        return Some(Dob0PatternElement {
-            trait_name,
-            dna_offset,
-            dna_length,
-            pattern_type,
-            trait_args,
-            dob_type,
-        });
-    }
-
-    let obj = value.as_object()?;
-    let trait_name = obj.get("traitName")?.as_str()?.to_string();
-    let dna_offset = json_to_usize(obj.get("dnaOffset")?)?;
-    let dna_length = json_to_usize(obj.get("dnaLength")?)?;
-    let pattern_type = obj
-        .get("patternType")
-        .and_then(|v| v.as_str())
-        .unwrap_or("raw")
-        .to_string();
-    let dob_type = obj
-        .get("dobType")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    Some(Dob0PatternElement {
-        trait_name,
-        dna_offset,
-        dna_length,
-        pattern_type,
-        trait_args: obj.get("traitArgs").cloned(),
-        dob_type,
-    })
-}
-
-fn normalize_dob1_pattern_element(value: &Value) -> Option<Dob1PatternElement> {
-    if let Value::Array(items) = value {
-        let image_name = items.first()?.as_str()?.to_string();
-        let svg_fields = items.get(1)?.as_str()?.to_string();
-        let trait_name = items.get(2)?.as_str()?.to_string();
-        let pattern_type = items.get(3)?.as_str()?.to_string();
-        let trait_args = items.get(4).cloned();
-        return Some(Dob1PatternElement {
-            image_name,
-            svg_fields,
-            trait_name,
-            pattern_type,
-            trait_args,
-        });
-    }
-
-    let obj = value.as_object()?;
-    Some(Dob1PatternElement {
-        image_name: obj.get("imageName")?.as_str()?.to_string(),
-        svg_fields: obj.get("svgFields")?.as_str()?.to_string(),
-        trait_name: obj.get("traitName")?.as_str()?.to_string(),
-        pattern_type: obj.get("patternType")?.as_str()?.to_string(),
-        trait_args: obj.get("traitArgs").cloned(),
-    })
-}
-
-fn extract_dob0_pattern(metadata: &Value) -> Vec<Dob0PatternElement> {
-    let dob = if let Some(v) = metadata.get("dob").and_then(|v| v.as_object()) {
-        v
-    } else {
-        return Vec::new();
-    };
-
-    let ver = dob.get("ver").and_then(|v| v.as_i64());
-    if ver.unwrap_or(0) == 0 {
-        if let Some(patterns) = dob.get("pattern").and_then(|v| v.as_array()) {
-            return patterns
-                .iter()
-                .filter_map(normalize_dob0_pattern_element)
-                .collect();
-        }
-    }
-
-    if let Some(decoders) = dob.get("decoders").and_then(|v| v.as_array()) {
-        for decoder in decoders {
-            if let Some(patterns) = decoder.get("pattern").and_then(|v| v.as_array()) {
-                let normalized: Vec<Dob0PatternElement> = patterns
-                    .iter()
-                    .filter_map(normalize_dob0_pattern_element)
-                    .collect();
-                if !normalized.is_empty() {
-                    return normalized;
-                }
-            }
-        }
-    }
-    Vec::new()
-}
-
-fn extract_dob1_pattern(metadata: &Value) -> Vec<Dob1PatternElement> {
-    let dob = if let Some(v) = metadata.get("dob").and_then(|v| v.as_object()) {
-        v
-    } else {
-        return Vec::new();
-    };
-    let decoders = if let Some(v) = dob.get("decoders").and_then(|v| v.as_array()) {
-        v
-    } else {
-        return Vec::new();
-    };
-
-    for decoder in decoders {
-        if let Some(patterns) = decoder.get("pattern").and_then(|v| v.as_array()) {
-            let normalized: Vec<Dob1PatternElement> = patterns
-                .iter()
-                .filter_map(normalize_dob1_pattern_element)
-                .collect();
-            if !normalized.is_empty() {
-                return normalized;
-            }
-        }
-    }
-    Vec::new()
-}
-
-fn decode_dob0_trait_value(pattern: &Dob0PatternElement, dna_slice: &[u8]) -> Value {
-    let kind = pattern.pattern_type.to_ascii_lowercase();
-
-    match kind.as_str() {
-        "options" => {
-            if let Some(Value::Array(options)) = &pattern.trait_args {
-                if options.is_empty() {
-                    return Value::Null;
-                }
-                let idx = parse_le_modulo(dna_slice, options.len());
-                return options[idx].clone();
-            }
-            Value::Null
-        }
-        "range" => {
-            if let Some(Value::Array(args)) = &pattern.trait_args {
-                if args.len() < 2 {
-                    return Value::Null;
-                }
-                let min = args[0].as_i64();
-                let max = args[1].as_i64();
-                if let (Some(a), Some(b)) = (min, max) {
-                    let lo = a.min(b);
-                    let hi = a.max(b);
-                    if let Some(width) = hi.checked_sub(lo).and_then(|d| d.checked_add(1)) {
-                        if let Ok(width_usize) = usize::try_from(width) {
-                            let offset = parse_le_modulo(dna_slice, width_usize) as i64;
-                            return Value::from(lo + offset);
-                        }
-                    }
-                }
-            }
-            Value::Null
-        }
-        "utf8" => Value::String(
-            String::from_utf8_lossy(dna_slice)
-                .trim_end_matches('\0')
-                .to_string(),
-        ),
-        "rawnumber" => {
-            if let Some(v) = parse_le_u128(dna_slice) {
-                Value::String(v.to_string())
-            } else {
-                Value::String(format!("0x{}", hex::encode(dna_slice)))
-            }
-        }
-        "rawstring" => Value::String(format!("0x{}", hex::encode(dna_slice))),
-        "raw" => {
-            if pattern
-                .dob_type
-                .as_deref()
-                .is_some_and(|v| v.eq_ignore_ascii_case("number"))
-            {
-                if let Some(v) = parse_le_u128(dna_slice) {
-                    Value::String(v.to_string())
-                } else {
-                    Value::String(format!("0x{}", hex::encode(dna_slice)))
-                }
-            } else {
-                Value::String(format!("0x{}", hex::encode(dna_slice)))
-            }
-        }
-        _ => Value::String(format!("0x{}", hex::encode(dna_slice))),
-    }
-}
-
-fn selector_matches(selector: &Value, trait_value: &str) -> bool {
-    match selector {
-        Value::String(s) if s == "*" => true,
-        Value::Array(items) => items.iter().any(|item| selector_matches(item, trait_value)),
-        _ => format_json_value(selector) == trait_value,
-    }
-}
-
-fn resolve_dob1_snippet(
-    pattern: &Dob1PatternElement,
-    traits: &HashMap<String, String>,
-) -> Option<String> {
-    let kind = pattern.pattern_type.to_ascii_lowercase();
-    if kind == "raw" {
-        return pattern
-            .trait_args
-            .as_ref()
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-    }
-    if kind != "options" {
-        return None;
-    }
-
-    let mut wildcard: Option<String> = None;
-    let trait_value = traits.get(&pattern.trait_name).cloned().unwrap_or_default();
-    let options = pattern.trait_args.as_ref()?.as_array()?;
-    for option in options {
-        let Some(pair) = option.as_array() else {
-            continue;
-        };
-        if pair.len() < 2 {
-            continue;
-        }
-        let selector = &pair[0];
-        let snippet = if let Some(v) = pair[1].as_str() {
-            v
-        } else {
-            continue;
-        };
-        if selector_matches(selector, "*") {
-            wildcard = Some(snippet.to_string());
-        }
-        if selector_matches(selector, &trait_value) {
-            return Some(snippet.to_string());
-        }
-    }
-    wildcard
-}
-
-fn build_dob1_svg(
-    patterns: &[Dob1PatternElement],
-    traits: &HashMap<String, String>,
-) -> Option<String> {
-    if patterns.is_empty() {
-        return None;
-    }
-
-    let mut images: BTreeMap<String, (Vec<String>, Vec<String>)> = BTreeMap::new();
-    for pattern in patterns {
-        let Some(snippet) = resolve_dob1_snippet(pattern, traits) else {
-            continue;
-        };
-        let entry = images
-            .entry(pattern.image_name.clone())
-            .or_insert_with(|| (Vec::new(), Vec::new()));
-        if pattern.svg_fields == "attributes" {
-            entry.0.push(snippet);
-        } else if pattern.svg_fields == "elements" {
-            entry.1.push(snippet);
-        }
-    }
-
-    let image_key = if images.contains_key("IMAGE.0") {
-        "IMAGE.0".to_string()
-    } else {
-        images.keys().next()?.to_string()
-    };
-    let (attrs, elements) = images.get(&image_key)?;
-    if elements.is_empty() {
-        return None;
-    }
-
-    let attr_text = if attrs.is_empty() {
-        "xmlns='http://www.w3.org/2000/svg' viewBox='0 0 500 500'".to_string()
-    } else {
-        attrs.join(" ")
-    };
-    let element_text = elements.join("");
-    Some(format!("<svg {attr_text}>{element_text}</svg>"))
-}
-
-fn decode_dob_embedded(
-    content_type: &str,
-    content_text: Option<&str>,
-    cluster_description: Option<&str>,
-) -> (
-    Option<String>,
-    Vec<DobTraitResponse>,
-    Option<String>,
-    Vec<String>,
-) {
-    let mut issues = Vec::new();
-    if !content_type.to_ascii_lowercase().starts_with("dob/") {
-        issues.push(format!(
-            "Unsupported content type for DOB decode: {content_type}"
-        ));
-        return (None, Vec::new(), None, issues);
-    }
-
-    let metadata = cluster_description.and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-    if metadata.is_none() {
-        issues.push("Missing or invalid DOB metadata in cluster description".to_string());
-    }
-
-    let dna_hex = content_text.and_then(parse_dna_hex_from_content_text);
-    if dna_hex.is_none() {
-        issues.push("Missing or invalid DNA in DOB content".to_string());
-    }
-
-    let mut traits: Vec<DobTraitResponse> = Vec::new();
-    if let (Some(meta), Some(dna_hex)) = (metadata.as_ref(), dna_hex.as_ref()) {
-        let Ok(dna_bytes) = hex::decode(dna_hex) else {
-            issues.push("DNA hex decode failed".to_string());
-            return (Some(dna_hex.clone()), traits, None, issues);
-        };
-        let patterns = extract_dob0_pattern(meta);
-        if patterns.is_empty() {
-            issues.push("No DOB/0 pattern found in cluster metadata".to_string());
-        } else {
-            for pattern in patterns {
-                let start = pattern.dna_offset.min(dna_bytes.len());
-                let end = (start + pattern.dna_length).min(dna_bytes.len());
-                let raw = decode_dob0_trait_value(&pattern, &dna_bytes[start..end]);
-                traits.push(DobTraitResponse {
-                    name: pattern.trait_name,
-                    value: format_json_value(&raw),
-                });
-            }
-        }
-    }
-
-    let mut svg_markup = None;
-    if let Some(meta) = metadata.as_ref() {
-        let dob1_patterns = extract_dob1_pattern(meta);
-        if !dob1_patterns.is_empty() {
-            let trait_map: HashMap<String, String> = traits
-                .iter()
-                .map(|item| (item.name.clone(), item.value.clone()))
-                .collect();
-            svg_markup = build_dob1_svg(&dob1_patterns, &trait_map);
-            if svg_markup.is_none() {
-                issues.push(
-                    "DOB/1 SVG pattern detected but no renderable SVG output was produced"
-                        .to_string(),
-                );
-            }
-        }
-    }
-
-    (dna_hex, traits, svg_markup, issues)
-}
-
-fn is_text_like_content_type(content_type: &str) -> bool {
-    let normalized = content_type.trim().to_ascii_lowercase();
-    normalized.starts_with("text/")
-        || normalized.contains("json")
-        || normalized.contains("xml")
-        || normalized.contains("javascript")
-        || normalized.starts_with("dob/")
-}
-
-fn load_spore_content_from_ckb(
-    state: &Arc<AppState>,
-    spore_id: &[u8],
-    entry: &ckbadger_store::ObjectEntry,
-) -> anyhow::Result<(String, Vec<u8>)> {
-    let ckb_store = state.ckb_store.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("CKB direct store unavailable; set [ckb].workdir in ckbadger.toml")
-    })?;
-
-    if entry.created_at_tx.len() != 32 {
-        anyhow::bail!(
-            "invalid spore created_at_tx length: expected 32, got {}",
-            entry.created_at_tx.len()
-        );
-    }
-    let tx_hash_arr: [u8; 32] = entry
-        .created_at_tx
-        .as_slice()
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("invalid spore created_at_tx bytes"))?;
-
-    let tx_view = ckb_store.get_transaction(&tx_hash_arr).ok_or_else(|| {
-        anyhow::anyhow!(
-            "spore creation transaction not found in CKB store: 0x{}",
-            hex::encode(tx_hash_arr)
-        )
-    })?;
-    let rpc_tx = ckb_store_reader::convert_transaction_view(&tx_view);
-
-    let target_spore_id = format!("0x{}", hex::encode(spore_id));
-    for (output, output_data) in rpc_tx.outputs.iter().zip(rpc_tx.outputs_data.iter()) {
-        let Some(type_script) = output.type_.as_ref() else {
-            continue;
-        };
-        if !type_script.args.eq_ignore_ascii_case(&target_spore_id) {
-            continue;
-        }
-        if let Some(parsed) = parse_spore_content_from_output_data(output_data) {
-            return Ok(parsed);
-        }
-    }
-
-    anyhow::bail!(
-        "spore output data not found in tx 0x{} for spore 0x{}",
-        hex::encode(tx_hash_arr),
-        hex::encode(spore_id)
-    )
 }
 
 fn format_yyyymmdd_for_chart(date: u32) -> String {
@@ -1668,57 +1112,52 @@ async fn decode_spore(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Spore not found"))?;
 
-    let mut content_type = match &entry.extra {
+    let content_type = match &entry.extra {
         ckbadger_store::ObjectExtra::Spore { content_type, .. } => content_type.clone(),
         _ => String::new(),
     };
 
-    let cluster_description = if let Some(cluster_id) = entry.collection_id.as_ref() {
-        state
-            .store
-            .get_spore(cluster_id)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .and_then(|cluster| cluster.description)
-    } else {
-        None
-    };
+    // Check CF_DOB_DECODED for cached decode result
+    let store = state.store.clone();
+    let id_for_decode = id.clone();
+    let decoded = tokio::task::spawn_blocking(move || store.get_dob_decoded(&id_for_decode))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let mut issues = Vec::new();
-    let mut content_text: Option<String> = None;
-    match load_spore_content_from_ckb(&state, &id, &entry) {
-        Ok((loaded_content_type, content_bytes)) => {
-            content_type = loaded_content_type;
-            if is_text_like_content_type(&content_type) {
-                if content_bytes.len() > 256 * 1024 {
-                    issues.push(format!(
-                        "DOB content is too large for text decode: {} bytes",
-                        content_bytes.len()
-                    ));
-                } else {
-                    content_text = Some(String::from_utf8_lossy(&content_bytes).to_string());
-                }
-            }
+    match decoded {
+        Some(entry) => {
+            let traits = entry
+                .traits
+                .into_iter()
+                .map(|t| DobTraitResponse {
+                    name: t.name,
+                    value: t.value,
+                })
+                .collect();
+            ok(SporeDobDecodeResponse {
+                status: "decoded".to_string(),
+                spore_id: format!("0x{}", hex::encode(&id)),
+                content_type,
+                dna_hex: None,
+                traits,
+                svg_markup: entry.svg_markup,
+                issues: Vec::new(),
+            })
         }
-        Err(e) => {
-            issues.push(format!("Failed to load on-chain spore content: {e}"));
-        }
+        None => ok(SporeDobDecodeResponse {
+            status: "pending".to_string(),
+            spore_id: format!("0x{}", hex::encode(&id)),
+            content_type,
+            dna_hex: None,
+            traits: Vec::new(),
+            svg_markup: None,
+            issues: vec![
+                "DOB decode pending — background worker has not processed this spore yet"
+                    .to_string(),
+            ],
+        }),
     }
-
-    let (dna_hex, traits, svg_markup, mut decode_issues) = decode_dob_embedded(
-        &content_type,
-        content_text.as_deref(),
-        cluster_description.as_deref(),
-    );
-    issues.append(&mut decode_issues);
-
-    ok(SporeDobDecodeResponse {
-        spore_id: format!("0x{}", hex::encode(&id)),
-        content_type,
-        dna_hex,
-        traits,
-        svg_markup,
-        issues,
-    })
 }
 
 async fn get_cluster_capacity_chart(
@@ -1919,13 +1358,6 @@ async fn get_spores_by_owner(
 mod tests {
     use super::*;
 
-    fn encode_molecule_bytes(raw: &[u8]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(4 + raw.len());
-        out.extend_from_slice(&(raw.len() as u32).to_le_bytes());
-        out.extend_from_slice(raw);
-        out
-    }
-
     fn make_spore_entry(
         created_at_block: i64,
         owner_lock_hash: Option<Vec<u8>>,
@@ -1946,33 +1378,6 @@ mod tests {
                 media_profile: ckbadger_store::SporeMediaProfile::default(),
             },
         }
-    }
-
-    fn make_spore_output_data_hex(content_type: &str, content_text: &str) -> String {
-        let content_type_bytes = encode_molecule_bytes(content_type.as_bytes());
-        let content_bytes = encode_molecule_bytes(content_text.as_bytes());
-
-        let offset_content_type = 16u32;
-        let offset_content = offset_content_type + content_type_bytes.len() as u32;
-        let offset_cluster_id = offset_content + content_bytes.len() as u32;
-        let total_size = offset_cluster_id;
-
-        let mut out = Vec::new();
-        out.extend_from_slice(&total_size.to_le_bytes());
-        out.extend_from_slice(&offset_content_type.to_le_bytes());
-        out.extend_from_slice(&offset_content.to_le_bytes());
-        out.extend_from_slice(&offset_cluster_id.to_le_bytes());
-        out.extend_from_slice(&content_type_bytes);
-        out.extend_from_slice(&content_bytes);
-        format!("0x{}", hex::encode(out))
-    }
-
-    #[test]
-    fn test_parse_spore_content_from_output_data() {
-        let data_hex = make_spore_output_data_hex("dob/0", r#"{ "dna": "0a01ff00" }"#);
-        let parsed = parse_spore_content_from_output_data(&data_hex).expect("parse spore output");
-        assert_eq!(parsed.0, "dob/0");
-        assert!(String::from_utf8_lossy(&parsed.1).contains("\"dna\""));
     }
 
     #[test]
@@ -2129,148 +1534,6 @@ mod tests {
         );
         assert_eq!(clusters[1].created_at_block, 100);
         assert_eq!(clusters[1].holders_count, 12);
-    }
-
-    #[test]
-    fn test_decode_dob_embedded_dob0_traits() {
-        let cluster_description = serde_json::json!({
-            "dob": {
-                "ver": 0,
-                "pattern": [
-                    {
-                        "traitName": "Background",
-                        "dobType": "String",
-                        "dnaOffset": 0,
-                        "dnaLength": 1,
-                        "patternType": "options",
-                        "traitArgs": ["red", "blue"]
-                    },
-                    {
-                        "traitName": "Level",
-                        "dobType": "Number",
-                        "dnaOffset": 1,
-                        "dnaLength": 1,
-                        "patternType": "range",
-                        "traitArgs": [10, 20]
-                    }
-                ]
-            }
-        })
-        .to_string();
-
-        let (dna_hex, traits, svg_markup, issues) = decode_dob_embedded(
-            "dob/0",
-            Some(r#"{ "dna": "0a01ff00" }"#),
-            Some(&cluster_description),
-        );
-
-        assert_eq!(dna_hex.as_deref(), Some("0a01ff00"));
-        assert_eq!(traits.len(), 2);
-        assert_eq!(traits[0].name, "Background");
-        assert_eq!(traits[0].value, "red");
-        assert_eq!(traits[1].name, "Level");
-        assert_eq!(traits[1].value, "11");
-        assert!(svg_markup.is_none());
-        assert!(issues.is_empty());
-    }
-
-    #[test]
-    fn test_decode_dob_embedded_dob1_svg() {
-        let cluster_description = serde_json::json!({
-            "dob": {
-                "ver": 1,
-                "decoders": [
-                    {
-                        "pattern": [
-                            {
-                                "traitName": "BackgroundColor",
-                                "dobType": "String",
-                                "dnaOffset": 0,
-                                "dnaLength": 1,
-                                "patternType": "options",
-                                "traitArgs": ["red", "blue"]
-                            }
-                        ]
-                    },
-                    {
-                        "pattern": [
-                            {
-                                "imageName": "IMAGE.0",
-                                "svgFields": "attributes",
-                                "traitName": "",
-                                "patternType": "raw",
-                                "traitArgs": "xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'"
-                            },
-                            {
-                                "imageName": "IMAGE.0",
-                                "svgFields": "elements",
-                                "traitName": "BackgroundColor",
-                                "patternType": "options",
-                                "traitArgs": [
-                                    ["red", "<rect width='100' height='100' fill='red' />"],
-                                    ["blue", "<rect width='100' height='100' fill='blue' />"]
-                                ]
-                            }
-                        ]
-                    }
-                ]
-            }
-        })
-        .to_string();
-
-        let (_, traits, svg_markup, issues) = decode_dob_embedded(
-            "dob/0",
-            Some(r#"{ "dna": "01" }"#),
-            Some(&cluster_description),
-        );
-
-        assert_eq!(traits.len(), 1);
-        assert_eq!(traits[0].name, "BackgroundColor");
-        assert_eq!(traits[0].value, "blue");
-        let svg = svg_markup.expect("svg rendered");
-        assert!(svg.contains("<svg "));
-        assert!(svg.contains("fill='blue'"));
-        assert!(issues.is_empty());
-    }
-
-    #[test]
-    fn test_decode_dob_embedded_dob1_svg_with_array_pattern() {
-        let cluster_description = serde_json::json!({
-            "dob": {
-                "ver": 1,
-                "decoders": [
-                    {
-                        "pattern": [
-                            ["BackgroundColor", "String", 0, 1, "options", ["red", "blue"]]
-                        ]
-                    },
-                    {
-                        "pattern": [
-                            ["IMAGE.0", "attributes", "", "raw", "xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'"],
-                            ["IMAGE.0", "elements", "BackgroundColor", "options", [
-                                ["red", "<rect width='100' height='100' fill='red' />"],
-                                ["blue", "<rect width='100' height='100' fill='blue' />"]
-                            ]]
-                        ]
-                    }
-                ]
-            }
-        })
-        .to_string();
-
-        let (_, traits, svg_markup, issues) = decode_dob_embedded(
-            "dob/0",
-            Some(r#"{ "dna": "01" }"#),
-            Some(&cluster_description),
-        );
-
-        assert_eq!(traits.len(), 1);
-        assert_eq!(traits[0].name, "BackgroundColor");
-        assert_eq!(traits[0].value, "blue");
-        let svg = svg_markup.expect("svg rendered");
-        assert!(svg.contains("<svg "));
-        assert!(svg.contains("fill='blue'"));
-        assert!(issues.is_empty());
     }
 
     #[test]

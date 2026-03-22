@@ -18,12 +18,13 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ActivityEntry, AssetAction, AssetChange, CachedBlockHeader, ClusterAggregate,
     ClusterDailyDelta, DailyBlockStats, DailyStats, DaoDailySnapshot, DaoDepositCacheEntry,
-    DeepForkInfo, EpochStats, HourlyStats, IdentityCollectionAggregate, IdentityEntry,
-    IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats, ObjectCollectionActivityEntry,
-    ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry, ObjectExtra, ObjectStandard,
-    OwnerActivityDelta, ProtocolAction, ReorgEvent, ScriptDailyDelta, ScriptInfo,
-    ScriptVersionInfo, SporeDailyDelta, SporeMediaProfile, StorageDependencyTier, TokenDailyDelta,
-    TokenInfo, TxActivityBundle, TxIndexEntry, TypeCallEntry,
+    DeepForkInfo, DobDecodedEntry, DobDecodedTrait, EpochStats, HourlyStats,
+    IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard, LiveCellInfo,
+    MinerStats, ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta,
+    ObjectEntry, ObjectExtra, ObjectStandard, OwnerActivityDelta, ProtocolAction, ReorgEvent,
+    ScriptDailyDelta, ScriptInfo, ScriptVersionInfo, SporeDailyDelta, SporeMediaProfile,
+    StorageDependencyTier, TokenDailyDelta, TokenInfo, TxActivityBundle, TxIndexEntry,
+    TypeCallEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -5353,46 +5354,14 @@ async fn test_spore_capacity_chart_and_spore_capacity_fields() {
 }
 
 #[tokio::test]
-async fn test_spore_decode_endpoint_returns_issues_without_ckb_direct_store() {
+async fn test_spore_decode_endpoint_returns_pending_without_cached_result() {
     let store = test_store();
-    let cluster_id = [0x44u8; 32];
     let spore_id = [0x55u8; 32];
     let spore_id_hex = format!("0x{}", hex::encode(spore_id));
 
-    let cluster_entry = ObjectEntry {
-        standard: ObjectStandard::SporeCluster,
-        collection_id: None,
-        token_id: None,
-        owner_lock_hash: Some(vec![0x11; 32]),
-        name: Some("DOB Cluster".to_string()),
-        description: Some(
-            serde_json::json!({
-                "dob": {
-                    "ver": 0,
-                    "pattern": [
-                        {
-                            "traitName": "Background",
-                            "dobType": "String",
-                            "dnaOffset": 0,
-                            "dnaLength": 1,
-                            "patternType": "options",
-                            "traitArgs": ["red", "blue"]
-                        }
-                    ]
-                }
-            })
-            .to_string(),
-        ),
-        is_live: true,
-        created_at_block: 100,
-        created_at_tx: vec![0x22; 32],
-        extra: ObjectExtra::SporeCluster,
-    };
-    store.put_spore_direct(&cluster_id, &cluster_entry).unwrap();
-
     let spore_entry = ObjectEntry {
         standard: ObjectStandard::Spore,
-        collection_id: Some(cluster_id.to_vec()),
+        collection_id: None,
         token_id: None,
         owner_lock_hash: Some(vec![0xAA; 32]),
         name: None,
@@ -5420,12 +5389,81 @@ async fn test_spore_decode_endpoint_returns_issues_without_ckb_direct_store() {
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "pending");
     assert_eq!(json["sporeId"], spore_id_hex);
     assert_eq!(json["contentType"], "dob/0");
     assert_eq!(json["traits"], serde_json::json!([]));
     assert!(json["issues"].as_array().unwrap().iter().any(|issue| issue
         .as_str()
-        .is_some_and(|s| s.contains("Failed to load on-chain spore content"))));
+        .is_some_and(|s| s.contains("background worker"))));
+}
+
+#[tokio::test]
+async fn test_spore_decode_endpoint_returns_decoded_from_cache() {
+    let store = test_store();
+    let spore_id = [0x55u8; 32];
+    let spore_id_hex = format!("0x{}", hex::encode(spore_id));
+
+    let spore_entry = ObjectEntry {
+        standard: ObjectStandard::Spore,
+        collection_id: None,
+        token_id: None,
+        owner_lock_hash: Some(vec![0xAA; 32]),
+        name: None,
+        description: None,
+        is_live: true,
+        created_at_block: 321,
+        created_at_tx: vec![0xBB; 32],
+        extra: ObjectExtra::Spore {
+            content_type: "dob/0".to_string(),
+            content_length: 128,
+            media_profile: SporeMediaProfile::default(),
+        },
+    };
+    store.put_spore_direct(&spore_id, &spore_entry).unwrap();
+
+    let decoded_entry = DobDecodedEntry {
+        traits: vec![
+            DobDecodedTrait {
+                name: "Background".to_string(),
+                value: "red".to_string(),
+            },
+            DobDecodedTrait {
+                name: "Level".to_string(),
+                value: "11".to_string(),
+            },
+        ],
+        svg_markup: Some("<svg><rect fill='red'/></svg>".to_string()),
+        media_sources: vec![],
+        decoded_at: 1700000000,
+    };
+    store
+        .put_dob_decoded_direct(&spore_id, &decoded_entry)
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/spore/objects/{}/decode", spore_id_hex))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "decoded");
+    assert_eq!(json["sporeId"], spore_id_hex);
+    assert_eq!(json["contentType"], "dob/0");
+    let traits = json["traits"].as_array().unwrap();
+    assert_eq!(traits.len(), 2);
+    assert_eq!(traits[0]["name"], "Background");
+    assert_eq!(traits[0]["value"], "red");
+    assert_eq!(traits[1]["name"], "Level");
+    assert_eq!(traits[1]["value"], "11");
+    assert_eq!(json["svgMarkup"], "<svg><rect fill='red'/></svg>");
+    assert!(json["issues"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
