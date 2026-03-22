@@ -329,34 +329,97 @@ fn find_diskstats_device_by_name(diskstats: &str, name: &str) -> Option<()> {
     None
 }
 
-/// High-level: detect the `/proc/diskstats` device name for a data path.
+/// Detect the block device name for a data path.
 ///
-/// Reads `/proc/self/mountinfo` and `/proc/diskstats`, using major:minor
-/// matching with fallback to source device name matching. For device-mapper
-/// paths (`/dev/mapper/*`), follows the symlink to resolve the `dm-N` name.
+/// On Linux, resolves to the `/proc/diskstats` device name for I/O tracking.
+/// Uses major:minor matching with fallback to source device name matching.
+/// For device-mapper paths (`/dev/mapper/*`), uses multiple strategies:
+///
+/// 1. Symlink: `readlink /dev/mapper/luks-... -> ../dm-0`
+/// 2. Stat: `stat /dev/mapper/luks-...` to get real major:minor
+/// 3. Sysfs: match `/sys/block/dm-*/dm/name` against the mapper name
+///
+/// On macOS, returns the device basename from `statfs()` (e.g., `"disk1s1"`).
+/// `DiskStatsTracker` will still return 0.0 on macOS since `/proc/diskstats`
+/// does not exist; per-disk I/O tracking would require IOKit.
+///
 /// Never fails (returns empty string on any resolution failure).
 pub fn detect_disk_device(data_path: &str) -> String {
-    let mountinfo = fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
-    let diskstats = fs::read_to_string("/proc/diskstats").unwrap_or_default();
+    #[cfg(target_os = "linux")]
+    {
+        let mountinfo = fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+        let diskstats = fs::read_to_string("/proc/diskstats").unwrap_or_default();
 
-    // Try pure resolution (major:minor or source device basename)
-    if let Some(device) = resolve_diskstats_device(&mountinfo, &diskstats, data_path) {
-        return device;
+        // Try pure resolution (major:minor or source device basename)
+        if let Some(device) = resolve_diskstats_device(&mountinfo, &diskstats, data_path) {
+            return device;
+        }
+
+        // Source device needs deeper resolution (e.g., /dev/mapper/luks-...)
+        if let Some(entry) = parse_mountinfo_entry(&mountinfo, data_path) {
+            // Fallback 1: symlink resolution (/dev/mapper/luks-... -> ../dm-0)
+            if let Ok(target) = fs::read_link(&entry.source_device) {
+                if let Some(name) = target.file_name().and_then(|n| n.to_str()) {
+                    if find_diskstats_device_by_name(&diskstats, name).is_some() {
+                        return name.to_string();
+                    }
+                }
+            }
+
+            // Fallback 2: stat() to get real major:minor, then find in diskstats
+            if let Ok(meta) = fs::metadata(&entry.source_device) {
+                use std::os::unix::fs::MetadataExt;
+                let rdev = meta.rdev();
+                let major = ((rdev >> 8) & 0xfff) as u32;
+                let minor = (rdev & 0xff) as u32;
+                if let Some(name) = find_diskstats_device_by_id(&diskstats, major, minor) {
+                    return name;
+                }
+            }
+
+            // Fallback 3: /sys/block/dm-*/dm/name (works when /dev/mapper/ is
+            // inaccessible, e.g., in sandboxed/namespaced environments)
+            if let Some(mapper_name) = entry.source_device.strip_prefix("/dev/mapper/") {
+                if let Some(dm_device) = resolve_dm_by_sysfs_name(&diskstats, mapper_name) {
+                    return dm_device;
+                }
+            }
+        }
+
+        String::new()
     }
 
-    // Fallback: source device may be a symlink (/dev/mapper/luks-... -> ../dm-0).
-    // Follow it and check if the target appears in diskstats.
-    if let Some(entry) = parse_mountinfo_entry(&mountinfo, data_path) {
-        if let Ok(target) = fs::read_link(&entry.source_device) {
-            if let Some(name) = target.file_name().and_then(|n| n.to_str()) {
-                if find_diskstats_device_by_name(&diskstats, name).is_some() {
-                    return name.to_string();
+    #[cfg(target_os = "macos")]
+    {
+        statfs_device_and_filesystem(data_path)
+            .map(|(device, _)| device)
+            .unwrap_or_default()
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = data_path;
+        String::new()
+    }
+}
+
+/// Resolve a device-mapper name to its `dm-N` diskstats device via sysfs.
+///
+/// Scans `/sys/block/dm-*/dm/name` for each dm device present in diskstats
+/// and returns the first whose name matches `mapper_name`.
+fn resolve_dm_by_sysfs_name(diskstats: &str, mapper_name: &str) -> Option<String> {
+    for line in diskstats.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() >= 3 && fields[2].starts_with("dm-") {
+            let dm_name_path = format!("/sys/block/{}/dm/name", fields[2]);
+            if let Ok(name) = fs::read_to_string(&dm_name_path) {
+                if name.trim() == mapper_name {
+                    return Some(fields[2].to_string());
                 }
             }
         }
     }
-
-    String::new()
+    None
 }
 
 /// Read /sys/block/{device}/queue/scheduler, extract bracketed active scheduler.
@@ -509,13 +572,15 @@ fn sysctl_string(name: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Capture static environment snapshot. Uses cross-platform POSIX APIs for
-/// CPU/RAM/kernel, with Linux-specific procfs/sysfs for disk info.
+/// CPU/RAM/kernel, with platform-specific disk info detection.
 /// Never fails (returns defaults on any resolution failure).
 pub fn capture_environment(data_path: &str) -> EnvironmentSnapshot {
-    // Disk info is Linux-specific (procfs/sysfs); returns empty on macOS.
-    let mounts = fs::read_to_string("/proc/mounts").unwrap_or_default();
-    let (disk_device, filesystem) = parse_mount_info(&mounts, data_path).unwrap_or_default();
-    let disk_scheduler = read_disk_scheduler(&disk_device);
+    let (disk_device, filesystem) = detect_device_and_filesystem(data_path);
+
+    // For dm devices, the scheduler lives on the parent physical device.
+    // Walk /sys/block/dm-N/slaves/ to find it. No-op on macOS.
+    let scheduler_device = resolve_scheduler_device(&disk_device);
+    let disk_scheduler = read_disk_scheduler(&scheduler_device);
 
     EnvironmentSnapshot {
         cpu_model: read_cpu_model(),
@@ -526,6 +591,80 @@ pub fn capture_environment(data_path: &str) -> EnvironmentSnapshot {
         disk_scheduler,
         filesystem,
     }
+}
+
+/// Detect disk device name and filesystem type for a path.
+///
+/// - Linux: procfs/sysfs resolution (handles LUKS/dm/btrfs).
+/// - macOS: `statfs()` for device and filesystem type.
+fn detect_device_and_filesystem(data_path: &str) -> (String, String) {
+    #[cfg(target_os = "linux")]
+    {
+        let mounts = fs::read_to_string("/proc/mounts").unwrap_or_default();
+        let (_, filesystem) = parse_mount_info(&mounts, data_path).unwrap_or_default();
+        let disk_device = detect_disk_device(data_path);
+        (disk_device, filesystem)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        statfs_device_and_filesystem(data_path).unwrap_or_default()
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = data_path;
+        (String::new(), String::new())
+    }
+}
+
+/// macOS: use `statfs()` to get device name and filesystem type.
+///
+/// Returns e.g. `("disk1s1", "apfs")` or `("disk3s1", "hfs")`.
+#[cfg(target_os = "macos")]
+fn statfs_device_and_filesystem(path: &str) -> Option<(String, String)> {
+    use std::ffi::{CStr, CString};
+    let c_path = CString::new(path).ok()?;
+    unsafe {
+        let mut buf: libc::statfs = std::mem::zeroed();
+        if libc::statfs(c_path.as_ptr(), &mut buf) != 0 {
+            return None;
+        }
+        let device = CStr::from_ptr(buf.f_mntfromname.as_ptr())
+            .to_string_lossy()
+            .into_owned();
+        let filesystem = CStr::from_ptr(buf.f_fstypename.as_ptr())
+            .to_string_lossy()
+            .into_owned();
+        // Strip /dev/ prefix for display (e.g., "/dev/disk1s1" → "disk1s1")
+        let short = device.strip_prefix("/dev/").unwrap_or(&device).to_string();
+        Some((short, filesystem))
+    }
+}
+
+/// For a dm device, walk `/sys/block/dm-N/slaves/` to find the parent
+/// physical device (e.g., nvme0n1p2) whose scheduler is meaningful.
+/// For non-dm devices, returns the device name unchanged.
+fn resolve_scheduler_device(device: &str) -> String {
+    if !device.starts_with("dm-") {
+        return device.to_string();
+    }
+    let slaves_dir = format!("/sys/block/{}/slaves", device);
+    if let Some(entry) = fs::read_dir(&slaves_dir)
+        .ok()
+        .and_then(|mut entries| entries.find_map(|e| e.ok()))
+    {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("dm-") {
+            // Recurse through stacked dm layers
+            return resolve_scheduler_device(&name);
+        }
+        // Found a physical device (e.g., nvme0n1p2) — strip partition
+        // suffix for the scheduler lookup (scheduler is on whole disk)
+        return strip_partition_suffix(&format!("/dev/{}", name));
+    }
+    device.to_string()
 }
 
 /// Read per-batch environment. Uses cross-platform POSIX APIs for load/memory,
@@ -815,5 +954,80 @@ MemAvailable:   45000000 kB
         assert!(env.ram_total_mb > 0);
         assert!(!env.kernel.is_empty());
         assert!(!env.cpu_model.is_empty());
+    }
+
+    #[test]
+    fn test_detect_disk_device_resolves_for_home() {
+        // On Linux, /home is always mounted. detect_disk_device should find
+        // the diskstats device, even on LUKS/dm/btrfs stacks where
+        // /dev/mapper/ may be inaccessible.
+        let device = detect_disk_device("/home");
+        // On any standard Linux, /home is on a real block device
+        if cfg!(target_os = "linux") {
+            assert!(
+                !device.is_empty(),
+                "detect_disk_device(/home) returned empty — \
+                 expected a diskstats device like dm-0, nvme0n1, sda, etc."
+            );
+        }
+    }
+
+    #[test]
+    fn test_capture_environment_resolves_disk_for_home() {
+        let env = capture_environment("/home");
+        if cfg!(target_os = "linux") {
+            assert!(
+                !env.disk_device.is_empty(),
+                "capture_environment(/home).disk_device was empty"
+            );
+            assert!(
+                !env.filesystem.is_empty(),
+                "capture_environment(/home).filesystem was empty"
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_dm_by_sysfs_name() {
+        let diskstats = "\
+ 259       0 nvme0n1 100 0 500 0 200 0 300 0 0 0 0 0 0 0 0 0
+ 253       0 dm-0 80 0 400 0 180 0 280 0 0 0 0 0 0 0 0 0
+";
+        // When /sys/block/dm-0/dm/name exists with matching name, it resolves
+        let sysfs_name_path = "/sys/block/dm-0/dm/name";
+        if let Ok(name) = fs::read_to_string(sysfs_name_path) {
+            let name = name.trim();
+            eprintln!("dm-0 name from sysfs: {:?}", name);
+            let result = resolve_dm_by_sysfs_name(diskstats, name);
+            assert_eq!(result, Some("dm-0".to_string()));
+        }
+
+        // Non-existent mapper name should return None
+        assert_eq!(
+            resolve_dm_by_sysfs_name(diskstats, "nonexistent-mapper"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_resolve_scheduler_device_non_dm() {
+        assert_eq!(resolve_scheduler_device("nvme0n1"), "nvme0n1");
+        assert_eq!(resolve_scheduler_device("sda"), "sda");
+        assert_eq!(resolve_scheduler_device(""), "");
+    }
+
+    #[test]
+    fn test_resolve_scheduler_device_dm() {
+        // If /sys/block/dm-0/slaves/ exists, resolve should find parent
+        if std::path::Path::new("/sys/block/dm-0/slaves").exists() {
+            let result = resolve_scheduler_device("dm-0");
+            eprintln!("resolve_scheduler_device(dm-0) = {:?}", result);
+            // Should NOT be dm-0 (should resolve to parent)
+            assert!(
+                !result.starts_with("dm-"),
+                "expected physical device, got {}",
+                result
+            );
+        }
     }
 }
