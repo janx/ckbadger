@@ -28,6 +28,7 @@ pub mod types;
 // Domain operation modules (impl blocks on CkbadgerStore)
 mod activity_ops;
 mod address_ops;
+mod background_task_ops;
 mod block_ops;
 mod cell_ops;
 mod cluster_ops;
