@@ -231,8 +231,8 @@ The slug is purely a filename convention for human convenience. The authoritativ
 - Scan `docs/metadata/tokens/*.toml` and `docs/metadata/scripts/*.toml`.
 - Parse TOML into intermediate structs.
 - Serialize to bundled JSON blobs (`bundled_udt_labels.json`, `bundled_script_labels.json`).
-- Bundle `docs/metadata/nft-tiers.toml` content.
 - Extract UDT-compatible script code_hashes from scripts with `category = "udt"` (for `bundled_udt_script_code_hashes.json`).
+- Note: `nft-tiers.toml` is NOT bundled by `build.rs`. The API crate reads it directly via `CARGO_MANIFEST_DIR`-relative path at runtime.
 - Remove: all references to `docs/token-labels/`, `script-name-overrides.json`.
 
 ### `crates/indexer/src/label_import.rs`
