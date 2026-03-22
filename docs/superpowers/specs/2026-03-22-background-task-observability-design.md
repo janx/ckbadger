@@ -123,13 +123,9 @@ The `update_background_task` helper handles the read-modify-write (get -> deseri
 
 **Concurrency safety**: The DOB decode worker runs on a separate tokio task from the main indexer pipeline. The "dob_decode" Waiting entry is initialized in `indexer.rs` *before* `tokio::spawn`, ensuring the entry exists before the worker starts. After that, only the DOB worker's spawned task updates the "dob_decode" entry — no other writer touches this task name. Each task name has a single writer, so no read-modify-write race can occur.
 
-### StoreBatch (`crates/ckbadger-store/src/batch.rs`)
+### ~~StoreBatch~~ (dropped)
 
-```rust
-pub fn put_background_tasks(&mut self, data: &BackgroundTasksData)
-```
-
-For tasks that want to write atomically with other batch operations.
+~~The spec originally included `StoreBatch::put_background_tasks` in `batch.rs`.~~ This was dropped during planning — no task requires batch-level background task writes. All writers use `update_background_task` on the store directly.
 
 ### New Query (`crates/ckbadger-store/src/spore_ops.rs`)
 
@@ -275,7 +271,6 @@ New "Background Tasks" section, rendered as a compact table after sync progress:
 |------|-----|
 | `crates/common/src/sync.rs` | New types: `BackgroundTasksData`, `BackgroundTaskEntry`, `BackgroundTaskState` |
 | `crates/ckbadger-store/src/background_task_ops.rs` (new) | Store read/write/update ops |
-| `crates/ckbadger-store/src/batch.rs` | `put_background_tasks` on StoreBatch |
 | `crates/ckbadger-store/src/spore_ops.rs` | `count_undecoded_dob_spores` |
 | `crates/indexer/src/sync/dob_decode_worker.rs` | Timing + progress reporting |
 | `crates/indexer/src/sync/indexer.rs` | Initialize dob_decode task entry as Waiting |
