@@ -232,10 +232,10 @@ pub struct BulkBuildProgressData {
     /// If ~0, the flush was fully hidden behind the build phase.
     #[serde(default)]
     pub flush_wait_ms: Option<f64>,
-    /// Time spent collecting prefetched blocks in ms.
+    /// Time spent blocking to receive prefetched blocks in ms.
     /// If ~0, the prefetch was fully hidden behind the build phase.
     #[serde(default)]
-    pub prefetch_collect_ms: Option<f64>,
+    pub prefetch_recv_ms: Option<f64>,
     /// Total RPC/DB fetch time for the batch in ms.
     #[serde(default)]
     pub fetch_ms: Option<f64>,
@@ -285,7 +285,7 @@ pub struct BulkBuildProgressData {
     /// EMA cost model: milliseconds per block (adaptive batch sizing).
     #[serde(default)]
     pub ms_per_block_ema: Option<f64>,
-    /// Controllable wall-clock time of the last batch in ms (build + prefetch_collect, excludes flush).
+    /// Controllable wall-clock time of the last batch in ms (build + prefetch_recv, excludes flush).
     #[serde(default)]
     pub controllable_ms: Option<f64>,
     /// Target wall-clock iteration budget in ms (constant: 1500ms).
@@ -823,7 +823,7 @@ mod tests {
             activity_stats_ms: Some(5.1),
             flush_ms: Some(52.0),
             flush_wait_ms: None,
-            prefetch_collect_ms: None,
+            prefetch_recv_ms: None,
             fetch_ms: Some(120.5),
             build_ms: Some(141.0),
             owner_memory_bytes: Some(1_800_000_000),

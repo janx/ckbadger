@@ -294,7 +294,7 @@ pub(crate) struct BulkBuildPerfStats {
     last_fetch_us: AtomicU64,
     last_build_us: AtomicU64,
     last_flush_wait_us: AtomicU64,
-    last_prefetch_collect_us: AtomicU64,
+    last_prefetch_recv_us: AtomicU64,
     // In-memory state
     owner_memory_bytes: AtomicU64,
     live_cell_count: AtomicU64,
@@ -360,7 +360,7 @@ impl BulkBuildPerfStats {
         facts_intern_total_count: u64,
         facts_cell_count: u64,
         flush_wait_ms: f64,
-        prefetch_collect_ms: f64,
+        prefetch_recv_ms: f64,
         flush_channel_pending: u64,
         flush_channel_capacity: u64,
     ) {
@@ -417,8 +417,8 @@ impl BulkBuildPerfStats {
             .store(facts_cell_count, Ordering::Relaxed);
         self.last_flush_wait_us
             .store(ms_to_us(flush_wait_ms), Ordering::Relaxed);
-        self.last_prefetch_collect_us
-            .store(ms_to_us(prefetch_collect_ms), Ordering::Relaxed);
+        self.last_prefetch_recv_us
+            .store(ms_to_us(prefetch_recv_ms), Ordering::Relaxed);
         self.flush_channel_pending
             .store(flush_channel_pending, Ordering::Relaxed);
         self.flush_channel_capacity
@@ -455,9 +455,7 @@ impl BulkBuildPerfStats {
             )),
             flush_ms: Some(us_to_ms(self.last_flush_us.load(Ordering::Relaxed))),
             flush_wait_ms: Some(us_to_ms(self.last_flush_wait_us.load(Ordering::Relaxed))),
-            prefetch_collect_ms: Some(us_to_ms(
-                self.last_prefetch_collect_us.load(Ordering::Relaxed),
-            )),
+            prefetch_recv_ms: Some(us_to_ms(self.last_prefetch_recv_us.load(Ordering::Relaxed))),
             fetch_ms: Some(us_to_ms(self.last_fetch_us.load(Ordering::Relaxed))),
             build_ms: Some(us_to_ms(self.last_build_us.load(Ordering::Relaxed))),
             owner_memory_bytes: Some(self.owner_memory_bytes.load(Ordering::Relaxed)),
@@ -1049,7 +1047,7 @@ mod tests {
             0,             // facts_intern_total_count
             0,             // facts_cell_count
             0.0,           // flush_wait_ms
-            0.0,           // prefetch_collect_ms
+            0.0,           // prefetch_recv_ms
             1,             // flush_channel_pending
             4,             // flush_channel_capacity
         );
@@ -1104,7 +1102,7 @@ mod tests {
             42_000, // facts_intern_total_count
             28_000, // facts_cell_count
             0.0,    // flush_wait_ms
-            0.0,    // prefetch_collect_ms
+            0.0,    // prefetch_recv_ms
             2,      // flush_channel_pending
             4,      // flush_channel_capacity
         );
@@ -1133,7 +1131,7 @@ mod tests {
             1500.0, // tx_density, ms_per_block_ema, controllable, target_iteration
             8.0, 2.0, 40.0, // facts_par_iter, facts_merge, facts_serial_equiv
             5, 100, 200, // facts_intern_slow, facts_intern_total, facts_cell_count
-            15.0, 3.5, // flush_wait_ms, prefetch_collect_ms
+            15.0, 3.5, // flush_wait_ms, prefetch_recv_ms
             3, 4, // flush_channel_pending, flush_channel_capacity
         );
 
@@ -1146,11 +1144,11 @@ mod tests {
             "flush_wait_ms: expected ~15.0, got {fw}"
         );
         let pc = snap
-            .prefetch_collect_ms
-            .expect("prefetch_collect_ms should be Some");
+            .prefetch_recv_ms
+            .expect("prefetch_recv_ms should be Some");
         assert!(
             (pc - 3.5).abs() < 0.01,
-            "prefetch_collect_ms: expected ~3.5, got {pc}"
+            "prefetch_recv_ms: expected ~3.5, got {pc}"
         );
     }
 
