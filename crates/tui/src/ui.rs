@@ -1613,12 +1613,12 @@ fn draw_iteration_budget_panel(f: &mut Frame, area: Rect, app: &App) {
                 format!("{:.0}", build_cur),
                 Style::default().fg(BUDGET_BUILD_COLOR),
             ),
-            Span::styled(" fetch ", Style::default().fg(BUDGET_FETCH_WAIT_COLOR)),
+            Span::styled(" fetch_wait ", Style::default().fg(BUDGET_FETCH_WAIT_COLOR)),
             Span::styled(
                 format!("{:.0}", fetch_wait_cur),
                 Style::default().fg(BUDGET_FETCH_WAIT_COLOR),
             ),
-            Span::styled(" flush ", Style::default().fg(BUDGET_FLUSH_WAIT_COLOR)),
+            Span::styled(" flush_wait ", Style::default().fg(BUDGET_FLUSH_WAIT_COLOR)),
             Span::styled(
                 format!("{:.0}", flush_wait_cur),
                 Style::default().fg(BUDGET_FLUSH_WAIT_COLOR),
@@ -2435,13 +2435,13 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
         BUDGET_BUILD_COLOR,
     ));
     lines.push(budget_sparkline_line(
-        "Fetch",
+        "FetW",
         &app.fetch_wait_ms_history,
         spark_width,
         BUDGET_FETCH_WAIT_COLOR,
     ));
     lines.push(budget_sparkline_line(
-        "Flush",
+        "FluW",
         &app.flush_wait_ms_history,
         spark_width,
         BUDGET_FLUSH_WAIT_COLOR,
