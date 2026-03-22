@@ -1004,16 +1004,15 @@ mod tests {
     }
 
     #[test]
-    fn test_purge_preserves_config_and_labels() {
+    fn test_purge_preserves_config_and_metadata() {
         let dir = TempDir::new().unwrap();
         let root = dir.path().to_path_buf();
 
         cmd_init(&root).unwrap();
 
-        // Create token-labels directory and labels.toml
-        std::fs::create_dir(root.join("token-labels")).unwrap();
-        std::fs::write(root.join("token-labels/info.json"), "{}").unwrap();
-        std::fs::write(root.join("labels.toml"), "[labels]").unwrap();
+        // Create metadata directory
+        std::fs::create_dir_all(root.join("metadata/tokens")).unwrap();
+        std::fs::write(root.join("metadata/tokens/test.toml"), "name = \"Test\"").unwrap();
 
         // Create some data to be purged
         std::fs::write(root.join("data/domain/test.db"), "data").unwrap();
@@ -1021,22 +1020,18 @@ mod tests {
         let args = PurgeArgs { confirm: true };
         cmd_purge(&root, &args).unwrap();
 
-        // Config and labels should be preserved
+        // Config and metadata should be preserved
         assert!(
             root.join("ckbadger.toml").exists(),
             "config should be preserved"
         );
         assert!(
-            root.join("token-labels").exists(),
-            "token-labels dir should be preserved"
+            root.join("metadata").exists(),
+            "metadata dir should be preserved"
         );
         assert!(
-            root.join("token-labels/info.json").exists(),
-            "token-labels contents should be preserved"
-        );
-        assert!(
-            root.join("labels.toml").exists(),
-            "labels.toml should be preserved"
+            root.join("metadata/tokens/test.toml").exists(),
+            "metadata contents should be preserved"
         );
 
         // Data should be gone
