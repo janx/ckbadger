@@ -70,3 +70,4 @@ frontend/tsconfig.tsbuildinfo
 .worktrees/
 docs/plans/
 docs/superpowers/
+.gstack/

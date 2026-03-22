@@ -24,7 +24,7 @@ export function storageTierCardStyle(tier: string): {
 } {
   if (tier === 'fully_on_ckb_and_btc') {
     return {
-      card: 'storage-card-no-crt storage-card-both rounded border border-[#4a6838] bg-gradient-to-br from-[#4a3a12] to-[#0e3830] p-3',
+      card: 'storage-card-no-crt storage-card-both rounded border border-[#222840] bg-[#10131c] p-3',
       label: 'text-[#a0b880]',
       text: 'storage-text-split',
       tooltipButton: `${TOOLTIP_BTN_BASE} text-[#a0b880] border-[#4a6838] hover:text-[#c0d8a0] hover:border-[#6a8850]`,
@@ -32,7 +32,7 @@ export function storageTierCardStyle(tier: string): {
   }
   if (tier === 'fully_on_ckb' || tier === 'fully_onchain') {
     return {
-      card: 'storage-card-no-crt storage-card-ckb rounded border border-[#1a6050] bg-[#0e3830] p-3',
+      card: 'storage-card-no-crt storage-card-ckb rounded border border-[#222840] bg-[#10131c] p-3',
       label: 'text-[#5abfa0]',
       text: 'storage-text-gem',
       tooltipButton: `${TOOLTIP_BTN_BASE} text-[#5abfa0] border-[#1a6050] hover:text-[#40e8b0] hover:border-[#2a8068]`,
