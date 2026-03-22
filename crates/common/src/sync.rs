@@ -338,6 +338,56 @@ pub fn format_duration_smart(total_secs: f64) -> String {
     }
 }
 
+// --- Background task observability ---
+
+pub const BACKGROUND_TASKS_CACHE_KEY: &str = "bg:tasks";
+
+/// State of a single background task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BackgroundTaskState {
+    /// Waiting for precondition (e.g. sync catching up).
+    Waiting,
+    /// Actively processing.
+    Running,
+    /// Finished successfully.
+    Completed,
+    /// Terminated with error.
+    Failed,
+}
+
+/// Status of a single background task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundTaskEntry {
+    /// Stable identifier: "dob_decode", "cache_warmup", "chart_warmup", "assets_refresh".
+    pub name: String,
+    pub state: BackgroundTaskState,
+    /// Human-readable status line.
+    pub message: Option<String>,
+    /// Progress numerator (items processed so far).
+    pub progress_current: Option<u64>,
+    /// Progress denominator (total items, if known).
+    pub progress_total: Option<u64>,
+    /// Processing rate (items/sec), computed at batch boundaries.
+    pub rate: Option<f64>,
+    /// ETA in seconds, if computable.
+    pub eta_seconds: Option<f64>,
+    /// Unix timestamp when task entered Running state.
+    pub started_at: Option<i64>,
+    /// Elapsed wall-clock time in ms since started_at.
+    pub elapsed_ms: Option<f64>,
+    /// Error message if state is Failed.
+    pub error: Option<String>,
+}
+
+/// Status of all background tasks, stored in a single RocksDB domain key.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundTasksData {
+    pub tasks: Vec<BackgroundTaskEntry>,
+    pub updated_at: i64,
+}
+
 /// Memory statistics for key indexer components.
 /// Published to RocksDB domain store for monitoring by TUI and other tools.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -855,5 +905,65 @@ mod tests {
 
         let parsed: SyncProgressData = serde_json::from_value(value).unwrap();
         assert_eq!(parsed.bulk_build, None);
+    }
+
+    #[test]
+    fn test_background_task_entry_bincode_roundtrip() {
+        let entry = BackgroundTaskEntry {
+            name: "dob_decode".to_string(),
+            state: BackgroundTaskState::Running,
+            message: Some("Processing batch 3".to_string()),
+            progress_current: Some(142),
+            progress_total: Some(1283),
+            rate: Some(12.3),
+            eta_seconds: Some(92.7),
+            started_at: Some(1711100000),
+            elapsed_ms: Some(83000.0),
+            error: None,
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: BackgroundTaskEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.name, "dob_decode");
+        assert_eq!(decoded.state, BackgroundTaskState::Running);
+        assert_eq!(decoded.progress_current, Some(142));
+        assert_eq!(decoded.progress_total, Some(1283));
+    }
+
+    #[test]
+    fn test_background_tasks_data_json_roundtrip() {
+        let data = BackgroundTasksData {
+            tasks: vec![BackgroundTaskEntry {
+                name: "cache_warmup".to_string(),
+                state: BackgroundTaskState::Completed,
+                message: None,
+                progress_current: None,
+                progress_total: None,
+                rate: None,
+                eta_seconds: None,
+                started_at: Some(1711100000),
+                elapsed_ms: Some(820.0),
+                error: None,
+            }],
+            updated_at: 1711100001,
+        };
+        let json = serde_json::to_string(&data).unwrap();
+        assert!(json.contains("\"progressCurrent\"")); // camelCase
+        let decoded: BackgroundTasksData = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.tasks.len(), 1);
+        assert_eq!(decoded.tasks[0].name, "cache_warmup");
+    }
+
+    #[test]
+    fn test_background_task_state_all_variants_serialize() {
+        for state in [
+            BackgroundTaskState::Waiting,
+            BackgroundTaskState::Running,
+            BackgroundTaskState::Completed,
+            BackgroundTaskState::Failed,
+        ] {
+            let bytes = bincode::serialize(&state).unwrap();
+            let decoded: BackgroundTaskState = bincode::deserialize(&bytes).unwrap();
+            assert_eq!(decoded, state);
+        }
     }
 }
