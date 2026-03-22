@@ -352,6 +352,25 @@ pub struct SporeMediaProfile {
     pub issues: Vec<String>,
 }
 
+/// Cached DOB decode result from CKB-VM execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DobDecodedEntry {
+    /// Flattened trait name->value pairs.
+    pub traits: Vec<DobDecodedTrait>,
+    /// SVG markup from DOB/1 rendering, if any.
+    pub svg_markup: Option<String>,
+    /// Media sources extracted from decoded trait values.
+    pub media_sources: Vec<SporeMediaSource>,
+    /// Epoch timestamp when this was decoded.
+    pub decoded_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DobDecodedTrait {
+    pub name: String,
+    pub value: String,
+}
+
 /// Object standard identifier.
 ///
 /// Object is the unified asset type on CKB covering Spore/DOB and mNFT.

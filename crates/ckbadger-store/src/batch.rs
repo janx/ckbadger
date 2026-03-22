@@ -918,6 +918,17 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_object_by_collection(), key, []);
     }
 
+    // ---- DOB decoded cache ----
+
+    pub fn put_dob_decoded(&mut self, spore_id: &[u8], entry: &crate::types::DobDecodedEntry) {
+        let value = bincode::serialize(entry).expect("serialize DobDecodedEntry");
+        self.put_cf(self.store.cf_dob_decoded(), spore_id, &value);
+    }
+
+    pub fn delete_dob_decoded(&mut self, spore_id: &[u8]) {
+        self.delete_cf(self.store.cf_dob_decoded(), spore_id);
+    }
+
     // ---- Identity ----
 
     pub fn put_identity(&mut self, id: &[u8], entry: &IdentityEntry) {

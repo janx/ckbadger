@@ -330,6 +330,7 @@ pub const CF_FIBER_CHANNELS: &str = "fiber_channels";
 pub const CF_FIBER_CHANNEL_BY_COMMITMENT: &str = "fiber_channel_by_commitment";
 pub const CF_FIBER_CHANNEL_BY_FUNDING_ARGS: &str = "fiber_channel_by_funding_args";
 pub const CF_ADDR_FIBER_CHANNELS: &str = "addr_fiber_channels";
+pub const CF_DOB_DECODED: &str = "dob_decoded";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CfWritePolicy {
@@ -363,7 +364,11 @@ const CF_WRITE_POLICY_SEALED_AGGREGATE: &[&str] = &[
     CF_STATS_OBJECT,
 ];
 
-const CF_WRITE_POLICY_BULK_DISABLED: &[&str] = &[CF_REORG_UNDO_LOG_BY_BLOCK, CF_PENDING_PROPOSALS];
+const CF_WRITE_POLICY_BULK_DISABLED: &[&str] = &[
+    CF_REORG_UNDO_LOG_BY_BLOCK,
+    CF_PENDING_PROPOSALS,
+    CF_DOB_DECODED,
+];
 
 const CF_WRITE_POLICY_FINAL_SNAPSHOT: &[&str] = &[
     CF_LIVE_CELLS,
@@ -492,6 +497,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_FIBER_CHANNEL_BY_COMMITMENT,
     CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
     CF_ADDR_FIBER_CHANNELS,
+    CF_DOB_DECODED,
 ];
 
 /// Column families intended for the domain mutable store.
@@ -550,6 +556,7 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_FIBER_CHANNEL_BY_COMMITMENT,
     CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
     CF_ADDR_FIBER_CHANNELS,
+    CF_DOB_DECODED,
 ];
 
 /// Column families for the append-only store (immutable, hash-keyed cell payloads).
@@ -1344,6 +1351,9 @@ impl CkbadgerStore {
     }
     pub fn cf_addr_fiber_channels(&self) -> &ColumnFamily {
         self.cf(CF_ADDR_FIBER_CHANNELS)
+    }
+    pub fn cf_dob_decoded(&self) -> &ColumnFamily {
+        self.cf(CF_DOB_DECODED)
     }
 
     // ---- Raw DB operations ----

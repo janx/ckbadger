@@ -9,6 +9,8 @@ use crate::batch::StoreBatch;
 
 pub(crate) type SporeBatchEntry = (Vec<u8>, Option<ObjectEntry>);
 pub(crate) type SporeOutpointLookup = (Vec<u8>, i16, Vec<u8>);
+/// `(spore_id, content_type, collection_id)` for undecoded DOB spores.
+pub type UndecodedDobEntry = (Vec<u8>, String, Option<Vec<u8>>);
 
 use crate::bytes_to_hex;
 
@@ -318,6 +320,69 @@ impl CkbadgerStore {
             results.push((date, delta));
         }
 
+        Ok(results)
+    }
+
+    // ---- DOB decoded cache ----
+
+    pub fn get_dob_decoded(
+        &self,
+        spore_id: &[u8],
+    ) -> anyhow::Result<Option<crate::types::DobDecodedEntry>> {
+        match self.get_cf(self.cf_dob_decoded(), spore_id)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// List spores with DOB content types that have not yet been decoded.
+    ///
+    /// Returns `(spore_id, content_type, collection_id)` tuples.
+    /// Uses keyset pagination via `after_key` for incremental scanning.
+    pub fn list_undecoded_dob_spores(
+        &self,
+        limit: usize,
+        after_key: Option<&[u8]>,
+    ) -> anyhow::Result<Vec<UndecodedDobEntry>> {
+        use crate::types::{ObjectEntry, ObjectExtra};
+
+        let mode = match after_key {
+            Some(key) => rocksdb::IteratorMode::From(key, rocksdb::Direction::Forward),
+            None => rocksdb::IteratorMode::Start,
+        };
+        let iter = self.iterator_cf(self.cf_spore_data(), mode);
+        let mut results = Vec::new();
+        let mut skip_first = after_key.is_some();
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate spore_data in list_undecoded_dob_spores: {}",
+                    e
+                )
+            })?;
+            if skip_first {
+                skip_first = false;
+                if after_key.is_some_and(|ak| ak == key.as_ref()) {
+                    continue;
+                }
+            }
+            let entry: ObjectEntry = bincode::deserialize(&value)?;
+            if let ObjectExtra::Spore { content_type, .. } = &entry.extra {
+                if content_type.to_ascii_lowercase().starts_with("dob/")
+                    && self.get_cf(self.cf_dob_decoded(), &key)?.is_none()
+                {
+                    results.push((
+                        key.to_vec(),
+                        content_type.clone(),
+                        entry.collection_id.clone(),
+                    ));
+                    if results.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
         Ok(results)
     }
 
