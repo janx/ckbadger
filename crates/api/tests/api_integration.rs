@@ -14,6 +14,7 @@ use ckbadger_api::routes::api_routes;
 use ckbadger_api::utils::address::compute_script_hash;
 use ckbadger_api::ws::WsManager;
 use ckbadger_api::{create_router, AppConfig, AppState, CleanupPathGuard};
+use ckbadger_common::BackgroundTaskState;
 use ckbadger_indexer::label_import::run_label_import_bundled;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
@@ -9519,4 +9520,56 @@ async fn test_asset_ecosystem_returns_expected_structure() {
         .map(|c| c["category"].as_str().unwrap())
         .collect();
     assert_eq!(categories, vec!["dao", "tokens", "objects", "other"]);
+}
+
+#[tokio::test]
+async fn test_network_stats_includes_api_background_tasks() {
+    let store = test_store();
+    let config = test_config(store);
+
+    // Build AppState manually so we can hold a reference to it.
+    let state = Arc::new(AppState {
+        store: config.store,
+        append_only_store: config.append_only_store,
+        ws_manager: Arc::new(WsManager::new()),
+        cache: CacheBackend::new(),
+        ckb_rpc_url: config.ckb_rpc_url,
+        ckb_network: config.ckb_network,
+        cycles_client: CyclesClient::disabled(),
+        ckb_store: None,
+        ckb_db_cleanup: config.ckb_db_cleanup,
+        mem_cache: InMemoryCache::new(),
+        asset_cache_warmup_error: Arc::new(std::sync::RwLock::new(None)),
+        background_tasks: Arc::new(std::sync::RwLock::new(Default::default())),
+    });
+
+    // Register a background task.
+    state.update_background_task("test_task", |entry| {
+        entry.state = BackgroundTaskState::Running;
+        entry.message = Some("Testing".to_string());
+    });
+
+    let app = axum::Router::new()
+        .nest("/api/v1", api_routes())
+        .with_state(state);
+
+    let request = Request::builder()
+        .uri("/api/v1/statistics/network")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // The apiBackgroundTasks field should be present with our registered task.
+    let tasks = json["apiBackgroundTasks"]
+        .as_array()
+        .expect("apiBackgroundTasks should be an array");
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0]["name"], "test_task");
+    assert_eq!(tasks[0]["state"], "Running");
+    assert_eq!(tasks[0]["message"], "Testing");
 }
