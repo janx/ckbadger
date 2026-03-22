@@ -21,7 +21,11 @@ use ckbadger_store::types::{
 };
 use ckbadger_store::CkbadgerStore;
 
-use crate::parser::media_source::{extract_uri_sources, resolve_tier, uri_seems_image};
+use crate::parser::media_source::{
+    extract_uri_sources, parse_dna_hex_from_content_text, resolve_tier, uri_seems_image,
+};
+use crate::parser::spore::SporeParser;
+use crate::rpc::{parse_hex_to_bytes, CkbRpcClient};
 
 const BATCH_SIZE: usize = 500;
 const MAX_MEDIA_SOURCES: usize = 24;
@@ -30,8 +34,7 @@ const MAX_MEDIA_SOURCES: usize = 24;
 pub struct DobDecodeWorker {
     /// Domain store — reads spore/cluster entries and writes decode results.
     store: Arc<CkbadgerStore>,
-    /// Append-only store — for reading cell payloads to extract DNA.
-    /// (Task 8 will implement actual DNA extraction from cell data.)
+    /// Append-only store — reserved for future cell payload access.
     #[allow(dead_code)]
     append_only_store: Arc<CkbadgerStore>,
     /// Disk cache for decoder RISC-V binaries.
@@ -187,9 +190,8 @@ impl DobDecodeWorker {
         let metadata: Value = serde_json::from_str(cluster_description)
             .context("cluster description is not valid JSON")?;
 
-        // Extract DNA from spore cell content.
-        // Task 8 will implement actual extraction from cell payload.
-        let _dna_hex = extract_dna_from_spore(spore_id, content_type, &self.append_only_store)?;
+        // Extract DNA hex from the spore cell's on-chain content.
+        let dna_hex = extract_dna_from_spore(spore_id, &self.store, &self.rpc_url).await?;
 
         // Parse decoder reference from cluster DOB metadata
         let dob_obj = metadata
@@ -208,12 +210,12 @@ impl DobDecodeWorker {
 
         // Execute decoder
         let decoded = match dob_version {
-            0 => ckbadger_dob_decoder::decode_dob0(&decoder_binary, &_dna_hex, &pattern_json)?,
+            0 => ckbadger_dob_decoder::decode_dob0(&decoder_binary, &dna_hex, &pattern_json)?,
             1 => {
                 // DOB/1 uses a chain of decoders; for now we support single-decoder DOB/1
                 let decoders: Vec<(&[u8], &str)> =
                     vec![(decoder_binary.as_slice(), pattern_json.as_str())];
-                ckbadger_dob_decoder::decode_dob1_chain(&decoders, &_dna_hex)?
+                ckbadger_dob_decoder::decode_dob1_chain(&decoders, &dna_hex)?
             }
             v => bail!("unsupported DOB version: {v}"),
         };
@@ -283,19 +285,77 @@ impl DobDecodeWorker {
     }
 }
 
-/// Placeholder for DNA extraction from spore cell payload.
+/// Extract DNA hex from a spore's on-chain cell content.
 ///
-/// Task 8 will implement actual extraction by reading the cell content
-/// from the append-only store and parsing the DNA hex.
-fn extract_dna_from_spore(
+/// 1. Look up the spore's outpoint (tx_hash, output_index) from the domain store.
+/// 2. Fetch the creation transaction via CKB RPC to obtain raw output data.
+/// 3. Parse the Spore molecule to extract the content field.
+/// 4. Decode the content as text and extract the DNA hex string.
+async fn extract_dna_from_spore(
     spore_id: &[u8],
-    _content_type: &str,
-    _append_only_store: &CkbadgerStore,
+    store: &CkbadgerStore,
+    rpc_url: &str,
 ) -> Result<String> {
-    bail!(
-        "extract_dna_from_spore not yet implemented (Task 8): spore_id=0x{}",
-        hex::encode(spore_id)
-    )
+    // Step 1: Find the spore's outpoint (most recent first).
+    let outpoints = store
+        .list_spore_outpoints_by_spore_id(spore_id)
+        .with_context(|| {
+            format!(
+                "failed to list outpoints for spore_id=0x{}",
+                hex::encode(spore_id)
+            )
+        })?;
+
+    let (tx_hash, output_index) = outpoints
+        .first()
+        .with_context(|| format!("no outpoint found for spore_id=0x{}", hex::encode(spore_id)))?;
+
+    // Step 2: Fetch the transaction from CKB node via RPC.
+    let tx_hash_hex = format!("0x{}", hex::encode(tx_hash));
+    let rpc = CkbRpcClient::new(rpc_url);
+    let tx_with_status = rpc
+        .get_transaction(&tx_hash_hex)
+        .await
+        .with_context(|| format!("RPC get_transaction failed for tx_hash={}", tx_hash_hex))?
+        .with_context(|| format!("transaction not found via RPC: tx_hash={}", tx_hash_hex))?;
+
+    let tx = tx_with_status.transaction.with_context(|| {
+        format!(
+            "transaction view missing in RPC response: tx_hash={}",
+            tx_hash_hex
+        )
+    })?;
+
+    // Step 3: Get the output data at the correct index.
+    let idx = *output_index as usize;
+    let output_data_hex = tx.outputs_data.get(idx).with_context(|| {
+        format!(
+            "output_index {} out of range (outputs_data len={}): tx_hash={}",
+            idx,
+            tx.outputs_data.len(),
+            tx_hash_hex
+        )
+    })?;
+
+    // Step 4: Parse the Spore molecule to extract content bytes.
+    let output_data = parse_hex_to_bytes(output_data_hex);
+    let content_bytes =
+        SporeParser::parse_spore_content_from_data(&output_data).with_context(|| {
+            format!(
+                "failed to parse Spore molecule content: spore_id=0x{}, tx_hash={}",
+                hex::encode(spore_id),
+                tx_hash_hex
+            )
+        })?;
+
+    // Step 5: Convert content to text and extract DNA hex.
+    let content_text = String::from_utf8_lossy(&content_bytes);
+    parse_dna_hex_from_content_text(&content_text).with_context(|| {
+        format!(
+            "failed to extract DNA hex from spore content: spore_id=0x{}",
+            hex::encode(spore_id)
+        )
+    })
 }
 
 /// Parse the DOB version from a content type string like "dob/0" or "dob/1".
@@ -661,18 +721,19 @@ mod tests {
         assert!(decode_hex_field("0xZZZZ").is_err());
     }
 
-    #[test]
-    fn test_extract_dna_from_spore_placeholder() {
-        let store = {
-            let dir = tempfile::tempdir().unwrap();
-            CkbadgerStore::open_test_unified(dir.path()).unwrap()
-        };
+    #[tokio::test]
+    async fn test_extract_dna_from_spore_no_outpoints() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let spore_id = [0x11u8; 32];
-        let result = extract_dna_from_spore(&spore_id, "dob/0", &store);
+        let result = extract_dna_from_spore(&spore_id, &store, "http://localhost:9999").await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("extract_dna_from_spore not yet implemented"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no outpoint found"),
+            "should fail when no outpoints exist for the spore"
+        );
     }
 }

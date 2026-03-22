@@ -415,7 +415,7 @@ fn clean_hex(raw: &str) -> Option<String> {
     Some(normalized)
 }
 
-fn parse_dna_hex_from_content_text(content_text: &str) -> Option<String> {
+pub(crate) fn parse_dna_hex_from_content_text(content_text: &str) -> Option<String> {
     let trimmed = content_text.trim();
     if trimmed.is_empty() {
         return None;

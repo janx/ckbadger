@@ -261,6 +261,14 @@ impl SporeParser {
         Self::parse_spore_data(data).and_then(|parsed| parsed.cluster_id)
     }
 
+    /// Extract the raw content bytes from a Spore molecule.
+    ///
+    /// Used by the DOB decode worker to obtain DNA from a spore cell's
+    /// output data without needing the full ParsedSporeCell context.
+    pub(crate) fn parse_spore_content_from_data(data: &[u8]) -> Option<Vec<u8>> {
+        Self::parse_spore_data(data).map(|parsed| parsed.content)
+    }
+
     fn parse_spore_data(data: &[u8]) -> Option<SporeData> {
         if data.len() < 16 {
             return None;
@@ -695,6 +703,20 @@ mod tests {
     fn test_parse_spore_data_too_short() {
         let data = [0u8; 8];
         let result = SporeParser::parse_spore_data(&data);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_spore_content_from_data_extracts_content() {
+        let content = b"{\"dna\":\"0xaabbccdd\"}";
+        let data = create_spore_data("dob/0", content, Some(&[0x11; 32]));
+        let extracted = SporeParser::parse_spore_content_from_data(&data).unwrap();
+        assert_eq!(extracted, content.to_vec());
+    }
+
+    #[test]
+    fn test_parse_spore_content_from_data_too_short() {
+        let result = SporeParser::parse_spore_content_from_data(&[0u8; 8]);
         assert!(result.is_none());
     }
 
