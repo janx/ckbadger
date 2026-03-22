@@ -430,12 +430,14 @@ impl Indexer {
         progress.start_refresher();
         let cell_cache = Arc::new(DashMap::with_capacity(CELL_CACHE_CAPACITY));
         let udt_cell_cache = Arc::new(DashMap::with_capacity(UDT_CELL_CACHE_CAPACITY));
-        let adaptive_batch_controller =
-            Arc::new(AdaptiveBatchController::new(config.pipeline_buffer as u64));
-
         let bulk_sync_allowed = is_fresh_sync_tip_state(tip_number, &tip_hash);
         let was_bulk =
             bulk_sync_allowed && progress.blocks_remaining() > config.bulk_sync_threshold;
+        let adaptive_batch_controller = Arc::new(if was_bulk {
+            AdaptiveBatchController::new_for_bulk(config.pipeline_buffer as u64)
+        } else {
+            AdaptiveBatchController::new(config.pipeline_buffer as u64)
+        });
         let hodl_tracker = match store.get_hodl_tracker_state()? {
             Some(state) => {
                 info!(
@@ -945,7 +947,7 @@ impl Indexer {
             target_batch_txs: snapshot.target_batch_txs,
             inflight_limit: snapshot.inflight_limit,
             min_target_batch_txs: snapshot.min_target_batch_txs,
-            cooldown_steps: snapshot.cooldown_steps,
+            cooldown_until_ms: snapshot.cooldown_until_ms,
             last_reason: decode_adaptive_batch_reason(snapshot.last_reason_code)
                 .map(str::to_string),
             adjustment_seq: snapshot.adjustment_seq,

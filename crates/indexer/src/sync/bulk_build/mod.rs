@@ -54,6 +54,7 @@ const BULK_BUILD_TARGET_ITERATION_MS: f64 = 1500.0;
 const BULK_BUILD_MS_PER_BLOCK_ALPHA: f64 = 0.5;
 const BULK_BUILD_INITIAL_MS_PER_BLOCK: f64 = 0.05;
 const BULK_BUILD_MAX_STEP_RATIO: f64 = 2.0;
+const BULK_BUILD_MAX_EFFECTIVE_TARGET_MS: f64 = 5000.0;
 const FLUSH_CHANNEL_DEPTH: usize = 4;
 
 #[derive(Default)]
@@ -457,6 +458,15 @@ impl BulkBuildEngine {
             let is_representative =
                 batch_count > 1 && actual_blocks >= (batch_block_span as f64 * 0.5);
 
+            let effective_target_ms = if prev_flush_ms > BULK_BUILD_TARGET_ITERATION_MS * 0.8 {
+                (prev_flush_ms * 1.5).clamp(
+                    BULK_BUILD_TARGET_ITERATION_MS,
+                    BULK_BUILD_MAX_EFFECTIVE_TARGET_MS,
+                )
+            } else {
+                BULK_BUILD_TARGET_ITERATION_MS
+            };
+
             if is_representative && actual_blocks > 0.0 && controllable_ms > 0.0 {
                 let sample = controllable_ms / actual_blocks;
                 ms_per_block_ema = ms_per_block_ema * (1.0 - BULK_BUILD_MS_PER_BLOCK_ALPHA)
@@ -473,14 +483,14 @@ impl BulkBuildEngine {
                     );
                 }
 
-                let desired_f64 = BULK_BUILD_TARGET_ITERATION_MS / ms_per_block_ema;
+                let desired_f64 = effective_target_ms / ms_per_block_ema;
                 if !desired_f64.is_finite() || desired_f64 < 0.0 {
                     bail!(
                         "bulk build adaptive sizing: desired blocks is invalid: \
-                         desired_f64={} ms_per_block_ema={} target_ms={}",
+                         desired_f64={} ms_per_block_ema={} effective_target_ms={}",
                         desired_f64,
                         ms_per_block_ema,
-                        BULK_BUILD_TARGET_ITERATION_MS
+                        effective_target_ms
                     );
                 }
                 let desired = desired_f64 as u64;
@@ -6506,5 +6516,43 @@ mod tests {
 
         // Epoch 5→6 boundary: 240 minutes
         assert_eq!(acc.epoch_time_dist.get(&240), Some(&1));
+    }
+
+    fn compute_effective_target_ms(prev_flush_ms: f64) -> f64 {
+        if prev_flush_ms > BULK_BUILD_TARGET_ITERATION_MS * 0.8 {
+            (prev_flush_ms * 1.5).clamp(
+                BULK_BUILD_TARGET_ITERATION_MS,
+                BULK_BUILD_MAX_EFFECTIVE_TARGET_MS,
+            )
+        } else {
+            BULK_BUILD_TARGET_ITERATION_MS
+        }
+    }
+
+    #[test]
+    fn test_effective_target_ms_stretch_on_flush_pressure() {
+        let result = compute_effective_target_ms(2000.0);
+        assert!(
+            (result - 3000.0).abs() < f64::EPSILON,
+            "should stretch to 1.5x flush time"
+        );
+    }
+
+    #[test]
+    fn test_effective_target_ms_caps_at_maximum() {
+        let result = compute_effective_target_ms(10_000.0);
+        assert!(
+            (result - BULK_BUILD_MAX_EFFECTIVE_TARGET_MS).abs() < f64::EPSILON,
+            "should cap at max"
+        );
+    }
+
+    #[test]
+    fn test_effective_target_ms_unchanged_when_flush_is_low() {
+        let result = compute_effective_target_ms(500.0);
+        assert!(
+            (result - BULK_BUILD_TARGET_ITERATION_MS).abs() < f64::EPSILON,
+            "should remain at default target"
+        );
     }
 }

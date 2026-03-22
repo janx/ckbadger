@@ -19,7 +19,7 @@ pub(crate) const ADAPTIVE_BATCH_TPB_EMA_ALPHA_PCT: u64 = 20; // 0.20
 pub(crate) const ADAPTIVE_BATCH_INITIAL_TPB_MILLI: u64 = 20_000; // 20.0 tx/block
 pub(crate) const ADAPTIVE_BATCH_INITIAL_INFLIGHT: u64 = 3;
 pub(crate) const ADAPTIVE_BATCH_WRITE_TARGET_MS: f64 = 2_500.0;
-pub(crate) const ADAPTIVE_BATCH_WRITE_LO_MS: f64 = 1_500.0;
+pub(crate) const ADAPTIVE_BATCH_WRITE_SAFETY_CEILING_MS: f64 = 30_000.0;
 pub(crate) const ADAPTIVE_BATCH_WRITE_HI_MS: f64 = 6_000.0;
 pub(crate) const ADAPTIVE_BATCH_WRITE_HEALTHY_US_PER_TX: f64 = 300.0;
 pub(crate) const ADAPTIVE_BATCH_WRITE_TARGET_US_PER_TX: f64 = 450.0;
@@ -32,10 +32,12 @@ pub(crate) const ADAPTIVE_BATCH_PARSE_SEVERE_MS: f64 = 4_000.0;
 pub(crate) const ADAPTIVE_BATCH_PRECOMPUTE_MODERATE_MS: f64 = 5_000.0;
 pub(crate) const ADAPTIVE_BATCH_PRECOMPUTE_SEVERE_MS: f64 = 12_000.0;
 pub(crate) const ADAPTIVE_BATCH_SEVERE_CONSECUTIVE_REQUIRED: u64 = 2;
-pub(crate) const ADAPTIVE_BATCH_SEVERE_COOLDOWN_STEPS: u64 = 2;
+pub(crate) const ADAPTIVE_BATCH_SEVERE_COOLDOWN_MS: i64 = 5_000;
 pub(crate) const ADAPTIVE_BATCH_TXPS_EMA_ALPHA_PCT: u64 = 20; // 0.20
 pub(crate) const ADAPTIVE_BATCH_TXPS_STEPUP_MIN_RETAIN_PCT: u64 = 98;
 pub(crate) const ADAPTIVE_BATCH_TXPS_BACKOFF_DROP_PCT: u64 = 95;
+pub(crate) const ADAPTIVE_BATCH_THROUGHPUT_PLATEAU_PCT: u64 = 102;
+pub(crate) const ADAPTIVE_BATCH_THROUGHPUT_PLATEAU_STREAK: u64 = 2;
 pub(crate) const ADAPTIVE_BATCH_PARSE_PRESSURE_PCT: f64 = 95.0;
 pub(crate) const ADAPTIVE_BATCH_WRITER_PRESSURE_PCT: f64 = 90.0;
 pub(crate) const ADAPTIVE_BATCH_PARSE_HEALTHY_PCT: f64 = 60.0;
@@ -74,7 +76,7 @@ pub(crate) struct AdaptiveBatchSnapshot {
     pub(crate) target_batch_txs: u64,
     pub(crate) inflight_limit: u64,
     pub(crate) min_target_batch_txs: u64,
-    pub(crate) cooldown_steps: u64,
+    pub(crate) cooldown_until_ms: i64,
     pub(crate) last_reason_code: u8,
     pub(crate) adjustment_seq: u64,
     pub(crate) backoff_streak: u64,
@@ -86,7 +88,7 @@ pub struct AdaptiveBatchProgressSnapshot {
     pub target_batch_txs: u64,
     pub inflight_limit: u64,
     pub min_target_batch_txs: u64,
-    pub cooldown_steps: u64,
+    pub cooldown_until_ms: i64,
     pub last_reason: Option<String>,
     pub adjustment_seq: u64,
     pub backoff_streak: u64,
@@ -139,12 +141,13 @@ pub(crate) struct AdaptiveBatchController {
     min_target_batch_txs: AtomicU64,
     tx_per_block_milli_ema: AtomicU64,
     tx_per_sec_milli_ema: AtomicU64,
-    cooldown_steps: AtomicU64,
+    cooldown_until_ms: AtomicI64,
     last_reason_code: AtomicU8,
     adjustment_seq: AtomicU64,
     backoff_streak: AtomicU64,
     severe_pressure_streak: AtomicU64,
     healthy_streak: AtomicU64,
+    throughput_plateau_streak: AtomicU64,
     last_adjusted_at: AtomicI64,
     max_inflight_limit: u64,
     early_height_boost_applied: AtomicBool,
@@ -152,20 +155,29 @@ pub(crate) struct AdaptiveBatchController {
 
 impl AdaptiveBatchController {
     pub(crate) fn new(max_inflight_limit: u64) -> Self {
+        Self::with_initial_inflight(max_inflight_limit, ADAPTIVE_BATCH_INITIAL_INFLIGHT)
+    }
+
+    pub(crate) fn new_for_bulk(max_inflight_limit: u64) -> Self {
+        Self::with_initial_inflight(max_inflight_limit, 6)
+    }
+
+    fn with_initial_inflight(max_inflight_limit: u64, initial: u64) -> Self {
         let max_inflight_limit = max_inflight_limit.max(1);
-        let initial_inflight = ADAPTIVE_BATCH_INITIAL_INFLIGHT.min(max_inflight_limit);
+        let initial_inflight = initial.min(max_inflight_limit);
         Self {
             target_batch_txs: AtomicU64::new(ADAPTIVE_BATCH_INITIAL_TXS),
             inflight_limit: AtomicU64::new(initial_inflight),
             min_target_batch_txs: AtomicU64::new(ADAPTIVE_BATCH_BASE_MIN_TXS),
             tx_per_block_milli_ema: AtomicU64::new(ADAPTIVE_BATCH_INITIAL_TPB_MILLI),
             tx_per_sec_milli_ema: AtomicU64::new(0),
-            cooldown_steps: AtomicU64::new(0),
+            cooldown_until_ms: AtomicI64::new(0),
             last_reason_code: AtomicU8::new(ADAPTIVE_REASON_UNKNOWN),
             adjustment_seq: AtomicU64::new(0),
             backoff_streak: AtomicU64::new(0),
             severe_pressure_streak: AtomicU64::new(0),
             healthy_streak: AtomicU64::new(0),
+            throughput_plateau_streak: AtomicU64::new(0),
             last_adjusted_at: AtomicI64::new(0),
             max_inflight_limit,
             early_height_boost_applied: AtomicBool::new(false),
@@ -178,7 +190,7 @@ impl AdaptiveBatchController {
             target_batch_txs: self.target_batch_txs.load(Ordering::Relaxed),
             inflight_limit: self.inflight_limit.load(Ordering::Relaxed),
             min_target_batch_txs: self.min_target_batch_txs.load(Ordering::Relaxed),
-            cooldown_steps: self.cooldown_steps.load(Ordering::Relaxed),
+            cooldown_until_ms: self.cooldown_until_ms.load(Ordering::Relaxed),
             last_reason_code: self.last_reason_code.load(Ordering::Relaxed),
             adjustment_seq: self.adjustment_seq.load(Ordering::Relaxed),
             backoff_streak: self.backoff_streak.load(Ordering::Relaxed),
@@ -414,9 +426,13 @@ impl AdaptiveBatchController {
         if severe_pressure {
             new_target_batch_txs = ((previous_target_batch_txs as f64) * 0.7).round() as u64;
             new_inflight_limit = previous_inflight_limit.saturating_sub(1).max(1);
-            self.cooldown_steps
-                .store(ADAPTIVE_BATCH_SEVERE_COOLDOWN_STEPS, Ordering::Relaxed);
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            self.cooldown_until_ms.store(
+                now_ms + ADAPTIVE_BATCH_SEVERE_COOLDOWN_MS,
+                Ordering::Relaxed,
+            );
             self.healthy_streak.store(0, Ordering::Relaxed);
+            self.throughput_plateau_streak.store(0, Ordering::Relaxed);
 
             let at_floor = previous_target_batch_txs <= previous_min_target_batch_txs;
             if at_floor && previous_inflight_limit <= 2 && high_unit_write_cost {
@@ -438,19 +454,20 @@ impl AdaptiveBatchController {
         } else if moderate_pressure {
             new_target_batch_txs = ((previous_target_batch_txs as f64) * 0.9).round() as u64;
             self.healthy_streak.store(0, Ordering::Relaxed);
+            self.throughput_plateau_streak.store(0, Ordering::Relaxed);
             reason = Some(if parser_moderate_pressure {
                 "parser_moderate_backoff"
             } else {
                 "moderate_backoff"
             });
         } else {
-            let cooldown = self.cooldown_steps.load(Ordering::Relaxed);
-            if cooldown > 0 {
-                self.cooldown_steps.fetch_sub(1, Ordering::Relaxed);
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let cooldown_until = self.cooldown_until_ms.load(Ordering::Relaxed);
+            if now_ms < cooldown_until {
                 self.healthy_streak.store(0, Ordering::Relaxed);
                 reason = None;
             } else {
-                let healthy = input.write_ms < ADAPTIVE_BATCH_WRITE_LO_MS
+                let healthy = input.write_ms < ADAPTIVE_BATCH_WRITE_SAFETY_CEILING_MS
                     && write_us_per_tx
                         .is_some_and(|us| us < ADAPTIVE_BATCH_WRITE_HEALTHY_US_PER_TX)
                     && input
@@ -465,8 +482,27 @@ impl AdaptiveBatchController {
                     && !rocksdb_moderate_pressure;
                 if healthy && throughput_not_worse {
                     let healthy_streak = self.healthy_streak.fetch_add(1, Ordering::Relaxed) + 1;
+                    // Plateau detection: check if throughput EMA improved by >=2%.
+                    // If not for consecutive healthy steps, skip growth.
+                    let throughput_improved = txps_ema.is_some_and(|(old, new)| {
+                        old == 0
+                            || new.saturating_mul(100)
+                                >= old.saturating_mul(ADAPTIVE_BATCH_THROUGHPUT_PLATEAU_PCT)
+                    });
+                    let plateau_streak = if throughput_improved {
+                        self.throughput_plateau_streak.store(0, Ordering::Relaxed);
+                        0
+                    } else {
+                        self.throughput_plateau_streak
+                            .fetch_add(1, Ordering::Relaxed)
+                            + 1
+                    };
+                    let at_plateau = plateau_streak >= ADAPTIVE_BATCH_THROUGHPUT_PLATEAU_STREAK;
+
                     if previous_inflight_limit < self.max_inflight_limit {
                         new_inflight_limit = previous_inflight_limit + 1;
+                    } else if at_plateau {
+                        // Throughput has plateaued — skip batch size growth
                     } else {
                         let mut growth_pct = ADAPTIVE_BATCH_HEALTHY_STEP_UP_PCT;
                         if healthy_streak >= ADAPTIVE_BATCH_HEALTHY_BONUS_STREAK
@@ -786,7 +822,7 @@ mod tests {
         let controller = AdaptiveBatchController::new(8);
         let adjustment = controller
             .update_after_write(AdaptiveBatchInput {
-                write_ms: ADAPTIVE_BATCH_WRITE_LO_MS - 100.0,
+                write_ms: 1400.0,
                 commit_ms: 0.0,
                 batch_tx_count: 10_000,
                 blocks_remaining: 0,
@@ -824,7 +860,7 @@ mod tests {
 
         let adjustment = controller
             .update_after_write(AdaptiveBatchInput {
-                write_ms: ADAPTIVE_BATCH_WRITE_LO_MS - 100.0,
+                write_ms: 1400.0,
                 commit_ms: 0.0,
                 batch_tx_count: 5_000,
                 blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 1,
@@ -1316,7 +1352,7 @@ mod tests {
         let snapshot_after_pressure = controller.snapshot();
 
         let no_adjustment = controller.update_after_write(AdaptiveBatchInput {
-            write_ms: ADAPTIVE_BATCH_WRITE_LO_MS - 100.0,
+            write_ms: 1400.0,
             commit_ms: 0.0,
             batch_tx_count: 10_000,
             blocks_remaining: 0,
@@ -1710,6 +1746,112 @@ mod tests {
         assert!(
             adjustment.new_inflight_limit < adjustment.previous_inflight_limit,
             "parser-heavy severe backoff should reduce inflight immediately"
+        );
+    }
+
+    #[test]
+    fn test_throughput_plateau_stops_growth() {
+        let controller = AdaptiveBatchController::new(8);
+        // Fill inflight so we test target growth path
+        controller.inflight_limit.store(8, Ordering::Relaxed);
+
+        // Seed the throughput EMA with a baseline
+        controller.observe_tx_throughput(10_000, 1000.0);
+
+        let healthy_input = |batch_tx_count: usize| AdaptiveBatchInput {
+            write_ms: 1000.0,
+            commit_ms: 100.0,
+            batch_tx_count,
+            blocks_remaining: 0,
+            parse_ms: None,
+            precompute_ms: None,
+            parse_queue_fill_pct: Some(10.0),
+            writer_queue_fill_pct: Some(10.0),
+            memory_ratio_pct: Some(10.0),
+            l0_files_max: None,
+            compaction_pending_bytes: None,
+            immutable_memtables: None,
+            severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+            moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+            severe_imm_threshold: 60,
+            moderate_imm_threshold: 30,
+            is_bulk_sync: false,
+        };
+
+        // First healthy step: throughput baseline, streak=1 (no plateau yet)
+        let first = controller.update_after_write(healthy_input(10_000));
+        assert!(first.is_some(), "first healthy should step up");
+        let target_after_first = controller.snapshot().target_batch_txs;
+
+        // Second healthy step: same throughput (no improvement), streak=2 → plateau
+        let second = controller.update_after_write(healthy_input(10_000));
+        // At plateau, growth should be skipped
+        let target_after_second = controller.snapshot().target_batch_txs;
+        assert_eq!(
+            target_after_second, target_after_first,
+            "plateau detection should prevent target growth when throughput is flat"
+        );
+        // But it should still register as some kind of no-op or reason=None
+        assert!(second.is_none(), "no adjustment when at plateau");
+    }
+
+    #[test]
+    fn test_throughput_improvement_resets_plateau_streak() {
+        let controller = AdaptiveBatchController::new(8);
+        controller.inflight_limit.store(8, Ordering::Relaxed);
+
+        // Low baseline: 5K tx/s
+        controller.observe_tx_throughput(5_000, 1000.0);
+
+        let healthy_input = |batch_tx_count: usize, write_ms: f64| AdaptiveBatchInput {
+            write_ms,
+            commit_ms: 100.0,
+            batch_tx_count,
+            blocks_remaining: 0,
+            parse_ms: None,
+            precompute_ms: None,
+            parse_queue_fill_pct: Some(10.0),
+            writer_queue_fill_pct: Some(10.0),
+            memory_ratio_pct: Some(10.0),
+            l0_files_max: None,
+            compaction_pending_bytes: None,
+            immutable_memtables: None,
+            severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+            moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+            severe_imm_threshold: 60,
+            moderate_imm_threshold: 30,
+            is_bulk_sync: false,
+        };
+
+        // First: flat throughput → streak=1
+        let _ = controller.update_after_write(healthy_input(5_000, 1000.0));
+        // Now deliver a big throughput improvement to reset streak
+        let big_improvement = controller.update_after_write(healthy_input(20_000, 1000.0));
+        assert!(
+            big_improvement.is_some(),
+            "big throughput improvement should allow growth"
+        );
+        assert_eq!(
+            big_improvement.unwrap().reason,
+            "healthy_step_up",
+            "growth should proceed after throughput improvement resets plateau"
+        );
+    }
+
+    #[test]
+    fn test_new_for_bulk_has_higher_initial_inflight() {
+        let controller = AdaptiveBatchController::new_for_bulk(16);
+        let snapshot = controller.snapshot();
+        assert_eq!(snapshot.inflight_limit, 6);
+    }
+
+    #[test]
+    fn test_new_for_bulk_respects_max_limit() {
+        let controller = AdaptiveBatchController::new_for_bulk(4);
+        let snapshot = controller.snapshot();
+        assert_eq!(
+            snapshot.inflight_limit, 4,
+            "initial inflight should not exceed max"
         );
     }
 }
