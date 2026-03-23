@@ -709,6 +709,40 @@ disabled = true
     }
 
     #[test]
+    fn test_run_label_import_bundled_imports_utxoswap_proxy_lock() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        super::run_label_import_bundled(&store, "mainnet").unwrap();
+
+        let code_hash =
+            hex::decode("393df3359e33f85010cd65a3c4a4268f72d95ec6b049781a916c680b31ea9a88")
+                .unwrap();
+        let script_info = store
+            .get_script_info(&code_hash)
+            .unwrap()
+            .expect("UTXOSwap proxy lock should be imported");
+        assert_eq!(script_info.name.as_deref(), Some("UTXOSwap Proxy Lock"));
+        assert_eq!(
+            script_info.description.as_deref(),
+            Some("Proxy lock used in UTXOSwap flows to bind xUDT owner hashes.")
+        );
+
+        let version_hash =
+            hex::decode("93a96b70d7abf2ab94abe2b1468192ee85286061699286d80c90c08a0eb96487")
+                .unwrap();
+        let version_info = store
+            .get_script_version(&version_hash)
+            .unwrap()
+            .expect("UTXOSwap proxy lock version should be imported");
+        assert_eq!(version_info.name.as_deref(), Some("UTXOSwap Proxy Lock"));
+        assert_eq!(
+            version_info.associated_code_hash.as_deref(),
+            Some(code_hash.as_slice())
+        );
+    }
+
+    #[test]
     fn test_run_label_import_bundled_imports_legacy_godwoken_custodian_lock() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();

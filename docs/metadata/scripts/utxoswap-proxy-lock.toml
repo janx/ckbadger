@@ -1,0 +1,7 @@
+name = "UTXOSwap Proxy Lock"
+description = "Proxy lock used in UTXOSwap flows to bind xUDT owner hashes."
+
+[[mainnet]]
+code_hash = "0x393df3359e33f85010cd65a3c4a4268f72d95ec6b049781a916c680b31ea9a88"
+data_hash = "0x93a96b70d7abf2ab94abe2b1468192ee85286061699286d80c90c08a0eb96487"
+hash_type = "type"
