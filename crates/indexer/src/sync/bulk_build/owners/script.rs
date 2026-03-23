@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::keys;
 use ckbadger_store::{
-    CkbadgerStore, ScriptDailyDelta, ScriptInfo, CF_SCRIPT_INFO, CF_STATS_SCRIPT,
+    CkbadgerStore, ScriptDailyDelta, ScriptInfo, ScriptReferenceInfo, CF_SCRIPT_INFO,
+    CF_SCRIPT_REFERENCE_INFO, CF_STATS_SCRIPT,
 };
 use rustc_hash::FxHashMap;
 
@@ -18,6 +19,7 @@ use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 #[derive(Debug, Default)]
 pub(crate) struct ScriptOwner {
     infos: FxHashMap<Vec<u8>, ScriptInfo>,
+    reference_infos: FxHashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     daily_deltas: FxHashMap<(Vec<u8>, bool, u32), ScriptDailyDelta>,
 }
 
@@ -31,7 +33,14 @@ impl ScriptOwner {
         crate::sync::bulk_build::accounting::hash_map_bytes(&self.infos, |code_hash, info| {
             crate::sync::bulk_build::accounting::bytes_vec_bytes(code_hash)
                 + crate::sync::bulk_build::accounting::serialized_bytes(info)
-        }) + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.daily_deltas)
+        }) + crate::sync::bulk_build::accounting::hash_map_bytes(
+            &self.reference_infos,
+            |(reference_hash, _hash_type), info| {
+                crate::sync::bulk_build::accounting::bytes_vec_bytes(reference_hash)
+                    + std::mem::size_of::<u8>() as u64
+                    + crate::sync::bulk_build::accounting::serialized_bytes(info)
+            },
+        ) + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.daily_deltas)
     }
 
     fn record_daily_delta(
@@ -74,12 +83,16 @@ impl ScriptOwner {
 impl BulkReducer for ScriptOwner {
     fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
         let mut deltas: FxHashMap<Vec<u8>, ScriptDelta> = FxHashMap::default();
+        let mut reference_deltas: FxHashMap<(Vec<u8>, u8), ScriptReferenceDelta> =
+            FxHashMap::default();
 
         for input in &tx.resolved_inputs {
             apply_input_deltas(input, ctx, &mut deltas, tx)?;
+            apply_input_reference_deltas(input, ctx, &mut reference_deltas, tx)?;
         }
         for cell in tx.cells.iter() {
             apply_output_deltas(cell, ctx, &mut deltas, tx)?;
+            apply_output_reference_deltas(cell, ctx, &mut reference_deltas, tx)?;
         }
 
         let date_yyyymmdd = keys::timestamp_ms_to_date(tx.timestamp_ms);
@@ -143,6 +156,18 @@ impl BulkReducer for ScriptOwner {
                 delta.type_owned_knowledge_delta,
                 tx,
             )?;
+        }
+
+        for ((reference_hash, hash_type), delta) in reference_deltas {
+            let info = self
+                .reference_infos
+                .entry((reference_hash.clone(), hash_type))
+                .or_insert_with(|| ScriptReferenceInfo {
+                    reference_hash: reference_hash.clone(),
+                    hash_type,
+                    ..Default::default()
+                });
+            apply_reference_delta(info, &reference_hash, hash_type, &delta, tx)?;
         }
 
         Ok(())
@@ -218,7 +243,26 @@ impl BulkReducer for ScriptOwner {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        materializer.materialize_final_snapshot(&rows)
+        materializer.materialize_final_snapshot(&rows)?;
+
+        let mut reference_keys: Vec<&(Vec<u8>, u8)> = self.reference_infos.keys().collect();
+        reference_keys.sort();
+        let reference_rows = reference_keys
+            .into_iter()
+            .map(|(reference_hash, hash_type)| {
+                let info = self
+                    .reference_infos
+                    .get(&(reference_hash.clone(), *hash_type))
+                    .expect("sorted script reference key must exist in script owner");
+                Ok(MaterializedRow::new(
+                    CF_SCRIPT_REFERENCE_INFO,
+                    keys::encode_script_reference_key(*hash_type, reference_hash).to_vec(),
+                    bincode::serialize(info)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        materializer.materialize_final_snapshot(&reference_rows)
     }
 }
 
@@ -237,6 +281,34 @@ struct ScriptDelta {
     type_owned_capacity_delta: i128,
     type_used_capacity_delta: i128,
     type_owned_knowledge_delta: i128,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ScriptReferenceDelta {
+    cells_delta: i64,
+    live_cells_delta: i64,
+    owned_capacity_delta: i128,
+    owned_knowledge_delta: i128,
+}
+
+fn parse_hash_type_u8(
+    hash_type: i16,
+    script_kind: &str,
+    tx: &ResolvedTxFacts<'_>,
+    code_hash_id: crate::sync::types::InternId,
+) -> Result<u8> {
+    match hash_type {
+        0 | 1 | 2 | 4 => Ok(hash_type as u8),
+        _ => Err(anyhow!(
+            "invalid {} script hash_type: code_hash_id={}, hash_type={}, block={}, tx=0x{}, tx_index={}, expected_one_of=[0,1,2,4]",
+            script_kind,
+            code_hash_id.as_usize(),
+            hash_type,
+            tx.block_number,
+            hex::encode(tx.tx_hash),
+            tx.tx_index
+        )),
+    }
 }
 
 fn apply_input_deltas(
@@ -272,6 +344,46 @@ fn apply_input_deltas(
         type_delta.type_live_cells_delta -= 1;
         type_delta.type_owned_capacity_delta -= i128::from(input.capacity);
         type_delta.type_owned_knowledge_delta -= i128::from(input.occupied_capacity);
+    }
+
+    Ok(())
+}
+
+fn apply_input_reference_deltas(
+    input: &ResolvedInputFacts,
+    ctx: &ReducerContext<'_>,
+    deltas: &mut FxHashMap<(Vec<u8>, u8), ScriptReferenceDelta>,
+    tx: &ResolvedTxFacts<'_>,
+) -> Result<()> {
+    let lock_hash_type =
+        parse_hash_type_u8(input.lock_hash_type, "lock", tx, input.lock_code_hash_id)?;
+    let lock_reference_hash = ctx.resolve_identity(input.lock_code_hash_id).to_vec();
+    let lock_delta = deltas
+        .entry((lock_reference_hash.clone(), lock_hash_type))
+        .or_default();
+    lock_delta.live_cells_delta -= 1;
+    lock_delta.owned_capacity_delta -= i128::from(input.capacity);
+    lock_delta.owned_knowledge_delta -= i128::from(input.occupied_capacity);
+
+    if let Some(type_code_hash_id) = input.type_code_hash_id {
+        let type_hash_type = input.type_hash_type.ok_or_else(|| {
+            anyhow!(
+                "missing type hash_type for resolved typed input: block={}, tx=0x{}, tx_index={}, outpoint=0x{}:{}",
+                tx.block_number,
+                hex::encode(tx.tx_hash),
+                tx.tx_index,
+                hex::encode(input.outpoint.tx_hash),
+                input.outpoint.index
+            )
+        })?;
+        let type_hash_type = parse_hash_type_u8(type_hash_type, "type", tx, type_code_hash_id)?;
+        let type_reference_hash = ctx.resolve_identity(type_code_hash_id).to_vec();
+        let type_delta = deltas
+            .entry((type_reference_hash.clone(), type_hash_type))
+            .or_default();
+        type_delta.live_cells_delta -= 1;
+        type_delta.owned_capacity_delta -= i128::from(input.capacity);
+        type_delta.owned_knowledge_delta -= i128::from(input.occupied_capacity);
     }
 
     Ok(())
@@ -321,6 +433,48 @@ fn apply_output_deltas(
         type_delta.type_owned_capacity_delta += i128::from(cell.capacity);
         type_delta.type_used_capacity_delta += i128::from(cell.occupied_capacity);
         type_delta.type_owned_knowledge_delta += i128::from(cell.occupied_capacity);
+    }
+
+    Ok(())
+}
+
+fn apply_output_reference_deltas(
+    cell: &CellFacts,
+    ctx: &ReducerContext<'_>,
+    deltas: &mut FxHashMap<(Vec<u8>, u8), ScriptReferenceDelta>,
+    tx: &ResolvedTxFacts<'_>,
+) -> Result<()> {
+    let lock_hash_type =
+        parse_hash_type_u8(cell.lock_hash_type, "lock", tx, cell.lock_code_hash_id)?;
+    let lock_reference_hash = ctx.resolve_identity(cell.lock_code_hash_id).to_vec();
+    let lock_delta = deltas
+        .entry((lock_reference_hash.clone(), lock_hash_type))
+        .or_default();
+    lock_delta.cells_delta += 1;
+    lock_delta.live_cells_delta += 1;
+    lock_delta.owned_capacity_delta += i128::from(cell.capacity);
+    lock_delta.owned_knowledge_delta += i128::from(cell.occupied_capacity);
+
+    if let Some(type_code_hash_id) = cell.type_code_hash_id {
+        let type_hash_type = cell.type_hash_type.ok_or_else(|| {
+            anyhow!(
+                "missing type hash_type for typed output: block={}, tx=0x{}, tx_index={}, outpoint=0x{}:{}",
+                tx.block_number,
+                hex::encode(tx.tx_hash),
+                tx.tx_index,
+                hex::encode(cell.outpoint.tx_hash),
+                cell.outpoint.index
+            )
+        })?;
+        let type_hash_type = parse_hash_type_u8(type_hash_type, "type", tx, type_code_hash_id)?;
+        let type_reference_hash = ctx.resolve_identity(type_code_hash_id).to_vec();
+        let type_delta = deltas
+            .entry((type_reference_hash.clone(), type_hash_type))
+            .or_default();
+        type_delta.cells_delta += 1;
+        type_delta.live_cells_delta += 1;
+        type_delta.owned_capacity_delta += i128::from(cell.capacity);
+        type_delta.owned_knowledge_delta += i128::from(cell.occupied_capacity);
     }
 
     Ok(())
@@ -395,6 +549,59 @@ fn apply_lock_delta(
             hex::encode(code_hash),
             info.lock_owned_knowledge_sum,
             info.lock_owned_capacity_sum
+        );
+    }
+
+    Ok(())
+}
+
+fn apply_reference_delta(
+    info: &mut ScriptReferenceInfo,
+    reference_hash: &[u8],
+    hash_type: u8,
+    delta: &ScriptReferenceDelta,
+    tx: &ResolvedTxFacts<'_>,
+) -> Result<()> {
+    info.cells_count = checked_next_reference_i64(
+        reference_hash,
+        hash_type,
+        "cells_count",
+        info.cells_count,
+        delta.cells_delta,
+        tx,
+    )?;
+    info.live_cells_count = checked_next_reference_i64(
+        reference_hash,
+        hash_type,
+        "live_cells_count",
+        info.live_cells_count,
+        delta.live_cells_delta,
+        tx,
+    )?;
+    info.owned_capacity_sum = checked_next_reference_i128(
+        reference_hash,
+        hash_type,
+        "owned_capacity_sum",
+        info.owned_capacity_sum,
+        delta.owned_capacity_delta,
+        tx,
+    )?;
+    info.owned_knowledge_sum = checked_next_reference_i128(
+        reference_hash,
+        hash_type,
+        "owned_knowledge_sum",
+        info.owned_knowledge_sum,
+        delta.owned_knowledge_delta,
+        tx,
+    )?;
+
+    if info.owned_knowledge_sum > info.owned_capacity_sum {
+        bail!(
+            "script reference owned knowledge exceeds owned capacity: reference_hash=0x{}, hash_type={}, owned_knowledge_sum={}, owned_capacity_sum={}",
+            hex::encode(reference_hash),
+            hash_type,
+            info.owned_knowledge_sum,
+            info.owned_capacity_sum
         );
     }
 
@@ -483,17 +690,7 @@ fn set_or_confirm_hash_type(
     tx: &ResolvedTxFacts<'_>,
     code_hash_id: crate::sync::types::InternId,
 ) -> Result<()> {
-    let next_hash_type = u8::try_from(hash_type).map_err(|_| {
-        anyhow!(
-            "invalid {} script hash_type: code_hash_id={}, hash_type={}, block={}, tx=0x{}, tx_index={}",
-            script_kind,
-            code_hash_id.as_usize(),
-            hash_type,
-            tx.block_number,
-            hex::encode(tx.tx_hash),
-            tx.tx_index
-        )
-    })?;
+    let next_hash_type = parse_hash_type_u8(hash_type, script_kind, tx, code_hash_id)?;
 
     if delta == &ScriptDelta::default() {
         delta.hash_type = next_hash_type;
@@ -508,6 +705,82 @@ fn set_or_confirm_hash_type(
     }
 
     Ok(())
+}
+
+fn checked_next_reference_i64(
+    reference_hash: &[u8],
+    hash_type: u8,
+    metric: &str,
+    current: i64,
+    delta: i64,
+    tx: &ResolvedTxFacts<'_>,
+) -> Result<i64> {
+    let next = current.checked_add(delta).ok_or_else(|| {
+        anyhow!(
+            "script reference {} overflow: reference_hash=0x{}, hash_type={}, current={}, delta={}, block={}, tx=0x{}, tx_index={}",
+            metric,
+            hex::encode(reference_hash),
+            hash_type,
+            current,
+            delta,
+            tx.block_number,
+            hex::encode(tx.tx_hash),
+            tx.tx_index
+        )
+    })?;
+    if next < 0 {
+        bail!(
+            "script reference {} underflow: reference_hash=0x{}, hash_type={}, current={}, delta={}, next={}, block={}, tx=0x{}, tx_index={}",
+            metric,
+            hex::encode(reference_hash),
+            hash_type,
+            current,
+            delta,
+            next,
+            tx.block_number,
+            hex::encode(tx.tx_hash),
+            tx.tx_index
+        );
+    }
+    Ok(next)
+}
+
+fn checked_next_reference_i128(
+    reference_hash: &[u8],
+    hash_type: u8,
+    metric: &str,
+    current: i128,
+    delta: i128,
+    tx: &ResolvedTxFacts<'_>,
+) -> Result<i128> {
+    let next = current.checked_add(delta).ok_or_else(|| {
+        anyhow!(
+            "script reference {} overflow: reference_hash=0x{}, hash_type={}, current={}, delta={}, block={}, tx=0x{}, tx_index={}",
+            metric,
+            hex::encode(reference_hash),
+            hash_type,
+            current,
+            delta,
+            tx.block_number,
+            hex::encode(tx.tx_hash),
+            tx.tx_index
+        )
+    })?;
+    if next < 0 {
+        bail!(
+            "script reference {} underflow: reference_hash=0x{}, hash_type={}, current={}, delta={}, next={}, block={}, tx=0x{}, tx_index={}",
+            metric,
+            hex::encode(reference_hash),
+            hash_type,
+            current,
+            delta,
+            next,
+            tx.block_number,
+            hex::encode(tx.tx_hash),
+            tx.tx_index
+        );
+    }
+    Ok(next)
 }
 
 fn checked_next_i64(
@@ -652,6 +925,7 @@ mod tests {
     use super::*;
     use crate::sync::bulk_build::facts::{CellFacts, OutPointKey, ResolvedInputFacts};
     use crate::sync::types::InternId;
+    use ckbadger_store::ScriptReferenceInfo;
 
     #[test]
     fn script_owner_reduces_lock_and_type_live_usage() {
@@ -860,5 +1134,140 @@ mod tests {
         );
         assert_eq!(updated.lock_cells_count, 1);
         assert_eq!(updated.lock_live_cells_count, 1);
+    }
+
+    #[test]
+    fn parse_hash_type_u8_rejects_unsupported_value() {
+        let tx = ResolvedTxFacts {
+            tx_hash: [0x31; 32],
+            block_number: 100,
+            block_hash: [0x02; 32],
+            timestamp_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index: 0,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: Vec::new().into(),
+        };
+
+        let err = parse_hash_type_u8(3, "lock", &tx, InternId::new(0)).unwrap_err();
+        assert!(err.to_string().contains("expected_one_of=[0,1,2,4]"));
+    }
+
+    #[test]
+    fn script_owner_materialize_final_persists_distinct_reference_hash_types() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain_path = dir.path().join("domain");
+        let append_path = dir.path().join("append-only");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+
+        let domain_store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
+
+        let reference_hash = vec![0x55; 32];
+        let interner = IdentityInterner::default();
+        interner.intern_bytes(vec![0xaa; 32]);
+        let code_hash_id = interner.intern_bytes(reference_hash.clone());
+        interner.intern_bytes(vec![0xab; 20]);
+        interner.intern_bytes(vec![0xbb; 32]);
+        interner.intern_bytes(vec![0xac; 20]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        let tx = ResolvedTxFacts {
+            tx_hash: [0x41; 32],
+            block_number: 200,
+            block_hash: [0x09; 32],
+            timestamp_ms: 1_700_000_100_000,
+            block_dao_ar: 1,
+            tx_index: 0,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![
+                CellFacts {
+                    outpoint: OutPointKey::new([0x41; 32], 0),
+                    created_at_block: 200,
+                    created_by_block_dao_ar: 1,
+                    capacity: 100_00000000,
+                    lock_script_hash_id: InternId::new(0),
+                    lock_code_hash_id: code_hash_id,
+                    lock_hash_type: 0,
+                    lock_args_id: InternId::new(2),
+                    type_script_hash_id: None,
+                    type_code_hash_id: None,
+                    type_hash_type: None,
+                    type_args_id: None,
+                    occupied_capacity: 61_00000000,
+                    data_size: 0,
+                    data: Vec::new(),
+                    data_hash: None,
+                    udt_amount: None,
+                    semantic_tag: crate::sync::CellSemanticTag::Plain,
+                    dao_state: None,
+                    protocol_facts: None,
+                },
+                CellFacts {
+                    outpoint: OutPointKey::new([0x41; 32], 1),
+                    created_at_block: 200,
+                    created_by_block_dao_ar: 1,
+                    capacity: 150_00000000,
+                    lock_script_hash_id: InternId::new(3),
+                    lock_code_hash_id: code_hash_id,
+                    lock_hash_type: 1,
+                    lock_args_id: InternId::new(4),
+                    type_script_hash_id: None,
+                    type_code_hash_id: None,
+                    type_hash_type: None,
+                    type_args_id: None,
+                    occupied_capacity: 71_00000000,
+                    data_size: 0,
+                    data: Vec::new(),
+                    data_hash: None,
+                    udt_amount: None,
+                    semantic_tag: crate::sync::CellSemanticTag::Plain,
+                    dao_state: None,
+                    protocol_facts: None,
+                },
+            ]
+            .into(),
+        };
+
+        let mut owner = ScriptOwner::default();
+        owner.apply_tx(&tx, &ctx).unwrap();
+
+        let mut materializer = Materializer::new(&domain_store, &append_store);
+        owner.materialize_final(&mut materializer).unwrap();
+        let _ = materializer.finish();
+
+        let data_hash_info = domain_store
+            .get_script_reference_info(0, &reference_hash)
+            .unwrap();
+        assert_eq!(
+            data_hash_info,
+            Some(ScriptReferenceInfo {
+                reference_hash: reference_hash.clone(),
+                hash_type: 0,
+                live_cells_count: 1,
+                cells_count: 1,
+                owned_capacity_sum: 100_00000000,
+                owned_knowledge_sum: 61_00000000,
+            })
+        );
+
+        let type_hash_info = domain_store
+            .get_script_reference_info(1, &reference_hash)
+            .unwrap();
+        assert_eq!(
+            type_hash_info,
+            Some(ScriptReferenceInfo {
+                reference_hash: reference_hash.clone(),
+                hash_type: 1,
+                live_cells_count: 1,
+                cells_count: 1,
+                owned_capacity_sum: 150_00000000,
+                owned_knowledge_sum: 71_00000000,
+            })
+        );
     }
 }

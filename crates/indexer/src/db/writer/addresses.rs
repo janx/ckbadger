@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::types::{AddressBalance, ScriptDailyDelta};
+use ckbadger_store::types::{AddressBalance, ScriptDailyDelta, ScriptReferenceInfo};
 
 use super::BatchWriter;
 
@@ -61,6 +61,68 @@ fn checked_next_script_metric_i128(
             script_kind,
             metric,
             hex::encode(code_hash),
+            current,
+            delta,
+            next
+        );
+    }
+    Ok(next)
+}
+
+fn checked_next_script_reference_metric_i64(
+    reference_hash: &[u8],
+    hash_type: u8,
+    metric: &str,
+    current: i64,
+    delta: i64,
+) -> Result<i64> {
+    let next = current.checked_add(delta).ok_or_else(|| {
+        anyhow::anyhow!(
+            "script reference {} overflow: reference_hash=0x{}, hash_type={}, current={}, delta={}",
+            metric,
+            hex::encode(reference_hash),
+            hash_type,
+            current,
+            delta
+        )
+    })?;
+    if next < 0 {
+        bail!(
+            "script reference {} underflow: reference_hash=0x{}, hash_type={}, current={}, delta={}, next={}",
+            metric,
+            hex::encode(reference_hash),
+            hash_type,
+            current,
+            delta,
+            next
+        );
+    }
+    Ok(next)
+}
+
+fn checked_next_script_reference_metric_i128(
+    reference_hash: &[u8],
+    hash_type: u8,
+    metric: &str,
+    current: i128,
+    delta: i128,
+) -> Result<i128> {
+    let next = current.checked_add(delta).ok_or_else(|| {
+        anyhow::anyhow!(
+            "script reference {} overflow: reference_hash=0x{}, hash_type={}, current={}, delta={}",
+            metric,
+            hex::encode(reference_hash),
+            hash_type,
+            current,
+            delta
+        )
+    })?;
+    if next < 0 {
+        bail!(
+            "script reference {} underflow: reference_hash=0x{}, hash_type={}, current={}, delta={}, next={}",
+            metric,
+            hex::encode(reference_hash),
+            hash_type,
             current,
             delta,
             next
@@ -473,6 +535,155 @@ impl BatchWriter {
         Ok(())
     }
 
+    pub fn read_script_reference_info(
+        &self,
+        references: &[(Vec<u8>, u8)],
+    ) -> Result<HashMap<(Vec<u8>, u8), Option<ScriptReferenceInfo>>> {
+        if references.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let encoded_keys: Vec<Vec<u8>> = references
+            .iter()
+            .map(|(reference_hash, hash_type)| {
+                keys::encode_script_reference_key(*hash_type, reference_hash).to_vec()
+            })
+            .collect();
+        let cf_keys: Vec<_> = encoded_keys
+            .iter()
+            .map(|key| (self.store.cf_script_reference_info(), key.as_slice()))
+            .collect();
+        let results = self.store.multi_get_cf(cf_keys);
+
+        let mut map = HashMap::with_capacity(references.len());
+        for (((reference_hash, hash_type), key), res) in references
+            .iter()
+            .zip(encoded_keys.iter())
+            .zip(results.into_iter())
+        {
+            let existing: Option<ScriptReferenceInfo> = match res {
+                Ok(Some(value)) => Some(bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize script reference info: key=0x{}, hash_type={}, reference_hash=0x{}, error={}",
+                        hex::encode(key),
+                        hash_type,
+                        hex::encode(reference_hash),
+                        e
+                    )
+                })?),
+                Ok(None) => None,
+                Err(e) => {
+                    bail!(
+                        "failed to read script reference info: hash_type={}, reference_hash=0x{}, error={}",
+                        hash_type,
+                        hex::encode(reference_hash),
+                        e
+                    );
+                }
+            };
+            map.insert((reference_hash.clone(), *hash_type), existing);
+        }
+
+        Ok(map)
+    }
+
+    pub fn apply_script_reference_usage_deltas(
+        &self,
+        existing: &HashMap<(Vec<u8>, u8), Option<ScriptReferenceInfo>>,
+        changes: &HashMap<(Vec<u8>, u8), (i64, i64, i128, i128)>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+
+        let mut updated_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo> =
+            HashMap::with_capacity(existing.len());
+
+        for (
+            (reference_hash, hash_type),
+            (cells_delta, live_delta, owned_cap_delta, owned_knowledge_delta),
+        ) in changes
+        {
+            let key = (reference_hash.clone(), *hash_type);
+            let existing_info = existing.get(&key).and_then(|o| o.clone());
+            if existing_info.is_none()
+                && (*cells_delta < 0
+                    || *live_delta < 0
+                    || *owned_cap_delta < 0
+                    || *owned_knowledge_delta < 0)
+            {
+                bail!(
+                    "script reference delta underflow for unseen reference: reference_hash=0x{}, hash_type={}, cells_delta={}, live_delta={}, owned_capacity_delta={}, owned_knowledge_delta={}",
+                    hex::encode(reference_hash),
+                    hash_type,
+                    cells_delta,
+                    live_delta,
+                    owned_cap_delta,
+                    owned_knowledge_delta
+                );
+            }
+
+            let info = updated_map.entry(key).or_insert_with(|| {
+                existing_info.unwrap_or_else(|| ScriptReferenceInfo {
+                    reference_hash: reference_hash.clone(),
+                    hash_type: *hash_type,
+                    ..Default::default()
+                })
+            });
+
+            let next_cells_count = checked_next_script_reference_metric_i64(
+                reference_hash,
+                *hash_type,
+                "cells_count",
+                info.cells_count,
+                *cells_delta,
+            )?;
+            let next_live_cells_count = checked_next_script_reference_metric_i64(
+                reference_hash,
+                *hash_type,
+                "live_cells_count",
+                info.live_cells_count,
+                *live_delta,
+            )?;
+            let next_owned_capacity_sum = checked_next_script_reference_metric_i128(
+                reference_hash,
+                *hash_type,
+                "owned_capacity_sum",
+                info.owned_capacity_sum,
+                *owned_cap_delta,
+            )?;
+            let next_owned_knowledge_sum = checked_next_script_reference_metric_i128(
+                reference_hash,
+                *hash_type,
+                "owned_knowledge_sum",
+                info.owned_knowledge_sum,
+                *owned_knowledge_delta,
+            )?;
+
+            if next_owned_knowledge_sum > next_owned_capacity_sum {
+                bail!(
+                    "script reference owned knowledge exceeds owned capacity: reference_hash=0x{}, hash_type={}, owned_knowledge_sum={}, owned_capacity_sum={}",
+                    hex::encode(reference_hash),
+                    hash_type,
+                    next_owned_knowledge_sum,
+                    next_owned_capacity_sum
+                );
+            }
+
+            info.cells_count = next_cells_count;
+            info.live_cells_count = next_live_cells_count;
+            info.owned_capacity_sum = next_owned_capacity_sum;
+            info.owned_knowledge_sum = next_owned_knowledge_sum;
+        }
+
+        for ((reference_hash, hash_type), info) in &updated_map {
+            batch.put_script_reference_info(*hash_type, reference_hash, info);
+        }
+
+        Ok(())
+    }
+
     pub fn update_script_usage_batch(
         &self,
         changes: &HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>,
@@ -499,6 +710,23 @@ impl BatchWriter {
         let refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
         let existing = self.read_script_info(&refs)?;
         self.apply_script_usage_deltas(&existing, changes, batch)
+    }
+
+    pub fn update_script_reference_usage_batch(
+        &self,
+        changes: &HashMap<(Vec<u8>, u8), (i64, i64, i128, i128)>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+
+        let references: Vec<(Vec<u8>, u8)> = changes
+            .keys()
+            .map(|(reference_hash, hash_type)| (reference_hash.clone(), *hash_type))
+            .collect();
+        let existing = self.read_script_reference_info(&references)?;
+        self.apply_script_reference_usage_deltas(&existing, changes, batch)
     }
 
     pub fn update_script_daily_deltas_batch(
@@ -596,7 +824,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use ckbadger_store::{CkbadgerStore, ScriptInfo};
+    use ckbadger_store::{CkbadgerStore, ScriptInfo, ScriptReferenceInfo};
 
     #[test]
     fn test_update_script_daily_deltas_batch_accumulates_and_deletes_zero_net() {
@@ -828,6 +1056,56 @@ mod tests {
         assert_eq!(updated.lock_owned_capacity_sum, 100);
         assert_eq!(updated.lock_used_capacity_sum, 61);
         assert_eq!(updated.lock_owned_knowledge_sum, 61);
+    }
+
+    #[test]
+    fn test_update_script_reference_usage_batch_persists_distinct_hash_types() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let reference_hash = vec![0x7a; 32];
+        let mut existing = HashMap::new();
+        existing.insert(
+            (reference_hash.clone(), 0u8),
+            Some(ScriptReferenceInfo {
+                reference_hash: reference_hash.clone(),
+                hash_type: 0,
+                live_cells_count: 2,
+                cells_count: 2,
+                owned_capacity_sum: 200,
+                owned_knowledge_sum: 120,
+            }),
+        );
+        existing.insert((reference_hash.clone(), 1u8), None);
+
+        let mut changes = HashMap::new();
+        changes.insert((reference_hash.clone(), 0u8), (1, 1, 100, 61));
+        changes.insert((reference_hash.clone(), 1u8), (3, 2, 300, 183));
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .apply_script_reference_usage_deltas(&existing, &changes, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let data_hash_info = store
+            .get_script_reference_info(0, &reference_hash)
+            .unwrap()
+            .unwrap();
+        assert_eq!(data_hash_info.cells_count, 3);
+        assert_eq!(data_hash_info.live_cells_count, 3);
+        assert_eq!(data_hash_info.owned_capacity_sum, 300);
+        assert_eq!(data_hash_info.owned_knowledge_sum, 181);
+
+        let type_hash_info = store
+            .get_script_reference_info(1, &reference_hash)
+            .unwrap()
+            .unwrap();
+        assert_eq!(type_hash_info.cells_count, 3);
+        assert_eq!(type_hash_info.live_cells_count, 2);
+        assert_eq!(type_hash_info.owned_capacity_sum, 300);
+        assert_eq!(type_hash_info.owned_knowledge_sum, 183);
     }
 
     #[test]
