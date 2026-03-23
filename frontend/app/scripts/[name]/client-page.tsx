@@ -92,6 +92,15 @@ function deploymentOutpointKey(
   return `${txHash}:${outputIndex}`;
 }
 
+function isPositiveBigInt(value: string | null | undefined): boolean {
+  if (!value) return false;
+  try {
+    return BigInt(value) > BigInt(0);
+  } catch {
+    return false;
+  }
+}
+
 function compareCellsByCreatedAt(
   a: { cell: { createdAtBlock: number; txHash: string; outputIndex: number } },
   b: { cell: { createdAtBlock: number; txHash: string; outputIndex: number } }
@@ -286,6 +295,7 @@ export default function ScriptDetailPage({
   const selectedRefHashType = normalizeScriptRefHashType(searchParams.get('hashType'));
   const [capacityRange, setCapacityRange] = useState<CapacityRangeKey>('all');
   const [selectedVersion, setSelectedVersion] = useState<SelectedVersion | null>(null);
+  const [selectedDeploymentOutpoint, setSelectedDeploymentOutpoint] = useState<string | null>(null);
   const cellsPagination = useCursorPagination();
   const capacityRangeParams = getCapacityRangeParams(capacityRange);
   const {
@@ -515,10 +525,21 @@ export default function ScriptDetailPage({
       sortedDeployments.filter((deployment) => deployment.codeHash === selectedVersion?.codeHash),
     [selectedVersion?.codeHash, sortedDeployments]
   );
+  const deploymentsForReferences = useMemo(
+    () =>
+      selectedDeploymentOutpoint
+        ? selectedVersionDeployments.filter(
+            (d) =>
+              deploymentOutpointKey(d.codeCellTxHash, d.codeCellOutputIndex) ===
+              selectedDeploymentOutpoint
+          )
+        : selectedVersionDeployments,
+    [selectedDeploymentOutpoint, selectedVersionDeployments]
+  );
   const versionUsageReferences = useMemo<VersionUsageReference[]>(() => {
     const references = new Map<string, VersionUsageReference>();
 
-    for (const deployment of selectedVersionDeployments) {
+    for (const deployment of deploymentsForReferences) {
       const resolved = deploymentReferenceHashes(
         deployment,
         deploymentLookup?.[deployment.codeHash]
@@ -543,7 +564,7 @@ export default function ScriptDetailPage({
     }
 
     return Array.from(references.values()).sort((a, b) => a.key.localeCompare(b.key));
-  }, [deploymentLookup, selectedVersionDeployments]);
+  }, [deploymentLookup, deploymentsForReferences]);
   const versionCellsCursorState = useMemo(
     () => decodeVersionCellsCursorState(cellsPagination.cursor),
     [cellsPagination.cursor]
@@ -901,11 +922,20 @@ export default function ScriptDetailPage({
         codeHash: versionRow.codeHash,
         scriptKind: versionRow.scriptKind,
       });
+      setSelectedDeploymentOutpoint(null);
       cellsPagination.reset();
     }
   };
+  const handleDeploymentClick = (outpointKey: string | null) => {
+    if (!outpointKey) return;
+    setSelectedDeploymentOutpoint((prev) => (prev === outpointKey ? null : outpointKey));
+    cellsPagination.reset();
+  };
   const isSelected = (versionRow: (typeof versionRows)[number]) =>
     selectedVersion?.codeHash === versionRow.codeHash;
+  const isDeploymentSelected = (outpointKey: string | null) =>
+    outpointKey != null && selectedDeploymentOutpoint === outpointKey;
+  const hasMultipleDeployments = selectedVersionDeploymentRows.length > 1;
   const showMobileVersions = viewportWidth < MOBILE_BREAKPOINT;
   const showCompactVersions = !showMobileVersions && viewportWidth < COMPACT_SCRIPT_VERSIONS_WIDTH;
   const showMobileVersionDeployments = viewportWidth < MOBILE_BREAKPOINT;
@@ -982,10 +1012,12 @@ export default function ScriptDetailPage({
 
   const renderDeploymentBadges = (
     deployment: (typeof selectedVersionDeploymentRows)[number]['deployment'],
-    codeCell: (typeof selectedVersionDeploymentRows)[number]['codeCell']
+    codeCell: (typeof selectedVersionDeploymentRows)[number]['codeCell'],
+    selected: boolean = false
   ) => (
     <div className="flex flex-wrap items-center gap-2">
       {renderDeploymentStatus(codeCell)}
+      {selected && hasMultipleDeployments && <Badge variant="green">Selected</Badge>}
       {deployment.deprecated && <Badge variant="red">Deprecated</Badge>}
     </div>
   );
@@ -1507,7 +1539,15 @@ export default function ScriptDetailPage({
                     {selectedVersionDeploymentRows.length > 0 ? (
                       selectedVersionDeploymentRows.map(
                         ({ deployment, outpointKey, codeCell, references }) => (
-                          <TerminalRow key={outpointKey ?? deployment.codeHash}>
+                          <TerminalRow
+                            key={outpointKey ?? deployment.codeHash}
+                            onClick={() => handleDeploymentClick(outpointKey)}
+                            className={
+                              hasMultipleDeployments
+                                ? `cursor-pointer ${isDeploymentSelected(outpointKey) ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}`
+                                : ''
+                            }
+                          >
                             <div className="space-y-3">
                               <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
@@ -1520,6 +1560,7 @@ export default function ScriptDetailPage({
                                       <Link
                                         href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
                                         className="text-emphasis hover:underline"
+                                        onClick={(e) => e.stopPropagation()}
                                       >
                                         <HexDisplay
                                           value={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
@@ -1537,7 +1578,11 @@ export default function ScriptDetailPage({
                                   </div>
                                 </div>
                                 <div className="pt-4">
-                                  {renderDeploymentBadges(deployment, codeCell)}
+                                  {renderDeploymentBadges(
+                                    deployment,
+                                    codeCell,
+                                    isDeploymentSelected(outpointKey)
+                                  )}
                                 </div>
                               </div>
                               <div>
@@ -1616,7 +1661,8 @@ export default function ScriptDetailPage({
                         ({ deployment, outpointKey, codeCell, references }) => (
                           <TerminalRow
                             key={outpointKey ?? deployment.codeHash}
-                            className="min-w-[860px]"
+                            onClick={() => handleDeploymentClick(outpointKey)}
+                            className={`min-w-[860px] ${hasMultipleDeployments ? `cursor-pointer ${isDeploymentSelected(outpointKey) ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}` : ''}`}
                           >
                             <div className="grid w-full min-w-[860px] grid-cols-[10rem_minmax(10rem,1fr)_minmax(11rem,1fr)_8rem_9rem] items-start gap-4">
                               <div
@@ -1628,6 +1674,7 @@ export default function ScriptDetailPage({
                                   <Link
                                     href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
                                     className="text-emphasis hover:underline"
+                                    onClick={(e) => e.stopPropagation()}
                                   >
                                     <HexDisplay
                                       value={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
@@ -1642,7 +1689,13 @@ export default function ScriptDetailPage({
                                     Unavailable
                                   </span>
                                 )}
-                                <div>{renderDeploymentBadges(deployment, codeCell)}</div>
+                                <div>
+                                  {renderDeploymentBadges(
+                                    deployment,
+                                    codeCell,
+                                    isDeploymentSelected(outpointKey)
+                                  )}
+                                </div>
                               </div>
                               <div className="min-w-0 space-y-2">{renderGovernance(codeCell)}</div>
                               {renderDeploymentReferences(references)}
@@ -1697,7 +1750,8 @@ export default function ScriptDetailPage({
                         ({ deployment, outpointKey, codeCell, references }) => (
                           <TerminalRow
                             key={outpointKey ?? deployment.codeHash}
-                            className="min-w-[1120px]"
+                            onClick={() => handleDeploymentClick(outpointKey)}
+                            className={`min-w-[1120px] ${hasMultipleDeployments ? `cursor-pointer ${isDeploymentSelected(outpointKey) ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}` : ''}`}
                           >
                             <div className="grid w-full min-w-[1120px] grid-cols-[11rem_6rem_minmax(14rem,1fr)_minmax(16rem,1fr)_11rem_11rem] items-start gap-4">
                               <div
@@ -1709,6 +1763,7 @@ export default function ScriptDetailPage({
                                   <Link
                                     href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
                                     className="text-emphasis hover:underline"
+                                    onClick={(e) => e.stopPropagation()}
                                   >
                                     <HexDisplay
                                       value={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
@@ -1725,7 +1780,11 @@ export default function ScriptDetailPage({
                                 )}
                               </div>
                               <div className="pt-0.5">
-                                {renderDeploymentBadges(deployment, codeCell)}
+                                {renderDeploymentBadges(
+                                  deployment,
+                                  codeCell,
+                                  isDeploymentSelected(outpointKey)
+                                )}
                               </div>
                               <div className="min-w-0 space-y-2">{renderGovernance(codeCell)}</div>
                               {renderDeploymentReferences(references)}
@@ -1774,15 +1833,20 @@ export default function ScriptDetailPage({
                 Usage
               </TerminalPanelHeader>
               <TerminalPanelContent padding="none">
-                {selectedVersionUsage && (
-                  <div className="border-base-border border-b px-4 py-4">
+                <div className="border-base-border border-b px-4 py-4">
+                  {selectedVersionUsage &&
+                  isPositiveBigInt(selectedVersionUsage.ownedCapacitySum) ? (
                     <CapacityUtilization
                       totalCapacity={selectedVersionUsage.ownedCapacitySum}
                       commonKnowledgeSize={selectedVersionUsage.ownedKnowledgeSum}
                       totalLabel="Owned Capacity"
                     />
-                  </div>
-                )}
+                  ) : (
+                    <div className="text-text-dim py-2 text-center text-xs">
+                      No live cells currently use this version.
+                    </div>
+                  )}
+                </div>
                 <div className="border-base-border border-b px-4 py-4">
                   <div className="text-text-dim mb-3 text-xs">
                     Historical common knowledge and free live capacity for the selected version.
