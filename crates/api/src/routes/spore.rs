@@ -1241,7 +1241,20 @@ async fn serve_media(
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(format!("Failed to read media blob: {e}")))?;
 
-    // 6. Return binary response with appropriate headers
+    // 6. Return binary response with security headers.
+    //
+    // Media blobs are untrusted on-chain data (DOB decoder output). A malicious
+    // decoder could emit SVG/HTML containing <script> or event handlers. Without
+    // mitigation, navigating directly to this URL would execute attacker JS in
+    // the API origin, enabling cookie/localStorage theft (stored XSS).
+    //
+    // Defence layers:
+    // - CSP `default-src 'none'` blocks all script execution, even inline
+    //   handlers and <script> tags. `style-src 'unsafe-inline'` permits SVG
+    //   presentation attributes. `img-src data:` permits embedded data URIs
+    //   within SVG.
+    // - `X-Content-Type-Options: nosniff` prevents browsers from MIME-sniffing
+    //   a response into a dangerous type.
     Ok((
         StatusCode::OK,
         [
@@ -1250,6 +1263,11 @@ async fn serve_media(
                 header::CACHE_CONTROL,
                 "public, max-age=31536000, immutable".to_string(),
             ),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; style-src 'unsafe-inline'; img-src data:".to_string(),
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
         ],
         blob,
     )
