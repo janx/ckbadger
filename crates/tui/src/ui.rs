@@ -40,8 +40,6 @@ const ERROR_RED: Color = Color::Rgb(239, 68, 68);
 const L0_GAUGE_MAX: u64 = 20;
 const P95_WINDOW: usize = 300;
 const P95_MIN_WIDTH: u16 = 40;
-const BULK_BUILD_MIN_SPAN_K: u64 = 10;
-const BULK_BUILD_MAX_SPAN_K: u64 = 100;
 
 #[derive(Debug, Clone)]
 pub struct LogEntry {
@@ -2449,6 +2447,154 @@ fn build_bulk_build_diagnostics(
     (left, right)
 }
 
+/// Build the controller observation panel lines for bulk-build diagnostics.
+///
+/// Three layers:
+/// 1. Signals — EMA-smoothed timing inputs
+/// 2. Judgment — bottleneck classification with time-share percentages
+/// 3. Knobs — current controller output values
+fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'static>> {
+    let recv_ema = bb.controller_recv_ema.unwrap_or(0.0);
+    let build_ema = bb.controller_build_ema.unwrap_or(0.0);
+    let wait_ema = bb.controller_wait_ema.unwrap_or(0.0);
+    let l0_ema = bb.controller_l0_ema.unwrap_or(0.0);
+    let total_ema = recv_ema + build_ema + wait_ema;
+
+    // Percentages
+    let (recv_pct, build_pct, flush_pct) = if total_ema > 1.0 {
+        (
+            recv_ema / total_ema * 100.0,
+            build_ema / total_ema * 100.0,
+            wait_ema / total_ema * 100.0,
+        )
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+
+    // Bottleneck label + color
+    let (bn_label, bn_color) = match bb.controller_bottleneck {
+        Some(1) => ("FETCH", AMBER),
+        Some(2) => ("BUILD", TERMINAL_GREEN),
+        Some(3) => ("FLUSH", ERROR_RED),
+        _ => ("-", SLATE_500),
+    };
+
+    // Knob values
+    let span_text = bb
+        .batch_block_span
+        .map(|v| format!("{}k", v / 1000))
+        .unwrap_or_else(|| "-".to_string());
+    let prefetch_text = match (bb.controller_prefetch_ahead, bb.prefetch_channel_capacity) {
+        (Some(ahead), Some(cap)) => format!("{}/{}", ahead, cap),
+        (Some(ahead), None) => format!("{}", ahead),
+        _ => "-".to_string(),
+    };
+    let threads_text = bb
+        .controller_fetch_threads
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let bg_text = bb
+        .controller_bg_jobs
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "-".to_string());
+
+    if dense {
+        // Compact: 2 lines
+        vec![
+            Line::from(vec![
+                Span::styled("Ctrl ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format!("[{}]", bn_label),
+                    Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(
+                        "  recv {:.0}%  build {:.0}%  flush {:.0}%",
+                        recv_pct, build_pct, flush_pct,
+                    ),
+                    Style::default().fg(TERMINAL_DIM),
+                ),
+                Span::styled(
+                    format!("  L0 {:.0}", l0_ema),
+                    Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("     ", Style::default().fg(SLATE_500)),
+                Span::styled("span ", Style::default().fg(SLATE_500)),
+                Span::styled(span_text, Style::default().fg(FOREGROUND)),
+                Span::styled("  prefetch ", Style::default().fg(SLATE_500)),
+                Span::styled(prefetch_text, Style::default().fg(FOREGROUND)),
+                Span::styled("  threads ", Style::default().fg(SLATE_500)),
+                Span::styled(threads_text, Style::default().fg(FOREGROUND)),
+                Span::styled("  bg ", Style::default().fg(SLATE_500)),
+                Span::styled(bg_text, Style::default().fg(FOREGROUND)),
+            ]),
+        ]
+    } else {
+        // Detail: 3 lines (signals, judgment, knobs)
+        let rows_ema_text = bb
+            .controller_rows_per_block_ema
+            .filter(|v| *v > 0.0 && v.is_finite())
+            .map(|v| format!("{v:.1}"))
+            .unwrap_or_else(|| "-".to_string());
+        let row_cap_text = bb
+            .controller_rows_per_block_ema
+            .filter(|v| *v > 0.0 && v.is_finite())
+            .map(|v| format!("{}k", (800_000.0 / v) as u64 / 1000))
+            .unwrap_or_else(|| "-".to_string());
+
+        vec![
+            // Line 1: EMA signals
+            Line::from(vec![
+                Span::styled("Ctrl EMA ", Style::default().fg(SLATE_500)),
+                Span::styled("recv ", Style::default().fg(SLATE_500)),
+                Span::styled(format!("{:.0}", recv_ema), Style::default().fg(FOREGROUND)),
+                Span::styled("  build ", Style::default().fg(SLATE_500)),
+                Span::styled(format!("{:.0}", build_ema), Style::default().fg(FOREGROUND)),
+                Span::styled("  flush ", Style::default().fg(SLATE_500)),
+                Span::styled(format!("{:.0}", wait_ema), Style::default().fg(FOREGROUND)),
+                Span::styled("  L0 ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format!("{:.0}", l0_ema),
+                    Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
+                ),
+            ]),
+            // Line 2: Bottleneck classification
+            Line::from(vec![
+                Span::styled("     ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format!("[{}]", bn_label),
+                    Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(
+                        "  recv {:.0}%  build {:.0}%  flush {:.0}%",
+                        recv_pct, build_pct, flush_pct,
+                    ),
+                    Style::default().fg(TERMINAL_DIM),
+                ),
+                Span::styled(
+                    format!("  rows/blk {} cap {}", rows_ema_text, row_cap_text),
+                    Style::default().fg(SLATE_500),
+                ),
+            ]),
+            // Line 3: Knob outputs
+            Line::from(vec![
+                Span::styled("     ", Style::default().fg(SLATE_500)),
+                Span::styled("span ", Style::default().fg(SLATE_500)),
+                Span::styled(span_text, Style::default().fg(FOREGROUND)),
+                Span::styled("  prefetch ", Style::default().fg(SLATE_500)),
+                Span::styled(prefetch_text, Style::default().fg(FOREGROUND)),
+                Span::styled("  threads ", Style::default().fg(SLATE_500)),
+                Span::styled(threads_text, Style::default().fg(FOREGROUND)),
+                Span::styled("  bg_jobs ", Style::default().fg(SLATE_500)),
+                Span::styled(bg_text, Style::default().fg(FOREGROUND)),
+            ]),
+        ]
+    }
+}
+
 /// Build the left column for normal per-batch bulk-build diagnostics.
 fn build_batch_left_column(
     bb: &BulkBuildProgressData,
@@ -2613,28 +2759,6 @@ fn build_batch_left_column(
         }
     }
 
-    let flush_text = bb
-        .flush_ms
-        .map(|v| format!("{v:.1}ms"))
-        .unwrap_or_else(|| "-".to_string());
-    let fetch_text = bb
-        .fetch_ms
-        .map(|v| format!("{v:.1}ms"))
-        .unwrap_or_else(|| "-".to_string());
-    let build_text = bb
-        .build_ms
-        .map(|v| format!("{v:.1}ms"))
-        .unwrap_or_else(|| "-".to_string());
-    left.push(Line::from(vec![
-        Span::styled("I/O ", Style::default().fg(SLATE_500)),
-        Span::styled("Fetch ", Style::default().fg(SLATE_500)),
-        Span::styled(fetch_text, Style::default().fg(FOREGROUND)),
-        Span::styled("  Build ", Style::default().fg(SLATE_500)),
-        Span::styled(build_text, Style::default().fg(FOREGROUND)),
-        Span::styled("  Flush ", Style::default().fg(SLATE_500)),
-        Span::styled(flush_text, Style::default().fg(TERMINAL_DIM)),
-    ]));
-
     let cells_created = bb
         .cells_created
         .map(|v| format!("+{}", format_num_u64(v)))
@@ -2660,53 +2784,7 @@ fn build_batch_left_column(
         ),
     ]));
 
-    // Adaptive EMA controller: cost model and budget utilization
-    let ema_text = bb
-        .ms_per_block_ema
-        .filter(|v| *v > 0.0 && v.is_finite())
-        .map(|v| format!("{v:.3}"))
-        .unwrap_or_else(|| "-".to_string());
-    let ctrl_ms = bb.controllable_ms.unwrap_or(0.0);
-    let target_ms = bb.target_iteration_ms.unwrap_or(0.0);
-    let ctrl_text = if ctrl_ms > 0.0 {
-        format!("{ctrl_ms:.0}")
-    } else {
-        "-".to_string()
-    };
-    let target_text = if target_ms > 0.0 {
-        format!("{target_ms:.0}")
-    } else {
-        "-".to_string()
-    };
-    let budget_color = if ctrl_ms > 0.0 && target_ms > 0.0 {
-        let ratio = ctrl_ms / target_ms;
-        if ratio <= 1.1 {
-            TERMINAL_GREEN
-        } else if ratio <= 1.5 {
-            AMBER
-        } else {
-            ERROR_RED
-        }
-    } else {
-        FOREGROUND
-    };
-    left.push(Line::from(vec![
-        Span::styled("Adaptive ", Style::default().fg(SLATE_500)),
-        Span::styled("EMA ", Style::default().fg(SLATE_500)),
-        Span::styled(
-            format!("{} ms/blk", ema_text),
-            Style::default().fg(TERMINAL_DIM),
-        ),
-        Span::styled("  Budget ", Style::default().fg(SLATE_500)),
-        Span::styled(
-            format!("{}/{} ms", ctrl_text, target_text),
-            Style::default().fg(budget_color),
-        ),
-        Span::styled(
-            format!("  [{}-{}k]", BULK_BUILD_MIN_SPAN_K, BULK_BUILD_MAX_SPAN_K),
-            Style::default().fg(SLATE_500),
-        ),
-    ]));
+    left.extend(controller_panel_lines(bb, dense_panel));
 
     left
 }
@@ -5489,23 +5567,23 @@ mod tests {
     use super::{
         adaptive_control_lines, adaptive_state_label, api_health_state,
         background_task_last_result, background_task_section_heights, background_task_state_label,
-        build_batch_left_column, build_finalize_left_column, bulk_queue_indicator_line,
-        chart_height_warning, compact_overview_layout, consumed_cells_source_color,
-        consumed_cells_source_label, dense_right_lines, detail_right_lines,
-        diagnostics_dense_panel, direct_io_reads_label, disk_pressure_lines, eta_confidence_label,
-        footer_hint_line, footer_status_message, format_age_secs, format_num, format_num_commas,
-        format_num_compact, format_rate_expanded, format_signed_num_i128,
-        format_stage_commit_gap_ms, header_right_line, header_title_line, heartbeat_is_on,
-        io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
-        overview_log_min_height, overview_services_min_height, percentile_from_history,
-        pipeline_bottleneck, pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state,
-        runtime_live_delta, service_log_tails_line, sparkline, split_background_tasks,
-        stale_age_secs, stale_status, startup_phase_label, storage_pressure_l0_line,
-        storage_pressure_wbm_line, storage_runtime_columns, summarize_background_tasks,
-        supervisor_services_line, sync_bottleneck, system_kv_line, system_store_path_lines,
-        system_workdir_lines, trend_delta, trim_for_panel, visible_background_tasks,
-        AdaptiveControlSnapshot, App, BackgroundTaskSummary, Color, CompactOverviewLayout,
-        DiagnosticsViewMode, SyncBottleneck, AMBER, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
+        build_finalize_left_column, bulk_queue_indicator_line, chart_height_warning,
+        compact_overview_layout, consumed_cells_source_color, consumed_cells_source_label,
+        controller_panel_lines, dense_right_lines, detail_right_lines, diagnostics_dense_panel,
+        direct_io_reads_label, disk_pressure_lines, eta_confidence_label, footer_hint_line,
+        footer_status_message, format_age_secs, format_num, format_num_commas, format_num_compact,
+        format_rate_expanded, format_signed_num_i128, format_stage_commit_gap_ms,
+        header_right_line, header_title_line, heartbeat_is_on, io_fetch_write_jitter_line,
+        is_rate_drop, merged_sparkline_p95_line, overview_log_min_height,
+        overview_services_min_height, percentile_from_history, pipeline_bottleneck,
+        pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state, runtime_live_delta,
+        service_log_tails_line, sparkline, split_background_tasks, stale_age_secs, stale_status,
+        startup_phase_label, storage_pressure_l0_line, storage_pressure_wbm_line,
+        storage_runtime_columns, summarize_background_tasks, supervisor_services_line,
+        sync_bottleneck, system_kv_line, system_store_path_lines, system_workdir_lines,
+        trend_delta, trim_for_panel, visible_background_tasks, AdaptiveControlSnapshot, App,
+        BackgroundTaskSummary, Color, CompactOverviewLayout, DiagnosticsViewMode, SyncBottleneck,
+        AMBER, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
     use crate::db::{
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
@@ -5514,7 +5592,7 @@ mod tests {
         BackgroundTaskEntry, BackgroundTaskKind, BackgroundTaskState, BulkBuildProgressData,
         MemoryStatsData,
     };
-    use ratatui::layout::{Constraint, Direction, Layout, Rect};
+    use ratatui::layout::Rect;
     use ratatui::text::Line;
     use std::collections::VecDeque;
     use std::time::Instant;
@@ -6832,64 +6910,54 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_left_column_shows_adaptive_ema() {
+    fn test_controller_panel_lines_dense() {
         let bb = BulkBuildProgressData {
-            facts_ms: Some(10.0),
-            resolve_ms: Some(8.0),
-            reduce_ms: Some(6.0),
-            history_ms: Some(4.0),
-            address_reduce_ms: Some(2.0),
-            activity_stats_ms: Some(1.0),
-            flush_ms: Some(50.0),
-            fetch_ms: Some(100.0),
-            build_ms: Some(31.0),
-            batch_block_span: Some(30_000),
-            batch_count: Some(5),
-            tx_density: Some(3.5),
-            ms_per_block_ema: Some(0.042),
-            controllable_ms: Some(1380.0),
-            target_iteration_ms: Some(1500.0),
+            controller_bottleneck: Some(2), // Build
+            controller_recv_ema: Some(100.0),
+            controller_build_ema: Some(3000.0),
+            controller_wait_ema: Some(200.0),
+            controller_l0_ema: Some(12.0),
+            controller_prefetch_ahead: Some(3),
+            controller_fetch_threads: Some(8),
+            controller_bg_jobs: Some(4),
+            controller_rows_per_block_ema: Some(30.0),
+            batch_block_span: Some(50_000),
+            prefetch_channel_capacity: Some(4),
             ..Default::default()
         };
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(60), Constraint::Length(40)])
-            .split(Rect::new(0, 0, 100, 20));
-        let lines = build_batch_left_column(&bb, &cols, false);
-        let all_text: String = lines
-            .iter()
-            .map(|l| line_text(l))
-            .collect::<Vec<_>>()
-            .join("|");
+        let lines = controller_panel_lines(&bb, true);
+        assert_eq!(lines.len(), 2);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            all_text.contains("Adaptive"),
-            "should show Adaptive line: {}",
-            all_text
+            text.contains("[BUILD]"),
+            "should contain bottleneck label, got: {}",
+            text
         );
+    }
+
+    #[test]
+    fn test_controller_panel_lines_detail() {
+        let bb = BulkBuildProgressData {
+            controller_bottleneck: Some(3), // Flush
+            controller_recv_ema: Some(50.0),
+            controller_build_ema: Some(2000.0),
+            controller_wait_ema: Some(3000.0),
+            controller_l0_ema: Some(55.0),
+            controller_prefetch_ahead: Some(1),
+            controller_fetch_threads: Some(4),
+            controller_bg_jobs: Some(8),
+            controller_rows_per_block_ema: Some(40.0),
+            batch_block_span: Some(20_000),
+            prefetch_channel_capacity: Some(4),
+            ..Default::default()
+        };
+        let lines = controller_panel_lines(&bb, false);
+        assert_eq!(lines.len(), 3);
+        let text: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            all_text.contains("EMA"),
-            "should show EMA label: {}",
-            all_text
-        );
-        assert!(
-            all_text.contains("ms/blk"),
-            "should show ms/blk unit: {}",
-            all_text
-        );
-        assert!(
-            all_text.contains("Budget"),
-            "should show Budget label: {}",
-            all_text
-        );
-        assert!(
-            all_text.contains("1380/1500 ms"),
-            "should show controllable/target: {}",
-            all_text
-        );
-        assert!(
-            all_text.contains("[10-100k]"),
-            "should show span bounds: {}",
-            all_text
+            text.contains("[FLUSH]"),
+            "should contain bottleneck label, got: {}",
+            text
         );
     }
 
