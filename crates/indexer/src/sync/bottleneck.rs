@@ -25,6 +25,10 @@ const MIN_PREFETCH: u64 = 1;
 pub(crate) const MAX_PREFETCH: u64 = 8;
 const INITIAL_PREFETCH: u64 = 4;
 
+// Flush ahead bounds (batches buffered between build and flush worker)
+pub(crate) const MAX_FLUSH_AHEAD: u64 = 8;
+const INITIAL_FLUSH_AHEAD: u64 = 4;
+
 // Fetch thread bounds
 const MIN_FETCH_THREADS: u32 = 2;
 
@@ -80,6 +84,7 @@ pub(crate) struct ControllerOutput {
     pub batch_span: u64,
     pub prefetch_ahead: u64,
     pub fetch_threads: u32,
+    pub flush_ahead: u64,
     pub bg_jobs: i32,
     pub bottleneck: Bottleneck,
     pub recv_ema: f64,
@@ -102,6 +107,7 @@ pub(crate) struct BottleneckController {
     batch_span: u64,
     prefetch_ahead: u64,
     fetch_threads: u32,
+    flush_ahead: u64,
     bg_jobs: i32,
 
     // Bounds
@@ -130,6 +136,7 @@ impl BottleneckController {
             batch_span: initial_span.clamp(MIN_SPAN, MAX_SPAN),
             prefetch_ahead: INITIAL_PREFETCH,
             fetch_threads: max_fetch_threads,
+            flush_ahead: INITIAL_FLUSH_AHEAD,
             bg_jobs: max_bg_jobs,
 
             max_fetch_threads,
@@ -178,13 +185,16 @@ impl BottleneckController {
                 self.bg_jobs = (self.bg_jobs - 1).max(self.min_bg_jobs);
             }
             Bottleneck::Build => {
-                // Build-bound: shrink fetch threads to reduce overlap contention.
-                // Grow span for better RocksDB write amortization.
+                // Build-bound: shrink fetch overlap to give build more CPU.
+                self.prefetch_ahead = (self.prefetch_ahead - 1).max(MIN_PREFETCH);
                 self.fetch_threads = shrink_threads(self.fetch_threads);
                 self.batch_span = grow_span(self.batch_span);
             }
             Bottleneck::Flush => {
+                // Flush-bound: grow flush_ahead to absorb transient compaction
+                // spikes without blocking build.
                 self.fetch_threads = shrink_threads(self.fetch_threads);
+                self.flush_ahead = (self.flush_ahead + 1).min(MAX_FLUSH_AHEAD);
                 self.batch_span = shrink_span(self.batch_span);
                 self.bg_jobs = (self.bg_jobs + 1).min(self.max_bg_jobs);
             }
@@ -206,6 +216,7 @@ impl BottleneckController {
             batch_span: self.batch_span,
             prefetch_ahead: self.prefetch_ahead,
             fetch_threads: self.fetch_threads,
+            flush_ahead: self.flush_ahead,
             bg_jobs: self.bg_jobs,
             bottleneck,
             recv_ema: self.recv_ema,
@@ -244,6 +255,10 @@ impl BottleneckController {
 
     pub(crate) fn fetch_threads(&self) -> u32 {
         self.fetch_threads
+    }
+
+    pub(crate) fn flush_ahead(&self) -> u64 {
+        self.flush_ahead
     }
 
     /// Returns (current_bg_jobs, changed) where `changed` is true only if
