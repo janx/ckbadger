@@ -993,12 +993,22 @@ interface DobTrait {
   value: string;
 }
 
+export interface DecodedMediaItem {
+  mediaType: string;
+  role: string | null;
+  size: number;
+  hash: string;
+  step: number | null;
+  url: string;
+}
+
 interface SporeDobDecoded {
+  status: string;
   sporeId: string;
   contentType: string;
   dnaHex: string | null;
   traits: DobTrait[];
-  svgMarkup: string | null;
+  media: DecodedMediaItem[];
   issues: string[];
 }
 

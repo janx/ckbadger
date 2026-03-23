@@ -387,11 +387,12 @@ describe('api', () => {
         http.get('*/api/v1/spore/objects/:sporeId/decode', ({ params }) => {
           expect(params.sporeId).toBe('0x9999');
           return HttpResponse.json({
+            status: 'ok',
             sporeId: '0x9999',
             contentType: 'dob/0',
             dnaHex: '0a01ff00',
             traits: [{ name: 'Background', value: 'red' }],
-            svgMarkup: null,
+            media: [],
             issues: [],
           });
         })

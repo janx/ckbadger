@@ -11,6 +11,7 @@ const MAX_SVG_BYTES = 256 * 1024; // 256 KB
 export type PreviewKind =
   | { type: 'image'; dataUrl: string }
   | { type: 'svg'; markup: string }
+  | { type: 'media-url'; url: string; mediaType: string }
   | null;
 
 const BINARY_IMAGE_TYPES = new Set([
@@ -54,18 +55,22 @@ function extractSvgFromText(text: string): string | null {
  * Detect whether on-chain content can be visually previewed.
  *
  * Priority:
- * 1. DOB/1 decoded SVG markup (from cluster pattern + DNA)
+ * 1. DOB decoded media blobs (highest step = final product)
  * 2. Binary image (PNG, JPEG, GIF, WebP, AVIF) → data: URL
  * 3. SVG content (image/svg+xml or text containing <svg>)
  */
 export function detectPreview(
   contentType: string,
   contentBytes: Uint8Array | undefined,
-  dobSvgMarkup: string | null | undefined
+  dobMedia: Array<{ mediaType: string; url: string; step: number | null }> | undefined
 ): PreviewKind {
-  // DOB/1 SVG — always available if decoded, regardless of content bytes
-  if (dobSvgMarkup) {
-    return { type: 'svg', markup: dobSvgMarkup };
+  // DOB decoded media — find final product (highest step)
+  if (dobMedia && dobMedia.length > 0) {
+    const sorted = [...dobMedia].sort((a, b) => (b.step ?? 0) - (a.step ?? 0));
+    const primary = sorted[0];
+    if (primary.mediaType.startsWith('image/')) {
+      return { type: 'media-url', url: primary.url, mediaType: primary.mediaType };
+    }
   }
 
   if (!contentBytes || contentBytes.length === 0) {

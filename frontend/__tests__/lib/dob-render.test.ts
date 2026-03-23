@@ -117,7 +117,7 @@ describe('dob-render helpers', () => {
     ]);
   });
 
-  it('builds dob/1 svg from decoded traits', () => {
+  it('decodes dob/1 traits from multi-decoder pattern', () => {
     const decoded = decodeDobContent({
       sporeContentType: 'dob/0',
       contentText: '{ "dna": "0100" }',
@@ -154,26 +154,6 @@ describe('dob-render helpers', () => {
                   patternType: 'raw',
                   traitArgs: "xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'",
                 },
-                {
-                  imageName: 'IMAGE.0',
-                  svgFields: 'elements',
-                  traitName: 'BackgroundColor',
-                  patternType: 'options',
-                  traitArgs: [
-                    ['red', "<rect width='100' height='100' fill='red' />"],
-                    ['blue', "<rect width='100' height='100' fill='blue' />"],
-                  ],
-                },
-                {
-                  imageName: 'IMAGE.0',
-                  svgFields: 'elements',
-                  traitName: 'Shape',
-                  patternType: 'options',
-                  traitArgs: [
-                    ['circle', "<circle cx='50' cy='50' r='30' fill='white' />"],
-                    [['*'], "<rect x='25' y='25' width='50' height='50' fill='white' />"],
-                  ],
-                },
               ],
             },
           ],
@@ -182,12 +162,13 @@ describe('dob-render helpers', () => {
     });
 
     expect(decoded).not.toBeNull();
-    expect(decoded?.svgMarkup).toContain('<svg ');
-    expect(decoded?.svgMarkup).toContain("fill='blue'");
-    expect(decoded?.svgMarkup).toContain('<circle');
+    expect(decoded?.traits).toEqual([
+      { name: 'BackgroundColor', value: 'blue' },
+      { name: 'Shape', value: 'circle' },
+    ]);
   });
 
-  it('builds dob/1 svg from array-style pattern', () => {
+  it('decodes dob/1 traits from array-style pattern', () => {
     const decoded = decodeDobContent({
       sporeContentType: 'dob/0',
       contentText: '{ "dna": "01" }',
@@ -198,27 +179,6 @@ describe('dob-render helpers', () => {
             {
               pattern: [['BackgroundColor', 'String', 0, 1, 'options', ['red', 'blue']]],
             },
-            {
-              pattern: [
-                [
-                  'IMAGE.0',
-                  'attributes',
-                  '',
-                  'raw',
-                  "xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'",
-                ],
-                [
-                  'IMAGE.0',
-                  'elements',
-                  'BackgroundColor',
-                  'options',
-                  [
-                    ['red', "<rect width='100' height='100' fill='red' />"],
-                    ['blue', "<rect width='100' height='100' fill='blue' />"],
-                  ],
-                ],
-              ],
-            },
           ],
         },
       }),
@@ -226,8 +186,6 @@ describe('dob-render helpers', () => {
 
     expect(decoded).not.toBeNull();
     expect(decoded?.traits).toEqual([{ name: 'BackgroundColor', value: 'blue' }]);
-    expect(decoded?.svgMarkup).toContain('<svg ');
-    expect(decoded?.svgMarkup).toContain("fill='blue'");
   });
 
   it('returns null for non-dob content type', () => {

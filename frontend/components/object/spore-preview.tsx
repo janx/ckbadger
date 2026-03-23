@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { type PreviewKind } from '@/lib/preview-utils';
+import { resolveApiBase } from '@/lib/api';
 
 export type PreviewPhysicality = 'onchain' | 'onchain-btc' | 'default';
 
@@ -158,6 +159,9 @@ function PreviewContent({ preview }: { preview: NonNullable<PreviewKind> }) {
   if (preview.type === 'image') {
     return <ImagePreview dataUrl={preview.dataUrl} />;
   }
+  if (preview.type === 'media-url') {
+    return <MediaUrlPreview url={preview.url} mediaType={preview.mediaType} />;
+  }
   return <SvgPreview markup={preview.markup} />;
 }
 
@@ -170,6 +174,35 @@ function ImagePreview({ dataUrl }: { dataUrl: string }) {
       draggable={false}
     />
   );
+}
+
+function MediaUrlPreview({ url, mediaType }: { url: string; mediaType: string }) {
+  const apiBase = resolveApiBase();
+  const src = `${apiBase}${url}`;
+
+  if (mediaType === 'image/svg+xml') {
+    return (
+      <img
+        src={src}
+        alt="Spore decoded media preview"
+        className="max-h-80 max-w-full rounded object-contain"
+        draggable={false}
+      />
+    );
+  }
+
+  if (mediaType.startsWith('image/')) {
+    return (
+      <img
+        src={src}
+        alt="Spore decoded media preview"
+        className="max-h-80 max-w-full rounded object-contain"
+        draggable={false}
+      />
+    );
+  }
+
+  return null;
 }
 
 function SvgPreview({ markup }: { markup: string }) {

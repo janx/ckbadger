@@ -1,5 +1,4 @@
 const MAX_TEXT_BYTES = 256 * 1024;
-const DEFAULT_SVG_ATTRS = "xmlns='http://www.w3.org/2000/svg' viewBox='0 0 500 500'";
 
 export interface SporeDataSegmentLike {
   label: string;
@@ -32,7 +31,6 @@ export interface DobTrait {
 export interface DobDecodedContent {
   dnaHex: string | null;
   traits: DobTrait[];
-  svgMarkup: string | null;
   issues: string[];
 }
 
@@ -45,14 +43,6 @@ interface Dob0PatternElement {
   patternType: string;
   traitArgs?: unknown;
   dobType?: string;
-}
-
-interface Dob1PatternElement {
-  imageName: string;
-  svgFields: string;
-  traitName: string;
-  patternType: string;
-  traitArgs?: unknown;
 }
 
 interface DobMetadata {
@@ -236,47 +226,6 @@ function normalizeDob0PatternElement(value: unknown): Dob0PatternElement | null 
   };
 }
 
-function normalizeDob1PatternElement(value: unknown): Dob1PatternElement | null {
-  if (Array.isArray(value)) {
-    const [imageName, svgFields, traitName, patternType, traitArgs] = value;
-    if (
-      typeof imageName !== 'string' ||
-      typeof svgFields !== 'string' ||
-      typeof traitName !== 'string' ||
-      typeof patternType !== 'string'
-    ) {
-      return null;
-    }
-    return {
-      imageName,
-      svgFields,
-      traitName,
-      patternType,
-      traitArgs,
-    };
-  }
-
-  const record = asRecord(value);
-  if (!record) {
-    return null;
-  }
-  if (
-    typeof record.imageName !== 'string' ||
-    typeof record.svgFields !== 'string' ||
-    typeof record.traitName !== 'string' ||
-    typeof record.patternType !== 'string'
-  ) {
-    return null;
-  }
-  return {
-    imageName: record.imageName,
-    svgFields: record.svgFields,
-    traitName: record.traitName,
-    patternType: record.patternType,
-    traitArgs: record.traitArgs,
-  };
-}
-
 function extractDob0Pattern(metadata: DobMetadata): Dob0PatternElement[] {
   const dob = metadata.dob;
   if (!dob) {
@@ -308,26 +257,6 @@ function extractDob0Pattern(metadata: DobMetadata): Dob0PatternElement[] {
     }
   }
 
-  return [];
-}
-
-function extractDob1Pattern(metadata: DobMetadata): Dob1PatternElement[] {
-  const decoders = metadata.dob?.decoders;
-  if (!Array.isArray(decoders)) {
-    return [];
-  }
-  for (const decoderEntry of decoders) {
-    const record = asRecord(decoderEntry);
-    if (!record || !Array.isArray(record.pattern)) {
-      continue;
-    }
-    const normalized = record.pattern
-      .map(normalizeDob1PatternElement)
-      .filter((item): item is Dob1PatternElement => !!item);
-    if (normalized.length > 0) {
-      return normalized;
-    }
-  }
   return [];
 }
 
@@ -401,92 +330,6 @@ function decodeDob0TraitValue(pattern: Dob0PatternElement, dnaSlice: Uint8Array)
   }
 
   return `0x${bytesToHex(dnaSlice)}`;
-}
-
-function selectorMatches(selector: unknown, traitValue: string): boolean {
-  if (selector === '*') {
-    return true;
-  }
-  if (Array.isArray(selector)) {
-    return selector.some((candidate) => selectorMatches(candidate, traitValue));
-  }
-  return formatUnknownValue(selector) === traitValue;
-}
-
-function resolveDob1Snippet(
-  pattern: Dob1PatternElement,
-  traits: Record<string, string>
-): string | null {
-  const kind = pattern.patternType.toLowerCase();
-  if (kind === 'raw') {
-    return typeof pattern.traitArgs === 'string' ? pattern.traitArgs : null;
-  }
-  if (kind !== 'options' || !Array.isArray(pattern.traitArgs)) {
-    return null;
-  }
-
-  const traitValue = traits[pattern.traitName] ?? '';
-  let wildcard: string | null = null;
-
-  for (const candidate of pattern.traitArgs) {
-    if (!Array.isArray(candidate) || candidate.length < 2) {
-      continue;
-    }
-    const [selector, snippet] = candidate;
-    if (typeof snippet !== 'string') {
-      continue;
-    }
-    if (selectorMatches(selector, '*')) {
-      wildcard = snippet;
-    }
-    if (selectorMatches(selector, traitValue)) {
-      return snippet;
-    }
-  }
-
-  return wildcard;
-}
-
-function buildDob1Svg(
-  patterns: Dob1PatternElement[],
-  traits: Record<string, string>
-): string | null {
-  if (patterns.length === 0) {
-    return null;
-  }
-
-  const images = new Map<string, { attrs: string[]; elements: string[] }>();
-
-  for (const pattern of patterns) {
-    const snippet = resolveDob1Snippet(pattern, traits);
-    if (!snippet) {
-      continue;
-    }
-    const image = images.get(pattern.imageName) ?? { attrs: [], elements: [] };
-    if (pattern.svgFields === 'attributes') {
-      image.attrs.push(snippet);
-    } else if (pattern.svgFields === 'elements') {
-      image.elements.push(snippet);
-    }
-    images.set(pattern.imageName, image);
-  }
-
-  const imageName = images.has('IMAGE.0') ? 'IMAGE.0' : images.keys().next().value;
-  if (!imageName) {
-    return null;
-  }
-  const image = images.get(imageName);
-  if (!image) {
-    return null;
-  }
-
-  const attrs = image.attrs.join(' ').trim() || DEFAULT_SVG_ATTRS;
-  const elements = image.elements.join('');
-  if (!elements.trim()) {
-    return null;
-  }
-
-  return `<svg ${attrs}>${elements}</svg>`;
 }
 
 export function extractSporePayload(cell: SporeCellLike | null | undefined): SporePayload | null {
@@ -573,17 +416,5 @@ export function decodeDobContent(input: {
     }
   }
 
-  let svgMarkup: string | null = null;
-  if (metadata) {
-    const dob1Pattern = extractDob1Pattern(metadata);
-    if (dob1Pattern.length > 0) {
-      const traitMap = Object.fromEntries(traits.map((item) => [item.name, item.value]));
-      svgMarkup = buildDob1Svg(dob1Pattern, traitMap);
-      if (!svgMarkup) {
-        issues.push('DOB/1 SVG pattern detected but no renderable SVG output was produced');
-      }
-    }
-  }
-
-  return { dnaHex, traits, svgMarkup, issues };
+  return { dnaHex, traits, issues };
 }

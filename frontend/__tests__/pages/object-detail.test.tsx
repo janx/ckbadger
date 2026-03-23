@@ -259,7 +259,7 @@ describe('SporeDetailPage', () => {
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Media Sources')).toBeInTheDocument();
+      expect(screen.getByText('Media Compositions')).toBeInTheDocument();
       expect(screen.getByText('btcfs://abcdi0')).toBeInTheDocument();
       expect(screen.getAllByText('BTC+CKB').length).toBeGreaterThan(0);
     });
@@ -294,11 +294,12 @@ describe('SporeDetailPage', () => {
       contentType: 'dob/0',
     } as any);
     vi.mocked(api.getSporeObjectDecoded).mockResolvedValue({
+      status: 'ok',
       sporeId: mockSpore.sporeId,
       contentType: 'dob/0',
       dnaHex: '0102',
       traits: [{ name: 'Background', value: 'Blue' }],
-      svgMarkup: null,
+      media: [],
       issues: [],
     } as any);
 
