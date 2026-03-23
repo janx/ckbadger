@@ -1673,10 +1673,19 @@ impl CkbadgerStore {
     /// Dynamically adjust the number of RocksDB background compaction/flush
     /// threads.  Used by the bottleneck controller to shift CPU between
     /// compaction and build/fetch work.
+    ///
+    /// RocksDB's `SetDBOptions` is not exposed through the C API, so we
+    /// adjust the default `Env` thread pools directly:
+    ///   - HIGH priority pool → flush threads (max(1, jobs/4))
+    ///   - LOW  priority pool → compaction threads (the rest)
     pub fn set_max_background_jobs(&self, jobs: i32) -> anyhow::Result<()> {
-        self.db
-            .set_options(&[("max_background_jobs", &jobs.to_string())])
-            .map_err(|e| anyhow::anyhow!("failed to set max_background_jobs to {}: {}", jobs, e))
+        let mut env = rocksdb::Env::new()
+            .map_err(|e| anyhow::anyhow!("failed to get default RocksDB env: {}", e))?;
+        let flush_threads = (jobs / 4).max(1);
+        let compaction_threads = (jobs - flush_threads).max(1);
+        env.set_high_priority_background_threads(flush_threads);
+        env.set_background_threads(compaction_threads);
+        Ok(())
     }
 
     /// Set relaxed L0 thresholds and larger write buffers for bulk sync.
@@ -2864,5 +2873,19 @@ mod tests {
     #[should_panic(expected = "unknown column family write policy")]
     fn test_cf_write_policy_panics_on_unknown_column_family() {
         cf_write_policy("missing_cf");
+    }
+
+    #[test]
+    fn test_set_max_background_jobs_succeeds() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        // This previously failed with "Extra option not recognized: max_background_jobs"
+        // because set_options() targets CF options, not DB options.
+        store
+            .set_max_background_jobs(4)
+            .expect("dynamic background jobs adjustment should succeed");
+        store
+            .set_max_background_jobs(8)
+            .expect("should succeed with different value");
     }
 }
