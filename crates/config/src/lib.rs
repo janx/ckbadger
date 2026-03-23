@@ -172,6 +172,8 @@ pub struct WorkDir {
     pub perf_dir: PathBuf,
     /// Bulk-sync performance artifacts directory.
     pub bulk_sync_perf_dir: PathBuf,
+    /// Decoded media blobs directory.
+    pub media_dir: PathBuf,
     /// Supervisor PID file.
     pub supervisor_pid: PathBuf,
     /// Indexer IPC socket.
@@ -196,6 +198,7 @@ impl WorkDir {
         let run_dir = root.join("run");
         let perf_dir = root.join("perf");
         let bulk_sync_perf_dir = perf_dir.join("bulk-sync");
+        let media_dir = root.join("media");
         let supervisor_pid = run_dir.join("supervisor.pid");
         let indexer_sock = run_dir.join("indexer.sock");
         let log_dir = run_dir.join("logs");
@@ -215,6 +218,7 @@ impl WorkDir {
             run_dir,
             perf_dir,
             bulk_sync_perf_dir,
+            media_dir,
             supervisor_pid,
             indexer_sock,
             log_dir,
@@ -750,6 +754,7 @@ network = "testnet"
         assert_eq!(wd.run_dir, root.join("run"));
         assert_eq!(wd.perf_dir, root.join("perf"));
         assert_eq!(wd.bulk_sync_perf_dir, root.join("perf/bulk-sync"));
+        assert_eq!(wd.media_dir, root.join("media"));
         assert_eq!(wd.supervisor_pid, root.join("run/supervisor.pid"));
         assert_eq!(wd.indexer_sock, root.join("run/indexer.sock"));
         assert_eq!(wd.log_dir, root.join("run/logs"));
