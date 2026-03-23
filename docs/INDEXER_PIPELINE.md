@@ -376,9 +376,10 @@ for the full design rationale.
 1. **FxHashMap**: non-cryptographic hash for `OutPointKey` (36B), lock/type hashes, and all reducer maps
 2. **Protocol facts side-map**: removed `Option<CellProtocolFacts>` from every `LiveCellSlot`, saving ~24B per entry
 3. **Parallel reducers**: address runs serially (produces cell distribution deltas), then script + token + dao + fiber + object run in parallel via nested `rayon::join`
-4. **Inter-batch pipelining**: `tokio::spawn` fetches batch N+1 from CKB RocksDB while batch N is being built (~200ms fetch hidden behind ~3-4s build)
-5. **RocksDB flush overlap**: after materializing batch N, flush is dispatched as `spawn_blocking` and runs concurrently with batch N+1 compute
+4. **Inter-batch pipelining**: prefetch worker reads batch N+1 from CKB RocksDB while batch N is being built; fetch uses `std::thread::scope` (not rayon) so blocking RocksDB reads don't starve CPU-bound build work
+5. **RocksDB flush overlap**: materialized rows are sent to a flush channel; a dedicated worker commits them to RocksDB concurrently with the next batch's build
 6. **Parallel block parsing**: `rayon::par_iter` parses blocks within a batch, merges output ranges for global cell indices post-merge
+7. **Bottleneck-driven resource control**: a single `BottleneckController` measures per-batch timing (fetch wait, build CPU, flush wait) and dynamically adjusts `batch_span`, `prefetch_ahead`, `fetch_threads`, and `bg_jobs` toward the current bottleneck stage
 
 ### Bulk-Build Write Classes
 
@@ -425,12 +426,26 @@ The decoder crate (`crates/dob-decoder/`) handles CKB-VM execution, binary cachi
 
 ### Bulk-Build Performance Infrastructure
 
-- **BackgroundSampler**: periodic background thread that samples RocksDB stats and system memory
+- **BottleneckController**: unified resource controller that classifies the current bottleneck
+  (fetch / build / flush) from per-batch timing EMAs and adjusts four knobs each batch.
+  Located in `crates/indexer/src/sync/bottleneck.rs`.
+
+  | Knob             | Range              | Fetch-bound | Build-bound | Flush-bound |
+  | ---------------- | ------------------ | ----------- | ----------- | ----------- |
+  | `batch_span`     | [10K, 100K] blocks | grow        | grow        | shrink      |
+  | `prefetch_ahead` | [1, depth] batches | +1          | -1          | -1          |
+  | `fetch_threads`  | [2, cores]         | +25%        | -25%        | -25%        |
+  | `bg_jobs`        | [N/4, N]           | -1          | hold        | +1          |
+
+  Channel depth (prefetch + flush) is derived from system RAM (16GB→2, 32GB→4, 64GB+→8, max 8).
+
+- **BackgroundSampler**: periodic background thread that samples RocksDB stats and system metrics
   (via cross-platform POSIX APIs) on a configurable interval, decoupling stat collection from the
   hot batch path. Located in `crates/indexer/src/sync/bulk_build/sampler.rs`.
-- **PrefetchChannelHandle**: bounded channel with configurable depth (default 4) for inter-batch
-  block prefetching. Allows up to N batches to be fetched ahead while the current batch is being
-  built. Located in `crates/indexer/src/sync/bulk_build/prefetch.rs`.
+- **PrefetchChannelHandle**: bounded channel for inter-batch block prefetching. Depth and
+  concurrency are controlled by the bottleneck controller. Fetch uses `std::thread::scope`
+  (temporary threads, not rayon) to avoid starving CPU-bound build work.
+  Located in `crates/indexer/src/sync/bulk_build/prefetch.rs`.
 
 ### Bulk-Sync Completion Behavior
 
@@ -454,16 +469,18 @@ When bulk sync completes (transitions from `blocks_remaining > threshold` to `<=
 ### Module Structure
 
 ```
-crates/indexer/src/sync/bulk_build/
-  mod.rs           # Build loop, inter-batch pipelining, flush overlap
-  facts.rs         # FactsArena — per-batch fact graph
-  interner.rs      # IdentityInterner (DashMap) + FrozenIdentityView
-  live_cells.rs    # LiveCellOwner — in-memory UTXO set + protocol facts side-map
-  sequencer.rs     # Canonical tx-order sequencing + input resolution
-  accounting.rs    # Fee/capacity accounting
-  materialize.rs   # StoreBatch assembly + flush_rows_to_stores()
-  sampler.rs       # BackgroundSampler — periodic RocksDB + system stats sampling
-  prefetch.rs      # PrefetchChannelHandle — bounded depth-N block prefetching
+crates/indexer/src/sync/
+  bottleneck.rs    # BottleneckController — unified adaptive resource control
+  bulk_build/
+    mod.rs           # Build loop, inter-batch pipelining, flush overlap
+    facts.rs         # FactsArena — per-batch fact graph
+    interner.rs      # IdentityInterner (DashMap) + FrozenIdentityView
+    live_cells.rs    # LiveCellOwner — in-memory UTXO set + protocol facts side-map
+    sequencer.rs     # Canonical tx-order sequencing + input resolution
+    accounting.rs    # Fee/capacity accounting
+    materialize.rs   # StoreBatch assembly + flush_rows_to_stores()
+    sampler.rs       # BackgroundSampler — periodic RocksDB + system stats sampling
+    prefetch.rs      # PrefetchChannelHandle — bounded block prefetching
   owners/
     mod.rs         # ReducerContext, parallel reducer dispatch
     address.rs     # AddressOwner — balances, cell counts, addr_stats
