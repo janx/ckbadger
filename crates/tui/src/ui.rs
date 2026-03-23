@@ -134,9 +134,7 @@ pub struct App {
     last_overlap_batch_count: u64,
     show_build_subphases: bool,
     log_entries: VecDeque<LogEntry>,
-    sync_event_entries: VecDeque<LogEntry>,
     log_scroll: usize,
-    sync_event_scroll: usize,
     main_tab: MainTab,
     prev_is_bulk_sync: Option<bool>,
     prev_is_syncing: Option<bool>,
@@ -167,13 +165,6 @@ impl App {
             message: "ckbadger-tui started".to_string(),
             level: LogLevel::Info,
         });
-        let mut sync_event_entries = VecDeque::with_capacity(LOG_HISTORY_SIZE);
-        sync_event_entries.push_back(LogEntry {
-            timestamp: Local::now(),
-            message: "sync monitor initialized".to_string(),
-            level: LogLevel::Info,
-        });
-
         Self {
             build_version,
             db,
@@ -205,9 +196,7 @@ impl App {
             last_overlap_batch_count: 0,
             show_build_subphases: false,
             log_entries,
-            sync_event_entries,
             log_scroll: 0,
-            sync_event_scroll: 0,
             main_tab: MainTab::default(),
             prev_is_bulk_sync: None,
             prev_is_syncing: None,
@@ -292,12 +281,7 @@ impl App {
                     self.log_scroll += 1;
                 }
             }
-            MainTab::Sync => {
-                if self.sync_event_scroll < self.sync_event_entries.len().saturating_sub(1) {
-                    self.sync_event_scroll += 1;
-                }
-            }
-            MainTab::System => {}
+            MainTab::Sync | MainTab::System => {}
         }
     }
 
@@ -306,28 +290,21 @@ impl App {
             MainTab::Overview => {
                 self.log_scroll = self.log_scroll.saturating_sub(1);
             }
-            MainTab::Sync => {
-                self.sync_event_scroll = self.sync_event_scroll.saturating_sub(1);
-            }
-            MainTab::System => {}
+            MainTab::Sync | MainTab::System => {}
         }
     }
 
     pub fn scroll_log_to_bottom(&mut self) {
         match self.main_tab {
             MainTab::Overview => self.log_scroll = 0,
-            MainTab::Sync => self.sync_event_scroll = 0,
-            MainTab::System => {}
+            MainTab::Sync | MainTab::System => {}
         }
     }
 
     pub fn scroll_log_to_top(&mut self) {
         match self.main_tab {
             MainTab::Overview => self.log_scroll = self.log_entries.len().saturating_sub(1),
-            MainTab::Sync => {
-                self.sync_event_scroll = self.sync_event_entries.len().saturating_sub(1)
-            }
-            MainTab::System => {}
+            MainTab::Sync | MainTab::System => {}
         }
     }
 
@@ -475,7 +452,7 @@ impl App {
                     .map(|t| t.elapsed().as_secs() >= 30)
                     .unwrap_or(true);
                 if should_alert {
-                    self.push_sync_event_and_log(
+                    self.push_log(
                         format!(
                             "sync rate drop detected: {:.0} -> {:.0} blk/s",
                             prev, block_rate
@@ -496,7 +473,7 @@ impl App {
                     .map(|t| t.elapsed().as_secs() >= 30)
                     .unwrap_or(true);
                 if should_alert {
-                    self.push_sync_event_and_log(
+                    self.push_log(
                         format!(
                             "sync tx rate drop detected: {:.0} -> {:.0} tx/s",
                             prev, tx_rate
@@ -526,28 +503,28 @@ impl App {
 
         if let Some(prev_bulk) = self.prev_is_bulk_sync {
             if prev_bulk && !is_bulk_sync {
-                self.push_sync_event_and_log("bulk sync completed".to_string(), LogLevel::Success);
+                self.push_log("bulk sync completed".to_string(), LogLevel::Success);
             } else if !prev_bulk && is_bulk_sync {
-                self.push_sync_event_and_log("bulk sync started".to_string(), LogLevel::Info);
+                self.push_log("bulk sync started".to_string(), LogLevel::Info);
             }
         }
         self.prev_is_bulk_sync = Some(is_bulk_sync);
 
         if let Some(prev_syncing) = self.prev_is_syncing {
             if prev_syncing && !is_syncing {
-                self.push_sync_event_and_log(
+                self.push_log(
                     "sync completed, now in real-time mode".to_string(),
                     LogLevel::Success,
                 );
             } else if !prev_syncing && is_syncing {
-                self.push_sync_event_and_log("syncing started".to_string(), LogLevel::Info);
+                self.push_log("syncing started".to_string(), LogLevel::Info);
             }
         }
         self.prev_is_syncing = Some(is_syncing);
 
         if pipeline_reset_epoch.is_some() && pipeline_reset_epoch != self.prev_pipeline_reset_epoch
         {
-            self.push_sync_event_and_log(
+            self.push_log(
                 format!(
                     "pipeline reset #{} ({})",
                     pipeline_reset_epoch.unwrap_or(0),
@@ -560,7 +537,7 @@ impl App {
 
         if let Some(prev) = self.prev_bottleneck {
             if prev != bottleneck && bottleneck != SyncBottleneck::Unknown {
-                self.push_sync_event_and_log(
+                self.push_log(
                     format!("bottleneck changed to {}", bottleneck_label(bottleneck)),
                     LogLevel::Info,
                 );
@@ -570,7 +547,7 @@ impl App {
 
         if adaptive_last_reason != self.prev_adaptive_last_reason {
             if let Some(reason) = adaptive_last_reason.as_deref() {
-                self.push_sync_event_and_log(
+                self.push_log(
                     format!("adaptive state changed: {}", reason),
                     LogLevel::Info,
                 );
@@ -584,12 +561,9 @@ impl App {
         let stale_now = stale_secs.is_some_and(|secs| secs > 30);
         if let Some(secs) = stale_secs {
             if stale_now && !self.stale_warning_active {
-                self.push_sync_event_and_log(
-                    format!("sync data is stale ({}s)", secs),
-                    LogLevel::Warning,
-                );
+                self.push_log(format!("sync data is stale ({}s)", secs), LogLevel::Warning);
             } else if !stale_now && self.stale_warning_active {
-                self.push_sync_event_and_log(
+                self.push_log(
                     "sync data freshness recovered".to_string(),
                     LogLevel::Success,
                 );
@@ -617,18 +591,6 @@ impl App {
         });
         while self.log_entries.len() > LOG_HISTORY_SIZE {
             self.log_entries.pop_front();
-        }
-    }
-
-    fn push_sync_event_and_log(&mut self, message: String, level: LogLevel) {
-        self.push_log(message.clone(), level);
-        self.sync_event_entries.push_back(LogEntry {
-            timestamp: Local::now(),
-            message,
-            level,
-        });
-        while self.sync_event_entries.len() > LOG_HISTORY_SIZE {
-            self.sync_event_entries.pop_front();
         }
     }
 }
@@ -978,22 +940,6 @@ fn draw_overview_tail(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
-    let is_bulk_build = app
-        .sync_status
-        .as_ref()
-        .and_then(|s| s.bulk_build.as_ref())
-        .is_some();
-
-    let diag_height: u16 = if is_bulk_build {
-        if app.show_build_subphases {
-            16
-        } else {
-            12
-        }
-    } else {
-        6
-    };
-
     let status_height: u16 = 10;
     let charts_height: u16 = 10;
 
@@ -1002,15 +948,13 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
         .constraints([
             Constraint::Length(status_height),
             Constraint::Length(charts_height),
-            Constraint::Length(diag_height),
-            Constraint::Min(3),
+            Constraint::Min(6),
         ])
         .split(area);
 
     draw_sync_status_row(f, app, chunks[0]);
     draw_sync_charts(f, app, chunks[1]);
     draw_sync_diagnostics(f, app, chunks[2]);
-    draw_sync_events(f, app, chunks[3]);
 }
 
 fn heartbeat_is_on(elapsed_millis: u128) -> bool {
@@ -3112,60 +3056,6 @@ fn detail_right_lines(
         stability_line,
         io_line,
     ]
-}
-
-fn draw_sync_events(f: &mut Frame, app: &App, area: Rect) {
-    let title = if app.sync_event_scroll > 0 {
-        format!("Sync Events [j/k g/G] (scroll +{})", app.sync_event_scroll)
-    } else {
-        "Sync Events [j/k g/G]".to_string()
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(SLATE_800))
-        .title(Span::styled(title, Style::default().fg(FOREGROUND)));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if inner.height == 0 {
-        return;
-    }
-
-    if app.sync_event_entries.is_empty() {
-        f.render_widget(Paragraph::new("No sync events"), inner);
-        return;
-    }
-
-    let visible = inner.height as usize;
-    let total = app.sync_event_entries.len();
-    let base_start = total.saturating_sub(visible);
-    let start = base_start.saturating_sub(app.sync_event_scroll);
-    let end = (start + visible).min(total);
-
-    let lines: Vec<Line> = app
-        .sync_event_entries
-        .iter()
-        .skip(start)
-        .take(end.saturating_sub(start))
-        .map(|entry| {
-            Line::from(vec![
-                Span::styled(
-                    entry.timestamp.format("%H:%M:%S").to_string(),
-                    Style::default().fg(SLATE_500),
-                ),
-                Span::styled(" ", Style::default().fg(SLATE_700)),
-                Span::styled(
-                    entry.level.prefix(),
-                    Style::default().fg(entry.level.color()),
-                ),
-                Span::styled(" ", Style::default().fg(SLATE_700)),
-                Span::styled(&entry.message, Style::default().fg(FOREGROUND)),
-            ])
-        })
-        .collect();
-
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 /// Filter out Completed tasks that finished more than 5 minutes ago.
