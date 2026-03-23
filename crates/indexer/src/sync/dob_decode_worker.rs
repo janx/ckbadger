@@ -5,6 +5,7 @@
 //! decoder binary from chain, executes it in CKB-VM, and writes the
 //! decoded traits + media sources into `CF_DOB_DECODED`.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -18,10 +19,12 @@ use ckbadger_dob_decoder::fetch::fetch_decoder_binary;
 use ckbadger_dob_decoder::types::{DecoderRef, DobTrait};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    ClusterAggregate, CompositionTier, DobDecodedEntry, DobDecodedTrait, ObjectEntry, ObjectExtra,
-    SporeMediaProfile, SporeMediaSource,
+    ClusterAggregate, CompositionTier, DecodedMedia, DobDecodedEntry, DobDecodedTrait, ObjectEntry,
+    ObjectExtra, SporeMediaProfile, SporeMediaSource,
 };
 use ckbadger_store::CkbadgerStore;
+
+use crate::media_store::{sniff_media_type, MediaBlobStore};
 
 use crate::parser::media_source::{
     extract_uri_sources, parse_dna_hex_from_content_text, resolve_tier, uri_seems_image,
@@ -41,6 +44,8 @@ pub struct DobDecodeWorker {
     append_only_store: Arc<CkbadgerStore>,
     /// Disk cache for decoder RISC-V binaries.
     decoder_cache: Arc<DecoderBinaryCache>,
+    /// Content-addressed blob store for decoded media files.
+    media_store: Arc<MediaBlobStore>,
     /// CKB RPC endpoint URL for fetching decoder binaries.
     rpc_url: String,
     /// Reusable RPC client for CKB node calls (connection-pooled).
@@ -56,6 +61,7 @@ impl DobDecodeWorker {
         store: Arc<CkbadgerStore>,
         append_only_store: Arc<CkbadgerStore>,
         decoder_cache: Arc<DecoderBinaryCache>,
+        media_dir: PathBuf,
         rpc_url: String,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
@@ -65,10 +71,12 @@ impl DobDecodeWorker {
             .timeout(std::time::Duration::from_secs(60))
             .build()
             .expect("failed to build HTTP client");
+        let media_store = Arc::new(MediaBlobStore::new(media_dir));
         Self {
             store,
             append_only_store,
             decoder_cache,
+            media_store,
             rpc_url,
             rpc_client,
             http_client,
@@ -135,6 +143,7 @@ impl DobDecodeWorker {
                 store: Arc::clone(&self.store),
                 append_only_store: Arc::clone(&self.append_only_store),
                 decoder_cache: Arc::clone(&self.decoder_cache),
+                media_store: Arc::clone(&self.media_store),
                 rpc_client: self.rpc_client.clone(),
                 http_client: self.http_client.clone(),
                 rpc_url: self.rpc_url.clone(),
@@ -199,7 +208,10 @@ impl DobDecodeWorker {
 
                 // Update media profiles (sequential — may touch same cluster aggregate)
                 for (spore_id, entry) in &decoded_results {
-                    let has_renderable_image = !entry.media.is_empty();
+                    let has_renderable_image = entry
+                        .media
+                        .iter()
+                        .any(|m| m.media_type.starts_with("image/"));
                     if !entry.media_sources.is_empty() || has_renderable_image {
                         if let Err(e) = self.update_spore_media_profile(
                             spore_id,
@@ -408,6 +420,7 @@ struct DecodeContext {
     store: Arc<CkbadgerStore>,
     append_only_store: Arc<CkbadgerStore>,
     decoder_cache: Arc<DecoderBinaryCache>,
+    media_store: Arc<MediaBlobStore>,
     rpc_client: CkbRpcClient,
     http_client: reqwest::Client,
     rpc_url: String,
@@ -509,12 +522,26 @@ async fn decode_single_spore(
         })
         .collect();
 
+    // Store raw output as a media blob
+    let raw_bytes = decoded.raw_output.as_bytes();
+    let media_type = sniff_media_type(raw_bytes);
+    let coll_id = collection_id.unwrap_or(&[] as &[u8]);
+    let hash = ctx.media_store.write(coll_id, raw_bytes)?;
+
+    let media = vec![DecodedMedia {
+        media_type: media_type.to_string(),
+        role: None,
+        size: raw_bytes.len() as u64,
+        hash,
+        step: Some(0),
+    }];
+
     // Extract media sources from decoded trait values
     let media_sources = extract_media_sources_from_traits(&decoded.traits);
 
     Ok(DobDecodedEntry {
         traits,
-        media: vec![],
+        media,
         media_sources,
         decoded_at: chrono::Utc::now().timestamp(),
     })
@@ -1162,11 +1189,13 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let cache_dir = dir.path().join("decoder-cache");
         let decoder_cache = Arc::new(DecoderBinaryCache::new(&cache_dir).unwrap());
+        let media_dir = dir.path().join("media");
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker = DobDecodeWorker::new(
             store.clone(),
             store.clone(),
             decoder_cache,
+            media_dir,
             "http://localhost:9999".to_string(),
             shutdown,
         );
@@ -1249,11 +1278,13 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let cache_dir = dir.path().join("decoder-cache");
         let decoder_cache = Arc::new(DecoderBinaryCache::new(&cache_dir).unwrap());
+        let media_dir = dir.path().join("media");
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker = DobDecodeWorker::new(
             store.clone(),
             store.clone(),
             decoder_cache,
+            media_dir,
             "http://localhost:9999".to_string(),
             shutdown,
         );
@@ -1420,10 +1451,14 @@ mod tests {
             .mount(&server)
             .await;
 
+        let media_dir = tempfile::tempdir().unwrap();
+        let media_store = Arc::new(MediaBlobStore::new(media_dir.path().join("media")));
+
         let ctx = DecodeContext {
             store,
             append_only_store,
             decoder_cache: decoder_cache.clone(),
+            media_store,
             rpc_client: CkbRpcClient::new(server.uri()),
             http_client: reqwest::Client::new(),
             rpc_url: server.uri(),

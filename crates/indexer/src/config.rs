@@ -47,10 +47,17 @@ pub struct Config {
     /// Path to the DOB decoder binary cache directory.
     #[serde(default = "default_decoder_cache_path")]
     pub decoder_cache_path: String,
+    /// Path to the decoded media blobs directory.
+    #[serde(default = "default_media_dir")]
+    pub media_dir: String,
 }
 
 fn default_decoder_cache_path() -> String {
     "data/decoder-cache".to_string()
+}
+
+fn default_media_dir() -> String {
+    "media".to_string()
 }
 
 fn default_batch_size() -> usize {
@@ -162,6 +169,7 @@ mod tests {
             force_startup_cleanup: false,
             store_runtime_config: StoreRuntimeConfig::default(),
             decoder_cache_path: default_decoder_cache_path(),
+            media_dir: default_media_dir(),
         }
     }
 
