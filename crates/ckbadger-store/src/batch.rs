@@ -1103,6 +1103,98 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_script_versions_by_label(), key);
     }
 
+    pub fn put_script_family(&mut self, family_id: &str, info: &ScriptFamilyInfo) {
+        assert!(
+            info.family_id == family_id,
+            "put_script_family batch family_id mismatch: key={}, value={}",
+            family_id,
+            info.family_id
+        );
+        let value = bincode::serialize(info).expect("serialize ScriptFamilyInfo");
+        self.put_cf(
+            self.store.cf_script_families(),
+            family_id.as_bytes(),
+            &value,
+        );
+    }
+
+    pub fn put_script_version_by_family(&mut self, family_id: &str, version_hash: &[u8]) {
+        let key = keys::encode_script_version_by_family_key(family_id, version_hash);
+        self.put_cf(self.store.cf_script_versions_by_family(), key, []);
+    }
+
+    pub fn delete_script_version_by_family(&mut self, family_id: &str, version_hash: &[u8]) {
+        let key = keys::encode_script_version_by_family_key(family_id, version_hash);
+        self.delete_cf(self.store.cf_script_versions_by_family(), key);
+    }
+
+    pub fn put_script_reference_info(
+        &mut self,
+        hash_type: u8,
+        reference_hash: &[u8],
+        info: &ScriptReferenceInfo,
+    ) {
+        assert!(
+            info.hash_type == hash_type,
+            "put_script_reference_info batch hash_type mismatch: key={}, value={}",
+            hash_type,
+            info.hash_type
+        );
+        assert!(
+            info.reference_hash.as_slice() == reference_hash,
+            "put_script_reference_info batch reference_hash mismatch: key=0x{}, value=0x{}",
+            crate::bytes_to_hex(reference_hash),
+            crate::bytes_to_hex(&info.reference_hash)
+        );
+        let key = keys::encode_script_reference_key(hash_type, reference_hash);
+        let value = bincode::serialize(info).expect("serialize ScriptReferenceInfo");
+        self.put_cf(self.store.cf_script_reference_info(), key, &value);
+    }
+
+    pub fn delete_script_reference_info(&mut self, hash_type: u8, reference_hash: &[u8]) {
+        let key = keys::encode_script_reference_key(hash_type, reference_hash);
+        self.delete_cf(self.store.cf_script_reference_info(), key);
+    }
+
+    pub fn put_script_reference_to_version(
+        &mut self,
+        hash_type: u8,
+        reference_hash: &[u8],
+        version_hash: &[u8],
+    ) {
+        assert!(
+            version_hash.len() == 32,
+            "put_script_reference_to_version expects 32-byte version_hash, got {}",
+            version_hash.len()
+        );
+        let key = keys::encode_script_reference_key(hash_type, reference_hash);
+        self.put_cf(
+            self.store.cf_script_reference_to_version(),
+            key,
+            version_hash,
+        );
+    }
+
+    pub fn delete_script_reference_to_version(&mut self, hash_type: u8, reference_hash: &[u8]) {
+        let key = keys::encode_script_reference_key(hash_type, reference_hash);
+        self.delete_cf(self.store.cf_script_reference_to_version(), key);
+    }
+
+    pub fn put_script_family_by_name(&mut self, family_name: &str, family_id: &str) {
+        self.put_cf(
+            self.store.cf_script_family_by_name(),
+            family_name.as_bytes(),
+            family_id.as_bytes(),
+        );
+    }
+
+    pub fn delete_script_family_by_name(&mut self, family_name: &str) {
+        self.delete_cf(
+            self.store.cf_script_family_by_name(),
+            family_name.as_bytes(),
+        );
+    }
+
     // ---- Fiber Channels ----
 
     pub fn put_fiber_channel(&mut self, channel_id: &[u8], channel: &FiberChannel) {
@@ -1658,6 +1750,105 @@ mod tests {
         assert!(err
             .to_string()
             .contains("append-only batch duplicate key blocked"));
+    }
+
+    #[test]
+    fn test_script_family_and_reference_delete_helpers_batch_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let family = ScriptFamilyInfo {
+            family_id: "family/default-lock".to_string(),
+            name: "Default Lock".to_string(),
+            ..Default::default()
+        };
+        let reference = ScriptReferenceInfo {
+            reference_hash: vec![0x33; 32],
+            hash_type: 1,
+            ..Default::default()
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_script_family(&family.family_id, &family);
+        batch.put_script_version_by_family(&family.family_id, &[0x11; 32]);
+        batch.put_script_family_by_name(&family.name, &family.family_id);
+        batch.put_script_reference_info(reference.hash_type, &reference.reference_hash, &reference);
+        batch.put_script_reference_to_version(
+            reference.hash_type,
+            &reference.reference_hash,
+            &[0x55; 32],
+        );
+        batch.commit().unwrap();
+
+        let mut delete_batch = StoreBatch::new(&store);
+        delete_batch.delete_script_version_by_family(&family.family_id, &[0x11; 32]);
+        delete_batch.delete_script_family_by_name(&family.name);
+        delete_batch.delete_script_reference_info(reference.hash_type, &reference.reference_hash);
+        delete_batch
+            .delete_script_reference_to_version(reference.hash_type, &reference.reference_hash);
+        delete_batch.commit().unwrap();
+
+        assert!(store
+            .list_script_version_hashes_by_family(&family.family_id)
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .get_script_family_id_by_name(&family.name)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_script_reference_info(reference.hash_type, &reference.reference_hash)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_script_reference_version_hash(reference.hash_type, &reference.reference_hash)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "put_script_family batch family_id mismatch")]
+    fn test_put_script_family_batch_rejects_mismatched_family_id() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let family = ScriptFamilyInfo {
+            family_id: "family/actual".to_string(),
+            name: "Default Lock".to_string(),
+            ..Default::default()
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_script_family("family/requested", &family);
+    }
+
+    #[test]
+    #[should_panic(expected = "put_script_reference_info batch hash_type mismatch")]
+    fn test_put_script_reference_info_batch_rejects_hash_type_mismatch() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference = ScriptReferenceInfo {
+            reference_hash: vec![0x33; 32],
+            hash_type: 2,
+            ..Default::default()
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_script_reference_info(1, &reference.reference_hash, &reference);
+    }
+
+    #[test]
+    #[should_panic(expected = "put_script_reference_info batch reference_hash mismatch")]
+    fn test_put_script_reference_info_batch_rejects_reference_hash_mismatch() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference = ScriptReferenceInfo {
+            reference_hash: vec![0x33; 32],
+            hash_type: 1,
+            ..Default::default()
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_script_reference_info(1, &[0x44; 32], &reference);
     }
 
     #[test]

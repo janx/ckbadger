@@ -314,6 +314,11 @@ pub const CF_STATS_OBJECT: &str = "stats_object";
 pub const CF_SCRIPT_INFO: &str = "script_info";
 pub const CF_SCRIPT_VERSIONS: &str = "script_versions";
 pub const CF_SCRIPT_VERSIONS_BY_LABEL: &str = "script_versions_by_label";
+pub const CF_SCRIPT_FAMILIES: &str = "script_families";
+pub const CF_SCRIPT_VERSIONS_BY_FAMILY: &str = "script_versions_by_family";
+pub const CF_SCRIPT_REFERENCE_INFO: &str = "script_reference_info";
+pub const CF_SCRIPT_REFERENCE_TO_VERSION: &str = "script_reference_to_version";
+pub const CF_SCRIPT_FAMILY_BY_NAME: &str = "script_family_by_name";
 pub const CF_SYNC_META: &str = "sync_meta";
 pub const CF_SPORE_BY_CLUSTER: &str = "spore_by_cluster";
 pub const CF_CELL_BY_LOCK_CODE: &str = "cell_by_lock_code";
@@ -393,6 +398,11 @@ const CF_WRITE_POLICY_FINAL_SNAPSHOT: &[&str] = &[
     CF_SCRIPT_INFO,
     CF_SCRIPT_VERSIONS,
     CF_SCRIPT_VERSIONS_BY_LABEL,
+    CF_SCRIPT_FAMILIES,
+    CF_SCRIPT_VERSIONS_BY_FAMILY,
+    CF_SCRIPT_REFERENCE_INFO,
+    CF_SCRIPT_REFERENCE_TO_VERSION,
+    CF_SCRIPT_FAMILY_BY_NAME,
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
     CF_CELL_BY_LOCK_CODE,
@@ -483,6 +493,11 @@ pub const ALL_CFS: &[&str] = &[
     CF_SCRIPT_INFO,
     CF_SCRIPT_VERSIONS,
     CF_SCRIPT_VERSIONS_BY_LABEL,
+    CF_SCRIPT_FAMILIES,
+    CF_SCRIPT_VERSIONS_BY_FAMILY,
+    CF_SCRIPT_REFERENCE_INFO,
+    CF_SCRIPT_REFERENCE_TO_VERSION,
+    CF_SCRIPT_FAMILY_BY_NAME,
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
@@ -542,6 +557,11 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_SCRIPT_INFO,
     CF_SCRIPT_VERSIONS,
     CF_SCRIPT_VERSIONS_BY_LABEL,
+    CF_SCRIPT_FAMILIES,
+    CF_SCRIPT_VERSIONS_BY_FAMILY,
+    CF_SCRIPT_REFERENCE_INFO,
+    CF_SCRIPT_REFERENCE_TO_VERSION,
+    CF_SCRIPT_FAMILY_BY_NAME,
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
@@ -1300,6 +1320,21 @@ impl CkbadgerStore {
     }
     pub fn cf_script_versions_by_label(&self) -> &ColumnFamily {
         self.cf(CF_SCRIPT_VERSIONS_BY_LABEL)
+    }
+    pub fn cf_script_families(&self) -> &ColumnFamily {
+        self.cf(CF_SCRIPT_FAMILIES)
+    }
+    pub fn cf_script_versions_by_family(&self) -> &ColumnFamily {
+        self.cf(CF_SCRIPT_VERSIONS_BY_FAMILY)
+    }
+    pub fn cf_script_reference_info(&self) -> &ColumnFamily {
+        self.cf(CF_SCRIPT_REFERENCE_INFO)
+    }
+    pub fn cf_script_reference_to_version(&self) -> &ColumnFamily {
+        self.cf(CF_SCRIPT_REFERENCE_TO_VERSION)
+    }
+    pub fn cf_script_family_by_name(&self) -> &ColumnFamily {
+        self.cf(CF_SCRIPT_FAMILY_BY_NAME)
     }
     pub fn cf_sync_meta(&self) -> &ColumnFamily {
         self.cf(CF_SYNC_META)
@@ -2564,7 +2599,15 @@ mod tests {
 
     #[test]
     fn test_mega_write_cfs_excludes_script_cfs() {
-        for cf in [CF_SCRIPT_VERSIONS, CF_SCRIPT_VERSIONS_BY_LABEL] {
+        for cf in [
+            CF_SCRIPT_VERSIONS,
+            CF_SCRIPT_VERSIONS_BY_LABEL,
+            CF_SCRIPT_FAMILIES,
+            CF_SCRIPT_VERSIONS_BY_FAMILY,
+            CF_SCRIPT_REFERENCE_INFO,
+            CF_SCRIPT_REFERENCE_TO_VERSION,
+            CF_SCRIPT_FAMILY_BY_NAME,
+        ] {
             assert!(
                 !CkbadgerStore::is_mega_write_cf(cf),
                 "{cf} should NOT be in MEGA_WRITE_CFS"

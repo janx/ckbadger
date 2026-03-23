@@ -767,6 +767,30 @@ pub struct ScriptVersionInfo {
     pub associated_code_hash: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScriptFamilyInfo {
+    pub family_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub website: Option<String>,
+    pub category: Option<String>,
+    pub versions_count: i64,
+    pub live_cells_count: i64,
+    pub cells_count: i64,
+    pub owned_capacity_sum: i128,
+    pub owned_knowledge_sum: i128,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScriptReferenceInfo {
+    pub reference_hash: Vec<u8>,
+    pub hash_type: u8,
+    pub live_cells_count: i64,
+    pub cells_count: i64,
+    pub owned_capacity_sum: i128,
+    pub owned_knowledge_sum: i128,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScriptDailyDelta {
     /// Net live capacity change in shannons for this script deployment + kind + day.
