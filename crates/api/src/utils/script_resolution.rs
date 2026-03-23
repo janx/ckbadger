@@ -418,7 +418,14 @@ pub fn resolve_script_by_hash(
                 },
             )));
         }
-        return Ok(CurrentScriptVersionResolution::NotFound);
+        let version_hash = unique_versions[0].clone();
+        let version_info = store.get_script_version(&version_hash)?;
+        return Ok(CurrentScriptVersionResolution::Resolved(Box::new(
+            CurrentScriptVersion {
+                version_hash,
+                version_info,
+            },
+        )));
     }
 
     Ok(CurrentScriptVersionResolution::NotFound)
@@ -664,6 +671,47 @@ mod tests {
                 );
             }
             other => panic!("expected persisted mapping to win, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_script_by_hash_resolves_unique_live_type_match_without_persisted_mapping() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference_hash = vec![0x47; 32];
+        let version_hash = vec![0x58; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(
+            &[0x92; 32],
+            0,
+            &LiveCellInfo {
+                capacity: 100,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x12; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(reference_hash.clone()),
+                type_code_hash: Some(vec![0x13; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 0,
+                occupied_capacity: 80,
+                udt_amount: None,
+                data_hash: Some(version_hash.clone()),
+            },
+            10,
+        );
+        batch.put_cell_by_type(&reference_hash, 10, &[0x92; 32], 0);
+        batch.commit().unwrap();
+
+        let resolution = resolve_script_by_hash(&store, &store, &reference_hash).unwrap();
+        match resolution {
+            CurrentScriptVersionResolution::Resolved(resolved) => {
+                assert_eq!(resolved.version_hash, version_hash);
+                assert!(resolved.version_info.is_none());
+            }
+            other => panic!("expected unique live type match resolution, got {other:?}"),
         }
     }
 
