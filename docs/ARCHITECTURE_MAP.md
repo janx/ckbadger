@@ -6,9 +6,8 @@ Quick navigation map for humans and agents working in `ckbadger`.
 
 1. `crates/indexer` fetches blocks and transactions from CKB RPC.
 2. `crates/indexer/src/parser/` converts raw chain data into domain models.
-3. `crates/indexer/src/db/writer/` writes indexed data into `crates/ckbadger-store` (RocksDB) and sync
-   progress into Redis (optional `redis-cache` feature).
-4. `crates/api` serves REST and WebSocket data from RocksDB (+ Redis cache when enabled).
+3. `crates/indexer/src/db/writer/` writes indexed data into `crates/ckbadger-store` (RocksDB).
+4. `crates/api` serves REST and WebSocket data from RocksDB (secondary read-only mode).
 5. `frontend` consumes `/api/v1` + `/ws` and renders explorer pages.
 
 ## Module Map
@@ -49,5 +48,5 @@ cd frontend && pnpm type-check
 cd frontend && pnpm test
 
 # Data integrity
-cargo run -p ckbadger-indexer -- verify --depth fast
+ckbadger verify --depth fast
 ```

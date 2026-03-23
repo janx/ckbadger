@@ -29,20 +29,11 @@ For any non-trivial task, use this structure in the final summary or PR descript
 
 ## Principle Alignment
 
-- CKB Native: / Local First: / Agent Friendly:
-
-## Scope
-
-- Files changed and why / Any storage/schema impact
-
-## Validation
-
-- Commands run: / Tests added/updated: / Verify checks:
-- Store boundary checks: / Domain vs append-only target confirmed: yes/no / Append-only update/delete path check: pass/fail
-
 ## Result
 
-- Behavior change summary / Re-sync required: yes/no / What to do next
+- Behavior change summary
+- Re-sync required: yes/no
+- What to do next
 ```
 
 **Principle Sync Rule**: If principle wording changes, update both `README.md` and `CLAUDE.md` in the same commit.
