@@ -1582,7 +1582,7 @@ struct DiskAttributionSummary {
 
 #[derive(Debug, Clone)]
 struct DiskAttributionSignals {
-    relevant_sample_count: u64,
+    sample_count: u64,
     valid_disk_windows: u64,
     disk_telemetry_status: String,
     p95_disk_util_pct: Option<f64>,
@@ -1621,14 +1621,7 @@ impl DiskAttributionSignals {
     }
 }
 
-fn relevant_bulk_build_samples(samples: &[BatchSample]) -> Vec<&BatchSample> {
-    samples
-        .iter()
-        .filter(|sample| sample.engine == "bulk_build")
-        .collect()
-}
-
-fn disk_telemetry_status_for_samples(samples: &[&BatchSample]) -> String {
+fn disk_telemetry_status_for_samples(samples: &[BatchSample]) -> String {
     let total = samples.len();
     if total == 0 {
         return "unavailable".to_string();
@@ -1661,7 +1654,7 @@ fn disk_telemetry_status_for_samples(samples: &[&BatchSample]) -> String {
     "ok".to_string()
 }
 
-fn collect_disk_attribution_signals(samples: &[&BatchSample]) -> DiskAttributionSignals {
+fn collect_disk_attribution_signals(samples: &[BatchSample]) -> DiskAttributionSignals {
     let disk_util_pct: Vec<Option<f64>> = samples.iter().map(|s| s.disk_util_pct).collect();
     let disk_await_ms: Vec<Option<f64>> = samples.iter().map(|s| s.disk_await_ms).collect();
     let disk_avg_queue_depth: Vec<Option<f64>> =
@@ -1689,7 +1682,7 @@ fn collect_disk_attribution_signals(samples: &[&BatchSample]) -> DiskAttribution
         .count() as u64;
 
     DiskAttributionSignals {
-        relevant_sample_count: samples.len() as u64,
+        sample_count: samples.len() as u64,
         valid_disk_windows,
         disk_telemetry_status: disk_telemetry_status_for_samples(samples),
         p95_disk_util_pct: percentile_valid(&disk_util_pct, 95),
@@ -1724,32 +1717,31 @@ fn classify_disk_attribution(signals: &DiskAttributionSignals) -> DiskAttributio
 }
 
 fn summarize_disk_attribution(samples: &[BatchSample]) -> DiskAttributionSummary {
-    let relevant_samples = relevant_bulk_build_samples(samples);
-    if relevant_samples.is_empty() {
+    if samples.is_empty() {
         return DiskAttributionSummary {
             classification: DiskAttribution::Inconclusive,
-            evidence: "no relevant bulk-build samples; attribution not attempted".to_string(),
+            evidence: "no run samples; attribution not attempted".to_string(),
         };
     }
 
-    let disk_telemetry_status = disk_telemetry_status_for_samples(&relevant_samples);
+    let disk_telemetry_status = disk_telemetry_status_for_samples(samples);
     if disk_telemetry_status != "ok" {
         return DiskAttributionSummary {
             classification: DiskAttribution::Inconclusive,
             evidence: format!(
-                "{} relevant bulk-build samples; disk telemetry coverage {}; attribution not attempted",
-                relevant_samples.len(),
+                "{} samples; disk telemetry coverage {}; attribution not attempted",
+                samples.len(),
                 disk_telemetry_status
             ),
         };
     }
 
-    let signals = collect_disk_attribution_signals(&relevant_samples);
+    let signals = collect_disk_attribution_signals(samples);
     let classification = classify_disk_attribution(&signals);
     let evidence = match classification {
         DiskAttribution::DeviceSaturated => format!(
-            "{} relevant bulk-build samples, disk telemetry coverage {}, {} valid disk windows, p95 disk util {}%, p95 await {} ms, max qd {}, p95 flush_wait {} ms, p95 flush {} ms, max flush_channel_pending {}",
-            signals.relevant_sample_count,
+            "{} samples, disk telemetry coverage {}, {} valid disk windows, p95 disk util {}%, p95 await {} ms, max qd {}, p95 flush_wait {} ms, p95 flush {} ms, max flush_channel_pending {}",
+            signals.sample_count,
             signals.disk_telemetry_status,
             signals.valid_disk_windows,
             format_optional_float(signals.p95_disk_util_pct),
@@ -1760,8 +1752,8 @@ fn summarize_disk_attribution(samples: &[BatchSample]) -> DiskAttributionSummary
             format_float(signals.max_flush_channel_pending),
         ),
         DiskAttribution::RocksDbBacklog => format!(
-            "{} relevant bulk-build samples, disk telemetry coverage {}, {} valid disk windows, p95 disk util {}%, p95 await {} ms, max compaction {} MB, max l0 files {}, max imm memtables {}, p95 flush_wait {} ms, max flush_channel_pending {}",
-            signals.relevant_sample_count,
+            "{} samples, disk telemetry coverage {}, {} valid disk windows, p95 disk util {}%, p95 await {} ms, max compaction {} MB, max l0 files {}, max imm memtables {}, p95 flush_wait {} ms, max flush_channel_pending {}",
+            signals.sample_count,
             signals.disk_telemetry_status,
             signals.valid_disk_windows,
             format_optional_float(signals.p95_disk_util_pct),
@@ -1773,8 +1765,8 @@ fn summarize_disk_attribution(samples: &[BatchSample]) -> DiskAttributionSummary
             format_float(signals.max_flush_channel_pending),
         ),
         DiskAttribution::CoordinationGap => format!(
-            "{} relevant bulk-build samples, disk telemetry coverage {}, {} valid disk windows, p95 flush_wait {} ms, p95 disk util {}%, p95 await {} ms, max flush_channel_pending {}, max compaction {} MB",
-            signals.relevant_sample_count,
+            "{} samples, disk telemetry coverage {}, {} valid disk windows, p95 flush_wait {} ms, p95 disk util {}%, p95 await {} ms, max flush_channel_pending {}, max compaction {} MB",
+            signals.sample_count,
             signals.disk_telemetry_status,
             signals.valid_disk_windows,
             format_float(signals.p95_flush_wait_ms),
@@ -1784,8 +1776,8 @@ fn summarize_disk_attribution(samples: &[BatchSample]) -> DiskAttributionSummary
             format_float(signals.max_compaction_pending_mb),
         ),
         DiskAttribution::Inconclusive => format!(
-            "{} relevant bulk-build samples, disk telemetry coverage {}, {} valid disk windows, p95 disk util {}%, p95 await {} ms, max qd {}, p95 flush_wait {} ms, max flush_channel_pending {}, max compaction {} MB, max l0 files {}, max imm memtables {}",
-            signals.relevant_sample_count,
+            "{} samples, disk telemetry coverage {}, {} valid disk windows, p95 disk util {}%, p95 await {} ms, max qd {}, p95 flush_wait {} ms, max flush_channel_pending {}, max compaction {} MB, max l0 files {}, max imm memtables {}",
+            signals.sample_count,
             signals.disk_telemetry_status,
             signals.valid_disk_windows,
             format_optional_float(signals.p95_disk_util_pct),
@@ -2477,7 +2469,7 @@ mod tests {
     }
 
     #[test]
-    fn report_is_inconclusive_when_relevant_disk_coverage_is_partial() {
+    fn report_is_inconclusive_when_run_disk_coverage_is_partial() {
         let dir = TempDir::new().unwrap();
         let mut run =
             BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
@@ -2526,7 +2518,7 @@ mod tests {
     }
 
     #[test]
-    fn report_ignores_pipeline_samples_when_attributing() {
+    fn report_is_inconclusive_when_mixed_samples_have_partial_disk_coverage() {
         let dir = TempDir::new().unwrap();
         let mut run =
             BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
@@ -2541,7 +2533,7 @@ mod tests {
         pipeline.disk_state = Some("saturated".to_string());
         run.record_batch_sample(pipeline).unwrap();
 
-        run.record_batch_sample(attribution_sample(
+        let mut bulk_build = attribution_sample(
             11,
             1.1,
             42.0,
@@ -2554,14 +2546,15 @@ mod tests {
             12.0,
             18.0,
             0,
-        ))
-        .unwrap();
+        );
+        bulk_build.disk_state = Some("unavailable".to_string());
+        run.record_batch_sample(bulk_build).unwrap();
 
         run.finish_completed().unwrap();
 
         let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
         assert!(report.contains("Primary classification: inconclusive"));
-        assert!(report.contains("relevant bulk-build samples"));
+        assert!(report.contains("disk telemetry coverage partial"));
         assert!(!report.contains("Primary classification: device_saturated"));
         assert!(!report.contains("Primary classification: rocksdb_backlog"));
         assert!(!report.contains("Primary classification: coordination_gap"));
