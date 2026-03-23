@@ -243,32 +243,43 @@ fn resolve_reference_version_hash(
 ) -> Result<Option<Vec<u8>>> {
     match hash_type {
         0 | 2 | 4 => Ok(Some(reference_hash.to_vec())),
-        1 => {
-            let mut seen = HashSet::new();
-            let mut versions = Vec::new();
-            for (tx_hash, output_index, cell) in
-                store.list_cells_by_type(reference_hash, usize::MAX, None, append_only_store)?
-            {
-                let version_hash = cell.cell.data_hash.clone().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "live type-referenced code cell missing data_hash while rebuilding reference rollups: reference_hash=0x{}, outpoint=0x{}:{}",
-                        hex::encode(reference_hash),
-                        hex::encode(&tx_hash),
-                        output_index
-                    )
-                })?;
-                if seen.insert(version_hash.clone()) {
-                    versions.push(version_hash);
-                }
-            }
-            Ok((versions.len() == 1).then(|| versions.remove(0)))
-        }
+        1 => Ok(
+            resolve_type_reference_live_versions(store, append_only_store, reference_hash)?
+                .into_iter()
+                .next(),
+        ),
         _ => bail!(
             "unsupported script reference hash_type while rebuilding rollups: reference_hash=0x{}, hash_type={}, expected_one_of=[0,1,2,4]",
             hex::encode(reference_hash),
             hash_type
         ),
     }
+}
+
+fn resolve_type_reference_live_versions(
+    store: &ckbadger_store::CkbadgerStore,
+    append_only_store: &ckbadger_store::CkbadgerStore,
+    reference_hash: &[u8],
+) -> Result<Vec<Vec<u8>>> {
+    let mut seen = HashSet::new();
+    let mut versions = Vec::new();
+    for (tx_hash, output_index, cell) in
+        store.list_cells_by_type(reference_hash, usize::MAX, None, append_only_store)?
+    {
+        let version_hash = cell.cell.data_hash.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "live type-referenced code cell missing data_hash while rebuilding reference rollups: reference_hash=0x{}, outpoint=0x{}:{}",
+                hex::encode(reference_hash),
+                hex::encode(&tx_hash),
+                output_index
+            )
+        })?;
+        if seen.insert(version_hash.clone()) {
+            versions.push(version_hash);
+        }
+    }
+    versions.sort();
+    Ok(versions)
 }
 
 #[derive(Debug, Default)]
@@ -473,12 +484,25 @@ pub(crate) fn collect_current_script_reference_rollup_state(
         .list_script_reference_infos()?
         .into_iter()
         .map(|((reference_hash, hash_type), _info)| {
-            let version_hash = resolve_reference_version_hash(
-                store,
-                append_only_store,
-                &reference_hash,
-                hash_type,
-            )?;
+            let version_hash = if hash_type == 1 {
+                let live_versions = resolve_type_reference_live_versions(
+                    store,
+                    append_only_store,
+                    &reference_hash,
+                )?;
+                match live_versions.len() {
+                    0 => store.get_script_reference_version_hash(1, &reference_hash)?,
+                    1 => Some(live_versions[0].clone()),
+                    _ => None,
+                }
+            } else {
+                resolve_reference_version_hash(
+                    store,
+                    append_only_store,
+                    &reference_hash,
+                    hash_type,
+                )?
+            };
             Ok(((reference_hash, hash_type), version_hash))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1239,12 +1263,18 @@ impl BatchWriter {
         batch: &mut StoreBatch,
     ) -> Result<()> {
         for reference_hash in reference_hashes {
-            let version_hash = resolve_reference_version_hash(
+            let live_versions = resolve_type_reference_live_versions(
                 self.store.as_ref(),
                 self.append_only_store.as_ref(),
                 reference_hash,
-                1,
             )?;
+            let version_hash = match live_versions.len() {
+                0 => self
+                    .store
+                    .get_script_reference_version_hash(1, reference_hash)?,
+                1 => Some(live_versions[0].clone()),
+                _ => None,
+            };
             if let Some(version_hash) = version_hash {
                 batch.put_script_reference_to_version(1, reference_hash, &version_hash);
             } else {
@@ -1822,6 +1852,35 @@ mod tests {
             .get_script_reference_version_hash(1, &reference_hash)
             .unwrap();
         assert_eq!(resolved, Some(live_version));
+    }
+
+    #[test]
+    fn test_refresh_type_script_reference_version_mapping_preserves_existing_value_without_live_cells(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let reference_hash = vec![0x72; 32];
+        let persisted_version = vec![0x82; 32];
+
+        store
+            .put_script_reference_to_version_direct(1, &reference_hash, &persisted_version)
+            .unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .refresh_type_script_reference_version_mappings(
+                std::slice::from_ref(&reference_hash),
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let resolved = store
+            .get_script_reference_version_hash(1, &reference_hash)
+            .unwrap();
+        assert_eq!(resolved, Some(persisted_version));
     }
 
     #[test]
