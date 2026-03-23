@@ -787,122 +787,78 @@ fn draw_content(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_overview_content(f: &mut Frame, app: &App, area: Rect) {
     let log_min_height = overview_log_min_height();
-    let bg_height = background_tasks_height(app);
     match detect_layout_density(app, area) {
         LayoutDensity::Compact => match compact_overview_layout(area) {
             CompactOverviewLayout::MemoryOnly => {
-                let mut constraints = vec![Constraint::Length(6), Constraint::Length(7)];
-                if bg_height > 0 {
-                    constraints.push(Constraint::Length(bg_height));
-                }
-                constraints.push(Constraint::Length(8));
-                constraints.push(Constraint::Min(log_min_height));
-
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints(constraints)
+                    .constraints([
+                        Constraint::Length(6),
+                        Constraint::Length(7),
+                        Constraint::Length(8),
+                        Constraint::Min(log_min_height),
+                    ])
                     .split(area);
 
-                let mut i = 0;
-                draw_overview_kpis(f, app, chunks[i]);
-                i += 1;
-                draw_chain_info(f, app, chunks[i]);
-                i += 1;
-                if bg_height > 0 {
-                    draw_background_tasks(f, app, chunks[i]);
-                    i += 1;
-                }
-                draw_memory_stats(f, app, chunks[i]);
-                i += 1;
-                draw_overview_tail(f, app, chunks[i]);
+                draw_overview_kpis(f, app, chunks[0]);
+                draw_chain_info(f, app, chunks[1]);
+                draw_memory_stats(f, app, chunks[2]);
+                draw_overview_tail(f, app, chunks[3]);
             }
             CompactOverviewLayout::MemoryAndStorage => {
-                let mut constraints = vec![Constraint::Length(6), Constraint::Length(7)];
-                if bg_height > 0 {
-                    constraints.push(Constraint::Length(bg_height));
-                }
-                constraints.push(Constraint::Length(8));
-                constraints.push(Constraint::Length(8));
-                constraints.push(Constraint::Min(log_min_height));
-
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints(constraints)
+                    .constraints([
+                        Constraint::Length(6),
+                        Constraint::Length(7),
+                        Constraint::Length(8),
+                        Constraint::Length(8),
+                        Constraint::Min(log_min_height),
+                    ])
                     .split(area);
 
-                let mut i = 0;
-                draw_overview_kpis(f, app, chunks[i]);
-                i += 1;
-                draw_chain_info(f, app, chunks[i]);
-                i += 1;
-                if bg_height > 0 {
-                    draw_background_tasks(f, app, chunks[i]);
-                    i += 1;
-                }
-                draw_memory_stats(f, app, chunks[i]);
-                i += 1;
-                draw_storage_health(f, app, chunks[i]);
-                i += 1;
-                draw_overview_tail(f, app, chunks[i]);
+                draw_overview_kpis(f, app, chunks[0]);
+                draw_chain_info(f, app, chunks[1]);
+                draw_memory_stats(f, app, chunks[2]);
+                draw_storage_health(f, app, chunks[3]);
+                draw_overview_tail(f, app, chunks[4]);
             }
         },
         LayoutDensity::Standard => {
-            let mut constraints = vec![Constraint::Length(6), Constraint::Length(7)];
-            if bg_height > 0 {
-                constraints.push(Constraint::Length(bg_height));
-            }
-            constraints.push(Constraint::Length(8));
-            constraints.push(Constraint::Length(8));
-            constraints.push(Constraint::Min(log_min_height));
-
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints(constraints)
+                .constraints([
+                    Constraint::Length(6),
+                    Constraint::Length(7),
+                    Constraint::Length(8),
+                    Constraint::Length(8),
+                    Constraint::Min(log_min_height),
+                ])
                 .split(area);
 
-            let mut i = 0;
-            draw_overview_kpis(f, app, chunks[i]);
-            i += 1;
-            draw_chain_info(f, app, chunks[i]);
-            i += 1;
-            if bg_height > 0 {
-                draw_background_tasks(f, app, chunks[i]);
-                i += 1;
-            }
-            draw_memory_stats(f, app, chunks[i]);
-            i += 1;
-            draw_storage_health(f, app, chunks[i]);
-            i += 1;
-            draw_overview_tail(f, app, chunks[i]);
+            draw_overview_kpis(f, app, chunks[0]);
+            draw_chain_info(f, app, chunks[1]);
+            draw_memory_stats(f, app, chunks[2]);
+            draw_storage_health(f, app, chunks[3]);
+            draw_overview_tail(f, app, chunks[4]);
         }
         LayoutDensity::Wide => {
-            let mut constraints = vec![Constraint::Length(6), Constraint::Length(7)];
-            if bg_height > 0 {
-                constraints.push(Constraint::Length(bg_height));
-            }
-            constraints.push(Constraint::Length(8));
-            constraints.push(Constraint::Length(8));
-            constraints.push(Constraint::Min(log_min_height));
-
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints(constraints)
+                .constraints([
+                    Constraint::Length(6),
+                    Constraint::Length(7),
+                    Constraint::Length(8),
+                    Constraint::Length(8),
+                    Constraint::Min(log_min_height),
+                ])
                 .split(area);
 
-            let mut i = 0;
-            draw_overview_kpis(f, app, chunks[i]);
-            i += 1;
-            draw_chain_info(f, app, chunks[i]);
-            i += 1;
-            if bg_height > 0 {
-                draw_background_tasks(f, app, chunks[i]);
-                i += 1;
-            }
-            draw_memory_stats(f, app, chunks[i]);
-            i += 1;
-            draw_storage_health(f, app, chunks[i]);
-            i += 1;
-            draw_overview_tail(f, app, chunks[i]);
+            draw_overview_kpis(f, app, chunks[0]);
+            draw_chain_info(f, app, chunks[1]);
+            draw_memory_stats(f, app, chunks[2]);
+            draw_storage_health(f, app, chunks[3]);
+            draw_overview_tail(f, app, chunks[4]);
         }
     }
 }
@@ -942,19 +898,37 @@ fn draw_overview_tail(f: &mut Frame, app: &App, area: Rect) {
 fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
     let status_height: u16 = 10;
     let charts_height: u16 = 10;
+    let bg_height = background_tasks_height(app);
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(status_height),
-            Constraint::Length(charts_height),
-            Constraint::Min(6),
-        ])
-        .split(area);
+    if bg_height > 0 {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(status_height),
+                Constraint::Length(charts_height),
+                Constraint::Min(6),
+                Constraint::Length(bg_height.min(12)),
+            ])
+            .split(area);
 
-    draw_sync_status_row(f, app, chunks[0]);
-    draw_sync_charts(f, app, chunks[1]);
-    draw_sync_diagnostics(f, app, chunks[2]);
+        draw_sync_status_row(f, app, chunks[0]);
+        draw_sync_charts(f, app, chunks[1]);
+        draw_sync_diagnostics(f, app, chunks[2]);
+        draw_background_tasks(f, app, chunks[3]);
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(status_height),
+                Constraint::Length(charts_height),
+                Constraint::Min(6),
+            ])
+            .split(area);
+
+        draw_sync_status_row(f, app, chunks[0]);
+        draw_sync_charts(f, app, chunks[1]);
+        draw_sync_diagnostics(f, app, chunks[2]);
+    }
 }
 
 fn heartbeat_is_on(elapsed_millis: u128) -> bool {
