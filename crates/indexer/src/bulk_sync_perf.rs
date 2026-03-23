@@ -10,6 +10,15 @@ const STATUS_RUNNING: &str = "running";
 const STATUS_COMPLETED: &str = "completed";
 const STATUS_FAILED: &str = "failed";
 const STALL_THRESHOLD_MULTIPLIER: f64 = 2.0;
+const DISK_UTIL_SATURATION_THRESHOLD: f64 = 85.0;
+const DISK_AWAIT_SATURATION_THRESHOLD_MS: f64 = 8.0;
+const DISK_QUEUE_DEPTH_SATURATION_THRESHOLD: f64 = 1.0;
+const FLUSH_PRESSURE_THRESHOLD_MS: f64 = 40.0;
+const FLUSH_WAIT_PRESSURE_THRESHOLD_MS: f64 = 80.0;
+const FLUSH_CHANNEL_PENDING_PRESSURE_THRESHOLD: f64 = 1.0;
+const COMPACTION_BACKLOG_THRESHOLD_MB: f64 = 256.0;
+const L0_BACKLOG_THRESHOLD: f64 = 32.0;
+const IMM_MEMTABLE_BACKLOG_THRESHOLD: f64 = 8.0;
 
 #[derive(Debug, Clone)]
 pub struct RocksDbConfig {
@@ -871,6 +880,8 @@ impl BulkSyncPerfRun {
         ));
         content.push('\n');
 
+        self.write_report_disk_attribution_section(&mut content);
+
         content.push_str("## Materialization\n\n");
         content.push_str("| Metric | Value |\n");
         content.push_str("| --- | ---: |\n");
@@ -1064,6 +1075,16 @@ impl BulkSyncPerfRun {
 
         fs::write(self.run_dir.join("report.md"), content)?;
         Ok(())
+    }
+
+    fn write_report_disk_attribution_section(&self, content: &mut String) {
+        let summary = summarize_disk_attribution(&self.batch_samples);
+        content.push_str("## Disk / Flush Attribution\n\n");
+        content.push_str(&format!(
+            "- Primary classification: {}\n",
+            summary.classification.as_str()
+        ));
+        content.push_str(&format!("- Evidence: {}\n\n", summary.evidence));
     }
 
     fn write_report_wall_clock_breakdown(
@@ -1534,6 +1555,178 @@ fn disk_telemetry_status(samples: &[BatchSample]) -> String {
     "ok".to_string()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiskAttribution {
+    DeviceSaturated,
+    RocksDbBacklog,
+    CoordinationGap,
+    Inconclusive,
+}
+
+impl DiskAttribution {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::DeviceSaturated => "device_saturated",
+            Self::RocksDbBacklog => "rocksdb_backlog",
+            Self::CoordinationGap => "coordination_gap",
+            Self::Inconclusive => "inconclusive",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DiskAttributionSummary {
+    classification: DiskAttribution,
+    evidence: String,
+}
+
+#[derive(Debug, Clone)]
+struct DiskAttributionSignals {
+    valid_disk_windows: u64,
+    p95_disk_util_pct: Option<f64>,
+    p95_disk_await_ms: Option<f64>,
+    max_disk_avg_queue_depth: Option<f64>,
+    p95_flush_ms: f64,
+    p95_flush_wait_ms: f64,
+    max_flush_channel_pending: f64,
+    max_compaction_pending_mb: f64,
+    max_l0_files: f64,
+    max_imm_memtables: f64,
+}
+
+impl DiskAttributionSignals {
+    fn device_pressure(&self) -> bool {
+        self.p95_disk_util_pct
+            .is_some_and(|v| v >= DISK_UTIL_SATURATION_THRESHOLD)
+            || self
+                .p95_disk_await_ms
+                .is_some_and(|v| v >= DISK_AWAIT_SATURATION_THRESHOLD_MS)
+            || self
+                .max_disk_avg_queue_depth
+                .is_some_and(|v| v >= DISK_QUEUE_DEPTH_SATURATION_THRESHOLD)
+    }
+
+    fn flush_pressure(&self) -> bool {
+        self.p95_flush_ms >= FLUSH_PRESSURE_THRESHOLD_MS
+            || self.p95_flush_wait_ms >= FLUSH_WAIT_PRESSURE_THRESHOLD_MS
+            || self.max_flush_channel_pending >= FLUSH_CHANNEL_PENDING_PRESSURE_THRESHOLD
+    }
+
+    fn backlog_pressure(&self) -> bool {
+        self.max_compaction_pending_mb >= COMPACTION_BACKLOG_THRESHOLD_MB
+            || self.max_l0_files >= L0_BACKLOG_THRESHOLD
+            || self.max_imm_memtables >= IMM_MEMTABLE_BACKLOG_THRESHOLD
+    }
+}
+
+fn collect_disk_attribution_signals(samples: &[BatchSample]) -> DiskAttributionSignals {
+    let disk_util_pct: Vec<Option<f64>> = samples.iter().map(|s| s.disk_util_pct).collect();
+    let disk_await_ms: Vec<Option<f64>> = samples.iter().map(|s| s.disk_await_ms).collect();
+    let disk_avg_queue_depth: Vec<Option<f64>> =
+        samples.iter().map(|s| s.disk_avg_queue_depth).collect();
+    let flush_ms: Vec<f64> = samples.iter().map(|s| s.flush_ms).collect();
+    let flush_wait_ms: Vec<f64> = samples.iter().map(|s| s.flush_wait_ms).collect();
+    let flush_channel_pending: Vec<f64> = samples
+        .iter()
+        .map(|s| s.flush_channel_pending as f64)
+        .collect();
+    let compaction_pending_mb: Vec<f64> = samples
+        .iter()
+        .map(|s| s.compaction_pending_mb as f64)
+        .collect();
+    let l0_files: Vec<f64> = samples.iter().map(|s| s.l0_files as f64).collect();
+    let imm_memtables: Vec<f64> = samples.iter().map(|s| s.imm_memtables as f64).collect();
+
+    let valid_disk_windows = samples
+        .iter()
+        .filter(|sample| {
+            sample.disk_util_pct.is_some()
+                || sample.disk_await_ms.is_some()
+                || sample.disk_avg_queue_depth.is_some()
+        })
+        .count() as u64;
+
+    DiskAttributionSignals {
+        valid_disk_windows,
+        p95_disk_util_pct: percentile_valid(&disk_util_pct, 95),
+        p95_disk_await_ms: percentile_valid(&disk_await_ms, 95),
+        max_disk_avg_queue_depth: max_valid(&disk_avg_queue_depth),
+        p95_flush_ms: percentile(flush_ms, 95),
+        p95_flush_wait_ms: percentile(flush_wait_ms, 95),
+        max_flush_channel_pending: flush_channel_pending.iter().copied().fold(0.0, f64::max),
+        max_compaction_pending_mb: compaction_pending_mb.iter().copied().fold(0.0, f64::max),
+        max_l0_files: l0_files.iter().copied().fold(0.0, f64::max),
+        max_imm_memtables: imm_memtables.iter().copied().fold(0.0, f64::max),
+    }
+}
+
+fn classify_disk_attribution(signals: &DiskAttributionSignals) -> DiskAttribution {
+    if signals.device_pressure() && signals.flush_pressure() {
+        return DiskAttribution::DeviceSaturated;
+    }
+
+    if signals.backlog_pressure() && signals.flush_pressure() && !signals.device_pressure() {
+        return DiskAttribution::RocksDbBacklog;
+    }
+
+    if signals.p95_flush_wait_ms >= FLUSH_WAIT_PRESSURE_THRESHOLD_MS
+        && !signals.device_pressure()
+        && !signals.backlog_pressure()
+    {
+        return DiskAttribution::CoordinationGap;
+    }
+
+    DiskAttribution::Inconclusive
+}
+
+fn summarize_disk_attribution(samples: &[BatchSample]) -> DiskAttributionSummary {
+    let signals = collect_disk_attribution_signals(samples);
+    let classification = classify_disk_attribution(&signals);
+    let evidence = match classification {
+        DiskAttribution::DeviceSaturated => format!(
+            "{} valid disk windows, p95 disk util {}%, p95 await {} ms, max qd {}, p95 flush_wait {} ms, p95 flush {} ms",
+            signals.valid_disk_windows,
+            format_optional_float(signals.p95_disk_util_pct),
+            format_optional_float(signals.p95_disk_await_ms),
+            format_optional_float(signals.max_disk_avg_queue_depth),
+            format_float(signals.p95_flush_wait_ms),
+            format_float(signals.p95_flush_ms),
+        ),
+        DiskAttribution::RocksDbBacklog => format!(
+            "{} valid disk windows, p95 disk util {}%, p95 await {} ms, max compaction {} MB, max l0 files {}, max imm memtables {}, p95 flush_wait {} ms",
+            signals.valid_disk_windows,
+            format_optional_float(signals.p95_disk_util_pct),
+            format_optional_float(signals.p95_disk_await_ms),
+            format_float(signals.max_compaction_pending_mb),
+            format_float(signals.max_l0_files),
+            format_float(signals.max_imm_memtables),
+            format_float(signals.p95_flush_wait_ms),
+        ),
+        DiskAttribution::CoordinationGap => format!(
+            "{} valid disk windows, p95 flush_wait {} ms, p95 disk util {}%, p95 await {} ms, max compaction {} MB",
+            signals.valid_disk_windows,
+            format_float(signals.p95_flush_wait_ms),
+            format_optional_float(signals.p95_disk_util_pct),
+            format_optional_float(signals.p95_disk_await_ms),
+            format_float(signals.max_compaction_pending_mb),
+        ),
+        DiskAttribution::Inconclusive => format!(
+            "{} valid disk windows, p95 disk util {}%, p95 await {} ms, max qd {}, p95 flush_wait {} ms, max compaction {} MB",
+            signals.valid_disk_windows,
+            format_optional_float(signals.p95_disk_util_pct),
+            format_optional_float(signals.p95_disk_await_ms),
+            format_optional_float(signals.max_disk_avg_queue_depth),
+            format_float(signals.p95_flush_wait_ms),
+            format_float(signals.max_compaction_pending_mb),
+        ),
+    };
+
+    DiskAttributionSummary {
+        classification,
+        evidence,
+    }
+}
+
 fn owner_memory_entries(entries: &HashMap<String, u64>) -> Vec<(String, u64)> {
     let mut rows = entries
         .iter()
@@ -1696,6 +1889,38 @@ mod tests {
         sample.disk_read_mb_s = read_mb_s;
         sample.disk_read_iops = read_iops;
         sample.disk_in_flight = in_flight;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn attribution_sample(
+        blocks: u64,
+        batch_seconds: f64,
+        commit_ms: f64,
+        compaction_pending_mb: u64,
+        l0_files: u64,
+        imm_memtables: u64,
+        disk_util_pct: Option<f64>,
+        disk_await_ms: Option<f64>,
+        disk_avg_queue_depth: Option<f64>,
+        flush_ms: f64,
+        flush_wait_ms: f64,
+        flush_channel_pending: u64,
+    ) -> BatchSample {
+        let mut sample = test_batch_sample(
+            blocks,
+            batch_seconds,
+            commit_ms,
+            compaction_pending_mb,
+            l0_files,
+            imm_memtables,
+        );
+        sample.disk_util_pct = disk_util_pct;
+        sample.disk_await_ms = disk_await_ms;
+        sample.disk_avg_queue_depth = disk_avg_queue_depth;
+        sample.flush_ms = flush_ms;
+        sample.flush_wait_ms = flush_wait_ms;
+        sample.flush_channel_pending = flush_channel_pending;
+        sample
     }
 
     fn test_env_snapshot() -> EnvironmentSnapshot {
@@ -2030,6 +2255,139 @@ mod tests {
         assert!(metrics.contains("saturated_window_count=0"));
         assert!(metrics.contains("saturated_window_ratio=0.000"));
         assert!(metrics.contains("disk_telemetry_status=partial"));
+    }
+
+    #[test]
+    fn report_classifies_device_saturation_when_disk_and_flush_rise_together() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        run.record_batch_sample(attribution_sample(
+            10,
+            1.0,
+            40.0,
+            128,
+            12,
+            2,
+            Some(96.5),
+            Some(18.0),
+            Some(3.25),
+            120.0,
+            412.0,
+            4,
+        ))
+        .unwrap();
+        run.record_batch_sample(attribution_sample(
+            12,
+            1.2,
+            44.0,
+            96,
+            10,
+            2,
+            Some(94.0),
+            Some(16.5),
+            Some(2.75),
+            104.0,
+            280.0,
+            3,
+        ))
+        .unwrap();
+
+        run.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        assert!(report.contains("## Disk / Flush Attribution"));
+        assert!(report.contains("Primary classification: device_saturated"));
+        assert!(report.contains("Evidence:"));
+    }
+
+    #[test]
+    fn report_classifies_rocksdb_backlog_before_device_saturation() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        run.record_batch_sample(attribution_sample(
+            10,
+            1.0,
+            40.0,
+            512,
+            48,
+            12,
+            Some(42.0),
+            Some(2.0),
+            Some(0.35),
+            140.0,
+            96.0,
+            2,
+        ))
+        .unwrap();
+        run.record_batch_sample(attribution_sample(
+            11,
+            1.1,
+            42.0,
+            640,
+            64,
+            16,
+            Some(38.0),
+            Some(1.8),
+            Some(0.25),
+            150.0,
+            120.0,
+            3,
+        ))
+        .unwrap();
+
+        run.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        assert!(report.contains("Primary classification: rocksdb_backlog"));
+        assert!(report.contains("compaction"));
+    }
+
+    #[test]
+    fn report_classifies_coordination_gap_when_flush_wait_lacks_disk_pressure() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        run.record_batch_sample(attribution_sample(
+            10,
+            1.0,
+            40.0,
+            16,
+            3,
+            1,
+            Some(25.0),
+            Some(1.2),
+            Some(0.20),
+            12.0,
+            180.0,
+            0,
+        ))
+        .unwrap();
+        run.record_batch_sample(attribution_sample(
+            12,
+            1.1,
+            42.0,
+            20,
+            4,
+            1,
+            Some(28.0),
+            Some(1.0),
+            Some(0.25),
+            10.0,
+            220.0,
+            0,
+        ))
+        .unwrap();
+
+        run.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        assert!(report.contains("Primary classification: coordination_gap"));
+        assert!(report.contains("flush_wait"));
     }
 
     #[test]
