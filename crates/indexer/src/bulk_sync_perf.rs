@@ -785,7 +785,7 @@ impl BulkSyncPerfRun {
             })
             .count() as u64;
         content.push_str(&format!(
-            "- Disk telemetry status: {}",
+            "- Disk telemetry coverage: {}",
             metrics.disk_telemetry_status
         ));
         if let Some(ratio) = metrics.saturated_window_ratio {
@@ -2055,7 +2055,7 @@ mod tests {
         run.finish_completed().unwrap();
 
         let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
-        assert!(report.contains("- Disk telemetry status: ok"));
+        assert!(report.contains("- Disk telemetry coverage: ok"));
         assert!(report.contains("saturated_window_count"));
         assert!(report.contains("peak_disk_write_mb_s"));
     }
