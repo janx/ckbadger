@@ -347,6 +347,8 @@ pub(crate) struct BulkBuildPerfStats {
     controller_fetch_threads: AtomicU64,
     controller_bg_jobs: AtomicU64,
     controller_rows_per_block_ema_bits: AtomicU64,
+    controller_flush_fill_ema_bits: AtomicU64,
+    controller_max_history_rows_bits: AtomicU64,
 }
 
 impl BulkBuildPerfStats {
@@ -490,6 +492,8 @@ impl BulkBuildPerfStats {
         fetch_threads: u32,
         bg_jobs: i32,
         rows_per_block_ema: f64,
+        flush_fill_ema: f64,
+        max_history_rows: f64,
     ) {
         self.controller_bottleneck_code
             .store(bottleneck_code, Ordering::Relaxed);
@@ -509,6 +513,10 @@ impl BulkBuildPerfStats {
             .store(bg_jobs as u64, Ordering::Relaxed);
         self.controller_rows_per_block_ema_bits
             .store(rows_per_block_ema.to_bits(), Ordering::Relaxed);
+        self.controller_flush_fill_ema_bits
+            .store(flush_fill_ema.to_bits(), Ordering::Relaxed);
+        self.controller_max_history_rows_bits
+            .store(max_history_rows.to_bits(), Ordering::Relaxed);
     }
 
     pub(crate) fn snapshot(&self) -> Option<BulkBuildProgressData> {
@@ -636,6 +644,13 @@ impl BulkBuildPerfStats {
             controller_bg_jobs: Some(self.controller_bg_jobs.load(Ordering::Relaxed) as i32),
             controller_rows_per_block_ema: Some(f64::from_bits(
                 self.controller_rows_per_block_ema_bits
+                    .load(Ordering::Relaxed),
+            )),
+            controller_flush_fill_ema: Some(f64::from_bits(
+                self.controller_flush_fill_ema_bits.load(Ordering::Relaxed),
+            )),
+            controller_max_history_rows: Some(f64::from_bits(
+                self.controller_max_history_rows_bits
                     .load(Ordering::Relaxed),
             )),
         })

@@ -2518,6 +2518,18 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
                     format!("  L0 {:.0}", l0_ema),
                     Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
                 ),
+                Span::styled("  fill ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format!(
+                        "{:.0}%",
+                        bb.controller_flush_fill_ema.unwrap_or(0.0) * 100.0
+                    ),
+                    Style::default().fg(if bb.controller_flush_fill_ema.unwrap_or(0.0) > 0.75 {
+                        ERROR_RED
+                    } else {
+                        FOREGROUND
+                    }),
+                ),
             ]),
             Line::from(vec![
                 Span::styled("     ", Style::default().fg(SLATE_500)),
@@ -2538,10 +2550,11 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
             .filter(|v| *v > 0.0 && v.is_finite())
             .map(|v| format!("{v:.1}"))
             .unwrap_or_else(|| "-".to_string());
+        let max_rows = bb.controller_max_history_rows.unwrap_or(2_000_000.0);
         let row_cap_text = bb
             .controller_rows_per_block_ema
             .filter(|v| *v > 0.0 && v.is_finite())
-            .map(|v| format!("{}k", (800_000.0 / v) as u64 / 1000))
+            .map(|v| format!("{}k", (max_rows / v) as u64 / 1000))
             .unwrap_or_else(|| "-".to_string());
 
         vec![
@@ -2558,6 +2571,18 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
                 Span::styled(
                     format!("{:.0}", l0_ema),
                     Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
+                ),
+                Span::styled("  fill ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format!(
+                        "{:.0}%",
+                        bb.controller_flush_fill_ema.unwrap_or(0.0) * 100.0
+                    ),
+                    Style::default().fg(if bb.controller_flush_fill_ema.unwrap_or(0.0) > 0.75 {
+                        ERROR_RED
+                    } else {
+                        FOREGROUND
+                    }),
                 ),
             ]),
             // Line 2: Bottleneck classification

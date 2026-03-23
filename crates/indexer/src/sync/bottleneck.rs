@@ -131,6 +131,7 @@ pub(crate) struct ControllerOutput {
     pub build_ema: f64,
     pub wait_ema: f64,
     pub l0_ema: f64,
+    pub flush_fill_ema: f64,
 }
 
 #[derive(Debug)]
@@ -291,6 +292,7 @@ impl BottleneckController {
             build_ema: self.build_ema,
             wait_ema: self.wait_ema,
             l0_ema: self.l0_ema,
+            flush_fill_ema: self.flush_fill_ema,
         })
     }
 
@@ -354,6 +356,10 @@ impl BottleneckController {
 
     pub(crate) fn rows_per_block_ema(&self) -> f64 {
         self.rows_per_block_ema
+    }
+
+    pub(crate) fn max_history_rows(&self) -> f64 {
+        MAX_HISTORY_ROWS
     }
 }
 

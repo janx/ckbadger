@@ -460,6 +460,8 @@ impl BulkBuildEngine {
                     output.fetch_threads,
                     output.bg_jobs,
                     controller.rows_per_block_ema(),
+                    output.flush_fill_ema,
+                    controller.max_history_rows(),
                 );
             }
 
