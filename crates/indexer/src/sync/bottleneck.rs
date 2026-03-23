@@ -8,11 +8,17 @@
 //
 // Three knobs, three signals:
 //
-//   Signal              │ Knob               │ What it controls
-//   ────────────────────│────────────────────│──────────────────────────
-//   prefetch_recv_ms    │ prefetch_ahead     │ Fetch/build overlap depth
-//   build_ms            │ batch_span         │ Work volume per iteration
-//   flush_wait_ms + L0  │ bg_jobs            │ RocksDB compaction threads
+//   Signal                        │ Knob               │ What it controls
+//   ──────────────────────────────│────────────────────│──────────────────────────
+//   prefetch_recv_ms              │ prefetch_ahead     │ Fetch/build overlap depth
+//   build_ms                      │ batch_span         │ Work volume per iteration
+//   flush_wait + L0 + channel fill│ bg_jobs            │ RocksDB compaction threads
+//
+// Key design principle: fetch (CKB RocksDB reads via std::thread::scope)
+// does NOT compete with build (CPU via rayon) for resources.  Therefore
+// Build-classified batches must NOT suppress prefetch_ahead or
+// fetch_threads.  Only Flush suppresses prefetch — and only when the
+// flush channel is actually filling up.
 
 const EMA_ALPHA: f64 = 0.3;
 
@@ -38,8 +44,11 @@ const MIN_FETCH_THREADS: u32 = 2;
 // Background jobs bounds
 const MIN_BG_JOBS: i32 = 2;
 
-// Row budget (materialization cap per batch)
-const MAX_HISTORY_ROWS: f64 = 800_000.0;
+// Row budget (materialization cap per batch).  This is a proactive upper
+// bound; the reactive flush_fill_ema signal in classify() handles the case
+// where flush actually falls behind.  Set high enough to not constrain
+// normal operation — at avg 30 rows/block this allows ~67K blocks/batch.
+const MAX_HISTORY_ROWS: f64 = 2_000_000.0;
 const ROWS_EMA_ALPHA: f64 = 0.3;
 const INITIAL_ROWS_PER_BLOCK: f64 = 30.0;
 
@@ -47,12 +56,17 @@ const INITIAL_ROWS_PER_BLOCK: f64 = 30.0;
 // Flush checked first (compound risk from L0 buildup).
 const FLUSH_PCT_THRESHOLD: f64 = 0.4;
 const FETCH_PCT_THRESHOLD: f64 = 0.5;
-// Leading indicator: L0 EMA above this → treat as flush-stressed even if
-// flush_wait hasn't spiked yet (the channel hasn't filled, but it will).
+// L0 threshold for proactive bg_jobs increase.  When L0 is above this but
+// the flush channel still has room, we bump bg_jobs to help compaction
+// catch up — without suppressing the pipeline (no Flush classification).
 const FLUSH_L0_THRESHOLD: f64 = 40.0;
+// Flush channel fill ratio above this → flush is falling behind.  This is
+// a more direct signal than L0 or flush_wait (which only fires when the
+// channel is completely full).
+const FLUSH_CHANNEL_FILL_THRESHOLD: f64 = 0.75;
 
 // Adjustment step factors
-const SPAN_GROW: f64 = 1.10;
+const SPAN_GROW: f64 = 1.20;
 const SPAN_SHRINK: f64 = 0.80;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +116,8 @@ pub(crate) struct BatchSignals {
     pub l0_files: u64,
     pub actual_blocks: u64,
     pub history_rows: usize,
+    pub flush_channel_pending: u64,
+    pub flush_channel_capacity: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -124,6 +140,7 @@ pub(crate) struct BottleneckController {
     build_ema: f64,
     wait_ema: f64,
     l0_ema: f64,
+    flush_fill_ema: f64,
     rows_per_block_ema: f64,
     rows_ema_observed: bool,
 
@@ -163,6 +180,7 @@ impl BottleneckController {
             build_ema: 0.0,
             wait_ema: 0.0,
             l0_ema: 0.0,
+            flush_fill_ema: 0.0,
             rows_per_block_ema: INITIAL_ROWS_PER_BLOCK,
             rows_ema_observed: false,
 
@@ -198,6 +216,14 @@ impl BottleneckController {
         self.wait_ema = ema(self.wait_ema, signals.flush_wait_ms);
         self.l0_ema = ema(self.l0_ema, signals.l0_files as f64);
 
+        // Track flush channel fill ratio (0.0 = empty, 1.0 = full).
+        let fill_ratio = if signals.flush_channel_capacity > 0 {
+            signals.flush_channel_pending as f64 / signals.flush_channel_capacity as f64
+        } else {
+            0.0
+        };
+        self.flush_fill_ema = ema(self.flush_fill_ema, fill_ratio);
+
         // Update rows/block EMA for history row budget cap.
         if signals.history_rows > 0 && signals.actual_blocks > 0 {
             let sample = signals.history_rows as f64 / signals.actual_blocks as f64;
@@ -218,9 +244,10 @@ impl BottleneckController {
                 self.bg_jobs = (self.bg_jobs - 1).max(self.min_bg_jobs);
             }
             Bottleneck::Build => {
-                // Build-bound: shrink fetch overlap to give build more CPU.
-                self.prefetch_ahead = (self.prefetch_ahead - 1).max(MIN_PREFETCH);
-                self.fetch_threads = shrink_threads(self.fetch_threads);
+                // Build-bound: grow batch span to amortize per-batch overhead.
+                // Do NOT shrink prefetch_ahead or fetch_threads — fetch uses
+                // independent std::thread::scope threads for CKB RocksDB reads
+                // and does not compete with build CPU (rayon pool).
                 self.batch_span = grow_span(self.batch_span);
             }
             Bottleneck::Flush => {
@@ -231,6 +258,13 @@ impl BottleneckController {
                 self.batch_span = shrink_span(self.batch_span);
                 self.bg_jobs = (self.bg_jobs + 1).min(self.max_bg_jobs);
             }
+        }
+
+        // Proactive bg_jobs: if L0 is building up but the flush channel still
+        // has room (not classified as Flush), bump bg_jobs to help compaction
+        // catch up — without suppressing the pipeline.
+        if bottleneck != Bottleneck::Flush && self.l0_ema > FLUSH_L0_THRESHOLD {
+            self.bg_jobs = (self.bg_jobs + 1).min(self.max_bg_jobs);
         }
 
         // Row budget cap: prevent a single batch from generating too many
@@ -269,7 +303,17 @@ impl BottleneckController {
         let flush_pct = self.wait_ema / total;
         let fetch_pct = self.recv_ema / total;
 
-        let flush_stressed = flush_pct > FLUSH_PCT_THRESHOLD || self.l0_ema > FLUSH_L0_THRESHOLD;
+        // Flush stressed when the flush channel shows actual backpressure:
+        //  - flush_wait dominates batch time (channel was full, writer blocked)
+        //  - flush channel filling up (consumer falling behind producer)
+        //
+        // L0 pileup alone does NOT trigger Flush classification.  High L0
+        // with an empty flush channel means RocksDB compaction is slow but
+        // the pipeline has no backpressure — suppressing fetch would starve
+        // the pipeline for no reason.  Instead, L0 is handled separately
+        // via proactive bg_jobs bumping in observe().
+        let flush_stressed =
+            flush_pct > FLUSH_PCT_THRESHOLD || self.flush_fill_ema > FLUSH_CHANNEL_FILL_THRESHOLD;
         if flush_stressed {
             return Bottleneck::Flush;
         }
@@ -367,6 +411,8 @@ mod tests {
             l0_files: 5,
             actual_blocks: 10_000,
             history_rows: 100_000,
+            flush_channel_pending: 1,
+            flush_channel_capacity: 8,
         }
     }
 
@@ -383,10 +429,8 @@ mod tests {
         let initial_span = ctrl.batch_span;
         let initial_prefetch = ctrl.prefetch_ahead;
 
-        // Warmup.
-        ctrl.observe(&healthy_signals());
+        ctrl.observe(&healthy_signals()); // warmup
 
-        // Feed fetch-heavy signals.
         for _ in 0..10 {
             ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 5000.0,
@@ -395,6 +439,8 @@ mod tests {
                 l0_files: 5,
                 actual_blocks: 10_000,
                 history_rows: 100_000,
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
             });
         }
 
@@ -406,7 +452,6 @@ mod tests {
     #[test]
     fn flush_pressure_shrinks_span_grows_bg_jobs() {
         let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
-        // Start bg_jobs below max so we can see it grow.
         ctrl.bg_jobs = 4;
         ctrl.prev_bg_jobs = 4;
         let initial_span = ctrl.batch_span;
@@ -421,6 +466,8 @@ mod tests {
                 l0_files: 60,
                 actual_blocks: 5000,
                 history_rows: 50_000,
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
             });
         }
 
@@ -444,6 +491,8 @@ mod tests {
                 l0_files: 5,
                 actual_blocks: 5000,
                 history_rows: 50_000,
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
             });
         }
 
@@ -452,13 +501,50 @@ mod tests {
     }
 
     #[test]
+    fn build_bound_does_not_shrink_prefetch_or_fetch_threads() {
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let initial_prefetch = ctrl.prefetch_ahead;
+        let initial_threads = ctrl.fetch_threads;
+
+        ctrl.observe(&healthy_signals()); // warmup
+
+        // Sustained build-bound: prefetch and fetch_threads must NOT decrease.
+        for _ in 0..20 {
+            ctrl.observe(&BatchSignals {
+                prefetch_recv_ms: 50.0,
+                build_ms: 5000.0,
+                flush_wait_ms: 0.0,
+                l0_files: 5,
+                actual_blocks: 10_000,
+                history_rows: 100_000,
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
+            });
+        }
+
+        assert_eq!(ctrl.classify(), Bottleneck::Build);
+        assert!(
+            ctrl.prefetch_ahead >= initial_prefetch,
+            "build-bound must not shrink prefetch_ahead: {} < initial {}",
+            ctrl.prefetch_ahead,
+            initial_prefetch
+        );
+        assert!(
+            ctrl.fetch_threads >= initial_threads,
+            "build-bound must not shrink fetch_threads: {} < initial {}",
+            ctrl.fetch_threads,
+            initial_threads
+        );
+    }
+
+    #[test]
     fn row_budget_caps_span() {
         let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
 
         ctrl.observe(&healthy_signals()); // warmup
 
-        // 40 rows/block → after EMA converges, budget = 800K/40 = 20K blocks.
-        // Without row cap, build-bound would grow span well past 50K.
+        // 40 rows/block → after EMA converges, budget = 2M/40 = 50K blocks.
+        // Without row cap, build-bound would grow span past 50K toward MAX.
         for _ in 0..20 {
             ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 100.0,
@@ -467,13 +553,14 @@ mod tests {
                 l0_files: 5,
                 actual_blocks: 10_000,
                 history_rows: 400_000, // 40 rows/block
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
             });
         }
 
-        // Span should be capped by row budget (~20K) instead of growing to MAX.
         assert!(
-            ctrl.batch_span <= 25_000,
-            "span {} should be capped by row budget (~20K)",
+            ctrl.batch_span <= 55_000,
+            "span {} should be capped by row budget (~50K)",
             ctrl.batch_span
         );
     }
@@ -484,7 +571,6 @@ mod tests {
 
         ctrl.observe(&healthy_signals()); // warmup
 
-        // Severe flush pressure — span should not go below MIN_SPAN.
         for _ in 0..100 {
             ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 0.0,
@@ -493,6 +579,8 @@ mod tests {
                 l0_files: 100,
                 actual_blocks: 10_000,
                 history_rows: 100_000,
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
             });
         }
 
@@ -514,6 +602,8 @@ mod tests {
                 l0_files: 5,
                 actual_blocks: 10_000,
                 history_rows: 100_000,
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
             });
         }
         assert!(ctrl.bg_jobs >= MIN_BG_JOBS);
@@ -527,19 +617,22 @@ mod tests {
                 l0_files: 80,
                 actual_blocks: 10_000,
                 history_rows: 100_000,
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
             });
         }
         assert!(ctrl.bg_jobs <= 4);
     }
 
     #[test]
-    fn fetch_threads_grow_when_fetch_bound_shrink_when_build_bound() {
+    fn fetch_threads_stable_when_build_bound_grow_when_fetch_bound() {
         let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
         let initial = ctrl.fetch_threads;
 
         ctrl.observe(&healthy_signals()); // warmup
 
-        // Build-bound: fetch_threads should shrink.
+        // Build-bound: fetch_threads must NOT shrink (fetch uses independent
+        // threads, does not compete with build CPU).
         for _ in 0..10 {
             ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 50.0,
@@ -548,16 +641,36 @@ mod tests {
                 l0_files: 5,
                 actual_blocks: 10_000,
                 history_rows: 100_000,
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
+            });
+        }
+        assert_eq!(
+            ctrl.fetch_threads, initial,
+            "build-bound must not change fetch_threads"
+        );
+
+        // Flush-bound: fetch_threads should shrink (yield disk to compaction).
+        for _ in 0..10 {
+            ctrl.observe(&BatchSignals {
+                prefetch_recv_ms: 50.0,
+                build_ms: 1000.0,
+                flush_wait_ms: 5000.0,
+                l0_files: 80,
+                actual_blocks: 10_000,
+                history_rows: 100_000,
+                flush_channel_pending: 7,
+                flush_channel_capacity: 8,
             });
         }
         assert!(
             ctrl.fetch_threads < initial,
-            "build-bound should shrink fetch_threads: {} vs initial {}",
+            "flush-bound should shrink fetch_threads: {} vs initial {}",
             ctrl.fetch_threads,
             initial
         );
 
-        let after_build = ctrl.fetch_threads;
+        let after_flush = ctrl.fetch_threads;
 
         // Fetch-bound: fetch_threads should grow back.
         for _ in 0..10 {
@@ -568,23 +681,29 @@ mod tests {
                 l0_files: 5,
                 actual_blocks: 10_000,
                 history_rows: 100_000,
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
             });
         }
         assert!(
-            ctrl.fetch_threads > after_build,
-            "fetch-bound should grow fetch_threads: {} vs after_build {}",
+            ctrl.fetch_threads > after_flush,
+            "fetch-bound should grow fetch_threads: {} vs after_flush {}",
             ctrl.fetch_threads,
-            after_build
+            after_flush
         );
     }
 
     #[test]
-    fn l0_leading_indicator_triggers_flush() {
+    fn l0_alone_does_not_trigger_flush_but_bumps_bg_jobs() {
         let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        ctrl.bg_jobs = 6;
+        ctrl.prev_bg_jobs = 6;
 
         ctrl.observe(&healthy_signals()); // warmup
 
-        // High L0 but zero flush_wait (channel hasn't backed up yet).
+        // High L0 but flush channel is empty — pipeline has no backpressure.
+        // Should NOT classify as Flush (would suppress prefetch needlessly).
+        // But should proactively bump bg_jobs to help compaction.
         for _ in 0..10 {
             ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 100.0,
@@ -593,6 +712,40 @@ mod tests {
                 l0_files: 60,
                 actual_blocks: 10_000,
                 history_rows: 100_000,
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
+            });
+        }
+
+        assert_ne!(
+            ctrl.classify(),
+            Bottleneck::Flush,
+            "L0 alone with empty flush channel must not trigger Flush"
+        );
+        assert!(
+            ctrl.bg_jobs > 6,
+            "proactive bg_jobs should have increased: {}",
+            ctrl.bg_jobs
+        );
+    }
+
+    #[test]
+    fn l0_with_channel_pressure_triggers_flush() {
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+
+        ctrl.observe(&healthy_signals()); // warmup
+
+        // High L0 AND flush channel filling up — genuine flush stress.
+        for _ in 0..10 {
+            ctrl.observe(&BatchSignals {
+                prefetch_recv_ms: 100.0,
+                build_ms: 3000.0,
+                flush_wait_ms: 0.0,
+                l0_files: 60,
+                actual_blocks: 10_000,
+                history_rows: 100_000,
+                flush_channel_pending: 7,
+                flush_channel_capacity: 8,
             });
         }
 
@@ -600,13 +753,60 @@ mod tests {
     }
 
     #[test]
+    fn flush_channel_fill_triggers_flush() {
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+
+        ctrl.observe(&healthy_signals()); // warmup
+
+        // Channel nearly full (7/8 = 87.5% > 75% threshold) but L0 low
+        // and no flush_wait yet.  Channel fill is an earlier signal.
+        for _ in 0..10 {
+            ctrl.observe(&BatchSignals {
+                prefetch_recv_ms: 100.0,
+                build_ms: 3000.0,
+                flush_wait_ms: 0.0,
+                l0_files: 5,
+                actual_blocks: 10_000,
+                history_rows: 100_000,
+                flush_channel_pending: 7,
+                flush_channel_capacity: 8,
+            });
+        }
+
+        assert_eq!(ctrl.classify(), Bottleneck::Flush);
+    }
+
+    #[test]
+    fn empty_flush_channel_does_not_trigger_flush() {
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+
+        ctrl.observe(&healthy_signals()); // warmup
+
+        // Channel nearly empty, low L0, no flush_wait — should NOT be Flush.
+        for _ in 0..10 {
+            ctrl.observe(&BatchSignals {
+                prefetch_recv_ms: 100.0,
+                build_ms: 3000.0,
+                flush_wait_ms: 0.0,
+                l0_files: 5,
+                actual_blocks: 10_000,
+                history_rows: 100_000,
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
+            });
+        }
+
+        assert_ne!(ctrl.classify(), Bottleneck::Flush);
+    }
+
+    #[test]
     fn bg_jobs_if_changed_tracks_transitions() {
         let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
-        assert!(ctrl.bg_jobs_if_changed().is_none()); // no change yet
+        assert!(ctrl.bg_jobs_if_changed().is_none());
 
         ctrl.bg_jobs = 6;
         assert_eq!(ctrl.bg_jobs_if_changed(), Some(6));
-        assert!(ctrl.bg_jobs_if_changed().is_none()); // same value, no change
+        assert!(ctrl.bg_jobs_if_changed().is_none());
     }
 
     #[test]
@@ -627,6 +827,8 @@ mod tests {
                 l0_files: 0,
                 actual_blocks: 50_000,
                 history_rows: 100_000,
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
             });
         }
         assert_eq!(ctrl.prefetch_ahead, ctrl.max_channel_depth);

@@ -419,6 +419,8 @@ impl BulkBuildEngine {
                 l0_files: snap.l0_files,
                 actual_blocks: batch_stats.block_count,
                 history_rows: pending_flush_row_count.0,
+                flush_channel_pending,
+                flush_channel_capacity: controller.channel_depth(),
             }) {
                 batch_block_span = output.batch_span;
                 prefetch.update_span(batch_block_span);
