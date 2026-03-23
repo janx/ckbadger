@@ -2809,8 +2809,6 @@ fn build_batch_left_column(
         ),
     ]));
 
-    left.extend(controller_panel_lines(bb, dense_panel));
-
     left
 }
 
@@ -3157,97 +3155,11 @@ fn visible_background_tasks(tasks: &[BackgroundTaskEntry]) -> Vec<&BackgroundTas
         .collect()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct BackgroundTaskSummary {
-    active: usize,
-    idle: usize,
-    failed: usize,
-}
-
-fn summarize_background_tasks(tasks: &[BackgroundTaskEntry]) -> BackgroundTaskSummary {
-    let mut summary = BackgroundTaskSummary {
-        active: 0,
-        idle: 0,
-        failed: 0,
-    };
-
-    for task in tasks {
-        match task.state {
-            BackgroundTaskState::Running => summary.active += 1,
-            BackgroundTaskState::Failed => summary.failed += 1,
-            BackgroundTaskState::Waiting if task.kind == BackgroundTaskKind::Watcher => {
-                summary.idle += 1
-            }
-            BackgroundTaskState::Waiting => {}
-            BackgroundTaskState::Completed => {}
-        }
-    }
-
-    summary
-}
-
 fn desired_background_task_table_height(rows: usize) -> u16 {
     if rows == 0 {
         0
     } else {
         3 + rows as u16
-    }
-}
-
-fn background_task_section_heights(
-    total_height: u16,
-    jobs_rows: usize,
-    watchers_rows: usize,
-) -> (u16, u16, u16) {
-    if total_height == 0 {
-        return (0, 0, 0);
-    }
-
-    let summary_h = 1;
-    let mut remaining = total_height.saturating_sub(summary_h);
-    let jobs_target = desired_background_task_table_height(jobs_rows);
-    let watchers_target = desired_background_task_table_height(watchers_rows);
-
-    match (jobs_target > 0, watchers_target > 0) {
-        (false, false) => (summary_h, 0, 0),
-        (true, false) => (summary_h, jobs_target.min(remaining), 0),
-        (false, true) => (summary_h, 0, watchers_target.min(remaining)),
-        (true, true) => {
-            let min_each = 3;
-            let (mut jobs_h, mut watchers_h);
-
-            if remaining >= min_each * 2 {
-                jobs_h = min_each;
-                watchers_h = min_each;
-                remaining -= min_each * 2;
-            } else {
-                jobs_h = remaining / 2 + remaining % 2;
-                watchers_h = remaining / 2;
-                remaining = 0;
-            }
-
-            while remaining > 0 {
-                if jobs_h < jobs_target {
-                    jobs_h += 1;
-                    remaining -= 1;
-                    if remaining == 0 {
-                        break;
-                    }
-                }
-                if watchers_h < watchers_target {
-                    watchers_h += 1;
-                    remaining -= 1;
-                    if remaining == 0 {
-                        break;
-                    }
-                }
-                if jobs_h >= jobs_target && watchers_h >= watchers_target {
-                    break;
-                }
-            }
-
-            (summary_h, jobs_h, watchers_h)
-        }
     }
 }
 
@@ -3437,149 +3349,180 @@ fn build_watcher_task_row(task: &BackgroundTaskEntry) -> Row<'static> {
 }
 
 fn draw_background_tasks(f: &mut Frame, app: &App, area: Rect) {
-    let visible_refs = visible_background_tasks(&app.background_tasks);
-    if visible_refs.is_empty() || area.height == 0 {
+    if area.height == 0 {
         return;
     }
 
+    let bb = app.sync_status.as_ref().and_then(|s| s.bulk_build.as_ref());
+
+    let visible_refs = visible_background_tasks(&app.background_tasks);
     let visible: Vec<BackgroundTaskEntry> = visible_refs.iter().map(|t| (*t).clone()).collect();
-    let summary = summarize_background_tasks(&visible);
     let (mut jobs, mut watchers) = split_background_tasks(&visible);
     sort_background_tasks(&mut jobs);
     sort_background_tasks(&mut watchers);
 
-    let (summary_height, jobs_height, watchers_height) =
-        background_task_section_heights(area.height, jobs.len(), watchers.len());
-    if summary_height == 0 {
+    let has_controller = bb.is_some();
+    let has_watchers = !watchers.is_empty();
+    let has_jobs = !jobs.is_empty();
+
+    if !has_controller && !has_watchers && !has_jobs {
         return;
     }
 
-    let mut constraints = vec![Constraint::Length(summary_height)];
-    if jobs_height > 0 {
-        constraints.push(Constraint::Length(jobs_height));
-    }
-    if watchers_height > 0 {
-        constraints.push(Constraint::Length(watchers_height));
-    }
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
+    // 3-column horizontal layout: Controller | Watchers | Jobs
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(30),
+            Constraint::Percentage(35),
+            Constraint::Percentage(35),
+        ])
         .split(area);
 
-    let summary_line = format!(
-        "{} active · {} idle · {} failed",
-        summary.active, summary.idle, summary.failed
-    );
-    f.render_widget(
-        Paragraph::new(summary_line).style(Style::default().fg(SLATE_500)),
-        chunks[0],
-    );
-
-    let jobs_header = Row::new(vec![
-        Cell::from(Span::styled(
-            "Task",
-            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
-        )),
-        Cell::from(Span::styled(
-            "State",
-            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
-        )),
-        Cell::from(Span::styled(
-            "Progress",
-            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
-        )),
-        Cell::from(Span::styled(
-            "Rate",
-            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
-        )),
-        Cell::from(Span::styled(
-            "ETA/Elapsed",
-            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
-        )),
-    ]);
-
-    let jobs_rows: Vec<Row<'static>> = jobs.iter().map(|t| build_job_task_row(t)).collect();
-    let watcher_header = Row::new(vec![
-        Cell::from(Span::styled(
-            "Task",
-            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
-        )),
-        Cell::from(Span::styled(
-            "State",
-            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
-        )),
-        Cell::from(Span::styled(
-            "Last Result",
-            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
-        )),
-        Cell::from(Span::styled(
-            "Last Success",
-            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
-        )),
-        Cell::from(Span::styled(
-            "Trigger",
-            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
-        )),
-    ]);
-    let watcher_rows: Vec<Row<'static>> =
-        watchers.iter().map(|t| build_watcher_task_row(t)).collect();
-
-    let jobs_widths = [
-        Constraint::Length(16),
-        Constraint::Length(11),
-        Constraint::Length(14),
-        Constraint::Length(9),
-        Constraint::Length(13),
-    ];
-    let watcher_widths = [
-        Constraint::Length(16),
-        Constraint::Length(11),
-        Constraint::Length(17),
-        Constraint::Length(14),
-        Constraint::Min(12),
-    ];
-
-    let mut idx = 1;
-    if jobs_height > 0 {
-        let jobs_table = Table::new(jobs_rows, jobs_widths)
-            .header(jobs_header)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(SLATE_800))
-                    .title(Span::styled(" Jobs ", Style::default().fg(FOREGROUND))),
-            )
-            .style(Style::default().fg(FOREGROUND));
-        f.render_widget(jobs_table, chunks[idx]);
-        idx += 1;
+    // ── Column 1: Controller observation window ──
+    let ctrl_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800))
+        .title(Span::styled(
+            " Controller ",
+            Style::default().fg(FOREGROUND),
+        ));
+    if let Some(bb) = bb {
+        let dense = cols[0].height <= 4;
+        let lines = controller_panel_lines(bb, dense);
+        f.render_widget(Paragraph::new(lines).block(ctrl_block), cols[0]);
+    } else {
+        f.render_widget(
+            Paragraph::new(Span::styled("-", Style::default().fg(SLATE_500))).block(ctrl_block),
+            cols[0],
+        );
     }
 
-    if watchers_height > 0 {
+    // ── Column 2: Watchers ──
+    let watcher_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800))
+        .title(Span::styled(" Watchers ", Style::default().fg(FOREGROUND)));
+    if has_watchers {
+        let watcher_header = Row::new(vec![
+            Cell::from(Span::styled(
+                "Task",
+                Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+            )),
+            Cell::from(Span::styled(
+                "State",
+                Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+            )),
+            Cell::from(Span::styled(
+                "Last Result",
+                Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+            )),
+            Cell::from(Span::styled(
+                "Last OK",
+                Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+            )),
+            Cell::from(Span::styled(
+                "Trigger",
+                Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+            )),
+        ]);
+        let watcher_rows: Vec<Row<'static>> =
+            watchers.iter().map(|t| build_watcher_task_row(t)).collect();
+        let watcher_widths = [
+            Constraint::Length(14),
+            Constraint::Length(11),
+            Constraint::Length(11),
+            Constraint::Length(10),
+            Constraint::Min(8),
+        ];
         let watcher_table = Table::new(watcher_rows, watcher_widths)
             .header(watcher_header)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(SLATE_800))
-                    .title(Span::styled(" Watchers ", Style::default().fg(FOREGROUND))),
-            )
+            .block(watcher_block)
             .style(Style::default().fg(FOREGROUND));
-        f.render_widget(watcher_table, chunks[idx]);
+        f.render_widget(watcher_table, cols[1]);
+    } else {
+        f.render_widget(
+            Paragraph::new(Span::styled("-", Style::default().fg(SLATE_500))).block(watcher_block),
+            cols[1],
+        );
+    }
+
+    // ── Column 3: Jobs ──
+    let jobs_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800))
+        .title(Span::styled(" Jobs ", Style::default().fg(FOREGROUND)));
+    if has_jobs {
+        let jobs_header = Row::new(vec![
+            Cell::from(Span::styled(
+                "Task",
+                Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+            )),
+            Cell::from(Span::styled(
+                "State",
+                Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+            )),
+            Cell::from(Span::styled(
+                "Progress",
+                Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+            )),
+            Cell::from(Span::styled(
+                "Rate",
+                Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+            )),
+            Cell::from(Span::styled(
+                "ETA",
+                Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+            )),
+        ]);
+        let jobs_rows: Vec<Row<'static>> = jobs.iter().map(|t| build_job_task_row(t)).collect();
+        let jobs_widths = [
+            Constraint::Length(14),
+            Constraint::Length(11),
+            Constraint::Length(14),
+            Constraint::Length(9),
+            Constraint::Min(8),
+        ];
+        let jobs_table = Table::new(jobs_rows, jobs_widths)
+            .header(jobs_header)
+            .block(jobs_block)
+            .style(Style::default().fg(FOREGROUND));
+        f.render_widget(jobs_table, cols[2]);
+    } else {
+        f.render_widget(
+            Paragraph::new(Span::styled("-", Style::default().fg(SLATE_500))).block(jobs_block),
+            cols[2],
+        );
     }
 }
 
-/// Height needed for the background tasks section (0 if hidden).
+/// Height needed for the bottom row section (0 if hidden).
+///
+/// The bottom row uses a 3-column horizontal layout: Controller | Watchers | Jobs.
+/// It is visible when any of the three columns has content.
 fn background_tasks_height(app: &App) -> u16 {
+    let has_controller = app
+        .sync_status
+        .as_ref()
+        .and_then(|s| s.bulk_build.as_ref())
+        .is_some();
+
     let visible_refs = visible_background_tasks(&app.background_tasks);
-    if visible_refs.is_empty() {
-        0
-    } else {
-        let visible: Vec<BackgroundTaskEntry> = visible_refs.iter().map(|t| (*t).clone()).collect();
-        let (jobs, watchers) = split_background_tasks(&visible);
-        let (summary_h, jobs_h, watchers_h) =
-            background_task_section_heights(18, jobs.len(), watchers.len());
-        summary_h + jobs_h + watchers_h
+    let visible: Vec<BackgroundTaskEntry> = visible_refs.iter().map(|t| (*t).clone()).collect();
+    let (jobs, watchers) = split_background_tasks(&visible);
+
+    let has_content = has_controller || !jobs.is_empty() || !watchers.is_empty();
+    if !has_content {
+        return 0;
     }
+
+    // Controller needs 5 lines (2 border + 3 detail lines).
+    // Tables need 3 + rows (2 border + 1 header + rows).
+    let controller_h: u16 = if has_controller { 5 } else { 3 };
+    let jobs_h = desired_background_task_table_height(jobs.len()).max(3);
+    let watchers_h = desired_background_task_table_height(watchers.len()).max(3);
+
+    controller_h.max(jobs_h).max(watchers_h).min(10)
 }
 
 fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
@@ -5591,24 +5534,23 @@ fn draw_system_params_compact(
 mod tests {
     use super::{
         adaptive_control_lines, adaptive_state_label, api_health_state,
-        background_task_last_result, background_task_section_heights, background_task_state_label,
-        build_finalize_left_column, bulk_queue_indicator_line, chart_height_warning,
-        compact_overview_layout, consumed_cells_source_color, consumed_cells_source_label,
-        controller_panel_lines, dense_right_lines, detail_right_lines, diagnostics_dense_panel,
-        direct_io_reads_label, disk_pressure_lines, eta_confidence_label, footer_hint_line,
-        footer_status_message, format_age_secs, format_num, format_num_commas, format_num_compact,
-        format_rate_expanded, format_signed_num_i128, format_stage_commit_gap_ms,
-        header_right_line, header_title_line, heartbeat_is_on, io_fetch_write_jitter_line,
-        is_rate_drop, merged_sparkline_p95_line, overview_log_min_height,
-        overview_services_min_height, percentile_from_history, pipeline_bottleneck,
-        pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state, runtime_live_delta,
-        service_log_tails_line, sparkline, split_background_tasks, stale_age_secs, stale_status,
-        startup_phase_label, storage_pressure_l0_line, storage_pressure_wbm_line,
-        storage_runtime_columns, summarize_background_tasks, supervisor_services_line,
+        background_task_last_result, background_task_state_label, build_finalize_left_column,
+        bulk_queue_indicator_line, chart_height_warning, compact_overview_layout,
+        consumed_cells_source_color, consumed_cells_source_label, controller_panel_lines,
+        dense_right_lines, detail_right_lines, diagnostics_dense_panel, direct_io_reads_label,
+        disk_pressure_lines, eta_confidence_label, footer_hint_line, footer_status_message,
+        format_age_secs, format_num, format_num_commas, format_num_compact, format_rate_expanded,
+        format_signed_num_i128, format_stage_commit_gap_ms, header_right_line, header_title_line,
+        heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
+        overview_log_min_height, overview_services_min_height, percentile_from_history,
+        pipeline_bottleneck, pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state,
+        runtime_live_delta, service_log_tails_line, sparkline, split_background_tasks,
+        stale_age_secs, stale_status, startup_phase_label, storage_pressure_l0_line,
+        storage_pressure_wbm_line, storage_runtime_columns, supervisor_services_line,
         sync_bottleneck, system_kv_line, system_store_path_lines, system_workdir_lines,
-        trend_delta, trim_for_panel, visible_background_tasks, AdaptiveControlSnapshot, App,
-        BackgroundTaskSummary, Color, CompactOverviewLayout, DiagnosticsViewMode, SyncBottleneck,
-        AMBER, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
+        trend_delta, trim_for_panel, visible_background_tasks, AdaptiveControlSnapshot, App, Color,
+        CompactOverviewLayout, DiagnosticsViewMode, SyncBottleneck, AMBER, CYAN,
+        STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
     use crate::db::{
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
@@ -5649,42 +5591,6 @@ mod tests {
             last_trigger_reason: None,
             error: None,
         }
-    }
-
-    #[test]
-    fn test_background_task_summary_counts_running_failed_and_idle_watchers() {
-        let tasks = vec![
-            bg_task(
-                "dob_decode",
-                BackgroundTaskKind::Job,
-                BackgroundTaskState::Running,
-            ),
-            bg_task(
-                "cache_warmup",
-                BackgroundTaskKind::Job,
-                BackgroundTaskState::Waiting,
-            ),
-            bg_task(
-                "api_cache_refresh",
-                BackgroundTaskKind::Watcher,
-                BackgroundTaskState::Waiting,
-            ),
-            bg_task(
-                "chart_warmup",
-                BackgroundTaskKind::Job,
-                BackgroundTaskState::Failed,
-            ),
-        ];
-
-        let summary = summarize_background_tasks(&tasks);
-        assert_eq!(
-            summary,
-            BackgroundTaskSummary {
-                active: 1,
-                idle: 1,
-                failed: 1,
-            }
-        );
     }
 
     #[test]
@@ -5771,15 +5677,6 @@ mod tests {
         let names: Vec<&str> = visible.iter().map(|t| t.name.as_str()).collect();
 
         assert_eq!(names, vec!["idle_watcher"]);
-    }
-
-    #[test]
-    fn test_background_task_section_heights_keep_both_tables_visible_under_cap() {
-        let (summary_h, jobs_h, watchers_h) = background_task_section_heights(18, 20, 20);
-        assert_eq!(summary_h, 1);
-        assert!(jobs_h >= 3, "jobs table should remain visible");
-        assert!(watchers_h >= 3, "watchers table should remain visible");
-        assert_eq!(summary_h + jobs_h + watchers_h, 18);
     }
 
     #[test]
