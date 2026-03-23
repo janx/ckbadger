@@ -56,7 +56,6 @@ pub(crate) struct PrefetchWorkerStats {
     pub total_fetches: u64,
     pub total_blocks: u64,
     pub disk_throttle_count: u64,
-    pub build_gate_count: u64,
     pub exit_reason: PrefetchExitReason,
 }
 
@@ -68,7 +67,6 @@ pub(crate) struct PrefetchChannelHandle {
 }
 
 impl PrefetchChannelHandle {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         depth: usize,
         ckb_store: Arc<CkbChainReader>,
@@ -77,7 +75,6 @@ impl PrefetchChannelHandle {
         handoff_target: u64,
         initial_span: u64,
         sampler_rx: tokio::sync::watch::Receiver<SamplerSnapshot>,
-        build_active: Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         let (result_tx, result_rx) = tokio::sync::mpsc::channel(depth);
         let (span_tx, span_rx) = tokio::sync::watch::channel(initial_span);
@@ -91,7 +88,6 @@ impl PrefetchChannelHandle {
                 fetch_pool,
                 start_block,
                 handoff_target,
-                build_active,
             )
         });
 
@@ -103,7 +99,6 @@ impl PrefetchChannelHandle {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn prefetch_worker(
         result_tx: tokio::sync::mpsc::Sender<Result<PrefetchResult>>,
         span_rx: tokio::sync::watch::Receiver<u64>,
@@ -112,26 +107,16 @@ impl PrefetchChannelHandle {
         fetch_pool: Arc<rayon::ThreadPool>,
         start_block: u64,
         handoff_target: u64,
-        build_active: Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<PrefetchWorkerStats> {
         let mut stats = PrefetchWorkerStats {
             total_fetches: 0,
             total_blocks: 0,
             disk_throttle_count: 0,
-            build_gate_count: 0,
             exit_reason: PrefetchExitReason::Completed,
         };
         let mut position = start_block;
 
         while position <= handoff_target {
-            // Wait for build phase to finish before starting I/O-heavy fetch.
-            // Avoids CPU cache thrashing between fetch pool threads and build
-            // rayon threads (48 threads on 24 cores → 2x per-tx cost penalty).
-            while build_active.load(std::sync::atomic::Ordering::Acquire) {
-                stats.build_gate_count += 1;
-                std::thread::sleep(Duration::from_millis(10));
-            }
-
             // Let the queue fill most of the way, then back off only when disk
             // is already busy. This preserves fetch throughput while still
             // yielding to RocksDB compaction I/O under pressure.
@@ -237,7 +222,6 @@ mod tests {
                 total_fetches: 0,
                 total_blocks: 0,
                 disk_throttle_count: 0,
-                build_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -271,7 +255,6 @@ mod tests {
                 total_fetches: 0,
                 total_blocks: 0,
                 disk_throttle_count: 0,
-                build_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -312,7 +295,6 @@ mod tests {
                 total_fetches: 0,
                 total_blocks: 0,
                 disk_throttle_count: 0,
-                build_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -344,7 +326,6 @@ mod tests {
                 total_fetches: 0,
                 total_blocks: 0,
                 disk_throttle_count: 0,
-                build_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -380,7 +361,6 @@ mod tests {
                 total_fetches: 42,
                 total_blocks: 420_000,
                 disk_throttle_count: 0,
-                build_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -475,50 +455,5 @@ mod tests {
     fn prefetch_throttle_never_engages_when_disk_is_idle() {
         assert!(!should_throttle_prefetch(4, 4, DISK_IDLE_WRITE_MB - 0.1));
         assert!(!should_throttle_prefetch(1, 1, 0.0));
-    }
-
-    #[tokio::test]
-    async fn prefetch_worker_sleeps_while_build_gate_is_set() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-
-        let build_active = Arc::new(AtomicBool::new(true));
-        let build_active_clone = Arc::clone(&build_active);
-
-        let (result_tx, mut result_rx) = tokio::sync::mpsc::channel::<Result<PrefetchResult>>(4);
-
-        let gate_task = tokio::task::spawn_blocking(move || {
-            let mut gate_spins = 0u64;
-            while build_active_clone.load(Ordering::Acquire) {
-                gate_spins += 1;
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            let _ = result_tx.blocking_send(Ok(PrefetchResult {
-                blocks: vec![],
-                fetch_elapsed: Duration::from_millis(1),
-                effective_end: 999,
-            }));
-            gate_spins
-        });
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        assert!(
-            result_rx.try_recv().is_err(),
-            "should not have result while gated"
-        );
-
-        build_active.store(false, Ordering::Release);
-
-        let result = tokio::time::timeout(tokio::time::Duration::from_secs(2), result_rx.recv())
-            .await
-            .expect("timeout waiting for result")
-            .expect("channel closed");
-        assert_eq!(result.unwrap().effective_end, 999);
-
-        let spins = gate_task.await.unwrap();
-        assert!(
-            spins >= 5,
-            "worker should have spun at least 5 times in 100ms"
-        );
     }
 }

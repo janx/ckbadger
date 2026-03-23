@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -283,7 +283,6 @@ impl BulkBuildEngine {
         } else {
             indexer.progress.current() + 1
         };
-        let build_active = Arc::new(AtomicBool::new(false));
         let mut prefetch = prefetch::PrefetchChannelHandle::new(
             PREFETCH_DEPTH,
             ckb_store.clone(),
@@ -292,7 +291,6 @@ impl BulkBuildEngine {
             initial_handoff,
             configured_batch_size,
             sampler.subscribe(),
-            Arc::clone(&build_active),
         );
         // Bounded flush channel: the build loop sends PendingFlush into
         // a channel. A dedicated worker drains it serially, committing
@@ -344,10 +342,8 @@ impl BulkBuildEngine {
             );
 
             let build_started = Instant::now();
-            build_active.store(true, Ordering::Release);
             let (batch_stats, build_timings, pending_flush) =
                 runtime.apply_blocks(&blocks, indexer.config.is_mainnet(), &token_info_cache)?;
-            build_active.store(false, Ordering::Release);
             let build_elapsed = build_started.elapsed();
 
             // Read the most recent flush_ms from the worker (non-blocking).
@@ -584,7 +580,6 @@ impl BulkBuildEngine {
             total_fetches = prefetch_stats.total_fetches,
             total_blocks = prefetch_stats.total_blocks,
             disk_throttle_count = prefetch_stats.disk_throttle_count,
-            build_gate_count = prefetch_stats.build_gate_count,
             exit_reason = ?prefetch_stats.exit_reason,
             "Prefetch worker finished"
         );
