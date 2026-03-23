@@ -77,6 +77,15 @@ pub struct BatchSample {
     pub mem_available_mb: u64,
     pub disk_read_mb: f64,
     pub disk_write_mb: f64,
+    pub disk_read_mb_s: Option<f64>,
+    pub disk_write_mb_s: Option<f64>,
+    pub disk_read_iops: Option<f64>,
+    pub disk_write_iops: Option<f64>,
+    pub disk_util_pct: Option<f64>,
+    pub disk_await_ms: Option<f64>,
+    pub disk_avg_queue_depth: Option<f64>,
+    pub disk_in_flight: Option<u64>,
+    pub disk_state: Option<String>,
     pub owner_memory_bytes: HashMap<String, u64>,
     pub live_cell_count: u64,
     pub cumulative_history_rows: u64,
@@ -149,6 +158,15 @@ impl BatchSample {
             mem_available_mb,
             disk_read_mb,
             disk_write_mb,
+            disk_read_mb_s: None,
+            disk_write_mb_s: None,
+            disk_read_iops: None,
+            disk_write_iops: None,
+            disk_util_pct: None,
+            disk_await_ms: None,
+            disk_avg_queue_depth: None,
+            disk_in_flight: None,
+            disk_state: None,
             owner_memory_bytes: HashMap::new(),
             live_cell_count: 0,
             cumulative_history_rows: 0,
@@ -213,6 +231,16 @@ pub struct BulkSyncPerfMetrics {
     pub max_load_avg_1m: f64,
     pub min_mem_available_mb: u64,
     pub avg_disk_write_mb_per_batch: f64,
+    pub avg_disk_util_pct: Option<f64>,
+    pub p95_disk_util_pct: Option<f64>,
+    pub avg_disk_await_ms: Option<f64>,
+    pub p95_disk_await_ms: Option<f64>,
+    pub max_disk_avg_queue_depth: Option<f64>,
+    pub peak_disk_write_mb_s: Option<f64>,
+    pub peak_disk_write_iops: Option<f64>,
+    pub saturated_window_count: u64,
+    pub saturated_window_ratio: Option<f64>,
+    pub disk_telemetry_status: String,
     pub peak_owner_memory_bytes: HashMap<String, u64>,
     pub peak_live_cell_count: u64,
     pub streamed_history_rows: u64,
@@ -445,6 +473,53 @@ impl BulkSyncPerfRun {
             .unwrap_or(0);
         let disk_writes: Vec<f64> = self.batch_samples.iter().map(|s| s.disk_write_mb).collect();
         let avg_disk_write_mb_per_batch = average(&disk_writes);
+        let disk_util_pct: Vec<Option<f64>> =
+            self.batch_samples.iter().map(|s| s.disk_util_pct).collect();
+        let disk_await_ms: Vec<Option<f64>> =
+            self.batch_samples.iter().map(|s| s.disk_await_ms).collect();
+        let disk_avg_queue_depth: Vec<Option<f64>> = self
+            .batch_samples
+            .iter()
+            .map(|s| s.disk_avg_queue_depth)
+            .collect();
+        let disk_write_mb_s: Vec<Option<f64>> = self
+            .batch_samples
+            .iter()
+            .map(|s| s.disk_write_mb_s)
+            .collect();
+        let disk_write_iops: Vec<Option<f64>> = self
+            .batch_samples
+            .iter()
+            .map(|s| s.disk_write_iops)
+            .collect();
+        let avg_disk_util_pct = average_valid(&disk_util_pct);
+        let p95_disk_util_pct = percentile_valid(&disk_util_pct, 95);
+        let avg_disk_await_ms = average_valid(&disk_await_ms);
+        let p95_disk_await_ms = percentile_valid(&disk_await_ms, 95);
+        let max_disk_avg_queue_depth = max_valid(&disk_avg_queue_depth);
+        let peak_disk_write_mb_s = max_valid(&disk_write_mb_s);
+        let peak_disk_write_iops = max_valid(&disk_write_iops);
+        let saturated_window_count = self
+            .batch_samples
+            .iter()
+            .filter(|sample| sample.disk_state.as_deref() == Some("saturated"))
+            .count() as u64;
+        let observed_disk_window_count = self
+            .batch_samples
+            .iter()
+            .filter(|sample| {
+                matches!(
+                    sample.disk_state.as_deref(),
+                    Some("idle" | "active" | "saturated")
+                )
+            })
+            .count() as u64;
+        let saturated_window_ratio = if observed_disk_window_count > 0 {
+            Some(saturated_window_count as f64 / observed_disk_window_count as f64)
+        } else {
+            None
+        };
+        let disk_telemetry_status = disk_telemetry_status(&self.batch_samples);
         let mut peak_owner_memory_bytes = HashMap::new();
         for sample in &self.batch_samples {
             for (owner, bytes) in &sample.owner_memory_bytes {
@@ -498,6 +573,16 @@ impl BulkSyncPerfRun {
             max_load_avg_1m,
             min_mem_available_mb,
             avg_disk_write_mb_per_batch,
+            avg_disk_util_pct,
+            p95_disk_util_pct,
+            avg_disk_await_ms,
+            p95_disk_await_ms,
+            max_disk_avg_queue_depth,
+            peak_disk_write_mb_s,
+            peak_disk_write_iops,
+            saturated_window_count,
+            saturated_window_ratio,
+            disk_telemetry_status,
             peak_owner_memory_bytes,
             peak_live_cell_count,
             streamed_history_rows: materialization_report.streamed_history_rows as u64,
@@ -558,7 +643,7 @@ impl BulkSyncPerfRun {
             content.push_str(&format!("finished_at_utc={}\n", finished_at_utc));
         }
         content.push_str(&format!(
-            "wall_clock_seconds={}\nbatches={}\nblocks={}\ntotal_txs={}\nblocks_per_sec_wall={}\ntxs_per_sec_wall={}\nblocks_per_batch={}\navg_batch_seconds={}\np95_batch_seconds={}\np99_batch_seconds={}\ntotal_commit_seconds={}\navg_commit_ms={}\np95_commit_ms={}\np99_commit_ms={}\nfinalize_seconds={}\nmax_compaction_pending_mb={}\nmax_l0_files={}\nmax_imm_memtables={}\navg_load_avg_1m={}\nmax_load_avg_1m={}\nmin_mem_available_mb={}\navg_disk_write_mb_per_batch={}\npeak_live_cell_count={}\nstreamed_history_rows={}\nsealed_aggregate_rows={}\nfinal_snapshot_rows={}\nhistory_flushes={}\nsealed_aggregate_flushes={}\nfinal_snapshot_flushes={}\ntotal_batch_seconds={}\nstall_count={}\n",
+            "wall_clock_seconds={}\nbatches={}\nblocks={}\ntotal_txs={}\nblocks_per_sec_wall={}\ntxs_per_sec_wall={}\nblocks_per_batch={}\navg_batch_seconds={}\np95_batch_seconds={}\np99_batch_seconds={}\ntotal_commit_seconds={}\navg_commit_ms={}\np95_commit_ms={}\np99_commit_ms={}\nfinalize_seconds={}\nmax_compaction_pending_mb={}\nmax_l0_files={}\nmax_imm_memtables={}\navg_load_avg_1m={}\nmax_load_avg_1m={}\nmin_mem_available_mb={}\navg_disk_write_mb_per_batch={}\navg_disk_util_pct={}\np95_disk_util_pct={}\navg_disk_await_ms={}\np95_disk_await_ms={}\nmax_disk_avg_queue_depth={}\npeak_disk_write_mb_s={}\npeak_disk_write_iops={}\nsaturated_window_count={}\nsaturated_window_ratio={}\ndisk_telemetry_status={}\npeak_live_cell_count={}\nstreamed_history_rows={}\nsealed_aggregate_rows={}\nfinal_snapshot_rows={}\nhistory_flushes={}\nsealed_aggregate_flushes={}\nfinal_snapshot_flushes={}\ntotal_batch_seconds={}\nstall_count={}\n",
             format_float(metrics.wall_clock_seconds),
             metrics.batches,
             metrics.blocks,
@@ -581,6 +666,16 @@ impl BulkSyncPerfRun {
             format_float(metrics.max_load_avg_1m),
             metrics.min_mem_available_mb,
             format_float(metrics.avg_disk_write_mb_per_batch),
+            format_optional_float(metrics.avg_disk_util_pct),
+            format_optional_float(metrics.p95_disk_util_pct),
+            format_optional_float(metrics.avg_disk_await_ms),
+            format_optional_float(metrics.p95_disk_await_ms),
+            format_optional_float(metrics.max_disk_avg_queue_depth),
+            format_optional_float(metrics.peak_disk_write_mb_s),
+            format_optional_float(metrics.peak_disk_write_iops),
+            metrics.saturated_window_count,
+            format_optional_float(metrics.saturated_window_ratio),
+            metrics.disk_telemetry_status,
             metrics.peak_live_cell_count,
             metrics.streamed_history_rows,
             metrics.sealed_aggregate_rows,
@@ -679,6 +774,30 @@ impl BulkSyncPerfRun {
         self.write_report_stall_events(&mut content, metrics);
 
         content.push_str("## System Pressure\n\n");
+        let observed_disk_windows = self
+            .batch_samples
+            .iter()
+            .filter(|sample| {
+                matches!(
+                    sample.disk_state.as_deref(),
+                    Some("idle" | "active" | "saturated")
+                )
+            })
+            .count() as u64;
+        content.push_str(&format!(
+            "- Disk telemetry status: {}",
+            metrics.disk_telemetry_status
+        ));
+        if let Some(ratio) = metrics.saturated_window_ratio {
+            content.push_str(&format!(
+                " ({} saturated / {} observed windows, {}%)",
+                metrics.saturated_window_count,
+                observed_disk_windows,
+                format_float(ratio * 100.0)
+            ));
+        }
+        content.push('\n');
+        content.push('\n');
         content.push_str("| Metric | Value |\n");
         content.push_str("| --- | ---: |\n");
         content.push_str(&format!(
@@ -705,6 +824,46 @@ impl BulkSyncPerfRun {
         content.push_str(&format!(
             "| avg_disk_write_mb_per_batch | {} |\n",
             format_float(metrics.avg_disk_write_mb_per_batch)
+        ));
+        content.push_str(&format!(
+            "| avg_disk_util_pct | {} |\n",
+            format_optional_float(metrics.avg_disk_util_pct)
+        ));
+        content.push_str(&format!(
+            "| p95_disk_util_pct | {} |\n",
+            format_optional_float(metrics.p95_disk_util_pct)
+        ));
+        content.push_str(&format!(
+            "| avg_disk_await_ms | {} |\n",
+            format_optional_float(metrics.avg_disk_await_ms)
+        ));
+        content.push_str(&format!(
+            "| p95_disk_await_ms | {} |\n",
+            format_optional_float(metrics.p95_disk_await_ms)
+        ));
+        content.push_str(&format!(
+            "| max_disk_avg_queue_depth | {} |\n",
+            format_optional_float(metrics.max_disk_avg_queue_depth)
+        ));
+        content.push_str(&format!(
+            "| peak_disk_write_mb_s | {} |\n",
+            format_optional_float(metrics.peak_disk_write_mb_s)
+        ));
+        content.push_str(&format!(
+            "| peak_disk_write_iops | {} |\n",
+            format_optional_float(metrics.peak_disk_write_iops)
+        ));
+        content.push_str(&format!(
+            "| saturated_window_count | {} |\n",
+            metrics.saturated_window_count
+        ));
+        content.push_str(&format!(
+            "| saturated_window_ratio | {} |\n",
+            format_optional_float(metrics.saturated_window_ratio)
+        ));
+        content.push_str(&format!(
+            "| disk_telemetry_status | {} |\n",
+            metrics.disk_telemetry_status
         ));
         content.push_str(&format!(
             "| peak_live_cell_count | {} |\n",
@@ -851,6 +1010,56 @@ impl BulkSyncPerfRun {
                     baseline.min_mem_available_mb as f64
                 ),
             ));
+            for (name, current, previous) in [
+                (
+                    "avg_disk_util_pct",
+                    metrics.avg_disk_util_pct,
+                    baseline.avg_disk_util_pct,
+                ),
+                (
+                    "p95_disk_util_pct",
+                    metrics.p95_disk_util_pct,
+                    baseline.p95_disk_util_pct,
+                ),
+                (
+                    "avg_disk_await_ms",
+                    metrics.avg_disk_await_ms,
+                    baseline.avg_disk_await_ms,
+                ),
+                (
+                    "p95_disk_await_ms",
+                    metrics.p95_disk_await_ms,
+                    baseline.p95_disk_await_ms,
+                ),
+                (
+                    "max_disk_avg_queue_depth",
+                    metrics.max_disk_avg_queue_depth,
+                    baseline.max_disk_avg_queue_depth,
+                ),
+                (
+                    "peak_disk_write_mb_s",
+                    metrics.peak_disk_write_mb_s,
+                    baseline.peak_disk_write_mb_s,
+                ),
+                (
+                    "peak_disk_write_iops",
+                    metrics.peak_disk_write_iops,
+                    baseline.peak_disk_write_iops,
+                ),
+                (
+                    "saturated_window_ratio",
+                    metrics.saturated_window_ratio,
+                    baseline.saturated_window_ratio,
+                ),
+            ] {
+                content.push_str(&format!(
+                    "| {} | {} | {} | {} |\n",
+                    name,
+                    format_optional_float(current),
+                    format_optional_float(previous),
+                    format_optional_delta_pct(current, previous),
+                ));
+            }
         }
 
         fs::write(self.run_dir.join("report.md"), content)?;
@@ -1237,6 +1446,14 @@ fn average(values: &[f64]) -> f64 {
     values.iter().sum::<f64>() / values.len() as f64
 }
 
+fn average_valid(values: &[Option<f64>]) -> Option<f64> {
+    let values = values.iter().flatten().copied().collect::<Vec<_>>();
+    if values.is_empty() {
+        return None;
+    }
+    Some(values.iter().sum::<f64>() / values.len() as f64)
+}
+
 fn percentile(mut values: Vec<f64>, pct: usize) -> f64 {
     if values.is_empty() {
         return 0.0;
@@ -1246,8 +1463,26 @@ fn percentile(mut values: Vec<f64>, pct: usize) -> f64 {
     values[index.saturating_sub(1).min(values.len() - 1)]
 }
 
+fn percentile_valid(values: &[Option<f64>], pct: usize) -> Option<f64> {
+    let mut values = values.iter().flatten().copied().collect::<Vec<_>>();
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+    let index = (pct * values.len()).div_ceil(100);
+    Some(values[index.saturating_sub(1).min(values.len() - 1)])
+}
+
+fn max_valid(values: &[Option<f64>]) -> Option<f64> {
+    values.iter().flatten().copied().max_by(f64::total_cmp)
+}
+
 fn format_float(value: f64) -> String {
     format!("{value:.3}")
+}
+
+fn format_optional_float(value: Option<f64>) -> String {
+    value.map(format_float).unwrap_or_else(|| "n/a".to_string())
 }
 
 fn format_delta_pct(current: f64, baseline: f64) -> String {
@@ -1255,6 +1490,47 @@ fn format_delta_pct(current: f64, baseline: f64) -> String {
         return "n/a".to_string();
     }
     format!("{:.2}%", ((current - baseline) / baseline) * 100.0)
+}
+
+fn format_optional_delta_pct(current: Option<f64>, baseline: Option<f64>) -> String {
+    match (current, baseline) {
+        (Some(current), Some(baseline)) if baseline != 0.0 => {
+            format!("{:.2}%", ((current - baseline) / baseline) * 100.0)
+        }
+        _ => "n/a".to_string(),
+    }
+}
+
+fn disk_telemetry_status(samples: &[BatchSample]) -> String {
+    let mut seen_idle = false;
+    let mut seen_active = false;
+    let mut seen_saturated = false;
+
+    for sample in samples {
+        match sample.disk_state.as_deref() {
+            Some("idle") => {
+                seen_idle = true;
+            }
+            Some("active") => {
+                seen_active = true;
+            }
+            Some("saturated") => {
+                seen_saturated = true;
+            }
+            Some("unavailable") | None => {}
+            Some(other) => panic!("unknown bulk sync disk telemetry state: {other}"),
+        }
+    }
+
+    if seen_saturated {
+        "saturated".to_string()
+    } else if seen_active {
+        "active".to_string()
+    } else if seen_idle {
+        "idle".to_string()
+    } else {
+        "unavailable".to_string()
+    }
 }
 
 fn owner_memory_entries(entries: &HashMap<String, u64>) -> Vec<(String, u64)> {
@@ -1312,6 +1588,23 @@ fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
         max_load_avg_1m: read_f64(&map, "max_load_avg_1m"),
         min_mem_available_mb: read_u64(&map, "min_mem_available_mb"),
         avg_disk_write_mb_per_batch: read_f64(&map, "avg_disk_write_mb_per_batch"),
+        avg_disk_util_pct: read_optional_f64(&map, "avg_disk_util_pct"),
+        p95_disk_util_pct: read_optional_f64(&map, "p95_disk_util_pct"),
+        avg_disk_await_ms: read_optional_f64(&map, "avg_disk_await_ms"),
+        p95_disk_await_ms: read_optional_f64(&map, "p95_disk_await_ms"),
+        max_disk_avg_queue_depth: read_optional_f64(&map, "max_disk_avg_queue_depth"),
+        peak_disk_write_mb_s: read_optional_f64(&map, "peak_disk_write_mb_s"),
+        peak_disk_write_iops: read_optional_f64(&map, "peak_disk_write_iops"),
+        saturated_window_count: read_u64(&map, "saturated_window_count"),
+        saturated_window_ratio: read_optional_f64(&map, "saturated_window_ratio"),
+        disk_telemetry_status: {
+            let status = read_string(&map, "disk_telemetry_status");
+            if status.is_empty() {
+                "unavailable".to_string()
+            } else {
+                status
+            }
+        },
         peak_owner_memory_bytes,
         peak_live_cell_count: read_u64(&map, "peak_live_cell_count"),
         streamed_history_rows: read_u64(&map, "streamed_history_rows"),
@@ -1339,6 +1632,13 @@ fn read_f64(map: &HashMap<String, String>, key: &str) -> f64 {
     map.get(key)
         .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(0.0)
+}
+
+fn read_optional_f64(map: &HashMap<String, String>, key: &str) -> Option<f64> {
+    match map.get(key).map(String::as_str) {
+        Some("n/a") | None => None,
+        Some(value) => value.parse::<f64>().ok(),
+    }
 }
 
 #[cfg(test)]
@@ -1371,6 +1671,30 @@ mod tests {
             0.0,
             0.0,
         )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn set_disk_window(
+        sample: &mut BatchSample,
+        state: Option<&str>,
+        util_pct: Option<f64>,
+        await_ms: Option<f64>,
+        avg_queue_depth: Option<f64>,
+        write_mb_s: Option<f64>,
+        write_iops: Option<f64>,
+        read_mb_s: Option<f64>,
+        read_iops: Option<f64>,
+        in_flight: Option<u64>,
+    ) {
+        sample.disk_state = state.map(str::to_string);
+        sample.disk_util_pct = util_pct;
+        sample.disk_await_ms = await_ms;
+        sample.disk_avg_queue_depth = avg_queue_depth;
+        sample.disk_write_mb_s = write_mb_s;
+        sample.disk_write_iops = write_iops;
+        sample.disk_read_mb_s = read_mb_s;
+        sample.disk_read_iops = read_iops;
+        sample.disk_in_flight = in_flight;
     }
 
     fn test_env_snapshot() -> EnvironmentSnapshot {
@@ -1657,6 +1981,147 @@ mod tests {
     }
 
     #[test]
+    fn test_metrics_env_aggregates_disk_windows_without_zero_fallbacks() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        let mut valid = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        set_disk_window(
+            &mut valid,
+            Some("active"),
+            Some(50.0),
+            Some(10.0),
+            Some(1.5),
+            Some(200.0),
+            Some(3_000.0),
+            Some(100.0),
+            Some(1_500.0),
+            Some(4),
+        );
+        run.record_batch_sample(valid).unwrap();
+
+        let mut unavailable = test_batch_sample(20, 2.0, 80.0, 200, 7, 2);
+        set_disk_window(
+            &mut unavailable,
+            Some("unavailable"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        run.record_batch_sample(unavailable).unwrap();
+
+        run.finish_completed().unwrap();
+
+        let metrics = std::fs::read_to_string(dir.path().join("run-1/metrics.env")).unwrap();
+        assert!(metrics.contains("avg_disk_util_pct=50.000"));
+        assert!(metrics.contains("p95_disk_util_pct=50.000"));
+        assert!(metrics.contains("avg_disk_await_ms=10.000"));
+        assert!(metrics.contains("p95_disk_await_ms=10.000"));
+        assert!(metrics.contains("max_disk_avg_queue_depth=1.500"));
+        assert!(metrics.contains("peak_disk_write_mb_s=200.000"));
+        assert!(metrics.contains("peak_disk_write_iops=3000.000"));
+        assert!(metrics.contains("saturated_window_count=0"));
+        assert!(metrics.contains("saturated_window_ratio=0.000"));
+        assert!(metrics.contains("disk_telemetry_status=active"));
+    }
+
+    #[test]
+    fn test_report_includes_disk_saturation_summary_line() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        let mut sample = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        set_disk_window(
+            &mut sample,
+            Some("saturated"),
+            Some(96.5),
+            Some(18.0),
+            Some(3.25),
+            Some(712.0),
+            Some(18_400.0),
+            Some(128.0),
+            Some(2_400.0),
+            Some(9),
+        );
+        run.record_batch_sample(sample).unwrap();
+        run.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        assert!(report.contains("- Disk telemetry status: saturated"));
+        assert!(report.contains("saturated_window_count"));
+        assert!(report.contains("peak_disk_write_mb_s"));
+    }
+
+    #[test]
+    fn test_unavailable_disk_windows_do_not_skew_averages() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        let mut valid_a = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        set_disk_window(
+            &mut valid_a,
+            Some("active"),
+            Some(90.0),
+            Some(18.0),
+            Some(2.0),
+            Some(500.0),
+            Some(11_000.0),
+            Some(120.0),
+            Some(1_800.0),
+            Some(6),
+        );
+        run.record_batch_sample(valid_a).unwrap();
+
+        let mut unavailable = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        set_disk_window(
+            &mut unavailable,
+            Some("unavailable"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        run.record_batch_sample(unavailable).unwrap();
+
+        let mut valid_b = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        set_disk_window(
+            &mut valid_b,
+            Some("active"),
+            Some(30.0),
+            Some(6.0),
+            Some(1.0),
+            Some(250.0),
+            Some(8_000.0),
+            Some(80.0),
+            Some(1_200.0),
+            Some(3),
+        );
+        run.record_batch_sample(valid_b).unwrap();
+
+        run.finish_completed().unwrap();
+
+        let metrics = std::fs::read_to_string(dir.path().join("run-1/metrics.env")).unwrap();
+        assert!(metrics.contains("avg_disk_util_pct=60.000"));
+        assert!(metrics.contains("avg_disk_await_ms=12.000"));
+        assert!(metrics.contains("peak_disk_write_mb_s=500.000"));
+        assert!(metrics.contains("disk_telemetry_status=active"));
+        assert!(!metrics.contains("avg_disk_util_pct=40.000"));
+        assert!(!metrics.contains("avg_disk_await_ms=9.000"));
+    }
+
+    #[test]
     fn test_perf_report_tracks_owner_memory_breakdown_and_materialization_totals() {
         let dir = TempDir::new().unwrap();
         let mut run =
@@ -1825,6 +2290,39 @@ mod tests {
         assert!(samples.contains("\"mem_available_mb\""));
         assert!(samples.contains("\"disk_read_mb\""));
         assert!(samples.contains("\"disk_write_mb\""));
+    }
+
+    #[test]
+    fn test_batch_samples_write_disk_window_fields_to_samples_jsonl() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        let mut sample = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        set_disk_window(
+            &mut sample,
+            Some("saturated"),
+            Some(91.5),
+            Some(17.25),
+            Some(2.75),
+            Some(712.0),
+            Some(18_400.0),
+            Some(128.0),
+            Some(2_400.0),
+            Some(7),
+        );
+        run.record_batch_sample(sample).unwrap();
+
+        let samples = std::fs::read_to_string(dir.path().join("run-1/samples.jsonl")).unwrap();
+        assert!(samples.contains("\"disk_read_mb_s\":128.0"));
+        assert!(samples.contains("\"disk_write_mb_s\":712.0"));
+        assert!(samples.contains("\"disk_read_iops\":2400.0"));
+        assert!(samples.contains("\"disk_write_iops\":18400.0"));
+        assert!(samples.contains("\"disk_util_pct\":91.5"));
+        assert!(samples.contains("\"disk_await_ms\":17.25"));
+        assert!(samples.contains("\"disk_avg_queue_depth\":2.75"));
+        assert!(samples.contains("\"disk_in_flight\":7"));
+        assert!(samples.contains("\"disk_state\":\"saturated\""));
     }
 
     #[test]

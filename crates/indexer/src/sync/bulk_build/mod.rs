@@ -395,6 +395,7 @@ impl BulkBuildEngine {
             );
 
             let snap = sampler.latest();
+            let disk_state = snap.disk_state.clone();
             let mut sample = BatchSample::new(
                 batch_stats.block_count,
                 fetch_elapsed.as_secs_f64() + build_elapsed.as_secs_f64(),
@@ -411,6 +412,15 @@ impl BulkBuildEngine {
                 snap.disk_write_mb,
             );
             sample.engine = "bulk_build".to_string();
+            sample.disk_read_mb_s = snap.disk_read_mb_s;
+            sample.disk_write_mb_s = snap.disk_write_mb_s;
+            sample.disk_read_iops = snap.disk_read_iops;
+            sample.disk_write_iops = snap.disk_write_iops;
+            sample.disk_util_pct = snap.disk_util_pct;
+            sample.disk_await_ms = snap.disk_await_ms;
+            sample.disk_avg_queue_depth = snap.disk_avg_queue_depth;
+            sample.disk_in_flight = snap.disk_in_flight;
+            sample.disk_state = disk_state.clone();
             sample.txs = batch_stats.tx_count;
             sample.cells = u64::try_from(batch_stats.cells_created).map_err(|_| {
                 anyhow!(
@@ -463,7 +473,7 @@ impl BulkBuildEngine {
             // Must happen before record_bulk_sync_perf_batch_sample moves sample.
             let owner_mem_total: u64 = sample.owner_memory_bytes.values().sum();
             indexer.bulk_build_perf.record_disk_telemetry(
-                snap.disk_state.as_deref(),
+                disk_state.as_deref(),
                 snap.disk_util_pct,
                 snap.disk_await_ms,
                 snap.disk_avg_queue_depth,
