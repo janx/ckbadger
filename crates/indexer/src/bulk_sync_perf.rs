@@ -499,12 +499,7 @@ impl BulkSyncPerfRun {
         let max_disk_avg_queue_depth = max_valid(&disk_avg_queue_depth);
         let peak_disk_write_mb_s = max_valid(&disk_write_mb_s);
         let peak_disk_write_iops = max_valid(&disk_write_iops);
-        let saturated_window_count = self
-            .batch_samples
-            .iter()
-            .filter(|sample| sample.disk_state.as_deref() == Some("saturated"))
-            .count() as u64;
-        let observed_disk_window_count = self
+        let valid_disk_window_count = self
             .batch_samples
             .iter()
             .filter(|sample| {
@@ -514,8 +509,13 @@ impl BulkSyncPerfRun {
                 )
             })
             .count() as u64;
-        let saturated_window_ratio = if observed_disk_window_count > 0 {
-            Some(saturated_window_count as f64 / observed_disk_window_count as f64)
+        let saturated_window_count = self
+            .batch_samples
+            .iter()
+            .filter(|sample| sample.disk_state.as_deref() == Some("saturated"))
+            .count() as u64;
+        let saturated_window_ratio = if valid_disk_window_count > 0 {
+            Some(saturated_window_count as f64 / valid_disk_window_count as f64)
         } else {
             None
         };
@@ -774,7 +774,7 @@ impl BulkSyncPerfRun {
         self.write_report_stall_events(&mut content, metrics);
 
         content.push_str("## System Pressure\n\n");
-        let observed_disk_windows = self
+        let valid_disk_windows = self
             .batch_samples
             .iter()
             .filter(|sample| {
@@ -790,9 +790,9 @@ impl BulkSyncPerfRun {
         ));
         if let Some(ratio) = metrics.saturated_window_ratio {
             content.push_str(&format!(
-                " ({} saturated / {} observed windows, {}%)",
+                " ({} saturated / {} valid windows, {}%)",
                 metrics.saturated_window_count,
-                observed_disk_windows,
+                valid_disk_windows,
                 format_float(ratio * 100.0)
             ));
         }
@@ -1502,35 +1502,36 @@ fn format_optional_delta_pct(current: Option<f64>, baseline: Option<f64>) -> Str
 }
 
 fn disk_telemetry_status(samples: &[BatchSample]) -> String {
-    let mut seen_idle = false;
-    let mut seen_active = false;
-    let mut seen_saturated = false;
+    let total = samples.len();
+    if total == 0 {
+        return "unavailable".to_string();
+    }
+
+    let valid = samples
+        .iter()
+        .filter(|sample| {
+            matches!(
+                sample.disk_state.as_deref(),
+                Some("idle" | "active" | "saturated")
+            )
+        })
+        .count();
+    if valid == 0 {
+        return "unavailable".to_string();
+    }
+    if valid < total {
+        return "partial".to_string();
+    }
 
     for sample in samples {
         match sample.disk_state.as_deref() {
-            Some("idle") => {
-                seen_idle = true;
-            }
-            Some("active") => {
-                seen_active = true;
-            }
-            Some("saturated") => {
-                seen_saturated = true;
-            }
+            Some("idle") | Some("active") | Some("saturated") => {}
             Some("unavailable") | None => {}
             Some(other) => panic!("unknown bulk sync disk telemetry state: {other}"),
         }
     }
 
-    if seen_saturated {
-        "saturated".to_string()
-    } else if seen_active {
-        "active".to_string()
-    } else if seen_idle {
-        "idle".to_string()
-    } else {
-        "unavailable".to_string()
-    }
+    "ok".to_string()
 }
 
 fn owner_memory_entries(entries: &HashMap<String, u64>) -> Vec<(String, u64)> {
@@ -2028,7 +2029,7 @@ mod tests {
         assert!(metrics.contains("peak_disk_write_iops=3000.000"));
         assert!(metrics.contains("saturated_window_count=0"));
         assert!(metrics.contains("saturated_window_ratio=0.000"));
-        assert!(metrics.contains("disk_telemetry_status=active"));
+        assert!(metrics.contains("disk_telemetry_status=partial"));
     }
 
     #[test]
@@ -2054,7 +2055,7 @@ mod tests {
         run.finish_completed().unwrap();
 
         let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
-        assert!(report.contains("- Disk telemetry status: saturated"));
+        assert!(report.contains("- Disk telemetry status: ok"));
         assert!(report.contains("saturated_window_count"));
         assert!(report.contains("peak_disk_write_mb_s"));
     }
@@ -2116,9 +2117,60 @@ mod tests {
         assert!(metrics.contains("avg_disk_util_pct=60.000"));
         assert!(metrics.contains("avg_disk_await_ms=12.000"));
         assert!(metrics.contains("peak_disk_write_mb_s=500.000"));
-        assert!(metrics.contains("disk_telemetry_status=active"));
+        assert!(metrics.contains("disk_telemetry_status=partial"));
         assert!(!metrics.contains("avg_disk_util_pct=40.000"));
         assert!(!metrics.contains("avg_disk_await_ms=9.000"));
+    }
+
+    #[test]
+    fn test_disk_telemetry_status_is_unavailable_when_no_valid_windows_exist() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        let mut unavailable_a = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        set_disk_window(
+            &mut unavailable_a,
+            Some("unavailable"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        run.record_batch_sample(unavailable_a).unwrap();
+
+        let mut unavailable_b = test_batch_sample(10, 1.0, 40.0, 100, 4, 1);
+        set_disk_window(
+            &mut unavailable_b,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        run.record_batch_sample(unavailable_b).unwrap();
+
+        run.finish_completed().unwrap();
+
+        let metrics = std::fs::read_to_string(dir.path().join("run-1/metrics.env")).unwrap();
+        assert!(metrics.contains("avg_disk_util_pct=n/a"));
+        assert!(metrics.contains("p95_disk_util_pct=n/a"));
+        assert!(metrics.contains("avg_disk_await_ms=n/a"));
+        assert!(metrics.contains("p95_disk_await_ms=n/a"));
+        assert!(metrics.contains("max_disk_avg_queue_depth=n/a"));
+        assert!(metrics.contains("peak_disk_write_mb_s=n/a"));
+        assert!(metrics.contains("peak_disk_write_iops=n/a"));
+        assert!(metrics.contains("saturated_window_count=0"));
+        assert!(metrics.contains("saturated_window_ratio=n/a"));
+        assert!(metrics.contains("disk_telemetry_status=unavailable"));
     }
 
     #[test]
