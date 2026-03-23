@@ -1062,12 +1062,25 @@ export async function renderMarkdownPage(
       ]);
       return { status: 200, body };
     }
-    case 'assets_list': {
+    case 'inventory_tokens':
+    case 'inventory_objects':
+    case 'inventory_identities': {
       const limit = parseLimit(searchParams);
       const cursor = searchParams.get('cursor') ?? undefined;
-      const assets = await api.getAssets({ limit, cursor });
+      const typeMap = {
+        inventory_tokens: 'token' as const,
+        inventory_objects: 'object' as const,
+        inventory_identities: 'identity' as const,
+      };
+      const titleMap = {
+        inventory_tokens: 'Tokens',
+        inventory_objects: 'Objects',
+        inventory_identities: 'Identities',
+      };
+      const assetType = typeMap[page.kind];
+      const assets = await api.getAssets({ limit, cursor, type: assetType });
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
-        '# Assets',
+        `# ${titleMap[page.kind]}`,
         '',
         '## Query',
         '',

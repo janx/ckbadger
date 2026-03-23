@@ -39,7 +39,9 @@ Known markdown page routes:
 
 - `/`
 - `/address/{addr}`
-- `/assets`
+- `/inventory/tokens`
+- `/inventory/objects`
+- `/inventory/identities`
 - `/blocks`
 - `/blocks/{id}`
 - `/cell/{outpoint}`

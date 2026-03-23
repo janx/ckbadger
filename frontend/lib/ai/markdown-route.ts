@@ -32,7 +32,9 @@ export type ParsedMarkdownPage =
   | { kind: 'home'; pathname: '/' }
   | { kind: 'activities_list'; pathname: '/activities' }
   | { kind: 'address_detail'; pathname: string; addr: string }
-  | { kind: 'assets_list'; pathname: '/assets' }
+  | { kind: 'inventory_tokens'; pathname: '/inventory/tokens' }
+  | { kind: 'inventory_objects'; pathname: '/inventory/objects' }
+  | { kind: 'inventory_identities'; pathname: '/inventory/identities' }
   | { kind: 'blocks_list'; pathname: '/blocks' }
   | { kind: 'block_detail'; pathname: string; id: string }
   | { kind: 'cell_detail'; pathname: string; outpoint: string }
@@ -66,7 +68,9 @@ export const MARKDOWN_ROUTE_PATTERNS = [
   '/',
   '/activities',
   '/address/{addr}',
-  '/assets',
+  '/inventory/tokens',
+  '/inventory/objects',
+  '/inventory/identities',
   '/blocks',
   '/blocks/{id}',
   '/cell/{outpoint}',
@@ -121,7 +125,19 @@ export function parseMarkdownSourcePath(pathname: string): ParsedMarkdownPage {
   if (normalized === '/activities') {
     return { kind: 'activities_list', pathname: '/activities' };
   }
-  if (normalized === '/assets') return { kind: 'assets_list', pathname: '/assets' };
+  // Legacy /assets redirects to /inventory/tokens
+  if (normalized === '/assets') {
+    return { kind: 'inventory_tokens', pathname: '/inventory/tokens' };
+  }
+  if (normalized === '/inventory/tokens') {
+    return { kind: 'inventory_tokens', pathname: '/inventory/tokens' };
+  }
+  if (normalized === '/inventory/objects') {
+    return { kind: 'inventory_objects', pathname: '/inventory/objects' };
+  }
+  if (normalized === '/inventory/identities') {
+    return { kind: 'inventory_identities', pathname: '/inventory/identities' };
+  }
   if (normalized === '/blocks') return { kind: 'blocks_list', pathname: '/blocks' };
   if (normalized === '/charts') return { kind: 'charts_overview', pathname: '/charts' };
   if (normalized === '/dao/charts') return { kind: 'dao_charts', pathname: '/dao/charts' };

@@ -58,9 +58,17 @@ describe('Header', () => {
       'href',
       '/activities'
     );
-    expect(screen.getAllByRole('link', { name: 'Assets' }).at(0)).toHaveAttribute(
+    expect(screen.getAllByRole('link', { name: 'Tokens' }).at(0)).toHaveAttribute(
       'href',
-      '/assets'
+      '/inventory/tokens'
+    );
+    expect(screen.getAllByRole('link', { name: 'Objects' }).at(0)).toHaveAttribute(
+      'href',
+      '/inventory/objects'
+    );
+    expect(screen.getAllByRole('link', { name: 'Identities' }).at(0)).toHaveAttribute(
+      'href',
+      '/inventory/identities'
     );
     expect(screen.getAllByRole('link', { name: 'Scripts' }).at(0)).toHaveAttribute(
       'href',
@@ -83,7 +91,9 @@ describe('Header', () => {
 
     expect(screen.getAllByRole('link', { name: 'DAO' })).toHaveLength(2);
     expect(screen.getAllByRole('link', { name: 'Activities' })).toHaveLength(2);
-    expect(screen.getAllByRole('link', { name: 'Assets' })).toHaveLength(2);
+    expect(screen.getAllByRole('link', { name: 'Tokens' })).toHaveLength(2);
+    expect(screen.getAllByRole('link', { name: 'Objects' })).toHaveLength(2);
+    expect(screen.getAllByRole('link', { name: 'Identities' })).toHaveLength(2);
     expect(screen.queryByRole('link', { name: 'Fiber' })).not.toBeInTheDocument();
     expect(searchBarMock.mock.calls.every(([props]) => props.variant === 'compact')).toBe(true);
 

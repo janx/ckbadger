@@ -149,7 +149,7 @@ describe('ClusterDetailPage', () => {
       expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
       expect(screen.queryByLabelText('Search spores')).not.toBeInTheDocument();
       const backLink = screen.getByText('← Back to Objects');
-      expect(backLink.closest('a')).toHaveAttribute('href', '/assets?type=object');
+      expect(backLink.closest('a')).toHaveAttribute('href', '/inventory/objects');
     });
   });
 

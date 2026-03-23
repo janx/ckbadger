@@ -7,8 +7,8 @@ vi.mock('@/src/navigation', () => ({
 }));
 
 describe('ObjectsPage', () => {
-  it('redirects to assets object tab', () => {
+  it('redirects to inventory objects page', () => {
     ObjectsPage();
-    expect(redirect).toHaveBeenCalledWith('/assets?type=object');
+    expect(redirect).toHaveBeenCalledWith('/inventory/objects');
   });
 });

@@ -44,7 +44,10 @@ function lazyParamPage<TProps extends object>(
 
 const HomePage = lazyPage(() => import('@/app/page'));
 const ActivitiesPage = lazyPage(() => import('@/app/activities/page'));
-const AssetsPage = lazyPage(() => import('@/app/assets/page'));
+const AssetsRedirectPage = lazyPage(() => import('@/app/assets/page'));
+const InventoryTokensPage = lazyPage(() => import('@/app/inventory/tokens/page'));
+const InventoryObjectsPage = lazyPage(() => import('@/app/inventory/objects/page'));
+const InventoryIdentitiesPage = lazyPage(() => import('@/app/inventory/identities/page'));
 const BlocksPage = lazyPage(() => import('@/app/blocks/page'));
 const BlockDetailPage = lazyPage(() => import('@/app/blocks/[id]/page'));
 const TransactionsPage = lazyPage(() => import('@/app/transactions/page'));
@@ -180,7 +183,19 @@ export function createAppRouter(): RouteObject[] {
         },
         {
           path: 'assets',
-          element: <AssetsPage />,
+          element: <AssetsRedirectPage />,
+        },
+        {
+          path: 'inventory/tokens',
+          element: <InventoryTokensPage />,
+        },
+        {
+          path: 'inventory/objects',
+          element: <InventoryObjectsPage />,
+        },
+        {
+          path: 'inventory/identities',
+          element: <InventoryIdentitiesPage />,
         },
         {
           path: 'blocks',

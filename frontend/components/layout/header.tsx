@@ -9,10 +9,33 @@ import { Logo } from '@/components/layout/logo';
 import { GlobalStatsBar } from '@/components/stats-bar';
 import { useHomeScrollStore } from '@/hooks/useHomeScrollStore';
 
-const navLinks = [
+interface NavLink {
+  href: string;
+  label: string;
+}
+
+interface NavDropdown {
+  label: string;
+  children: NavLink[];
+}
+
+type NavItem = NavLink | NavDropdown;
+
+function isDropdown(item: NavItem): item is NavDropdown {
+  return 'children' in item;
+}
+
+const navItems: NavItem[] = [
   { href: '/dao', label: 'DAO' },
   { href: '/activities', label: 'Activities' },
-  { href: '/assets', label: 'Assets' },
+  {
+    label: 'Inventory',
+    children: [
+      { href: '/inventory/tokens', label: 'Tokens' },
+      { href: '/inventory/objects', label: 'Objects' },
+      { href: '/inventory/identities', label: 'Identities' },
+    ],
+  },
   { href: '/scripts', label: 'Scripts' },
   { href: '/charts', label: 'Charts' },
 ];
@@ -24,6 +47,8 @@ export function Header() {
   const pathname = usePathname();
   const isHomePage = pathname === '/';
   const isLinkActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+  const isDropdownActive = (item: NavDropdown) =>
+    item.children.some((child) => isLinkActive(child.href));
   const heroVisible = useHomeScrollStore((s) => s.heroVisible);
   const showStatsBar = isHomePage ? !heroVisible : true;
 
@@ -44,19 +69,64 @@ export function Header() {
         </div>
 
         <nav className="relative z-10 ml-auto hidden shrink-0 items-center justify-end gap-2 md:flex">
-          {navLinks.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className={`rounded-md border px-3 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
-                isLinkActive(link.href)
-                  ? 'border-jade/40 bg-jade/8 text-jade'
-                  : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
-              }`}
-            >
-              {link.label}
-            </Link>
-          ))}
+          {navItems.map((item) =>
+            isDropdown(item) ? (
+              <div key={item.label} className="group relative">
+                <button
+                  type="button"
+                  className={`flex items-center gap-1 rounded-md border px-3 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
+                    isDropdownActive(item)
+                      ? 'border-jade/40 bg-jade/8 text-jade'
+                      : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
+                  }`}
+                >
+                  {item.label}
+                  <svg
+                    className="h-3 w-3 opacity-50"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 9l-7 7-7-7"
+                    />
+                  </svg>
+                </button>
+                <div className="invisible absolute left-0 top-full pt-1 opacity-0 transition-all group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
+                  <div className="border-base-border bg-base-surface min-w-[10rem] rounded-md border py-1 shadow-lg">
+                    {item.children.map((child) => (
+                      <Link
+                        key={child.href}
+                        href={child.href}
+                        className={`block px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] transition-colors ${
+                          isLinkActive(child.href)
+                            ? 'text-jade bg-jade/8'
+                            : 'text-text hover:text-jade hover:bg-base-elevated/50'
+                        }`}
+                      >
+                        {child.label}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`rounded-md border px-3 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
+                  isLinkActive(item.href)
+                    ? 'border-jade/40 bg-jade/8 text-jade'
+                    : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
+                }`}
+              >
+                {item.label}
+              </Link>
+            )
+          )}
         </nav>
 
         <div className="ml-auto flex items-center space-x-3 md:hidden">
@@ -111,20 +181,42 @@ export function Header() {
               <SearchBar variant="compact" />
             </div>
             <div className="flex flex-col items-end gap-2">
-              {navLinks.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  onClick={() => setIsMenuOpen(false)}
-                  className={`block w-full max-w-[12rem] rounded-md border px-3 py-2.5 text-right font-mono text-xs uppercase tracking-[0.12em] transition ${
-                    isLinkActive(link.href)
-                      ? 'border-jade/40 bg-jade/8 text-jade'
-                      : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
-                  }`}
-                >
-                  {link.label}
-                </Link>
-              ))}
+              {navItems.map((item) =>
+                isDropdown(item) ? (
+                  <div key={item.label} className="flex w-full max-w-[12rem] flex-col gap-1">
+                    <span className="text-text-dim px-3 py-1 text-right font-mono text-xs uppercase tracking-[0.12em]">
+                      {item.label}
+                    </span>
+                    {item.children.map((child) => (
+                      <Link
+                        key={child.href}
+                        href={child.href}
+                        onClick={() => setIsMenuOpen(false)}
+                        className={`block w-full rounded-md border px-3 py-2.5 text-right font-mono text-xs uppercase tracking-[0.12em] transition ${
+                          isLinkActive(child.href)
+                            ? 'border-jade/40 bg-jade/8 text-jade'
+                            : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
+                        }`}
+                      >
+                        {child.label}
+                      </Link>
+                    ))}
+                  </div>
+                ) : (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={() => setIsMenuOpen(false)}
+                    className={`block w-full max-w-[12rem] rounded-md border px-3 py-2.5 text-right font-mono text-xs uppercase tracking-[0.12em] transition ${
+                      isLinkActive(item.href)
+                        ? 'border-jade/40 bg-jade/8 text-jade'
+                        : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
+                    }`}
+                  >
+                    {item.label}
+                  </Link>
+                )
+              )}
             </div>
           </nav>
         </div>

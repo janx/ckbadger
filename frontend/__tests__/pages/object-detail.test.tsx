@@ -214,7 +214,7 @@ describe('SporeDetailPage', () => {
 
     expect(screen.getByRole('link', { name: '← Back to Objects' })).toHaveAttribute(
       'href',
-      '/assets?type=object'
+      '/inventory/objects'
     );
     expect(screen.getByText('Spore Asset (0x1234...cdef)')).toBeInTheDocument();
     expect(screen.getByText('Spore Overview')).toBeInTheDocument();

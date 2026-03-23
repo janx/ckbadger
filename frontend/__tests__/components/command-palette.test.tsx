@@ -114,7 +114,7 @@ describe('CommandPalette', () => {
     fireEvent.keyDown(window, { key: 'g' });
     fireEvent.keyDown(window, { key: 'a' });
 
-    expect(pushMock).toHaveBeenCalledWith('/assets');
+    expect(pushMock).toHaveBeenCalledWith('/inventory/tokens');
   });
 
   it('navigates to scripts with g s chord', () => {

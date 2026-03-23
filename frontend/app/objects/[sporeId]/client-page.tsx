@@ -358,7 +358,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
         <main className="container mx-auto px-4 py-8">
           <div className="mb-6">
             <Link
-              href="/assets?type=object"
+              href="/inventory/objects"
               className="hover:text-emphasis text-text-dim text-sm transition-colors"
             >
               ← Back to Objects
@@ -900,7 +900,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
           <Link
-            href="/assets?type=object"
+            href="/inventory/objects"
             className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
             ← Back to Objects

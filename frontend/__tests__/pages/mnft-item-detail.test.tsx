@@ -108,7 +108,7 @@ describe('MnftItemDetailPage', () => {
     expect(breadcrumb).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /^Objects$/ })).toHaveAttribute(
       'href',
-      '/assets?type=object'
+      '/inventory/objects'
     );
     expect(screen.getByText('M-NFT')).toBeInTheDocument();
     expect(screen.getByText('locked')).toBeInTheDocument();

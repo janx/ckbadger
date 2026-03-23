@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Image from '@/components/ui/image';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
@@ -16,7 +16,6 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { HMulHelpPopover } from '@/components/ui/hmul-info';
 import { compositionTierCardStyle } from '@/components/object/storage-tier';
 import { api, Asset } from '@/lib/api';
@@ -30,7 +29,8 @@ import {
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatCkbCompact } from '@/lib/utils';
 import { formatCompositionTier } from '@/lib/asset-utils';
-type AssetTab = 'token' | 'object' | 'identity';
+
+export type AssetType = 'token' | 'object' | 'identity';
 type SortDirection = 'asc' | 'desc';
 type CompositionTierFilter =
   | 'all'
@@ -61,16 +61,6 @@ const COMPOSITION_TIER_OPTIONS: CompositionTierFilter[] = [
   'centralized_mixture',
   'unknown',
 ];
-function normalizeAssetTab(value: string | null): AssetTab {
-  if (value === 'dob' || value === 'nft') {
-    // Backward compatibility: old assets links used ?type=dob or ?type=nft.
-    return 'object';
-  }
-  if (value === 'object' || value === 'identity' || value === 'token') {
-    return value;
-  }
-  return 'token';
-}
 function normalizeStandardFilter(value: string | null): string | undefined {
   if (!value) {
     return undefined;
@@ -151,7 +141,7 @@ function formatTokenSupply(totalSupply: string | null, decimals: number | null):
   const decimal = remainder.toString().padStart(decimals, '0').replace(/0+$/, '');
   return `${formatted}.${decimal}`;
 }
-function getStandardOptions(assetType: AssetTab, selectedStandard?: string) {
+function getStandardOptions(assetType: AssetType, selectedStandard?: string) {
   const options =
     assetType === 'token'
       ? TOKEN_STANDARD_OPTIONS
@@ -163,26 +153,27 @@ function getStandardOptions(assetType: AssetTab, selectedStandard?: string) {
   }
   return options;
 }
-function AssetTable({
+
+const EMPTY_STATE_LABELS: Record<AssetType, string> = {
+  token: 'No tokens found',
+  object: 'No objects found',
+  identity: 'No identities found',
+};
+
+function InventoryTable({
   assetType,
   search,
   standard,
   compositionTier,
 }: {
-  assetType: AssetTab;
+  assetType: AssetType;
   search: string | undefined;
   standard: string | undefined;
   compositionTier: CompositionTierFilter;
 }) {
   const pagination = useCursorPagination();
-  const { reset } = pagination;
   const [sortKey, setSortKey] = useState<AssetSortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
-  useEffect(() => {
-    setSortKey('capacity');
-    setSortDirection('desc');
-    reset();
-  }, [assetType, standard, compositionTier, reset]);
   const { data, isLoading } = useQuery({
     queryKey: [
       'assets',
@@ -261,7 +252,7 @@ function AssetTable({
     >
       <span>{label}</span>
       <span className={sortKey === key ? 'text-emphasis' : 'text-text-dim'}>
-        {sortKey === key ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
+        {sortKey === key ? (sortDirection === 'asc' ? '\u2191' : '\u2193') : '\u2195'}
       </span>
     </button>
   );
@@ -328,7 +319,7 @@ function AssetTable({
     );
   }
   if (!data?.data?.length) {
-    return <div className="text-text-dim py-8 text-center">No assets found</div>;
+    return <div className="text-text-dim py-8 text-center">{EMPTY_STATE_LABELS[assetType]}</div>;
   }
   return (
     <>
@@ -380,7 +371,7 @@ function AssetTable({
                       />
                     )}
                     {asset.assetType === 'object' && asset.standard === 'spore' && (
-                      <span className="text-sm leading-none">🗂️</span>
+                      <span className="text-sm leading-none">{'\uD83D\uDDC2\uFE0F'}</span>
                     )}
                   </span>
                   <div className="min-w-0">
@@ -464,8 +455,9 @@ function AssetTable({
               className={`${capacityColumnClass} text-text hidden font-mono tabular-nums xl:block`}
             >
               {asset.hMultiplier != null ? (
-                <span title={`HMul: ×${asset.hMultiplier.toFixed(2)}`}>
-                  ×{asset.hMultiplier.toFixed(2)}
+                <span title={`HMul: \u00d7${asset.hMultiplier.toFixed(2)}`}>
+                  {'\u00d7'}
+                  {asset.hMultiplier.toFixed(2)}
                 </span>
               ) : (
                 <span className="text-text-dim">-</span>
@@ -517,7 +509,7 @@ function AssetTable({
                       />
                     )}
                     {asset.assetType === 'object' && asset.standard === 'spore' && (
-                      <span className="text-sm leading-none">🗂️</span>
+                      <span className="text-sm leading-none">{'\uD83D\uDDC2\uFE0F'}</span>
                     )}
                   </span>
                   <div className="min-w-0">
@@ -595,13 +587,23 @@ function AssetTable({
     </>
   );
 }
-export function AssetsPageClient() {
+
+interface InventoryPageClientProps {
+  assetType: AssetType;
+  title: string;
+  subtitle: string;
+  panelTitle: string;
+}
+
+export function InventoryPageClient({
+  assetType,
+  title,
+  subtitle,
+  panelTitle,
+}: InventoryPageClientProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const [activeTab, setActiveTab] = useState<AssetTab>(() =>
-    normalizeAssetTab(searchParams.get('type'))
-  );
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string | undefined>(undefined);
   const [standard, setStandard] = useState<string | undefined>(() =>
@@ -610,14 +612,6 @@ export function AssetsPageClient() {
   const [compositionTier, setCompositionTier] = useState<CompositionTierFilter>(() =>
     normalizeCompositionTier(searchParams.get('compositionTier'))
   );
-  useEffect(() => {
-    const tabFromUrl = normalizeAssetTab(searchParams.get('type'));
-    setActiveTab((prev) => (prev === tabFromUrl ? prev : tabFromUrl));
-    const standardFromUrl = normalizeStandardFilter(searchParams.get('standard'));
-    setStandard((prev) => (prev === standardFromUrl ? prev : standardFromUrl));
-    const compositionTierFromUrl = normalizeCompositionTier(searchParams.get('compositionTier'));
-    setCompositionTier((prev) => (prev === compositionTierFromUrl ? prev : compositionTierFromUrl));
-  }, [searchParams]);
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setSearch(searchInput.trim() || undefined);
@@ -625,20 +619,6 @@ export function AssetsPageClient() {
   const clearSearch = () => {
     setSearchInput('');
     setSearch(undefined);
-  };
-  const handleTabChange = (value: string) => {
-    const nextTab = normalizeAssetTab(value);
-    setActiveTab(nextTab);
-    setSearch(undefined);
-    setSearchInput('');
-    setStandard(undefined);
-    setCompositionTier('all');
-    const params = new URLSearchParams(searchParams.toString());
-    params.set('type', nextTab);
-    params.delete('standard');
-    params.delete('compositionTier');
-    const query = params.toString();
-    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   };
   const handleStandardChange = (value: string) => {
     const nextStandard = normalizeStandardFilter(value);
@@ -664,14 +644,14 @@ export function AssetsPageClient() {
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   };
-  const standardOptions = getStandardOptions(activeTab, standard);
+  const standardOptions = getStandardOptions(assetType, standard);
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <PageHeader
-          title="Assets"
-          subtitle="Browse tokens, objects, and identities on the CKB network"
+          title={title}
+          subtitle={subtitle}
           actions={
             <form
               onSubmit={handleSearch}
@@ -691,7 +671,7 @@ export function AssetsPageClient() {
                     onClick={clearSearch}
                     className="text-text-dim hover:text-text absolute right-2 top-1/2 -translate-y-1/2"
                   >
-                    ×
+                    {'\u00d7'}
                   </button>
                 )}
               </div>
@@ -705,81 +685,56 @@ export function AssetsPageClient() {
           }
         />
         <TerminalPanel>
-          <Tabs value={activeTab} onValueChange={handleTabChange}>
-            <TerminalPanelHeader
-              indicator="active"
-              actions={
-                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+          <TerminalPanelHeader
+            indicator="active"
+            actions={
+              <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+                <select
+                  value={standard ?? ''}
+                  onChange={(event) => handleStandardChange(event.target.value)}
+                  aria-label="Filter by standard"
+                  className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface text-text-bright min-w-[10.5rem] rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
+                >
+                  <option value="">All standards</option>
+                  {standardOptions.map((item) => (
+                    <option key={item} value={item}>
+                      {formatStandardLabel(item)}
+                    </option>
+                  ))}
+                </select>
+                {assetType === 'object' && (
                   <select
-                    value={standard ?? ''}
-                    onChange={(event) => handleStandardChange(event.target.value)}
-                    aria-label="Filter by standard"
-                    className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface text-text-bright min-w-[10.5rem] rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
+                    value={compositionTier}
+                    onChange={(event) => handleCompositionTierChange(event.target.value)}
+                    aria-label="Filter by composition tier"
+                    className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface text-text-bright min-w-[12rem] rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
                   >
-                    <option value="">All standards</option>
-                    {standardOptions.map((item) => (
+                    {COMPOSITION_TIER_OPTIONS.map((item) => (
                       <option key={item} value={item}>
-                        {formatStandardLabel(item)}
+                        {formatCompositionTierLabel(item)}
                       </option>
                     ))}
                   </select>
-                  {activeTab === 'object' && (
-                    <select
-                      value={compositionTier}
-                      onChange={(event) => handleCompositionTierChange(event.target.value)}
-                      aria-label="Filter by composition tier"
-                      className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface text-text-bright min-w-[12rem] rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
-                    >
-                      {COMPOSITION_TIER_OPTIONS.map((item) => (
-                        <option key={item} value={item}>
-                          {formatCompositionTierLabel(item)}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  <TabsList className="ml-auto">
-                    <TabsTrigger value="token">Tokens</TabsTrigger>
-                    <TabsTrigger value="object">Objects</TabsTrigger>
-                    <TabsTrigger value="identity">Identities</TabsTrigger>
-                  </TabsList>
-                </div>
-              }
-            >
-              Asset List
-            </TerminalPanelHeader>
-            <TerminalPanelContent padding="none">
-              <TabsContent value="token">
-                <AssetTable
-                  assetType="token"
-                  search={search}
-                  standard={standard}
-                  compositionTier="all"
-                />
-              </TabsContent>
-              <TabsContent value="object">
-                <AssetTable
-                  assetType="object"
-                  search={search}
-                  standard={standard}
-                  compositionTier={compositionTier}
-                />
-              </TabsContent>
-              <TabsContent value="identity">
-                <AssetTable
-                  assetType="identity"
-                  search={search}
-                  standard={standard}
-                  compositionTier="all"
-                />
-              </TabsContent>
-            </TerminalPanelContent>
-          </Tabs>
+                )}
+              </div>
+            }
+          >
+            {panelTitle}
+          </TerminalPanelHeader>
+          <TerminalPanelContent padding="none">
+            <InventoryTable
+              assetType={assetType}
+              search={search}
+              standard={standard}
+              compositionTier={compositionTier}
+            />
+          </TerminalPanelContent>
         </TerminalPanel>
       </main>
     </div>
   );
 }
-export function AssetsPageFallback() {
+export function InventoryPageFallback() {
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />

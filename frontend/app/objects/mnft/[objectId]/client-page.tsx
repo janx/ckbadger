@@ -152,7 +152,7 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
       <main className="container mx-auto px-4 py-8">
         {/* Breadcrumb */}
         <nav className="text-text-dim mb-6 flex items-center gap-1.5 font-mono text-sm">
-          <Link href="/assets?type=object" className="hover:text-emphasis transition-colors">
+          <Link href="/inventory/objects" className="hover:text-emphasis transition-colors">
             Objects
           </Link>
           <span>&rsaquo;</span>

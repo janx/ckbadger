@@ -30,7 +30,8 @@ Core page groups:
 - `/transactions`, `/tx/{hash}`
 - `/address/{addr}`, `/cell/{txHash-outputIndex}`
 - `/tokens`, `/tokens/{typeHash}`
-- `/assets`, `/objects`, `/objects/{sporeId}`, `/identities/dotbit/{identityId}`, `/identities/did/{identityId}`, `/objects/mnft/{objectId}`
+- `/inventory/tokens`, `/inventory/objects`, `/inventory/identities`
+- `/objects/{sporeId}`, `/identities/dotbit/{identityId}`, `/identities/did/{identityId}`, `/objects/mnft/{objectId}`
 - `/scripts`, `/scripts/{name}`, `/script/{codeHash}`
 - `/dao`, `/dao/charts`
 - `/charts`, `/charts/{slug}`

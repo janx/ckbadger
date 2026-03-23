@@ -29,7 +29,10 @@ describe('NotFoundPage', () => {
 
     // Header nav links still present
     expect(screen.getByRole('link', { name: 'DAO' })).toHaveAttribute('href', '/dao');
-    expect(screen.getByRole('link', { name: 'Assets' })).toHaveAttribute('href', '/assets');
+    expect(screen.getByRole('link', { name: 'Tokens' })).toHaveAttribute(
+      'href',
+      '/inventory/tokens'
+    );
     expect(screen.getByRole('link', { name: 'Scripts' })).toHaveAttribute('href', '/scripts');
     expect(screen.getByRole('link', { name: 'Charts' })).toHaveAttribute('href', '/charts');
 
