@@ -20,14 +20,17 @@ const EMA_ALPHA: f64 = 0.3;
 pub(crate) const MIN_SPAN: u64 = 10_000;
 pub(crate) const MAX_SPAN: u64 = 100_000;
 
-// Prefetch ahead bounds (batches)
-const MIN_PREFETCH: u64 = 1;
-pub(crate) const MAX_PREFETCH: u64 = 8;
-const INITIAL_PREFETCH: u64 = 4;
+// Channel depth bounds (batches).  Max is computed from system RAM at
+// startup to cap total buffered data.  Each slot holds one batch of raw
+// blocks (prefetch) or materialized rows (flush); per-slot size scales
+// with batch_span.  Absolute ceiling of 8 prevents runaway memory on
+// very large machines.
+const MIN_CHANNEL_DEPTH: u64 = 1;
+const ABSOLUTE_MAX_CHANNEL_DEPTH: u64 = 8;
+const INITIAL_PREFETCH_RATIO: u64 = 2; // initial = max / 2
 
-// Flush ahead bounds (batches buffered between build and flush worker)
-pub(crate) const MAX_FLUSH_AHEAD: u64 = 8;
-const INITIAL_FLUSH_AHEAD: u64 = 4;
+// Prefetch ahead bounds
+const MIN_PREFETCH: u64 = 1;
 
 // Fetch thread bounds
 const MIN_FETCH_THREADS: u32 = 2;
@@ -84,7 +87,6 @@ pub(crate) struct ControllerOutput {
     pub batch_span: u64,
     pub prefetch_ahead: u64,
     pub fetch_threads: u32,
-    pub flush_ahead: u64,
     pub bg_jobs: i32,
     pub bottleneck: Bottleneck,
     pub recv_ema: f64,
@@ -107,10 +109,10 @@ pub(crate) struct BottleneckController {
     batch_span: u64,
     prefetch_ahead: u64,
     fetch_threads: u32,
-    flush_ahead: u64,
     bg_jobs: i32,
 
     // Bounds
+    max_channel_depth: u64,
     max_fetch_threads: u32,
     min_bg_jobs: i32,
     max_bg_jobs: i32,
@@ -121,10 +123,19 @@ pub(crate) struct BottleneckController {
 }
 
 impl BottleneckController {
-    pub(crate) fn new(initial_span: u64, max_fetch_threads: u32, max_bg_jobs: i32) -> Self {
+    pub(crate) fn new(
+        initial_span: u64,
+        max_fetch_threads: u32,
+        max_bg_jobs: i32,
+        system_ram_bytes: u64,
+    ) -> Self {
         let max_bg_jobs = max_bg_jobs.max(MIN_BG_JOBS);
         let min_bg_jobs = (max_bg_jobs / 4).max(MIN_BG_JOBS);
         let max_fetch_threads = max_fetch_threads.max(MIN_FETCH_THREADS);
+        let max_channel_depth = channel_depth_for_ram(system_ram_bytes);
+        let initial_prefetch = (max_channel_depth / INITIAL_PREFETCH_RATIO)
+            .max(MIN_PREFETCH)
+            .min(max_channel_depth);
         Self {
             recv_ema: 0.0,
             build_ema: 0.0,
@@ -134,11 +145,11 @@ impl BottleneckController {
             rows_ema_observed: false,
 
             batch_span: initial_span.clamp(MIN_SPAN, MAX_SPAN),
-            prefetch_ahead: INITIAL_PREFETCH,
+            prefetch_ahead: initial_prefetch,
             fetch_threads: max_fetch_threads,
-            flush_ahead: INITIAL_FLUSH_AHEAD,
             bg_jobs: max_bg_jobs,
 
+            max_channel_depth,
             max_fetch_threads,
             min_bg_jobs,
             max_bg_jobs,
@@ -179,7 +190,7 @@ impl BottleneckController {
         // Adjust knobs.
         match bottleneck {
             Bottleneck::Fetch => {
-                self.prefetch_ahead = (self.prefetch_ahead + 1).min(MAX_PREFETCH);
+                self.prefetch_ahead = (self.prefetch_ahead + 1).min(self.max_channel_depth);
                 self.fetch_threads = grow_threads(self.fetch_threads, self.max_fetch_threads);
                 self.batch_span = grow_span(self.batch_span);
                 self.bg_jobs = (self.bg_jobs - 1).max(self.min_bg_jobs);
@@ -191,10 +202,10 @@ impl BottleneckController {
                 self.batch_span = grow_span(self.batch_span);
             }
             Bottleneck::Flush => {
-                // Flush-bound: grow flush_ahead to absorb transient compaction
-                // spikes without blocking build.
+                // Flush-bound: reduce read I/O (prefetch + fetch_threads) to
+                // yield disk bandwidth to compaction.
+                self.prefetch_ahead = (self.prefetch_ahead - 1).max(MIN_PREFETCH);
                 self.fetch_threads = shrink_threads(self.fetch_threads);
-                self.flush_ahead = (self.flush_ahead + 1).min(MAX_FLUSH_AHEAD);
                 self.batch_span = shrink_span(self.batch_span);
                 self.bg_jobs = (self.bg_jobs + 1).min(self.max_bg_jobs);
             }
@@ -209,14 +220,15 @@ impl BottleneckController {
 
         // Final clamp.
         self.batch_span = self.batch_span.clamp(MIN_SPAN, MAX_SPAN);
-        self.prefetch_ahead = self.prefetch_ahead.clamp(MIN_PREFETCH, MAX_PREFETCH);
+        self.prefetch_ahead = self
+            .prefetch_ahead
+            .clamp(MIN_PREFETCH, self.max_channel_depth);
         self.bg_jobs = self.bg_jobs.clamp(self.min_bg_jobs, self.max_bg_jobs);
 
         Some(ControllerOutput {
             batch_span: self.batch_span,
             prefetch_ahead: self.prefetch_ahead,
             fetch_threads: self.fetch_threads,
-            flush_ahead: self.flush_ahead,
             bg_jobs: self.bg_jobs,
             bottleneck,
             recv_ema: self.recv_ema,
@@ -257,8 +269,10 @@ impl BottleneckController {
         self.fetch_threads
     }
 
-    pub(crate) fn flush_ahead(&self) -> u64 {
-        self.flush_ahead
+    /// Max channel depth for both prefetch and flush channels, computed
+    /// from system RAM at startup.
+    pub(crate) fn channel_depth(&self) -> u64 {
+        self.max_channel_depth
     }
 
     /// Returns (current_bg_jobs, changed) where `changed` is true only if
@@ -295,11 +309,29 @@ fn shrink_threads(t: u32) -> u32 {
     t.saturating_sub((t / 4).max(1)).max(MIN_FETCH_THREADS)
 }
 
+/// Compute max channel depth (for both prefetch and flush) from system RAM.
+///
+/// Budget: ~2GB per channel slot at peak (raw blocks + pending rows).
+/// Halved to leave room for RocksDB + in-memory build structures.
+///
+///   RAM      depth
+///   ≤16 GB   2
+///   32 GB    4
+///   64 GB    8
+///   128 GB   8 (capped)
+fn channel_depth_for_ram(system_ram_bytes: u64) -> u64 {
+    const GB: u64 = 1024 * 1024 * 1024;
+    let depth = system_ram_bytes / (8 * GB);
+    depth.clamp(MIN_CHANNEL_DEPTH, ABSOLUTE_MAX_CHANNEL_DEPTH)
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const GB: u64 = 1024 * 1024 * 1024;
 
     fn healthy_signals() -> BatchSignals {
         BatchSignals {
@@ -314,14 +346,14 @@ mod tests {
 
     #[test]
     fn first_batch_returns_none() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
         let output = ctrl.observe(&healthy_signals());
         assert!(output.is_none());
     }
 
     #[test]
     fn fetch_starved_grows_prefetch_and_span() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
         let initial_span = ctrl.batch_span;
         let initial_prefetch = ctrl.prefetch_ahead;
 
@@ -347,7 +379,7 @@ mod tests {
 
     #[test]
     fn flush_pressure_shrinks_span_grows_bg_jobs() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
         // Start bg_jobs below max so we can see it grow.
         ctrl.bg_jobs = 4;
         ctrl.prev_bg_jobs = 4;
@@ -373,7 +405,7 @@ mod tests {
 
     #[test]
     fn build_bound_grows_span() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
         let initial_span = ctrl.batch_span;
 
         ctrl.observe(&healthy_signals()); // warmup
@@ -395,7 +427,7 @@ mod tests {
 
     #[test]
     fn row_budget_caps_span() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -422,7 +454,7 @@ mod tests {
 
     #[test]
     fn span_bounds_enforced() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -443,7 +475,7 @@ mod tests {
 
     #[test]
     fn bg_jobs_bounds_enforced() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 4);
+        let mut ctrl = BottleneckController::new(50_000, 12, 4, 32 * GB);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -476,7 +508,7 @@ mod tests {
 
     #[test]
     fn fetch_threads_grow_when_fetch_bound_shrink_when_build_bound() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
         let initial = ctrl.fetch_threads;
 
         ctrl.observe(&healthy_signals()); // warmup
@@ -522,7 +554,7 @@ mod tests {
 
     #[test]
     fn l0_leading_indicator_triggers_flush() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -543,7 +575,7 @@ mod tests {
 
     #[test]
     fn bg_jobs_if_changed_tracks_transitions() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
         assert!(ctrl.bg_jobs_if_changed().is_none()); // no change yet
 
         ctrl.bg_jobs = 6;
@@ -553,12 +585,14 @@ mod tests {
 
     #[test]
     fn prefetch_ahead_bounds() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8);
-        assert_eq!(ctrl.prefetch_ahead, INITIAL_PREFETCH);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        // 32 GB → channel_depth = 4, initial prefetch = 4/2 = 2
+        assert_eq!(ctrl.max_channel_depth, 4);
+        assert_eq!(ctrl.prefetch_ahead, 2);
 
         ctrl.observe(&healthy_signals()); // warmup
 
-        // Sustained fetch starvation should hit MAX_PREFETCH.
+        // Sustained fetch starvation should hit channel_depth.
         for _ in 0..20 {
             ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 10_000.0,
@@ -569,6 +603,16 @@ mod tests {
                 history_rows: 100_000,
             });
         }
-        assert_eq!(ctrl.prefetch_ahead, MAX_PREFETCH);
+        assert_eq!(ctrl.prefetch_ahead, ctrl.max_channel_depth);
+    }
+
+    #[test]
+    fn channel_depth_scales_with_ram() {
+        assert_eq!(channel_depth_for_ram(8 * GB), 1);
+        assert_eq!(channel_depth_for_ram(16 * GB), 2);
+        assert_eq!(channel_depth_for_ram(32 * GB), 4);
+        assert_eq!(channel_depth_for_ram(64 * GB), 8);
+        assert_eq!(channel_depth_for_ram(128 * GB), 8); // capped
+        assert_eq!(channel_depth_for_ram(256 * GB), 8); // capped
     }
 }

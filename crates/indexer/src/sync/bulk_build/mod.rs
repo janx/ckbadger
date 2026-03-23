@@ -50,7 +50,7 @@ pub(crate) mod prefetch;
 pub(crate) mod sampler;
 pub(crate) mod sequencer;
 
-use crate::sync::bottleneck::{BatchSignals, BottleneckController, MAX_FLUSH_AHEAD, MAX_PREFETCH};
+use crate::sync::bottleneck::{BatchSignals, BottleneckController};
 
 const BULK_BUILD_MIN_BLOCK_SPAN: u64 = 10_000;
 
@@ -137,7 +137,9 @@ impl BulkBuildEngine {
             configured_batch_size,
             max_fetch_threads,
             mem_profile.max_background_jobs,
+            mem_profile.system_ram_bytes,
         );
+        let channel_depth = controller.channel_depth() as usize;
         let mut batch_block_span = controller.batch_span();
         let mut batch_count: u64 = 0;
         // Compute initial handoff_target for the prefetch worker.
@@ -153,7 +155,7 @@ impl BulkBuildEngine {
         let (ahead_tx, ahead_rx) = tokio::sync::watch::channel(controller.prefetch_ahead());
         let (threads_tx, threads_rx) = tokio::sync::watch::channel(controller.fetch_threads());
         let mut prefetch = prefetch::PrefetchChannelHandle::new(
-            MAX_PREFETCH as usize,
+            channel_depth,
             ckb_store.clone(),
             prefetch_start,
             initial_handoff,
@@ -166,7 +168,7 @@ impl BulkBuildEngine {
         // each batch to RocksDB. Build only blocks when the channel is
         // full, eliminating the flush bubble when flush_ms > build_ms.
         let flush_channel = materialize::FlushChannelHandle::new(
-            MAX_FLUSH_AHEAD as usize,
+            channel_depth,
             indexer.writer.store().clone(),
             indexer.append_only_store.clone(),
         );
@@ -227,15 +229,9 @@ impl BulkBuildEngine {
                 pending_flush.sealed_rows.len(),
             );
 
-            // Soft gate: respect controller's flush_ahead limit before sending.
-            // Channel capacity is MAX_FLUSH_AHEAD; the soft gate makes the
-            // effective depth dynamic. flush_wait_ms captures both gate wait
-            // and any hard channel backpressure.
+            // Send to flush channel.  Blocks when channel is full (natural
+            // backpressure).  Channel depth is memory-budget-derived.
             let flush_wait_started = Instant::now();
-            let flush_ahead_limit = controller.flush_ahead() as usize;
-            while flush_channel.pending() >= flush_ahead_limit {
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
             flush_channel.send(pending_flush).await?;
             let flush_wait_elapsed = flush_wait_started.elapsed();
             let flush_channel_pending = flush_channel.pending() as u64;
@@ -321,7 +317,7 @@ impl BulkBuildEngine {
             sample.facts_cell_count = build_timings.facts_breakdown.cell_count;
             sample.flush_ms = prev_flush_ms;
             sample.flush_wait_ms = flush_wait_elapsed.as_secs_f64() * 1000.0;
-            sample.flush_channel_depth = controller.flush_ahead();
+            sample.flush_channel_depth = controller.channel_depth();
             sample.flush_channel_pending = flush_channel_pending;
             sample.prefetch_recv_ms = prefetch_recv_elapsed.as_secs_f64() * 1000.0;
             sample.prefetch_depth = controller.prefetch_ahead();
@@ -383,7 +379,7 @@ impl BulkBuildEngine {
                 prefetch_channel_pending,
                 prefetch_channel_capacity,
                 flush_channel_pending,
-                controller.flush_ahead(),
+                controller.channel_depth(),
             );
 
             indexer.record_bulk_sync_perf_batch_sample(sample);
@@ -443,7 +439,7 @@ impl BulkBuildEngine {
                     batch_span = output.batch_span,
                     prefetch_ahead = output.prefetch_ahead,
                     fetch_threads = output.fetch_threads,
-                    flush_ahead = output.flush_ahead,
+                    channel_depth = controller.channel_depth(),
                     bg_jobs = output.bg_jobs,
                     recv_ema = format!("{:.1}", output.recv_ema),
                     build_ema = format!("{:.1}", output.build_ema),
