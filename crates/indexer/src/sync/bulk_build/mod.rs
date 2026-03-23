@@ -128,8 +128,11 @@ impl BulkBuildEngine {
             )
         })?;
         let mem_profile = indexer.writer.store().memory_profile();
+        // Max = available cores.  Fetch threads are temporary (std::thread::scope),
+        // so no persistent over-subscription.  The controller shrinks this when
+        // build-bound to reduce overlap contention.
         let max_fetch_threads = std::thread::available_parallelism()
-            .map(|n| (n.get() / 2).max(2) as u32)
+            .map(|n| n.get().max(2) as u32)
             .unwrap_or(4);
         let mut controller = BottleneckController::new(
             configured_batch_size,

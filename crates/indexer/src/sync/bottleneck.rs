@@ -173,18 +173,18 @@ impl BottleneckController {
         match bottleneck {
             Bottleneck::Fetch => {
                 self.prefetch_ahead = (self.prefetch_ahead + 1).min(MAX_PREFETCH);
-                self.fetch_threads = (self.fetch_threads + 1).min(self.max_fetch_threads);
+                self.fetch_threads = grow_threads(self.fetch_threads, self.max_fetch_threads);
                 self.batch_span = grow_span(self.batch_span);
                 self.bg_jobs = (self.bg_jobs - 1).max(self.min_bg_jobs);
             }
             Bottleneck::Build => {
                 // Build-bound: shrink fetch threads to reduce overlap contention.
                 // Grow span for better RocksDB write amortization.
-                self.fetch_threads = (self.fetch_threads - 1).max(MIN_FETCH_THREADS);
+                self.fetch_threads = shrink_threads(self.fetch_threads);
                 self.batch_span = grow_span(self.batch_span);
             }
             Bottleneck::Flush => {
-                self.fetch_threads = (self.fetch_threads - 1).max(MIN_FETCH_THREADS);
+                self.fetch_threads = shrink_threads(self.fetch_threads);
                 self.batch_span = shrink_span(self.batch_span);
                 self.bg_jobs = (self.bg_jobs + 1).min(self.max_bg_jobs);
             }
@@ -268,6 +268,16 @@ fn grow_span(span: u64) -> u64 {
 
 fn shrink_span(span: u64) -> u64 {
     ((span as f64 * SPAN_SHRINK) as u64).max(MIN_SPAN)
+}
+
+/// +25% per step (minimum step of 1).
+fn grow_threads(t: u32, max: u32) -> u32 {
+    (t + (t / 4).max(1)).min(max)
+}
+
+/// -25% per step (minimum step of 1).
+fn shrink_threads(t: u32) -> u32 {
+    t.saturating_sub((t / 4).max(1)).max(MIN_FETCH_THREADS)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
