@@ -2,7 +2,8 @@ name = ".bit Reverse Record"
 description = ".bit reverse record type script storing reverse name mappings."
 website = "https://d.id/id-protocol/bit"
 
-[[mainnet]]
-code_hash = "0xebc9e13658f6df13593cf59b7e9cd159602b6c3c7d54b14dea43bae600ebae11"
-data_hash = "0x84bdd29c78d8adb3b4477a63f3cc7fecd203195fa597b6474f9742d70784fd72"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0xebc9e13658f6df13593cf59b7e9cd159602b6c3c7d54b14dea43bae600ebae11"
+version_hash = "0x84bdd29c78d8adb3b4477a63f3cc7fecd203195fa597b6474f9742d70784fd72"
+canonical_hash_type = "type"

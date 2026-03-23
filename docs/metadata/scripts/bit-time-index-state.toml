@@ -2,7 +2,8 @@ name = ".bit Time Index State"
 description = ".bit time oracle index-state type script."
 website = "https://github.com/dotbitHQ/ckb-time-script"
 
-[[mainnet]]
-code_hash = "0x3a468d53352eb855521dabed0dc7036929bfe72766ad58f801edfbae564f7b43"
-data_hash = "0xb575f6dd6417d4f7c52fd9e3a96824130302751c78ac10d1d0d35cd4b507bbae"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x3a468d53352eb855521dabed0dc7036929bfe72766ad58f801edfbae564f7b43"
+version_hash = "0xb575f6dd6417d4f7c52fd9e3a96824130302751c78ac10d1d0d35cd4b507bbae"
+canonical_hash_type = "type"

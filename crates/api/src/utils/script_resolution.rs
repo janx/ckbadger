@@ -331,8 +331,77 @@ pub fn resolve_script_by_hash(
     cells_store: &CkbadgerStore,
     reference_hash: &[u8],
 ) -> anyhow::Result<CurrentScriptVersionResolution> {
-    // 1. Type reference: code cells whose type_script_hash matches
+    let direct_version = store.get_script_version(reference_hash)?;
+    let persisted_versions = {
+        let mut seen = HashSet::new();
+        let mut versions = Vec::new();
+        for hash_type in [0u8, 1u8, 2u8, 4u8] {
+            if let Some(version_hash) =
+                store.get_script_reference_version_hash(hash_type, reference_hash)?
+            {
+                if seen.insert(version_hash.clone()) {
+                    versions.push(version_hash);
+                }
+            }
+        }
+        versions
+    };
+
+    if persisted_versions.len() == 1 {
+        let version_hash = persisted_versions[0].clone();
+        let version_info = store.get_script_version(&version_hash)?;
+        return Ok(CurrentScriptVersionResolution::Resolved(Box::new(
+            CurrentScriptVersion {
+                version_hash,
+                version_info,
+            },
+        )));
+    }
+
+    if persisted_versions.len() > 1 {
+        return Ok(CurrentScriptVersionResolution::Ambiguous(Box::new(
+            AmbiguousCurrentScriptVersion {
+                version_hashes: persisted_versions,
+            },
+        )));
+    }
+
     let type_matches = resolve_live_type_reference_matches(store, cells_store, reference_hash)?;
+    if let Some(version_info) = direct_version {
+        let mut unique_versions: Vec<Vec<u8>> = {
+            let mut seen = HashSet::new();
+            type_matches
+                .iter()
+                .filter(|m| seen.insert(m.version_hash.clone()))
+                .map(|m| m.version_hash.clone())
+                .collect()
+        };
+        if unique_versions.is_empty() {
+            return Ok(CurrentScriptVersionResolution::Resolved(Box::new(
+                CurrentScriptVersion {
+                    version_hash: reference_hash.to_vec(),
+                    version_info: Some(version_info),
+                },
+            )));
+        }
+        if unique_versions.len() == 1 && unique_versions[0] == reference_hash {
+            return Ok(CurrentScriptVersionResolution::Resolved(Box::new(
+                CurrentScriptVersion {
+                    version_hash: reference_hash.to_vec(),
+                    version_info: Some(version_info),
+                },
+            )));
+        }
+        if !unique_versions.iter().any(|hash| hash == reference_hash) {
+            unique_versions.push(reference_hash.to_vec());
+        }
+        unique_versions.sort();
+        return Ok(CurrentScriptVersionResolution::Ambiguous(Box::new(
+            AmbiguousCurrentScriptVersion {
+                version_hashes: unique_versions,
+            },
+        )));
+    }
     if !type_matches.is_empty() {
         let unique_versions: Vec<Vec<u8>> = {
             let mut seen = HashSet::new();
@@ -342,40 +411,19 @@ pub fn resolve_script_by_hash(
                 .map(|m| m.version_hash.clone())
                 .collect()
         };
-        if unique_versions.len() == 1 {
-            let vh = &unique_versions[0];
-            let vi = store.get_script_version(vh)?;
-            return Ok(CurrentScriptVersionResolution::Resolved(Box::new(
-                CurrentScriptVersion {
-                    version_hash: vh.clone(),
-                    version_info: vi,
+        if unique_versions.len() > 1 {
+            return Ok(CurrentScriptVersionResolution::Ambiguous(Box::new(
+                AmbiguousCurrentScriptVersion {
+                    version_hashes: unique_versions,
                 },
             )));
         }
-        return Ok(CurrentScriptVersionResolution::Ambiguous(Box::new(
-            AmbiguousCurrentScriptVersion {
-                version_hashes: unique_versions,
-            },
-        )));
-    }
-
-    // 2. Data-family: version_hash = reference_hash, check CF_SCRIPT_INFO
-    if store.get_script_info(reference_hash)?.is_some() {
-        let vi = store.get_script_version(reference_hash)?;
+        let version_hash = unique_versions[0].clone();
+        let version_info = store.get_script_version(&version_hash)?;
         return Ok(CurrentScriptVersionResolution::Resolved(Box::new(
             CurrentScriptVersion {
-                version_hash: reference_hash.to_vec(),
-                version_info: vi,
-            },
-        )));
-    }
-
-    // 3. Direct version lookup (from labels)
-    if let Some(vi) = store.get_script_version(reference_hash)? {
-        return Ok(CurrentScriptVersionResolution::Resolved(Box::new(
-            CurrentScriptVersion {
-                version_hash: reference_hash.to_vec(),
-                version_info: Some(vi),
+                version_hash,
+                version_info,
             },
         )));
     }
@@ -540,6 +588,175 @@ mod tests {
                 );
             }
             other => panic!("expected ambiguity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_script_by_hash_uses_persisted_mapping_before_live_type_ambiguity() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference_hash = vec![0x63; 32];
+        let mapped_version_hash = vec![0x74; 32];
+        let conflicting_version_hash = vec![0x85; 32];
+
+        store
+            .put_script_reference_to_version_direct(1, &reference_hash, &mapped_version_hash)
+            .unwrap();
+        store
+            .put_script_version(
+                &mapped_version_hash,
+                &ScriptVersionInfo {
+                    version_hash: mapped_version_hash.clone(),
+                    name: Some("Mapped Version".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(
+            &[0x90; 32],
+            0,
+            &LiveCellInfo {
+                capacity: 100,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x12; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(reference_hash.clone()),
+                type_code_hash: Some(vec![0x13; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 0,
+                occupied_capacity: 80,
+                udt_amount: None,
+                data_hash: Some(mapped_version_hash.clone()),
+            },
+            10,
+        );
+        batch.put_cell_by_type(&reference_hash, 10, &[0x90; 32], 0);
+        batch.put_cell(
+            &[0x91; 32],
+            0,
+            &LiveCellInfo {
+                capacity: 100,
+                lock_script_hash: vec![0x21; 32],
+                lock_code_hash: vec![0x22; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(reference_hash.clone()),
+                type_code_hash: Some(vec![0x23; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 0,
+                occupied_capacity: 80,
+                udt_amount: None,
+                data_hash: Some(conflicting_version_hash),
+            },
+            11,
+        );
+        batch.put_cell_by_type(&reference_hash, 11, &[0x91; 32], 0);
+        batch.commit().unwrap();
+
+        let resolution = resolve_script_by_hash(&store, &store, &reference_hash).unwrap();
+        match resolution {
+            CurrentScriptVersionResolution::Resolved(resolved) => {
+                assert_eq!(resolved.version_hash, mapped_version_hash);
+                assert_eq!(
+                    resolved
+                        .version_info
+                        .as_ref()
+                        .and_then(|info| info.name.as_deref()),
+                    Some("Mapped Version")
+                );
+            }
+            other => panic!("expected persisted mapping to win, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_script_by_hash_resolves_unique_live_type_match_without_persisted_mapping() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference_hash = vec![0x47; 32];
+        let version_hash = vec![0x58; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(
+            &[0x92; 32],
+            0,
+            &LiveCellInfo {
+                capacity: 100,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x12; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(reference_hash.clone()),
+                type_code_hash: Some(vec![0x13; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 0,
+                occupied_capacity: 80,
+                udt_amount: None,
+                data_hash: Some(version_hash.clone()),
+            },
+            10,
+        );
+        batch.put_cell_by_type(&reference_hash, 10, &[0x92; 32], 0);
+        batch.commit().unwrap();
+
+        let resolution = resolve_script_by_hash(&store, &store, &reference_hash).unwrap();
+        match resolution {
+            CurrentScriptVersionResolution::Resolved(resolved) => {
+                assert_eq!(resolved.version_hash, version_hash);
+                assert!(resolved.version_info.is_none());
+            }
+            other => panic!("expected unique live type match resolution, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_script_by_hash_resolves_direct_version_hash_without_persisted_mapping() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let reference_hash = vec![0x52; 32];
+
+        store
+            .put_script_info_direct(
+                &reference_hash,
+                &ScriptInfo {
+                    code_hash: reference_hash.clone(),
+                    hash_type: 0,
+                    lock_cells_count: 1,
+                    lock_live_cells_count: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_version(
+                &reference_hash,
+                &ScriptVersionInfo {
+                    version_hash: reference_hash.clone(),
+                    name: Some("Legacy Fallback".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let resolution = resolve_script_by_hash(&store, &store, &reference_hash).unwrap();
+        match resolution {
+            CurrentScriptVersionResolution::Resolved(resolved) => {
+                assert_eq!(resolved.version_hash, reference_hash);
+                assert_eq!(
+                    resolved
+                        .version_info
+                        .as_ref()
+                        .and_then(|info| info.name.as_deref()),
+                    Some("Legacy Fallback")
+                );
+            }
+            other => panic!("expected direct version resolution, got {other:?}"),
         }
     }
 }

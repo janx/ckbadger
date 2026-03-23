@@ -1,8 +1,9 @@
 name = "NexisDAO dCKB Lock"
 description = "Legacy lock script used by NexisDAO dCKB flows to custody NervosDAO deposits."
 
-[[mainnet]]
-code_hash = "0x8baa01f58baab0cb58fc319136ea4f6866ed59c323fa94bf7d6b72bea21c74de"
-data_hash = "0x8baa01f58baab0cb58fc319136ea4f6866ed59c323fa94bf7d6b72bea21c74de"
-hash_type = "data"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x8baa01f58baab0cb58fc319136ea4f6866ed59c323fa94bf7d6b72bea21c74de"
+version_hash = "0x8baa01f58baab0cb58fc319136ea4f6866ed59c323fa94bf7d6b72bea21c74de"
+canonical_hash_type = "data"
 deprecated = true

@@ -1,12 +1,14 @@
 name = "Nostr"
 description = "The Nostr lock script is designed for interoperability with Nostr."
 
-[[mainnet]]
-code_hash = "0x641a89ad2f77721b803cd50d01351c1f308444072d5fa20088567196c0574c68"
-data_hash = "0x2effea19ff3024b5b0fb4c0c59c379e7610110e7e3fe7ae003247b1115e59795"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x641a89ad2f77721b803cd50d01351c1f308444072d5fa20088567196c0574c68"
+version_hash = "0x2effea19ff3024b5b0fb4c0c59c379e7610110e7e3fe7ae003247b1115e59795"
+canonical_hash_type = "type"
 
-[[testnet]]
-code_hash = "0x6ae5ee0cb887b2df5a9a18137315b9bdc55be8d52637b2de0624092d5f0c91d5"
-data_hash = "0x2effea19ff3024b5b0fb4c0c59c379e7610110e7e3fe7ae003247b1115e59795"
-hash_type = "type"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x6ae5ee0cb887b2df5a9a18137315b9bdc55be8d52637b2de0624092d5f0c91d5"
+version_hash = "0x2effea19ff3024b5b0fb4c0c59c379e7610110e7e3fe7ae003247b1115e59795"
+canonical_hash_type = "type"

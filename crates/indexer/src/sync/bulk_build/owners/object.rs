@@ -2474,6 +2474,7 @@ mod tests {
             ResolvedInputFacts {
                 created_by_block_dao_ar: 0,
                 data_size: 0,
+                data_hash: None,
                 dao_compensation_ars: None,
                 $($body)*
             }

@@ -2,12 +2,14 @@ name = "Godwoken State Validator"
 description = "State validator is the major script to verify the on-chain Rollup cell. Rollup cell is an identity cell on CKB, it stores the structure GlobalState which represents the layer-2 state."
 website = "https://github.com/godwokenrises/godwoken/tree/develop/gwos#state-validator"
 
-[[mainnet]]
-code_hash = "0xfef1d086d9f74d143c60bf03bd04bab29200dbf484c801c72774f2056d4c6718"
-data_hash = "0x2ba2f8f9831af130793b74846ec794322b7dc764f53755b5728fe703fd90291f"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0xfef1d086d9f74d143c60bf03bd04bab29200dbf484c801c72774f2056d4c6718"
+version_hash = "0x2ba2f8f9831af130793b74846ec794322b7dc764f53755b5728fe703fd90291f"
+canonical_hash_type = "type"
 
-[[testnet]]
-code_hash = "0x1e44736436b406f8e48a30dfbddcf044feb0c9eebfe63b0f81cb5bb727d84854"
-data_hash = "0x2ba2f8f9831af130793b74846ec794322b7dc764f53755b5728fe703fd90291f"
-hash_type = "type"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x1e44736436b406f8e48a30dfbddcf044feb0c9eebfe63b0f81cb5bb727d84854"
+version_hash = "0x2ba2f8f9831af130793b74846ec794322b7dc764f53755b5728fe703fd90291f"
+canonical_hash_type = "type"

@@ -1,11 +1,13 @@
 name = "FlashSigner"
 
-[[mainnet]]
-code_hash = "0x081dbffa88dab54ba426d231ca64eb760cea2fe9e16761a1da400da1b2cbe128"
-data_hash = "0x0d5da9effc2aa91aa2d813fef14c746ce263e0cb70cf8f4d064569ab047a5768"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x081dbffa88dab54ba426d231ca64eb760cea2fe9e16761a1da400da1b2cbe128"
+version_hash = "0x0d5da9effc2aa91aa2d813fef14c746ce263e0cb70cf8f4d064569ab047a5768"
+canonical_hash_type = "type"
 
-[[testnet]]
-code_hash = "0x577a5e5930e2ecdd6200765f3442e6119dc99e87df474f22f13cab819c80b242"
-data_hash = "0xe822b7e218bcb85efa3f47c540236f16ac8afda82187fd28b30d05f503812da5"
-hash_type = "type"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x577a5e5930e2ecdd6200765f3442e6119dc99e87df474f22f13cab819c80b242"
+version_hash = "0xe822b7e218bcb85efa3f47c540236f16ac8afda82187fd28b30d05f503812da5"
+canonical_hash_type = "type"

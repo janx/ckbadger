@@ -875,6 +875,8 @@ fn truncate_to_hour(dt: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 pub(super) type ScriptUsageChanges = HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
+pub(super) type ScriptReferenceUsageChanges =
+    HashMap<(Vec<u8>, u8, bool), (i64, i64, i128, i128, i128, i128)>;
 pub(super) fn parse_blocks_parallel(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<(
@@ -1095,6 +1097,7 @@ impl Indexer {
         batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
         script_usage_changes: ScriptUsageChanges,
+        script_reference_usage_changes: ScriptReferenceUsageChanges,
         script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
         token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
         spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
@@ -1412,31 +1415,51 @@ impl Indexer {
         } else {
             vec![]
         };
+        let reference_keys: Vec<(Vec<u8>, u8)> = if !script_reference_usage_changes.is_empty() {
+            let mut seen = std::collections::HashSet::new();
+            script_reference_usage_changes
+                .keys()
+                .filter_map(|(reference_hash, hash_type, _is_type)| {
+                    let key = (reference_hash.clone(), *hash_type);
+                    seen.insert(key.clone()).then_some(key)
+                })
+                .collect()
+        } else {
+            vec![]
+        };
         let code_hash_refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
 
         let need_balances = !lock_hash_keys.is_empty();
         let need_scripts = !code_hash_refs.is_empty();
+        let need_script_references = !reference_keys.is_empty();
         let mut domain_analytics_batch = StoreBatch::new(self.writer.store());
         let mut append_history_batch = StoreBatch::new(self.writer.store());
 
-        if need_balances || need_scripts {
+        if need_balances || need_scripts || need_script_references {
             let writer = &self.writer;
-            let (existing_balances, existing_scripts) = std::thread::scope(|s| {
-                let bal = if need_balances {
-                    Some(s.spawn(|| writer.read_address_balances(&lock_hash_keys)))
-                } else {
-                    None
-                };
-                let scr = if need_scripts {
-                    Some(s.spawn(|| writer.read_script_info(&code_hash_refs)))
-                } else {
-                    None
-                };
-                (
-                    bal.map(|h| h.join().unwrap()),
-                    scr.map(|h| h.join().unwrap()),
-                )
-            });
+            let (existing_balances, existing_scripts, existing_script_references) =
+                std::thread::scope(|s| {
+                    let bal = if need_balances {
+                        Some(s.spawn(|| writer.read_address_balances(&lock_hash_keys)))
+                    } else {
+                        None
+                    };
+                    let scr = if need_scripts {
+                        Some(s.spawn(|| writer.read_script_info(&code_hash_refs)))
+                    } else {
+                        None
+                    };
+                    let refs = if need_script_references {
+                        Some(s.spawn(|| writer.read_script_reference_info(&reference_keys)))
+                    } else {
+                        None
+                    };
+                    (
+                        bal.map(|h| h.join().unwrap()),
+                        scr.map(|h| h.join().unwrap()),
+                        refs.map(|h| h.join().unwrap()),
+                    )
+                });
             if let Some(existing) = existing_balances {
                 let existing = existing?;
                 batch_new_addresses = count_new_addresses(&address_balance_changes, &existing);
@@ -1450,6 +1473,13 @@ impl Indexer {
                 self.writer.apply_script_usage_deltas(
                     &existing?,
                     &script_usage_changes,
+                    &mut domain_analytics_batch,
+                )?;
+            }
+            if let Some(existing) = existing_script_references {
+                self.writer.apply_script_reference_usage_deltas(
+                    &existing?,
+                    &script_reference_usage_changes,
                     &mut domain_analytics_batch,
                 )?;
             }
@@ -3018,6 +3048,14 @@ impl Indexer {
                     first_block, last_block
                 )
             })?;
+            self.writer
+                .refresh_script_reference_rollups()
+                .with_context(|| {
+                    format!(
+                        "script reference rollup refresh failed after commit for blocks {}-{}",
+                        first_block, last_block
+                    )
+                })?;
             let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
             write_commit_ms += commit_ms;
             if commit_ms >= BULK_PHASE_COMMIT_SLOW_WARN_MS {

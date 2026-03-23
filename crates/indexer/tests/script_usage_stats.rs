@@ -7,7 +7,9 @@ use ckbadger_indexer::rpc::{
     BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
     TransactionView,
 };
-use ckbadger_indexer::sync::materialize_script_infos_for_test;
+use ckbadger_indexer::sync::{
+    materialize_script_infos_for_test, materialize_script_reference_infos_for_test,
+};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::ScriptInfo;
@@ -449,4 +451,43 @@ fn bulk_build_script_owner_materializes_lock_and_type_usage_without_db_reads() {
     assert_eq!(type_info.type_owned_capacity_sum, 0);
     assert_eq!(type_info.type_used_capacity_sum, 142_00000000);
     assert_eq!(type_info.type_owned_knowledge_sum, 0);
+}
+
+#[test]
+fn bulk_build_script_owner_materializes_exact_reference_usage_without_db_reads() {
+    let references = materialize_script_reference_infos_for_test(&[bulk_build_script_fixture()])
+        .expect("script reference infos");
+
+    let lock_reference_hash = vec![
+        0x9b, 0xd7, 0xe0, 0x6f, 0x3e, 0xcf, 0x4b, 0xe0, 0xf2, 0xfc, 0xd2, 0x18, 0x8b, 0x23, 0xf1,
+        0xb9, 0xfc, 0xc8, 0x8e, 0x5d, 0x4b, 0x65, 0xa8, 0x63, 0x7b, 0x17, 0x72, 0x3b, 0xbd, 0xa3,
+        0xcc, 0xe8,
+    ];
+    let type_reference_hash = vec![
+        0xc5, 0xe5, 0xdc, 0xf2, 0x15, 0xd9, 0x9a, 0xf6, 0x28, 0x67, 0x16, 0x4d, 0x6f, 0xb9, 0xd1,
+        0x7c, 0xe6, 0x8a, 0x45, 0xb9, 0xe2, 0xae, 0xcd, 0x49, 0xc1, 0x96, 0x34, 0x42, 0x6f, 0x20,
+        0x56, 0xa3,
+    ];
+
+    let lock_reference = references
+        .get(&(lock_reference_hash.clone(), 1))
+        .expect("lock reference");
+    assert_eq!(lock_reference.lock_cells_count, 3);
+    assert_eq!(lock_reference.lock_live_cells_count, 2);
+    assert_eq!(lock_reference.lock_capacity_sum, 380_00000000);
+    assert_eq!(lock_reference.lock_owned_capacity_sum, 180_00000000);
+    assert_eq!(lock_reference.lock_used_capacity_sum, 264_00000000);
+    assert_eq!(lock_reference.lock_owned_knowledge_sum, 122_00000000);
+    assert_eq!(lock_reference.type_cells_count, 0);
+
+    let type_reference = references
+        .get(&(type_reference_hash.clone(), 1))
+        .expect("type reference");
+    assert_eq!(type_reference.type_cells_count, 1);
+    assert_eq!(type_reference.type_live_cells_count, 0);
+    assert_eq!(type_reference.type_capacity_sum, 200_00000000);
+    assert_eq!(type_reference.type_owned_capacity_sum, 0);
+    assert_eq!(type_reference.type_used_capacity_sum, 142_00000000);
+    assert_eq!(type_reference.type_owned_knowledge_sum, 0);
+    assert_eq!(type_reference.lock_cells_count, 0);
 }

@@ -1,7 +1,7 @@
 # Scripts, Code Cells, and References
 
-This document records the script model ckbadger should use when reasoning about script detail
-pages, code cells, versions, and labels.
+This document records the script model ckbadger now uses when reasoning about script detail
+pages, families, versions, code cells, and references.
 
 ## Why This Exists
 
@@ -72,13 +72,15 @@ So for one concrete code cell:
 - it always has a data-hash reference family
 - it has a type-hash reference family only if the code cell itself has a type script
 
-### Label Family
+### Script Family
 
-- Optional human-readable grouping
-- A label may cover one or many script versions
-- A version may have a readable label, or may remain unlabeled
+- First-class human-readable grouping defined by metadata
+- One metadata file defines one script family
+- A family may cover one or many script versions
+- A version belongs to zero or one family in ckbadger's current product model
 
-Labels are product metadata, not chain truth.
+Families are product metadata, not chain truth, but they are now persisted as first-class store
+entities rather than inferred ad hoc at read time.
 
 ## Two Different Axes That Must Not Be Mixed
 
@@ -205,12 +207,12 @@ Created output locks are a separate case.
   version-level attribution may be absent until a later spending transaction actually executes the
   lock with concrete deps
 
-### Label to Versions
+### Family to Versions
 
-- One label family may point to many versions
-- One version belongs to zero or one label family in ckbadger's current product model
+- One script family may point to many versions
+- One version belongs to zero or one script family in ckbadger's current product model
 
-The label relation must come from imported metadata. It should not be inferred from chain data.
+The family relation comes from imported metadata. It must not be inferred from chain data.
 
 ## Recommended Explorer Model
 
@@ -229,13 +231,13 @@ Use these four entities:
    - identity: outpoint
    - belongs to one `version`
 
-4. `label family`
-   - optional grouping over versions
+4. `script family`
+   - metadata-defined grouping over versions
 
 Relationship summary:
 
 ```text
-label family (optional)
+script family (optional)
         |
         v
     version = H(script_code)
@@ -246,13 +248,25 @@ reference reference code cell instance(s)
 
 More precisely:
 
-- `label family -> many versions`
+- `script family -> many versions`
 - `version -> many code cell instances`
 - `version <- many references`
 - `type` reference resolution depends on which live code cells exist, unless uniqueness is
   guaranteed by the referenced type script pattern such as Type ID
 
 ## Route Semantics
+
+### `/scripts`
+
+Treat this as a script-family inventory route.
+
+Backend behavior is:
+
+1. enumerate persisted script families
+2. sort/filter at the family level
+3. surface family-level totals, not raw reference rows
+
+This route must not enumerate `ScriptInfo`/reference-like rows and then try to merge them later.
 
 ### `/script/{hash}`
 
@@ -279,32 +293,56 @@ must ultimately come from that transaction's actual `cell_deps`, not from today'
 
 ### `/scripts/{name}`
 
-Treat this as a label-family route.
+Treat this as a script-family route.
 
 Backend behavior should be:
 
-1. load all versions that belong to that label family
-2. render versions separately
-3. for each version, show its code cell instances and usage stats
+1. load the persisted family by name
+2. load all versions that belong to that family
+3. for each version, return:
+   - version-level totals
+   - observed references
+   - real code-cell deployments
+4. render versions separately
 
-This route is label-driven, not reference-driven.
+This route is family-driven, not reference-driven.
+
+Important:
+
+- `versions[].deployments[]` are only real code-cell rows
+- a version may have zero deployments and still remain a valid family member
+- `versions[].references[]` are observed runtime references, not fake deployment rows
+- `First Deployed At` means the earliest known deployment timestamp for that version, not the
+  latest surviving code cell
 
 ## What The Explorer Should Show
 
-For a script version detail page:
+For a script family detail page:
+
+- family identity and metadata
+- family-level usage totals
+- one row per version
+
+For each script version row:
 
 - version identity (`version_hash`)
-- available references
-- live code cell instances
+- observed references
+- real code cell deployments
 - total known code cell instances if useful
-- optional label metadata
+- optional family/version metadata
 - usage stats split by lock/type role
+
+For a version with zero deployments:
+
+- the version row should still exist
+- the deployment table should show an empty state
+- the UI must not synthesize fake deployment rows just to preserve old shapes
 
 It should not assume:
 
 - one version has only one code cell instance
 - one reference maps to only one code cell instance
-- one label implies one version
+- one family implies one version
 
 ## Naming Guidance
 
@@ -315,7 +353,7 @@ Prefer:
 - `version` for logical script bytecode identity
 - `code cell instance` for one concrete outpoint
 - `reference` for `(reference_hash, hash_type)`
-- `label family` for optional human-readable grouping
+- `script family` for metadata-defined human-readable grouping
 
 If `deployment` is still used in some code or UI, it should mean a publication of a version on
 chain, not the version itself.
@@ -344,52 +382,77 @@ Wrong because:
 
 - the same version may be deployed in multiple interchangeable code cells
 
-### Mistake 4: relying on label import for code resolution correctness
+### Mistake 4: relying on metadata labels for code resolution correctness
 
 Wrong because:
 
-- labels are optional
+- family metadata is optional from the chain's point of view
 - unlabeled versions must still be fully queryable and resolvable from chain-derived indexes
 
 ## Script Resolution Implementation
 
-Script resolution (`reference -> version -> code cell instances`) is performed at API query time
-using the existing cell indexes rather than via dedicated indexer-time CFs:
+Current resolution is split into two layers:
 
-- `cell_by_data_hash` — resolves data-hash references to code cell instances
-- `cell_by_type` / `cell_by_type_code` — resolves type-hash references to code cell instances
-- `script_versions` / `script_versions_by_label` — version and label metadata written by
-  `label_import`
+1. persisted `reference -> version -> family` state written by the indexer
+2. live code-cell-instance lookup performed at API query time
 
-The indexer does not maintain per-cell version attribution CFs or canonical reference CFs. All
-resolution that was previously done at index time is now done at query time. This means:
+Persisted script-family CFs now include:
 
-- historical attribution for `type` references is resolved from current live cell state at the time
-  of the API query, not from a precomputed indexer snapshot
-- version identity (`H(script_code)`) is always derived from cell data at query time
+- `script_families`
+- `script_versions_by_family`
+- `script_reference_info`
+- `script_reference_to_version`
+- `script_family_by_name`
+
+That means:
+
+- raw reference usage is indexed and stored by `(reference_hash, hash_type)`
+- current `reference -> version` mappings are materialized by the indexer
+- family rollups are materialized by the indexer from reference/version state
+- the API reads family/version/reference state directly instead of rebuilding families from
+  `ScriptInfo`
+
+Live code-cell-instance lookup still uses the existing cell indexes:
+
+- `cell_by_data_hash` — lists code cells for a version / data-hash reference
+- `cell_by_type` / `cell_by_type_code` — resolves current live matches for type-hash references
+
+So the explorer now follows this chain:
+
+`reference -> version -> family`
+
+with code-cell-instance lookup attached to the resolved version when needed.
 
 ## Practical Implications For ckbadger
 
 The backend should own correctness with this chain:
 
-`reference -> version -> code cell instances`
+`reference -> version -> family`
 
-With one clarification:
+Then, separately:
+
+`version -> code cell instances`
+
+With these clarifications:
 
 - for data-hash references, `reference -> version` is direct and immutable
 - for type-hash references, `reference -> current live version` is a resolution step that depends
   on current live code cells unless the actual transaction `cell_deps` are known
+- code-cell deployments are presentation of concrete outpoints, not substitutes for observed
+  references
+- family pages must not collapse observed references into fake deployment rows
 
 The frontend should only own presentation state such as:
 
-- which reference variant the user selected
+- which family/version/reference variant the user selected
 - whether the user is viewing lock or type usage
-- which code cell instance row is expanded
+- which real code cell deployment row is expanded
 
 In particular:
 
 - `hashType` is a backend correctness input, not a frontend guess
 - `kind` is a usage-view hint only
+- version/family grouping is a backend data-model concern, not a frontend merge heuristic
 
 ## Related References
 

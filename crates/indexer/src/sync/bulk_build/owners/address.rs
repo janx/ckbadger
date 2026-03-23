@@ -413,6 +413,7 @@ mod tests {
                 capacity: 200_00000000,
                 occupied_capacity: 61_00000000,
                 data_size: 0,
+                data_hash: None,
                 udt_amount: None,
                 lock_script_hash_id: lock_a,
                 lock_code_hash_id: InternId::new(2),

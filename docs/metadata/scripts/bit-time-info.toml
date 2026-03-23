@@ -2,7 +2,8 @@ name = ".bit Time Info"
 description = ".bit time oracle info type script."
 website = "https://github.com/dotbitHQ/ckb-time-script"
 
-[[mainnet]]
-code_hash = "0x9e537bf5b8ec044ca3f53355e879f3fd8832217e4a9b41d9994cf0c547241a79"
-data_hash = "0x1871b6ecbe086e0c0a5298b653de8bd7efb223c1f7927f41ad8b13de848b7209"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x9e537bf5b8ec044ca3f53355e879f3fd8832217e4a9b41d9994cf0c547241a79"
+version_hash = "0x1871b6ecbe086e0c0a5298b653de8bd7efb223c1f7927f41ad8b13de848b7209"
+canonical_hash_type = "type"

@@ -739,6 +739,8 @@ pub struct ScriptVersionInfo {
     pub version_hash: Vec<u8>,
     pub name: Option<String>,
     #[serde(default)]
+    pub family_id: Option<String>,
+    #[serde(default)]
     pub deprecated: bool,
     pub category: Option<String>,
     pub website: Option<String>,
@@ -765,6 +767,46 @@ pub struct ScriptVersionInfo {
     /// Used to look up the correct ScriptInfo for per-version stats.
     #[serde(default)]
     pub associated_code_hash: Option<Vec<u8>>,
+    #[serde(default)]
+    pub canonical_reference_hash: Option<Vec<u8>>,
+    #[serde(default)]
+    pub canonical_hash_type: Option<u8>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScriptFamilyInfo {
+    pub family_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub website: Option<String>,
+    pub category: Option<String>,
+    pub versions_count: i64,
+    pub live_cells_count: i64,
+    pub cells_count: i64,
+    pub owned_capacity_sum: i128,
+    pub owned_knowledge_sum: i128,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScriptReferenceInfo {
+    pub reference_hash: Vec<u8>,
+    pub hash_type: u8,
+    pub lock_cells_count: i64,
+    pub lock_live_cells_count: i64,
+    pub lock_capacity_sum: i128,
+    pub lock_owned_capacity_sum: i128,
+    #[serde(default)]
+    pub lock_used_capacity_sum: i128,
+    #[serde(default)]
+    pub lock_owned_knowledge_sum: i128,
+    pub type_cells_count: i64,
+    pub type_live_cells_count: i64,
+    pub type_capacity_sum: i128,
+    pub type_owned_capacity_sum: i128,
+    #[serde(default)]
+    pub type_used_capacity_sum: i128,
+    #[serde(default)]
+    pub type_owned_knowledge_sum: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

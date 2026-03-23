@@ -95,6 +95,10 @@ impl<'a> Materializer<'a> {
         self.domain_store
     }
 
+    pub(crate) fn append_only_store(&self) -> &'a CkbadgerStore {
+        self.append_only_store
+    }
+
     /// Track rows that were flushed externally (e.g. via `flush_rows_to_stores`
     /// in a background `spawn_blocking` task).
     pub(crate) fn add_external_counts(

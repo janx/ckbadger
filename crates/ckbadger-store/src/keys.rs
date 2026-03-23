@@ -7,6 +7,7 @@
 pub const OUTPOINT_KEY_SIZE: usize = 34;
 pub const SCRIPT_VERSION_BY_LABEL_LEN_SIZE: usize = 2;
 pub const SCRIPT_VERSION_HASH_SIZE: usize = 32;
+pub const SCRIPT_REFERENCE_KEY_SIZE: usize = 33;
 
 /// Block number key: 8 bytes big-endian i64
 pub const BLOCK_NUM_KEY_SIZE: usize = 8;
@@ -79,6 +80,79 @@ pub fn decode_script_version_by_label_key(key: &[u8]) -> (String, Vec<u8>) {
         String::from_utf8(key[2..2 + label_len].to_vec()).expect("label key must be valid UTF-8");
     let version_hash = key[2 + label_len..expected_len].to_vec();
     (label, version_hash)
+}
+
+pub fn encode_script_version_by_family_key(family_id: &str, version_hash: &[u8]) -> Vec<u8> {
+    assert!(
+        version_hash.len() == SCRIPT_VERSION_HASH_SIZE,
+        "encode_script_version_by_family_key: version_hash must be exactly 32 bytes, got {}",
+        version_hash.len()
+    );
+    let family_bytes = family_id.as_bytes();
+    let family_len = u16::try_from(family_bytes.len()).expect("family_id length exceeds u16::MAX");
+    let mut key = Vec::with_capacity(
+        SCRIPT_VERSION_BY_LABEL_LEN_SIZE + family_bytes.len() + SCRIPT_VERSION_HASH_SIZE,
+    );
+    key.extend_from_slice(&family_len.to_be_bytes());
+    key.extend_from_slice(family_bytes);
+    key.extend_from_slice(&version_hash[..SCRIPT_VERSION_HASH_SIZE]);
+    key
+}
+
+pub fn encode_script_version_by_family_prefix(family_id: &str) -> Vec<u8> {
+    let family_bytes = family_id.as_bytes();
+    let family_len = u16::try_from(family_bytes.len()).expect("family_id length exceeds u16::MAX");
+    let mut prefix = Vec::with_capacity(SCRIPT_VERSION_BY_LABEL_LEN_SIZE + family_bytes.len());
+    prefix.extend_from_slice(&family_len.to_be_bytes());
+    prefix.extend_from_slice(family_bytes);
+    prefix
+}
+
+pub fn decode_script_version_by_family_key(key: &[u8]) -> (String, Vec<u8>) {
+    assert!(
+        key.len() >= SCRIPT_VERSION_BY_LABEL_LEN_SIZE + SCRIPT_VERSION_HASH_SIZE,
+        "decode_script_version_by_family_key: expected at least {} bytes, got {}",
+        SCRIPT_VERSION_BY_LABEL_LEN_SIZE + SCRIPT_VERSION_HASH_SIZE,
+        key.len()
+    );
+    let family_len = u16::from_be_bytes([key[0], key[1]]) as usize;
+    let expected_len = SCRIPT_VERSION_BY_LABEL_LEN_SIZE + family_len + SCRIPT_VERSION_HASH_SIZE;
+    assert!(
+        key.len() == expected_len,
+        "decode_script_version_by_family_key: expected {} bytes from family_len {}, got {}",
+        expected_len,
+        family_len,
+        key.len()
+    );
+    let family_id =
+        String::from_utf8(key[2..2 + family_len].to_vec()).expect("family_id must be valid UTF-8");
+    let version_hash = key[2 + family_len..expected_len].to_vec();
+    (family_id, version_hash)
+}
+
+pub fn encode_script_reference_key(
+    hash_type: u8,
+    reference_hash: &[u8],
+) -> [u8; SCRIPT_REFERENCE_KEY_SIZE] {
+    assert!(
+        reference_hash.len() == SCRIPT_VERSION_HASH_SIZE,
+        "encode_script_reference_key: reference_hash must be exactly 32 bytes, got {}",
+        reference_hash.len()
+    );
+    let mut key = [0u8; SCRIPT_REFERENCE_KEY_SIZE];
+    key[0] = hash_type;
+    key[1..].copy_from_slice(&reference_hash[..SCRIPT_VERSION_HASH_SIZE]);
+    key
+}
+
+pub fn decode_script_reference_key(key: &[u8]) -> (u8, Vec<u8>) {
+    assert!(
+        key.len() == SCRIPT_REFERENCE_KEY_SIZE,
+        "decode_script_reference_key: expected {} bytes, got {}",
+        SCRIPT_REFERENCE_KEY_SIZE,
+        key.len()
+    );
+    (key[0], key[1..].to_vec())
 }
 
 pub fn encode_block_num(n: i64) -> [u8; BLOCK_NUM_KEY_SIZE] {
@@ -1342,6 +1416,64 @@ mod tests {
         assert_eq!(label, "Default Lock");
         assert_eq!(decoded_hash, version_hash);
         assert!(key.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_script_version_by_family_key_roundtrip() {
+        let version_hash = [0x56; 32];
+        let key = encode_script_version_by_family_key("family/default-lock", &version_hash);
+        let prefix = encode_script_version_by_family_prefix("family/default-lock");
+        let (family_id, decoded_hash) = decode_script_version_by_family_key(&key);
+
+        assert_eq!(family_id, "family/default-lock");
+        assert_eq!(decoded_hash, version_hash);
+        assert!(key.starts_with(&prefix));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "encode_script_version_by_family_key: version_hash must be exactly 32 bytes"
+    )]
+    fn test_script_version_by_family_key_panics_on_oversized_hash() {
+        let oversized = [0x56; 33];
+        let _ = encode_script_version_by_family_key("family/default-lock", &oversized);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "encode_script_version_by_family_key: version_hash must be exactly 32 bytes"
+    )]
+    fn test_script_version_by_family_key_panics_on_undersized_hash() {
+        let undersized = [0x56; 31];
+        let _ = encode_script_version_by_family_key("family/default-lock", &undersized);
+    }
+
+    #[test]
+    fn test_script_reference_key_roundtrip() {
+        let reference_hash = [0xAB; 32];
+        let key = encode_script_reference_key(1, &reference_hash);
+        let (hash_type, decoded_hash) = decode_script_reference_key(&key);
+
+        assert_eq!(hash_type, 1);
+        assert_eq!(decoded_hash, reference_hash);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "encode_script_reference_key: reference_hash must be exactly 32 bytes"
+    )]
+    fn test_script_reference_key_panics_on_oversized_hash() {
+        let oversized = [0xAB; 33];
+        let _ = encode_script_reference_key(1, &oversized);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "encode_script_reference_key: reference_hash must be exactly 32 bytes"
+    )]
+    fn test_script_reference_key_panics_on_undersized_hash() {
+        let undersized = [0xAB; 31];
+        let _ = encode_script_reference_key(1, &undersized);
     }
 
     #[test]

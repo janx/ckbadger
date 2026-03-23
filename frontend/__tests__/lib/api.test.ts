@@ -196,6 +196,164 @@ describe('api', () => {
       await api.getScripts({ network: 'mainnet', decoderType: 'lock', search: 'secp256k1' });
     });
 
+    it('maps script family list responses into known script rows', async () => {
+      server.use(
+        http.get('*/api/v1/scripts', () => {
+          return HttpResponse.json({
+            data: [
+              {
+                familyId: 'default-lock',
+                name: 'Default Lock',
+                description: 'Default lock family',
+                scriptKind: 'lock',
+                website: null,
+                liveCellsCount: 10,
+                cellsCount: 14,
+                ownedCapacitySum: '1500',
+                ownedKnowledgeSum: '900',
+                versionsCount: 1,
+              },
+            ],
+            total: 1,
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          });
+        })
+      );
+
+      const result = await api.getScripts();
+      expect(result.data).toEqual([
+        expect.objectContaining({
+          codeHash: 'family:default-lock',
+          name: 'Default Lock',
+          scriptKind: 'lock',
+          ownedCapacitySum: '1500',
+          ownedKnowledgeSum: '900',
+          liveCellsCount: 10,
+          cellsCount: 14,
+        }),
+      ]);
+    });
+
+    it('flattens script family detail into version deployment entries and preserves observed refs', async () => {
+      server.use(
+        http.get('*/api/v1/scripts/:name', ({ params }) => {
+          expect(params.name).toBe('Default Lock');
+          return HttpResponse.json({
+            familyId: 'default-lock',
+            name: 'Default Lock',
+            description: 'Default lock family',
+            scriptKind: 'lock',
+            website: null,
+            liveCellsCount: 10,
+            cellsCount: 14,
+            ownedCapacitySum: '1500',
+            ownedKnowledgeSum: '900',
+            versionsCount: 1,
+            versions: [
+              {
+                versionHash: '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+                name: 'Default Lock',
+                description: 'Default lock family',
+                scriptKind: 'lock',
+                website: null,
+                deprecated: false,
+                canonicalReferenceHash:
+                  '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+                canonicalHashType: 'type',
+                deployedAt: 1700000000000,
+                liveCellsCount: 10,
+                cellsCount: 14,
+                ownedCapacitySum: '1500',
+                ownedKnowledgeSum: '900',
+                codeCellsLiveCount: 1,
+                codeCellsTotal: 2,
+                deployments: [
+                  {
+                    hashType: 'type',
+                    typeReferenceHash:
+                      '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+                    dataReferenceHash:
+                      '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+                    codeCellTxHash:
+                      '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                    codeCellOutputIndex: 0,
+                    deployedAt: 1700000000000,
+                  },
+                  {
+                    hashType: 'data',
+                    typeReferenceHash:
+                      '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+                    dataReferenceHash:
+                      '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+                    codeCellTxHash:
+                      '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                    codeCellOutputIndex: 1,
+                    deployedAt: 1700001000000,
+                  },
+                ],
+                references: [
+                  {
+                    referenceHash:
+                      '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+                    hashType: 'type',
+                    liveCellsCount: 4,
+                    cellsCount: 6,
+                    ownedCapacitySum: '700',
+                    ownedKnowledgeSum: '400',
+                  },
+                  {
+                    referenceHash:
+                      '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+                    hashType: 'data1',
+                    liveCellsCount: 6,
+                    cellsCount: 8,
+                    ownedCapacitySum: '800',
+                    ownedKnowledgeSum: '500',
+                  },
+                ],
+              },
+            ],
+          });
+        })
+      );
+
+      const result = await api.getScript('Default Lock');
+      expect(result).toEqual([
+        expect.objectContaining({
+          codeHash: '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+          hashType: 'type',
+          typeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+          dataHash: '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+          codeCellTxHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          codeCellOutputIndex: 0,
+          liveCellsCount: 10,
+          cellsCount: 14,
+          observedReferences: [
+            expect.objectContaining({
+              referenceHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+              hashType: 'type',
+            }),
+            expect.objectContaining({
+              referenceHash: '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+              hashType: 'data1',
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          codeHash: '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+          hashType: 'data',
+          typeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+          dataHash: '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+          codeCellTxHash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          codeCellOutputIndex: 1,
+          liveCellsCount: 10,
+          cellsCount: 14,
+        }),
+      ]);
+    });
+
     it('builds query params for getAssets with sorting', async () => {
       server.use(
         http.get('*/api/v1/assets', ({ request }) => {

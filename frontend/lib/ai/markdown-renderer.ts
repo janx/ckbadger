@@ -1421,26 +1421,38 @@ export async function renderMarkdownPage(
         '## Results',
         '',
         markdownTable(
-          ['name', 'codeHash', 'hashType', 'scriptKind', 'network', 'deprecated'],
+          ['name', 'scriptKind', 'liveCellsCount', 'cellsCount', 'ownedCapacitySum'],
           scripts.data.map((script) => [
             script.name,
-            hashShort(script.codeHash),
-            script.hashType ?? '-',
             script.scriptKind ?? '-',
-            script.network,
-            script.deprecated,
+            script.liveCellsCount ?? '-',
+            script.cellsCount ?? '-',
+            script.ownedCapacitySum ?? '-',
           ])
         ),
       ]);
       return { status: 200, body };
     }
     case 'script_detail': {
-      const [scripts, usage] = await Promise.all([
-        api.getScript(page.name),
+      const [script, usage] = await Promise.all([
+        api.getScriptFamilyDetail(page.name),
         api.getScriptUsage(page.name),
       ]);
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
         `# Script ${page.name}`,
+        '',
+        '## Family',
+        '',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['familyId', script.familyId],
+            ['name', script.name],
+            ['scriptKind', script.scriptKind ?? '-'],
+            ['versionsCount', script.versionsCount],
+            ['website', script.website ?? '-'],
+          ]
+        ),
         '',
         '## Usage',
         '',
@@ -1457,7 +1469,7 @@ export async function renderMarkdownPage(
           ]
         ),
         '',
-        '## Deployments',
+        '## Version Usage',
         '',
         markdownTable(
           ['codeHash', 'scriptKind', 'cellsCount', 'liveCellsCount', 'ownedKnowledgeSum'],
@@ -1470,18 +1482,55 @@ export async function renderMarkdownPage(
           ])
         ),
         '',
-        '## Registry Entries',
+        '## Versions',
         '',
         markdownTable(
-          ['name', 'codeHash', 'hashType', 'scriptKind', 'deprecated', 'isSystem'],
-          scripts.map((script) => [
-            script.name,
-            hashShort(script.codeHash),
-            script.hashType ?? '-',
-            script.scriptKind ?? '-',
-            script.deprecated,
-            script.isSystem,
+          [
+            'versionHash',
+            'scriptKind',
+            'deprecated',
+            'codeCellsTotal',
+            'liveCellsCount',
+            'firstDeployedAt',
+          ],
+          script.versions.map((version) => [
+            hashShort(version.versionHash),
+            version.scriptKind ?? '-',
+            version.deprecated,
+            version.codeCellsTotal,
+            version.liveCellsCount,
+            version.deployedAt ?? '-',
           ])
+        ),
+        '',
+        '## Deployments',
+        '',
+        markdownTable(
+          ['versionHash', 'hashType', 'typeReferenceHash', 'dataReferenceHash', 'outpoint'],
+          script.versions.flatMap((version) =>
+            version.deployments.map((deployment) => [
+              hashShort(version.versionHash),
+              deployment.hashType,
+              deployment.typeReferenceHash ? hashShort(deployment.typeReferenceHash) : '-',
+              hashShort(deployment.dataReferenceHash),
+              `${hashShort(deployment.codeCellTxHash)}:${deployment.codeCellOutputIndex}`,
+            ])
+          )
+        ),
+        '',
+        '## Observed References',
+        '',
+        markdownTable(
+          ['versionHash', 'referenceHash', 'hashType', 'liveCellsCount', 'cellsCount'],
+          script.versions.flatMap((version) =>
+            version.references.map((reference) => [
+              hashShort(version.versionHash),
+              hashShort(reference.referenceHash),
+              reference.hashType,
+              reference.liveCellsCount,
+              reference.cellsCount,
+            ])
+          )
         ),
       ]);
       return { status: 200, body };

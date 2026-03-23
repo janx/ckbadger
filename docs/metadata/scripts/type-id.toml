@@ -1,9 +1,9 @@
 name = "Type ID"
 
-[[mainnet]]
+[mainnet.pseudo]
 code_hash = "0x00000000000000000000000000000000000000000000000000545950455f4944"
 hash_type = "type"
 
-[[testnet]]
+[testnet.pseudo]
 code_hash = "0x00000000000000000000000000000000000000000000000000545950455f4944"
 hash_type = "type"

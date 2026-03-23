@@ -13,6 +13,7 @@ use ckb_types::packed;
 use ckb_types::prelude::*;
 use rocksdb::{ColumnFamilyDescriptor, DBCompressionType, Options, DB};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info};
 
 pub use convert::{
@@ -717,13 +718,18 @@ struct SecondaryDir {
     path: PathBuf,
 }
 
+static SECONDARY_DIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
 impl SecondaryDir {
     fn create_for_process() -> Result<Self> {
         // Secondary instances need their own directory for manifest tracking.
-        // Keep the long-lived per-process naming so it is easy to inspect and correlate with logs.
-        let path = PathBuf::from(format!(
-            "/tmp/ckbadger-rocksdb-secondary-{}",
-            std::process::id()
+        // Keep process identity in the name for log correlation, but make the directory
+        // unique per reader instance so concurrent readers in the same process do not race.
+        let sequence = SECONDARY_DIR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "ckbadger-rocksdb-secondary-{}-{}",
+            std::process::id(),
+            sequence
         ));
         std::fs::create_dir_all(&path)
             .map_err(|e| anyhow!("Failed to create secondary path {}: {}", path.display(), e))?;
@@ -778,6 +784,16 @@ mod tests {
     }
 
     #[test]
+    fn secondary_dirs_are_unique_per_reader_instance() {
+        let first = SecondaryDir::create_for_process().unwrap();
+        let second = SecondaryDir::create_for_process().unwrap();
+
+        assert_ne!(first.path(), second.path());
+        assert!(first.path().exists());
+        assert!(second.path().exists());
+    }
+
+    #[test]
     fn ckb_reader_drop_removes_secondary_directory() {
         let primary_dir = tempdir().unwrap();
         let mut db_opts = Options::default();
@@ -790,14 +806,11 @@ mod tests {
         let _primary_db =
             DB::open_cf_descriptors(&db_opts, primary_dir.path(), cf_descriptors).unwrap();
 
-        let secondary_path = std::path::PathBuf::from(format!(
-            "/tmp/ckbadger-rocksdb-secondary-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&secondary_path);
+        let secondary_path;
 
         {
             let reader = CkbChainReader::open(primary_dir.path().to_str().unwrap()).unwrap();
+            secondary_path = reader._secondary_dir.path().to_path_buf();
             assert!(secondary_path.exists());
             assert!(reader.tip_number().is_none());
         }
@@ -822,17 +835,13 @@ mod tests {
         let _primary_db =
             DB::open_cf_descriptors(&db_opts, primary_dir.path(), cf_descriptors).unwrap();
 
-        let secondary_path = std::path::PathBuf::from(format!(
-            "/tmp/ckbadger-rocksdb-secondary-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&secondary_path);
-
         let reader = CkbChainReader::open(primary_dir.path().to_str().unwrap()).unwrap();
+        let secondary_path = reader._secondary_dir.path().to_path_buf();
 
         assert!(reader.get_block_hashes_batch(&[]).is_empty());
         assert!(reader.get_blocks_batch(&[]).is_empty());
         assert!(reader.get_block_exts_batch(&[]).is_empty());
+        assert!(secondary_path.exists());
     }
 
     #[test]
@@ -848,13 +857,8 @@ mod tests {
         let _primary_db =
             DB::open_cf_descriptors(&db_opts, primary_dir.path(), cf_descriptors).unwrap();
 
-        let secondary_path = std::path::PathBuf::from(format!(
-            "/tmp/ckbadger-rocksdb-secondary-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&secondary_path);
-
         let reader = CkbChainReader::open(primary_dir.path().to_str().unwrap()).unwrap();
+        let secondary_path = reader._secondary_dir.path().to_path_buf();
 
         // Non-existent block numbers should return None
         let hashes = reader.get_block_hashes_batch(&[0, 1, 2]);
@@ -870,5 +874,6 @@ mod tests {
         let exts = reader.get_block_exts_batch(&fake_hashes);
         assert_eq!(exts.len(), 2);
         assert!(exts.iter().all(|e| e.is_none()));
+        assert!(secondary_path.exists());
     }
 }

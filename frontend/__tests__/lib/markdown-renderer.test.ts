@@ -7,6 +7,9 @@ vi.mock('@/lib/api', () => ({
   api: {
     getActivitySummary24h: vi.fn(),
     getBlocks: vi.fn(),
+    getScripts: vi.fn(),
+    getScriptFamilyDetail: vi.fn(),
+    getScriptUsage: vi.fn(),
     getGlobalActivities: vi.fn(),
     getTransactionDetail: vi.fn(),
     getTransactionLifecycle: vi.fn(),
@@ -170,6 +173,150 @@ describe('renderMarkdownPage', () => {
     expect(result.body).toContain('# Chart miner-address-distribution');
     expect(result.body).toContain('ExampleMiner');
     expect(result.body).toContain('Total blocks: 100');
+  });
+
+  it('renders scripts list markdown with family-level columns', async () => {
+    vi.mocked(api.getScripts).mockResolvedValue({
+      data: [
+        {
+          codeHash: 'family:default-lock',
+          name: 'Default Lock',
+          description: 'Default lock family',
+          scriptKind: 'lock',
+          rfc: null,
+          website: null,
+          sourceUrl: null,
+          decoderType: null,
+          network: '',
+          hashType: null,
+          dataHash: null,
+          typeHash: null,
+          tag: null,
+          deprecated: false,
+          isSystem: false,
+          codeCellTxHash: null,
+          codeCellOutputIndex: null,
+          ownedCapacitySum: '1500',
+          ownedKnowledgeSum: '900',
+          liveCellsCount: 10,
+          cellsCount: 14,
+        },
+      ],
+      total: 1,
+      limit: 1,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/scripts'),
+      searchParams: new URLSearchParams('limit=1'),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('# Scripts');
+    expect(result.body).toContain(
+      '| name | scriptKind | liveCellsCount | cellsCount | ownedCapacitySum |'
+    );
+    expect(result.body).toContain('| Default Lock | lock | 10 | 14 | 1500 |');
+    expect(result.body).not.toContain('family:default-lock');
+    expect(result.body).not.toContain('| network |');
+  });
+
+  it('renders script detail markdown with family, versions, deployments, and observed references', async () => {
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue({
+      familyId: 'default-lock',
+      name: 'Default Lock',
+      description: 'Default lock family',
+      scriptKind: 'lock',
+      website: null,
+      liveCellsCount: 10,
+      cellsCount: 14,
+      ownedCapacitySum: '1500',
+      ownedKnowledgeSum: '900',
+      versionsCount: 1,
+      versions: [
+        {
+          versionHash: '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+          name: 'Default Lock',
+          description: 'Default lock family',
+          scriptKind: 'lock',
+          website: null,
+          deprecated: false,
+          canonicalReferenceHash:
+            '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+          canonicalHashType: 'type',
+          deployedAt: 1700000000000,
+          liveCellsCount: 10,
+          cellsCount: 14,
+          ownedCapacitySum: '1500',
+          ownedKnowledgeSum: '900',
+          codeCellsLiveCount: 1,
+          codeCellsTotal: 1,
+          deployments: [
+            {
+              hashType: 'type',
+              typeReferenceHash:
+                '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+              dataReferenceHash:
+                '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+              codeCellTxHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+              codeCellOutputIndex: 0,
+              deployedAt: 1700000000000,
+            },
+          ],
+          references: [
+            {
+              referenceHash: '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+              hashType: 'data1',
+              liveCellsCount: 6,
+              cellsCount: 8,
+              ownedCapacitySum: '800',
+              ownedKnowledgeSum: '500',
+            },
+          ],
+        },
+      ],
+    } as any);
+    vi.mocked(api.getScriptUsage).mockResolvedValue({
+      name: 'Default Lock',
+      cellsCount: 14,
+      liveCellsCount: 10,
+      capacitySum: '1500',
+      ownedCapacitySum: '1500',
+      commonKnowledgeSizeSum: '900',
+      ownedKnowledgeSum: '900',
+      byDeployment: [
+        {
+          codeHash: '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649',
+          scriptKind: 'lock',
+          cellsCount: 14,
+          liveCellsCount: 10,
+          capacitySum: '1500',
+          ownedCapacitySum: '1500',
+          commonKnowledgeSizeSum: '900',
+          ownedKnowledgeSum: '900',
+        },
+      ],
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/scripts/Default%20Lock'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('# Script Default Lock');
+    expect(result.body).toContain('## Family');
+    expect(result.body).toContain('default-lock');
+    expect(result.body).toContain('## Versions');
+    expect(result.body).toContain('## Deployments');
+    expect(result.body).toContain('## Observed References');
+    expect(result.body).toContain('data1');
+    expect(result.body).not.toContain('family:default-lock');
+    expect(result.body).not.toContain('| isSystem |');
   });
 
   it('returns 404 for unknown chart slug', async () => {

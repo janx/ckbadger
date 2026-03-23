@@ -1,7 +1,8 @@
 name = "Bitcoin SPV Type Lock"
 description = "Bitcoin SPV light-client type script used by RGB++ flows."
 
-[[mainnet]]
-code_hash = "0xa76e227da81b97d23deabf0d8964aa41c042f4bcf2db2b8bd873fe8521de741d"
-data_hash = "0x0a1d2402d7ccd9fe9b6e86eda78c6bd89cd3e00d84521bd5271c62846da7dbbf"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0xa76e227da81b97d23deabf0d8964aa41c042f4bcf2db2b8bd873fe8521de741d"
+version_hash = "0x0a1d2402d7ccd9fe9b6e86eda78c6bd89cd3e00d84521bd5271c62846da7dbbf"
+canonical_hash_type = "type"

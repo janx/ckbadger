@@ -2,13 +2,15 @@ name = "COTA"
 description = "A Compact Token Aggregator Standard for Extremely Low Cost NFTs and FTs"
 website = "https://www.cotadev.io/"
 
-[[mainnet]]
-code_hash = "0x1122a4fb54697cf2e6e3a96c9d80fd398a936559b90954c6e88eb7ba0cf652df"
-data_hash = "0xeafc5d23a45ce68e5fd9e50cfb85664c5832519292577caf9a51bdde6c5729b3"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x1122a4fb54697cf2e6e3a96c9d80fd398a936559b90954c6e88eb7ba0cf652df"
+version_hash = "0xeafc5d23a45ce68e5fd9e50cfb85664c5832519292577caf9a51bdde6c5729b3"
+canonical_hash_type = "type"
 deprecated = true
 
-[[testnet]]
-code_hash = "0x89cd8003a0eaf8e65e0c31525b7d1d5c1becefd2ea75bb4cff87810ae37764d8"
-data_hash = "0xc62a0a74809b40a7be31a62143efb556c78ffeacf4b7ce734dd317b04359101d"
-hash_type = "type"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x89cd8003a0eaf8e65e0c31525b7d1d5c1becefd2ea75bb4cff87810ae37764d8"
+version_hash = "0xc62a0a74809b40a7be31a62143efb556c78ffeacf4b7ce734dd317b04359101d"
+canonical_hash_type = "type"

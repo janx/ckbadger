@@ -1,12 +1,14 @@
 name = "AlwaysSuccess"
 description = "A simple script that always succeeds."
 
-[[mainnet]]
-code_hash = "0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1"
-data_hash = "0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1"
-hash_type = "data1"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1"
+version_hash = "0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1"
+canonical_hash_type = "data1"
 
-[[testnet]]
-code_hash = "0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1"
-data_hash = "0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1"
-hash_type = "data1"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1"
+version_hash = "0x3b521cc4b552f109d092d8cc468a8048acb53c5952dbe769d2b2f9cf6e47f7f1"
+canonical_hash_type = "data1"

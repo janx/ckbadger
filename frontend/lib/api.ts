@@ -1243,6 +1243,7 @@ interface KnownScript {
   cellsCount?: number;
   codeCellsLiveCount?: number;
   codeCellsTotal?: number;
+  observedReferences?: ScriptObservedReferenceApi[];
 }
 
 interface DeploymentUsage {
@@ -1265,6 +1266,71 @@ interface ScriptUsage {
   commonKnowledgeSizeSum: string;
   ownedKnowledgeSum: string;
   byDeployment: DeploymentUsage[];
+}
+
+interface ScriptFamilyListItemApi {
+  familyId: string;
+  name: string;
+  description: string | null;
+  scriptKind: string | null;
+  website: string | null;
+  liveCellsCount: number;
+  cellsCount: number;
+  ownedCapacitySum: string;
+  ownedKnowledgeSum: string;
+  versionsCount: number;
+}
+
+interface ScriptObservedReferenceApi {
+  referenceHash: string;
+  hashType: string;
+  liveCellsCount: number;
+  cellsCount: number;
+  ownedCapacitySum: string;
+  ownedKnowledgeSum: string;
+}
+
+interface ScriptVersionDetailApi {
+  versionHash: string;
+  name: string;
+  description: string | null;
+  scriptKind: string | null;
+  website: string | null;
+  deprecated: boolean;
+  canonicalReferenceHash: string | null;
+  canonicalHashType: string | null;
+  deployedAt: number | null;
+  liveCellsCount: number;
+  cellsCount: number;
+  ownedCapacitySum: string;
+  ownedKnowledgeSum: string;
+  codeCellsLiveCount: number;
+  codeCellsTotal: number;
+  deployments: ScriptVersionDeploymentApi[];
+  references: ScriptObservedReferenceApi[];
+}
+
+interface ScriptVersionDeploymentApi {
+  hashType: string;
+  typeReferenceHash: string | null;
+  dataReferenceHash: string;
+  codeCellTxHash: string;
+  codeCellOutputIndex: number;
+  deployedAt: number;
+}
+
+interface ScriptFamilyDetailApi {
+  familyId: string;
+  name: string;
+  description: string | null;
+  scriptKind: string | null;
+  website: string | null;
+  liveCellsCount: number;
+  cellsCount: number;
+  ownedCapacitySum: string;
+  ownedKnowledgeSum: string;
+  versionsCount: number;
+  versions: ScriptVersionDetailApi[];
 }
 
 interface ScriptQueryParams {
@@ -1312,6 +1378,79 @@ interface ScriptLookupInfo {
 }
 
 type ScriptLookupResponse = Record<string, ScriptLookupInfo>;
+
+function scriptFamilyListItemToKnownScript(script: ScriptFamilyListItemApi): KnownScript {
+  return {
+    codeHash: `family:${script.familyId}`,
+    name: script.name,
+    description: script.description,
+    scriptKind: script.scriptKind,
+    rfc: null,
+    website: script.website,
+    sourceUrl: null,
+    decoderType: null,
+    network: '',
+    hashType: null,
+    dataHash: null,
+    typeHash: null,
+    tag: null,
+    deprecated: false,
+    isSystem: false,
+    codeCellTxHash: null,
+    codeCellOutputIndex: null,
+    deployedAt: null,
+    ownedCapacitySum: script.ownedCapacitySum,
+    ownedKnowledgeSum: script.ownedKnowledgeSum,
+    liveCellsCount: script.liveCellsCount,
+    cellsCount: script.cellsCount,
+  };
+}
+
+function scriptVersionDetailToKnownScripts(
+  family: ScriptFamilyDetailApi,
+  version: ScriptVersionDetailApi
+): KnownScript[] {
+  const baseDeployment: Omit<
+    KnownScript,
+    'hashType' | 'dataHash' | 'typeHash' | 'codeCellTxHash' | 'codeCellOutputIndex' | 'deployedAt'
+  > = {
+    codeHash: version.versionHash,
+    name: version.name || family.name,
+    description: version.description ?? family.description,
+    scriptKind: version.scriptKind ?? family.scriptKind,
+    rfc: null,
+    website: version.website ?? family.website,
+    sourceUrl: null,
+    decoderType: null,
+    network: '',
+    tag: null,
+    deprecated: version.deprecated,
+    isSystem: false,
+    ownedCapacitySum: version.ownedCapacitySum,
+    ownedKnowledgeSum: version.ownedKnowledgeSum,
+    liveCellsCount: version.liveCellsCount,
+    cellsCount: version.cellsCount,
+    codeCellsLiveCount: version.codeCellsLiveCount,
+    codeCellsTotal: version.codeCellsTotal,
+    observedReferences: version.references,
+  };
+
+  return version.deployments.map((deployment) => ({
+    ...baseDeployment,
+    hashType: deployment.hashType,
+    dataHash: deployment.dataReferenceHash,
+    typeHash:
+      deployment.typeReferenceHash ??
+      (version.canonicalHashType === 'type' ? version.canonicalReferenceHash : null),
+    codeCellTxHash: deployment.codeCellTxHash,
+    codeCellOutputIndex: deployment.codeCellOutputIndex,
+    deployedAt: deployment.deployedAt,
+  }));
+}
+
+function scriptFamilyDetailToKnownScripts(family: ScriptFamilyDetailApi): KnownScript[] {
+  return family.versions.flatMap((version) => scriptVersionDetailToKnownScripts(family, version));
+}
 
 interface MempoolInfo {
   pendingCount: number;
@@ -1566,6 +1705,10 @@ export type {
   BlockFeeStats,
   BlockProposal,
   KnownScript,
+  ScriptObservedReferenceApi as ScriptObservedReference,
+  ScriptVersionDeploymentApi as ScriptVersionDeployment,
+  ScriptVersionDetailApi as ScriptVersionDetail,
+  ScriptFamilyDetailApi as ScriptFamilyDetail,
   ScriptUsage,
   ScriptLookupInfo,
   ScriptLookupResponse,
@@ -2324,10 +2467,21 @@ export const api = {
       query.set('sort_key', params.sortKey === 'usedRatio' ? 'used_ratio' : params.sortKey);
     }
     if (params.sortDirection) query.set('sort_direction', params.sortDirection);
-    return fetchApi(`/scripts?${query}`);
+    return fetchApi<CursorPaginatedResponse<ScriptFamilyListItemApi>>(`/scripts?${query}`).then(
+      (response) => ({
+        ...response,
+        data: response.data.map(scriptFamilyListItemToKnownScript),
+      })
+    );
   },
 
   getScript: (name: string): Promise<KnownScript[]> => {
+    return fetchApi<ScriptFamilyDetailApi>(`/scripts/${encodeURIComponent(name)}`).then(
+      scriptFamilyDetailToKnownScripts
+    );
+  },
+
+  getScriptFamilyDetail: (name: string): Promise<ScriptFamilyDetailApi> => {
     return fetchApi(`/scripts/${encodeURIComponent(name)}`);
   },
 

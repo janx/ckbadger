@@ -1,12 +1,14 @@
 name = "EasyToDiscoverType"
 description = "Reveals cell data through type script arguments."
 
-[[mainnet]]
-code_hash = "0xaba4430cc7110d699007095430a1faa72973edf2322ddbfd4d1d219cacf237af"
-data_hash = "0xaba4430cc7110d699007095430a1faa72973edf2322ddbfd4d1d219cacf237af"
-hash_type = "data1"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0xaba4430cc7110d699007095430a1faa72973edf2322ddbfd4d1d219cacf237af"
+version_hash = "0xaba4430cc7110d699007095430a1faa72973edf2322ddbfd4d1d219cacf237af"
+canonical_hash_type = "data1"
 
-[[testnet]]
-code_hash = "0xaba4430cc7110d699007095430a1faa72973edf2322ddbfd4d1d219cacf237af"
-data_hash = "0xaba4430cc7110d699007095430a1faa72973edf2322ddbfd4d1d219cacf237af"
-hash_type = "data1"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0xaba4430cc7110d699007095430a1faa72973edf2322ddbfd4d1d219cacf237af"
+version_hash = "0xaba4430cc7110d699007095430a1faa72973edf2322ddbfd4d1d219cacf237af"
+canonical_hash_type = "data1"

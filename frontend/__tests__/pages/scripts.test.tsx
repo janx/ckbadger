@@ -83,6 +83,14 @@ describe('ScriptsPage', () => {
     vi.clearAllMocks();
   });
 
+  it('uses a family-name search placeholder', async () => {
+    vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
+
+    render(<ScriptsPage />);
+
+    expect(screen.getByPlaceholderText('Search by script family name...')).toBeInTheDocument();
+  });
+
   it('renders sortable script list columns and entries', async () => {
     vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
 

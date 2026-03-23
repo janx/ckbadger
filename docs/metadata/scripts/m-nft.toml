@@ -1,12 +1,14 @@
 name = "M-NFT"
 
-[[mainnet]]
-code_hash = "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9"
-data_hash = "0xf677aac8b653741126c760f1c76a24bd9f49e01949cb68f67f998cf62ac350df"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9"
+version_hash = "0xf677aac8b653741126c760f1c76a24bd9f49e01949cb68f67f998cf62ac350df"
+canonical_hash_type = "type"
 deprecated = true
 
-[[testnet]]
-code_hash = "0xb1837b5ad01a88558731953062d1f5cb547adf89ece01e8934a9f0aeed2d959f"
-data_hash = "0xcf4b06e9c835577803152da1974ee7e413a4b29518ea4bddec10a585b8f4cab3"
-hash_type = "type"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0xb1837b5ad01a88558731953062d1f5cb547adf89ece01e8934a9f0aeed2d959f"
+version_hash = "0xcf4b06e9c835577803152da1974ee7e413a4b29518ea4bddec10a585b8f4cab3"
+canonical_hash_type = "type"

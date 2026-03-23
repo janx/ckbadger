@@ -13,15 +13,19 @@ use std::sync::Arc;
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{
     decode_cursor_single, default_limit, encode_cursor_single, ok, ApiError, ApiResult,
-    ApiRouteError, CursorPaginatedResponse,
+    ApiRouteError, CursorPaginatedResponse, ScriptFamilyDetailResponse,
+    ScriptFamilyListItemResponse, ScriptObservedReferenceResponse, ScriptVersionDeploymentResponse,
+    ScriptVersionDetailResponse,
 };
 use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
-    hash_type_to_string, is_known_script_name, list_version_code_cells,
-    merge_script_info_for_reference, parse_chart_date_range, related_code_hashes_for_reference,
-    resolve_script_by_hash, CurrentScriptVersionResolution, VersionCodeCell,
+    hash_type_to_string, list_version_code_cells, merge_script_info_for_reference,
+    parse_chart_date_range, related_code_hashes_for_reference, resolve_script_by_hash,
+    CurrentScriptVersionResolution, VersionCodeCell,
 };
-use crate::warmup::{CACHE_KEY_SCRIPTS_ALL, CACHE_KEY_SCRIPT_VERSIONS_ALL};
+use crate::warmup::{
+    CACHE_KEY_SCRIPTS_ALL, CACHE_KEY_SCRIPT_FAMILIES_ALL, CACHE_KEY_SCRIPT_VERSIONS_ALL,
+};
 use crate::AppState;
 
 fn load_script_infos_cached(
@@ -30,6 +34,17 @@ fn load_script_infos_cached(
     state
         .mem_cache
         .get::<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>>(CACHE_KEY_SCRIPTS_ALL)
+        .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
+}
+
+fn load_script_families_cached(
+    state: &Arc<AppState>,
+) -> Result<Vec<(String, ckbadger_store::types::ScriptFamilyInfo)>, ApiRouteError> {
+    state
+        .mem_cache
+        .get::<Vec<(String, ckbadger_store::types::ScriptFamilyInfo)>>(
+            CACHE_KEY_SCRIPT_FAMILIES_ALL,
+        )
         .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
 }
 
@@ -115,35 +130,6 @@ pub struct ScriptResolutionAmbiguityResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ScriptResponse {
-    pub code_hash: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub script_kind: Option<String>,
-    pub rfc: Option<String>,
-    pub website: Option<String>,
-    pub source_url: Option<String>,
-    pub decoder_type: Option<String>,
-    pub network: String,
-    pub hash_type: Option<String>,
-    pub data_hash: Option<String>,
-    pub type_hash: Option<String>,
-    pub tag: Option<String>,
-    pub deprecated: bool,
-    pub is_system: bool,
-    pub code_cell_tx_hash: Option<String>,
-    pub code_cell_output_index: Option<i32>,
-    pub deployed_at: Option<i64>,
-    pub live_cells_count: i64,
-    pub cells_count: i64,
-    pub owned_capacity_sum: String,
-    pub owned_knowledge_sum: String,
-    pub code_cells_live_count: i64,
-    pub code_cells_total: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ScriptUsageResponse {
     pub name: String,
     pub cells_count: i64,
@@ -206,6 +192,7 @@ pub struct ScriptLookupInfo {
 ///
 /// Tries type-ref lookup first, then data-hash lookup as fallback (not mutually exclusive).
 /// Both paths use ckbadger's own domain store indexes — no dependency on CKB node RocksDB.
+#[cfg_attr(not(test), allow(dead_code))]
 fn resolve_code_cell(
     info: &ckbadger_store::ScriptInfo,
     store: &ckbadger_store::CkbadgerStore,
@@ -266,78 +253,6 @@ fn resolve_code_cell(
     }
 
     Ok((None, None))
-}
-
-fn resolve_deployed_at(
-    store: &ckbadger_store::CkbadgerStore,
-    cells_store: &ckbadger_store::CkbadgerStore,
-    code_cell_tx_hash: Option<&str>,
-    code_cell_output_index: Option<i32>,
-) -> Option<i64> {
-    let tx_hash = code_cell_tx_hash?;
-    let output_index = code_cell_output_index?;
-    let output_index = i16::try_from(output_index).ok()?;
-    let tx_hash_bytes = hex::decode(tx_hash.strip_prefix("0x").unwrap_or(tx_hash)).ok()?;
-
-    let created_at_block = store
-        .get_cell(&tx_hash_bytes, output_index, cells_store)
-        .ok()
-        .flatten()
-        .or_else(|| {
-            store
-                .get_consumed_cell(&tx_hash_bytes, output_index, cells_store)
-                .ok()
-                .flatten()
-        })
-        .map(|cell| cell.created_at_block)?;
-
-    store
-        .get_block_header(created_at_block)
-        .ok()
-        .flatten()
-        .map(|header| header.timestamp)
-}
-
-fn count_code_cells(
-    info: &ckbadger_store::ScriptInfo,
-    store: &ckbadger_store::CkbadgerStore,
-    cells_store: &ckbadger_store::CkbadgerStore,
-) -> Result<(i64, i64), ApiRouteError> {
-    let (type_ref, data_ref) = deployment_reference_hashes(info);
-
-    let mut seen = std::collections::HashSet::new();
-    let mut live_count: i64 = 0;
-    let mut total_count: i64 = 0;
-
-    if let Some(type_hash) = type_ref.as_deref() {
-        let cells = store
-            .list_all_cells_by_type(type_hash, cells_store)
-            .map_err(|e| ApiError::internal(format!("count_code_cells type failed: {}", e)))?;
-        for (tx_hash, idx, _, is_live) in cells {
-            if seen.insert((tx_hash, idx)) {
-                total_count += 1;
-                if is_live {
-                    live_count += 1;
-                }
-            }
-        }
-    }
-
-    if let Some(data_hash) = data_ref.as_deref() {
-        let cells = store
-            .list_all_cells_by_data_hash(data_hash, cells_store)
-            .map_err(|e| ApiError::internal(format!("count_code_cells data failed: {}", e)))?;
-        for (tx_hash, idx, _, is_live) in cells {
-            if seen.insert((tx_hash, idx)) {
-                total_count += 1;
-                if is_live {
-                    live_count += 1;
-                }
-            }
-        }
-    }
-
-    Ok((live_count, total_count))
 }
 
 fn script_kind_from_counts(lock_cells_count: i64, type_cells_count: i64) -> Option<String> {
@@ -429,6 +344,7 @@ fn fallback_script_version_info(
     Ok(ckbadger_store::types::ScriptVersionInfo {
         version_hash: version_hash.to_vec(),
         name: fallback.name,
+        family_id: None,
         deprecated: fallback.deprecated,
         category: fallback.category,
         website: fallback.website,
@@ -446,6 +362,8 @@ fn fallback_script_version_info(
         type_used_capacity_sum: fallback.type_used_capacity_sum,
         type_owned_knowledge_sum: fallback.type_owned_knowledge_sum,
         associated_code_hash: None,
+        canonical_reference_hash: None,
+        canonical_hash_type: None,
     })
 }
 
@@ -488,22 +406,7 @@ fn resolve_script_identifier(
     }
 }
 
-fn script_display_name(info: &ckbadger_store::ScriptInfo) -> &str {
-    info.name.as_deref().unwrap_or("Unknown")
-}
-
-fn script_kind_for_sort(info: &ckbadger_store::ScriptInfo) -> &str {
-    if info.lock_cells_count > 0 && info.type_cells_count > 0 {
-        "lock+type"
-    } else if info.lock_cells_count > 0 {
-        "lock"
-    } else if info.type_cells_count > 0 {
-        "type"
-    } else {
-        ""
-    }
-}
-
+#[cfg_attr(not(test), allow(dead_code))]
 fn checked_capacity_totals(
     info: &ckbadger_store::ScriptInfo,
     context: &str,
@@ -622,23 +525,6 @@ fn resolve_version_capacity(
 
     Ok((cells, live_cells, cap, live_cap, used, live_used))
 }
-
-fn owned_capacity_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
-    info.lock_owned_capacity_sum + info.type_owned_capacity_sum
-}
-
-fn owned_knowledge_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
-    info.lock_owned_knowledge_sum + info.type_owned_knowledge_sum
-}
-
-fn used_ratio_for_sort(info: &ckbadger_store::ScriptInfo) -> Option<(i128, i128)> {
-    let capacity = owned_capacity_sum_for_sort(info);
-    if capacity <= 0 {
-        return None;
-    }
-    Some((owned_knowledge_sum_for_sort(info), capacity))
-}
-
 fn apply_direction(ordering: Ordering, direction: SortDirection) -> Ordering {
     match direction {
         SortDirection::Asc => ordering,
@@ -663,19 +549,61 @@ fn compare_used_ratio(
     }
 }
 
-fn compare_script_entries(
-    left: &(Vec<u8>, ckbadger_store::ScriptInfo),
-    right: &(Vec<u8>, ckbadger_store::ScriptInfo),
+fn checked_family_totals(
+    info: &ckbadger_store::types::ScriptFamilyInfo,
+    context: &str,
+) -> Result<(i128, i128), ApiRouteError> {
+    if info.owned_capacity_sum < 0 {
+        return Err(ApiError::internal(format!(
+            "negative live capacity in {}: family_id={}, capacity={}",
+            context, info.family_id, info.owned_capacity_sum
+        )));
+    }
+    if info.owned_knowledge_sum < 0 {
+        return Err(ApiError::internal(format!(
+            "negative live common knowledge size in {}: family_id={}, used={}",
+            context, info.family_id, info.owned_knowledge_sum
+        )));
+    }
+    if info.owned_knowledge_sum > info.owned_capacity_sum {
+        return Err(ApiError::internal(format!(
+            "live common knowledge size exceeds total in {}: family_id={}, used={}, capacity={}",
+            context, info.family_id, info.owned_knowledge_sum, info.owned_capacity_sum
+        )));
+    }
+    Ok((info.owned_capacity_sum, info.owned_knowledge_sum))
+}
+
+fn family_display_name(info: &ckbadger_store::types::ScriptFamilyInfo) -> &str {
+    info.name.as_str()
+}
+
+fn family_kind_for_sort(info: &ckbadger_store::types::ScriptFamilyInfo) -> &str {
+    info.category.as_deref().unwrap_or("")
+}
+
+fn used_ratio_for_family_sort(
+    info: &ckbadger_store::types::ScriptFamilyInfo,
+) -> Option<(i128, i128)> {
+    if info.owned_capacity_sum <= 0 {
+        return None;
+    }
+    Some((info.owned_knowledge_sum, info.owned_capacity_sum))
+}
+
+fn compare_script_family_entries(
+    left: &(String, ckbadger_store::types::ScriptFamilyInfo),
+    right: &(String, ckbadger_store::types::ScriptFamilyInfo),
     sort_key: ScriptSortKey,
     direction: SortDirection,
 ) -> Ordering {
     let compared = match sort_key {
         ScriptSortKey::Name => apply_direction(
-            script_display_name(&left.1).cmp(script_display_name(&right.1)),
+            family_display_name(&left.1).cmp(family_display_name(&right.1)),
             direction,
         ),
         ScriptSortKey::Kind => apply_direction(
-            script_kind_for_sort(&left.1).cmp(script_kind_for_sort(&right.1)),
+            family_kind_for_sort(&left.1).cmp(family_kind_for_sort(&right.1)),
             direction,
         ),
         ScriptSortKey::Description => apply_direction(
@@ -687,109 +615,462 @@ fn compare_script_entries(
             direction,
         ),
         ScriptSortKey::Used => apply_direction(
-            owned_knowledge_sum_for_sort(&left.1).cmp(&owned_knowledge_sum_for_sort(&right.1)),
+            left.1.owned_knowledge_sum.cmp(&right.1.owned_knowledge_sum),
             direction,
         ),
         ScriptSortKey::Capacity => apply_direction(
-            owned_capacity_sum_for_sort(&left.1).cmp(&owned_capacity_sum_for_sort(&right.1)),
+            left.1.owned_capacity_sum.cmp(&right.1.owned_capacity_sum),
             direction,
         ),
         ScriptSortKey::UsedRatio => compare_used_ratio(
-            used_ratio_for_sort(&left.1),
-            used_ratio_for_sort(&right.1),
+            used_ratio_for_family_sort(&left.1),
+            used_ratio_for_family_sort(&right.1),
             direction,
         ),
         ScriptSortKey::LiveCells => apply_direction(
-            (left.1.lock_live_cells_count + left.1.type_live_cells_count)
-                .cmp(&(right.1.lock_live_cells_count + right.1.type_live_cells_count)),
+            left.1.live_cells_count.cmp(&right.1.live_cells_count),
             direction,
         ),
-        ScriptSortKey::Cells => apply_direction(
-            (left.1.lock_cells_count + left.1.type_cells_count)
-                .cmp(&(right.1.lock_cells_count + right.1.type_cells_count)),
-            direction,
-        ),
+        ScriptSortKey::Cells => {
+            apply_direction(left.1.cells_count.cmp(&right.1.cells_count), direction)
+        }
     };
 
     if compared != Ordering::Equal {
         return compared;
     }
 
-    script_display_name(&left.1)
-        .cmp(script_display_name(&right.1))
+    family_display_name(&left.1)
+        .cmp(family_display_name(&right.1))
         .then_with(|| left.0.cmp(&right.0))
 }
 
-/// Convert a store ScriptInfo into an API ScriptResponse.
-fn script_info_to_response(
-    info: &ckbadger_store::ScriptInfo,
-    network: &str,
-    state: &AppState,
-) -> Result<ScriptResponse, ApiRouteError> {
-    let hash_type_str = match info.hash_type {
-        0 => Some("data".to_string()),
-        1 => Some("type".to_string()),
-        2 => Some("data1".to_string()),
-        4 => Some("data2".to_string()),
-        _ => None,
-    };
-
-    // Determine script_kind from usage stats
-    let script_kind = if info.lock_cells_count > 0 && info.type_cells_count > 0 {
-        Some("lock+type".to_string())
-    } else if info.lock_cells_count > 0 {
-        Some("lock".to_string())
-    } else if info.type_cells_count > 0 {
-        Some("type".to_string())
-    } else {
-        None
-    };
-
-    // Resolve deployment code cell outpoint from the deployment-family references.
-    let (code_cell_tx_hash, code_cell_output_index) =
-        resolve_code_cell(info, &state.store, &state.append_only_store)?;
-    let deployed_at = resolve_deployed_at(
-        &state.store,
-        &state.append_only_store,
-        code_cell_tx_hash.as_deref(),
-        code_cell_output_index,
-    );
-    let (owned_capacity, owned_knowledge) = checked_capacity_totals(info, "script response")?;
-    let owned_knowledge_sum = owned_knowledge.to_string();
-    let owned_capacity_sum = owned_capacity.to_string();
-    let (deployment_type_hash, deployment_data_hash) = deployment_reference_hashes(info);
-    let (code_cells_live_count, code_cells_total) =
-        count_code_cells(info, &state.store, &state.append_only_store)?;
-
-    Ok(ScriptResponse {
-        code_hash: format!("0x{}", hex::encode(&info.code_hash)),
-        name: info.name.clone().unwrap_or_else(|| "Unknown".to_string()),
+fn script_family_to_response(
+    family_id: &str,
+    info: &ckbadger_store::types::ScriptFamilyInfo,
+) -> Result<ScriptFamilyListItemResponse, ApiRouteError> {
+    let (owned_capacity, owned_knowledge) = checked_family_totals(info, "script family response")?;
+    Ok(ScriptFamilyListItemResponse {
+        family_id: family_id.to_string(),
+        name: info.name.clone(),
         description: info.description.clone(),
-        script_kind,
-        rfc: None,
+        script_kind: info.category.clone(),
         website: info.website.clone(),
-        source_url: None,
-        decoder_type: None,
-        network: network.to_string(),
-        hash_type: hash_type_str,
-        data_hash: deployment_data_hash
-            .as_ref()
-            .map(|h| format!("0x{}", hex::encode(h))),
-        type_hash: deployment_type_hash
-            .as_ref()
-            .map(|h| format!("0x{}", hex::encode(h))),
-        tag: None,
-        deprecated: info.deprecated,
-        is_system: false,
-        code_cell_tx_hash,
-        code_cell_output_index,
-        deployed_at,
-        live_cells_count: info.lock_live_cells_count + info.type_live_cells_count,
-        cells_count: info.lock_cells_count + info.type_cells_count,
+        live_cells_count: info.live_cells_count,
+        cells_count: info.cells_count,
+        owned_capacity_sum: owned_capacity.to_string(),
+        owned_knowledge_sum: owned_knowledge.to_string(),
+        versions_count: info.versions_count,
+    })
+}
+
+fn reference_totals(info: &ckbadger_store::types::ScriptReferenceInfo) -> (i64, i64, i128, i128) {
+    (
+        info.lock_live_cells_count + info.type_live_cells_count,
+        info.lock_cells_count + info.type_cells_count,
+        info.lock_owned_capacity_sum + info.type_owned_capacity_sum,
+        info.lock_owned_knowledge_sum + info.type_owned_knowledge_sum,
+    )
+}
+
+fn reference_info_to_response(
+    info: &ckbadger_store::types::ScriptReferenceInfo,
+) -> Result<ScriptObservedReferenceResponse, ApiRouteError> {
+    let (live_cells_count, cells_count, owned_capacity_sum, owned_knowledge_sum) =
+        reference_totals(info);
+    if owned_capacity_sum < 0 || owned_knowledge_sum < 0 || owned_knowledge_sum > owned_capacity_sum
+    {
+        return Err(ApiError::internal(format!(
+            "invalid script reference totals while building family detail: reference_hash=0x{}, hash_type={}, owned_capacity_sum={}, owned_knowledge_sum={}",
+            hex::encode(&info.reference_hash),
+            info.hash_type,
+            owned_capacity_sum,
+            owned_knowledge_sum
+        )));
+    }
+    Ok(ScriptObservedReferenceResponse {
+        reference_hash: format!("0x{}", hex::encode(&info.reference_hash)),
+        hash_type: hash_type_to_string(info.hash_type)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("unknown({})", info.hash_type)),
+        live_cells_count,
+        cells_count,
+        owned_capacity_sum: owned_capacity_sum.to_string(),
+        owned_knowledge_sum: owned_knowledge_sum.to_string(),
+    })
+}
+
+fn checked_version_totals(
+    version_hash: &[u8],
+    info: &ckbadger_store::types::ScriptVersionInfo,
+    context: &str,
+) -> Result<(i64, i64, i128, i128, i128, i128), ApiRouteError> {
+    let (
+        cells_count,
+        live_cells_count,
+        capacity_sum,
         owned_capacity_sum,
+        used_capacity_sum,
         owned_knowledge_sum,
+    ) = version_totals(info);
+
+    if capacity_sum < 0 {
+        return Err(ApiError::internal(format!(
+            "negative capacity in {}: version_hash=0x{}, value={}",
+            context,
+            hex::encode(version_hash),
+            capacity_sum
+        )));
+    }
+    if used_capacity_sum < 0 {
+        return Err(ApiError::internal(format!(
+            "negative used capacity in {}: version_hash=0x{}, value={}",
+            context,
+            hex::encode(version_hash),
+            used_capacity_sum
+        )));
+    }
+    if used_capacity_sum > capacity_sum {
+        return Err(ApiError::internal(format!(
+            "used capacity exceeds total in {}: version_hash=0x{}, used={}, capacity={}",
+            context,
+            hex::encode(version_hash),
+            used_capacity_sum,
+            capacity_sum
+        )));
+    }
+    if owned_capacity_sum < 0 {
+        return Err(ApiError::internal(format!(
+            "negative live capacity in {}: version_hash=0x{}, value={}",
+            context,
+            hex::encode(version_hash),
+            owned_capacity_sum
+        )));
+    }
+    if owned_knowledge_sum < 0 {
+        return Err(ApiError::internal(format!(
+            "negative live common knowledge size in {}: version_hash=0x{}, value={}",
+            context,
+            hex::encode(version_hash),
+            owned_knowledge_sum
+        )));
+    }
+    if owned_knowledge_sum > owned_capacity_sum {
+        return Err(ApiError::internal(format!(
+            "live common knowledge size exceeds total in {}: version_hash=0x{}, used={}, capacity={}",
+            context,
+            hex::encode(version_hash),
+            owned_knowledge_sum,
+            owned_capacity_sum
+        )));
+    }
+
+    Ok((
+        cells_count,
+        live_cells_count,
+        capacity_sum,
+        owned_capacity_sum,
+        used_capacity_sum,
+        owned_knowledge_sum,
+    ))
+}
+
+fn code_cell_timestamp(
+    state: &AppState,
+    version_hash: &[u8],
+    created_at_block: i64,
+) -> Result<i64, ApiRouteError> {
+    let header = state
+        .store
+        .get_block_header(created_at_block)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing block header while building script family detail: version_hash=0x{}, created_at_block={}",
+                hex::encode(version_hash),
+                created_at_block
+            ))
+        })?;
+
+    Ok(header.timestamp)
+}
+
+fn first_code_cell_timestamp(
+    state: &AppState,
+    version_hash: &[u8],
+    code_cells: &[VersionCodeCell],
+) -> Result<Option<i64>, ApiRouteError> {
+    let mut earliest = None;
+
+    for (_, _, cell, _) in code_cells {
+        let timestamp = code_cell_timestamp(state, version_hash, cell.created_at_block)?;
+        earliest = Some(earliest.map_or(timestamp, |current: i64| current.min(timestamp)));
+    }
+
+    Ok(earliest)
+}
+
+fn script_version_deployments(
+    state: &AppState,
+    version_hash: &[u8],
+    info: &ckbadger_store::types::ScriptVersionInfo,
+    code_cells: &[VersionCodeCell],
+) -> Result<Vec<ScriptVersionDeploymentResponse>, ApiRouteError> {
+    code_cells
+        .iter()
+        .map(|(tx_hash, output_index, cell, _)| {
+            let hash_type = if cell.type_script_hash.is_some() {
+                "type".to_string()
+            } else {
+                info.canonical_hash_type
+                    .and_then(hash_type_to_string)
+                    .unwrap_or("data")
+                    .to_string()
+            };
+            let type_reference_hash = cell
+                .type_script_hash
+                .as_ref()
+                .or_else(|| {
+                    if info.canonical_hash_type == Some(1) {
+                        info.canonical_reference_hash.as_ref()
+                    } else {
+                        None
+                    }
+                })
+                .map(|hash| format!("0x{}", hex::encode(hash)));
+
+            Ok(ScriptVersionDeploymentResponse {
+                hash_type,
+                type_reference_hash,
+                data_reference_hash: format!("0x{}", hex::encode(version_hash)),
+                code_cell_tx_hash: format!("0x{}", hex::encode(tx_hash)),
+                code_cell_output_index: i32::from(*output_index),
+                deployed_at: code_cell_timestamp(state, version_hash, cell.created_at_block)?,
+            })
+        })
+        .collect()
+}
+
+fn observed_references_by_version(
+    state: &AppState,
+    family_id: &str,
+    versions: &[(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)],
+) -> Result<HashMap<Vec<u8>, Vec<ScriptObservedReferenceResponse>>, ApiRouteError> {
+    let mut by_version: HashMap<Vec<u8>, Vec<ScriptObservedReferenceResponse>> = HashMap::new();
+    let allowed_versions: HashSet<Vec<u8>> = versions
+        .iter()
+        .map(|(version_hash, _)| version_hash.clone())
+        .collect();
+    let canonical_references: HashSet<(u8, Vec<u8>)> = versions
+        .iter()
+        .filter_map(|(_, info)| {
+            Some((
+                info.canonical_hash_type?,
+                info.canonical_reference_hash.as_ref()?.clone(),
+            ))
+        })
+        .collect();
+
+    for ((reference_hash, hash_type), info) in state
+        .store
+        .list_script_reference_infos()
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    {
+        let version_hash = if let Some(version_hash) = state
+            .store
+            .get_script_reference_version_hash(hash_type, &reference_hash)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+        {
+            if !allowed_versions.contains(&version_hash) {
+                continue;
+            }
+            version_hash
+        } else if matches!(hash_type, 0 | 2 | 4) && allowed_versions.contains(&reference_hash) {
+            reference_hash.clone()
+        } else if canonical_references.contains(&(hash_type, reference_hash.clone())) {
+            return Err(ApiError::internal(format!(
+                "script family detail is missing reference->version mapping: family_id={}, reference_hash=0x{}, hash_type={}",
+                family_id,
+                hex::encode(&reference_hash),
+                hash_type
+            )));
+        } else {
+            continue;
+        };
+
+        by_version
+            .entry(version_hash)
+            .or_default()
+            .push(reference_info_to_response(&info)?);
+    }
+
+    for references in by_version.values_mut() {
+        references.sort_by(|left, right| {
+            right
+                .live_cells_count
+                .cmp(&left.live_cells_count)
+                .then_with(|| right.cells_count.cmp(&left.cells_count))
+                .then_with(|| left.hash_type.cmp(&right.hash_type))
+                .then_with(|| left.reference_hash.cmp(&right.reference_hash))
+        });
+    }
+
+    Ok(by_version)
+}
+
+fn load_script_family_by_name(
+    state: &AppState,
+    name: &str,
+) -> Result<(String, ckbadger_store::types::ScriptFamilyInfo), ApiRouteError> {
+    let family_id = state
+        .store
+        .get_script_family_id_by_name(name)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Script not found"))?;
+    let family = state
+        .store
+        .get_script_family(&family_id)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "script family name index points to missing family: name={}, family_id={}",
+                name, family_id
+            ))
+        })?;
+
+    if family.family_id != family_id {
+        return Err(ApiError::internal(format!(
+            "script family record mismatch while resolving family by name: name={}, indexed_family_id={}, record_family_id={}",
+            name, family_id, family.family_id
+        )));
+    }
+
+    Ok((family_id, family))
+}
+
+fn load_family_versions(
+    state: &Arc<AppState>,
+    family_id: &str,
+) -> Result<Vec<(Vec<u8>, ckbadger_store::types::ScriptVersionInfo)>, ApiRouteError> {
+    let mut versions_by_hash: HashMap<Vec<u8>, ckbadger_store::types::ScriptVersionInfo> =
+        load_script_versions_cached(state)?.into_iter().collect();
+    let version_hashes = state
+        .store
+        .list_script_version_hashes_by_family(family_id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let mut versions = Vec::with_capacity(version_hashes.len());
+    for version_hash in version_hashes {
+        let version_info = if let Some(version_info) = versions_by_hash.remove(&version_hash) {
+            version_info
+        } else {
+            state
+                .store
+                .get_script_version(&version_hash)
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "script family references missing version: family_id={}, version_hash=0x{}",
+                        family_id,
+                        hex::encode(&version_hash)
+                    ))
+                })?
+        };
+
+        if version_info.family_id.as_deref() != Some(family_id) {
+            return Err(ApiError::internal(format!(
+                "script version family mismatch while building family detail: family_id={}, version_hash=0x{}, version_family_id={:?}",
+                family_id,
+                hex::encode(&version_hash),
+                version_info.family_id
+            )));
+        }
+
+        versions.push((version_hash, version_info));
+    }
+
+    Ok(versions)
+}
+
+fn resolved_version_name(
+    state: &AppState,
+    version_hash: &[u8],
+    info: &ckbadger_store::types::ScriptVersionInfo,
+    unknown_fallback: &str,
+) -> Result<String, ApiRouteError> {
+    if let Some(name) = info.name.clone() {
+        return Ok(name);
+    }
+
+    let Some(family_id) = info.family_id.as_deref() else {
+        return Ok(unknown_fallback.to_string());
+    };
+
+    let family = state
+        .store
+        .get_script_family(family_id)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "script version points to missing family while resolving name: version_hash=0x{}, family_id={}",
+                hex::encode(version_hash),
+                family_id
+            ))
+        })?;
+
+    Ok(family.name)
+}
+
+fn script_version_to_detail_response(
+    state: &AppState,
+    version_hash: &[u8],
+    info: &ckbadger_store::types::ScriptVersionInfo,
+    observed_references: Vec<ScriptObservedReferenceResponse>,
+) -> Result<ScriptVersionDetailResponse, ApiRouteError> {
+    let (cells_count, live_cells_count, _, owned_capacity_sum, _, owned_knowledge_sum) =
+        checked_version_totals(version_hash, info, "script family detail")?;
+    let mut code_cells =
+        list_version_code_cells(&state.store, &state.append_only_store, version_hash)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+    sort_code_cells(&mut code_cells);
+
+    let deployed_at = first_code_cell_timestamp(state, version_hash, &code_cells)?;
+    let code_cells_live_count = code_cells
+        .iter()
+        .filter(|(_, _, _, is_live)| *is_live)
+        .count() as i64;
+    let code_cells_total = code_cells.len() as i64;
+    let deployments = script_version_deployments(state, version_hash, info, &code_cells)?;
+
+    Ok(ScriptVersionDetailResponse {
+        version_hash: format!("0x{}", hex::encode(version_hash)),
+        name: resolved_version_name(
+            state,
+            version_hash,
+            info,
+            &format!("0x{}", hex::encode(version_hash)),
+        )?,
+        description: info.description.clone(),
+        script_kind: version_script_kind(info),
+        website: info.website.clone(),
+        deprecated: info.deprecated,
+        canonical_reference_hash: info
+            .canonical_reference_hash
+            .as_ref()
+            .map(|hash| format!("0x{}", hex::encode(hash))),
+        canonical_hash_type: info
+            .canonical_hash_type
+            .and_then(hash_type_to_string)
+            .map(str::to_string),
+        deployed_at,
+        live_cells_count,
+        cells_count,
+        owned_capacity_sum: owned_capacity_sum.to_string(),
+        owned_knowledge_sum: owned_knowledge_sum.to_string(),
         code_cells_live_count,
         code_cells_total,
+        deployments,
+        references: observed_references,
     })
 }
 
@@ -866,10 +1147,12 @@ async fn lookup_scripts(
                     ScriptLookupInfo {
                         reference_hash: reference_hash_hex.clone(),
                         code_hash: format!("0x{}", hex::encode(&version_hash)),
-                        name: version_info
-                            .name
-                            .clone()
-                            .unwrap_or_else(|| "Unknown".to_string()),
+                        name: resolved_version_name(
+                            &state,
+                            &version_hash,
+                            &version_info,
+                            "Unknown",
+                        )?,
                         deprecated: version_info.deprecated
                             || script_info
                                 .as_ref()
@@ -1091,25 +1374,18 @@ async fn get_code_cells(
 async fn list_scripts(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
-) -> ApiResult<CursorPaginatedResponse<ScriptResponse>> {
+) -> ApiResult<CursorPaginatedResponse<ScriptFamilyListItemResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
-    let network = params.network.as_deref().unwrap_or(&state.ckb_network);
-
-    let all_scripts = load_script_infos_cached(&state)?;
+    let _network = params.network.as_deref().unwrap_or(&state.ckb_network);
+    let all_families = load_script_families_cached(&state)?;
 
     let search_pattern = params.search.as_ref().map(|s| s.to_lowercase());
 
-    let mut filtered: Vec<_> = all_scripts
+    let mut filtered: Vec<_> = all_families
         .into_iter()
         .filter(|(_, info)| {
-            // Filter by search pattern
             if let Some(ref pattern) = search_pattern {
-                let name_match = info
-                    .name
-                    .as_ref()
-                    .map(|n| n.to_lowercase().contains(pattern))
-                    .unwrap_or(false);
-                if !name_match {
+                if !info.name.to_lowercase().contains(pattern) {
                     return false;
                 }
             }
@@ -1117,51 +1393,14 @@ async fn list_scripts(
         })
         .collect();
 
-    let all_filtered_infos: Vec<ckbadger_store::ScriptInfo> =
-        filtered.iter().map(|(_, info)| info.clone()).collect();
-    filtered.retain(|(_, info)| {
-        if is_known_script_name(info.name.as_deref()) {
-            return true;
-        }
-        let Some(resolved) = merge_script_info_for_reference(&all_filtered_infos, &info.code_hash)
-        else {
-            return true;
-        };
-        !is_known_script_name(resolved.name.as_deref())
-    });
-
-    // First sort by display name, then code hash to ensure deterministic dedup selection.
-    filtered.sort_by(|a, b| {
-        script_display_name(&a.1)
-            .cmp(script_display_name(&b.1))
-            .then_with(|| a.0.cmp(&b.0))
-    });
-
-    // Deduplicate by known name (keep one deployment per known script name), but
-    // keep all Unknown entries distinct by code hash.
-    let mut seen_known_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let deduped: Vec<_> = filtered
-        .into_iter()
-        .filter(|(_, info)| {
-            let Some(name) = info.name.as_ref() else {
-                return true;
-            };
-            let trimmed = name.trim();
-            if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("unknown") {
-                return true;
-            }
-            seen_known_names.insert(trimmed.to_string())
-        })
-        .collect();
-
-    // Apply requested ordering to the entire result set before pagination.
-    let mut deduped = deduped;
-    for (_, info) in &deduped {
-        checked_capacity_totals(info, "list scripts")?;
+    for (_, info) in &filtered {
+        checked_family_totals(info, "list script families")?;
     }
-    deduped.sort_by(|a, b| compare_script_entries(a, b, params.sort_key, params.sort_direction));
+    filtered.sort_by(|a, b| {
+        compare_script_family_entries(a, b, params.sort_key, params.sort_direction)
+    });
 
-    let total = deduped.len() as i64;
+    let total = filtered.len() as i64;
 
     let start_idx = params
         .cursor
@@ -1170,7 +1409,7 @@ async fn list_scripts(
         .and_then(|v| usize::try_from(v).ok())
         .unwrap_or(0);
 
-    let page: Vec<_> = deduped
+    let page: Vec<_> = filtered
         .into_iter()
         .skip(start_idx)
         .take(limit + 1)
@@ -1184,9 +1423,9 @@ async fn list_scripts(
         None
     };
 
-    let scripts: Vec<ScriptResponse> = page
+    let scripts: Vec<ScriptFamilyListItemResponse> = page
         .iter()
-        .map(|(_, info)| script_info_to_response(info, network, &state))
+        .map(|(family_id, info)| script_family_to_response(family_id, info))
         .collect::<Result<Vec<_>, _>>()?;
 
     ok(CursorPaginatedResponse::new(
@@ -1200,177 +1439,54 @@ async fn list_scripts(
 async fn get_script(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
-) -> ApiResult<Vec<ScriptResponse>> {
-    let network = &state.ckb_network;
-
-    let matching: Vec<_> = load_script_versions_cached(&state)?
+) -> ApiResult<ScriptFamilyDetailResponse> {
+    let (family_id, family) = load_script_family_by_name(&state, &name)?;
+    let family_versions = load_family_versions(&state, &family_id)?;
+    let mut observed_references =
+        observed_references_by_version(&state, &family_id, &family_versions)?;
+    let mut versions = family_versions
         .into_iter()
-        .filter(|(_, info)| info.name.as_deref() == Some(name.as_str()))
-        .collect();
+        .map(|(version_hash, version_info)| {
+            let refs = observed_references
+                .remove(&version_hash)
+                .unwrap_or_default();
+            script_version_to_detail_response(&state, &version_hash, &version_info, refs)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
-    if matching.is_empty() {
-        return Err(ApiError::not_found("Script not found"));
-    }
-    let mut scripts = Vec::new();
-    let all_script_infos = load_script_infos_cached(&state)?;
-
-    for (version_hash, version_info) in matching {
-        let mut code_cells =
-            list_version_code_cells(&state.store, &state.append_only_store, &version_hash)
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-        sort_code_cells(&mut code_cells);
-
-        // Derive hash_type, type_hash, data_hash from ScriptInfo if available.
-        // For type-hash scripts, version_hash is a data_hash (not the code_hash that
-        // keys ScriptInfo), so fall back to associated_code_hash from label data.
-        let script_info = state
-            .store
-            .get_script_info(&version_hash)
-            .ok()
-            .flatten()
-            .or_else(|| {
-                let assoc = version_info.associated_code_hash.as_ref()?;
-                state.store.get_script_info(assoc).ok().flatten()
-            });
-        let (
-            cells_count,
-            live_cells_count,
-            _capacity_sum,
-            owned_capacity_sum,
-            _used_sum,
-            owned_knowledge,
-        ) = resolve_version_capacity(&version_info, script_info.as_ref(), &all_script_infos)?;
-        let code_cells_live_count = code_cells
-            .iter()
-            .filter(|(_, _, _, is_live)| *is_live)
-            .count() as i64;
-        let code_cells_total = code_cells.len() as i64;
-        let hash_type = script_info
-            .as_ref()
-            .and_then(|info| hash_type_to_string(info.hash_type).map(|s| s.to_string()));
-        let (type_hash, data_hash) = script_info
-            .as_ref()
-            .map(|info| {
-                let (type_ref, data_ref) = deployment_reference_hashes(info);
-                (
-                    type_ref.map(|h| format!("0x{}", hex::encode(h))),
-                    data_ref.map(|h| format!("0x{}", hex::encode(h))),
-                )
-            })
-            .unwrap_or((None, None));
-        // If no data_hash from ScriptInfo, use the version_hash itself
-        let data_hash = data_hash.or_else(|| Some(format!("0x{}", hex::encode(&version_hash))));
-
-        if code_cells.is_empty() {
-            scripts.push(ScriptResponse {
-                code_hash: format!("0x{}", hex::encode(&version_hash)),
-                name: version_info
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| "Unknown".to_string()),
-                description: version_info.description.clone(),
-                script_kind: version_script_kind(&version_info),
-                rfc: None,
-                website: version_info.website.clone(),
-                source_url: None,
-                decoder_type: version_info.category.clone(),
-                network: network.to_string(),
-                hash_type: hash_type.clone(),
-                data_hash: data_hash.clone(),
-                type_hash: type_hash.clone(),
-                tag: None,
-                deprecated: version_info.deprecated
-                    || script_info
-                        .as_ref()
-                        .map(|info| info.deprecated)
-                        .unwrap_or(false),
-                is_system: false,
-                code_cell_tx_hash: None,
-                code_cell_output_index: None,
-                deployed_at: None,
-                live_cells_count,
-                cells_count,
-                owned_capacity_sum: owned_capacity_sum.to_string(),
-                owned_knowledge_sum: owned_knowledge.to_string(),
-                code_cells_live_count,
-                code_cells_total,
-            });
-            continue;
+    versions.sort_by(|left, right| {
+        match (left.deployed_at, right.deployed_at) {
+            (Some(left_ts), Some(right_ts)) => right_ts.cmp(&left_ts),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
         }
-
-        for (tx_hash, output_index, cell, _is_live) in &code_cells {
-            let deployed_at = state
-                .store
-                .get_block_header(cell.created_at_block)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .map(|header| header.timestamp);
-            scripts.push(ScriptResponse {
-                code_hash: format!("0x{}", hex::encode(&version_hash)),
-                name: version_info
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| "Unknown".to_string()),
-                description: version_info.description.clone(),
-                script_kind: version_script_kind(&version_info),
-                rfc: None,
-                website: version_info.website.clone(),
-                source_url: None,
-                decoder_type: version_info.category.clone(),
-                network: network.to_string(),
-                hash_type: hash_type.clone(),
-                data_hash: data_hash.clone(),
-                type_hash: type_hash.clone(),
-                tag: None,
-                deprecated: version_info.deprecated
-                    || script_info
-                        .as_ref()
-                        .map(|info| info.deprecated)
-                        .unwrap_or(false),
-                is_system: false,
-                code_cell_tx_hash: Some(format!("0x{}", hex::encode(tx_hash))),
-                code_cell_output_index: Some(i32::from(*output_index)),
-                deployed_at,
-                live_cells_count,
-                cells_count,
-                owned_capacity_sum: owned_capacity_sum.to_string(),
-                owned_knowledge_sum: owned_knowledge.to_string(),
-                code_cells_live_count,
-                code_cells_total,
-            });
-        }
-    }
-
-    scripts.sort_by(|a, b| match (a.deployed_at, b.deployed_at) {
-        (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts).then_with(|| a.code_hash.cmp(&b.code_hash)),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => a.code_hash.cmp(&b.code_hash),
+        .then_with(|| left.version_hash.cmp(&right.version_hash))
     });
 
-    ok(scripts)
+    let (owned_capacity_sum, owned_knowledge_sum) =
+        checked_family_totals(&family, "script family detail")?;
+
+    ok(ScriptFamilyDetailResponse {
+        family_id,
+        name: family.name,
+        description: family.description,
+        script_kind: family.category,
+        website: family.website,
+        live_cells_count: family.live_cells_count,
+        cells_count: family.cells_count,
+        owned_capacity_sum: owned_capacity_sum.to_string(),
+        owned_knowledge_sum: owned_knowledge_sum.to_string(),
+        versions_count: family.versions_count,
+        versions,
+    })
 }
 
 async fn get_script_usage(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> ApiResult<ScriptUsageResponse> {
-    let matching: Vec<_> = load_script_versions_cached(&state)?
-        .into_iter()
-        .filter(|(_, info)| info.name.as_deref() == Some(name.as_str()))
-        .collect();
-
-    if matching.is_empty() {
-        return ok(ScriptUsageResponse {
-            name,
-            cells_count: 0,
-            live_cells_count: 0,
-            capacity_sum: "0".to_string(),
-            owned_capacity_sum: "0".to_string(),
-            used_capacity_sum: "0".to_string(),
-            owned_knowledge_sum: "0".to_string(),
-            by_deployment: vec![],
-        });
-    }
+    let (family_id, _family) = load_script_family_by_name(&state, &name)?;
 
     let mut total_cells: i64 = 0;
     let mut total_live: i64 = 0;
@@ -1379,9 +1495,7 @@ async fn get_script_usage(
     let mut total_used_cap: u128 = 0;
     let mut total_owned_knowledge: u128 = 0;
 
-    let all_script_infos = load_script_infos_cached(&state)?;
-
-    let by_deployment: Vec<DeploymentUsage> = matching
+    let mut by_deployment: Vec<DeploymentUsage> = load_family_versions(&state, &family_id)?
         .into_iter()
         .map(|(version_hash, info)| {
             let (
@@ -1391,7 +1505,7 @@ async fn get_script_usage(
                 owned_capacity_sum,
                 used_capacity_sum,
                 owned_knowledge_sum,
-            ) = resolve_version_capacity(&info, None, &all_script_infos)?;
+            ) = checked_version_totals(&version_hash, &info, "script family usage")?;
             let capacity_sum = capacity_sum as u128;
             let owned_capacity_sum = owned_capacity_sum as u128;
             let used_capacity_sum = used_capacity_sum as u128;
@@ -1416,6 +1530,12 @@ async fn get_script_usage(
             })
         })
         .collect::<Result<Vec<_>, ApiRouteError>>()?;
+    by_deployment.sort_by(|left, right| {
+        right
+            .live_cells_count
+            .cmp(&left.live_cells_count)
+            .then_with(|| left.code_hash.cmp(&right.code_hash))
+    });
 
     ok(ScriptUsageResponse {
         name,

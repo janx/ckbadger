@@ -543,6 +543,24 @@ fn parser_cache_committed_tip_from_sync_tip(sync_tip: i64) -> i64 {
         .expect("sync tip underflow while deriving parser cache committed tip")
 }
 
+fn parse_script_reference_hash_type(
+    hash_type: i16,
+    script_kind: &str,
+    block_number: i64,
+    tx_hash: &[u8; 32],
+) -> Result<u8> {
+    match hash_type {
+        0 | 1 | 2 | 4 => Ok(hash_type as u8),
+        _ => Err(anyhow!(
+            "invalid {} script reference hash_type in pipeline cache pass: block={}, tx=0x{}, hash_type={}, expected_one_of=[0,1,2,4]",
+            script_kind,
+            block_number,
+            hex::encode(tx_hash),
+            hash_type
+        )),
+    }
+}
+
 impl Indexer {
     pub(crate) async fn run_pipeline(&self) -> Result<()> {
         use tokio::sync::mpsc;
@@ -562,6 +580,7 @@ impl Indexer {
             batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
             script_usage_changes: ScriptUsageChanges,
+            script_reference_usage_changes: ScriptReferenceUsageChanges,
             script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
             token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
             spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
@@ -1306,6 +1325,8 @@ impl Indexer {
                 let mut address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta> =
                     HashMap::new();
                 let mut script_usage_changes: ScriptUsageChanges = HashMap::new();
+                let mut script_reference_usage_changes: ScriptReferenceUsageChanges =
+                    HashMap::new();
                 let mut script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)> =
                     HashMap::new();
                 let mut token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
@@ -1400,11 +1421,38 @@ impl Indexer {
                     // script_usage_changes - outputs
                     for cell in &tx_data.cells {
                         let lock_key = (cell.lock_code_hash.clone(), false);
+                        let lock_hash_type = match parse_script_reference_hash_type(
+                            cell.lock_hash_type,
+                            "lock",
+                            tx_data.block_number,
+                            &tx_data.hash,
+                        ) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                record_worker_exit_reason(
+                                    &parser_exit_reason_for_parser,
+                                    format!(
+                                        "invalid output lock hash_type for range {}-{}: {}",
+                                        start_block, end_block, e
+                                    ),
+                                );
+                                return;
+                            }
+                        };
                         let cell_occupied = occupied_capacity_shannons_i64(
                             cell.lock_args.len(),
                             cell.type_args.as_ref().map(|args| args.len()),
                             cell.data_size,
                         );
+                        let reference_entry = script_reference_usage_changes
+                            .entry((cell.lock_code_hash.clone(), lock_hash_type, false))
+                            .or_insert((0, 0, 0, 0, 0, 0));
+                        reference_entry.0 += 1;
+                        reference_entry.1 += 1;
+                        reference_entry.2 += i128::from(cell.capacity);
+                        reference_entry.3 += i128::from(cell.capacity);
+                        reference_entry.4 += i128::from(cell_occupied);
+                        reference_entry.5 += i128::from(cell_occupied);
                         let entry = script_usage_changes
                             .entry(lock_key)
                             .or_insert((0, 0, 0, 0, 0, 0));
@@ -1420,7 +1468,49 @@ impl Indexer {
                         daily_entry.0 += i128::from(cell.capacity);
                         daily_entry.1 += i128::from(cell_occupied);
                         if let Some(ref type_code_hash) = cell.type_code_hash {
+                            let type_hash_type = match cell.type_hash_type {
+                                Some(hash_type) => match parse_script_reference_hash_type(
+                                    hash_type,
+                                    "type",
+                                    tx_data.block_number,
+                                    &tx_data.hash,
+                                ) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        record_worker_exit_reason(
+                                            &parser_exit_reason_for_parser,
+                                            format!(
+                                                "invalid output type hash_type for range {}-{}: {}",
+                                                start_block, end_block, e
+                                            ),
+                                        );
+                                        return;
+                                    }
+                                },
+                                None => {
+                                    record_worker_exit_reason(
+                                        &parser_exit_reason_for_parser,
+                                        format!(
+                                            "missing output type hash_type for range {}-{}: block={}, tx=0x{}",
+                                            start_block,
+                                            end_block,
+                                            tx_data.block_number,
+                                            hex::encode(tx_data.hash)
+                                        ),
+                                    );
+                                    return;
+                                }
+                            };
                             let type_key = (type_code_hash.clone(), true);
+                            let reference_entry = script_reference_usage_changes
+                                .entry((type_code_hash.clone(), type_hash_type, true))
+                                .or_insert((0, 0, 0, 0, 0, 0));
+                            reference_entry.0 += 1;
+                            reference_entry.1 += 1;
+                            reference_entry.2 += i128::from(cell.capacity);
+                            reference_entry.3 += i128::from(cell.capacity);
+                            reference_entry.4 += i128::from(cell_occupied);
+                            reference_entry.5 += i128::from(cell_occupied);
                             let entry = script_usage_changes
                                 .entry(type_key)
                                 .or_insert((0, 0, 0, 0, 0, 0));
@@ -1543,6 +1633,30 @@ impl Indexer {
                                     .or_default() -= i128::from(info.occupied_capacity);
                                 // script usage - inputs
                                 let lock_key = (info.lock_code_hash.clone(), false);
+                                let lock_hash_type = match parse_script_reference_hash_type(
+                                    info.lock_hash_type,
+                                    "lock",
+                                    tx_data.block_number,
+                                    &tx_data.hash,
+                                ) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        record_worker_exit_reason(
+                                            &parser_exit_reason_for_parser,
+                                            format!(
+                                                "invalid input lock hash_type for range {}-{}: {}",
+                                                start_block, end_block, e
+                                            ),
+                                        );
+                                        return;
+                                    }
+                                };
+                                let reference_entry = script_reference_usage_changes
+                                    .entry((info.lock_code_hash.clone(), lock_hash_type, false))
+                                    .or_insert((0, 0, 0, 0, 0, 0));
+                                reference_entry.1 -= 1;
+                                reference_entry.3 -= i128::from(info.capacity);
+                                reference_entry.5 -= i128::from(info.occupied_capacity);
                                 let entry = script_usage_changes
                                     .entry(lock_key)
                                     .or_insert((0, 0, 0, 0, 0, 0));
@@ -1555,7 +1669,46 @@ impl Indexer {
                                 daily_entry.0 -= i128::from(info.capacity);
                                 daily_entry.1 -= i128::from(info.occupied_capacity);
                                 if let Some(ref type_code_hash) = info.type_code_hash {
+                                    let type_hash_type = match info.type_hash_type {
+                                        Some(hash_type) => match parse_script_reference_hash_type(
+                                            hash_type,
+                                            "type",
+                                            tx_data.block_number,
+                                            &tx_data.hash,
+                                        ) {
+                                            Ok(v) => v,
+                                            Err(e) => {
+                                                record_worker_exit_reason(
+                                                    &parser_exit_reason_for_parser,
+                                                    format!(
+                                                        "invalid input type hash_type for range {}-{}: {}",
+                                                        start_block, end_block, e
+                                                    ),
+                                                );
+                                                return;
+                                            }
+                                        },
+                                        None => {
+                                            record_worker_exit_reason(
+                                                &parser_exit_reason_for_parser,
+                                                format!(
+                                                    "missing input type hash_type for range {}-{}: block={}, tx=0x{}",
+                                                    start_block,
+                                                    end_block,
+                                                    tx_data.block_number,
+                                                    hex::encode(tx_data.hash)
+                                                ),
+                                            );
+                                            return;
+                                        }
+                                    };
                                     let type_key = (type_code_hash.clone(), true);
+                                    let reference_entry = script_reference_usage_changes
+                                        .entry((type_code_hash.clone(), type_hash_type, true))
+                                        .or_insert((0, 0, 0, 0, 0, 0));
+                                    reference_entry.1 -= 1;
+                                    reference_entry.3 -= i128::from(info.capacity);
+                                    reference_entry.5 -= i128::from(info.occupied_capacity);
                                     let entry = script_usage_changes
                                         .entry(type_key)
                                         .or_insert((0, 0, 0, 0, 0, 0));
@@ -1847,6 +2000,7 @@ impl Indexer {
                         batch_cell_infos,
                         address_balance_changes,
                         script_usage_changes,
+                        script_reference_usage_changes,
                         script_daily_changes,
                         token_daily_changes,
                         spore_type_index_changes,
@@ -1927,6 +2081,7 @@ impl Indexer {
                     batch_cell_infos,
                     address_balance_changes,
                     script_usage_changes,
+                    script_reference_usage_changes,
                     script_daily_changes,
                     token_daily_changes,
                     spore_type_index_changes,
@@ -2239,6 +2394,7 @@ impl Indexer {
                             batch_cell_infos,
                             address_balance_changes,
                             script_usage_changes,
+                            script_reference_usage_changes,
                             script_daily_changes,
                             token_daily_changes,
                             spore_type_index_changes,
@@ -2893,6 +3049,12 @@ mod tests {
             data.extend_from_slice(&cluster_id_bytes);
         }
         data
+    }
+
+    #[test]
+    fn parse_script_reference_hash_type_rejects_unsupported_value() {
+        let err = parse_script_reference_hash_type(3, "lock", 42, &[0x11; 32]).unwrap_err();
+        assert!(err.to_string().contains("expected_one_of=[0,1,2,4]"));
     }
 
     fn create_cluster_data(name: &str, description: &str) -> Vec<u8> {

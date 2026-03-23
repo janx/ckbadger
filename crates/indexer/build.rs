@@ -29,6 +29,8 @@ struct TokenDeployment {
 
 #[derive(Deserialize, Serialize)]
 struct ScriptMetadata {
+    #[serde(default)]
+    metadata_slug: Option<String>,
     name: String,
     #[serde(default)]
     description: Option<String>,
@@ -37,19 +39,117 @@ struct ScriptMetadata {
     #[serde(default)]
     category: Option<String>,
     #[serde(default)]
-    mainnet: Vec<ScriptDeployment>,
+    mainnet: Option<ScriptNetworkMetadata>,
     #[serde(default)]
-    testnet: Vec<ScriptDeployment>,
+    testnet: Option<ScriptNetworkMetadata>,
 }
 
 #[derive(Deserialize, Serialize)]
-struct ScriptDeployment {
-    code_hash: String,
+#[serde(try_from = "ScriptNetworkMetadataRaw")]
+struct ScriptNetworkMetadata {
+    versions: Vec<ScriptDeployment>,
+    pseudo: Option<PseudoScriptDeployment>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptNetworkMetadataRaw {
     #[serde(default)]
-    data_hash: Option<String>,
-    hash_type: String,
+    versions: Vec<ScriptDeployment>,
+    #[serde(default)]
+    pseudo: Option<PseudoScriptDeployment>,
+}
+
+impl TryFrom<ScriptNetworkMetadataRaw> for ScriptNetworkMetadata {
+    type Error = String;
+
+    fn try_from(raw: ScriptNetworkMetadataRaw) -> Result<Self, Self::Error> {
+        let has_versions = !raw.versions.is_empty();
+        let has_pseudo = raw.pseudo.is_some();
+        match (has_versions, has_pseudo) {
+            (true, false) | (false, true) => Ok(Self {
+                versions: raw.versions,
+                pseudo: raw.pseudo,
+            }),
+            (false, false) => Err(
+                "network metadata must define exactly one of `versions` or `pseudo`".to_string(),
+            ),
+            (true, true) => {
+                Err("network metadata cannot define both `versions` and `pseudo`".to_string())
+            }
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PseudoScriptDeployment {
+    code_hash: String,
+    hash_type: ValidatedHashType,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(try_from = "ScriptDeploymentRaw")]
+struct ScriptDeployment {
+    version_hash: String,
+    canonical_ref_hash: String,
+    canonical_hash_type: ValidatedHashType,
     #[serde(default)]
     deprecated: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptDeploymentRaw {
+    version_hash: String,
+    canonical_ref_hash: String,
+    canonical_hash_type: String,
+    #[serde(default)]
+    deprecated: bool,
+}
+
+impl TryFrom<ScriptDeploymentRaw> for ScriptDeployment {
+    type Error = String;
+
+    fn try_from(raw: ScriptDeploymentRaw) -> Result<Self, Self::Error> {
+        Ok(Self {
+            version_hash: raw.version_hash,
+            canonical_ref_hash: raw.canonical_ref_hash,
+            canonical_hash_type: ValidatedHashType::new(
+                raw.canonical_hash_type,
+                "canonical_hash_type",
+            )?,
+            deprecated: raw.deprecated,
+        })
+    }
+}
+
+#[derive(Serialize)]
+struct ValidatedHashType(String);
+
+impl ValidatedHashType {
+    fn new(value: String, field: &str) -> Result<Self, String> {
+        match value.as_str() {
+            "data" | "type" | "data1" | "data2" => Ok(Self(value)),
+            _ => Err(format!("invalid {field}: `{value}`")),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ValidatedHashType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        ValidatedHashType::new(value, "hash_type").map_err(serde::de::Error::custom)
+    }
+}
+
+impl ScriptNetworkMetadata {
+    fn versions(&self) -> &[ScriptDeployment] {
+        &self.versions
+    }
 }
 
 fn main() {
@@ -71,14 +171,11 @@ fn main() {
             if path.extension().and_then(|e| e.to_str()) != Some("toml") {
                 continue;
             }
-            if let Ok(content) = fs::read_to_string(&path) {
-                match toml::from_str::<TokenMetadata>(&content) {
-                    Ok(token) => token_entries.push(token),
-                    Err(e) => {
-                        eprintln!("cargo:warning=failed to parse {}: {}", path.display(), e);
-                    }
-                }
-            }
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
+            let token = toml::from_str::<TokenMetadata>(&content)
+                .unwrap_or_else(|e| panic!("failed to parse {}: {}", path.display(), e));
+            token_entries.push(token);
         }
     }
     let udt_json = serde_json::to_string(&token_entries).expect("failed to serialize UDT labels");
@@ -97,14 +194,17 @@ fn main() {
             if path.extension().and_then(|e| e.to_str()) != Some("toml") {
                 continue;
             }
-            if let Ok(content) = fs::read_to_string(&path) {
-                match toml::from_str::<ScriptMetadata>(&content) {
-                    Ok(script) => script_entries.push(script),
-                    Err(e) => {
-                        eprintln!("cargo:warning=failed to parse {}: {}", path.display(), e);
-                    }
-                }
-            }
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
+            let mut script = toml::from_str::<ScriptMetadata>(&content)
+                .unwrap_or_else(|e| panic!("failed to parse {}: {}", path.display(), e));
+            script.metadata_slug = Some(
+                path.file_stem()
+                    .unwrap_or_else(|| panic!("missing file stem for {}", path.display()))
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            script_entries.push(script);
         }
     }
     let script_json =
@@ -134,14 +234,27 @@ fn main() {
             continue;
         }
 
-        for deployment in entry.mainnet.iter().chain(entry.testnet.iter()) {
+        let mainnet_versions = entry
+            .mainnet
+            .as_ref()
+            .map(ScriptNetworkMetadata::versions)
+            .into_iter()
+            .flatten();
+        let testnet_versions = entry
+            .testnet
+            .as_ref()
+            .map(ScriptNetworkMetadata::versions)
+            .into_iter()
+            .flatten();
+
+        for deployment in mainnet_versions.chain(testnet_versions) {
             if deployment.deprecated {
                 continue;
             }
-            if !deployment.code_hash.is_empty()
-                && !excluded_udt_code_hashes.contains(deployment.code_hash.as_str())
+            if !deployment.canonical_ref_hash.is_empty()
+                && !excluded_udt_code_hashes.contains(deployment.canonical_ref_hash.as_str())
             {
-                udt_script_code_hashes.push(deployment.code_hash.clone());
+                udt_script_code_hashes.push(deployment.canonical_ref_hash.clone());
             }
         }
     }
