@@ -271,8 +271,8 @@ pub struct SporeDobDecodeResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dna_hex: Option<String>,
     pub traits: Vec<DobTraitResponse>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub svg_markup: Option<String>,
+    #[serde(default)]
+    pub media: Vec<ckbadger_store::DecodedMedia>,
     pub issues: Vec<String>,
 }
 
@@ -1136,7 +1136,7 @@ async fn decode_spore(
                 content_type,
                 dna_hex: None,
                 traits,
-                svg_markup: entry.svg_markup,
+                media: entry.media,
                 issues: Vec::new(),
             })
         }
@@ -1146,7 +1146,7 @@ async fn decode_spore(
             content_type,
             dna_hex: None,
             traits: Vec::new(),
-            svg_markup: None,
+            media: vec![],
             issues: vec![
                 "DOB decode pending — background worker has not processed this spore yet"
                     .to_string(),

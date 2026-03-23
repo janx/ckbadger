@@ -336,6 +336,23 @@ pub struct SporeMediaSource {
     pub dependency_tier: CompositionTier,
 }
 
+/// A single media artifact produced by DOB decoding, stored as a content-addressed
+/// filesystem blob. The `hash` field doubles as the blob filename.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecodedMedia {
+    /// MIME type of the media (e.g. "image/svg+xml").
+    pub media_type: String,
+    /// Semantic role (e.g. "render", "thumbnail"), if applicable.
+    pub role: Option<String>,
+    /// Byte size of the blob.
+    pub size: u64,
+    /// Blake2b content hash (hex-encoded), also the blob filename.
+    pub hash: String,
+    /// Decode chain step index that produced this artifact, if applicable.
+    pub step: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SporeMediaProfile {
@@ -354,8 +371,9 @@ pub struct SporeMediaProfile {
 pub struct DobDecodedEntry {
     /// Flattened trait name->value pairs.
     pub traits: Vec<DobDecodedTrait>,
-    /// SVG markup from DOB/1 rendering, if any.
-    pub svg_markup: Option<String>,
+    /// Media artifacts produced by decoding, stored as content-addressed blobs.
+    #[serde(default)]
+    pub media: Vec<DecodedMedia>,
     /// Media sources extracted from decoded trait values.
     pub media_sources: Vec<SporeMediaSource>,
     /// Epoch timestamp when this was decoded.

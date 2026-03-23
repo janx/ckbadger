@@ -5435,7 +5435,13 @@ async fn test_spore_decode_endpoint_returns_decoded_from_cache() {
                 value: "11".to_string(),
             },
         ],
-        svg_markup: Some("<svg><rect fill='red'/></svg>".to_string()),
+        media: vec![ckbadger_store::DecodedMedia {
+            media_type: "image/svg+xml".to_string(),
+            role: Some("render".to_string()),
+            size: 29,
+            hash: "abc123".to_string(),
+            step: None,
+        }],
         media_sources: vec![],
         decoded_at: 1700000000,
     };
@@ -5464,7 +5470,12 @@ async fn test_spore_decode_endpoint_returns_decoded_from_cache() {
     assert_eq!(traits[0]["value"], "red");
     assert_eq!(traits[1]["name"], "Level");
     assert_eq!(traits[1]["value"], "11");
-    assert_eq!(json["svgMarkup"], "<svg><rect fill='red'/></svg>");
+    let media = json["media"].as_array().unwrap();
+    assert_eq!(media.len(), 1);
+    assert_eq!(media[0]["mediaType"], "image/svg+xml");
+    assert_eq!(media[0]["role"], "render");
+    assert_eq!(media[0]["size"], 29);
+    assert_eq!(media[0]["hash"], "abc123");
     assert!(json["issues"].as_array().unwrap().is_empty());
 }
 

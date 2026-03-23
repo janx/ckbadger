@@ -199,7 +199,7 @@ impl DobDecodeWorker {
 
                 // Update media profiles (sequential — may touch same cluster aggregate)
                 for (spore_id, entry) in &decoded_results {
-                    let has_renderable_image = entry.svg_markup.is_some();
+                    let has_renderable_image = !entry.media.is_empty();
                     if !entry.media_sources.is_empty() || has_renderable_image {
                         if let Err(e) = self.update_spore_media_profile(
                             spore_id,
@@ -512,16 +512,9 @@ async fn decode_single_spore(
     // Extract media sources from decoded trait values
     let media_sources = extract_media_sources_from_traits(&decoded.traits);
 
-    // Check if any SVG markup was produced (DOB/1 rendering)
-    let svg_markup = if decoded.raw_output.to_ascii_lowercase().contains("<svg") {
-        Some(decoded.raw_output.clone())
-    } else {
-        None
-    };
-
     Ok(DobDecodedEntry {
         traits,
-        svg_markup,
+        media: vec![],
         media_sources,
         decoded_at: chrono::Utc::now().timestamp(),
     })
