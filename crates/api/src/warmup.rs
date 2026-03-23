@@ -10,7 +10,7 @@ use crate::utils::{
     resolve_nft_collection_name,
 };
 use crate::AppState;
-use ckbadger_common::BackgroundTaskState;
+use ckbadger_common::{BackgroundTaskKind, BackgroundTaskState};
 use ckbadger_store::AddressBalance;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
@@ -204,16 +204,68 @@ fn resolve_composition_tier(
     "unknown".to_string()
 }
 
+fn set_api_cache_refresh_startup(entry: &mut ckbadger_common::BackgroundTaskEntry) {
+    entry.kind = BackgroundTaskKind::Watcher;
+    entry.state = BackgroundTaskState::Waiting;
+    entry.started_at = None;
+    entry.message = Some("Waiting for first refresh".to_string());
+    entry.last_trigger_reason = Some("startup".to_string());
+    entry.error = None;
+}
+
+fn set_api_cache_refresh_cycle_start(entry: &mut ckbadger_common::BackgroundTaskEntry) {
+    entry.kind = BackgroundTaskKind::Watcher;
+    entry.state = BackgroundTaskState::Running;
+    entry.started_at = Some(chrono::Utc::now().timestamp());
+    entry.message = Some("Refreshing API caches".to_string());
+    entry.progress_current = None;
+    entry.progress_total = None;
+    entry.rate = None;
+    entry.eta_seconds = None;
+    entry.elapsed_ms = None;
+    entry.last_trigger_reason = Some("new_tip".to_string());
+    entry.error = None;
+}
+
+fn set_api_cache_refresh_idle(entry: &mut ckbadger_common::BackgroundTaskEntry, reason: &str) {
+    entry.kind = BackgroundTaskKind::Watcher;
+    entry.state = BackgroundTaskState::Waiting;
+    entry.message = Some("Idle".to_string());
+    entry.last_trigger_reason = Some(reason.to_string());
+    entry.error = None;
+}
+
+fn set_api_cache_refresh_success(
+    entry: &mut ckbadger_common::BackgroundTaskEntry,
+    elapsed_ms: f64,
+    now_ts: i64,
+) {
+    set_api_cache_refresh_idle(entry, "new_tip");
+    entry.elapsed_ms = Some(elapsed_ms);
+    entry.last_success_at = Some(now_ts);
+}
+
+fn set_api_cache_refresh_failure(
+    entry: &mut ckbadger_common::BackgroundTaskEntry,
+    elapsed_ms: f64,
+    error: String,
+) {
+    entry.kind = BackgroundTaskKind::Watcher;
+    entry.state = BackgroundTaskState::Failed;
+    entry.message = Some("Refresh failed".to_string());
+    entry.last_trigger_reason = Some("new_tip".to_string());
+    entry.elapsed_ms = Some(elapsed_ms);
+    entry.error = Some(error);
+}
+
 /// Background loop that refreshes the assets cache every 30 seconds.
 /// Skips the refresh cycle when the sync tip block number hasn't changed
 /// since the last successful refresh, avoiding wasteful CF scans when idle.
 pub async fn refresh_assets_cache_loop(state: Arc<AppState>) {
     let mut last_refreshed_tip: i64 = -1;
 
-    state.update_background_task("assets_refresh", |entry| {
-        entry.state = BackgroundTaskState::Running;
-        entry.started_at = Some(chrono::Utc::now().timestamp());
-        entry.message = Some("Assets refresh loop started".to_string());
+    state.update_background_task("api_cache_refresh", |entry| {
+        set_api_cache_refresh_startup(entry);
     });
 
     loop {
@@ -225,9 +277,16 @@ pub async fn refresh_assets_cache_loop(state: Arc<AppState>) {
 
         if current_tip == last_refreshed_tip {
             tracing::trace!("Warmup: tip unchanged at {}, skipping refresh", current_tip);
+            state.update_background_task("api_cache_refresh", |entry| {
+                set_api_cache_refresh_idle(entry, "tip_unchanged");
+            });
             tokio::time::sleep(Duration::from_secs(30)).await;
             continue;
         }
+
+        state.update_background_task("api_cache_refresh", |entry| {
+            set_api_cache_refresh_cycle_start(entry);
+        });
 
         let cycle_start = std::time::Instant::now();
         let state_clone = state.clone();
@@ -240,25 +299,28 @@ pub async fn refresh_assets_cache_loop(state: Arc<AppState>) {
             Ok(Ok(())) => {
                 last_refreshed_tip = current_tip;
                 tracing::debug!("Assets cache refreshed at tip {}", current_tip);
-                state.update_background_task("assets_refresh", |entry| {
-                    entry.elapsed_ms = Some(cycle_elapsed_ms);
-                    entry.message =
-                        Some(format!("Last refresh: {:.1}s", cycle_elapsed_ms / 1000.0));
-                    entry.error = None;
+                state.update_background_task("api_cache_refresh", |entry| {
+                    set_api_cache_refresh_success(
+                        entry,
+                        cycle_elapsed_ms,
+                        chrono::Utc::now().timestamp(),
+                    );
                 });
             }
             Ok(Err(e)) => {
                 tracing::warn!("Assets cache refresh failed: {}", e);
-                state.update_background_task("assets_refresh", |entry| {
-                    entry.elapsed_ms = Some(cycle_elapsed_ms);
-                    entry.error = Some(e.to_string());
+                state.update_background_task("api_cache_refresh", |entry| {
+                    set_api_cache_refresh_failure(entry, cycle_elapsed_ms, e.to_string());
                 });
             }
             Err(e) => {
                 tracing::warn!("Assets cache refresh task panicked: {}", e);
-                state.update_background_task("assets_refresh", |entry| {
-                    entry.elapsed_ms = Some(cycle_elapsed_ms);
-                    entry.error = Some(format!("task panicked: {}", e));
+                state.update_background_task("api_cache_refresh", |entry| {
+                    set_api_cache_refresh_failure(
+                        entry,
+                        cycle_elapsed_ms,
+                        format!("task panicked: {}", e),
+                    );
                 });
             }
         }
@@ -769,6 +831,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
 
 pub async fn warmup_assets_cache_once(state: Arc<AppState>) -> anyhow::Result<()> {
     state.update_background_task("cache_warmup", |entry| {
+        entry.kind = BackgroundTaskKind::Job;
         entry.state = BackgroundTaskState::Running;
         entry.started_at = Some(chrono::Utc::now().timestamp());
         entry.message = Some("Warming up asset caches...".to_string());
@@ -841,6 +904,7 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
     // Total chart types: 2 materialized + 10 async = 12
     let chart_start = std::time::Instant::now();
     state.update_background_task("chart_warmup", |entry| {
+        entry.kind = BackgroundTaskKind::Job;
         entry.state = BackgroundTaskState::Running;
         entry.started_at = Some(chrono::Utc::now().timestamp());
         entry.message = Some("Warming up chart caches...".to_string());
@@ -1028,10 +1092,29 @@ async fn warmup_secondary_issuance(state: &AppState) -> Result<(), String> {
 mod tests {
     use super::*;
     use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
+    use ckbadger_common::{BackgroundTaskEntry, BackgroundTaskKind};
 
     fn compact_to_difficulty(compact: i64) -> u64 {
         let difficulty = ckb_compact_to_difficulty(compact as u32);
         difficulty.to_string().parse::<u64>().unwrap_or(u64::MAX)
+    }
+
+    fn background_entry(name: &str) -> BackgroundTaskEntry {
+        BackgroundTaskEntry {
+            name: name.to_string(),
+            kind: BackgroundTaskKind::Job,
+            state: BackgroundTaskState::Waiting,
+            message: Some("placeholder".to_string()),
+            progress_current: Some(1),
+            progress_total: Some(2),
+            rate: Some(3.0),
+            eta_seconds: Some(4.0),
+            started_at: Some(5),
+            elapsed_ms: Some(6.0),
+            last_success_at: Some(7),
+            last_trigger_reason: Some("old-trigger".to_string()),
+            error: Some("old-error".to_string()),
+        }
     }
 
     #[test]
@@ -1089,5 +1172,76 @@ mod tests {
         assert_eq!(entry.live_cells_count, 3);
         assert_eq!(entry.transactions_count, 9);
         assert_eq!(entry.last_activity_block, 100);
+    }
+
+    #[test]
+    fn test_api_cache_refresh_startup_marks_waiting_watcher() {
+        let mut entry = background_entry("api_cache_refresh");
+        set_api_cache_refresh_startup(&mut entry);
+
+        assert_eq!(entry.kind, BackgroundTaskKind::Watcher);
+        assert_eq!(entry.state, BackgroundTaskState::Waiting);
+        assert_eq!(entry.message.as_deref(), Some("Waiting for first refresh"));
+        assert_eq!(entry.last_trigger_reason.as_deref(), Some("startup"));
+        assert_eq!(entry.error, None);
+        assert_eq!(entry.started_at, None);
+    }
+
+    #[test]
+    fn test_api_cache_refresh_cycle_start_marks_running_watcher() {
+        let mut entry = background_entry("api_cache_refresh");
+        set_api_cache_refresh_cycle_start(&mut entry);
+
+        assert_eq!(entry.kind, BackgroundTaskKind::Watcher);
+        assert_eq!(entry.state, BackgroundTaskState::Running);
+        assert_eq!(entry.message.as_deref(), Some("Refreshing API caches"));
+        assert_eq!(entry.last_trigger_reason.as_deref(), Some("new_tip"));
+        assert_eq!(entry.error, None);
+        assert!(entry.started_at.is_some());
+        assert_eq!(entry.elapsed_ms, None);
+        assert_eq!(entry.progress_current, None);
+        assert_eq!(entry.progress_total, None);
+        assert_eq!(entry.rate, None);
+        assert_eq!(entry.eta_seconds, None);
+    }
+
+    #[test]
+    fn test_api_cache_refresh_success_returns_to_waiting_and_records_last_success() {
+        let mut entry = background_entry("api_cache_refresh");
+        set_api_cache_refresh_success(&mut entry, 4321.0, 1_711_111_111);
+
+        assert_eq!(entry.kind, BackgroundTaskKind::Watcher);
+        assert_eq!(entry.state, BackgroundTaskState::Waiting);
+        assert_eq!(entry.message.as_deref(), Some("Idle"));
+        assert_eq!(entry.elapsed_ms, Some(4321.0));
+        assert_eq!(entry.last_success_at, Some(1_711_111_111));
+        assert_eq!(entry.last_trigger_reason.as_deref(), Some("new_tip"));
+        assert_eq!(entry.error, None);
+    }
+
+    #[test]
+    fn test_api_cache_refresh_tip_unchanged_stays_waiting_with_idle_message() {
+        let mut entry = background_entry("api_cache_refresh");
+        set_api_cache_refresh_idle(&mut entry, "tip_unchanged");
+
+        assert_eq!(entry.kind, BackgroundTaskKind::Watcher);
+        assert_eq!(entry.state, BackgroundTaskState::Waiting);
+        assert_eq!(entry.message.as_deref(), Some("Idle"));
+        assert_eq!(entry.last_trigger_reason.as_deref(), Some("tip_unchanged"));
+        assert_eq!(entry.error, None);
+        assert_eq!(entry.elapsed_ms, Some(6.0));
+    }
+
+    #[test]
+    fn test_api_cache_refresh_failure_marks_failed_and_keeps_cycle_duration() {
+        let mut entry = background_entry("api_cache_refresh");
+        set_api_cache_refresh_failure(&mut entry, 987.5, "rpc timeout".to_string());
+
+        assert_eq!(entry.kind, BackgroundTaskKind::Watcher);
+        assert_eq!(entry.state, BackgroundTaskState::Failed);
+        assert_eq!(entry.message.as_deref(), Some("Refresh failed"));
+        assert_eq!(entry.elapsed_ms, Some(987.5));
+        assert_eq!(entry.error.as_deref(), Some("rpc timeout"));
+        assert_eq!(entry.last_trigger_reason.as_deref(), Some("new_tip"));
     }
 }

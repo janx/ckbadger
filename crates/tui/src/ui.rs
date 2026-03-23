@@ -1,7 +1,7 @@
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, TimeZone};
 use ckbadger_common::{
-    format_duration_smart, BackgroundTaskEntry, BackgroundTaskState, BulkBuildProgressData,
-    MemoryStatsData,
+    format_duration_smart, BackgroundTaskEntry, BackgroundTaskKind, BackgroundTaskState,
+    BulkBuildProgressData, MemoryStatsData,
 };
 use ckbadger_store::{APPEND_CFS, DOMAIN_CFS};
 use ratatui::{
@@ -11,6 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap},
     Frame,
 };
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -3189,16 +3190,170 @@ fn visible_background_tasks(tasks: &[BackgroundTaskEntry]) -> Vec<&BackgroundTas
         .collect()
 }
 
-fn build_task_row(task: &BackgroundTaskEntry) -> Row<'static> {
-    let name_cell = Cell::from(task.name.clone());
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BackgroundTaskSummary {
+    active: usize,
+    idle: usize,
+    failed: usize,
+}
 
-    let (state_text, state_color) = match task.state {
-        BackgroundTaskState::Waiting => ("Waiting", Color::DarkGray),
-        BackgroundTaskState::Running => ("Running", TERMINAL_GREEN),
-        BackgroundTaskState::Completed => ("Completed", CYAN),
-        BackgroundTaskState::Failed => ("Failed", ERROR_RED),
+fn summarize_background_tasks(tasks: &[BackgroundTaskEntry]) -> BackgroundTaskSummary {
+    let mut summary = BackgroundTaskSummary {
+        active: 0,
+        idle: 0,
+        failed: 0,
     };
-    let state_cell = Cell::from(Span::styled(state_text, Style::default().fg(state_color)));
+
+    for task in tasks {
+        match task.state {
+            BackgroundTaskState::Running => summary.active += 1,
+            BackgroundTaskState::Failed => summary.failed += 1,
+            BackgroundTaskState::Waiting if task.kind == BackgroundTaskKind::Watcher => {
+                summary.idle += 1
+            }
+            BackgroundTaskState::Waiting => {}
+            BackgroundTaskState::Completed => {}
+        }
+    }
+
+    summary
+}
+
+fn desired_background_task_table_height(rows: usize) -> u16 {
+    if rows == 0 {
+        0
+    } else {
+        3 + rows as u16
+    }
+}
+
+fn background_task_section_heights(
+    total_height: u16,
+    jobs_rows: usize,
+    watchers_rows: usize,
+) -> (u16, u16, u16) {
+    if total_height == 0 {
+        return (0, 0, 0);
+    }
+
+    let summary_h = 1;
+    let mut remaining = total_height.saturating_sub(summary_h);
+    let jobs_target = desired_background_task_table_height(jobs_rows);
+    let watchers_target = desired_background_task_table_height(watchers_rows);
+
+    match (jobs_target > 0, watchers_target > 0) {
+        (false, false) => (summary_h, 0, 0),
+        (true, false) => (summary_h, jobs_target.min(remaining), 0),
+        (false, true) => (summary_h, 0, watchers_target.min(remaining)),
+        (true, true) => {
+            let min_each = 3;
+            let (mut jobs_h, mut watchers_h);
+
+            if remaining >= min_each * 2 {
+                jobs_h = min_each;
+                watchers_h = min_each;
+                remaining -= min_each * 2;
+            } else {
+                jobs_h = remaining / 2 + remaining % 2;
+                watchers_h = remaining / 2;
+                remaining = 0;
+            }
+
+            while remaining > 0 {
+                if jobs_h < jobs_target {
+                    jobs_h += 1;
+                    remaining -= 1;
+                    if remaining == 0 {
+                        break;
+                    }
+                }
+                if watchers_h < watchers_target {
+                    watchers_h += 1;
+                    remaining -= 1;
+                    if remaining == 0 {
+                        break;
+                    }
+                }
+                if jobs_h >= jobs_target && watchers_h >= watchers_target {
+                    break;
+                }
+            }
+
+            (summary_h, jobs_h, watchers_h)
+        }
+    }
+}
+
+fn split_background_tasks(
+    tasks: &[BackgroundTaskEntry],
+) -> (Vec<&BackgroundTaskEntry>, Vec<&BackgroundTaskEntry>) {
+    let mut jobs = Vec::new();
+    let mut watchers = Vec::new();
+
+    for task in tasks {
+        match task.kind {
+            BackgroundTaskKind::Job => jobs.push(task),
+            BackgroundTaskKind::Watcher => watchers.push(task),
+        }
+    }
+
+    (jobs, watchers)
+}
+
+fn background_task_display_name(task: &BackgroundTaskEntry) -> Cow<'static, str> {
+    match task.name.as_str() {
+        "dob_decode" => Cow::Borrowed("DOB Decode"),
+        "cache_warmup" => Cow::Borrowed("Cache Warmup"),
+        "chart_warmup" => Cow::Borrowed("Chart Warmup"),
+        "api_cache_refresh" => Cow::Borrowed("API Cache Refresh"),
+        _ => Cow::Owned(task.name.clone()),
+    }
+}
+
+fn background_task_state_label(task: &BackgroundTaskEntry) -> &'static str {
+    match (task.kind, task.state) {
+        (BackgroundTaskKind::Watcher, BackgroundTaskState::Waiting) => "Idle",
+        (BackgroundTaskKind::Watcher, BackgroundTaskState::Running) => "Refreshing",
+        (_, BackgroundTaskState::Waiting) => "Waiting",
+        (_, BackgroundTaskState::Running) => "Running",
+        (_, BackgroundTaskState::Completed) => "Completed",
+        (_, BackgroundTaskState::Failed) => "Failed",
+    }
+}
+
+fn background_task_state_color(task: &BackgroundTaskEntry) -> Color {
+    match task.state {
+        BackgroundTaskState::Waiting => Color::DarkGray,
+        BackgroundTaskState::Running => TERMINAL_GREEN,
+        BackgroundTaskState::Completed => CYAN,
+        BackgroundTaskState::Failed => ERROR_RED,
+    }
+}
+
+fn background_task_sort_rank(state: BackgroundTaskState) -> u8 {
+    match state {
+        BackgroundTaskState::Failed => 0,
+        BackgroundTaskState::Running => 1,
+        BackgroundTaskState::Waiting => 2,
+        BackgroundTaskState::Completed => 3,
+    }
+}
+
+fn sort_background_tasks(tasks: &mut Vec<&BackgroundTaskEntry>) {
+    tasks.sort_by(|a, b| {
+        background_task_sort_rank(a.state)
+            .cmp(&background_task_sort_rank(b.state))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+}
+
+fn build_job_task_row(task: &BackgroundTaskEntry) -> Row<'static> {
+    let name_cell = Cell::from(background_task_display_name(task).into_owned());
+
+    let state_cell = Cell::from(Span::styled(
+        background_task_state_label(task),
+        Style::default().fg(background_task_state_color(task)),
+    ));
 
     // C1: Failed state displays truncated error message
     let progress_text = match (task.progress_current, task.progress_total) {
@@ -3255,13 +3410,105 @@ fn build_task_row(task: &BackgroundTaskEntry) -> Row<'static> {
     }
 }
 
+fn background_task_last_result(task: &BackgroundTaskEntry) -> String {
+    if task.state == BackgroundTaskState::Failed {
+        return task
+            .error
+            .as_deref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "Failed".to_string());
+    }
+
+    if task.state == BackgroundTaskState::Running {
+        return "In progress".to_string();
+    }
+
+    if task.last_success_at.is_some() {
+        return match task.elapsed_ms {
+            Some(ms) if (0.0..1000.0).contains(&ms) => format!("ok {:.0}ms", ms),
+            Some(ms) if ms >= 1000.0 => format!("ok {}", format_duration_smart(ms / 1000.0)),
+            _ => "ok".to_string(),
+        };
+    }
+
+    "\u{2014}".to_string()
+}
+
+fn format_background_task_timestamp(ts: Option<i64>) -> String {
+    ts.and_then(|t| Local.timestamp_opt(t, 0).single())
+        .map(|dt| dt.format("%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "\u{2014}".to_string())
+}
+
+fn build_watcher_task_row(task: &BackgroundTaskEntry) -> Row<'static> {
+    let name_cell = Cell::from(background_task_display_name(task).into_owned());
+    let state_cell = Cell::from(Span::styled(
+        background_task_state_label(task),
+        Style::default().fg(background_task_state_color(task)),
+    ));
+    let result_cell = Cell::from(background_task_last_result(task));
+    let success_cell = Cell::from(format_background_task_timestamp(task.last_success_at));
+    let trigger_cell = Cell::from(
+        task.last_trigger_reason
+            .as_deref()
+            .unwrap_or("\u{2014}")
+            .to_string(),
+    );
+
+    let row = Row::new(vec![
+        name_cell,
+        state_cell,
+        result_cell,
+        success_cell,
+        trigger_cell,
+    ]);
+    if task.state == BackgroundTaskState::Waiting {
+        row.style(Style::default().fg(Color::DarkGray))
+    } else {
+        row
+    }
+}
+
 fn draw_background_tasks(f: &mut Frame, app: &App, area: Rect) {
-    let visible = visible_background_tasks(&app.background_tasks);
-    if visible.is_empty() {
+    let visible_refs = visible_background_tasks(&app.background_tasks);
+    if visible_refs.is_empty() || area.height == 0 {
         return;
     }
 
-    let header = Row::new(vec![
+    let visible: Vec<BackgroundTaskEntry> = visible_refs.iter().map(|t| (*t).clone()).collect();
+    let summary = summarize_background_tasks(&visible);
+    let (mut jobs, mut watchers) = split_background_tasks(&visible);
+    sort_background_tasks(&mut jobs);
+    sort_background_tasks(&mut watchers);
+
+    let (summary_height, jobs_height, watchers_height) =
+        background_task_section_heights(area.height, jobs.len(), watchers.len());
+    if summary_height == 0 {
+        return;
+    }
+
+    let mut constraints = vec![Constraint::Length(summary_height)];
+    if jobs_height > 0 {
+        constraints.push(Constraint::Length(jobs_height));
+    }
+    if watchers_height > 0 {
+        constraints.push(Constraint::Length(watchers_height));
+    }
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area);
+
+    let summary_line = format!(
+        "{} active · {} idle · {} failed",
+        summary.active, summary.idle, summary.failed
+    );
+    f.render_widget(
+        Paragraph::new(summary_line).style(Style::default().fg(SLATE_500)),
+        chunks[0],
+    );
+
+    let jobs_header = Row::new(vec![
         Cell::from(Span::styled(
             "Task",
             Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
@@ -3279,45 +3526,92 @@ fn draw_background_tasks(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
         )),
         Cell::from(Span::styled(
-            "Elapsed",
+            "ETA/Elapsed",
             Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
         )),
     ]);
 
-    let rows: Vec<Row<'static>> = visible.iter().map(|t| build_task_row(t)).collect();
+    let jobs_rows: Vec<Row<'static>> = jobs.iter().map(|t| build_job_task_row(t)).collect();
+    let watcher_header = Row::new(vec![
+        Cell::from(Span::styled(
+            "Task",
+            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+        )),
+        Cell::from(Span::styled(
+            "State",
+            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+        )),
+        Cell::from(Span::styled(
+            "Last Result",
+            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+        )),
+        Cell::from(Span::styled(
+            "Last Success",
+            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+        )),
+        Cell::from(Span::styled(
+            "Trigger",
+            Style::default().fg(SLATE_500).add_modifier(Modifier::BOLD),
+        )),
+    ]);
+    let watcher_rows: Vec<Row<'static>> =
+        watchers.iter().map(|t| build_watcher_task_row(t)).collect();
 
-    let widths = [
+    let jobs_widths = [
         Constraint::Length(16),
         Constraint::Length(11),
         Constraint::Length(14),
         Constraint::Length(9),
-        Constraint::Length(10),
+        Constraint::Length(13),
+    ];
+    let watcher_widths = [
+        Constraint::Length(16),
+        Constraint::Length(11),
+        Constraint::Length(17),
+        Constraint::Length(14),
+        Constraint::Min(12),
     ];
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(SLATE_800))
-                .title(Span::styled(
-                    " Background Tasks ",
-                    Style::default().fg(FOREGROUND),
-                )),
-        )
-        .style(Style::default().fg(FOREGROUND));
+    let mut idx = 1;
+    if jobs_height > 0 {
+        let jobs_table = Table::new(jobs_rows, jobs_widths)
+            .header(jobs_header)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(SLATE_800))
+                    .title(Span::styled(" Jobs ", Style::default().fg(FOREGROUND))),
+            )
+            .style(Style::default().fg(FOREGROUND));
+        f.render_widget(jobs_table, chunks[idx]);
+        idx += 1;
+    }
 
-    f.render_widget(table, area);
+    if watchers_height > 0 {
+        let watcher_table = Table::new(watcher_rows, watcher_widths)
+            .header(watcher_header)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(SLATE_800))
+                    .title(Span::styled(" Watchers ", Style::default().fg(FOREGROUND))),
+            )
+            .style(Style::default().fg(FOREGROUND));
+        f.render_widget(watcher_table, chunks[idx]);
+    }
 }
 
 /// Height needed for the background tasks section (0 if hidden).
 fn background_tasks_height(app: &App) -> u16 {
-    let visible = visible_background_tasks(&app.background_tasks);
-    if visible.is_empty() {
+    let visible_refs = visible_background_tasks(&app.background_tasks);
+    if visible_refs.is_empty() {
         0
     } else {
-        // 2 for borders + 1 for header + 1 per task row
-        (2 + 1 + visible.len() as u16).min(10)
+        let visible: Vec<BackgroundTaskEntry> = visible_refs.iter().map(|t| (*t).clone()).collect();
+        let (jobs, watchers) = split_background_tasks(&visible);
+        let (summary_h, jobs_h, watchers_h) =
+            background_task_section_heights(18, jobs.len(), watchers.len());
+        summary_h + jobs_h + watchers_h
     }
 }
 
@@ -5329,27 +5623,33 @@ fn draw_system_params_compact(
 #[cfg(test)]
 mod tests {
     use super::{
-        adaptive_control_lines, adaptive_state_label, api_health_state, build_batch_left_column,
-        build_finalize_left_column, bulk_queue_indicator_line, chart_height_warning,
-        compact_overview_layout, consumed_cells_source_color, consumed_cells_source_label,
-        dense_right_lines, detail_right_lines, diagnostics_dense_panel, direct_io_reads_label,
-        disk_pressure_lines, eta_confidence_label, footer_hint_line, footer_status_message,
-        format_age_secs, format_num, format_num_commas, format_num_compact, format_rate_expanded,
-        format_signed_num_i128, format_stage_commit_gap_ms, header_right_line, header_title_line,
-        heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
+        adaptive_control_lines, adaptive_state_label, api_health_state,
+        background_task_last_result, background_task_section_heights, background_task_state_label,
+        build_batch_left_column, build_finalize_left_column, bulk_queue_indicator_line,
+        chart_height_warning, compact_overview_layout, consumed_cells_source_color,
+        consumed_cells_source_label, dense_right_lines, detail_right_lines,
+        diagnostics_dense_panel, direct_io_reads_label, disk_pressure_lines, eta_confidence_label,
+        footer_hint_line, footer_status_message, format_age_secs, format_num, format_num_commas,
+        format_num_compact, format_rate_expanded, format_signed_num_i128,
+        format_stage_commit_gap_ms, header_right_line, header_title_line, heartbeat_is_on,
+        io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
         overview_log_min_height, overview_services_min_height, percentile_from_history,
         pipeline_bottleneck, pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state,
-        runtime_live_delta, service_log_tails_line, sparkline, stale_age_secs, stale_status,
-        startup_phase_label, storage_pressure_l0_line, storage_pressure_wbm_line,
-        storage_runtime_columns, supervisor_services_line, sync_bottleneck, system_kv_line,
-        system_store_path_lines, system_workdir_lines, trend_delta, trim_for_panel,
-        AdaptiveControlSnapshot, App, Color, CompactOverviewLayout, DiagnosticsViewMode,
-        SyncBottleneck, AMBER, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
+        runtime_live_delta, service_log_tails_line, sparkline, split_background_tasks,
+        stale_age_secs, stale_status, startup_phase_label, storage_pressure_l0_line,
+        storage_pressure_wbm_line, storage_runtime_columns, summarize_background_tasks,
+        supervisor_services_line, sync_bottleneck, system_kv_line, system_store_path_lines,
+        system_workdir_lines, trend_delta, trim_for_panel, visible_background_tasks,
+        AdaptiveControlSnapshot, App, BackgroundTaskSummary, Color, CompactOverviewLayout,
+        DiagnosticsViewMode, SyncBottleneck, AMBER, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
     use crate::db::{
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
     };
-    use ckbadger_common::{BulkBuildProgressData, MemoryStatsData};
+    use ckbadger_common::{
+        BackgroundTaskEntry, BackgroundTaskKind, BackgroundTaskState, BulkBuildProgressData,
+        MemoryStatsData,
+    };
     use ratatui::layout::{Constraint, Direction, Layout, Rect};
     use ratatui::text::Line;
     use std::collections::VecDeque;
@@ -5360,6 +5660,189 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>()
+    }
+
+    fn bg_task(
+        name: &str,
+        kind: BackgroundTaskKind,
+        state: BackgroundTaskState,
+    ) -> BackgroundTaskEntry {
+        BackgroundTaskEntry {
+            name: name.to_string(),
+            kind,
+            state,
+            message: None,
+            progress_current: None,
+            progress_total: None,
+            rate: None,
+            eta_seconds: None,
+            started_at: None,
+            elapsed_ms: None,
+            last_success_at: None,
+            last_trigger_reason: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn test_background_task_summary_counts_running_failed_and_idle_watchers() {
+        let tasks = vec![
+            bg_task(
+                "dob_decode",
+                BackgroundTaskKind::Job,
+                BackgroundTaskState::Running,
+            ),
+            bg_task(
+                "cache_warmup",
+                BackgroundTaskKind::Job,
+                BackgroundTaskState::Waiting,
+            ),
+            bg_task(
+                "api_cache_refresh",
+                BackgroundTaskKind::Watcher,
+                BackgroundTaskState::Waiting,
+            ),
+            bg_task(
+                "chart_warmup",
+                BackgroundTaskKind::Job,
+                BackgroundTaskState::Failed,
+            ),
+        ];
+
+        let summary = summarize_background_tasks(&tasks);
+        assert_eq!(
+            summary,
+            BackgroundTaskSummary {
+                active: 1,
+                idle: 1,
+                failed: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn test_partition_background_tasks_separates_jobs_from_watchers() {
+        let tasks = vec![
+            bg_task(
+                "job_a",
+                BackgroundTaskKind::Job,
+                BackgroundTaskState::Running,
+            ),
+            bg_task(
+                "watcher_a",
+                BackgroundTaskKind::Watcher,
+                BackgroundTaskState::Waiting,
+            ),
+            bg_task(
+                "job_b",
+                BackgroundTaskKind::Job,
+                BackgroundTaskState::Completed,
+            ),
+        ];
+
+        let (jobs, watchers) = split_background_tasks(&tasks);
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(watchers.len(), 1);
+        assert_eq!(jobs[0].name, "job_a");
+        assert_eq!(jobs[1].name, "job_b");
+        assert_eq!(watchers[0].name, "watcher_a");
+    }
+
+    #[test]
+    fn test_watcher_waiting_renders_idle_label() {
+        let task = bg_task(
+            "api_cache_refresh",
+            BackgroundTaskKind::Watcher,
+            BackgroundTaskState::Waiting,
+        );
+        assert_eq!(background_task_state_label(&task), "Idle");
+    }
+
+    #[test]
+    fn test_watcher_running_renders_refreshing_label() {
+        let task = bg_task(
+            "api_cache_refresh",
+            BackgroundTaskKind::Watcher,
+            BackgroundTaskState::Running,
+        );
+        assert_eq!(background_task_state_label(&task), "Refreshing");
+    }
+
+    #[test]
+    fn test_completed_jobs_age_out_but_idle_watchers_remain_visible() {
+        let now = chrono::Utc::now().timestamp();
+        let old_completed_job = BackgroundTaskEntry {
+            started_at: Some(now - 900),
+            elapsed_ms: Some(1000.0),
+            ..bg_task(
+                "old_job",
+                BackgroundTaskKind::Job,
+                BackgroundTaskState::Completed,
+            )
+        };
+        let old_idle_watcher = BackgroundTaskEntry {
+            started_at: Some(now - 900),
+            elapsed_ms: Some(1000.0),
+            ..bg_task(
+                "idle_watcher",
+                BackgroundTaskKind::Watcher,
+                BackgroundTaskState::Waiting,
+            )
+        };
+        let old_completed_watcher = BackgroundTaskEntry {
+            started_at: Some(now - 900),
+            elapsed_ms: Some(1000.0),
+            ..bg_task(
+                "completed_watcher",
+                BackgroundTaskKind::Watcher,
+                BackgroundTaskState::Completed,
+            )
+        };
+
+        let tasks = vec![old_completed_job, old_idle_watcher, old_completed_watcher];
+        let visible = visible_background_tasks(&tasks);
+        let names: Vec<&str> = visible.iter().map(|t| t.name.as_str()).collect();
+
+        assert_eq!(names, vec!["idle_watcher"]);
+    }
+
+    #[test]
+    fn test_background_task_section_heights_keep_both_tables_visible_under_cap() {
+        let (summary_h, jobs_h, watchers_h) = background_task_section_heights(18, 20, 20);
+        assert_eq!(summary_h, 1);
+        assert!(jobs_h >= 3, "jobs table should remain visible");
+        assert!(watchers_h >= 3, "watchers table should remain visible");
+        assert_eq!(summary_h + jobs_h + watchers_h, 18);
+    }
+
+    #[test]
+    fn test_background_task_last_result_watcher_success_uses_outcome_not_message() {
+        let watcher = BackgroundTaskEntry {
+            message: Some("Idle".to_string()),
+            last_success_at: Some(1_711_101_000),
+            elapsed_ms: Some(2100.0),
+            ..bg_task(
+                "api_cache_refresh",
+                BackgroundTaskKind::Watcher,
+                BackgroundTaskState::Waiting,
+            )
+        };
+        assert_eq!(background_task_last_result(&watcher), "ok 2s");
+    }
+
+    #[test]
+    fn test_background_task_last_result_watcher_success_subsecond_uses_ms() {
+        let watcher = BackgroundTaskEntry {
+            message: Some("Idle".to_string()),
+            last_success_at: Some(1_711_101_000),
+            elapsed_ms: Some(250.0),
+            ..bg_task(
+                "api_cache_refresh",
+                BackgroundTaskKind::Watcher,
+                BackgroundTaskState::Waiting,
+            )
+        };
+        assert_eq!(background_task_last_result(&watcher), "ok 250ms");
     }
 
     #[test]

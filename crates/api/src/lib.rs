@@ -10,7 +10,9 @@ pub mod warmup;
 pub mod ws;
 
 use axum::{routing::get, Router};
-use ckbadger_common::{BackgroundTaskEntry, BackgroundTaskState, BackgroundTasksData};
+use ckbadger_common::{
+    BackgroundTaskEntry, BackgroundTaskKind, BackgroundTaskState, BackgroundTasksData,
+};
 use ckbadger_store::CkbadgerStore;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -101,6 +103,7 @@ impl AppState {
             None => {
                 data.tasks.push(BackgroundTaskEntry {
                     name: task_name.to_string(),
+                    kind: BackgroundTaskKind::Job,
                     state: BackgroundTaskState::Waiting,
                     message: None,
                     progress_current: None,
@@ -109,6 +112,8 @@ impl AppState {
                     eta_seconds: None,
                     started_at: None,
                     elapsed_ms: None,
+                    last_success_at: None,
+                    last_trigger_reason: None,
                     error: None,
                 });
                 data.tasks.last_mut().unwrap()

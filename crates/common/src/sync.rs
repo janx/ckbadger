@@ -379,12 +379,24 @@ pub enum BackgroundTaskState {
     Failed,
 }
 
+/// Kind of background task lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum BackgroundTaskKind {
+    /// Bounded work item with clear completion.
+    #[default]
+    Job,
+    /// Long-lived watcher that can run repeatedly.
+    Watcher,
+}
+
 /// Status of a single background task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundTaskEntry {
-    /// Stable identifier: "dob_decode", "cache_warmup", "chart_warmup", "assets_refresh".
+    /// Stable identifier: "dob_decode", "cache_warmup", "chart_warmup", "api_cache_refresh".
     pub name: String,
+    #[serde(default)]
+    pub kind: BackgroundTaskKind,
     pub state: BackgroundTaskState,
     /// Human-readable status line.
     pub message: Option<String>,
@@ -398,8 +410,14 @@ pub struct BackgroundTaskEntry {
     pub eta_seconds: Option<f64>,
     /// Unix timestamp when task entered Running state.
     pub started_at: Option<i64>,
-    /// Elapsed wall-clock time in ms since started_at.
+    /// Elapsed wall-clock time in ms for current or most recent execution.
     pub elapsed_ms: Option<f64>,
+    /// Unix timestamp when task most recently completed successfully.
+    #[serde(default)]
+    pub last_success_at: Option<i64>,
+    /// Optional reason for the most recent trigger/start.
+    #[serde(default)]
+    pub last_trigger_reason: Option<String>,
     /// Error message if state is Failed.
     pub error: Option<String>,
 }
@@ -1013,9 +1031,10 @@ mod tests {
     }
 
     #[test]
-    fn test_background_task_entry_bincode_roundtrip() {
+    fn test_background_task_entry_bincode_roundtrip_includes_kind_and_watcher_fields() {
         let entry = BackgroundTaskEntry {
             name: "dob_decode".to_string(),
+            kind: BackgroundTaskKind::Watcher,
             state: BackgroundTaskState::Running,
             message: Some("Processing batch 3".to_string()),
             progress_current: Some(142),
@@ -1024,21 +1043,27 @@ mod tests {
             eta_seconds: Some(92.7),
             started_at: Some(1711100000),
             elapsed_ms: Some(83000.0),
+            last_success_at: Some(1711101000),
+            last_trigger_reason: Some("new_block".to_string()),
             error: None,
         };
         let bytes = bincode::serialize(&entry).unwrap();
         let decoded: BackgroundTaskEntry = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.name, "dob_decode");
+        assert_eq!(decoded.kind, BackgroundTaskKind::Watcher);
         assert_eq!(decoded.state, BackgroundTaskState::Running);
         assert_eq!(decoded.progress_current, Some(142));
         assert_eq!(decoded.progress_total, Some(1283));
+        assert_eq!(decoded.last_success_at, Some(1711101000));
+        assert_eq!(decoded.last_trigger_reason.as_deref(), Some("new_block"));
     }
 
     #[test]
-    fn test_background_tasks_data_json_roundtrip() {
+    fn test_background_tasks_data_json_roundtrip_preserves_kind_and_watcher_fields() {
         let data = BackgroundTasksData {
             tasks: vec![BackgroundTaskEntry {
                 name: "cache_warmup".to_string(),
+                kind: BackgroundTaskKind::Watcher,
                 state: BackgroundTaskState::Completed,
                 message: None,
                 progress_current: None,
@@ -1047,15 +1072,38 @@ mod tests {
                 eta_seconds: None,
                 started_at: Some(1711100000),
                 elapsed_ms: Some(820.0),
+                last_success_at: Some(1711100000),
+                last_trigger_reason: Some("startup".to_string()),
                 error: None,
             }],
             updated_at: 1711100001,
         };
+        let value = serde_json::to_value(&data).unwrap();
+        let task = &value["tasks"][0];
+        assert_eq!(task["kind"], serde_json::json!("Watcher"));
+        assert_eq!(task["lastSuccessAt"], serde_json::json!(1711100000));
+        assert_eq!(task["lastTriggerReason"], serde_json::json!("startup"));
+        assert!(task.get("progressCurrent").is_some()); // camelCase field name
+
         let json = serde_json::to_string(&data).unwrap();
-        assert!(json.contains("\"progressCurrent\"")); // camelCase
         let decoded: BackgroundTasksData = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.tasks.len(), 1);
         assert_eq!(decoded.tasks[0].name, "cache_warmup");
+        assert_eq!(decoded.tasks[0].kind, BackgroundTaskKind::Watcher);
+        assert_eq!(decoded.tasks[0].last_success_at, Some(1711100000));
+        assert_eq!(
+            decoded.tasks[0].last_trigger_reason.as_deref(),
+            Some("startup")
+        );
+    }
+
+    #[test]
+    fn test_background_task_kind_all_variants_serialize() {
+        for kind in [BackgroundTaskKind::Job, BackgroundTaskKind::Watcher] {
+            let bytes = bincode::serialize(&kind).unwrap();
+            let decoded: BackgroundTaskKind = bincode::deserialize(&bytes).unwrap();
+            assert_eq!(decoded, kind);
+        }
     }
 
     #[test]

@@ -14,7 +14,7 @@ use ckbadger_api::routes::api_routes;
 use ckbadger_api::utils::address::compute_script_hash;
 use ckbadger_api::ws::WsManager;
 use ckbadger_api::{create_router, AppConfig, AppState, CleanupPathGuard};
-use ckbadger_common::BackgroundTaskState;
+use ckbadger_common::{BackgroundTaskKind, BackgroundTaskState};
 use ckbadger_indexer::label_import::run_label_import_bundled;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
@@ -9542,10 +9542,14 @@ async fn test_network_stats_includes_api_background_tasks() {
         background_tasks: Arc::new(std::sync::RwLock::new(Default::default())),
     });
 
-    // Register a background task.
-    state.update_background_task("test_task", |entry| {
-        entry.state = BackgroundTaskState::Running;
-        entry.message = Some("Testing".to_string());
+    // Register a watcher-shaped background task.
+    state.update_background_task("api_cache_refresh", |entry| {
+        entry.kind = BackgroundTaskKind::Watcher;
+        entry.state = BackgroundTaskState::Waiting;
+        entry.message = Some("Idle".to_string());
+        entry.elapsed_ms = Some(2100.0);
+        entry.last_success_at = Some(1_711_100_123);
+        entry.last_trigger_reason = Some("tip_unchanged".to_string());
     });
 
     let app = axum::Router::new()
@@ -9568,7 +9572,11 @@ async fn test_network_stats_includes_api_background_tasks() {
         .as_array()
         .expect("apiBackgroundTasks should be an array");
     assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0]["name"], "test_task");
-    assert_eq!(tasks[0]["state"], "Running");
-    assert_eq!(tasks[0]["message"], "Testing");
+    assert_eq!(tasks[0]["name"], "api_cache_refresh");
+    assert_eq!(tasks[0]["kind"], "Watcher");
+    assert_eq!(tasks[0]["state"], "Waiting");
+    assert_eq!(tasks[0]["message"], "Idle");
+    assert_eq!(tasks[0]["elapsedMs"], 2100.0);
+    assert_eq!(tasks[0]["lastSuccessAt"], 1_711_100_123);
+    assert_eq!(tasks[0]["lastTriggerReason"], "tip_unchanged");
 }
