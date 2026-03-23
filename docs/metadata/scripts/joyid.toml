@@ -2,12 +2,14 @@ name = "JoyID"
 description = "An universal Account Protocol for Web3 Mass-adoption."
 website = "https://joy.id/"
 
-[[mainnet]]
-code_hash = "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323"
-data_hash = "0x7e1baf1e2c98959b3b2972b57942cd6977afce520551913a6ff4933037848d0a"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323"
+version_hash = "0x7e1baf1e2c98959b3b2972b57942cd6977afce520551913a6ff4933037848d0a"
+canonical_hash_type = "type"
 
-[[testnet]]
-code_hash = "0xd23761b364210735c19c60561d213fb3beae2fd6172743719eff6920e020baac"
-data_hash = "0xd2c0f2f621a337007e046f0ed65f8fe29112c32a00ea1e43c2f8059fd42ca6d7"
-hash_type = "type"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0xd23761b364210735c19c60561d213fb3beae2fd6172743719eff6920e020baac"
+version_hash = "0xd2c0f2f621a337007e046f0ed65f8fe29112c32a00ea1e43c2f8059fd42ca6d7"
+canonical_hash_type = "type"

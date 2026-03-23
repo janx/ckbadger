@@ -2,12 +2,14 @@ name = "Godwoken ETH Account Lock"
 description = "A layer-2 lock script, ETH account lock is a script that verifies the layer-2 account signature."
 website = "https://github.com/godwokenrises/godwoken/tree/develop/gwos#eth-account-lock"
 
-[[mainnet]]
-code_hash = "0x096df264f38fff07f3acd318995abc2c71ae0e504036fe32bc38d5b6037364d4"
-data_hash = "0x685ae74d35fdbffe2ac08b46c428f89136fd3b10d170f1c0570ddd0b28199235"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x096df264f38fff07f3acd318995abc2c71ae0e504036fe32bc38d5b6037364d4"
+version_hash = "0x685ae74d35fdbffe2ac08b46c428f89136fd3b10d170f1c0570ddd0b28199235"
+canonical_hash_type = "type"
 
-[[testnet]]
-code_hash = "0x07521d0aa8e66ef441ebc31204d86bb23fc83e9edc58c19dbb1b0ebe64336ec0"
-data_hash = "0x685ae74d35fdbffe2ac08b46c428f89136fd3b10d170f1c0570ddd0b28199235"
-hash_type = "type"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x07521d0aa8e66ef441ebc31204d86bb23fc83e9edc58c19dbb1b0ebe64336ec0"
+version_hash = "0x685ae74d35fdbffe2ac08b46c428f89136fd3b10d170f1c0570ddd0b28199235"
+canonical_hash_type = "type"

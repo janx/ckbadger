@@ -2,12 +2,14 @@ name = "Godwoken Challenge Lock"
 description = "When a Godwoken node found that an invalid state exists in the Rollup, the node can send the RollupEnterChallenge action to the Rollup cell and generate a challenging cell."
 website = "https://github.com/godwokenrises/godwoken/tree/develop/gwos#challenge-lock"
 
-[[mainnet]]
-code_hash = "0x628b5f956b46ae27b50819a9ebab79ce5f957e6899ba0c75b8e142de2ed0dcd2"
-data_hash = "0xbaaae1cc39656301d65d2ac8151a21f967b344a18c9d6e967ac0945761401efd"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x628b5f956b46ae27b50819a9ebab79ce5f957e6899ba0c75b8e142de2ed0dcd2"
+version_hash = "0xbaaae1cc39656301d65d2ac8151a21f967b344a18c9d6e967ac0945761401efd"
+canonical_hash_type = "type"
 
-[[testnet]]
-code_hash = "0x5a86c3bf1e8648b6a6f8abe6875720ccf9745ab225b68fa7c195f9d6635dea80"
-data_hash = "0xbaaae1cc39656301d65d2ac8151a21f967b344a18c9d6e967ac0945761401efd"
-hash_type = "type"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x5a86c3bf1e8648b6a6f8abe6875720ccf9745ab225b68fa7c195f9d6635dea80"
+version_hash = "0xbaaae1cc39656301d65d2ac8151a21f967b344a18c9d6e967ac0945761401efd"
+canonical_hash_type = "type"

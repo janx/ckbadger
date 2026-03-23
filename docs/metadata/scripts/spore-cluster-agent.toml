@@ -1,7 +1,7 @@
 name = "Spore Cluster Agent"
 
-[[testnet]]
-code_hash = "0x923e997654b2697ee3f77052cb884e98f28799a4270fd412c3edb8f3987ca622"
-data_hash = "0x923e997654b2697ee3f77052cb884e98f28799a4270fd412c3edb8f3987ca622"
-hash_type = "data1"
-tag = "v2 preview"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x923e997654b2697ee3f77052cb884e98f28799a4270fd412c3edb8f3987ca622"
+version_hash = "0x923e997654b2697ee3f77052cb884e98f28799a4270fd412c3edb8f3987ca622"
+canonical_hash_type = "data1"

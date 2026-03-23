@@ -64,19 +64,134 @@ pub(crate) struct ScriptMetadata {
     #[serde(default)]
     pub disabled: bool,
     #[serde(default)]
-    pub mainnet: Vec<ScriptDeploymentEntry>,
+    pub mainnet: Option<ScriptNetworkMetadata>,
     #[serde(default)]
-    pub testnet: Vec<ScriptDeploymentEntry>,
+    pub testnet: Option<ScriptNetworkMetadata>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct ScriptDeploymentEntry {
-    pub code_hash: String,
+#[serde(try_from = "ScriptNetworkMetadataRaw")]
+pub(crate) struct ScriptNetworkMetadata {
+    pub versions: Vec<ScriptDeploymentEntry>,
+    pub pseudo: Option<PseudoScriptDeployment>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptNetworkMetadataRaw {
     #[serde(default)]
-    pub data_hash: Option<String>,
-    pub hash_type: String,
+    versions: Vec<ScriptDeploymentEntry>,
+    #[serde(default)]
+    pseudo: Option<PseudoScriptDeployment>,
+}
+
+impl TryFrom<ScriptNetworkMetadataRaw> for ScriptNetworkMetadata {
+    type Error = String;
+
+    fn try_from(raw: ScriptNetworkMetadataRaw) -> std::result::Result<Self, Self::Error> {
+        let has_versions = !raw.versions.is_empty();
+        let has_pseudo = raw.pseudo.is_some();
+        match (has_versions, has_pseudo) {
+            (true, false) | (false, true) => Ok(Self {
+                versions: raw.versions,
+                pseudo: raw.pseudo,
+            }),
+            (false, false) => Err(
+                "network metadata must define exactly one of `versions` or `pseudo`".to_string(),
+            ),
+            (true, true) => {
+                Err("network metadata cannot define both `versions` and `pseudo`".to_string())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PseudoScriptDeployment {
+    pub code_hash: String,
+    pub hash_type: ValidatedHashType,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "ScriptDeploymentEntryRaw")]
+pub(crate) struct ScriptDeploymentEntry {
+    pub version_hash: String,
+    pub canonical_ref_hash: String,
+    pub canonical_hash_type: ValidatedHashType,
     #[serde(default)]
     pub deprecated: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptDeploymentEntryRaw {
+    version_hash: String,
+    canonical_ref_hash: String,
+    canonical_hash_type: String,
+    #[serde(default)]
+    deprecated: bool,
+}
+
+impl TryFrom<ScriptDeploymentEntryRaw> for ScriptDeploymentEntry {
+    type Error = String;
+
+    fn try_from(raw: ScriptDeploymentEntryRaw) -> std::result::Result<Self, Self::Error> {
+        Ok(Self {
+            version_hash: raw.version_hash,
+            canonical_ref_hash: raw.canonical_ref_hash,
+            canonical_hash_type: ValidatedHashType::new(
+                raw.canonical_hash_type,
+                "canonical_hash_type",
+            )?,
+            deprecated: raw.deprecated,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ValidatedHashType(String);
+
+impl ValidatedHashType {
+    fn new(value: String, field: &str) -> std::result::Result<Self, String> {
+        match value.as_str() {
+            "data" | "type" | "data1" | "data2" => Ok(Self(value)),
+            _ => Err(format!("invalid {field}: `{value}`")),
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ValidatedHashType {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        ValidatedHashType::new(value, "hash_type").map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ImportDeployment {
+    Version(ScriptDeploymentEntry),
+    Pseudo(PseudoScriptDeployment),
+}
+
+impl ScriptNetworkMetadata {
+    fn import_deployments(&self) -> Vec<ImportDeployment> {
+        if let Some(pseudo) = &self.pseudo {
+            return vec![ImportDeployment::Pseudo(pseudo.clone())];
+        }
+        self.versions
+            .iter()
+            .cloned()
+            .map(ImportDeployment::Version)
+            .collect()
+    }
 }
 
 fn compute_type_hash(deployment: &TokenDeployment) -> Result<Vec<u8>> {
@@ -290,13 +405,46 @@ fn upsert_script_label(
     network: &str,
 ) -> Result<()> {
     // Only import deployments for the configured network.
-    let (active, excluded): (&[ScriptDeploymentEntry], &[ScriptDeploymentEntry]) = match network {
-        "mainnet" => (&script.mainnet, &script.testnet),
-        "testnet" => (&script.testnet, &script.mainnet),
+    let (active, excluded): (Vec<ImportDeployment>, Vec<ImportDeployment>) = match network {
+        "mainnet" => (
+            script
+                .mainnet
+                .as_ref()
+                .map(ScriptNetworkMetadata::import_deployments)
+                .unwrap_or_default(),
+            script
+                .testnet
+                .as_ref()
+                .map(ScriptNetworkMetadata::import_deployments)
+                .unwrap_or_default(),
+        ),
+        "testnet" => (
+            script
+                .testnet
+                .as_ref()
+                .map(ScriptNetworkMetadata::import_deployments)
+                .unwrap_or_default(),
+            script
+                .mainnet
+                .as_ref()
+                .map(ScriptNetworkMetadata::import_deployments)
+                .unwrap_or_default(),
+        ),
         _ => {
-            let all_deployments: Vec<&ScriptDeploymentEntry> =
-                script.mainnet.iter().chain(script.testnet.iter()).collect();
-            for deployment in all_deployments {
+            let all_deployments: Vec<ImportDeployment> = script
+                .mainnet
+                .as_ref()
+                .into_iter()
+                .flat_map(ScriptNetworkMetadata::import_deployments)
+                .chain(
+                    script
+                        .testnet
+                        .as_ref()
+                        .into_iter()
+                        .flat_map(ScriptNetworkMetadata::import_deployments),
+                )
+                .collect();
+            for deployment in &all_deployments {
                 import_single_deployment(store, script, deployment)?;
             }
             return Ok(());
@@ -305,8 +453,12 @@ fn upsert_script_label(
 
     // Clean up entries from the excluded network: clear label fields so they don't
     // appear in name-based queries. Preserves indexer-maintained usage stats.
-    for deployment in excluded {
-        if let Ok(code_hash) = decode_hex(&deployment.code_hash) {
+    for deployment in &excluded {
+        let code_hash_hex = match deployment {
+            ImportDeployment::Version(version) => &version.canonical_ref_hash,
+            ImportDeployment::Pseudo(pseudo) => &pseudo.code_hash,
+        };
+        if let Ok(code_hash) = decode_hex(code_hash_hex) {
             if let Ok(Some(mut info)) = store.get_script_info(&code_hash) {
                 if info.name.as_deref() == Some(&script.name) {
                     info.name = None;
@@ -317,8 +469,8 @@ fn upsert_script_label(
                 }
             }
         }
-        if let Some(dh) = &deployment.data_hash {
-            if let Ok(data_hash) = decode_hex(dh) {
+        if let ImportDeployment::Version(version) = deployment {
+            if let Ok(data_hash) = decode_hex(&version.version_hash) {
                 let is_zero_data = data_hash.iter().all(|&b| b == 0);
                 if !is_zero_data {
                     if let Ok(Some(mut version_info)) = store.get_script_version(&data_hash) {
@@ -337,7 +489,7 @@ fn upsert_script_label(
         }
     }
 
-    for deployment in active {
+    for deployment in &active {
         import_single_deployment(store, script, deployment)?;
     }
     Ok(())
@@ -346,10 +498,17 @@ fn upsert_script_label(
 fn import_single_deployment(
     store: &CkbadgerStore,
     script: &ScriptMetadata,
-    deployment: &ScriptDeploymentEntry,
+    deployment: &ImportDeployment,
 ) -> Result<()> {
-    let code_hash = decode_hex(&deployment.code_hash)?;
-    let deployment_hash_type = ScriptParser::parse_hash_type(&deployment.hash_type);
+    let (code_hash_hex, hash_type) = match deployment {
+        ImportDeployment::Version(version) => (
+            version.canonical_ref_hash.as_str(),
+            version.canonical_hash_type.as_str(),
+        ),
+        ImportDeployment::Pseudo(pseudo) => (pseudo.code_hash.as_str(), pseudo.hash_type.as_str()),
+    };
+    let code_hash = decode_hex(code_hash_hex)?;
+    let deployment_hash_type = ScriptParser::parse_hash_type(hash_type);
 
     let mut info =
         store
@@ -369,20 +528,21 @@ fn import_single_deployment(
     // code_cell_tx_hash, code_cell_output_index) — those are resolved by the sync
     // pipeline from actual chain data via script_references and script_versions CFs.
     info.name = Some(script.name.clone());
-    info.deprecated = deployment.deprecated;
+    info.deprecated =
+        matches!(deployment, ImportDeployment::Version(version) if version.deprecated);
     info.category = script.category.clone();
     info.description = script.description.clone();
     info.website = Some(script.website.clone().unwrap_or_default());
 
     store.put_script_info_direct(&code_hash, &info)?;
 
-    // Resolve version_hash from the deployment's data_hash.
+    // Resolve version_hash from the deployment metadata.
     // Pseudo-scripts (Type ID, Zero Lock) have no deployed code cell and therefore
-    // no meaningful dataHash — skip the version-write; code_hash-level metadata
+    // no meaningful version_hash — skip the version-write; code_hash-level metadata
     // was already persisted above.
-    let version_hash = match &deployment.data_hash {
-        Some(dh) => {
-            let decoded = decode_hex(dh).ok();
+    let version_hash = match deployment {
+        ImportDeployment::Version(version) => {
+            let decoded = decode_hex(&version.version_hash).ok();
             let is_zero = decoded
                 .as_ref()
                 .map(|h| h.iter().all(|&b| b == 0))
@@ -393,13 +553,13 @@ fn import_single_deployment(
                 decoded
             }
         }
-        None => None,
+        ImportDeployment::Pseudo(_) => None,
     };
     let Some(version_hash) = version_hash else {
         debug!(
             script = script.name,
             code_hash = hex::encode(&code_hash),
-            "skipping version-write for pseudo-script with no dataHash"
+            "skipping version-write for pseudo-script with no version_hash"
         );
         return Ok(());
     };
@@ -415,7 +575,8 @@ fn import_single_deployment(
         }
     }
     version_info.name = Some(script.name.clone());
-    version_info.deprecated = deployment.deprecated;
+    version_info.deprecated =
+        matches!(deployment, ImportDeployment::Version(version) if version.deprecated);
     version_info.category = script.category.clone();
     version_info.description = script.description.clone();
     version_info.website = Some(script.website.clone().unwrap_or_default());
@@ -466,6 +627,178 @@ mod tests {
         assert_eq!(make_slug(".bit Lock"), "bit-lock");
         assert_eq!(make_slug("  R-ordi  "), "r-ordi");
         assert_eq!(make_slug("Hello---World"), "hello-world");
+    }
+
+    #[test]
+    fn test_script_metadata_parses_family_first_versioned_shape() {
+        let script: ScriptMetadata = toml::from_str(
+            r#"
+name = "Omni Lock"
+description = "Universal lock"
+website = "https://omnilock.example"
+category = "lock"
+
+[mainnet]
+[[mainnet.versions]]
+version_hash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+canonical_ref_hash = "0x1111111111111111111111111111111111111111111111111111111111111111"
+canonical_hash_type = "type"
+
+[[mainnet.versions]]
+version_hash = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+canonical_ref_hash = "0x2222222222222222222222222222222222222222222222222222222222222222"
+canonical_hash_type = "type"
+deprecated = true
+
+[testnet]
+[[testnet.versions]]
+version_hash = "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+canonical_ref_hash = "0x3333333333333333333333333333333333333333333333333333333333333333"
+canonical_hash_type = "data1"
+"#,
+        )
+        .unwrap();
+
+        let mainnet = script.mainnet.expect("expected mainnet metadata");
+        let testnet = script.testnet.expect("expected testnet metadata");
+
+        assert_eq!(mainnet.versions.len(), 2);
+        assert!(mainnet.pseudo.is_none());
+        assert_eq!(mainnet.versions[0].canonical_hash_type.as_str(), "type");
+        assert_eq!(
+            mainnet.versions[1].version_hash,
+            "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert!(mainnet.versions[1].deprecated);
+
+        assert_eq!(testnet.versions.len(), 1);
+        assert!(testnet.pseudo.is_none());
+        assert_eq!(
+            testnet.versions[0].canonical_ref_hash,
+            "0x3333333333333333333333333333333333333333333333333333333333333333"
+        );
+        assert_eq!(testnet.versions[0].canonical_hash_type.as_str(), "data1");
+    }
+
+    #[test]
+    fn test_script_metadata_parses_explicit_pseudo_script_branch() {
+        let script: ScriptMetadata = toml::from_str(
+            r#"
+name = "Type ID"
+
+[mainnet.pseudo]
+code_hash = "0x00000000000000000000000000000000000000000000000000545950455f4944"
+hash_type = "type"
+
+[testnet.pseudo]
+code_hash = "0x00000000000000000000000000000000000000000000000000545950455f4944"
+hash_type = "type"
+"#,
+        )
+        .unwrap();
+
+        let mainnet = script.mainnet.expect("expected mainnet metadata");
+        let testnet = script.testnet.expect("expected testnet metadata");
+
+        assert!(mainnet.versions.is_empty());
+        assert_eq!(
+            mainnet.pseudo.expect("expected pseudo metadata").code_hash,
+            "0x00000000000000000000000000000000000000000000000000545950455f4944"
+        );
+        assert!(testnet.versions.is_empty());
+        assert_eq!(
+            testnet
+                .pseudo
+                .expect("expected pseudo metadata")
+                .hash_type
+                .as_str(),
+            "type"
+        );
+    }
+
+    #[test]
+    fn test_script_metadata_rejects_legacy_deployment_array_shape() {
+        let err = toml::from_str::<ScriptMetadata>(
+            r#"
+name = "Legacy"
+
+[[mainnet]]
+version_hash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+canonical_ref_hash = "0x1111111111111111111111111111111111111111111111111111111111111111"
+canonical_hash_type = "type"
+"#,
+        )
+        .unwrap_err();
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("mainnet") || msg.contains("invalid type"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_script_metadata_rejects_old_version_entry_field_names() {
+        let err = toml::from_str::<ScriptMetadata>(
+            r#"
+name = "Legacy"
+
+[mainnet]
+[[mainnet.versions]]
+code_hash = "0x1111111111111111111111111111111111111111111111111111111111111111"
+data_hash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+hash_type = "type"
+"#,
+        )
+        .unwrap_err();
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("canonical_ref_hash")
+                || msg.contains("unknown field")
+                || msg.contains("missing field"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_script_metadata_rejects_invalid_canonical_hash_type() {
+        let err = toml::from_str::<ScriptMetadata>(
+            r#"
+name = "Broken"
+
+[mainnet]
+[[mainnet.versions]]
+version_hash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+canonical_ref_hash = "0x1111111111111111111111111111111111111111111111111111111111111111"
+canonical_hash_type = "bogus"
+"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("canonical_hash_type"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_script_metadata_rejects_invalid_pseudo_hash_type() {
+        let err = toml::from_str::<ScriptMetadata>(
+            r#"
+name = "Broken Pseudo"
+
+[mainnet.pseudo]
+code_hash = "0x00000000000000000000000000000000000000000000000000545950455f4944"
+hash_type = "bogus"
+"#,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("hash_type"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -628,26 +961,28 @@ disabled = true
     }
 
     #[test]
-    fn test_import_pseudo_script_with_zero_data_hash_succeeds() {
+    fn test_import_pseudo_script_branch_succeeds() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
 
         // Type ID is a protocol-level pseudo-script with no deployed code cell.
-        // In the new format, data_hash is None (omitted) for pseudo-scripts.
+        // In the family-first format, pseudo-scripts use an explicit `pseudo`
+        // branch instead of a version entry.
         let script = ScriptMetadata {
             name: "Type ID".to_string(),
             description: Some("CKB built-in type ID".to_string()),
             website: None,
             category: None,
             disabled: false,
-            mainnet: vec![ScriptDeploymentEntry {
-                deprecated: false,
-                hash_type: "type".to_string(),
-                data_hash: None,
-                code_hash: "0x00000000000000000000000000000000000000000000000000545950455f4944"
-                    .to_string(),
-            }],
-            testnet: vec![],
+            mainnet: Some(ScriptNetworkMetadata {
+                versions: vec![],
+                pseudo: Some(PseudoScriptDeployment {
+                    hash_type: ValidatedHashType::new("type".to_string(), "hash_type").unwrap(),
+                    code_hash: "0x00000000000000000000000000000000000000000000000000545950455f4944"
+                        .to_string(),
+                }),
+            }),
+            testnet: None,
         };
 
         // Should succeed — no error returned.
@@ -736,17 +1071,24 @@ disabled = true
             website: None,
             category: Some("lock".to_string()),
             disabled: false,
-            mainnet: vec![ScriptDeploymentEntry {
-                deprecated: true,
-                hash_type: "type".to_string(),
-                data_hash: Some(
-                    "0xd6a5a0edb152e88e8bbc702e164441cb3890fae35da672b408d28ca9a1bde3ee"
-                        .to_string(),
-                ),
-                code_hash: "0xbf43c3602455798c1a61a596e0d95278864c552fafe231c063b3fabf97a8febc"
-                    .to_string(),
-            }],
-            testnet: vec![],
+            mainnet: Some(ScriptNetworkMetadata {
+                versions: vec![ScriptDeploymentEntry {
+                    deprecated: true,
+                    canonical_hash_type: ValidatedHashType::new(
+                        "type".to_string(),
+                        "canonical_hash_type",
+                    )
+                    .unwrap(),
+                    version_hash:
+                        "0xd6a5a0edb152e88e8bbc702e164441cb3890fae35da672b408d28ca9a1bde3ee"
+                            .to_string(),
+                    canonical_ref_hash:
+                        "0xbf43c3602455798c1a61a596e0d95278864c552fafe231c063b3fabf97a8febc"
+                            .to_string(),
+                }],
+                pseudo: None,
+            }),
+            testnet: None,
         };
 
         upsert_script_label(&store, &script, "mainnet").unwrap();
@@ -767,6 +1109,86 @@ disabled = true
         assert_eq!(
             store
                 .list_script_version_hashes_by_label("Deprecated Script")
+                .unwrap(),
+            vec![version_hash]
+        );
+    }
+
+    #[test]
+    fn test_active_network_import_handles_shared_version_hash_with_different_canonical_ref_hashes()
+    {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        let script = ScriptMetadata {
+            name: "Shared Version".to_string(),
+            description: Some("same version hash across networks".to_string()),
+            website: Some("https://example.com".to_string()),
+            category: Some("lock".to_string()),
+            disabled: false,
+            mainnet: Some(ScriptNetworkMetadata {
+                versions: vec![ScriptDeploymentEntry {
+                    version_hash:
+                        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .to_string(),
+                    canonical_ref_hash:
+                        "0x1111111111111111111111111111111111111111111111111111111111111111"
+                            .to_string(),
+                    canonical_hash_type: ValidatedHashType::new(
+                        "type".to_string(),
+                        "canonical_hash_type",
+                    )
+                    .unwrap(),
+                    deprecated: false,
+                }],
+                pseudo: None,
+            }),
+            testnet: Some(ScriptNetworkMetadata {
+                versions: vec![ScriptDeploymentEntry {
+                    version_hash:
+                        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .to_string(),
+                    canonical_ref_hash:
+                        "0x2222222222222222222222222222222222222222222222222222222222222222"
+                            .to_string(),
+                    canonical_hash_type: ValidatedHashType::new(
+                        "type".to_string(),
+                        "canonical_hash_type",
+                    )
+                    .unwrap(),
+                    deprecated: false,
+                }],
+                pseudo: None,
+            }),
+        };
+
+        upsert_script_label(&store, &script, "mainnet").unwrap();
+
+        let mainnet_code_hash =
+            hex::decode("1111111111111111111111111111111111111111111111111111111111111111")
+                .unwrap();
+        let testnet_code_hash =
+            hex::decode("2222222222222222222222222222222222222222222222222222222222222222")
+                .unwrap();
+        let version_hash =
+            hex::decode("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .unwrap();
+
+        let mainnet_info = store.get_script_info(&mainnet_code_hash).unwrap().unwrap();
+        assert_eq!(mainnet_info.name.as_deref(), Some("Shared Version"));
+
+        let testnet_info = store.get_script_info(&testnet_code_hash).unwrap();
+        assert!(
+            testnet_info.is_none(),
+            "excluded network code hash should not retain label state"
+        );
+
+        let version_info = store.get_script_version(&version_hash).unwrap().unwrap();
+        assert_eq!(version_info.name.as_deref(), Some("Shared Version"));
+        assert_eq!(version_info.associated_code_hash, Some(mainnet_code_hash));
+        assert_eq!(
+            store
+                .list_script_version_hashes_by_label("Shared Version")
                 .unwrap(),
             vec![version_hash]
         );

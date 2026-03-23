@@ -1,18 +1,20 @@
 name = "Anyone-Can-Pay Lock"
 description = "anyone_can_pay allows a recipient to provide cell capacity in asset transfer."
 
-[[mainnet]]
-code_hash = "0xd369597ff47f29fbc0d47d2e3775370d1250b85140c670e4718af712983a2354"
-data_hash = "0xcd69ba816f7471e59110058aa37387c362ed9a240cd178f7bb1ecee386cb31e6"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0xd369597ff47f29fbc0d47d2e3775370d1250b85140c670e4718af712983a2354"
+version_hash = "0xcd69ba816f7471e59110058aa37387c362ed9a240cd178f7bb1ecee386cb31e6"
+canonical_hash_type = "type"
 
-[[testnet]]
-code_hash = "0x3419a1c09eb2567f6552ee7a8ecffd64155cffe0f1796e6e61ec088d740c1356"
-data_hash = "0xcd69ba816f7471e59110058aa37387c362ed9a240cd178f7bb1ecee386cb31e6"
-hash_type = "type"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x3419a1c09eb2567f6552ee7a8ecffd64155cffe0f1796e6e61ec088d740c1356"
+version_hash = "0xcd69ba816f7471e59110058aa37387c362ed9a240cd178f7bb1ecee386cb31e6"
+canonical_hash_type = "type"
 
-[[testnet]]
-code_hash = "0x86a1c6987a4acbe1a887cca4c9dd2ac9fcb07405bbeda51b861b18bbf7492c4b"
-data_hash = "0x0fb343953ee78c9986b091defb6252154e0bb51044fd2879fde5b27314506111"
-hash_type = "type"
+[[testnet.versions]]
+canonical_ref_hash = "0x86a1c6987a4acbe1a887cca4c9dd2ac9fcb07405bbeda51b861b18bbf7492c4b"
+version_hash = "0x0fb343953ee78c9986b091defb6252154e0bb51044fd2879fde5b27314506111"
+canonical_hash_type = "type"
 deprecated = true

@@ -1,12 +1,14 @@
 name = "M-NFT Class"
 
-[[mainnet]]
-code_hash = "0xd51e6eaf48124c601f41abe173f1da550b4cbca9c6a166781906a287abbb3d9a"
-data_hash = "0xc9aa394982bf0b7b1f8b19fbbbae42a5437516f8d908c84e87778eb19cd95125"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0xd51e6eaf48124c601f41abe173f1da550b4cbca9c6a166781906a287abbb3d9a"
+version_hash = "0xc9aa394982bf0b7b1f8b19fbbbae42a5437516f8d908c84e87778eb19cd95125"
+canonical_hash_type = "type"
 deprecated = true
 
-[[testnet]]
-code_hash = "0x095b8c0b4e51a45f953acd1fcd1e39489f2675b4bc94e7af27bb38958790e3fc"
-data_hash = "0x682a109037de36b54bbc4595c137a0ce644ea9efc2118b3b15e6bf24be12a9d3"
-hash_type = "type"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x095b8c0b4e51a45f953acd1fcd1e39489f2675b4bc94e7af27bb38958790e3fc"
+version_hash = "0x682a109037de36b54bbc4595c137a0ce644ea9efc2118b3b15e6bf24be12a9d3"
+canonical_hash_type = "type"

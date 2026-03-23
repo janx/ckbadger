@@ -2,18 +2,19 @@ name = "Godwoken Custodian Lock"
 description = "Rollup uses the custodian lock to hold the deposited assets."
 website = "https://github.com/godwokenrises/godwoken/tree/develop/gwos#custodian-lock"
 
-[[mainnet]]
-code_hash = "0x000f87062a2fe9bb4a6cc475212ea11014b84deb32e0375ee51e6ec4a553e009"
-data_hash = "0xa254fee1ed74ae1e2e9b30df6607b27e6368aa950e5c0b8eaf33267c6c8addb0"
-hash_type = "type"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x000f87062a2fe9bb4a6cc475212ea11014b84deb32e0375ee51e6ec4a553e009"
+version_hash = "0xa254fee1ed74ae1e2e9b30df6607b27e6368aa950e5c0b8eaf33267c6c8addb0"
+canonical_hash_type = "type"
 
-[[mainnet]]
-code_hash = "0x45c112df97daece27c4afa02b24b15f64403bdfd45ab2e0e88c9fb2a24796b1d"
-data_hash = "0xe070f51c535eea3f9ab266ccaf0612f78c20ecdab2b87cfa593dd13aae9b2a2e"
-hash_type = "type"
-tag = "legacy"
+[[mainnet.versions]]
+canonical_ref_hash = "0x45c112df97daece27c4afa02b24b15f64403bdfd45ab2e0e88c9fb2a24796b1d"
+version_hash = "0xe070f51c535eea3f9ab266ccaf0612f78c20ecdab2b87cfa593dd13aae9b2a2e"
+canonical_hash_type = "type"
 
-[[testnet]]
-code_hash = "0x85ae4db0dd83f428a31deb342e4000af37ce2c9645d9e619df00096e3c50a2bb"
-data_hash = "0xa254fee1ed74ae1e2e9b30df6607b27e6368aa950e5c0b8eaf33267c6c8addb0"
-hash_type = "type"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x85ae4db0dd83f428a31deb342e4000af37ce2c9645d9e619df00096e3c50a2bb"
+version_hash = "0xa254fee1ed74ae1e2e9b30df6607b27e6368aa950e5c0b8eaf33267c6c8addb0"
+canonical_hash_type = "type"

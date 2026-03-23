@@ -1,12 +1,14 @@
 name = "WR Owned-Owner"
 description = "WR Owned-Owner enable to create Withdrawals Request from NervosDAO deposits locked with zero length args locks, developed as part of iCKB."
 
-[[mainnet]]
-code_hash = "0xacc79e07d107831feef4c70c9e683dac5644d5993b9cb106dca6e74baa381bd0"
-data_hash = "0xacc79e07d107831feef4c70c9e683dac5644d5993b9cb106dca6e74baa381bd0"
-hash_type = "data1"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0xacc79e07d107831feef4c70c9e683dac5644d5993b9cb106dca6e74baa381bd0"
+version_hash = "0xacc79e07d107831feef4c70c9e683dac5644d5993b9cb106dca6e74baa381bd0"
+canonical_hash_type = "data1"
 
-[[testnet]]
-code_hash = "0xacc79e07d107831feef4c70c9e683dac5644d5993b9cb106dca6e74baa381bd0"
-data_hash = "0xacc79e07d107831feef4c70c9e683dac5644d5993b9cb106dca6e74baa381bd0"
-hash_type = "data1"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0xacc79e07d107831feef4c70c9e683dac5644d5993b9cb106dca6e74baa381bd0"
+version_hash = "0xacc79e07d107831feef4c70c9e683dac5644d5993b9cb106dca6e74baa381bd0"
+canonical_hash_type = "data1"

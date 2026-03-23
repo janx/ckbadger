@@ -3,19 +3,19 @@ description = "Spore Protocol infuses digital assets with enduring value backed 
 website = "https://spore.pro/"
 category = "spore"
 
-[[mainnet]]
-code_hash = "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5"
-data_hash = "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5"
-hash_type = "data1"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5"
+version_hash = "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5"
+canonical_hash_type = "data1"
 
-[[testnet]]
-code_hash = "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d"
-data_hash = "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d"
-hash_type = "data1"
-tag = "v2 preview"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d"
+version_hash = "0x685a60219309029d01310311dba953d67029170ca4848a4ff638e57002130a0d"
+canonical_hash_type = "data1"
 
-[[testnet]]
-code_hash = "0xbbad126377d45f90a8ee120da988a2d7332c78ba8fd679aab478a19d6c133494"
-data_hash = "0xbbad126377d45f90a8ee120da988a2d7332c78ba8fd679aab478a19d6c133494"
-hash_type = "data1"
-tag = "v1 latest"
+[[testnet.versions]]
+canonical_ref_hash = "0xbbad126377d45f90a8ee120da988a2d7332c78ba8fd679aab478a19d6c133494"
+version_hash = "0xbbad126377d45f90a8ee120da988a2d7332c78ba8fd679aab478a19d6c133494"
+canonical_hash_type = "data1"

@@ -1,12 +1,14 @@
 name = "Single Use Lock"
 description = "A lock script that can only be used once."
 
-[[mainnet]]
-code_hash = "0x8290467a512e5b9a6b816469b0edabba1f4ac474e28ffdd604c2a7c76446bbaf"
-data_hash = "0x8290467a512e5b9a6b816469b0edabba1f4ac474e28ffdd604c2a7c76446bbaf"
-hash_type = "data1"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x8290467a512e5b9a6b816469b0edabba1f4ac474e28ffdd604c2a7c76446bbaf"
+version_hash = "0x8290467a512e5b9a6b816469b0edabba1f4ac474e28ffdd604c2a7c76446bbaf"
+canonical_hash_type = "data1"
 
-[[testnet]]
-code_hash = "0x8290467a512e5b9a6b816469b0edabba1f4ac474e28ffdd604c2a7c76446bbaf"
-data_hash = "0x8290467a512e5b9a6b816469b0edabba1f4ac474e28ffdd604c2a7c76446bbaf"
-hash_type = "data1"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x8290467a512e5b9a6b816469b0edabba1f4ac474e28ffdd604c2a7c76446bbaf"
+version_hash = "0x8290467a512e5b9a6b816469b0edabba1f4ac474e28ffdd604c2a7c76446bbaf"
+canonical_hash_type = "data1"

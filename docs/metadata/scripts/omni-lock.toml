@@ -1,26 +1,24 @@
 name = "OMNI Lock"
 description = "Omnilock is a lock script designed for interoperability. It comes with built-in support for verification of transaction signing methods used in Bitcoin, Ethereum, EOS, and Dogecoin. Omnilock is also extensible, so more verification algorithms can be added in future."
 
-[[mainnet]]
-code_hash = "0x9b819793a64463aed77c615d6cb226eea5487ccfc0783043a587254cda2b6f26"
-data_hash = "0x768f306681da232ceb0b94f436c5f813377179762a831c5ad8797bd4fd2d118d"
-hash_type = "type"
-tag = "v2"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x9b819793a64463aed77c615d6cb226eea5487ccfc0783043a587254cda2b6f26"
+version_hash = "0x768f306681da232ceb0b94f436c5f813377179762a831c5ad8797bd4fd2d118d"
+canonical_hash_type = "type"
 
-[[mainnet]]
-code_hash = "0xa4398768d87bd17aea1361edc3accd6a0117774dc4ebc813bfa173e8ac0d086d"
-data_hash = "0xf18e295b6a9286108639df659b822b1cc75216776df3d52ac9ed11a1dadadee5"
-hash_type = "type"
-tag = "v1"
+[[mainnet.versions]]
+canonical_ref_hash = "0xa4398768d87bd17aea1361edc3accd6a0117774dc4ebc813bfa173e8ac0d086d"
+version_hash = "0xf18e295b6a9286108639df659b822b1cc75216776df3d52ac9ed11a1dadadee5"
+canonical_hash_type = "type"
 
-[[testnet]]
-code_hash = "0xf329effd1c475a2978453c8600e1eaf0bc2087ee093c3ee64cc96ec6847752cb"
-data_hash = "0x6b29b6f10346b43c540e53806ba88ba0fe3a0c3a29d7448ef555840c8f8318fa"
-hash_type = "type"
-tag = "v2"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0xf329effd1c475a2978453c8600e1eaf0bc2087ee093c3ee64cc96ec6847752cb"
+version_hash = "0x6b29b6f10346b43c540e53806ba88ba0fe3a0c3a29d7448ef555840c8f8318fa"
+canonical_hash_type = "type"
 
-[[testnet]]
-code_hash = "0x79f90bb5e892d80dd213439eeab551120eb417678824f282b4ffb5f21bad2e1e"
-data_hash = "0x1bf147d1c95a5ad51016bd426c33f364257e685af54df26fc69ec40e3ae267d1"
-hash_type = "type"
-tag = "v1"
+[[testnet.versions]]
+canonical_ref_hash = "0x79f90bb5e892d80dd213439eeab551120eb417678824f282b4ffb5f21bad2e1e"
+version_hash = "0x1bf147d1c95a5ad51016bd426c33f364257e685af54df26fc69ec40e3ae267d1"
+canonical_hash_type = "type"

@@ -1,12 +1,14 @@
 name = "OutputTypeProxyLock"
 description = "Unlocks when a specific type script appears in transaction outputs."
 
-[[mainnet]]
-code_hash = "0x2df53b592db3ae3685b7787adcfef0332a611edb83ca3feca435809964c3aff2"
-data_hash = "0x2df53b592db3ae3685b7787adcfef0332a611edb83ca3feca435809964c3aff2"
-hash_type = "data1"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x2df53b592db3ae3685b7787adcfef0332a611edb83ca3feca435809964c3aff2"
+version_hash = "0x2df53b592db3ae3685b7787adcfef0332a611edb83ca3feca435809964c3aff2"
+canonical_hash_type = "data1"
 
-[[testnet]]
-code_hash = "0x2df53b592db3ae3685b7787adcfef0332a611edb83ca3feca435809964c3aff2"
-data_hash = "0x2df53b592db3ae3685b7787adcfef0332a611edb83ca3feca435809964c3aff2"
-hash_type = "data1"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x2df53b592db3ae3685b7787adcfef0332a611edb83ca3feca435809964c3aff2"
+version_hash = "0x2df53b592db3ae3685b7787adcfef0332a611edb83ca3feca435809964c3aff2"
+canonical_hash_type = "data1"

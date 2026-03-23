@@ -1,12 +1,14 @@
 name = "UDT Limit Order"
 description = "UDT Limit Order is a general purpose UDT based Limit Order, developed as part of iCKB."
 
-[[mainnet]]
-code_hash = "0x49dfb6afee5cc8ac4225aeea8cb8928b150caf3cd92fea33750683c74b13254a"
-data_hash = "0x49dfb6afee5cc8ac4225aeea8cb8928b150caf3cd92fea33750683c74b13254a"
-hash_type = "data1"
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x49dfb6afee5cc8ac4225aeea8cb8928b150caf3cd92fea33750683c74b13254a"
+version_hash = "0x49dfb6afee5cc8ac4225aeea8cb8928b150caf3cd92fea33750683c74b13254a"
+canonical_hash_type = "data1"
 
-[[testnet]]
-code_hash = "0x49dfb6afee5cc8ac4225aeea8cb8928b150caf3cd92fea33750683c74b13254a"
-data_hash = "0x49dfb6afee5cc8ac4225aeea8cb8928b150caf3cd92fea33750683c74b13254a"
-hash_type = "data1"
+[testnet]
+[[testnet.versions]]
+canonical_ref_hash = "0x49dfb6afee5cc8ac4225aeea8cb8928b150caf3cd92fea33750683c74b13254a"
+version_hash = "0x49dfb6afee5cc8ac4225aeea8cb8928b150caf3cd92fea33750683c74b13254a"
+canonical_hash_type = "data1"
