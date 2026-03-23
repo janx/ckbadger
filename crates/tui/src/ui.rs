@@ -4541,33 +4541,36 @@ fn disk_pressure_lines(bb: Option<&BulkBuildProgressData>, width: u16) -> Vec<Li
         ])];
     };
 
-    let state = match bb.disk_state.as_deref() {
-        Some(state @ ("idle" | "active" | "saturated")) => state,
-        Some("unavailable") | None => "unavailable",
+    let (state, state_color, metrics_available) = match bb.disk_state.as_deref() {
+        Some(state @ ("idle" | "active" | "saturated")) => {
+            let state_color = match state {
+                "saturated" => ERROR_RED,
+                "active" => TERMINAL_GREEN,
+                "idle" => SLATE_500,
+                _ => SLATE_500,
+            };
+            (state, state_color, true)
+        }
+        Some("unavailable") => ("unavailable", SLATE_500, false),
+        None => ("warming", SLATE_500, false),
         Some(other) => panic!("unknown bulk-build disk state: {other}"),
-    };
-    let state_color = match state {
-        "saturated" => ERROR_RED,
-        "active" => TERMINAL_GREEN,
-        "idle" | "unavailable" => SLATE_500,
-        _ => SLATE_500,
     };
 
     let state_text = trim_for_panel(
         &format!(
             "Disk {} util {}",
             state.to_ascii_uppercase(),
-            format_disk_util_text(bb.disk_util_pct, state)
+            format_disk_util_text(bb.disk_util_pct, metrics_available)
         ),
         width,
     );
     let detail_text = trim_for_panel(
         &format!(
             "await {} qd {} wr {} iops {}",
-            format_disk_await_text(bb.disk_await_ms, state),
-            format_disk_qd_text(bb.disk_avg_queue_depth, state),
-            format_disk_write_text(bb.disk_write_mb_s, state),
-            format_disk_iops_text(bb.disk_write_iops, state),
+            format_disk_await_text(bb.disk_await_ms, metrics_available),
+            format_disk_qd_text(bb.disk_avg_queue_depth, metrics_available),
+            format_disk_write_text(bb.disk_write_mb_s, metrics_available),
+            format_disk_iops_text(bb.disk_write_iops, metrics_available),
         ),
         width,
     );
@@ -4584,8 +4587,8 @@ fn disk_pressure_lines(bb: Option<&BulkBuildProgressData>, width: u16) -> Vec<Li
     ]
 }
 
-fn format_disk_util_text(value: Option<f64>, state: &str) -> String {
-    if state == "unavailable" {
+fn format_disk_util_text(value: Option<f64>, metrics_available: bool) -> String {
+    if !metrics_available {
         return "n/a".to_string();
     }
     value
@@ -4593,8 +4596,8 @@ fn format_disk_util_text(value: Option<f64>, state: &str) -> String {
         .unwrap_or_else(|| "n/a".to_string())
 }
 
-fn format_disk_await_text(value: Option<f64>, state: &str) -> String {
-    if state == "unavailable" {
+fn format_disk_await_text(value: Option<f64>, metrics_available: bool) -> String {
+    if !metrics_available {
         return "n/a".to_string();
     }
     value
@@ -4602,8 +4605,8 @@ fn format_disk_await_text(value: Option<f64>, state: &str) -> String {
         .unwrap_or_else(|| "n/a".to_string())
 }
 
-fn format_disk_qd_text(value: Option<f64>, state: &str) -> String {
-    if state == "unavailable" {
+fn format_disk_qd_text(value: Option<f64>, metrics_available: bool) -> String {
+    if !metrics_available {
         return "n/a".to_string();
     }
     value
@@ -4611,8 +4614,8 @@ fn format_disk_qd_text(value: Option<f64>, state: &str) -> String {
         .unwrap_or_else(|| "n/a".to_string())
 }
 
-fn format_disk_write_text(value: Option<f64>, state: &str) -> String {
-    if state == "unavailable" {
+fn format_disk_write_text(value: Option<f64>, metrics_available: bool) -> String {
+    if !metrics_available {
         return "n/a".to_string();
     }
     value
@@ -4620,8 +4623,8 @@ fn format_disk_write_text(value: Option<f64>, state: &str) -> String {
         .unwrap_or_else(|| "n/a".to_string())
 }
 
-fn format_disk_iops_text(value: Option<f64>, state: &str) -> String {
-    if state == "unavailable" {
+fn format_disk_iops_text(value: Option<f64>, metrics_available: bool) -> String {
+    if !metrics_available {
         return "n/a".to_string();
     }
     value
@@ -6327,6 +6330,31 @@ mod tests {
         assert!(state.contains("n/a"));
         assert!(detail.contains("n/a"));
         assert!(!detail.contains("0.0"));
+    }
+
+    #[test]
+    fn test_disk_pressure_lines_renders_warmup_state() {
+        let bb = BulkBuildProgressData {
+            disk_state: None,
+            disk_util_pct: Some(71.0),
+            disk_await_ms: Some(9.5),
+            disk_avg_queue_depth: Some(1.75),
+            disk_write_mb_s: Some(123.0),
+            disk_write_iops: Some(4_567.0),
+            ..Default::default()
+        };
+
+        let lines = disk_pressure_lines(Some(&bb), 120);
+        assert_eq!(lines.len(), 2);
+        let state = line_text(&lines[0]);
+        let detail = line_text(&lines[1]);
+        assert!(state.contains("Disk WARMING"));
+        assert!(state.contains("n/a"));
+        assert!(!state.contains("UNAVAILABLE"));
+        assert!(detail.contains("n/a"));
+        assert!(!detail.contains("71.0%"));
+        assert!(!detail.contains("9.5ms"));
+        assert!(!detail.contains("123.0 MB/s"));
     }
 
     #[test]

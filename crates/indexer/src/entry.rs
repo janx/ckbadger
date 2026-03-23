@@ -774,7 +774,8 @@ fn summarize_bulk_build_disk(bb: Option<&BulkBuildProgressData>) -> Option<DiskL
     let bb = bb?;
     let state = match bb.disk_state.as_deref() {
         Some(state @ ("idle" | "active" | "saturated")) => state.to_string(),
-        Some("unavailable") | None => "unavailable".to_string(),
+        None => return None,
+        Some("unavailable") => "unavailable".to_string(),
         Some(other) => panic!("unknown bulk-build disk state: {other}"),
     };
     let unavailable = state == "unavailable";
@@ -1082,6 +1083,21 @@ mod tests {
         assert_eq!(summary.disk_qd(), "n/a");
         assert_eq!(summary.disk_wr_mb_s(), "n/a");
         assert_eq!(summary.disk_wr_iops(), "n/a");
+    }
+
+    #[test]
+    fn test_summarize_bulk_build_disk_returns_none_for_warmup_state() {
+        let bulk_build = BulkBuildProgressData {
+            disk_state: None,
+            disk_util_pct: Some(91.2),
+            disk_await_ms: Some(12.3),
+            disk_avg_queue_depth: Some(4.56),
+            disk_write_mb_s: Some(789.0),
+            disk_write_iops: Some(12_345.0),
+            ..Default::default()
+        };
+
+        assert!(summarize_bulk_build_disk(Some(&bulk_build)).is_none());
     }
 
     #[test]
