@@ -891,36 +891,47 @@ impl ActivityStatsAccumulator {
     /// Replaces the old `apply_history_rows` which deserialized bundles
     /// from bincode MaterializedRows — a serialize→deserialize roundtrip
     /// costing ~410ms/batch at steady state.
+    ///
+    /// Chrono cache: all txs in the same block share one timestamp, so we
+    /// cache the formatted date/hour strings and only reformat on timestamp
+    /// change (~47K format calls per batch instead of ~123K).
     fn apply_bundles(&mut self, bundles: &[TxActivityBundle]) -> Result<()> {
+        let mut cached_ts = i64::MIN;
+        let mut cached_date = String::new();
+        let mut cached_hour = String::new();
+
         for bundle in bundles {
-            let date = ckbadger_common::block_date_from_ms(bundle.timestamp)
-                .format("%Y%m%d")
-                .to_string();
-            let hour = ckbadger_common::block_datetime_from_ms(bundle.timestamp)
-                .format("%Y%m%d%H")
-                .to_string();
+            if bundle.timestamp != cached_ts {
+                cached_ts = bundle.timestamp;
+                cached_date = ckbadger_common::block_date_from_ms(bundle.timestamp)
+                    .format("%Y%m%d")
+                    .to_string();
+                cached_hour = ckbadger_common::block_datetime_from_ms(bundle.timestamp)
+                    .format("%Y%m%d%H")
+                    .to_string();
+            }
 
             for owner in &bundle.owners {
                 crate::db::BatchWriter::accumulate_owner_activity_stats(
                     bundle.is_cellbase,
                     owner,
-                    self.daily_stats.entry(date.clone()).or_default(),
+                    self.daily_stats.entry(cached_date.clone()).or_default(),
                 );
                 crate::db::BatchWriter::accumulate_owner_activity_stats(
                     bundle.is_cellbase,
                     owner,
-                    self.hourly_stats.entry(hour.clone()).or_default(),
+                    self.hourly_stats.entry(cached_hour.clone()).or_default(),
                 );
 
                 if !bundle.is_cellbase && owner.lock_hash.len() == 32 {
                     let mut lock_hash = [0u8; 32];
                     lock_hash.copy_from_slice(&owner.lock_hash);
                     self.daily_addrs
-                        .entry(date.clone())
+                        .entry(cached_date.clone())
                         .or_default()
                         .insert(lock_hash);
                     self.hourly_addrs
-                        .entry(hour.clone())
+                        .entry(cached_hour.clone())
                         .or_default()
                         .insert(lock_hash);
                 }
@@ -1412,149 +1423,187 @@ impl BulkBuildRuntimeState {
         } = self;
         let ctx = owners::ReducerContext::new(&frozen);
 
-        // Overlap: build_history_rows (read-only) runs in parallel with all reducers.
-        // History rows depend only on immutable arena/resolved/frozen/store — zero
-        // dependency on reducer mutable state.
-        let (history_result_with_elapsed, reduce_right_result) = rayon::join(
-            // LEFT: history materialization (read-only, no mutable state)
-            || {
-                let started = Instant::now();
-                let result =
-                    build_history_rows(&arena, &resolved, &frozen, is_mainnet, token_info_cache);
-                (result, started.elapsed())
+        // 3-way parallel tree via nested rayon::join:
+        //   LEFT:   history → activity_stats (activity_stats depends only on history output)
+        //   MIDDLE: chain_stats (reads only immutable arena + resolved)
+        //   RIGHT:  hodl → rayon::join(address+cell_dist, 5 independent reducers)
+        //
+        // Each branch captures disjoint &mut fields. Shared &arena/&resolved/&frozen are immutable.
+        let (left_result, (mid_result, right_result)) = rayon::join(
+            // LEFT: history materialization → activity stats accumulation
+            || -> Result<(HistoryBuildResult, std::time::Duration, std::time::Duration)> {
+                let history_started = Instant::now();
+                let history =
+                    build_history_rows(&arena, &resolved, &frozen, is_mainnet, token_info_cache)?;
+                let history_elapsed = history_started.elapsed();
+
+                // activity_stats depends only on history.activity_bundles, not on any reducer state.
+                let activity_stats_started = Instant::now();
+                activity_stats.apply_bundles(&history.activity_bundles)?;
+                let activity_stats_elapsed = activity_stats_started.elapsed();
+
+                Ok((history, history_elapsed, activity_stats_elapsed))
             },
-            // RIGHT: all reducers (mutable state, disjoint from LEFT)
-            || -> Result<(
-                Vec<materialize::MaterializedRow>,
-                Vec<materialize::MaterializedRow>,
-                std::time::Duration,
-            )> {
-                let hodl_sealed_rows = apply_hodl_tracker_batch_standalone(
-                    hodl_tracker,
-                    hodl_live_cells_by_lock,
-                    &arena,
-                    &resolved,
-                )?;
-
-                let address_started = Instant::now();
-                let mut cell_dist_sealed_rows = Vec::new();
-
-                // Phase 1 (serial): address reducer + cell_dist_tracker.
-                // Address must run first because cell_dist_tracker needs per-tx address deltas.
-                for block in &arena.blocks {
-                    let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
-                    cell_dist_tracker.record_block_date(block.number, block_date);
-
-                    for tx in &resolved[block.tx_range.clone()] {
-                        for input in &tx.resolved_inputs {
-                            cell_dist_tracker.cell_consumed(input.occupied_capacity)?;
-                        }
-                        for cell in tx.cells.iter() {
-                            cell_dist_tracker.cell_created(cell.occupied_capacity);
-                        }
-
-                        let address_deltas =
-                            owners.address.apply_tx_with_deltas(tx, &ctx)?;
-                        apply_cell_dist_cohort_deltas(
-                            cell_dist_tracker,
-                            owners.address.balances(),
-                            &address_deltas,
-                            tx,
-                        )?;
-                    }
-
-                    if let Some((snapshot_date, snapshot)) =
-                        cell_dist_tracker.maybe_snapshot(block_date)
-                    {
-                        let date_str = snapshot_date.format("%Y%m%d").to_string();
-                        let cohort = cell_dist_tracker.cohort_snapshot();
-                        cell_dist_sealed_rows.push(materialize::MaterializedRow::new(
-                            CF_STATS_HODL,
-                            keys::encode_stats_key(
-                                keys::stats_prefix::CELL_DISTRIBUTION,
-                                date_str.as_bytes(),
-                            ),
-                            bincode::serialize(&snapshot)?,
-                        ));
-                        cell_dist_sealed_rows.push(materialize::MaterializedRow::new(
-                            CF_STATS_HODL,
-                            keys::encode_stats_key(
-                                keys::stats_prefix::ADDR_COHORT,
-                                date_str.as_bytes(),
-                            ),
-                            bincode::serialize(&cohort)?,
-                        ));
-                    }
-                }
-
-                let address_elapsed = address_started.elapsed();
-
-                // Phase 2 (parallel): 5 independent reducers via nested rayon::join.
-                // Each reducer reads immutable ResolvedTxFacts and writes only its own state.
-                let CoreOwners {
-                    address: _,
-                    ref mut script,
-                    ref mut token,
-                    ref mut dao,
-                    ref mut fiber,
-                    ref mut object,
-                } = *owners;
-
-                let (r_left, r_right) = rayon::join(
+            || {
+                rayon::join(
+                    // MIDDLE: chain-level daily statistics (reads only immutable arena + resolved)
                     || -> Result<()> {
-                        for block in &arena.blocks {
-                            for tx in &resolved[block.tx_range.clone()] {
-                                script.apply_tx(tx, &ctx)?;
-                            }
-                        }
-                        for block in &arena.blocks {
-                            for tx in &resolved[block.tx_range.clone()] {
-                                token.apply_tx(tx, &ctx)?;
-                            }
-                        }
-                        Ok(())
+                        chain_stats.apply_blocks(&arena, &resolved)
                     },
-                    || -> Result<()> {
-                        for block in &arena.blocks {
-                            // apply_tx first so claimed_compensation_by_block is
-                            // populated before record_block reads it.
-                            for tx in &resolved[block.tx_range.clone()] {
-                                dao.apply_tx(tx, &ctx)?;
-                            }
-                            dao.record_block(block)?;
-                        }
-                        let (r_fiber, r_object) = rayon::join(
-                            || -> Result<()> {
+                    // RIGHT: all reducers (mutable state, disjoint from LEFT and MIDDLE)
+                    || -> Result<(
+                        Vec<materialize::MaterializedRow>,
+                        Vec<materialize::MaterializedRow>,
+                        std::time::Duration,
+                    )> {
+                        let hodl_sealed_rows = apply_hodl_tracker_batch_standalone(
+                            hodl_tracker,
+                            hodl_live_cells_by_lock,
+                            &arena,
+                            &resolved,
+                        )?;
+
+                        // Destructure owners to split borrows: address+cell_dist runs in
+                        // parallel with 5 independent reducers that don't read address state.
+                        let CoreOwners {
+                            ref mut address,
+                            ref mut script,
+                            ref mut token,
+                            ref mut dao,
+                            ref mut fiber,
+                            ref mut object,
+                        } = *owners;
+
+                        let address_started = Instant::now();
+
+                        let (addr_result, reducers_result) = rayon::join(
+                            // LEFT-inner: address reducer + cell_dist_tracker (serial, interdependent)
+                            || -> Result<Vec<materialize::MaterializedRow>> {
+                                let mut cell_dist_sealed_rows = Vec::new();
                                 for block in &arena.blocks {
+                                    let block_date =
+                                        ckbadger_common::block_date_from_ms(block.timestamp_ms);
+                                    cell_dist_tracker
+                                        .record_block_date(block.number, block_date);
+
                                     for tx in &resolved[block.tx_range.clone()] {
-                                        fiber.apply_tx(tx, &ctx)?;
+                                        for input in &tx.resolved_inputs {
+                                            cell_dist_tracker
+                                                .cell_consumed(input.occupied_capacity)?;
+                                        }
+                                        for cell in tx.cells.iter() {
+                                            cell_dist_tracker
+                                                .cell_created(cell.occupied_capacity);
+                                        }
+
+                                        let address_deltas =
+                                            address.apply_tx_with_deltas(tx, &ctx)?;
+                                        apply_cell_dist_cohort_deltas(
+                                            cell_dist_tracker,
+                                            address.balances(),
+                                            &address_deltas,
+                                            tx,
+                                        )?;
+                                    }
+
+                                    if let Some((snapshot_date, snapshot)) =
+                                        cell_dist_tracker.maybe_snapshot(block_date)
+                                    {
+                                        let date_str =
+                                            snapshot_date.format("%Y%m%d").to_string();
+                                        let cohort = cell_dist_tracker.cohort_snapshot();
+                                        cell_dist_sealed_rows.push(
+                                            materialize::MaterializedRow::new(
+                                                CF_STATS_HODL,
+                                                keys::encode_stats_key(
+                                                    keys::stats_prefix::CELL_DISTRIBUTION,
+                                                    date_str.as_bytes(),
+                                                ),
+                                                bincode::serialize(&snapshot)?,
+                                            ),
+                                        );
+                                        cell_dist_sealed_rows.push(
+                                            materialize::MaterializedRow::new(
+                                                CF_STATS_HODL,
+                                                keys::encode_stats_key(
+                                                    keys::stats_prefix::ADDR_COHORT,
+                                                    date_str.as_bytes(),
+                                                ),
+                                                bincode::serialize(&cohort)?,
+                                            ),
+                                        );
                                     }
                                 }
-                                Ok(())
+                                Ok(cell_dist_sealed_rows)
                             },
+                            // RIGHT-inner: 5 independent reducers via nested rayon::join.
+                            // Each reads immutable ResolvedTxFacts and writes only its own state.
                             || -> Result<()> {
-                                for block in &arena.blocks {
-                                    for tx in &resolved[block.tx_range.clone()] {
-                                        object.apply_tx(tx, &ctx)?;
-                                    }
-                                }
+                                let (r_left, r_right) = rayon::join(
+                                    || -> Result<()> {
+                                        for block in &arena.blocks {
+                                            for tx in &resolved[block.tx_range.clone()] {
+                                                script.apply_tx(tx, &ctx)?;
+                                            }
+                                        }
+                                        for block in &arena.blocks {
+                                            for tx in &resolved[block.tx_range.clone()] {
+                                                token.apply_tx(tx, &ctx)?;
+                                            }
+                                        }
+                                        Ok(())
+                                    },
+                                    || -> Result<()> {
+                                        for block in &arena.blocks {
+                                            for tx in &resolved[block.tx_range.clone()] {
+                                                dao.apply_tx(tx, &ctx)?;
+                                            }
+                                            dao.record_block(block)?;
+                                        }
+                                        let (r_fiber, r_object) = rayon::join(
+                                            || -> Result<()> {
+                                                for block in &arena.blocks {
+                                                    for tx in
+                                                        &resolved[block.tx_range.clone()]
+                                                    {
+                                                        fiber.apply_tx(tx, &ctx)?;
+                                                    }
+                                                }
+                                                Ok(())
+                                            },
+                                            || -> Result<()> {
+                                                for block in &arena.blocks {
+                                                    for tx in
+                                                        &resolved[block.tx_range.clone()]
+                                                    {
+                                                        object.apply_tx(tx, &ctx)?;
+                                                    }
+                                                }
+                                                Ok(())
+                                            },
+                                        );
+                                        r_fiber?;
+                                        r_object?;
+                                        Ok(())
+                                    },
+                                );
+                                r_left?;
+                                r_right?;
                                 Ok(())
                             },
                         );
-                        r_fiber?;
-                        r_object?;
-                        Ok(())
-                    },
-                );
-                r_left?;
-                r_right?;
+                        let cell_dist_sealed_rows = addr_result?;
+                        reducers_result?;
 
-                Ok((hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed))
+                        let address_elapsed = address_started.elapsed();
+                        Ok((hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed))
+                    },
+                )
             },
         );
-        let (history_result, history_elapsed) = history_result_with_elapsed;
-        let history = history_result?;
-        let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = reduce_right_result?;
+        let (history, history_elapsed, activity_stats_elapsed) = left_result?;
+        mid_result?;
+        let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = right_result?;
 
         // Post-overlap: activity deltas need both history + object reducer done.
         owners
@@ -1564,14 +1613,6 @@ impl BulkBuildRuntimeState {
             .object
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
         let reduce_elapsed = reduce_started.elapsed();
-
-        // Accumulate activity stats from in-memory bundles (no deserialization).
-        let activity_stats_started = Instant::now();
-        activity_stats.apply_bundles(&history.activity_bundles)?;
-        let activity_stats_elapsed = activity_stats_started.elapsed();
-
-        // Accumulate chain-level daily statistics (block counts, difficulty, etc.).
-        chain_stats.apply_blocks(&arena, &resolved)?;
 
         // Collect all sealed rows into a single vec for the pending flush.
         let mut all_sealed = hodl_sealed_rows;
@@ -1667,41 +1708,69 @@ impl BulkBuildRuntimeState {
             ..
         } = self;
         let ctx = owners::ReducerContext::new(&frozen);
-        let (history_result_with_elapsed, reduce_right_result) = rayon::join(
-            || { let started = Instant::now(); let result = build_history_rows(&arena, &resolved, &frozen, is_mainnet, token_info_cache); (result, started.elapsed()) },
-            || -> Result<(Vec<materialize::MaterializedRow>, Vec<materialize::MaterializedRow>, std::time::Duration)> {
-                let hodl_sealed_rows = apply_hodl_tracker_batch_standalone(hodl_tracker, hodl_live_cells_by_lock, &arena, &resolved)?;
-                let address_started = Instant::now();
-                let mut cell_dist_sealed_rows = Vec::new();
-                for block in &arena.blocks {
-                    let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
-                    cell_dist_tracker.record_block_date(block.number, block_date);
-                    for tx in &resolved[block.tx_range.clone()] {
-                        for input in &tx.resolved_inputs { cell_dist_tracker.cell_consumed(input.occupied_capacity)?; }
-                        for cell in tx.cells.iter() { cell_dist_tracker.cell_created(cell.occupied_capacity); }
-                        let address_deltas = owners.address.apply_tx_with_deltas(tx, &ctx)?;
-                        apply_cell_dist_cohort_deltas(cell_dist_tracker, owners.address.balances(), &address_deltas, tx)?;
-                    }
-                    if let Some((snapshot_date, snapshot)) = cell_dist_tracker.maybe_snapshot(block_date) {
-                        let date_str = snapshot_date.format("%Y%m%d").to_string();
-                        let cohort = cell_dist_tracker.cohort_snapshot();
-                        cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::CELL_DISTRIBUTION, date_str.as_bytes()), bincode::serialize(&snapshot)?));
-                        cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::ADDR_COHORT, date_str.as_bytes()), bincode::serialize(&cohort)?));
-                    }
-                }
-                let address_elapsed = address_started.elapsed();
-                let CoreOwners { address: _, ref mut script, ref mut token, ref mut dao, ref mut fiber, ref mut object } = *owners;
-                let (r_left, r_right) = rayon::join(
-                    || -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { script.apply_tx(tx, &ctx)?; } } for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { token.apply_tx(tx, &ctx)?; } } Ok(()) },
-                    || -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { dao.apply_tx(tx, &ctx)?; } dao.record_block(block)?; } let (r_fiber, r_object) = rayon::join(|| -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { fiber.apply_tx(tx, &ctx)?; } } Ok(()) }, || -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { object.apply_tx(tx, &ctx)?; } } Ok(()) }); r_fiber?; r_object?; Ok(()) },
-                );
-                r_left?; r_right?;
-                Ok((hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed))
+
+        // 3-way parallel tree (same structure as apply_blocks):
+        //   LEFT:   history → activity_stats
+        //   MIDDLE: chain_stats
+        //   RIGHT:  hodl → rayon::join(address+cell_dist, 5 independent reducers)
+        let (left_result, (mid_result, right_result)) = rayon::join(
+            || -> Result<(HistoryBuildResult, std::time::Duration, std::time::Duration)> {
+                let history_started = Instant::now();
+                let history =
+                    build_history_rows(&arena, &resolved, &frozen, is_mainnet, token_info_cache)?;
+                let history_elapsed = history_started.elapsed();
+                let activity_stats_started = Instant::now();
+                activity_stats.apply_bundles(&history.activity_bundles)?;
+                let activity_stats_elapsed = activity_stats_started.elapsed();
+                Ok((history, history_elapsed, activity_stats_elapsed))
+            },
+            || {
+                rayon::join(
+                || -> Result<()> { chain_stats.apply_blocks(&arena, &resolved) },
+                || -> Result<(Vec<materialize::MaterializedRow>, Vec<materialize::MaterializedRow>, std::time::Duration)> {
+                    let hodl_sealed_rows = apply_hodl_tracker_batch_standalone(hodl_tracker, hodl_live_cells_by_lock, &arena, &resolved)?;
+                    let CoreOwners { ref mut address, ref mut script, ref mut token, ref mut dao, ref mut fiber, ref mut object } = *owners;
+                    let address_started = Instant::now();
+                    let (addr_result, reducers_result) = rayon::join(
+                        || -> Result<Vec<materialize::MaterializedRow>> {
+                            let mut cell_dist_sealed_rows = Vec::new();
+                            for block in &arena.blocks {
+                                let block_date = ckbadger_common::block_date_from_ms(block.timestamp_ms);
+                                cell_dist_tracker.record_block_date(block.number, block_date);
+                                for tx in &resolved[block.tx_range.clone()] {
+                                    for input in &tx.resolved_inputs { cell_dist_tracker.cell_consumed(input.occupied_capacity)?; }
+                                    for cell in tx.cells.iter() { cell_dist_tracker.cell_created(cell.occupied_capacity); }
+                                    let address_deltas = address.apply_tx_with_deltas(tx, &ctx)?;
+                                    apply_cell_dist_cohort_deltas(cell_dist_tracker, address.balances(), &address_deltas, tx)?;
+                                }
+                                if let Some((snapshot_date, snapshot)) = cell_dist_tracker.maybe_snapshot(block_date) {
+                                    let date_str = snapshot_date.format("%Y%m%d").to_string();
+                                    let cohort = cell_dist_tracker.cohort_snapshot();
+                                    cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::CELL_DISTRIBUTION, date_str.as_bytes()), bincode::serialize(&snapshot)?));
+                                    cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::ADDR_COHORT, date_str.as_bytes()), bincode::serialize(&cohort)?));
+                                }
+                            }
+                            Ok(cell_dist_sealed_rows)
+                        },
+                        || -> Result<()> {
+                            let (r_left, r_right) = rayon::join(
+                                || -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { script.apply_tx(tx, &ctx)?; } } for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { token.apply_tx(tx, &ctx)?; } } Ok(()) },
+                                || -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { dao.apply_tx(tx, &ctx)?; } dao.record_block(block)?; } let (r_fiber, r_object) = rayon::join(|| -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { fiber.apply_tx(tx, &ctx)?; } } Ok(()) }, || -> Result<()> { for block in &arena.blocks { for tx in &resolved[block.tx_range.clone()] { object.apply_tx(tx, &ctx)?; } } Ok(()) }); r_fiber?; r_object?; Ok(()) },
+                            );
+                            r_left?; r_right?; Ok(())
+                        },
+                    );
+                    let cell_dist_sealed_rows = addr_result?;
+                    reducers_result?;
+                    let address_elapsed = address_started.elapsed();
+                    Ok((hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed))
+                },
+            )
             },
         );
-        let (history_result, history_elapsed) = history_result_with_elapsed;
-        let history = history_result?;
-        let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = reduce_right_result?;
+        let (history, history_elapsed, activity_stats_elapsed) = left_result?;
+        mid_result?;
+        let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = right_result?;
         owners
             .object
             .apply_object_activity_count_deltas(&history.object_activity_count_deltas)?;
@@ -1709,10 +1778,6 @@ impl BulkBuildRuntimeState {
             .object
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
         let reduce_elapsed = reduce_started.elapsed();
-        let activity_stats_started = Instant::now();
-        activity_stats.apply_bundles(&history.activity_bundles)?;
-        let activity_stats_elapsed = activity_stats_started.elapsed();
-        chain_stats.apply_blocks(&arena, &resolved)?;
         let mut all_sealed = hodl_sealed_rows;
         all_sealed.extend(cell_dist_sealed_rows);
         Ok((
