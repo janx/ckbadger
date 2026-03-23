@@ -81,14 +81,14 @@ impl FiberDetector {
         let mut summary = FiberCellSummary::default();
 
         for input in &tx.inputs {
-            match classify_lock(&input.lock_code_hash) {
+            match classify_lock(input.lock_code_hash) {
                 FiberLockType::FundingLock => {
                     summary.has_funding_input = true;
                     summary
                         .funding_lock_hashes
-                        .push(input.lock_script_hash.clone());
+                        .push(input.lock_script_hash.to_vec());
                     if summary.funding_input_args.is_none() {
-                        summary.funding_input_args = Some(input.lock_args.clone());
+                        summary.funding_input_args = Some(input.lock_args.to_vec());
                         summary.funding_input_capacity = Some(input.capacity);
                     }
                 }
@@ -96,9 +96,9 @@ impl FiberDetector {
                     summary.has_commitment_input = true;
                     summary
                         .commitment_lock_hashes
-                        .push(input.lock_script_hash.clone());
+                        .push(input.lock_script_hash.to_vec());
                     if summary.commitment_input_args.is_none() {
-                        summary.commitment_input_args = Some(input.lock_args.clone());
+                        summary.commitment_input_args = Some(input.lock_args.to_vec());
                         summary.commitment_input_capacity = Some(input.capacity);
                     }
                 }
@@ -107,14 +107,14 @@ impl FiberDetector {
         }
 
         for (idx, output) in tx.outputs.iter().enumerate() {
-            match classify_lock(&output.lock_code_hash) {
+            match classify_lock(output.lock_code_hash) {
                 FiberLockType::FundingLock => {
                     summary.has_funding_output = true;
                     summary
                         .funding_lock_hashes
-                        .push(output.lock_script_hash.clone());
+                        .push(output.lock_script_hash.to_vec());
                     if summary.funding_output_args.is_none() {
-                        summary.funding_output_args = Some(output.lock_args.clone());
+                        summary.funding_output_args = Some(output.lock_args.to_vec());
                         summary.funding_output_capacity = Some(output.capacity);
                         summary.funding_output_index = Some(idx);
                     }
@@ -123,9 +123,9 @@ impl FiberDetector {
                     summary.has_commitment_output = true;
                     summary
                         .commitment_lock_hashes
-                        .push(output.lock_script_hash.clone());
+                        .push(output.lock_script_hash.to_vec());
                     if summary.commitment_output_args.is_none() {
-                        summary.commitment_output_args = Some(output.lock_args.clone());
+                        summary.commitment_output_args = Some(output.lock_args.to_vec());
                     }
                 }
                 FiberLockType::Other => {}
@@ -318,18 +318,18 @@ impl ProtocolDetector for FiberDetector {
     fn might_apply(&self, tx: &TxView<'_>) -> bool {
         tx.inputs
             .iter()
-            .any(|input| classify_lock(&input.lock_code_hash) != FiberLockType::Other)
+            .any(|input| classify_lock(input.lock_code_hash) != FiberLockType::Other)
             || tx
                 .outputs
                 .iter()
-                .any(|output| classify_lock(&output.lock_code_hash) != FiberLockType::Other)
+                .any(|output| classify_lock(output.lock_code_hash) != FiberLockType::Other)
     }
 
     fn detect(
         &self,
         tx: &TxView<'_>,
         owner_lock_hash: &[u8],
-        _accum: &OwnerAccum,
+        _accum: &OwnerAccum<'_>,
         _asset_changes: &[ckbadger_store::types::AssetChange],
         _type_calls: &[ckbadger_store::types::TypeCallEntry],
         _lock_calls: &[ckbadger_store::types::LockCallEntry],
@@ -371,16 +371,47 @@ impl ProtocolDetector for FiberDetector {
 }
 
 #[cfg(test)]
+#[allow(clippy::useless_vec)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
     use crate::db::writer::activities::{
-        build_activity_bundles_for_block_with_detectors, InputCellView, TxView,
+        build_activity_bundles_for_block_with_detectors, OutputCellView, TxView,
     };
-    use crate::parser::cell::ParsedCell;
     use crate::parser::fiber::{COMMITMENT_LOCK_CODE_HASH_MAINNET, FUNDING_LOCK_CODE_HASH_MAINNET};
     use crate::rpc::parse_hex_to_bytes;
+
+    struct OwnedInput {
+        lock_script_hash: Vec<u8>,
+        lock_code_hash: Vec<u8>,
+        lock_args: Vec<u8>,
+        type_code_hash: Option<Vec<u8>>,
+        type_args: Option<Vec<u8>>,
+        capacity: i64,
+        data: Vec<u8>,
+    }
+
+    impl OwnedInput {
+        fn view(&self) -> crate::db::writer::activities::InputCellView<'_> {
+            crate::db::writer::activities::InputCellView {
+                lock_script_hash: &self.lock_script_hash,
+                lock_code_hash: &self.lock_code_hash,
+                lock_hash_type: 1,
+                lock_args: &self.lock_args,
+                capacity: self.capacity,
+                occupied_capacity: 61_00000000,
+                type_code_hash: self.type_code_hash.as_deref(),
+                type_hash_type: Some(1),
+                type_script_hash: None,
+                type_args: self.type_args.as_deref(),
+                udt_amount: None,
+                data: &self.data,
+                is_dao_withdraw_request: false,
+                dao_compensation: None,
+            }
+        }
+    }
 
     fn make_input_with_lock(
         lock_hash_byte: u8,
@@ -389,22 +420,44 @@ mod tests {
         capacity: i64,
         type_code_hash: Option<Vec<u8>>,
         type_args: Option<Vec<u8>>,
-    ) -> InputCellView {
-        InputCellView {
+    ) -> OwnedInput {
+        OwnedInput {
             lock_script_hash: vec![lock_hash_byte; 32],
             lock_code_hash,
-            lock_hash_type: 1,
             lock_args,
             capacity,
-            occupied_capacity: 61_00000000,
             type_code_hash,
-            type_hash_type: Some(1),
-            type_script_hash: None,
             type_args,
-            udt_amount: None,
             data: vec![],
-            is_dao_withdraw_request: false,
-            dao_compensation: None,
+        }
+    }
+
+    struct OwnedOutput {
+        lock_script_hash: Vec<u8>,
+        lock_code_hash: Vec<u8>,
+        lock_args: Vec<u8>,
+        type_code_hash: Option<Vec<u8>>,
+        type_args: Option<Vec<u8>>,
+        capacity: i64,
+        data: Vec<u8>,
+    }
+
+    impl OwnedOutput {
+        fn view(&self) -> OutputCellView<'_> {
+            OutputCellView {
+                capacity: self.capacity,
+                lock_code_hash: &self.lock_code_hash,
+                lock_hash_type: 1,
+                lock_args: &self.lock_args,
+                lock_script_hash: &self.lock_script_hash,
+                type_code_hash: self.type_code_hash.as_deref(),
+                type_hash_type: Some(1),
+                type_args: self.type_args.as_deref(),
+                type_script_hash: None,
+                data_hash: &[],
+                data_size: 0,
+                data: &self.data,
+            }
         }
     }
 
@@ -415,19 +468,14 @@ mod tests {
         capacity: i64,
         type_code_hash: Option<Vec<u8>>,
         type_args: Option<Vec<u8>>,
-    ) -> ParsedCell {
-        ParsedCell {
-            capacity,
-            lock_code_hash,
-            lock_hash_type: 1,
-            lock_args,
+    ) -> OwnedOutput {
+        OwnedOutput {
             lock_script_hash: vec![lock_hash_byte; 32],
+            lock_code_hash,
+            lock_args,
+            capacity,
             type_code_hash,
-            type_hash_type: Some(1),
             type_args,
-            type_script_hash: None,
-            data_hash: [0; 32],
-            data_size: 0,
             data: vec![],
         }
     }
@@ -480,8 +528,8 @@ mod tests {
             block_number: 5000,
             timestamp: 1_700_200_000,
             is_cellbase: false,
-            inputs: vec![input],
-            outputs: &outputs,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
@@ -572,8 +620,8 @@ mod tests {
             block_number: 5001,
             timestamp: 1_700_200_010,
             is_cellbase: false,
-            inputs: vec![input],
-            outputs: &outputs,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
@@ -670,8 +718,8 @@ mod tests {
             block_number: 5002,
             timestamp: 1_700_200_020,
             is_cellbase: false,
-            inputs: vec![input],
-            outputs: &outputs,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
@@ -763,8 +811,8 @@ mod tests {
             block_number: 5003,
             timestamp: 1_700_200_030,
             is_cellbase: false,
-            inputs: vec![input],
-            outputs: &outputs,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
@@ -834,8 +882,8 @@ mod tests {
             block_number: 5004,
             timestamp: 1_700_200_040,
             is_cellbase: false,
-            inputs: vec![input],
-            outputs: &outputs,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
@@ -899,8 +947,8 @@ mod tests {
             block_number: 6000,
             timestamp: 1_700_300_000,
             is_cellbase: false,
-            inputs: vec![input],
-            outputs: &outputs,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
@@ -1029,8 +1077,8 @@ mod tests {
             block_number: 5005,
             timestamp: 1_700_200_050,
             is_cellbase: false,
-            inputs: vec![input_commitment, input_fee],
-            outputs: &outputs,
+            inputs: vec![input_commitment.view(), input_fee.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];

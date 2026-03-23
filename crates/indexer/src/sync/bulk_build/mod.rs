@@ -34,8 +34,7 @@ use super::indexer::{
     take_bulk_sync_completion_transition, Indexer,
 };
 use crate::bulk_sync_perf::BatchSample;
-use crate::parser::cell::ParsedCell;
-use crate::parser::{ParsedUdtCell, ScriptParser, UdtParser, UdtStandard};
+use crate::parser::{ParsedUdtCell, UdtParser, UdtStandard};
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::owners::BulkReducer;
 
@@ -2658,14 +2657,71 @@ fn build_history_rows_for_block(
                 resolved_tx
                     .cells
                     .iter()
-                    .map(|cell| parsed_cell_from_facts(cell, interner))
-                    .collect::<Result<Vec<_>>>()?,
+                    .map(|cell| crate::db::writer::activities::OutputCellView {
+                        capacity: cell.capacity,
+                        lock_code_hash: interner.resolve_bytes(cell.lock_code_hash_id),
+                        lock_hash_type: cell.lock_hash_type,
+                        lock_args: interner.resolve_bytes(cell.lock_args_id),
+                        lock_script_hash: interner.resolve_bytes(cell.lock_script_hash_id),
+                        type_code_hash: cell.type_code_hash_id.map(|id| interner.resolve_bytes(id)),
+                        type_hash_type: cell.type_hash_type,
+                        type_args: cell.type_args_id.map(|id| interner.resolve_bytes(id)),
+                        type_script_hash: cell
+                            .type_script_hash_id
+                            .map(|id| interner.resolve_bytes(id)),
+                        data_hash: cell.data_hash.as_ref().map_or(&[], |h| h.as_slice()),
+                        data_size: cell.data_size,
+                        data: &cell.data,
+                    })
+                    .collect::<Vec<_>>(),
             );
             block_inputs.push(
                 resolved_tx
                     .resolved_inputs
                     .iter()
-                    .map(|input| activity_input_view_from_resolved_input(input, interner))
+                    .map(|input| -> Result<crate::db::writer::activities::InputCellView<'_>> {
+                        let (is_dao_withdraw_request, dao_compensation) = match (
+                            input.dao_state,
+                            input.dao_compensation_ars,
+                        ) {
+                            (
+                                Some(facts::DaoCellState::WithdrawRequest { .. }),
+                                Some(facts::DaoCompensationArs {
+                                    deposit_ar,
+                                    withdraw_request_ar,
+                                }),
+                            ) => (
+                                true,
+                                Some(crate::db::writer::dao::calculate_dao_compensation_from_ar(
+                                    input.capacity, deposit_ar, withdraw_request_ar,
+                                )?),
+                            ),
+                            (Some(facts::DaoCellState::WithdrawRequest { .. }), None) => {
+                                bail!(
+                                    "missing DAO compensation ARs while building bulk DAO activity input: outpoint=0x{}:{}",
+                                    hex::encode(input.outpoint.tx_hash),
+                                    input.outpoint.index
+                                );
+                            }
+                            _ => (false, None),
+                        };
+                        Ok(crate::db::writer::activities::InputCellView {
+                            lock_script_hash: interner.resolve_bytes(input.lock_script_hash_id),
+                            lock_code_hash: interner.resolve_bytes(input.lock_code_hash_id),
+                            lock_hash_type: input.lock_hash_type,
+                            lock_args: interner.resolve_bytes(input.lock_args_id),
+                            capacity: input.capacity,
+                            occupied_capacity: input.occupied_capacity,
+                            type_code_hash: input.type_code_hash_id.map(|id| interner.resolve_bytes(id)),
+                            type_hash_type: input.type_hash_type,
+                            type_script_hash: input.type_script_hash_id.map(|id| interner.resolve_bytes(id)),
+                            type_args: input.type_args_id.map(|id| interner.resolve_bytes(id)),
+                            udt_amount: input.udt_amount,
+                            data: &[],
+                            is_dao_withdraw_request,
+                            dao_compensation,
+                        })
+                    })
                     .collect::<Result<Vec<_>>>()?,
             );
         }
@@ -2673,7 +2729,7 @@ fn build_history_rows_for_block(
         let tx_views = block_txs
             .iter()
             .zip(block_inputs)
-            .zip(block_outputs.iter())
+            .zip(block_outputs)
             .map(
                 |((tx, inputs), outputs)| crate::db::writer::activities::TxView {
                     tx_hash: &tx.hash,
@@ -3249,100 +3305,6 @@ fn activity_code_hash(
             tx.tx_index,
             interner.resolve_bytes(id).len()
         )
-    })
-}
-
-fn activity_input_view_from_resolved_input(
-    input: &facts::ResolvedInputFacts,
-    interner: &interner::FrozenIdentityView,
-) -> Result<crate::db::writer::activities::InputCellView> {
-    let (is_dao_withdraw_request, dao_compensation) = match (
-        input.dao_state,
-        input.dao_compensation_ars,
-    ) {
-        (
-            Some(facts::DaoCellState::WithdrawRequest { .. }),
-            Some(facts::DaoCompensationArs {
-                deposit_ar,
-                withdraw_request_ar,
-            }),
-        ) => (
-            true,
-            Some(crate::db::writer::dao::calculate_dao_compensation_from_ar(
-                input.capacity,
-                deposit_ar,
-                withdraw_request_ar,
-            )?),
-        ),
-        (Some(facts::DaoCellState::WithdrawRequest { .. }), None) => {
-            bail!(
-                    "missing DAO compensation ARs while building bulk DAO activity input: outpoint=0x{}:{}",
-                    hex::encode(input.outpoint.tx_hash),
-                    input.outpoint.index
-                );
-        }
-        _ => (false, None),
-    };
-
-    Ok(crate::db::writer::activities::InputCellView {
-        lock_script_hash: interner.resolve_bytes(input.lock_script_hash_id).to_vec(),
-        lock_code_hash: interner.resolve_bytes(input.lock_code_hash_id).to_vec(),
-        lock_hash_type: input.lock_hash_type,
-        lock_args: interner.resolve_bytes(input.lock_args_id).to_vec(),
-        capacity: input.capacity,
-        occupied_capacity: input.occupied_capacity,
-        type_code_hash: input
-            .type_code_hash_id
-            .map(|id| interner.resolve_bytes(id).to_vec()),
-        type_hash_type: input.type_hash_type,
-        type_script_hash: input
-            .type_script_hash_id
-            .map(|id| interner.resolve_bytes(id).to_vec()),
-        type_args: input
-            .type_args_id
-            .map(|id| interner.resolve_bytes(id).to_vec()),
-        udt_amount: input.udt_amount,
-        data: Vec::new(),
-        is_dao_withdraw_request,
-        dao_compensation,
-    })
-}
-
-fn parsed_cell_from_facts(
-    cell: &facts::CellFacts,
-    interner: &interner::FrozenIdentityView,
-) -> Result<ParsedCell> {
-    if usize::try_from(cell.data_size).ok() != Some(cell.data.len()) {
-        bail!(
-            "bulk build cell data size mismatch while building activities: outpoint=0x{}:{} data_size={} actual_len={}",
-            hex::encode(cell.outpoint.tx_hash),
-            cell.outpoint.index,
-            cell.data_size,
-            cell.data.len()
-        );
-    }
-
-    Ok(ParsedCell {
-        capacity: cell.capacity,
-        lock_code_hash: interner.resolve_bytes(cell.lock_code_hash_id).to_vec(),
-        lock_hash_type: cell.lock_hash_type,
-        lock_args: interner.resolve_bytes(cell.lock_args_id).to_vec(),
-        lock_script_hash: interner.resolve_bytes(cell.lock_script_hash_id).to_vec(),
-        type_code_hash: cell
-            .type_code_hash_id
-            .map(|id| interner.resolve_bytes(id).to_vec()),
-        type_hash_type: cell.type_hash_type,
-        type_args: cell
-            .type_args_id
-            .map(|id| interner.resolve_bytes(id).to_vec()),
-        type_script_hash: cell
-            .type_script_hash_id
-            .map(|id| interner.resolve_bytes(id).to_vec()),
-        data_hash: cell
-            .data_hash
-            .unwrap_or_else(|| ScriptParser::compute_data_hash(&cell.data)),
-        data_size: cell.data_size,
-        data: cell.data.clone(),
     })
 }
 

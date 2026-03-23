@@ -12,7 +12,6 @@ use ckbadger_store::types::{
     TypeCallEntry,
 };
 
-use crate::parser::cell::ParsedCell;
 use crate::parser::udt::UdtParser;
 
 mod bundled_udt {
@@ -145,22 +144,40 @@ impl CodeHashes {
 }
 
 /// Input cell info needed for activity building.
-#[derive(Clone)]
-pub struct InputCellView {
-    pub lock_script_hash: Vec<u8>,
-    pub lock_code_hash: Vec<u8>,
+#[derive(Clone, Copy)]
+pub struct InputCellView<'a> {
+    pub lock_script_hash: &'a [u8],
+    pub lock_code_hash: &'a [u8],
     pub lock_hash_type: i16,
-    pub lock_args: Vec<u8>,
+    pub lock_args: &'a [u8],
     pub capacity: i64,
     pub occupied_capacity: i64,
-    pub type_code_hash: Option<Vec<u8>>,
+    pub type_code_hash: Option<&'a [u8]>,
     pub type_hash_type: Option<i16>,
-    pub type_script_hash: Option<Vec<u8>>,
-    pub type_args: Option<Vec<u8>>,
+    pub type_script_hash: Option<&'a [u8]>,
+    pub type_args: Option<&'a [u8]>,
     pub udt_amount: Option<u128>,
-    pub data: Vec<u8>,
+    pub data: &'a [u8],
     pub is_dao_withdraw_request: bool,
     pub dao_compensation: Option<i64>,
+}
+
+/// Output cell info needed for activity building (borrowed from facts or ParsedCell).
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+pub struct OutputCellView<'a> {
+    pub capacity: i64,
+    pub lock_code_hash: &'a [u8],
+    pub lock_hash_type: i16,
+    pub lock_args: &'a [u8],
+    pub lock_script_hash: &'a [u8],
+    pub type_code_hash: Option<&'a [u8]>,
+    pub type_hash_type: Option<i16>,
+    pub type_args: Option<&'a [u8]>,
+    pub type_script_hash: Option<&'a [u8]>,
+    pub data_hash: &'a [u8],
+    pub data_size: i32,
+    pub data: &'a [u8],
 }
 
 /// Transaction data needed for activity building.
@@ -171,8 +188,8 @@ pub struct TxView<'a> {
     pub block_number: i64,
     pub timestamp: i64,
     pub is_cellbase: bool,
-    pub inputs: Vec<InputCellView>,
-    pub outputs: &'a [ParsedCell],
+    pub inputs: Vec<InputCellView<'a>>,
+    pub outputs: Vec<OutputCellView<'a>>,
 }
 
 /// Detects protocol-level actions by analyzing cross-layer signals.
@@ -197,7 +214,7 @@ pub(crate) trait ProtocolDetector: Send + Sync {
         &self,
         tx: &TxView<'_>,
         owner_lock_hash: &[u8],
-        accum: &OwnerAccum,
+        accum: &OwnerAccum<'_>,
         asset_changes: &[AssetChange],
         type_calls: &[TypeCallEntry],
         lock_calls: &[LockCallEntry],
@@ -245,16 +262,16 @@ pub fn build_activities_for_block(
 
 /// Accumulator for per-owner position within one transaction.
 #[derive(Default)]
-pub(crate) struct OwnerAccum {
-    pub(crate) lock_code_hash: Option<Vec<u8>>,
+pub(crate) struct OwnerAccum<'a> {
+    pub(crate) lock_code_hash: Option<&'a [u8]>,
     pub(crate) lock_hash_type: Option<i16>,
-    pub(crate) lock_args: Option<Vec<u8>>,
+    pub(crate) lock_args: Option<&'a [u8]>,
     pub(crate) input_capacity: i128,
     pub(crate) output_capacity: i128,
     pub(crate) input_used: i64,
     pub(crate) output_used: i64,
     /// UDT: type_script_hash -> (input_amount, output_amount)
-    pub(crate) udt_deltas: HashMap<Vec<u8>, (i128, i128)>,
+    pub(crate) udt_deltas: HashMap<&'a [u8], (i128, i128)>,
     /// DAO deposits (output cells with DAO type and data == 0x00..00)
     pub(crate) dao_deposits: Vec<i64>,
     /// DAO withdraw requests (output cells with DAO type and non-zero deposit block)
@@ -263,45 +280,41 @@ pub(crate) struct OwnerAccum {
     /// Each entry is (capacity, compensation).
     pub(crate) dao_withdraw_completes: Vec<(i64, i64)>,
     /// Spore/DOB IDs seen as inputs
-    pub(crate) spore_inputs: Vec<Vec<u8>>,
+    pub(crate) spore_inputs: Vec<&'a [u8]>,
     /// Spore/DOB IDs seen as outputs
-    pub(crate) spore_outputs: Vec<Vec<u8>>,
+    pub(crate) spore_outputs: Vec<&'a [u8]>,
     /// mNFT IDs seen as inputs
-    pub(crate) nft_inputs: Vec<Vec<u8>>,
+    pub(crate) nft_inputs: Vec<&'a [u8]>,
     /// mNFT IDs seen as outputs
-    pub(crate) nft_outputs: Vec<Vec<u8>>,
+    pub(crate) nft_outputs: Vec<&'a [u8]>,
     /// DotBit IDs seen as inputs
     pub(crate) dotbit_inputs: Vec<Vec<u8>>,
     /// DotBit IDs seen as outputs
     pub(crate) dotbit_outputs: Vec<Vec<u8>>,
     /// did:ckb IDs seen as inputs
-    pub(crate) did_ckb_inputs: Vec<Vec<u8>>,
+    pub(crate) did_ckb_inputs: Vec<&'a [u8]>,
     /// did:ckb IDs seen as outputs
-    pub(crate) did_ckb_outputs: Vec<Vec<u8>>,
+    pub(crate) did_ckb_outputs: Vec<&'a [u8]>,
     /// Distinct script code_hashes involved (lock + type)
-    pub(crate) involved_scripts: BTreeSet<Vec<u8>>,
+    pub(crate) involved_scripts: BTreeSet<&'a [u8]>,
     /// Whether any cell for this owner has a type script
     pub(crate) has_type_script: bool,
     /// Unrecognized type script instances keyed by (code_hash, hash_type, args)
-    pub(crate) unrecognized_type_calls: BTreeSet<(Vec<u8>, i16, Vec<u8>)>,
+    pub(crate) unrecognized_type_calls: BTreeSet<(&'a [u8], i16, &'a [u8])>,
     /// Non-standard lock scripts seen on output cells in this tx, keyed by (code_hash, hash_type, args)
-    pub(crate) unrecognized_lock_calls: BTreeSet<(Vec<u8>, i16, Vec<u8>)>,
+    pub(crate) unrecognized_lock_calls: BTreeSet<(&'a [u8], i16, &'a [u8])>,
 }
 
 const DOTBIT_TYPE_ARGS_LEN: usize = 20;
 const DOTBIT_DATA_HASH_PREFIX_LEN: usize = 32;
 
-fn record_owner_lock_script(
-    accum: &mut OwnerAccum,
-    lock_code_hash: &[u8],
+fn record_owner_lock_script<'a>(
+    accum: &mut OwnerAccum<'a>,
+    lock_code_hash: &'a [u8],
     lock_hash_type: i16,
-    lock_args: &[u8],
+    lock_args: &'a [u8],
 ) -> Result<()> {
-    match (
-        accum.lock_code_hash.as_ref(),
-        accum.lock_hash_type,
-        accum.lock_args.as_ref(),
-    ) {
+    match (accum.lock_code_hash, accum.lock_hash_type, accum.lock_args) {
         (Some(existing_code_hash), Some(existing_hash_type), Some(existing_args)) => {
             if existing_code_hash != lock_code_hash {
                 bail!(
@@ -328,9 +341,9 @@ fn record_owner_lock_script(
             }
         }
         (None, None, None) => {
-            accum.lock_code_hash = Some(lock_code_hash.to_vec());
+            accum.lock_code_hash = Some(lock_code_hash);
             accum.lock_hash_type = Some(lock_hash_type);
-            accum.lock_args = Some(lock_args.to_vec());
+            accum.lock_args = Some(lock_args);
         }
         _ => bail!(
             "owner lock script state partially initialized: code_hash={}, hash_type={}, args={}",
@@ -342,40 +355,40 @@ fn record_owner_lock_script(
     Ok(())
 }
 
-fn build_tx_activity_bundle<S: BuildHasher>(
-    tx: &TxView<'_>,
+fn build_tx_activity_bundle<'a, S: BuildHasher>(
+    tx: &TxView<'a>,
     hashes: &CodeHashes,
     token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>), S>,
     detectors: &[Box<dyn ProtocolDetector>],
 ) -> Result<TxActivityBundle> {
-    let mut owners: HashMap<Vec<u8>, OwnerAccum> = HashMap::new();
+    let mut owners: HashMap<&'a [u8], OwnerAccum<'a>> = HashMap::new();
 
     // Process inputs (skip inputs with unknown cell info — empty lock_script_hash)
     for input in &tx.inputs {
         if input.lock_script_hash.len() < 32 {
             continue;
         }
-        let accum = owners.entry(input.lock_script_hash.clone()).or_default();
+        let accum = owners.entry(input.lock_script_hash).or_default();
         record_owner_lock_script(
             accum,
-            &input.lock_code_hash,
+            input.lock_code_hash,
             input.lock_hash_type,
-            &input.lock_args,
+            input.lock_args,
         )?;
-        accum.involved_scripts.insert(input.lock_code_hash.clone());
+        accum.involved_scripts.insert(input.lock_code_hash);
         accum.input_capacity += input.capacity as i128;
         accum.input_used += input.occupied_capacity;
 
-        if let Some(ref type_code_hash) = input.type_code_hash {
-            accum.involved_scripts.insert(type_code_hash.clone());
+        if let Some(type_code_hash) = input.type_code_hash {
+            accum.involved_scripts.insert(type_code_hash);
             classify_input(
                 accum,
                 type_code_hash,
                 input.type_hash_type,
-                input.type_script_hash.as_deref(),
-                input.type_args.as_deref(),
+                input.type_script_hash,
+                input.type_args,
                 input.udt_amount,
-                &input.data,
+                input.data,
                 input.is_dao_withdraw_request,
                 input.dao_compensation,
                 hashes,
@@ -385,20 +398,20 @@ fn build_tx_activity_bundle<S: BuildHasher>(
     }
 
     // Process outputs
-    for cell in tx.outputs {
-        let accum = owners.entry(cell.lock_script_hash.clone()).or_default();
+    for cell in &tx.outputs {
+        let accum = owners.entry(cell.lock_script_hash).or_default();
         record_owner_lock_script(
             accum,
-            &cell.lock_code_hash,
+            cell.lock_code_hash,
             cell.lock_hash_type,
-            &cell.lock_args,
+            cell.lock_args,
         )?;
-        accum.involved_scripts.insert(cell.lock_code_hash.clone());
+        accum.involved_scripts.insert(cell.lock_code_hash);
         accum.output_capacity += cell.capacity as i128;
 
         // Compute occupied for output
         let type_args_len = if cell.type_code_hash.is_some() {
-            Some(cell.type_args.as_ref().map(|a| a.len()).unwrap_or(0))
+            Some(cell.type_args.map(|a| a.len()).unwrap_or(0))
         } else {
             None
         };
@@ -409,15 +422,15 @@ fn build_tx_activity_bundle<S: BuildHasher>(
         )?;
         accum.output_used += occupied;
 
-        if let Some(ref type_code_hash) = cell.type_code_hash {
-            accum.involved_scripts.insert(type_code_hash.clone());
+        if let Some(type_code_hash) = cell.type_code_hash {
+            accum.involved_scripts.insert(type_code_hash);
             classify_output(
                 accum,
                 type_code_hash,
                 cell.type_hash_type,
-                cell.type_script_hash.as_deref(),
-                cell.type_args.as_deref(),
-                &cell.data,
+                cell.type_script_hash,
+                cell.type_args,
+                cell.data,
                 hashes,
                 cell.capacity,
             )?;
@@ -425,25 +438,23 @@ fn build_tx_activity_bundle<S: BuildHasher>(
     }
 
     // Detect non-standard output locks and record as lock_calls for sending owners
-    for cell in tx.outputs {
-        if !hashes.is_standard_lock(&cell.lock_code_hash) {
+    for cell in &tx.outputs {
+        if !hashes.is_standard_lock(cell.lock_code_hash) {
             // Record on all owners who are sending CKB (input_capacity > 0)
             // and who are NOT the output cell's owner
             for (lock_hash, accum) in owners.iter_mut() {
-                if lock_hash.as_slice() != cell.lock_script_hash.as_slice()
-                    && accum.input_capacity > 0
-                {
+                if *lock_hash != cell.lock_script_hash && accum.input_capacity > 0 {
                     accum.unrecognized_lock_calls.insert((
-                        cell.lock_code_hash.clone(),
+                        cell.lock_code_hash,
                         cell.lock_hash_type,
-                        cell.lock_args.clone(),
+                        cell.lock_args,
                     ));
                 }
             }
         }
     }
 
-    let mut owner_hashes: Vec<Vec<u8>> = owners.keys().cloned().collect();
+    let mut owner_hashes: Vec<&[u8]> = owners.keys().copied().collect();
     owner_hashes.sort();
 
     // Pre-filter detectors once per tx (not per owner)
@@ -465,8 +476,8 @@ fn build_tx_activity_bundle<S: BuildHasher>(
         // Peers = all other lock_hashes in this tx
         let peers: Vec<Vec<u8>> = owner_hashes
             .iter()
-            .filter(|h| h.as_slice() != lock_hash.as_slice())
-            .cloned()
+            .filter(|h| *h != lock_hash)
+            .map(|h| h.to_vec())
             .collect();
 
         // Build asset changes
@@ -477,11 +488,11 @@ fn build_tx_activity_bundle<S: BuildHasher>(
             let delta = *output_amt - *input_amt;
             if delta != 0 {
                 let (symbol, decimals) = token_info_cache
-                    .get(type_script_hash)
+                    .get(*type_script_hash)
                     .cloned()
                     .unwrap_or((None, None));
                 asset_changes.push(AssetChange::Token {
-                    type_script_hash: type_script_hash.clone(),
+                    type_script_hash: type_script_hash.to_vec(),
                     delta,
                     symbol,
                     decimals,
@@ -550,9 +561,9 @@ fn build_tx_activity_bundle<S: BuildHasher>(
                 .iter()
                 .map(
                     |(type_code_hash, type_hash_type, type_args)| TypeCallEntry {
-                        type_code_hash: type_code_hash.clone(),
+                        type_code_hash: type_code_hash.to_vec(),
                         type_hash_type: *type_hash_type,
-                        type_args: type_args.clone(),
+                        type_args: type_args.to_vec(),
                     },
                 )
                 .collect()
@@ -564,9 +575,9 @@ fn build_tx_activity_bundle<S: BuildHasher>(
                 .iter()
                 .map(
                     |(lock_code_hash, lock_hash_type, lock_args)| LockCallEntry {
-                        lock_code_hash: lock_code_hash.clone(),
+                        lock_code_hash: lock_code_hash.to_vec(),
                         lock_hash_type: *lock_hash_type,
-                        lock_args: lock_args.clone(),
+                        lock_args: lock_args.to_vec(),
                     },
                 )
                 .collect()
@@ -590,29 +601,39 @@ fn build_tx_activity_bundle<S: BuildHasher>(
             .collect();
 
         bundle_owners.push(OwnerActivityDelta {
-            lock_hash: lock_hash.clone(),
-            lock_code_hash: accum.lock_code_hash.clone().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "owner lock_code_hash must be recorded for lock_hash=0x{}",
-                    hex::encode(lock_hash)
-                )
-            })?,
+            lock_hash: lock_hash.to_vec(),
+            lock_code_hash: accum
+                .lock_code_hash
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "owner lock_code_hash must be recorded for lock_hash=0x{}",
+                        hex::encode(lock_hash)
+                    )
+                })?
+                .to_vec(),
             lock_hash_type: accum.lock_hash_type.ok_or_else(|| {
                 anyhow::anyhow!(
                     "owner lock_hash_type must be recorded for lock_hash=0x{}",
                     hex::encode(lock_hash)
                 )
             })?,
-            lock_args: accum.lock_args.clone().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "owner lock_args must be recorded for lock_hash=0x{}",
-                    hex::encode(lock_hash)
-                )
-            })?,
+            lock_args: accum
+                .lock_args
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "owner lock_args must be recorded for lock_hash=0x{}",
+                        hex::encode(lock_hash)
+                    )
+                })?
+                .to_vec(),
             ckb_delta,
             used_delta,
             has_type_script: accum.has_type_script,
-            involved_script_code_hashes: accum.involved_scripts.iter().cloned().collect(),
+            involved_script_code_hashes: accum
+                .involved_scripts
+                .iter()
+                .map(|s| s.to_vec())
+                .collect(),
             asset_changes,
             type_calls,
             lock_calls,
@@ -659,14 +680,14 @@ fn flatten_tx_activity_bundle(bundle: TxActivityBundle) -> Vec<OwnerActivity> {
         .collect()
 }
 
-fn classify_input(
-    accum: &mut OwnerAccum,
-    type_code_hash: &[u8],
+fn classify_input<'a>(
+    accum: &mut OwnerAccum<'a>,
+    type_code_hash: &'a [u8],
     type_hash_type: Option<i16>,
-    type_script_hash: Option<&[u8]>,
-    type_args: Option<&[u8]>,
+    type_script_hash: Option<&'a [u8]>,
+    type_args: Option<&'a [u8]>,
     udt_amount: Option<u128>,
-    data: &[u8],
+    data: &'a [u8],
     is_dao_withdraw_request: bool,
     dao_compensation: Option<i64>,
     hashes: &CodeHashes,
@@ -677,7 +698,7 @@ fn classify_input(
         Some(AssetKind::Udt) => {
             if let Some(tsh) = type_script_hash {
                 if let Some(amount) = udt_amount.or_else(|| UdtParser::parse_amount(data)) {
-                    let entry = accum.udt_deltas.entry(tsh.to_vec()).or_insert((0, 0));
+                    let entry = accum.udt_deltas.entry(tsh).or_insert((0, 0));
                     entry.0 += amount as i128;
                 }
             }
@@ -696,21 +717,21 @@ fn classify_input(
         Some(AssetKind::SporeDid) => {
             if let Some(args) = type_args {
                 if !args.is_empty() {
-                    accum.did_ckb_inputs.push(args.to_vec());
+                    accum.did_ckb_inputs.push(args);
                 }
             }
         }
         Some(AssetKind::Spore | AssetKind::Cluster) => {
             if let Some(args) = type_args {
                 if !args.is_empty() {
-                    accum.spore_inputs.push(args.to_vec());
+                    accum.spore_inputs.push(args);
                 }
             }
         }
         Some(AssetKind::MnftToken) => {
             if let Some(args) = type_args {
                 if !args.is_empty() {
-                    accum.nft_inputs.push(args.to_vec());
+                    accum.nft_inputs.push(args);
                 }
             }
         }
@@ -726,13 +747,13 @@ fn classify_input(
     Ok(())
 }
 
-fn classify_output(
-    accum: &mut OwnerAccum,
-    type_code_hash: &[u8],
+fn classify_output<'a>(
+    accum: &mut OwnerAccum<'a>,
+    type_code_hash: &'a [u8],
     type_hash_type: Option<i16>,
-    type_script_hash: Option<&[u8]>,
-    type_args: Option<&[u8]>,
-    cell_data: &[u8],
+    type_script_hash: Option<&'a [u8]>,
+    type_args: Option<&'a [u8]>,
+    cell_data: &'a [u8],
     hashes: &CodeHashes,
     capacity: i64,
 ) -> Result<()> {
@@ -741,7 +762,7 @@ fn classify_output(
         Some(AssetKind::Udt) => {
             if let Some(tsh) = type_script_hash {
                 if let Some(amount) = UdtParser::parse_amount(cell_data) {
-                    let entry = accum.udt_deltas.entry(tsh.to_vec()).or_insert((0, 0));
+                    let entry = accum.udt_deltas.entry(tsh).or_insert((0, 0));
                     entry.1 += amount as i128;
                 }
             }
@@ -767,21 +788,21 @@ fn classify_output(
         Some(AssetKind::SporeDid) => {
             if let Some(args) = type_args {
                 if !args.is_empty() {
-                    accum.did_ckb_outputs.push(args.to_vec());
+                    accum.did_ckb_outputs.push(args);
                 }
             }
         }
         Some(AssetKind::Spore | AssetKind::Cluster) => {
             if let Some(args) = type_args {
                 if !args.is_empty() {
-                    accum.spore_outputs.push(args.to_vec());
+                    accum.spore_outputs.push(args);
                 }
             }
         }
         Some(AssetKind::MnftToken) => {
             if let Some(args) = type_args {
                 if !args.is_empty() {
-                    accum.nft_outputs.push(args.to_vec());
+                    accum.nft_outputs.push(args);
                 }
             }
         }
@@ -797,11 +818,11 @@ fn classify_output(
     Ok(())
 }
 
-fn record_script_call(
-    accum: &mut OwnerAccum,
-    type_code_hash: &[u8],
+fn record_script_call<'a>(
+    accum: &mut OwnerAccum<'a>,
+    type_code_hash: &'a [u8],
     type_hash_type: Option<i16>,
-    type_args: Option<&[u8]>,
+    type_args: Option<&'a [u8]>,
 ) -> Result<()> {
     let hash_type = type_hash_type.ok_or_else(|| {
         anyhow::anyhow!(
@@ -817,7 +838,7 @@ fn record_script_call(
     })?;
     accum
         .unrecognized_type_calls
-        .insert((type_code_hash.to_vec(), hash_type, args.to_vec()));
+        .insert((type_code_hash, hash_type, args));
     Ok(())
 }
 
@@ -847,32 +868,34 @@ fn resolve_dotbit_account_id(type_args: Option<&[u8]>, cell_data: &[u8]) -> Opti
 }
 
 /// Emit Object asset changes (Spore/DOB, mNFT) by comparing input vs output ID sets.
-fn emit_object_changes(
-    inputs: &[Vec<u8>],
-    outputs: &[Vec<u8>],
+fn emit_object_changes<T: AsRef<[u8]>>(
+    inputs: &[T],
+    outputs: &[T],
     standard: &str,
     asset_changes: &mut Vec<AssetChange>,
 ) {
     // IDs in outputs = Mint or Transfer
     for id in outputs {
-        let in_inputs = inputs.iter().any(|i| i == id);
+        let id = id.as_ref();
+        let in_inputs = inputs.iter().any(|i| i.as_ref() == id);
         let action = if in_inputs {
             AssetAction::Transfer
         } else {
             AssetAction::Mint
         };
         asset_changes.push(AssetChange::Object {
-            object_id: id.clone(),
+            object_id: id.to_vec(),
             standard: standard.to_string(),
             action,
         });
     }
     // IDs only in inputs = Burn
     for id in inputs {
-        let in_outputs = outputs.iter().any(|o| o == id);
+        let id = id.as_ref();
+        let in_outputs = outputs.iter().any(|o| o.as_ref() == id);
         if !in_outputs {
             asset_changes.push(AssetChange::Object {
-                object_id: id.clone(),
+                object_id: id.to_vec(),
                 standard: standard.to_string(),
                 action: AssetAction::Burn,
             });
@@ -881,32 +904,34 @@ fn emit_object_changes(
 }
 
 /// Emit Identity asset changes (.bit, did:ckb) by comparing input vs output ID sets.
-fn emit_identity_changes(
-    inputs: &[Vec<u8>],
-    outputs: &[Vec<u8>],
+fn emit_identity_changes<T: AsRef<[u8]>>(
+    inputs: &[T],
+    outputs: &[T],
     standard: &str,
     asset_changes: &mut Vec<AssetChange>,
 ) {
     // IDs in outputs = Mint or Transfer
     for id in outputs {
-        let in_inputs = inputs.iter().any(|i| i == id);
+        let id = id.as_ref();
+        let in_inputs = inputs.iter().any(|i| i.as_ref() == id);
         let action = if in_inputs {
             AssetAction::Transfer
         } else {
             AssetAction::Mint
         };
         asset_changes.push(AssetChange::Identity {
-            identity_id: id.clone(),
+            identity_id: id.to_vec(),
             standard: standard.to_string(),
             action,
         });
     }
     // IDs only in inputs = Burn
     for id in inputs {
-        let in_outputs = outputs.iter().any(|o| o == id);
+        let id = id.as_ref();
+        let in_outputs = outputs.iter().any(|o| o.as_ref() == id);
         if !in_outputs {
             asset_changes.push(AssetChange::Identity {
-                identity_id: id.clone(),
+                identity_id: id.to_vec(),
                 standard: standard.to_string(),
                 action: AssetAction::Burn,
             });
@@ -915,9 +940,42 @@ fn emit_identity_changes(
 }
 
 #[cfg(test)]
+#[allow(clippy::useless_vec)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// Owned data for constructing test OutputCellView instances.
+    struct OwnedOutput {
+        lock_script_hash: Vec<u8>,
+        lock_code_hash: Vec<u8>,
+        lock_args: Vec<u8>,
+        type_code_hash: Option<Vec<u8>>,
+        type_hash_type: Option<i16>,
+        type_script_hash: Option<Vec<u8>>,
+        type_args: Option<Vec<u8>>,
+        data: Vec<u8>,
+        capacity: i64,
+    }
+
+    impl OwnedOutput {
+        fn view(&self) -> OutputCellView<'_> {
+            OutputCellView {
+                capacity: self.capacity,
+                lock_code_hash: &self.lock_code_hash,
+                lock_hash_type: 1,
+                lock_args: &self.lock_args,
+                lock_script_hash: &self.lock_script_hash,
+                type_code_hash: self.type_code_hash.as_deref(),
+                type_hash_type: self.type_hash_type,
+                type_args: self.type_args.as_deref(),
+                type_script_hash: self.type_script_hash.as_deref(),
+                data_hash: &[],
+                data_size: self.data.len() as i32,
+                data: &self.data,
+            }
+        }
+    }
 
     fn make_output(
         lock_hash_byte: u8,
@@ -926,38 +984,71 @@ mod tests {
         type_script_hash: Option<Vec<u8>>,
         type_args: Option<Vec<u8>>,
         data: Vec<u8>,
-    ) -> ParsedCell {
-        let data_size = data.len() as i32;
-        ParsedCell {
-            capacity,
-            lock_code_hash: vec![0x11; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0x22; 20],
+    ) -> OwnedOutput {
+        OwnedOutput {
             lock_script_hash: vec![lock_hash_byte; 32],
+            lock_code_hash: vec![0x11; 32],
+            lock_args: vec![0x22; 20],
             type_code_hash,
             type_hash_type: None,
-            type_args,
             type_script_hash,
-            data_hash: [0; 32],
-            data_size,
+            type_args,
             data,
+            capacity,
         }
     }
 
-    fn make_input(lock_hash_byte: u8, capacity: i64, occupied: i64) -> InputCellView {
-        InputCellView {
+    /// Owned data for constructing test InputCellView instances.
+    struct OwnedInput {
+        lock_script_hash: Vec<u8>,
+        lock_code_hash: Vec<u8>,
+        lock_args: Vec<u8>,
+        type_code_hash: Option<Vec<u8>>,
+        type_script_hash: Option<Vec<u8>>,
+        type_args: Option<Vec<u8>>,
+        udt_amount: Option<u128>,
+        data: Vec<u8>,
+        capacity: i64,
+        occupied_capacity: i64,
+        type_hash_type: Option<i16>,
+        is_dao_withdraw_request: bool,
+        dao_compensation: Option<i64>,
+    }
+
+    impl OwnedInput {
+        fn view(&self) -> InputCellView<'_> {
+            InputCellView {
+                lock_script_hash: &self.lock_script_hash,
+                lock_code_hash: &self.lock_code_hash,
+                lock_hash_type: 1,
+                lock_args: &self.lock_args,
+                capacity: self.capacity,
+                occupied_capacity: self.occupied_capacity,
+                type_code_hash: self.type_code_hash.as_deref(),
+                type_hash_type: self.type_hash_type,
+                type_script_hash: self.type_script_hash.as_deref(),
+                type_args: self.type_args.as_deref(),
+                udt_amount: self.udt_amount,
+                data: &self.data,
+                is_dao_withdraw_request: self.is_dao_withdraw_request,
+                dao_compensation: self.dao_compensation,
+            }
+        }
+    }
+
+    fn make_input(lock_hash_byte: u8, capacity: i64, occupied: i64) -> OwnedInput {
+        OwnedInput {
             lock_script_hash: vec![lock_hash_byte; 32],
             lock_code_hash: vec![0x11; 32],
-            lock_hash_type: 1,
             lock_args: vec![0x22; 20],
-            capacity,
-            occupied_capacity: occupied,
             type_code_hash: None,
-            type_hash_type: None,
             type_script_hash: None,
             type_args: None,
             udt_amount: None,
             data: vec![],
+            capacity,
+            occupied_capacity: occupied,
+            type_hash_type: None,
             is_dao_withdraw_request: false,
             dao_compensation: None,
         }
@@ -966,7 +1057,7 @@ mod tests {
     #[test]
     fn test_build_activity_bundles_preserves_input_only_owner_lock_script() {
         let owner = 0xAA;
-        let outputs = Vec::new();
+        let input = make_input(owner, 100_00000000, 61_00000000);
 
         let tx = TxView {
             tx_hash: &[0x21; 32],
@@ -975,8 +1066,8 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
-            inputs: vec![make_input(owner, 100_00000000, 61_00000000)],
-            outputs: &outputs,
+            inputs: vec![input.view()],
+            outputs: vec![],
         };
 
         let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
@@ -999,6 +1090,7 @@ mod tests {
             make_output(bob, 100_00000000, None, None, None, vec![]),
         ];
 
+        let bob_input = make_input(bob, 200_00000000, 61_00000000);
         let tx = TxView {
             tx_hash: &[0x22; 32],
             block_hash: &[0xA2; 32],
@@ -1006,8 +1098,8 @@ mod tests {
             block_number: 1001,
             timestamp: 1_700_000_010,
             is_cellbase: false,
-            inputs: vec![make_input(bob, 200_00000000, 61_00000000)],
-            outputs: &outputs,
+            inputs: vec![bob_input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1031,6 +1123,7 @@ mod tests {
             make_output(alice, 200_00000000, None, None, None, vec![]),
         ];
 
+        let alice_input_owned = make_input(alice, 300_00000000, 61_00000000);
         let tx = TxView {
             tx_hash: &[0x01; 32],
             block_hash: &[0xA1; 32],
@@ -1038,8 +1131,8 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
-            inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
-            outputs: &outputs,
+            inputs: vec![alice_input_owned.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1079,7 +1172,7 @@ mod tests {
             timestamp: 1_700_000_000,
             is_cellbase: true,
             inputs: vec![],
-            outputs: &outputs,
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1104,6 +1197,7 @@ mod tests {
             vec![0u8; 100], // 100 bytes of data
         )];
 
+        let alice_input_owned = make_input(alice, 100_00000000, 61_00000000);
         let tx = TxView {
             tx_hash: &[0x03; 32],
             block_hash: &[0xA3; 32],
@@ -1111,8 +1205,8 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
-            inputs: vec![make_input(alice, 100_00000000, 61_00000000)],
-            outputs: &outputs,
+            inputs: vec![alice_input_owned.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1136,6 +1230,7 @@ mod tests {
             make_output(alice, 100_00000000, None, None, None, vec![]),
         ];
 
+        let alice_input_owned = make_input(alice, 300_00000000, 61_00000000);
         let tx = TxView {
             tx_hash: &[0x04; 32],
             block_hash: &[0xA4; 32],
@@ -1143,8 +1238,8 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
-            inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
-            outputs: &outputs,
+            inputs: vec![alice_input_owned.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1171,11 +1266,12 @@ mod tests {
             timestamp: 1_700_000_000,
             is_cellbase: true,
             inputs: vec![],
-            outputs: &outputs1,
+            outputs: outputs1.iter().map(|o| o.view()).collect(),
         };
 
         let outputs2 = vec![make_output(bob, 200_00000000, None, None, None, vec![])];
 
+        let alice_input_owned = make_input(alice, 200_00000000, 61_00000000);
         let tx2 = TxView {
             tx_hash: &[0x02; 32],
             block_hash: &[0xB1; 32],
@@ -1183,8 +1279,8 @@ mod tests {
             block_number: 100,
             timestamp: 1_700_000_000,
             is_cellbase: false,
-            inputs: vec![make_input(alice, 200_00000000, 61_00000000)],
-            outputs: &outputs2,
+            inputs: vec![alice_input_owned.view()],
+            outputs: outputs2.iter().map(|o| o.view()).collect(),
         };
 
         let activities = build_activities_for_block(&[tx1, tx2], &HashMap::new()).unwrap();
@@ -1235,8 +1331,8 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
-            inputs: vec![alice_input],
-            outputs: &outputs,
+            inputs: vec![alice_input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let mut token_cache = HashMap::new();
@@ -1330,8 +1426,8 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
-            inputs: vec![alice_input],
-            outputs: &outputs,
+            inputs: vec![alice_input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let mut token_cache = HashMap::new();
@@ -1390,7 +1486,7 @@ mod tests {
             timestamp: 1_700_000_000,
             is_cellbase: false,
             inputs: vec![],
-            outputs: &outputs,
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1440,7 +1536,7 @@ mod tests {
             timestamp: 1_700_000_100,
             is_cellbase: false,
             inputs: vec![],
-            outputs: &outputs,
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1476,7 +1572,7 @@ mod tests {
         dao_input.is_dao_withdraw_request = true;
         dao_input.dao_compensation = Some(5_00000000);
 
-        let outputs: Vec<ParsedCell> = vec![];
+        let outputs: Vec<OwnedOutput> = vec![];
 
         let tx = TxView {
             tx_hash: &[0x09; 32],
@@ -1485,8 +1581,8 @@ mod tests {
             block_number: 200,
             timestamp: 1_700_000_200,
             is_cellbase: false,
-            inputs: vec![dao_input],
-            outputs: &outputs,
+            inputs: vec![dao_input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1512,6 +1608,7 @@ mod tests {
             make_output(alice, 200_00000000, None, None, None, vec![]),
         ];
 
+        let alice_input_owned = make_input(alice, 300_00000000, 61_00000000);
         let tx = TxView {
             tx_hash: &[0x01; 32],
             block_hash: &[0xA1; 32],
@@ -1519,8 +1616,8 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
-            inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
-            outputs: &outputs,
+            inputs: vec![alice_input_owned.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1569,8 +1666,8 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
-            inputs: vec![alice_input],
-            outputs: &outputs,
+            inputs: vec![alice_input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1618,6 +1715,7 @@ mod tests {
             make_output(alice, 200_00000000, None, None, None, vec![]),
         ];
 
+        let alice_input_owned = make_input(alice, 300_00000000, 61_00000000);
         let tx = TxView {
             tx_hash: &[0x0B; 32],
             block_hash: &[0xAB; 32],
@@ -1625,8 +1723,8 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
-            inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
-            outputs: &outputs,
+            inputs: vec![alice_input_owned.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1676,8 +1774,8 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
-            inputs: vec![udt_input],
-            outputs: &outputs,
+            inputs: vec![udt_input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1768,8 +1866,8 @@ mod tests {
             block_number: 2000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
-            inputs: vec![alice_input],
-            outputs: &outputs,
+            inputs: vec![alice_input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1803,11 +1901,11 @@ mod tests {
 
         let mut output = make_output(0xCC, 50_00000000, None, None, None, vec![]);
         output.lock_code_hash = non_standard_lock_code_hash.clone();
-        output.lock_hash_type = 1;
         output.lock_args = non_standard_lock_args.clone();
 
         let outputs = vec![output];
 
+        let alice_input_owned = make_input(alice, 100_00000000, 61_00000000);
         let tx = TxView {
             tx_hash: &[0x30; 32],
             block_hash: &[0xB0; 32],
@@ -1815,8 +1913,8 @@ mod tests {
             block_number: 2000,
             timestamp: 1_700_100_000,
             is_cellbase: false,
-            inputs: vec![make_input(alice, 100_00000000, 61_00000000)],
-            outputs: &outputs,
+            inputs: vec![alice_input_owned.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1846,10 +1944,10 @@ mod tests {
 
         let mut output = make_output(0xBB, 50_00000000, None, None, None, vec![]);
         output.lock_code_hash = secp_code_hash;
-        output.lock_hash_type = 1;
 
         let outputs = vec![output];
 
+        let alice_input_owned = make_input(alice, 100_00000000, 61_00000000);
         let tx = TxView {
             tx_hash: &[0x31; 32],
             block_hash: &[0xB1; 32],
@@ -1857,8 +1955,8 @@ mod tests {
             block_number: 2001,
             timestamp: 1_700_100_010,
             is_cellbase: false,
-            inputs: vec![make_input(alice, 100_00000000, 61_00000000)],
-            outputs: &outputs,
+            inputs: vec![alice_input_owned.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
@@ -1893,11 +1991,10 @@ mod tests {
         capacity: i64,
         type_code_hash: Option<Vec<u8>>,
         type_args: Option<Vec<u8>>,
-    ) -> InputCellView {
-        InputCellView {
+    ) -> OwnedInput {
+        OwnedInput {
             lock_script_hash: vec![lock_hash_byte; 32],
             lock_code_hash,
-            lock_hash_type: 1,
             lock_args,
             capacity,
             occupied_capacity: 61_00000000,
@@ -1919,19 +2016,16 @@ mod tests {
         capacity: i64,
         type_code_hash: Option<Vec<u8>>,
         type_args: Option<Vec<u8>>,
-    ) -> ParsedCell {
-        ParsedCell {
+    ) -> OwnedOutput {
+        OwnedOutput {
             capacity,
             lock_code_hash,
-            lock_hash_type: 1,
             lock_args,
             lock_script_hash: vec![lock_hash_byte; 32],
             type_code_hash,
             type_hash_type: Some(1),
             type_args,
             type_script_hash: None,
-            data_hash: [0; 32],
-            data_size: 0,
             data: vec![],
         }
     }
@@ -1977,8 +2071,8 @@ mod tests {
             block_number: 5000,
             timestamp: 1_700_200_000,
             is_cellbase: false,
-            inputs: vec![input],
-            outputs: &outputs,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
@@ -2055,8 +2149,8 @@ mod tests {
             block_number: 5001,
             timestamp: 1_700_200_010,
             is_cellbase: false,
-            inputs: vec![input],
-            outputs: &outputs,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
@@ -2127,8 +2221,8 @@ mod tests {
             block_number: 5002,
             timestamp: 1_700_200_020,
             is_cellbase: false,
-            inputs: vec![input],
-            outputs: &outputs,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
@@ -2153,13 +2247,19 @@ mod tests {
         use super::super::utxoswap_detector::UtxoSwapDetector;
 
         let plain_lock = vec![0u8; 32];
+        let input_lock_hash = vec![0xAA; 32];
+        let input_lock_args = vec![0x22; 20];
+        let input_data: Vec<u8> = vec![];
+        let output_lock_args = vec![0x33; 20];
+        let output_lock_hash = vec![0xBB; 32];
+        let output_data: Vec<u8> = vec![];
 
         // Build a TxView with plain lock code_hash on input and output (no protocol scripts)
         let input = InputCellView {
-            lock_script_hash: vec![0xAA; 32],
-            lock_code_hash: plain_lock.clone(),
+            lock_script_hash: &input_lock_hash,
+            lock_code_hash: &plain_lock,
             lock_hash_type: 1,
-            lock_args: vec![0x22; 20],
+            lock_args: &input_lock_args,
             capacity: 200_00000000,
             occupied_capacity: 61_00000000,
             type_code_hash: None,
@@ -2167,27 +2267,26 @@ mod tests {
             type_script_hash: None,
             type_args: None,
             udt_amount: None,
-            data: vec![],
+            data: &input_data,
             is_dao_withdraw_request: false,
             dao_compensation: None,
         };
 
-        let output = ParsedCell {
+        let output = OutputCellView {
             capacity: 200_00000000,
-            lock_code_hash: plain_lock,
+            lock_code_hash: &plain_lock,
             lock_hash_type: 1,
-            lock_args: vec![0x33; 20],
-            lock_script_hash: vec![0xBB; 32],
+            lock_args: &output_lock_args,
+            lock_script_hash: &output_lock_hash,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             type_script_hash: None,
-            data_hash: [0; 32],
+            data_hash: &[],
             data_size: 0,
-            data: vec![],
+            data: &output_data,
         };
 
-        let outputs = vec![output];
         let tx = TxView {
             tx_hash: &[0x99; 32],
             block_hash: &[0xCC; 32],
@@ -2196,7 +2295,7 @@ mod tests {
             timestamp: 1_700_100_000,
             is_cellbase: false,
             inputs: vec![input],
-            outputs: &outputs,
+            outputs: vec![output],
         };
 
         let rgbpp = RgbppDetector::new(true);

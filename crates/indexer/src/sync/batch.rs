@@ -143,14 +143,14 @@ fn resolve_consumed_stats(
     Ok((data_size_consumed, used_capacity_consumed))
 }
 
-fn build_activity_input_views(
+fn build_activity_input_views<'a>(
     tx_data: &TxData,
     block_number: i64,
-    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    input_cell_info: &'a HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    batch_cell_infos: &'a HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     dao_withdraw_outpoints: &HashSet<(Vec<u8>, i16)>,
     dao_compensations: &HashMap<(Vec<u8>, i16), i64>,
-) -> Result<Vec<crate::db::writer::activities::InputCellView>> {
+) -> Result<Vec<crate::db::writer::activities::InputCellView<'a>>> {
     if tx_data.is_cellbase {
         return Ok(Vec::new());
     }
@@ -195,18 +195,18 @@ fn build_activity_input_views(
             };
 
             Ok(crate::db::writer::activities::InputCellView {
-                lock_script_hash: info.lock_script_hash.clone(),
-                lock_code_hash: info.lock_code_hash.clone(),
+                lock_script_hash: &info.lock_script_hash,
+                lock_code_hash: &info.lock_code_hash,
                 lock_hash_type: info.lock_hash_type,
-                lock_args: info.lock_args.clone(),
+                lock_args: &info.lock_args,
                 capacity: info.capacity,
                 occupied_capacity: info.occupied_capacity,
-                type_code_hash: info.type_code_hash.clone(),
+                type_code_hash: info.type_code_hash.as_deref(),
                 type_hash_type: info.type_hash_type,
-                type_script_hash: info.type_script_hash.clone(),
-                type_args: info.type_args.clone(),
+                type_script_hash: info.type_script_hash.as_deref(),
+                type_args: info.type_args.as_deref(),
                 udt_amount: info.udt_amount,
-                data: Vec::new(),
+                data: &[],
                 is_dao_withdraw_request,
                 dao_compensation,
             })
@@ -2498,6 +2498,24 @@ impl Indexer {
                             &dao_withdraw_outpoints,
                             &dao_compensations,
                         )?;
+                        let outputs: Vec<crate::db::writer::activities::OutputCellView<'_>> = td
+                            .cells
+                            .iter()
+                            .map(|cell| crate::db::writer::activities::OutputCellView {
+                                capacity: cell.capacity,
+                                lock_code_hash: &cell.lock_code_hash,
+                                lock_hash_type: cell.lock_hash_type,
+                                lock_args: &cell.lock_args,
+                                lock_script_hash: &cell.lock_script_hash,
+                                type_code_hash: cell.type_code_hash.as_deref(),
+                                type_hash_type: cell.type_hash_type,
+                                type_args: cell.type_args.as_deref(),
+                                type_script_hash: cell.type_script_hash.as_deref(),
+                                data_hash: &cell.data_hash,
+                                data_size: cell.data_size,
+                                data: &cell.data,
+                            })
+                            .collect();
                         Ok(crate::db::writer::activities::TxView {
                             tx_hash: &td.hash,
                             block_hash: &parsed.hash,
@@ -2506,7 +2524,7 @@ impl Indexer {
                             timestamp: parsed.timestamp.timestamp_millis(),
                             is_cellbase: td.is_cellbase,
                             inputs,
-                            outputs: &td.cells,
+                            outputs,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -3568,13 +3586,17 @@ mod tests {
             vec![],
         );
 
+        let empty_cell_info = HashMap::new();
+        let empty_batch_info = HashMap::new();
+        let empty_dao_outpoints = HashSet::new();
+        let empty_dao_comp = HashMap::new();
         let err = match build_activity_input_views(
             &tx,
             99,
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashSet::new(),
-            &HashMap::new(),
+            &empty_cell_info,
+            &empty_batch_info,
+            &empty_dao_outpoints,
+            &empty_dao_comp,
         ) {
             Ok(_) => panic!("missing input cell info should fail fast"),
             Err(err) => err,
@@ -3613,13 +3635,16 @@ mod tests {
             PositionedCellInfo::new(info.clone(), 1),
         );
 
+        let empty_cell_info = HashMap::new();
+        let empty_dao_outpoints = HashSet::new();
+        let empty_dao_comp = HashMap::new();
         let inputs = build_activity_input_views(
             &tx,
             100,
-            &HashMap::new(),
+            &empty_cell_info,
             &batch_cell_infos,
-            &HashSet::new(),
-            &HashMap::new(),
+            &empty_dao_outpoints,
+            &empty_dao_comp,
         )
         .expect("input lookup should fall back to same-batch cell cache");
         assert_eq!(inputs.len(), 1);
@@ -3662,11 +3687,12 @@ mod tests {
         let mut dao_compensations = HashMap::new();
         dao_compensations.insert((previous_tx_hash.to_vec(), 1i16), 5_00000000i64);
 
+        let empty_batch_info = HashMap::new();
         let inputs = build_activity_input_views(
             &tx,
             200,
             &input_cell_info,
-            &HashMap::new(),
+            &empty_batch_info,
             &dao_withdraw_outpoints,
             &dao_compensations,
         )

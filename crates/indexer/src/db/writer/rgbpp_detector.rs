@@ -149,10 +149,10 @@ impl ProtocolDetector for RgbppDetector {
 
     fn might_apply(&self, tx: &TxView<'_>) -> bool {
         tx.inputs.iter().any(|input| {
-            RgbppParser::detect_lock_type(&input.lock_code_hash, self.is_mainnet)
+            RgbppParser::detect_lock_type(input.lock_code_hash, self.is_mainnet)
                 != RgbppLockType::Other
         }) || tx.outputs.iter().any(|output| {
-            RgbppParser::detect_lock_type(&output.lock_code_hash, self.is_mainnet)
+            RgbppParser::detect_lock_type(output.lock_code_hash, self.is_mainnet)
                 != RgbppLockType::Other
         })
     }
@@ -161,7 +161,7 @@ impl ProtocolDetector for RgbppDetector {
         &self,
         tx: &TxView<'_>,
         owner_lock_hash: &[u8],
-        _accum: &OwnerAccum,
+        _accum: &OwnerAccum<'_>,
         _asset_changes: &[ckbadger_store::types::AssetChange],
         _type_calls: &[ckbadger_store::types::TypeCallEntry],
         _lock_calls: &[ckbadger_store::types::LockCallEntry],
@@ -175,34 +175,33 @@ impl ProtocolDetector for RgbppDetector {
 
         // Process inputs
         for input in &tx.inputs {
-            if let (Some(ref type_code_hash), Some(ref type_args)) =
-                (&input.type_code_hash, &input.type_args)
+            if let (Some(type_code_hash), Some(type_args)) = (input.type_code_hash, input.type_args)
             {
                 let lock_type =
-                    RgbppParser::detect_lock_type(&input.lock_code_hash, self.is_mainnet);
-                let key = (type_code_hash.clone(), type_args.clone());
+                    RgbppParser::detect_lock_type(input.lock_code_hash, self.is_mainnet);
+                let key = (type_code_hash.to_vec(), type_args.to_vec());
                 type_groups.entry(key).or_default().push(TypeGroupCell {
                     side: CellSide::Input,
                     lock_type,
-                    lock_script_hash: input.lock_script_hash.clone(),
-                    lock_args: input.lock_args.clone(),
+                    lock_script_hash: input.lock_script_hash.to_vec(),
+                    lock_args: input.lock_args.to_vec(),
                 });
             }
         }
 
         // Process outputs
-        for output in tx.outputs {
-            if let (Some(ref type_code_hash), Some(ref type_args)) =
-                (&output.type_code_hash, &output.type_args)
+        for output in &tx.outputs {
+            if let (Some(type_code_hash), Some(type_args)) =
+                (output.type_code_hash, output.type_args)
             {
                 let lock_type =
-                    RgbppParser::detect_lock_type(&output.lock_code_hash, self.is_mainnet);
-                let key = (type_code_hash.clone(), type_args.clone());
+                    RgbppParser::detect_lock_type(output.lock_code_hash, self.is_mainnet);
+                let key = (type_code_hash.to_vec(), type_args.to_vec());
                 type_groups.entry(key).or_default().push(TypeGroupCell {
                     side: CellSide::Output,
                     lock_type,
-                    lock_script_hash: output.lock_script_hash.clone(),
-                    lock_args: output.lock_args.clone(),
+                    lock_script_hash: output.lock_script_hash.to_vec(),
+                    lock_args: output.lock_args.to_vec(),
                 });
             }
         }

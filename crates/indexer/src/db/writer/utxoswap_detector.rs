@@ -32,18 +32,18 @@ impl ProtocolDetector for UtxoSwapDetector {
     fn might_apply(&self, tx: &TxView<'_>) -> bool {
         tx.inputs
             .iter()
-            .any(|input| is_intent_lock(&input.lock_code_hash))
+            .any(|input| is_intent_lock(input.lock_code_hash))
             || tx
                 .outputs
                 .iter()
-                .any(|output| is_intent_lock(&output.lock_code_hash))
+                .any(|output| is_intent_lock(output.lock_code_hash))
     }
 
     fn detect(
         &self,
         tx: &TxView<'_>,
         owner_lock_hash: &[u8],
-        accum: &OwnerAccum,
+        accum: &OwnerAccum<'_>,
         _asset_changes: &[AssetChange],
         _type_calls: &[TypeCallEntry],
         _lock_calls: &[LockCallEntry],
@@ -54,11 +54,11 @@ impl ProtocolDetector for UtxoSwapDetector {
 
         // --- Submitted: intent lock on outputs, only for the intent's owner ---
         if ckb_delta < 0 {
-            for output in tx.outputs {
-                if !is_intent_lock(&output.lock_code_hash) {
+            for output in &tx.outputs {
+                if !is_intent_lock(output.lock_code_hash) {
                     continue;
                 }
-                let parsed = match parse_intent_args(&output.lock_args) {
+                let parsed = match parse_intent_args(output.lock_args) {
                     Some(p) => p,
                     None => continue,
                 };
@@ -93,10 +93,10 @@ impl ProtocolDetector for UtxoSwapDetector {
 
         // --- Settled: intent lock on inputs, owner_lock_hash prefix match ---
         for input in &tx.inputs {
-            if !is_intent_lock(&input.lock_code_hash) {
+            if !is_intent_lock(input.lock_code_hash) {
                 continue;
             }
-            let parsed = match parse_intent_args(&input.lock_args) {
+            let parsed = match parse_intent_args(input.lock_args) {
                 Some(p) => p,
                 None => continue,
             };
@@ -131,38 +131,85 @@ impl ProtocolDetector for UtxoSwapDetector {
 }
 
 #[cfg(test)]
+#[allow(clippy::useless_vec)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
     use crate::db::writer::activities::{
-        build_activity_bundles_for_block_with_detectors, InputCellView, TxView,
+        build_activity_bundles_for_block_with_detectors, OutputCellView, TxView,
     };
-    use crate::parser::cell::ParsedCell;
     use crate::parser::utxoswap::INTENT_LOCK_CODE_HASH_MAINNET;
     use crate::rpc::parse_hex_to_bytes;
+
+    struct OwnedInput {
+        lock_script_hash: Vec<u8>,
+        lock_code_hash: Vec<u8>,
+        lock_args: Vec<u8>,
+        capacity: i64,
+        data: Vec<u8>,
+    }
+
+    impl OwnedInput {
+        fn view(&self) -> crate::db::writer::activities::InputCellView<'_> {
+            crate::db::writer::activities::InputCellView {
+                lock_script_hash: &self.lock_script_hash,
+                lock_code_hash: &self.lock_code_hash,
+                lock_hash_type: 1,
+                lock_args: &self.lock_args,
+                capacity: self.capacity,
+                occupied_capacity: 61_00000000,
+                type_code_hash: None,
+                type_hash_type: Some(1),
+                type_script_hash: None,
+                type_args: None,
+                udt_amount: None,
+                data: &self.data,
+                is_dao_withdraw_request: false,
+                dao_compensation: None,
+            }
+        }
+    }
 
     fn make_input(
         lock_hash_byte: u8,
         lock_code_hash: Vec<u8>,
         lock_args: Vec<u8>,
         capacity: i64,
-    ) -> InputCellView {
-        InputCellView {
+    ) -> OwnedInput {
+        OwnedInput {
             lock_script_hash: vec![lock_hash_byte; 32],
             lock_code_hash,
-            lock_hash_type: 1,
             lock_args,
             capacity,
-            occupied_capacity: 61_00000000,
-            type_code_hash: None,
-            type_hash_type: Some(1),
-            type_script_hash: None,
-            type_args: None,
-            udt_amount: None,
             data: vec![],
-            is_dao_withdraw_request: false,
-            dao_compensation: None,
+        }
+    }
+
+    struct OwnedOutput {
+        lock_script_hash: Vec<u8>,
+        lock_code_hash: Vec<u8>,
+        lock_args: Vec<u8>,
+        capacity: i64,
+        data: Vec<u8>,
+    }
+
+    impl OwnedOutput {
+        fn view(&self) -> OutputCellView<'_> {
+            OutputCellView {
+                capacity: self.capacity,
+                lock_code_hash: &self.lock_code_hash,
+                lock_hash_type: 1,
+                lock_args: &self.lock_args,
+                lock_script_hash: &self.lock_script_hash,
+                type_code_hash: None,
+                type_hash_type: Some(1),
+                type_args: None,
+                type_script_hash: None,
+                data_hash: &[],
+                data_size: 0,
+                data: &self.data,
+            }
         }
     }
 
@@ -171,19 +218,12 @@ mod tests {
         lock_code_hash: Vec<u8>,
         lock_args: Vec<u8>,
         capacity: i64,
-    ) -> ParsedCell {
-        ParsedCell {
-            capacity,
-            lock_code_hash,
-            lock_hash_type: 1,
-            lock_args,
+    ) -> OwnedOutput {
+        OwnedOutput {
             lock_script_hash: vec![lock_hash_byte; 32],
-            type_code_hash: None,
-            type_hash_type: Some(1),
-            type_args: None,
-            type_script_hash: None,
-            data_hash: [0; 32],
-            data_size: 0,
+            lock_code_hash,
+            lock_args,
+            capacity,
             data: vec![],
         }
     }
@@ -234,8 +274,8 @@ mod tests {
             block_number: 5000,
             timestamp: 1_700_200_000,
             is_cellbase: false,
-            inputs: vec![input],
-            outputs: &outputs,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
@@ -282,8 +322,8 @@ mod tests {
             block_number: 6000,
             timestamp: 1_700_300_000,
             is_cellbase: false,
-            inputs: vec![input],
-            outputs: &outputs,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
@@ -351,8 +391,8 @@ mod tests {
             block_number: 6001,
             timestamp: 1_700_300_010,
             is_cellbase: false,
-            inputs: vec![intent_input],
-            outputs: &outputs,
+            inputs: vec![intent_input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
@@ -409,8 +449,8 @@ mod tests {
             block_number: 6002,
             timestamp: 1_700_300_020,
             is_cellbase: false,
-            inputs: vec![input],
-            outputs: &outputs,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
@@ -473,8 +513,8 @@ mod tests {
             block_number: 6003,
             timestamp: 1_700_300_030,
             is_cellbase: false,
-            inputs: vec![intent_input],
-            outputs: &outputs,
+            inputs: vec![intent_input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
@@ -531,8 +571,8 @@ mod tests {
             block_number: 6004,
             timestamp: 1_700_300_040,
             is_cellbase: false,
-            inputs: vec![input],
-            outputs: &outputs,
+            inputs: vec![input.view()],
+            outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
