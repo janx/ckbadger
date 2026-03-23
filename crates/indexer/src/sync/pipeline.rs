@@ -1878,7 +1878,6 @@ impl Indexer {
         // Resolve disk device once for per-batch I/O delta tracking
         let disk_device = crate::sys_info::detect_disk_device(&self.config.domain_data_path);
         let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(disk_device);
-        let mut batches_since_last_flush: u32 = 0;
 
         loop {
             if self.shutdown_requested.load(Ordering::SeqCst) {
@@ -2547,28 +2546,6 @@ impl Indexer {
                         self.maybe_invalidate_chart_caches(end_block).await;
                         self.check_bulk_sync_completion().await;
                         self.ensure_compaction_mode(blocks_remaining);
-
-                        // Memory-pressure flush
-                        batches_since_last_flush += 1;
-                        if self.writer.store().is_bulk_sync_mode() {
-                            let mem_flush_threshold_mb =
-                                self.writer.store().memory_profile().system_ram_bytes
-                                    / (1024 * 1024)
-                                    / 5; // 20% of total RAM
-                            if batch_env.mem_available_mb < mem_flush_threshold_mb
-                                && batches_since_last_flush >= 30
-                            {
-                                info!(
-                                    mem_available_mb = batch_env.mem_available_mb,
-                                    threshold_mb = mem_flush_threshold_mb,
-                                    "Memory pressure detected, flushing memtables"
-                                );
-                                if let Err(e) = self.writer.store().flush_all_memtables() {
-                                    warn!(error = %e, "Memory-pressure flush failed");
-                                }
-                                batches_since_last_flush = 0;
-                            }
-                        }
                     }
 
                     self.perf

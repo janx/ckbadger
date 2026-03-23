@@ -50,117 +50,10 @@ pub(crate) mod prefetch;
 pub(crate) mod sampler;
 pub(crate) mod sequencer;
 
+use crate::sync::bottleneck::{BatchSignals, BottleneckController, MAX_PREFETCH};
+
 const BULK_BUILD_MIN_BLOCK_SPAN: u64 = 10_000;
-const BULK_BUILD_MAX_BLOCK_SPAN: u64 = 100_000;
 const FLUSH_CHANNEL_DEPTH: usize = 4;
-const PREFETCH_DEPTH: usize = 4;
-
-// ── Throughput controller constants ──────────────────────────────────
-//
-// Design principle: maximize batch_block_span (larger writes are more
-// efficient for RocksDB) and only shrink when RocksDB compaction can't
-// keep up.  A cooldown prevents oscillation after pressure events.
-const BULK_BUILD_GROW_PCT: u64 = 125; // 1.25x growth per healthy batch
-const BULK_BUILD_MODERATE_SHRINK_PCT: u64 = 80; // 0.8x on moderate pressure
-const BULK_BUILD_SEVERE_SHRINK_PCT: u64 = 50; // 0.5x on severe pressure
-const BULK_BUILD_SEVERE_COOLDOWN: u64 = 3;
-const BULK_BUILD_MODERATE_COOLDOWN: u64 = 2;
-const BULK_BUILD_MAX_HISTORY_ROWS: f64 = 800_000.0;
-const BULK_BUILD_ROWS_EMA_ALPHA: f64 = 0.3;
-const BULK_BUILD_INITIAL_ROWS_PER_BLOCK: f64 = 30.0;
-const BULK_BUILD_L0_MODERATE: u64 = 64;
-const BULK_BUILD_L0_SEVERE: u64 = 96;
-
-#[derive(Debug, Clone, Copy)]
-struct ThroughputObservation {
-    actual_blocks: u64,
-    history_rows: usize,
-    /// Max L0 file count across all CFs (from sampler).
-    l0_files_max: u64,
-    /// Pending compaction bytes (from sampler, converted to bytes).
-    compaction_pending_bytes: u64,
-    /// Total immutable memtables across all CFs (from sampler).
-    immutable_memtables: u64,
-}
-
-/// Throughput-oriented batch span controller for the bulk build engine.
-///
-/// Grows `batch_block_span` toward the maximum to maximize RocksDB write
-/// amortization.  Shrinks only when RocksDB compaction pressure exceeds
-/// MemoryProfile thresholds or when the materialization row budget would
-/// be exceeded.  A cooldown window after each pressure event prevents
-/// grow/shrink oscillation.
-#[derive(Debug, Clone)]
-struct ThroughputController {
-    span: u64,
-    cooldown: u64,
-    rows_per_block_ema: f64,
-    rows_ema_observed: bool,
-}
-
-impl ThroughputController {
-    fn new(initial_span: u64) -> Self {
-        Self {
-            span: initial_span.clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN),
-            cooldown: 0,
-            rows_per_block_ema: BULK_BUILD_INITIAL_ROWS_PER_BLOCK,
-            rows_ema_observed: false,
-        }
-    }
-
-    fn observe_and_update(
-        &mut self,
-        batch_count: u64,
-        obs: &ThroughputObservation,
-        profile: &ckbadger_store::store::MemoryProfile,
-    ) -> u64 {
-        // Skip first batch (not representative).
-        if batch_count <= 1 || obs.actual_blocks == 0 {
-            return self.span;
-        }
-
-        // Update rows/block EMA for history row budget.
-        if obs.history_rows > 0 {
-            let sample = obs.history_rows as f64 / obs.actual_blocks as f64;
-            self.rows_per_block_ema = self.rows_per_block_ema * (1.0 - BULK_BUILD_ROWS_EMA_ALPHA)
-                + sample * BULK_BUILD_ROWS_EMA_ALPHA;
-            self.rows_ema_observed = true;
-        }
-
-        // Detect RocksDB pressure.
-        let severe = obs.l0_files_max >= BULK_BUILD_L0_SEVERE
-            || obs.compaction_pending_bytes >= profile.severe_compaction_pending_bytes_bulk
-            || obs.immutable_memtables >= profile.severe_immutable_memtables;
-        let moderate = !severe
-            && (obs.l0_files_max >= BULK_BUILD_L0_MODERATE
-                || obs.compaction_pending_bytes >= profile.moderate_compaction_pending_bytes_bulk
-                || obs.immutable_memtables >= profile.moderate_immutable_memtables);
-
-        if severe {
-            self.span = self.span * BULK_BUILD_SEVERE_SHRINK_PCT / 100;
-            self.cooldown = BULK_BUILD_SEVERE_COOLDOWN;
-        } else if moderate {
-            self.span = self.span * BULK_BUILD_MODERATE_SHRINK_PCT / 100;
-            self.cooldown = BULK_BUILD_MODERATE_COOLDOWN;
-        } else if self.cooldown > 0 {
-            self.cooldown -= 1;
-        } else {
-            // Healthy: grow span to maximize write batch amortization.
-            self.span = self.span * BULK_BUILD_GROW_PCT / 100;
-        }
-
-        // Apply history row budget cap (only after first real observation).
-        if self.rows_ema_observed && self.rows_per_block_ema > 0.0 {
-            let row_budget_span = (BULK_BUILD_MAX_HISTORY_ROWS / self.rows_per_block_ema) as u64;
-            self.span = self.span.min(row_budget_span);
-        }
-
-        self.span = self
-            .span
-            .clamp(BULK_BUILD_MIN_BLOCK_SPAN, BULK_BUILD_MAX_BLOCK_SPAN);
-        self.span
-    }
-}
 
 fn fetch_pool_thread_count(
     configured_parallel_fetch_size: usize,
@@ -269,9 +162,10 @@ impl BulkBuildEngine {
                 indexer.config.batch_size
             )
         })?;
-        let mut batch_block_span = configured_batch_size;
-        let mut batch_controller = ThroughputController::new(configured_batch_size);
         let mem_profile = indexer.writer.store().memory_profile();
+        let mut controller =
+            BottleneckController::new(configured_batch_size, mem_profile.max_background_jobs);
+        let mut batch_block_span = controller.batch_span();
         let mut batch_count: u64 = 0;
         // Compute initial handoff_target for the prefetch worker.
         let initial_chain_tip = ckb_store
@@ -283,14 +177,15 @@ impl BulkBuildEngine {
         } else {
             indexer.progress.current() + 1
         };
+        let (ahead_tx, ahead_rx) = tokio::sync::watch::channel(controller.prefetch_ahead());
         let mut prefetch = prefetch::PrefetchChannelHandle::new(
-            PREFETCH_DEPTH,
+            MAX_PREFETCH as usize,
             ckb_store.clone(),
             Arc::clone(&fetch_pool),
             prefetch_start,
             initial_handoff,
             configured_batch_size,
-            sampler.subscribe(),
+            ahead_rx,
         );
         // Bounded flush channel: the build loop sends PendingFlush into
         // a channel. A dedicated worker drains it serially, committing
@@ -450,7 +345,7 @@ impl BulkBuildEngine {
             sample.flush_channel_depth = FLUSH_CHANNEL_DEPTH as u64;
             sample.flush_channel_pending = flush_channel_pending;
             sample.prefetch_recv_ms = prefetch_recv_elapsed.as_secs_f64() * 1000.0;
-            sample.prefetch_depth = PREFETCH_DEPTH as u64;
+            sample.prefetch_depth = controller.prefetch_ahead();
             sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
             // Cumulative row counts: tracks rows sent to flush channel.
@@ -542,19 +437,39 @@ impl BulkBuildEngine {
                 "Bulk build materialized batch"
             );
 
-            batch_block_span = batch_controller.observe_and_update(
-                batch_count,
-                &ThroughputObservation {
-                    actual_blocks: batch_stats.block_count,
-                    history_rows: pending_flush_row_count.0,
-                    l0_files_max: snap.l0_files,
-                    compaction_pending_bytes: snap.compaction_pending_mb * 1024 * 1024,
-                    immutable_memtables: snap.imm_memtables,
-                },
-                mem_profile,
-            );
+            if let Some(output) = controller.observe(&BatchSignals {
+                prefetch_recv_ms: prefetch_recv_elapsed.as_secs_f64() * 1000.0,
+                build_ms: build_elapsed.as_secs_f64() * 1000.0,
+                flush_wait_ms: flush_wait_elapsed.as_secs_f64() * 1000.0,
+                l0_files: snap.l0_files,
+                actual_blocks: batch_stats.block_count,
+                history_rows: pending_flush_row_count.0,
+            }) {
+                batch_block_span = output.batch_span;
+                prefetch.update_span(batch_block_span);
+                let _ = ahead_tx.send(output.prefetch_ahead);
 
-            prefetch.update_span(batch_block_span);
+                if let Some(new_bg_jobs) = controller.bg_jobs_if_changed() {
+                    if let Err(e) = indexer.writer.store().set_max_background_jobs(new_bg_jobs) {
+                        tracing::warn!(
+                            error = %e, new_bg_jobs,
+                            "Failed to adjust RocksDB background jobs"
+                        );
+                    }
+                }
+
+                tracing::debug!(
+                    bottleneck = %output.bottleneck,
+                    batch_span = output.batch_span,
+                    prefetch_ahead = output.prefetch_ahead,
+                    bg_jobs = output.bg_jobs,
+                    recv_ema = format!("{:.1}", output.recv_ema),
+                    build_ema = format!("{:.1}", output.build_ema),
+                    wait_ema = format!("{:.1}", output.wait_ema),
+                    l0_ema = format!("{:.1}", output.l0_ema),
+                    "Bottleneck controller adjusted"
+                );
+            }
 
             // Periodic memory summary every 10 batches
             if batch_count.is_multiple_of(10) {
@@ -579,7 +494,7 @@ impl BulkBuildEngine {
         info!(
             total_fetches = prefetch_stats.total_fetches,
             total_blocks = prefetch_stats.total_blocks,
-            disk_throttle_count = prefetch_stats.disk_throttle_count,
+            ahead_gate_count = prefetch_stats.ahead_gate_count,
             exit_reason = ?prefetch_stats.exit_reason,
             "Prefetch worker finished"
         );
@@ -5948,155 +5863,6 @@ mod tests {
         let standard = bincode::serialize(&header).unwrap();
         let presized = bincode_serialize_presized(&header).unwrap();
         assert_eq!(standard, presized);
-    }
-
-    #[test]
-    fn throughput_controller_grows_when_no_pressure() {
-        let profile =
-            ckbadger_store::store::MemoryProfile::compute(32 * 1024 * 1024 * 1024, 8, false);
-        let mut controller = ThroughputController::new(20_000);
-
-        let obs = ThroughputObservation {
-            actual_blocks: 20_000,
-            history_rows: 400_000,
-            l0_files_max: 5,
-            compaction_pending_bytes: 0,
-            immutable_memtables: 2,
-        };
-        let next = controller.observe_and_update(3, &obs, &profile);
-        // 20_000 * 125% = 25_000
-        assert_eq!(next, 25_000, "should grow 25% when healthy");
-    }
-
-    #[test]
-    fn throughput_controller_shrinks_on_severe_l0() {
-        let profile =
-            ckbadger_store::store::MemoryProfile::compute(32 * 1024 * 1024 * 1024, 8, false);
-        let mut controller = ThroughputController::new(40_000);
-
-        let obs = ThroughputObservation {
-            actual_blocks: 40_000,
-            history_rows: 800_000,
-            l0_files_max: BULK_BUILD_L0_SEVERE,
-            compaction_pending_bytes: 0,
-            immutable_memtables: 2,
-        };
-        let next = controller.observe_and_update(3, &obs, &profile);
-        // 40_000 * 50% = 20_000
-        assert_eq!(next, 20_000, "severe L0 should halve span");
-    }
-
-    #[test]
-    fn throughput_controller_shrinks_on_moderate_l0() {
-        let profile =
-            ckbadger_store::store::MemoryProfile::compute(32 * 1024 * 1024 * 1024, 8, false);
-        let mut controller = ThroughputController::new(50_000);
-
-        let obs = ThroughputObservation {
-            actual_blocks: 50_000,
-            history_rows: 0, // no history rows, so row budget doesn't interfere
-            l0_files_max: BULK_BUILD_L0_MODERATE,
-            compaction_pending_bytes: 0,
-            immutable_memtables: 2,
-        };
-        let next = controller.observe_and_update(3, &obs, &profile);
-        // 50_000 * 80% = 40_000
-        assert_eq!(next, 40_000, "moderate L0 should shrink to 80%");
-    }
-
-    #[test]
-    fn throughput_controller_cooldown_prevents_oscillation() {
-        let profile =
-            ckbadger_store::store::MemoryProfile::compute(32 * 1024 * 1024 * 1024, 8, false);
-        let mut controller = ThroughputController::new(40_000);
-
-        // Severe pressure → sets cooldown to 3
-        let severe = ThroughputObservation {
-            actual_blocks: 40_000,
-            history_rows: 400_000,
-            l0_files_max: BULK_BUILD_L0_SEVERE,
-            compaction_pending_bytes: 0,
-            immutable_memtables: 2,
-        };
-        let span_after_severe = controller.observe_and_update(3, &severe, &profile);
-
-        // Healthy obs during cooldown → should NOT grow
-        let healthy = ThroughputObservation {
-            actual_blocks: 20_000,
-            history_rows: 200_000,
-            l0_files_max: 5,
-            compaction_pending_bytes: 0,
-            immutable_memtables: 2,
-        };
-        let next = controller.observe_and_update(4, &healthy, &profile);
-        assert_eq!(next, span_after_severe, "cooldown should prevent growth");
-
-        // Drain cooldown
-        let _ = controller.observe_and_update(5, &healthy, &profile);
-        let _ = controller.observe_and_update(6, &healthy, &profile);
-        // Now should grow
-        let after_cooldown = controller.observe_and_update(7, &healthy, &profile);
-        assert!(
-            after_cooldown > span_after_severe,
-            "should grow after cooldown expires"
-        );
-    }
-
-    #[test]
-    fn throughput_controller_caps_by_history_row_budget() {
-        let profile =
-            ckbadger_store::store::MemoryProfile::compute(32 * 1024 * 1024 * 1024, 8, false);
-        let mut controller = ThroughputController::new(50_000);
-
-        // 50 rows/block sample, blended with initial EMA of 30 → EMA ~36
-        // Row budget = 800K / 36 ≈ 22K, much less than growth target (62.5K)
-        let obs = ThroughputObservation {
-            actual_blocks: 50_000,
-            history_rows: 2_500_000, // 50 rows/block
-            l0_files_max: 5,
-            compaction_pending_bytes: 0,
-            immutable_memtables: 2,
-        };
-        let next = controller.observe_and_update(3, &obs, &profile);
-        assert!(
-            next < 50_000,
-            "row budget should prevent growth, got {next}"
-        );
-    }
-
-    #[test]
-    fn throughput_controller_skips_first_batch() {
-        let profile =
-            ckbadger_store::store::MemoryProfile::compute(32 * 1024 * 1024 * 1024, 8, false);
-        let mut controller = ThroughputController::new(20_000);
-
-        let obs = ThroughputObservation {
-            actual_blocks: 20_000,
-            history_rows: 400_000,
-            l0_files_max: 5,
-            compaction_pending_bytes: 0,
-            immutable_memtables: 2,
-        };
-        let next = controller.observe_and_update(1, &obs, &profile);
-        assert_eq!(next, 20_000, "first batch should be skipped");
-    }
-
-    #[test]
-    fn throughput_controller_clamps_to_bounds() {
-        let profile =
-            ckbadger_store::store::MemoryProfile::compute(32 * 1024 * 1024 * 1024, 8, false);
-        let mut controller = ThroughputController::new(BULK_BUILD_MAX_BLOCK_SPAN);
-
-        // Already at max, healthy, no history rows → should stay at max
-        let obs = ThroughputObservation {
-            actual_blocks: BULK_BUILD_MAX_BLOCK_SPAN,
-            history_rows: 0,
-            l0_files_max: 5,
-            compaction_pending_bytes: 0,
-            immutable_memtables: 2,
-        };
-        let next = controller.observe_and_update(3, &obs, &profile);
-        assert_eq!(next, BULK_BUILD_MAX_BLOCK_SPAN, "should not exceed max");
     }
 
     #[test]

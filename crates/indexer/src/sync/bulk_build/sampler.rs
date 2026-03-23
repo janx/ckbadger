@@ -108,12 +108,6 @@ impl BackgroundSampler {
         self.latest_rx.borrow().clone()
     }
 
-    /// Clone the watch receiver so another component (e.g. prefetch worker)
-    /// can read the latest snapshot independently.
-    pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<SamplerSnapshot> {
-        self.latest_rx.clone()
-    }
-
     pub(crate) fn shutdown(mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
         if let Some(handle) = self.worker_handle.take() {

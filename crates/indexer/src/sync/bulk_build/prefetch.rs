@@ -3,31 +3,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::binary_facts::RawCkbBlock;
-use super::sampler::SamplerSnapshot;
 use super::BULK_BUILD_MIN_BLOCK_SPAN;
 use crate::sync::indexer::Indexer;
 use ckb_store_reader::CkbChainReader;
 
-/// Disk write threshold (MB per sampler interval) below which disk is
-/// considered idle enough for speculative prefetch.  The sampler runs at
-/// 200 ms, so 50 MB per interval ≈ 250 MB/s sustained writes.
-const DISK_IDLE_WRITE_MB: f64 = 30.0;
-
-/// How long the worker sleeps when gated by disk busyness before
-/// re-checking. Short enough to react quickly when disk goes idle.
-const DISK_BUSY_POLL_MS: u64 = 50;
-
-fn should_throttle_prefetch(pending: usize, capacity: usize, disk_write_mb: f64) -> bool {
-    if disk_write_mb < DISK_IDLE_WRITE_MB {
-        return false;
-    }
-
-    if capacity <= 1 {
-        return pending >= 1;
-    }
-
-    pending >= capacity.saturating_sub(1)
-}
+/// How long the worker sleeps when gated by the ahead limit before
+/// re-checking.
+const AHEAD_GATE_POLL_MS: u64 = 20;
 
 pub(crate) struct PrefetchResult {
     pub blocks: Vec<RawCkbBlock>,
@@ -55,7 +37,7 @@ pub(crate) enum PrefetchExitReason {
 pub(crate) struct PrefetchWorkerStats {
     pub total_fetches: u64,
     pub total_blocks: u64,
-    pub disk_throttle_count: u64,
+    pub ahead_gate_count: u64,
     pub exit_reason: PrefetchExitReason,
 }
 
@@ -68,22 +50,22 @@ pub(crate) struct PrefetchChannelHandle {
 
 impl PrefetchChannelHandle {
     pub(crate) fn new(
-        depth: usize,
+        max_depth: usize,
         ckb_store: Arc<CkbChainReader>,
         fetch_pool: Arc<rayon::ThreadPool>,
         start_block: u64,
         handoff_target: u64,
         initial_span: u64,
-        sampler_rx: tokio::sync::watch::Receiver<SamplerSnapshot>,
+        ahead_rx: tokio::sync::watch::Receiver<u64>,
     ) -> Self {
-        let (result_tx, result_rx) = tokio::sync::mpsc::channel(depth);
+        let (result_tx, result_rx) = tokio::sync::mpsc::channel(max_depth);
         let (span_tx, span_rx) = tokio::sync::watch::channel(initial_span);
 
         let worker_handle = tokio::task::spawn_blocking(move || {
             Self::prefetch_worker(
                 result_tx,
                 span_rx,
-                sampler_rx,
+                ahead_rx,
                 ckb_store,
                 fetch_pool,
                 start_block,
@@ -93,7 +75,7 @@ impl PrefetchChannelHandle {
 
         Self {
             result_rx,
-            depth,
+            depth: max_depth,
             span_tx,
             worker_handle,
         }
@@ -102,7 +84,7 @@ impl PrefetchChannelHandle {
     fn prefetch_worker(
         result_tx: tokio::sync::mpsc::Sender<Result<PrefetchResult>>,
         span_rx: tokio::sync::watch::Receiver<u64>,
-        sampler_rx: tokio::sync::watch::Receiver<SamplerSnapshot>,
+        ahead_rx: tokio::sync::watch::Receiver<u64>,
         ckb_store: Arc<CkbChainReader>,
         fetch_pool: Arc<rayon::ThreadPool>,
         start_block: u64,
@@ -111,31 +93,30 @@ impl PrefetchChannelHandle {
         let mut stats = PrefetchWorkerStats {
             total_fetches: 0,
             total_blocks: 0,
-            disk_throttle_count: 0,
+            ahead_gate_count: 0,
             exit_reason: PrefetchExitReason::Completed,
         };
         let mut position = start_block;
 
         while position <= handoff_target {
-            // Let the queue fill most of the way, then back off only when disk
-            // is already busy. This preserves fetch throughput while still
-            // yielding to RocksDB compaction I/O under pressure.
-            let capacity = result_tx.max_capacity();
-            let pending = capacity - result_tx.capacity();
-            if should_throttle_prefetch(pending, capacity, sampler_rx.borrow().disk_write_mb) {
-                let mut throttled = false;
+            // Dynamic ahead gate: the bottleneck controller sets how many
+            // batches to prefetch ahead.  When the channel has that many
+            // pending, we wait — freeing CPU and I/O for build/flush.
+            let ahead_limit = *ahead_rx.borrow();
+            let pending = result_tx.max_capacity() - result_tx.capacity();
+            if pending >= ahead_limit as usize {
+                let mut gated = false;
                 loop {
-                    let snap = sampler_rx.borrow().clone();
-                    // Re-check pending: consumer may have drained the channel.
-                    let current_pending = capacity - result_tx.capacity();
-                    if !should_throttle_prefetch(current_pending, capacity, snap.disk_write_mb) {
+                    let current_pending = result_tx.max_capacity() - result_tx.capacity();
+                    let current_limit = *ahead_rx.borrow();
+                    if current_pending < current_limit as usize {
                         break;
                     }
-                    if !throttled {
-                        stats.disk_throttle_count += 1;
-                        throttled = true;
+                    if !gated {
+                        stats.ahead_gate_count += 1;
+                        gated = true;
                     }
-                    std::thread::sleep(Duration::from_millis(DISK_BUSY_POLL_MS));
+                    std::thread::sleep(Duration::from_millis(AHEAD_GATE_POLL_MS));
                 }
             }
 
@@ -221,7 +202,7 @@ mod tests {
             Ok(PrefetchWorkerStats {
                 total_fetches: 0,
                 total_blocks: 0,
-                disk_throttle_count: 0,
+                ahead_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -254,7 +235,7 @@ mod tests {
             Ok(PrefetchWorkerStats {
                 total_fetches: 0,
                 total_blocks: 0,
-                disk_throttle_count: 0,
+                ahead_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -294,7 +275,7 @@ mod tests {
             Ok(PrefetchWorkerStats {
                 total_fetches: 0,
                 total_blocks: 0,
-                disk_throttle_count: 0,
+                ahead_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -325,7 +306,7 @@ mod tests {
             Ok(PrefetchWorkerStats {
                 total_fetches: 0,
                 total_blocks: 0,
-                disk_throttle_count: 0,
+                ahead_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -360,7 +341,7 @@ mod tests {
             Ok(PrefetchWorkerStats {
                 total_fetches: 42,
                 total_blocks: 420_000,
-                disk_throttle_count: 0,
+                ahead_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -379,16 +360,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prefetch_worker_throttles_when_disk_busy_and_queue_is_nearly_full() {
-        let (sampler_tx, sampler_rx) = tokio::sync::watch::channel(SamplerSnapshot {
-            disk_write_mb: 200.0, // busy
-            ..Default::default()
-        });
+    async fn prefetch_ahead_gate_blocks_when_at_limit() {
+        let (_ahead_tx, ahead_rx) = tokio::sync::watch::channel(3u64); // limit=3
 
-        let (result_tx, result_rx) = tokio::sync::mpsc::channel::<Result<PrefetchResult>>(4);
+        let (result_tx, result_rx) = tokio::sync::mpsc::channel::<Result<PrefetchResult>>(8);
 
-        // Pre-fill channel to pending=3/4 so the gate should engage.
-        // Keep result_rx alive so send succeeds.
+        // Pre-fill channel to pending=3 so the gate should engage.
         for _ in 0..3 {
             result_tx
                 .send(Ok(PrefetchResult {
@@ -401,59 +378,34 @@ mod tests {
         }
 
         let tx_for_check = result_tx.clone();
-        let sampler_for_check = sampler_rx.clone();
+        let ahead_for_check = ahead_rx.clone();
         let gate_task = tokio::task::spawn_blocking(move || {
-            let capacity = tx_for_check.max_capacity();
-            let pending = capacity - tx_for_check.capacity();
-            assert_eq!(pending, 3, "channel should be nearly full");
-            let snap = sampler_for_check.borrow().clone();
-            should_throttle_prefetch(pending, capacity, snap.disk_write_mb)
+            let pending = tx_for_check.max_capacity() - tx_for_check.capacity();
+            assert_eq!(pending, 3, "channel should have 3 pending");
+            let limit = *ahead_for_check.borrow();
+            // pending (3) >= limit (3) → should gate
+            pending >= limit as usize
         });
         assert!(gate_task.await.unwrap());
 
-        // After making disk idle, the gate should open
-        sampler_tx
-            .send(SamplerSnapshot {
-                disk_write_mb: 0.0,
-                ..Default::default()
-            })
-            .unwrap();
-
-        // Keep rx alive until end
         drop(result_rx);
     }
 
     #[tokio::test]
-    async fn prefetch_worker_does_not_throttle_when_channel_empty() {
-        let (_sampler_tx, _sampler_rx) = tokio::sync::watch::channel(SamplerSnapshot {
-            disk_write_mb: 999.0, // very busy
-            ..Default::default()
-        });
+    async fn prefetch_ahead_gate_open_when_below_limit() {
+        let (_ahead_tx, ahead_rx) = tokio::sync::watch::channel(4u64); // limit=4
 
-        let (result_tx, _result_rx) = tokio::sync::mpsc::channel::<Result<PrefetchResult>>(4);
+        let (result_tx, _result_rx) = tokio::sync::mpsc::channel::<Result<PrefetchResult>>(8);
 
-        // Channel is empty (pending = 0) — should NOT throttle even with busy disk
+        // Channel is empty (pending = 0) — should NOT gate
+        let tx_for_check = result_tx.clone();
+        let ahead_for_check = ahead_rx.clone();
         let gate_task = tokio::task::spawn_blocking(move || {
-            let capacity = result_tx.max_capacity();
-            let pending = capacity - result_tx.capacity();
+            let pending = tx_for_check.max_capacity() - tx_for_check.capacity();
             assert_eq!(pending, 0, "channel should be empty");
-            !should_throttle_prefetch(pending, capacity, 999.0)
+            let limit = *ahead_for_check.borrow();
+            pending < limit as usize // should be open
         });
-
         assert!(gate_task.await.unwrap());
-    }
-
-    #[test]
-    fn prefetch_throttle_requires_nearly_full_queue_when_disk_busy() {
-        assert!(!should_throttle_prefetch(1, 4, DISK_IDLE_WRITE_MB + 10.0));
-        assert!(!should_throttle_prefetch(2, 4, DISK_IDLE_WRITE_MB + 10.0));
-        assert!(should_throttle_prefetch(3, 4, DISK_IDLE_WRITE_MB + 10.0));
-        assert!(should_throttle_prefetch(4, 4, DISK_IDLE_WRITE_MB + 10.0));
-    }
-
-    #[test]
-    fn prefetch_throttle_never_engages_when_disk_is_idle() {
-        assert!(!should_throttle_prefetch(4, 4, DISK_IDLE_WRITE_MB - 0.1));
-        assert!(!should_throttle_prefetch(1, 1, 0.0));
     }
 }

@@ -1670,6 +1670,15 @@ impl CkbadgerStore {
         self.runtime_config
     }
 
+    /// Dynamically adjust the number of RocksDB background compaction/flush
+    /// threads.  Used by the bottleneck controller to shift CPU between
+    /// compaction and build/fetch work.
+    pub fn set_max_background_jobs(&self, jobs: i32) -> anyhow::Result<()> {
+        self.db
+            .set_options(&[("max_background_jobs", &jobs.to_string())])
+            .map_err(|e| anyhow::anyhow!("failed to set max_background_jobs to {}: {}", jobs, e))
+    }
+
     /// Set relaxed L0 thresholds and larger write buffers for bulk sync.
     ///
     /// During bulk sync, parallel writer threads each commit large WriteBatches.
