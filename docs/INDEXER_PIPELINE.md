@@ -352,8 +352,10 @@ for the full design rationale.
 │  2. Fact Extractor ─ parallel parse (rayon) → FactsArena                 │
 │     └─ concurrent IdentityInterner (DashMap + Mutex<Vec>)                │
 │  3. Sequencer ────── LiveCellOwner resolves inputs from memory           │
-│  4. Owner Reducers ─ address (serial) │ script,token,dao,fiber,object    │
-│     └─ address returns cell_dist      │ (parallel via rayon::join)       │
+│  4. 3-way parallel tree (nested rayon::join):                           │
+│     LEFT:   history materialization → activity_stats accumulation       │
+│     MIDDLE: chain_stats (reads only immutable arena + resolved)        │
+│     RIGHT:  hodl → rayon::join(address+cell_dist, 5 reducers)          │
 │  5. Materializer ─── Class A/C rows → StoreBatch → RocksDB              │
 │                                                                           │
 │  Pipelining: fetch batch N+1 overlaps with build N                       │
@@ -375,7 +377,7 @@ for the full design rationale.
 
 1. **FxHashMap**: non-cryptographic hash for `OutPointKey` (36B), lock/type hashes, and all reducer maps
 2. **Protocol facts side-map**: removed `Option<CellProtocolFacts>` from every `LiveCellSlot`, saving ~24B per entry
-3. **Parallel reducers**: address runs serially (produces cell distribution deltas), then script + token + dao + fiber + object run in parallel via nested `rayon::join`
+3. **3-way parallel build tree**: history materialization + activity_stats (LEFT), chain_stats (MIDDLE), and hodl + owner reducers (RIGHT) run concurrently via nested `rayon::join`; within RIGHT, address + cell_dist run in parallel with 5 independent reducers (script, token, dao, fiber, object)
 4. **Inter-batch pipelining**: prefetch worker reads batch N+1 from CKB RocksDB while batch N is being built; fetch uses `std::thread::scope` (not rayon) so blocking RocksDB reads don't starve CPU-bound build work
 5. **RocksDB flush overlap**: materialized rows are sent to a flush channel; a dedicated worker commits them to RocksDB concurrently with the next batch's build
 6. **Parallel block parsing**: `rayon::par_iter` parses blocks within a batch, merges output ranges for global cell indices post-merge
@@ -472,7 +474,8 @@ When bulk sync completes (transitions from `blocks_remaining > threshold` to `<=
 crates/indexer/src/sync/
   bottleneck.rs    # BottleneckController — unified adaptive resource control
   bulk_build/
-    mod.rs           # Build loop, inter-batch pipelining, flush overlap
+    mod.rs           # Build loop, 3-way parallel tree, inter-batch pipelining, flush overlap
+    binary_facts.rs  # Binary-format fact serialization for prefetch channel
     facts.rs         # FactsArena — per-batch fact graph
     interner.rs      # IdentityInterner (DashMap) + FrozenIdentityView
     live_cells.rs    # LiveCellOwner — in-memory UTXO set + protocol facts side-map
