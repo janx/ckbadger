@@ -29,7 +29,7 @@ import {
   type ScriptRefHashType,
 } from '@/lib/script-ref';
 import { formatCkbCompact } from '@/lib/utils';
-import type { KnownScript, ScriptLookupInfo } from '@/lib/api';
+import type { KnownScript, ScriptFamilyDetail, ScriptLookupInfo } from '@/lib/api';
 
 interface SelectedVersion {
   codeHash: string;
@@ -38,8 +38,13 @@ interface SelectedVersion {
 
 interface ScriptVersionGroup {
   codeHash: string;
+  name: string;
+  description: string | null;
+  scriptKind: string | null;
+  deprecated: boolean;
   deployments: KnownScript[];
-  primaryDeployment: KnownScript;
+  observedReferences: ScriptFamilyDetail['versions'][number]['references'];
+  deployedAt: number | null;
 }
 
 interface VersionUsageReference {
@@ -270,6 +275,24 @@ function deploymentReferenceHashes(
     normalizedHashType !== 'type' ? getScriptRefQueryHashType(deployment.hashType, 'data') : 'data';
   return { typeRef, dataRef, dataRefType };
 }
+
+function collectObservedUsageReferences(
+  references: Map<string, VersionUsageReference>,
+  deployment: KnownScript
+): void {
+  for (const reference of deployment.observedReferences ?? []) {
+    const normalizedHashType = normalizeScriptRefHashType(reference.hashType);
+    if (!normalizedHashType) {
+      continue;
+    }
+
+    references.set(`${reference.referenceHash}:${normalizedHashType}`, {
+      key: `${reference.referenceHash}:${normalizedHashType}`,
+      referenceHash: reference.referenceHash,
+      hashType: normalizedHashType,
+    });
+  }
+}
 export interface ScriptDetailPageProps {
   name?: string;
   codeHash?: string;
@@ -299,14 +322,14 @@ export default function ScriptDetailPage({
   const cellsPagination = useCursorPagination();
   const capacityRangeParams = getCapacityRangeParams(capacityRange);
   const {
-    data: namedDeployments,
-    isLoading: isNamedDeploymentsLoading,
-    error: namedDeploymentsError,
+    data: namedScriptDetail,
+    isLoading: isNamedScriptDetailLoading,
+    error: namedScriptDetailError,
   } = useQuery({
-    queryKey: ['script', name],
+    queryKey: ['script-family-detail', name],
     queryFn: () => {
       if (!name) throw new Error('script name is required');
-      return api.getScript(name);
+      return api.getScriptFamilyDetail(name);
     },
     enabled: Boolean(name) && !isCodeHashMode,
   });
@@ -360,7 +383,40 @@ export default function ScriptDetailPage({
   });
   const deployments = useMemo<KnownScript[] | null>(() => {
     if (!isCodeHashMode) {
-      return namedDeployments ?? null;
+      if (!namedScriptDetail) {
+        return null;
+      }
+
+      return namedScriptDetail.versions.flatMap((version) =>
+        version.deployments.map((deployment) => ({
+          codeHash: version.versionHash,
+          name: version.name || namedScriptDetail.name,
+          description: version.description ?? namedScriptDetail.description,
+          scriptKind: version.scriptKind ?? namedScriptDetail.scriptKind,
+          rfc: null,
+          website: version.website ?? namedScriptDetail.website,
+          sourceUrl: null,
+          decoderType: null,
+          network: '',
+          hashType: deployment.hashType,
+          dataHash: deployment.dataReferenceHash,
+          typeHash:
+            deployment.typeReferenceHash ??
+            (version.canonicalHashType === 'type' ? version.canonicalReferenceHash : null),
+          tag: null,
+          deprecated: version.deprecated,
+          isSystem: false,
+          codeCellTxHash: deployment.codeCellTxHash,
+          codeCellOutputIndex: deployment.codeCellOutputIndex,
+          deployedAt: deployment.deployedAt,
+          ownedCapacitySum: version.ownedCapacitySum,
+          ownedKnowledgeSum: version.ownedKnowledgeSum,
+          liveCellsCount: version.liveCellsCount,
+          cellsCount: version.cellsCount,
+          codeCellsLiveCount: version.codeCellsLiveCount,
+          codeCellsTotal: version.codeCellsTotal,
+        }))
+      );
     }
 
     if (!normalizedCodeHash || !codeHashLookup) {
@@ -412,7 +468,7 @@ export default function ScriptDetailPage({
     codeHashCodeCells?.codeCells,
     codeHashLookup,
     isCodeHashMode,
-    namedDeployments,
+    namedScriptDetail,
     normalizedCodeHash,
   ]);
   const versionUsageEntries = useMemo<VersionUsageStats[]>(() => {
@@ -447,6 +503,25 @@ export default function ScriptDetailPage({
     [deployments]
   );
   const versionGroups = useMemo<ScriptVersionGroup[]>(() => {
+    if (!isCodeHashMode) {
+      if (!namedScriptDetail) {
+        return [];
+      }
+
+      return namedScriptDetail.versions.map((version) => ({
+        codeHash: version.versionHash,
+        name: version.name || namedScriptDetail.name,
+        description: version.description ?? namedScriptDetail.description,
+        scriptKind: version.scriptKind ?? namedScriptDetail.scriptKind,
+        deprecated: version.deprecated,
+        deployments: sortedDeployments.filter(
+          (deployment) => deployment.codeHash === version.versionHash
+        ),
+        observedReferences: version.references,
+        deployedAt: version.deployedAt,
+      }));
+    }
+
     const groups = new Map<string, KnownScript[]>();
     for (const deployment of sortedDeployments) {
       const existing = groups.get(deployment.codeHash);
@@ -459,10 +534,15 @@ export default function ScriptDetailPage({
 
     return Array.from(groups.entries()).map(([codeHash, groupedDeployments]) => ({
       codeHash,
+      name: groupedDeployments[0]?.name ?? codeHash,
+      description: groupedDeployments[0]?.description ?? null,
+      scriptKind: groupedDeployments[0]?.scriptKind ?? null,
+      deprecated: groupedDeployments.some((deployment) => deployment.deprecated),
       deployments: groupedDeployments,
-      primaryDeployment: groupedDeployments[0],
+      observedReferences: [],
+      deployedAt: groupedDeployments[0]?.deployedAt ?? null,
     }));
-  }, [sortedDeployments]);
+  }, [isCodeHashMode, namedScriptDetail, sortedDeployments]);
   const lookupCodeHashes = useMemo(() => {
     const refs = new Set<string>((deployments ?? []).map((deployment) => deployment.codeHash));
     if (selectedRef) {
@@ -485,19 +565,45 @@ export default function ScriptDetailPage({
               return true;
             }
 
-            return group.deployments.some((deployment) => {
-              const refs = deploymentReferenceHashes(
-                deployment,
-                deploymentLookup?.[deployment.codeHash]
-              );
-              const matchesTypeRef =
-                refs.typeRef === selectedRef &&
-                (!selectedRefHashType || selectedRefHashType === 'type');
-              const matchesDataRef =
-                refs.dataRef === selectedRef &&
-                (!selectedRefHashType || selectedRefHashType === refs.dataRefType);
-              return matchesTypeRef || matchesDataRef;
-            });
+            return (
+              group.deployments.some((deployment) => {
+                const refs = deploymentReferenceHashes(
+                  deployment,
+                  deploymentLookup?.[deployment.codeHash]
+                );
+                const matchesTypeRef =
+                  refs.typeRef === selectedRef &&
+                  (!selectedRefHashType || selectedRefHashType === 'type');
+                const matchesDataRef =
+                  refs.dataRef === selectedRef &&
+                  (!selectedRefHashType || selectedRefHashType === refs.dataRefType);
+                const matchesObservedRef = (deployment.observedReferences ?? []).some(
+                  (reference) => {
+                    const normalizedHashType = normalizeScriptRefHashType(reference.hashType);
+                    if (!normalizedHashType) {
+                      return false;
+                    }
+
+                    return (
+                      reference.referenceHash === selectedRef &&
+                      (!selectedRefHashType || selectedRefHashType === normalizedHashType)
+                    );
+                  }
+                );
+                return matchesTypeRef || matchesDataRef || matchesObservedRef;
+              }) ||
+              group.observedReferences.some((reference) => {
+                const normalizedHashType = normalizeScriptRefHashType(reference.hashType);
+                if (!normalizedHashType) {
+                  return false;
+                }
+
+                return (
+                  reference.referenceHash === selectedRef &&
+                  (!selectedRefHashType || selectedRefHashType === normalizedHashType)
+                );
+              })
+            );
           })
         : null;
       const firstWithUsage = versionGroups.find((group) => {
@@ -524,6 +630,10 @@ export default function ScriptDetailPage({
     () =>
       sortedDeployments.filter((deployment) => deployment.codeHash === selectedVersion?.codeHash),
     [selectedVersion?.codeHash, sortedDeployments]
+  );
+  const selectedVersionGroup = useMemo(
+    () => versionGroups.find((group) => group.codeHash === selectedVersion?.codeHash) ?? null,
+    [selectedVersion?.codeHash, versionGroups]
   );
   const deploymentsForReferences = useMemo(
     () =>
@@ -563,8 +673,33 @@ export default function ScriptDetailPage({
       }
     }
 
+    if (!selectedDeploymentOutpoint) {
+      for (const deployment of selectedVersionDeployments) {
+        collectObservedUsageReferences(references, deployment);
+      }
+
+      for (const reference of selectedVersionGroup?.observedReferences ?? []) {
+        const normalizedHashType = normalizeScriptRefHashType(reference.hashType);
+        if (!normalizedHashType) {
+          continue;
+        }
+
+        references.set(`${reference.referenceHash}:${normalizedHashType}`, {
+          key: `${reference.referenceHash}:${normalizedHashType}`,
+          referenceHash: reference.referenceHash,
+          hashType: normalizedHashType,
+        });
+      }
+    }
+
     return Array.from(references.values()).sort((a, b) => a.key.localeCompare(b.key));
-  }, [deploymentLookup, deploymentsForReferences]);
+  }, [
+    deploymentLookup,
+    deploymentsForReferences,
+    selectedDeploymentOutpoint,
+    selectedVersionDeployments,
+    selectedVersionGroup,
+  ]);
   const versionCellsCursorState = useMemo(
     () => decodeVersionCellsCursorState(cellsPagination.cursor),
     [cellsPagination.cursor]
@@ -737,7 +872,7 @@ export default function ScriptDetailPage({
   ]);
   const isLoading = isCodeHashMode
     ? isCodeHashLookupLoading || isCodeHashCodeCellsLoading
-    : isNamedDeploymentsLoading || isUsageLoading;
+    : isNamedScriptDetailLoading || isUsageLoading;
   if (isLoading) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -804,7 +939,10 @@ export default function ScriptDetailPage({
       </div>
     );
   }
-  if (namedDeploymentsError || !deployments || deployments.length === 0) {
+  if (
+    (!isCodeHashMode && (namedScriptDetailError || !namedScriptDetail)) ||
+    (isCodeHashMode && (!deployments || deployments.length === 0))
+  ) {
     return (
       <div className="bg-base-bg min-h-screen">
         <Header />
@@ -818,16 +956,27 @@ export default function ScriptDetailPage({
       </div>
     );
   }
-  const scriptInfo = deployments[0];
+  const scriptInfo = isCodeHashMode ? (deployments?.[0] ?? null) : namedScriptDetail;
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat().format(num);
   };
   const inferredScriptKind = versionUsageEntries.find((d) => d.scriptKind)?.scriptKind;
-  const isKnownScript = hasKnownScriptName(scriptInfo.name);
-  const pageTitle = isKnownScript ? scriptInfo.name : 'Unlabeled Script';
+  const isKnownScript = hasKnownScriptName(scriptInfo?.name);
+  const pageTitle = isKnownScript ? (scriptInfo?.name ?? 'Unlabeled Script') : 'Unlabeled Script';
   const pageSubtitle = isKnownScript
-    ? scriptInfo.description
+    ? scriptInfo?.description
     : 'No imported label for this script yet. The code hash below is the canonical identity.';
+  const pageDeprecated = isCodeHashMode
+    ? Boolean(scriptInfo && 'deprecated' in scriptInfo && scriptInfo.deprecated)
+    : versionGroups.some((group) => group.deprecated);
+  const pageDecoderType =
+    isCodeHashMode && scriptInfo && 'decoderType' in scriptInfo ? scriptInfo.decoderType : null;
+  const pageHash =
+    isCodeHashMode && scriptInfo && 'codeHash' in scriptInfo ? scriptInfo.codeHash : undefined;
+  const pageRfc = isCodeHashMode && scriptInfo && 'rfc' in scriptInfo ? scriptInfo.rfc : null;
+  const pageSourceUrl =
+    isCodeHashMode && scriptInfo && 'sourceUrl' in scriptInfo ? scriptInfo.sourceUrl : null;
+  const pageWebsite = scriptInfo?.website ?? null;
   const deploymentCellsByOutpoint = new Map(
     deploymentCellQueries
       .map((query) => query.data)
@@ -836,38 +985,41 @@ export default function ScriptDetailPage({
   );
   const versionRows = versionGroups.map((group) => {
     const stats = usageByCodeHash.get(group.codeHash);
-    const firstDeployment = group.deployments.reduce((earliest, deployment) => {
-      const earliestOutpointKey = deploymentOutpointKey(
-        earliest.codeCellTxHash,
-        earliest.codeCellOutputIndex
-      );
-      const deploymentOutpointKeyValue = deploymentOutpointKey(
-        deployment.codeCellTxHash,
-        deployment.codeCellOutputIndex
-      );
-      const earliestCell = earliestOutpointKey
-        ? deploymentCellsByOutpoint.get(earliestOutpointKey)
-        : undefined;
-      const deploymentCell = deploymentOutpointKeyValue
-        ? deploymentCellsByOutpoint.get(deploymentOutpointKeyValue)
-        : undefined;
+    const firstDeployment =
+      group.deployments.length > 0
+        ? group.deployments.reduce((earliest, deployment) => {
+            const earliestOutpointKey = deploymentOutpointKey(
+              earliest.codeCellTxHash,
+              earliest.codeCellOutputIndex
+            );
+            const deploymentOutpointKeyValue = deploymentOutpointKey(
+              deployment.codeCellTxHash,
+              deployment.codeCellOutputIndex
+            );
+            const earliestCell = earliestOutpointKey
+              ? deploymentCellsByOutpoint.get(earliestOutpointKey)
+              : undefined;
+            const deploymentCell = deploymentOutpointKeyValue
+              ? deploymentCellsByOutpoint.get(deploymentOutpointKeyValue)
+              : undefined;
 
-      return compareDeploymentCreatedAt(
-        {
-          deployedAt: deployment.deployedAt,
-          createdAtBlock: deploymentCell?.createdAtBlock,
-        },
-        {
-          deployedAt: earliest.deployedAt,
-          createdAtBlock: earliestCell?.createdAtBlock,
-        }
-      ) < 0
-        ? deployment
-        : earliest;
-    }, group.deployments[0]);
+            return compareDeploymentCreatedAt(
+              {
+                deployedAt: deployment.deployedAt,
+                createdAtBlock: deploymentCell?.createdAtBlock,
+              },
+              {
+                deployedAt: earliest.deployedAt,
+                createdAtBlock: earliestCell?.createdAtBlock,
+              }
+            ) < 0
+              ? deployment
+              : earliest;
+          }, group.deployments[0])
+        : null;
     const firstDeploymentOutpointKey = deploymentOutpointKey(
-      firstDeployment.codeCellTxHash,
-      firstDeployment.codeCellOutputIndex
+      firstDeployment?.codeCellTxHash,
+      firstDeployment?.codeCellOutputIndex
     );
 
     return {
@@ -881,7 +1033,7 @@ export default function ScriptDetailPage({
       ownedCapacitySum: stats?.ownedCapacitySum ?? '0',
       scriptKind:
         (stats?.scriptKind as 'lock' | 'type' | undefined) ??
-        (group.primaryDeployment.scriptKind as 'lock' | 'type' | undefined),
+        (group.scriptKind as 'lock' | 'type' | undefined),
     };
   });
   const selectedVersionDeploymentRows = selectedVersionDeployments.map((deployment) => {
@@ -967,14 +1119,12 @@ export default function ScriptDetailPage({
         Copy
       </button>
       {selected && <Badge variant="green">Selected</Badge>}
-      {versionRow.deployments.some((deployment) => deployment.deprecated) && (
-        <Badge variant="red">Deprecated</Badge>
-      )}
+      {versionRow.deprecated && <Badge variant="red">Deprecated</Badge>}
     </div>
   );
 
   const renderVersionFirstDeployedAt = (versionRow: (typeof versionRows)[number]) =>
-    versionRow.firstDeploymentCell ? (
+    versionRow.firstDeploymentCell && versionRow.firstDeployment ? (
       <Link
         href={`/blocks/${versionRow.firstDeploymentCell.createdAtBlock}`}
         className="block hover:underline"
@@ -1219,24 +1369,22 @@ export default function ScriptDetailPage({
         <PageHeader
           title={pageTitle}
           subtitle={pageSubtitle}
-          hash={!isKnownScript ? scriptInfo.codeHash : undefined}
+          hash={!isKnownScript ? pageHash : undefined}
           badge={
             <div className="flex items-center gap-2">
               {!isKnownScript && <Badge variant="gray">UNLABELED</Badge>}
-              {scriptInfo.deprecated && <Badge variant="red">Deprecated</Badge>}
+              {pageDeprecated && <Badge variant="red">Deprecated</Badge>}
               {inferredScriptKind && (
                 <Badge variant="neutral">{inferredScriptKind.toUpperCase()}</Badge>
               )}
-              {scriptInfo.decoderType && (
-                <Badge variant="gray">{scriptInfo.decoderType.toUpperCase()}</Badge>
-              )}
+              {pageDecoderType && <Badge variant="gray">{pageDecoderType.toUpperCase()}</Badge>}
             </div>
           }
           actions={
             <div className="flex gap-3">
-              {scriptInfo.rfc && (
+              {pageRfc && (
                 <a
-                  href={scriptInfo.rfc}
+                  href={pageRfc}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-emphasis border-base-border hover:border-base-border hover:bg-base-surface rounded border px-3 py-1 font-mono text-sm transition-colors"
@@ -1244,9 +1392,9 @@ export default function ScriptDetailPage({
                   RFC
                 </a>
               )}
-              {scriptInfo.website && (
+              {pageWebsite && (
                 <a
-                  href={scriptInfo.website}
+                  href={pageWebsite}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-emphasis border-base-border hover:border-base-border hover:bg-base-surface rounded border px-3 py-1 font-mono text-sm transition-colors"
@@ -1254,9 +1402,9 @@ export default function ScriptDetailPage({
                   Website
                 </a>
               )}
-              {scriptInfo.sourceUrl && (
+              {pageSourceUrl && (
                 <a
-                  href={scriptInfo.sourceUrl}
+                  href={pageSourceUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-emphasis border-base-border hover:border-base-border hover:bg-base-surface rounded border px-3 py-1 font-mono text-sm transition-colors"

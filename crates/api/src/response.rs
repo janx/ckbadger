@@ -173,6 +173,81 @@ pub struct ScriptResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ScriptFamilyListItemResponse {
+    pub family_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub script_kind: Option<String>,
+    pub website: Option<String>,
+    pub live_cells_count: i64,
+    pub cells_count: i64,
+    pub owned_capacity_sum: String,
+    pub owned_knowledge_sum: String,
+    pub versions_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptObservedReferenceResponse {
+    pub reference_hash: String,
+    pub hash_type: String,
+    pub live_cells_count: i64,
+    pub cells_count: i64,
+    pub owned_capacity_sum: String,
+    pub owned_knowledge_sum: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptVersionDeploymentResponse {
+    pub hash_type: String,
+    pub type_reference_hash: Option<String>,
+    pub data_reference_hash: String,
+    pub code_cell_tx_hash: String,
+    pub code_cell_output_index: i32,
+    pub deployed_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptVersionDetailResponse {
+    pub version_hash: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub script_kind: Option<String>,
+    pub website: Option<String>,
+    pub deprecated: bool,
+    pub canonical_reference_hash: Option<String>,
+    pub canonical_hash_type: Option<String>,
+    pub deployed_at: Option<i64>,
+    pub live_cells_count: i64,
+    pub cells_count: i64,
+    pub owned_capacity_sum: String,
+    pub owned_knowledge_sum: String,
+    pub code_cells_live_count: i64,
+    pub code_cells_total: i64,
+    pub deployments: Vec<ScriptVersionDeploymentResponse>,
+    pub references: Vec<ScriptObservedReferenceResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptFamilyDetailResponse {
+    pub family_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub script_kind: Option<String>,
+    pub website: Option<String>,
+    pub live_cells_count: i64,
+    pub cells_count: i64,
+    pub owned_capacity_sum: String,
+    pub owned_knowledge_sum: String,
+    pub versions_count: i64,
+    pub versions: Vec<ScriptVersionDetailResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChartDataPoint {
     pub date: String,
     pub value: String,

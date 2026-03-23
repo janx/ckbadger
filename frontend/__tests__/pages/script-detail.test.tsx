@@ -6,7 +6,7 @@ import { api } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
   api: {
-    getScript: vi.fn(),
+    getScriptFamilyDetail: vi.fn(),
     getScriptUsage: vi.fn(),
     getScriptCapacityChart: vi.fn(),
     getScriptCapacityChartByCodeHash: vi.fn(),
@@ -34,6 +34,8 @@ const secondDeploymentDataHash =
   '0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
 const legacyDeploymentDataHash =
   '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+const sharedObservedData1Reference =
+  '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
 const firstDeploymentAt = Date.parse('2024-01-01T00:00:00.000Z');
 const secondDeploymentAt = Date.parse('2024-02-01T00:00:00.000Z');
 const legacyDeploymentAt = Date.parse('2023-12-01T00:00:00.000Z');
@@ -57,68 +59,110 @@ const secondGovernanceArgs = '0xa222222222222222222222222222222222222222';
 const legacyGovernanceArgs = '0xa333333333333333333333333333333333333333';
 const secondGovernanceScriptName = 'Secp256k1Blake160';
 
-const mockDeployments = [
-  {
-    codeHash: sharedVersionCodeHash,
-    name: 'SECP256K1_BLAKE160',
-    description: 'Default lock script',
-    scriptKind: 'lock',
-    rfc: null,
-    website: null,
-    sourceUrl: null,
-    decoderType: null,
-    network: 'mainnet',
-    hashType: 'type',
-    dataHash: firstDeploymentDataHash,
-    typeHash: sharedVersionCodeHash,
-    tag: null,
-    deprecated: false,
-    isSystem: true,
-    codeCellTxHash: firstDeploymentTxHash,
-    codeCellOutputIndex: 0,
-    deployedAt: firstDeploymentAt,
-  },
-  {
-    codeHash: sharedVersionCodeHash,
-    name: 'SECP256K1_BLAKE160',
-    description: 'Default lock script',
-    scriptKind: 'lock',
-    rfc: null,
-    website: null,
-    sourceUrl: null,
-    decoderType: null,
-    network: 'mainnet',
-    hashType: 'data',
-    dataHash: secondDeploymentDataHash,
-    typeHash: sharedVersionCodeHash,
-    tag: null,
-    deprecated: false,
-    isSystem: true,
-    codeCellTxHash: secondDeploymentTxHash,
-    codeCellOutputIndex: 1,
-    deployedAt: secondDeploymentAt,
-  },
-  {
-    codeHash: legacyVersionCodeHash,
-    name: 'SECP256K1_BLAKE160',
-    description: 'Default lock script',
-    scriptKind: 'lock',
-    rfc: null,
-    website: null,
-    sourceUrl: null,
-    decoderType: null,
-    network: 'mainnet',
-    hashType: 'type',
-    dataHash: legacyDeploymentDataHash,
-    typeHash: legacyVersionCodeHash,
-    tag: null,
-    deprecated: false,
-    isSystem: true,
-    codeCellTxHash: legacyDeploymentTxHash,
-    codeCellOutputIndex: 0,
-    deployedAt: legacyDeploymentAt,
-  },
-];
+const mockScriptFamilyDetail = {
+  familyId: 'secp256k1-blake160',
+  name: 'SECP256K1_BLAKE160',
+  description: 'Default lock script',
+  scriptKind: 'lock',
+  website: null,
+  liveCellsCount: 8,
+  cellsCount: 10,
+  ownedCapacitySum: '10000000000',
+  ownedKnowledgeSum: '6100000000',
+  versionsCount: 2,
+  versions: [
+    {
+      versionHash: sharedVersionCodeHash,
+      name: 'SECP256K1_BLAKE160',
+      description: 'Default lock script',
+      scriptKind: 'lock',
+      website: null,
+      deprecated: false,
+      canonicalReferenceHash: sharedVersionCodeHash,
+      canonicalHashType: 'type',
+      deployedAt: firstDeploymentAt,
+      liveCellsCount: 7,
+      cellsCount: 8,
+      ownedCapacitySum: '9000000000',
+      ownedKnowledgeSum: '5490000000',
+      codeCellsLiveCount: 2,
+      codeCellsTotal: 2,
+      deployments: [
+        {
+          hashType: 'type',
+          typeReferenceHash: sharedVersionCodeHash,
+          dataReferenceHash: firstDeploymentDataHash,
+          codeCellTxHash: firstDeploymentTxHash,
+          codeCellOutputIndex: 0,
+          deployedAt: firstDeploymentAt,
+        },
+        {
+          hashType: 'data',
+          typeReferenceHash: sharedVersionCodeHash,
+          dataReferenceHash: secondDeploymentDataHash,
+          codeCellTxHash: secondDeploymentTxHash,
+          codeCellOutputIndex: 1,
+          deployedAt: secondDeploymentAt,
+        },
+      ],
+      references: [
+        {
+          referenceHash: sharedVersionCodeHash,
+          hashType: 'type',
+          liveCellsCount: 4,
+          cellsCount: 6,
+          ownedCapacitySum: '700',
+          ownedKnowledgeSum: '400',
+        },
+        {
+          referenceHash: sharedObservedData1Reference,
+          hashType: 'data1',
+          liveCellsCount: 3,
+          cellsCount: 4,
+          ownedCapacitySum: '300',
+          ownedKnowledgeSum: '200',
+        },
+      ],
+    },
+    {
+      versionHash: legacyVersionCodeHash,
+      name: 'SECP256K1_BLAKE160',
+      description: 'Default lock script',
+      scriptKind: 'lock',
+      website: null,
+      deprecated: false,
+      canonicalReferenceHash: legacyVersionCodeHash,
+      canonicalHashType: 'type',
+      deployedAt: legacyDeploymentAt,
+      liveCellsCount: 1,
+      cellsCount: 2,
+      ownedCapacitySum: '1000000000',
+      ownedKnowledgeSum: '610000000',
+      codeCellsLiveCount: 0,
+      codeCellsTotal: 1,
+      deployments: [
+        {
+          hashType: 'type',
+          typeReferenceHash: legacyVersionCodeHash,
+          dataReferenceHash: legacyDeploymentDataHash,
+          codeCellTxHash: legacyDeploymentTxHash,
+          codeCellOutputIndex: 0,
+          deployedAt: legacyDeploymentAt,
+        },
+      ],
+      references: [
+        {
+          referenceHash: legacyVersionCodeHash,
+          hashType: 'type',
+          liveCellsCount: 1,
+          cellsCount: 2,
+          ownedCapacitySum: '1000000000',
+          ownedKnowledgeSum: '610000000',
+        },
+      ],
+    },
+  ],
+};
 
 const mockUsage = {
   name: 'SECP256K1_BLAKE160',
@@ -257,7 +301,7 @@ describe('ScriptDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setViewportWidth(1280);
-    vi.mocked(api.getScript).mockResolvedValue(mockDeployments);
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(mockScriptFamilyDetail as any);
     vi.mocked(api.getScriptUsage).mockResolvedValue(mockUsage);
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(mockCapacityChart);
     vi.mocked(api.getScriptCapacityChartByCodeHash).mockResolvedValue(mockCapacityChart);
@@ -332,6 +376,10 @@ describe('ScriptDetailPage', () => {
         return sharedVersionUsageCellsByRef.secondData;
       }
 
+      if (codeHash === sharedObservedData1Reference && hashType === 'data1') {
+        return emptyCells;
+      }
+
       return emptyCells;
     });
     vi.mocked(api.lookupScripts).mockResolvedValue({
@@ -390,7 +438,7 @@ describe('ScriptDetailPage', () => {
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
 
     await waitFor(() => {
-      expect(api.getScript).toHaveBeenCalledWith('SECP256K1_BLAKE160');
+      expect(api.getScriptFamilyDetail).toHaveBeenCalledWith('SECP256K1_BLAKE160');
       expect(api.getScriptUsage).toHaveBeenCalledWith('SECP256K1_BLAKE160');
       expect(screen.getByText('SECP256K1_BLAKE160')).toBeInTheDocument();
     });
@@ -530,6 +578,13 @@ describe('ScriptDetailPage', () => {
         limit: 50,
         cursor: undefined,
       });
+      expect(api.getCellsByScriptRef).toHaveBeenCalledWith({
+        codeHash: sharedObservedData1Reference,
+        hashType: 'data1',
+        scriptKind: 'lock',
+        limit: 50,
+        cursor: undefined,
+      });
       expect(
         vi
           .mocked(api.lookupScripts)
@@ -606,7 +661,7 @@ describe('ScriptDetailPage', () => {
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
 
     await waitFor(() => {
-      expect(api.getScript).toHaveBeenCalledWith('SECP256K1_BLAKE160');
+      expect(api.getScriptFamilyDetail).toHaveBeenCalledWith('SECP256K1_BLAKE160');
       expect(screen.getByText('SECP256K1_BLAKE160')).toBeInTheDocument();
     });
 
@@ -653,7 +708,7 @@ describe('ScriptDetailPage', () => {
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
 
     await waitFor(() => {
-      expect(api.getScript).toHaveBeenCalledWith('SECP256K1_BLAKE160');
+      expect(api.getScriptFamilyDetail).toHaveBeenCalledWith('SECP256K1_BLAKE160');
       expect(screen.getByText('SECP256K1_BLAKE160')).toBeInTheDocument();
     });
 
@@ -681,14 +736,17 @@ describe('ScriptDetailPage', () => {
   });
 
   it('shows deprecated badges for known deprecated scripts in the header and tables', async () => {
-    vi.mocked(api.getScript).mockResolvedValue(
-      mockDeployments.map((deployment) => ({
-        ...deployment,
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue({
+      ...mockScriptFamilyDetail,
+      name: 'PW Lock',
+      description: 'Ethereum wallet compatible lock',
+      versions: mockScriptFamilyDetail.versions.map((version) => ({
+        ...version,
         name: 'PW Lock',
         description: 'Ethereum wallet compatible lock',
         deprecated: true,
-      }))
-    );
+      })),
+    } as any);
     vi.mocked(api.getScriptUsage).mockResolvedValue({
       ...mockUsage,
       name: 'PW Lock',
@@ -702,5 +760,43 @@ describe('ScriptDetailPage', () => {
 
     expect(screen.queryByText('Unlabeled Script')).toBeNull();
     expect(screen.getAllByText('Deprecated').length).toBeGreaterThan(1);
+  });
+
+  it('renders zero-deployment versions without synthesizing fake deployment rows', async () => {
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue({
+      ...mockScriptFamilyDetail,
+      versions: [
+        {
+          ...mockScriptFamilyDetail.versions[0],
+          deployments: [],
+          codeCellsLiveCount: 0,
+          codeCellsTotal: 0,
+        },
+      ],
+      versionsCount: 1,
+    } as any);
+    vi.mocked(api.getScriptUsage).mockResolvedValue({
+      ...mockUsage,
+      byDeployment: [
+        {
+          ...mockUsage.byDeployment[0],
+          codeHash: sharedVersionCodeHash,
+          liveCellsCount: 3,
+          cellsCount: 4,
+        },
+      ],
+    });
+
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+
+    await waitFor(() => {
+      expect(api.getScriptFamilyDetail).toHaveBeenCalledWith('SECP256K1_BLAKE160');
+      expect(screen.getByText('SECP256K1_BLAKE160')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('Script not found')).toBeNull();
+    const versionRow = screen.getByTestId(`version-row-${sharedVersionCodeHash}`);
+    expect(within(versionRow).getByText(/^0$/)).toBeInTheDocument();
+    expect(screen.getByText('No deployments found for this version')).toBeInTheDocument();
   });
 });

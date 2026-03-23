@@ -331,6 +331,7 @@ pub fn resolve_script_by_hash(
     cells_store: &CkbadgerStore,
     reference_hash: &[u8],
 ) -> anyhow::Result<CurrentScriptVersionResolution> {
+    let direct_version = store.get_script_version(reference_hash)?;
     let persisted_versions = {
         let mut seen = HashSet::new();
         let mut versions = Vec::new();
@@ -366,6 +367,41 @@ pub fn resolve_script_by_hash(
     }
 
     let type_matches = resolve_live_type_reference_matches(store, cells_store, reference_hash)?;
+    if let Some(version_info) = direct_version {
+        let mut unique_versions: Vec<Vec<u8>> = {
+            let mut seen = HashSet::new();
+            type_matches
+                .iter()
+                .filter(|m| seen.insert(m.version_hash.clone()))
+                .map(|m| m.version_hash.clone())
+                .collect()
+        };
+        if unique_versions.is_empty() {
+            return Ok(CurrentScriptVersionResolution::Resolved(Box::new(
+                CurrentScriptVersion {
+                    version_hash: reference_hash.to_vec(),
+                    version_info: Some(version_info),
+                },
+            )));
+        }
+        if unique_versions.len() == 1 && unique_versions[0] == reference_hash {
+            return Ok(CurrentScriptVersionResolution::Resolved(Box::new(
+                CurrentScriptVersion {
+                    version_hash: reference_hash.to_vec(),
+                    version_info: Some(version_info),
+                },
+            )));
+        }
+        if !unique_versions.iter().any(|hash| hash == reference_hash) {
+            unique_versions.push(reference_hash.to_vec());
+        }
+        unique_versions.sort();
+        return Ok(CurrentScriptVersionResolution::Ambiguous(Box::new(
+            AmbiguousCurrentScriptVersion {
+                version_hashes: unique_versions,
+            },
+        )));
+    }
     if !type_matches.is_empty() {
         let unique_versions: Vec<Vec<u8>> = {
             let mut seen = HashSet::new();
@@ -632,7 +668,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_script_by_hash_does_not_fallback_without_persisted_mapping() {
+    fn test_resolve_script_by_hash_resolves_direct_version_hash_without_persisted_mapping() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let reference_hash = vec![0x52; 32];
@@ -661,6 +697,18 @@ mod tests {
             .unwrap();
 
         let resolution = resolve_script_by_hash(&store, &store, &reference_hash).unwrap();
-        assert_eq!(resolution, CurrentScriptVersionResolution::NotFound);
+        match resolution {
+            CurrentScriptVersionResolution::Resolved(resolved) => {
+                assert_eq!(resolved.version_hash, reference_hash);
+                assert_eq!(
+                    resolved
+                        .version_info
+                        .as_ref()
+                        .and_then(|info| info.name.as_deref()),
+                    Some("Legacy Fallback")
+                );
+            }
+            other => panic!("expected direct version resolution, got {other:?}"),
+        }
     }
 }

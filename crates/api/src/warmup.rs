@@ -27,6 +27,7 @@ pub const CACHE_KEY_ASSETS_NFT: &str = "assets:nft";
 pub const CACHE_KEY_ADDRESSES_TOP: &str = "addresses:top";
 pub const CACHE_KEY_ADDRESSES_ACTIVE: &str = "addresses:active";
 pub const CACHE_KEY_SPORES_ALL: &str = "spores:all";
+pub const CACHE_KEY_SCRIPT_FAMILIES_ALL: &str = "scripts:families:all";
 pub const CACHE_KEY_SCRIPTS_ALL: &str = "scripts:all";
 pub const CACHE_KEY_SCRIPTS_NAMED: &str = "scripts:named";
 pub const CACHE_KEY_SCRIPT_VERSIONS_ALL: &str = "scripts:versions:all";
@@ -462,6 +463,13 @@ fn refresh_spore_cache_sync(state: &AppState) -> anyhow::Result<()> {
 }
 
 fn refresh_named_script_cache_sync(state: &AppState) -> anyhow::Result<()> {
+    let script_families = state.store.list_script_families()?;
+    state.mem_cache.set(
+        CACHE_KEY_SCRIPT_FAMILIES_ALL,
+        &script_families,
+        CacheTtl::ASSETS,
+    );
+
     let script_infos = state.store.list_script_infos()?;
     state
         .mem_cache
