@@ -3,7 +3,7 @@ pub mod fetch;
 pub mod types;
 pub mod vm;
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 
 use crate::types::{DobDecodedResult, DobTrait, DobTraitGroup};
 use crate::vm::execute_riscv_binary;
@@ -11,7 +11,10 @@ use crate::vm::execute_riscv_binary;
 /// Decode a DOB0 spore by running a single decoder binary.
 ///
 /// The decoder binary receives `argv = [dna_hex, pattern_json]` and emits
-/// a JSON array of `DobTraitGroup` via debug syscall 2177.
+/// output via debug syscall 2177. Output is typically a JSON array of
+/// `DobTraitGroup`, but decoders may return any text format (SVG, HTML, …).
+/// When the output is not valid JSON traits, `traits` will be empty and
+/// `raw_output` still holds the verbatim decoder output for media storage.
 pub fn decode_dob0(
     decoder_binary: &[u8],
     dna_hex: &str,
@@ -25,12 +28,16 @@ pub fn decode_dob0(
 
     let raw_output = output.last().cloned().unwrap_or_default();
 
-    let groups: Vec<DobTraitGroup> = serde_json::from_str(&raw_output)
-        .context("failed to parse decoder output as DobTraitGroup array")?;
+    let traits = match serde_json::from_str::<Vec<DobTraitGroup>>(&raw_output) {
+        Ok(groups) => flatten_trait_groups(&groups),
+        Err(_) => Vec::new(),
+    };
 
-    let traits = flatten_trait_groups(&groups);
-
-    Ok(DobDecodedResult { traits, raw_output })
+    Ok(DobDecodedResult {
+        traits,
+        raw_output,
+        output_step: 0,
+    })
 }
 
 /// Decode a DOB1 spore by running a chain of decoders.
@@ -38,6 +45,11 @@ pub fn decode_dob0(
 /// Each entry in `decoders` is `(binary, pattern_json)`. The first decoder
 /// receives the original `dna_hex`; subsequent decoders receive the raw
 /// output of the previous decoder as their DNA input.
+///
+/// Traits are extracted from the latest step whose output is valid JSON
+/// `DobTraitGroup[]`. The final step's raw output is returned as-is — it
+/// may be rendered media (SVG, PNG, …) rather than JSON when the chain
+/// ends with a renderer decoder.
 pub fn decode_dob1_chain(
     decoders: &[(&[u8], &str)],
     dna_hex: &str,
@@ -48,6 +60,7 @@ pub fn decode_dob1_chain(
 
     let mut current_dna = dna_hex.to_string();
     let mut last_raw_output = String::new();
+    let mut traits: Vec<DobTrait> = Vec::new();
 
     for (i, (binary, pattern_json)) in decoders.iter().enumerate() {
         let (exit_code, output) = execute_riscv_binary(binary, &[&current_dna, pattern_json])?;
@@ -58,19 +71,23 @@ pub fn decode_dob1_chain(
 
         last_raw_output = output.last().cloned().unwrap_or_default();
 
+        // Capture traits from each step that produces valid JSON trait groups.
+        // For chains ending with a renderer (SVG output), traits come from an
+        // earlier step; for chains where every step outputs traits, the latest
+        // step's traits win.
+        if let Ok(groups) = serde_json::from_str::<Vec<DobTraitGroup>>(&last_raw_output) {
+            traits = flatten_trait_groups(&groups);
+        }
+
         // For chained decoders, the raw output becomes the next decoder's DNA
         // input (hex-encoded).
         current_dna = hex::encode(last_raw_output.as_bytes());
     }
 
-    let groups: Vec<DobTraitGroup> = serde_json::from_str(&last_raw_output)
-        .context("failed to parse final decoder output as DobTraitGroup array")?;
-
-    let traits = flatten_trait_groups(&groups);
-
     Ok(DobDecodedResult {
         traits,
         raw_output: last_raw_output,
+        output_step: (decoders.len() - 1) as u32,
     })
 }
 

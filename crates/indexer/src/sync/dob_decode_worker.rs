@@ -533,7 +533,7 @@ async fn decode_single_spore(
         role: None,
         size: raw_bytes.len() as u64,
         hash,
-        step: Some(0),
+        step: Some(decoded.output_step),
     }];
 
     // Extract media sources from decoded trait values

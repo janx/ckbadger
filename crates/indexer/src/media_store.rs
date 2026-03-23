@@ -18,13 +18,29 @@ use std::path::PathBuf;
 /// Detection rules (evaluated in order):
 /// 1. Empty content -> `"application/octet-stream"`
 /// 2. Not valid UTF-8 -> `"application/octet-stream"`
-/// 3. Trimmed text starts with `<svg` or `<SVG` -> `"image/svg+xml"`
-/// 4. Trimmed text starts with `[`/ends with `]`, or starts with `{`/ends with `}`,
-///    AND is valid JSON -> `"application/json"`
-/// 5. Everything else -> `"text/plain"`
+/// 3. Known binary magic bytes (PNG, JPEG, GIF, WebP) -> image MIME
+/// 4. Trimmed text starts with `<svg` / `<SVG` -> `"image/svg+xml"`
+/// 5. Trimmed text starts with `<!DOCTYPE html` / `<html` -> `"text/html"`
+/// 6. Trimmed text starts with `<?xml` -> `"application/xml"`
+/// 7. JSON-shaped text that parses as valid JSON -> `"application/json"`
+/// 8. Everything else -> `"text/plain"`
 pub fn sniff_media_type(content: &[u8]) -> &'static str {
     if content.is_empty() {
         return "application/octet-stream";
+    }
+
+    // Binary magic bytes — checked BEFORE UTF-8 attempt.
+    if content.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return "image/png";
+    }
+    if content.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return "image/jpeg";
+    }
+    if content.starts_with(b"GIF87a") || content.starts_with(b"GIF89a") {
+        return "image/gif";
+    }
+    if content.len() >= 12 && &content[0..4] == b"RIFF" && &content[8..12] == b"WEBP" {
+        return "image/webp";
     }
 
     let text = match std::str::from_utf8(content) {
@@ -33,11 +49,27 @@ pub fn sniff_media_type(content: &[u8]) -> &'static str {
     };
 
     let trimmed = text.trim();
+    let lower = trimmed.as_bytes();
 
+    // SVG
     if trimmed.starts_with("<svg") || trimmed.starts_with("<SVG") {
         return "image/svg+xml";
     }
 
+    // HTML
+    if lower.len() >= 15 {
+        let prefix_lower: String = trimmed.chars().take(15).collect::<String>().to_lowercase();
+        if prefix_lower.starts_with("<!doctype html") || prefix_lower.starts_with("<html") {
+            return "text/html";
+        }
+    }
+
+    // XML (non-SVG, non-HTML)
+    if trimmed.starts_with("<?xml") {
+        return "application/xml";
+    }
+
+    // JSON
     let looks_like_json = (trimmed.starts_with('[') && trimmed.ends_with(']'))
         || (trimmed.starts_with('{') && trimmed.ends_with('}'));
 
@@ -229,5 +261,55 @@ mod tests {
     #[test]
     fn test_sniff_empty() {
         assert_eq!(sniff_media_type(b""), "application/octet-stream");
+    }
+
+    #[test]
+    fn test_sniff_html_doctype() {
+        let content = b"<!DOCTYPE html><html><body>hello</body></html>";
+        assert_eq!(sniff_media_type(content), "text/html");
+    }
+
+    #[test]
+    fn test_sniff_html_tag() {
+        let content = b"<html lang=\"en\"><head></head><body></body></html>";
+        assert_eq!(sniff_media_type(content), "text/html");
+    }
+
+    #[test]
+    fn test_sniff_xml() {
+        let content = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><root/>";
+        assert_eq!(sniff_media_type(content), "application/xml");
+    }
+
+    #[test]
+    fn test_sniff_png_magic() {
+        let content = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        assert_eq!(sniff_media_type(content), "image/png");
+    }
+
+    #[test]
+    fn test_sniff_jpeg_magic() {
+        let content = &[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        assert_eq!(sniff_media_type(content), "image/jpeg");
+    }
+
+    #[test]
+    fn test_sniff_gif_magic() {
+        let content = b"GIF89a\x01\x00\x01\x00";
+        assert_eq!(sniff_media_type(content), "image/gif");
+    }
+
+    #[test]
+    fn test_sniff_webp_magic() {
+        let mut content = vec![0u8; 12];
+        content[..4].copy_from_slice(b"RIFF");
+        content[8..12].copy_from_slice(b"WEBP");
+        assert_eq!(sniff_media_type(&content), "image/webp");
+    }
+
+    #[test]
+    fn test_sniff_non_utf8_binary() {
+        let content = &[0x00, 0xFF, 0xFE, 0x80, 0x90];
+        assert_eq!(sniff_media_type(content), "application/octet-stream");
     }
 }

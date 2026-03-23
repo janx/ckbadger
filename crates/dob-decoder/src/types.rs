@@ -47,11 +47,18 @@ pub struct DobTrait {
 }
 
 /// Result of decoding a DOB's DNA through the decoder binary.
+///
+/// `raw_output` holds the final decoder step's output verbatim — it may be
+/// JSON trait groups, SVG, HTML, or any other text format a decoder emits.
+/// `traits` are extracted from whichever step produced valid JSON
+/// `DobTraitGroup[]` (may be empty if no step did).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DobDecodedResult {
     pub traits: Vec<DobTrait>,
     pub raw_output: String,
+    /// Zero-based index of the decoder step that produced `raw_output`.
+    pub output_step: u32,
 }
 
 /// Reference to a decoder binary on-chain, identified either by code_hash
@@ -106,6 +113,7 @@ mod tests {
                 type_tag: "String".to_string(),
             }],
             raw_output: r#"[{"name":"test","traits":[]}]"#.to_string(),
+            output_step: 0,
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"rawOutput\""));
