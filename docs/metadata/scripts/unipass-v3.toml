@@ -6,8 +6,10 @@ website = "https://www.unipass.id"
 code_hash = "0xd01f5152c267b7f33b9795140c2467742e8424e49ebe2331caec197f7281b60a"
 data_hash = "0x641aa0316014005d147b907e7fad7b5223ed0b9a4704b48a6dc592b838bdcde6"
 hash_type = "type"
+deprecated = true
 
 [[testnet]]
 code_hash = "0x3e1eb7ed4809b2d60650be96a40abfbdafb3fb942b7b37ec7709e64e2cd0a783"
 data_hash = "0xdcfa6069acc7b2c49c11a4e31ba553c5c1ed443b8dcc3651e957e19bb87c2bfc"
 hash_type = "type"
+deprecated = true
