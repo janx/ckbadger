@@ -429,6 +429,7 @@ fn fallback_script_version_info(
     Ok(ckbadger_store::types::ScriptVersionInfo {
         version_hash: version_hash.to_vec(),
         name: fallback.name,
+        family_id: None,
         deprecated: fallback.deprecated,
         category: fallback.category,
         website: fallback.website,
@@ -446,6 +447,8 @@ fn fallback_script_version_info(
         type_used_capacity_sum: fallback.type_used_capacity_sum,
         type_owned_knowledge_sum: fallback.type_owned_knowledge_sum,
         associated_code_hash: None,
+        canonical_reference_hash: None,
+        canonical_hash_type: None,
     })
 }
 

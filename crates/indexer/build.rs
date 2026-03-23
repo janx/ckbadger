@@ -29,6 +29,8 @@ struct TokenDeployment {
 
 #[derive(Deserialize, Serialize)]
 struct ScriptMetadata {
+    #[serde(default)]
+    metadata_slug: Option<String>,
     name: String,
     #[serde(default)]
     description: Option<String>,
@@ -194,8 +196,14 @@ fn main() {
             }
             let content = fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-            let script = toml::from_str::<ScriptMetadata>(&content)
+            let mut script = toml::from_str::<ScriptMetadata>(&content)
                 .unwrap_or_else(|e| panic!("failed to parse {}: {}", path.display(), e));
+            script.metadata_slug = Some(
+                path.file_stem()
+                    .unwrap_or_else(|| panic!("missing file stem for {}", path.display()))
+                    .to_string_lossy()
+                    .into_owned(),
+            );
             script_entries.push(script);
         }
     }

@@ -739,6 +739,8 @@ pub struct ScriptVersionInfo {
     pub version_hash: Vec<u8>,
     pub name: Option<String>,
     #[serde(default)]
+    pub family_id: Option<String>,
+    #[serde(default)]
     pub deprecated: bool,
     pub category: Option<String>,
     pub website: Option<String>,
@@ -765,6 +767,10 @@ pub struct ScriptVersionInfo {
     /// Used to look up the correct ScriptInfo for per-version stats.
     #[serde(default)]
     pub associated_code_hash: Option<Vec<u8>>,
+    #[serde(default)]
+    pub canonical_reference_hash: Option<Vec<u8>>,
+    #[serde(default)]
+    pub canonical_hash_type: Option<u8>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

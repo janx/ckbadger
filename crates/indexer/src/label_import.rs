@@ -54,6 +54,8 @@ pub(crate) struct TokenDeployment {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ScriptMetadata {
+    #[serde(default)]
+    pub metadata_slug: Option<String>,
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -336,9 +338,13 @@ fn overlay_from_dir(
             }
             let slug = path.file_stem().unwrap().to_string_lossy().to_string();
             let content = std::fs::read_to_string(&path)?;
-            let script: ScriptMetadata = toml::from_str(&content)
+            let mut script: ScriptMetadata = toml::from_str(&content)
                 .map_err(|e| anyhow::anyhow!("failed to parse {}: {}", path.display(), e))?;
-            if let Some(existing) = scripts.iter_mut().find(|s| make_slug(&s.name) == slug) {
+            script.metadata_slug = Some(slug.clone());
+            if let Some(existing) = scripts
+                .iter_mut()
+                .find(|s| s.metadata_slug.as_deref() == Some(slug.as_str()))
+            {
                 *existing = script;
             } else {
                 scripts.push(script);
@@ -347,6 +353,15 @@ fn overlay_from_dir(
     }
 
     Ok(())
+}
+
+fn script_family_id(script: &ScriptMetadata) -> Result<&str> {
+    script.metadata_slug.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "script metadata missing metadata_slug: name={}",
+            script.name
+        )
+    })
 }
 
 fn upsert_token_label(
@@ -405,6 +420,7 @@ fn upsert_script_label(
     network: &str,
 ) -> Result<()> {
     // Only import deployments for the configured network.
+    let family_id = script_family_id(script)?;
     let (active, excluded): (Vec<ImportDeployment>, Vec<ImportDeployment>) = match network {
         "mainnet" => (
             script
@@ -444,12 +460,15 @@ fn upsert_script_label(
                         .flat_map(ScriptNetworkMetadata::import_deployments),
                 )
                 .collect();
+            upsert_script_family(store, script, family_id, &all_deployments)?;
             for deployment in &all_deployments {
-                import_single_deployment(store, script, deployment)?;
+                import_single_deployment(store, script, family_id, deployment)?;
             }
             return Ok(());
         }
     };
+
+    upsert_script_family(store, script, family_id, &active)?;
 
     // Clean up entries from the excluded network: clear label fields so they don't
     // appear in name-based queries. Preserves indexer-maintained usage stats.
@@ -476,11 +495,21 @@ fn upsert_script_label(
                     if let Ok(Some(mut version_info)) = store.get_script_version(&data_hash) {
                         if version_info.name.as_deref() == Some(&script.name) {
                             store.delete_script_version_by_label(&script.name, &data_hash)?;
+                            if let Some(existing_family_id) = version_info.family_id.as_deref() {
+                                store.delete_script_version_by_family_direct(
+                                    existing_family_id,
+                                    &data_hash,
+                                )?;
+                            }
                             version_info.name = None;
+                            version_info.family_id = None;
                             version_info.deprecated = false;
                             version_info.category = None;
                             version_info.description = None;
                             version_info.website = None;
+                            version_info.canonical_reference_hash = None;
+                            version_info.canonical_hash_type = None;
+                            version_info.associated_code_hash = None;
                             store.put_script_version(&data_hash, &version_info)?;
                         }
                     }
@@ -490,14 +519,44 @@ fn upsert_script_label(
     }
 
     for deployment in &active {
-        import_single_deployment(store, script, deployment)?;
+        import_single_deployment(store, script, family_id, deployment)?;
     }
+    Ok(())
+}
+
+fn upsert_script_family(
+    store: &CkbadgerStore,
+    script: &ScriptMetadata,
+    family_id: &str,
+    active_deployments: &[ImportDeployment],
+) -> Result<()> {
+    let mut family = store.get_script_family(family_id)?.unwrap_or_else(|| {
+        ckbadger_store::types::ScriptFamilyInfo {
+            family_id: family_id.to_string(),
+            ..Default::default()
+        }
+    });
+    if !family.name.is_empty() && family.name != script.name {
+        store.delete_script_family_name_direct(&family.name)?;
+    }
+    family.family_id = family_id.to_string();
+    family.name = script.name.clone();
+    family.description = script.description.clone();
+    family.website = script.website.clone();
+    family.category = script.category.clone();
+    family.versions_count = active_deployments
+        .iter()
+        .filter(|deployment| matches!(deployment, ImportDeployment::Version(_)))
+        .count() as i64;
+    store.put_script_family_direct(family_id, &family)?;
+    store.put_script_family_name_direct(&script.name, family_id)?;
     Ok(())
 }
 
 fn import_single_deployment(
     store: &CkbadgerStore,
     script: &ScriptMetadata,
+    family_id: &str,
     deployment: &ImportDeployment,
 ) -> Result<()> {
     let (code_hash_hex, hash_type) = match deployment {
@@ -532,7 +591,7 @@ fn import_single_deployment(
         matches!(deployment, ImportDeployment::Version(version) if version.deprecated);
     info.category = script.category.clone();
     info.description = script.description.clone();
-    info.website = Some(script.website.clone().unwrap_or_default());
+    info.website = script.website.clone();
 
     store.put_script_info_direct(&code_hash, &info)?;
 
@@ -569,26 +628,40 @@ fn import_single_deployment(
             ..Default::default()
         }
     });
+    if let Some(existing_family_id) = version_info.family_id.as_deref() {
+        if existing_family_id != family_id {
+            store.delete_script_version_by_family_direct(existing_family_id, &version_hash)?;
+        }
+    }
     if let Some(existing_name) = version_info.name.as_deref() {
         if existing_name != script.name {
             store.delete_script_version_by_label(existing_name, &version_hash)?;
         }
     }
     version_info.name = Some(script.name.clone());
+    version_info.family_id = Some(family_id.to_string());
     version_info.deprecated =
         matches!(deployment, ImportDeployment::Version(version) if version.deprecated);
     version_info.category = script.category.clone();
     version_info.description = script.description.clone();
-    version_info.website = Some(script.website.clone().unwrap_or_default());
+    version_info.website = script.website.clone();
     version_info.associated_code_hash = Some(code_hash.clone());
+    if let ImportDeployment::Version(version) = deployment {
+        version_info.canonical_reference_hash = Some(code_hash.clone());
+        version_info.canonical_hash_type = Some(ScriptParser::parse_hash_type(
+            version.canonical_hash_type.as_str(),
+        ));
+    }
     store.put_script_version(&version_hash, &version_info)?;
     store.insert_script_version_by_label(&script.name, &version_hash)?;
+    store.put_script_version_by_family_direct(family_id, &version_hash)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckbadger_store::types::{ScriptFamilyInfo, ScriptVersionInfo};
     use tempfile::TempDir;
 
     #[test]
@@ -910,6 +983,311 @@ disabled = true
     }
 
     #[test]
+    fn test_label_import_writes_family_and_versions() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        super::run_label_import_bundled(&store, "mainnet").unwrap();
+
+        let family = store
+            .get_script_family("default-lock")
+            .unwrap()
+            .expect("default-lock family should be imported");
+        assert_eq!(
+            family,
+            ScriptFamilyInfo {
+                family_id: "default-lock".to_string(),
+                name: "Default Lock".to_string(),
+                description: Some(
+                    "SECP256K1/blake160 is the default lock script to verify CKB transaction signature."
+                        .to_string()
+                ),
+                website: None,
+                category: None,
+                versions_count: 1,
+                ..Default::default()
+            }
+        );
+
+        let family_versions = store
+            .list_script_version_hashes_by_family("default-lock")
+            .unwrap();
+        assert_eq!(
+            family_versions,
+            vec![
+                hex::decode("709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649")
+                    .unwrap()
+            ]
+        );
+
+        let version = store
+            .get_script_version(&family_versions[0])
+            .unwrap()
+            .expect("default-lock version should exist");
+        assert_eq!(
+            version,
+            ScriptVersionInfo {
+                version_hash: hex::decode(
+                    "709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649"
+                )
+                .unwrap(),
+                name: Some("Default Lock".to_string()),
+                description: Some(
+                    "SECP256K1/blake160 is the default lock script to verify CKB transaction signature."
+                        .to_string()
+                ),
+                family_id: Some("default-lock".to_string()),
+                canonical_reference_hash: Some(hex::decode(
+                    "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                )
+                .unwrap()),
+                canonical_hash_type: Some(ScriptParser::parse_hash_type("type")),
+                associated_code_hash: Some(hex::decode(
+                    "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                )
+                .unwrap()),
+                ..Default::default()
+            }
+        );
+
+        let compatible_versions = store
+            .list_script_version_hashes_by_label("Default Lock")
+            .unwrap();
+        assert_eq!(compatible_versions, family_versions);
+    }
+
+    #[test]
+    fn test_label_import_uses_metadata_slug_for_family_identity() {
+        let dir = TempDir::new().unwrap();
+        let metadata_path = dir.path().join("metadata");
+        std::fs::create_dir_all(metadata_path.join("scripts")).unwrap();
+
+        std::fs::write(
+            metadata_path.join("scripts/shadow-lock.toml"),
+            r#"
+name = "Nervape Shadow Lock"
+description = "Generic ownership delegate/proxy lock used by Nervape composing flows."
+
+[mainnet]
+[[mainnet.versions]]
+canonical_ref_hash = "0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24"
+version_hash = "0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24"
+canonical_hash_type = "data1"
+"#,
+        )
+        .unwrap();
+
+        let store_dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(store_dir.path().to_str().unwrap()).unwrap();
+        let config = LabelImportConfig {
+            network: "mainnet".to_string(),
+            metadata_path: Some(metadata_path.to_string_lossy().into_owned()),
+        };
+
+        super::run_label_import(&store, &config).unwrap();
+
+        let family = store
+            .get_script_family("shadow-lock")
+            .unwrap()
+            .expect("family id should come from metadata slug");
+        assert_eq!(family.name, "Nervape Shadow Lock");
+
+        let wrong_family = store.get_script_family("nervape-shadow-lock").unwrap();
+        assert!(
+            wrong_family.is_none(),
+            "family id must not be derived from make_slug(name)"
+        );
+
+        let family_versions = store
+            .list_script_version_hashes_by_family("shadow-lock")
+            .unwrap();
+        assert_eq!(
+            family_versions,
+            vec![
+                hex::decode("6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24")
+                    .unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_label_import_writes_multiple_versions_for_one_family() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        super::run_label_import_bundled(&store, "mainnet").unwrap();
+
+        let family = store
+            .get_script_family("default-multisig")
+            .unwrap()
+            .expect("default-multisig family should be imported");
+        assert_eq!(family.versions_count, 3);
+
+        let family_versions = store
+            .list_script_version_hashes_by_family("default-multisig")
+            .unwrap();
+        assert_eq!(
+            family_versions,
+            vec![
+                hex::decode("36c971b8d41fbd94aabca77dc75e826729ac98447b46f91e00796155dddb0d29")
+                    .unwrap(),
+                hex::decode("43400de165f0821abf63dcac299bbdf7fd73898675ee4ddb099b0a0d8db63bfb")
+                    .unwrap(),
+                hex::decode("50c8623ef5112510ccdf2d8e480d02d0de7288eb9968f8b019817340c3991145")
+                    .unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_network_switch_removes_stale_script_version_by_family_entries() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        let script = ScriptMetadata {
+            metadata_slug: Some("network-switch".to_string()),
+            name: "Network Switch".to_string(),
+            description: Some("version differs by network".to_string()),
+            website: None,
+            category: Some("lock".to_string()),
+            disabled: false,
+            mainnet: Some(ScriptNetworkMetadata {
+                versions: vec![ScriptDeploymentEntry {
+                    version_hash:
+                        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .to_string(),
+                    canonical_ref_hash:
+                        "0x1111111111111111111111111111111111111111111111111111111111111111"
+                            .to_string(),
+                    canonical_hash_type: ValidatedHashType::new(
+                        "type".to_string(),
+                        "canonical_hash_type",
+                    )
+                    .unwrap(),
+                    deprecated: false,
+                }],
+                pseudo: None,
+            }),
+            testnet: Some(ScriptNetworkMetadata {
+                versions: vec![ScriptDeploymentEntry {
+                    version_hash:
+                        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                            .to_string(),
+                    canonical_ref_hash:
+                        "0x2222222222222222222222222222222222222222222222222222222222222222"
+                            .to_string(),
+                    canonical_hash_type: ValidatedHashType::new(
+                        "type".to_string(),
+                        "canonical_hash_type",
+                    )
+                    .unwrap(),
+                    deprecated: false,
+                }],
+                pseudo: None,
+            }),
+        };
+
+        upsert_script_label(&store, &script, "mainnet").unwrap();
+        assert_eq!(
+            store
+                .list_script_version_hashes_by_family("network-switch")
+                .unwrap(),
+            vec![
+                hex::decode("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                    .unwrap()
+            ]
+        );
+
+        upsert_script_label(&store, &script, "testnet").unwrap();
+
+        assert_eq!(
+            store
+                .list_script_version_hashes_by_family("network-switch")
+                .unwrap(),
+            vec![
+                hex::decode("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                    .unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_family_rename_removes_stale_script_family_name_index() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        let original = ScriptMetadata {
+            metadata_slug: Some("rename-family".to_string()),
+            name: "Original Family Name".to_string(),
+            description: Some("original".to_string()),
+            website: None,
+            category: Some("lock".to_string()),
+            disabled: false,
+            mainnet: Some(ScriptNetworkMetadata {
+                versions: vec![ScriptDeploymentEntry {
+                    version_hash:
+                        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .to_string(),
+                    canonical_ref_hash:
+                        "0x1111111111111111111111111111111111111111111111111111111111111111"
+                            .to_string(),
+                    canonical_hash_type: ValidatedHashType::new(
+                        "type".to_string(),
+                        "canonical_hash_type",
+                    )
+                    .unwrap(),
+                    deprecated: false,
+                }],
+                pseudo: None,
+            }),
+            testnet: None,
+        };
+        upsert_script_label(&store, &original, "mainnet").unwrap();
+
+        let renamed = ScriptMetadata {
+            metadata_slug: Some("rename-family".to_string()),
+            name: "Renamed Family".to_string(),
+            description: Some("renamed".to_string()),
+            website: None,
+            category: Some("lock".to_string()),
+            disabled: false,
+            mainnet: Some(ScriptNetworkMetadata {
+                versions: vec![ScriptDeploymentEntry {
+                    version_hash:
+                        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .to_string(),
+                    canonical_ref_hash:
+                        "0x1111111111111111111111111111111111111111111111111111111111111111"
+                            .to_string(),
+                    canonical_hash_type: ValidatedHashType::new(
+                        "type".to_string(),
+                        "canonical_hash_type",
+                    )
+                    .unwrap(),
+                    deprecated: false,
+                }],
+                pseudo: None,
+            }),
+            testnet: None,
+        };
+        upsert_script_label(&store, &renamed, "mainnet").unwrap();
+
+        assert_eq!(
+            store
+                .get_script_family_id_by_name("Original Family Name")
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            store
+                .get_script_family_id_by_name("Renamed Family")
+                .unwrap()
+                .as_deref(),
+            Some("rename-family")
+        );
+    }
+
+    #[test]
     fn test_label_import_does_not_write_correctness_metadata() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
@@ -969,6 +1347,7 @@ disabled = true
         // In the family-first format, pseudo-scripts use an explicit `pseudo`
         // branch instead of a version entry.
         let script = ScriptMetadata {
+            metadata_slug: Some("type-id".to_string()),
             name: "Type ID".to_string(),
             description: Some("CKB built-in type ID".to_string()),
             website: None,
@@ -1066,6 +1445,7 @@ disabled = true
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
 
         let script = ScriptMetadata {
+            metadata_slug: Some("deprecated-script".to_string()),
             name: "Deprecated Script".to_string(),
             description: Some("deprecated but still named".to_string()),
             website: None,
@@ -1121,6 +1501,7 @@ disabled = true
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
 
         let script = ScriptMetadata {
+            metadata_slug: Some("shared-version".to_string()),
             name: "Shared Version".to_string(),
             description: Some("same version hash across networks".to_string()),
             website: Some("https://example.com".to_string()),
