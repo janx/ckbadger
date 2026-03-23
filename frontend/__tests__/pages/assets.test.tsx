@@ -377,8 +377,17 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('Test Collection').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('Composition')).toBeInTheDocument();
       expect(screen.getAllByText('SPORE').length).toBeGreaterThan(0);
-      expect(screen.getAllByText('BTC+CKB').length).toBeGreaterThanOrEqual(1);
+      const tierLabels = screen.getAllByText('BTC+CKB');
+      expect(tierLabels.length).toBeGreaterThanOrEqual(1);
+      expect(
+        tierLabels.some(
+          (label) =>
+            label.className.includes('storage-text-split') &&
+            label.className.includes('font-semibold')
+        )
+      ).toBe(true);
       const links = screen.getAllByRole('link', { name: /Test Collection/i });
       expect(
         links.some(
@@ -448,7 +457,7 @@ describe('AssetsPage', () => {
     });
   });
 
-  it('maps object storage tier filters to API query', async () => {
+  it('maps object composition tier filters to API query', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
 
     render(<AssetsPage />);
@@ -460,7 +469,7 @@ describe('AssetsPage', () => {
       );
     });
 
-    fireEvent.change(screen.getByLabelText('Filter by storage tier'), {
+    fireEvent.change(screen.getByLabelText('Filter by composition tier'), {
       target: { value: 'pure_ckb' },
     });
 
@@ -471,7 +480,7 @@ describe('AssetsPage', () => {
       expect(window.location.search).toContain('compositionTier=pure_ckb');
     });
 
-    fireEvent.change(screen.getByLabelText('Filter by storage tier'), {
+    fireEvent.change(screen.getByLabelText('Filter by composition tier'), {
       target: { value: 'centralized_mixture' },
     });
 

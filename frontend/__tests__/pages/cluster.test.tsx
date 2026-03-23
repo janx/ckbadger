@@ -35,6 +35,15 @@ const mockCluster = {
   clusterId: mockClusterId,
   name: 'Test Collection',
   description: 'A test collection of spores',
+  composition: {
+    tier: 'btc_ckb' as const,
+    fullyOnchainCount: 5,
+    pureCkbCount: 0,
+    decentralizedMixtureCount: 0,
+    centralizedMixtureCount: 0,
+    unknownCount: 0,
+    fullyOnchainRatio: '1.0',
+  },
   ownerLockHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
   ownerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
   sporesCount: 5,
@@ -131,6 +140,7 @@ describe('ClusterDetailPage', () => {
       expect(screen.getByText('Spore Cluster')).toBeInTheDocument();
       expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
       expect(screen.getByText('Collection Overview')).toBeInTheDocument();
+      expect(screen.getByText('Composition')).toBeInTheDocument();
       expect(screen.getByText('Supply')).toBeInTheDocument();
       expect(screen.getByText('creator')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^Activities \(/ })).toBeInTheDocument();

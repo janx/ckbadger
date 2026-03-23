@@ -382,7 +382,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
 
               {/* Stat cards row */}
               <div className="border-base-border mt-4 grid grid-cols-2 gap-3 border-t pt-4 sm:grid-cols-4">
-                {/* Storage profile card (color-coded) */}
+                {/* Composition card (color-coded) */}
                 {collection.composition?.tier &&
                   (() => {
                     const style = compositionTierCardStyle(collection.composition.tier);
@@ -391,7 +391,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                         <div
                           className={`mb-1.5 font-mono text-[10px] uppercase tracking-wider ${style.label}`}
                         >
-                          Storage Profile
+                          Composition
                         </div>
                         <div className="flex items-center gap-1">
                           <span
@@ -963,7 +963,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
 
             {/* Stat cards row */}
             <div className="border-base-border mt-4 grid grid-cols-2 gap-3 border-t pt-4 sm:grid-cols-4">
-              {/* Storage profile card (color-coded) */}
+              {/* Object composition card (color-coded) */}
               {spore.mediaProfile?.tier &&
                 (() => {
                   const style = compositionTierCardStyle(spore.mediaProfile.tier);
@@ -972,7 +972,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                       <div
                         className={`mb-1.5 font-mono text-[10px] uppercase tracking-wider ${style.label}`}
                       >
-                        Storage Profile
+                        Object Composition
                       </div>
                       <div className="flex items-center gap-1">
                         <span

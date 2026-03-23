@@ -18,6 +18,7 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { HMulHelpPopover } from '@/components/ui/hmul-info';
+import { compositionTierCardStyle } from '@/components/object/storage-tier';
 import { api, Asset } from '@/lib/api';
 import {
   getClusterDetailHref,
@@ -112,8 +113,12 @@ function formatCompositionTierLabel(value: CompositionTierFilter): string {
     case 'unknown':
       return 'Unknown';
     default:
-      return 'All Storage';
+      return 'All Composition';
   }
+}
+
+function compositionTierTextClass(tier: string | null | undefined): string {
+  return tier ? compositionTierCardStyle(tier).text : 'text-text-dim';
 }
 function formatStandardLabel(standard: string): string {
   switch (standard) {
@@ -331,7 +336,7 @@ function AssetTable({
         {renderSortHeader('name', assetType === 'token' ? 'Token' : 'Collection', nameColumnClass)}
         {assetType === 'object' && (
           <div className={`${compositionColumnClass} font-mono text-xs uppercase tracking-wider`}>
-            Storage
+            Composition
           </div>
         )}
         {renderSortHeader('type', 'Standard', typeColumnClass)}
@@ -411,10 +416,16 @@ function AssetTable({
               </AppLink>
             </div>
             {assetType === 'object' && (
-              <div
-                className={`${compositionColumnClass} font-mono text-xs ${asset.compositionTier === 'pure_ckb' ? 'storage-text-gem' : asset.compositionTier === 'btc_ckb' ? 'storage-text-split' : 'text-text-dim'}`}
-              >
-                {asset.compositionTier ? formatCompositionTier(asset.compositionTier) : '-'}
+              <div className={compositionColumnClass}>
+                {asset.compositionTier ? (
+                  <span
+                    className={`font-mono text-sm font-semibold leading-tight ${compositionTierTextClass(asset.compositionTier)}`}
+                  >
+                    {formatCompositionTier(asset.compositionTier)}
+                  </span>
+                ) : (
+                  <span className="text-text-dim font-mono text-xs">-</span>
+                )}
               </div>
             )}
             <div className={typeColumnClass}>
@@ -544,16 +555,13 @@ function AssetTable({
             </div>
             <div className="text-text-dim flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-xs tabular-nums">
               {assetType === 'object' && asset.compositionTier && (
-                <span
-                  className={
-                    asset.compositionTier === 'pure_ckb'
-                      ? 'storage-text-gem'
-                      : asset.compositionTier === 'btc_ckb'
-                        ? 'storage-text-split'
-                        : ''
-                  }
-                >
-                  Storage: {formatCompositionTier(asset.compositionTier)}
+                <span>
+                  Composition:{' '}
+                  <span
+                    className={`font-mono text-sm font-semibold leading-tight ${compositionTierTextClass(asset.compositionTier)}`}
+                  >
+                    {formatCompositionTier(asset.compositionTier)}
+                  </span>
                 </span>
               )}
               <span>
@@ -719,7 +727,7 @@ export function AssetsPageClient() {
                     <select
                       value={compositionTier}
                       onChange={(event) => handleCompositionTierChange(event.target.value)}
-                      aria-label="Filter by storage tier"
+                      aria-label="Filter by composition tier"
                       className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface text-text-bright min-w-[12rem] rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
                     >
                       {COMPOSITION_TIER_OPTIONS.map((item) => (

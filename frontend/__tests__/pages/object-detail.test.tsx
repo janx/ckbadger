@@ -57,6 +57,15 @@ const mockCollection = {
   collectionId: '0x1234567890abcdef1234567890abcdef1234567890abcdef',
   standard: 'spore',
   name: 'Test Collection',
+  composition: {
+    tier: 'btc_ckb' as const,
+    fullyOnchainCount: 500,
+    pureCkbCount: 0,
+    decentralizedMixtureCount: 0,
+    centralizedMixtureCount: 0,
+    unknownCount: 0,
+    fullyOnchainRatio: '1.0',
+  },
   totalCount: 500,
   liveCount: 320,
   holdersCount: 42,
@@ -209,6 +218,24 @@ describe('SporeDetailPage', () => {
     );
     expect(screen.getByText('Spore Asset (0x1234...cdef)')).toBeInTheDocument();
     expect(screen.getByText('Spore Overview')).toBeInTheDocument();
+  });
+
+  it('labels the spore composition card as Object Composition', async () => {
+    vi.mocked(api.getSporeObject).mockResolvedValue({
+      ...mockSpore,
+      mediaProfile: {
+        tier: 'btc_ckb',
+        hasRenderableImage: true,
+        issues: [],
+        sources: [],
+      },
+    } as any);
+
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Object Composition')).toBeInTheDocument();
+    });
   });
 
   it('renders media source analysis from API profile', async () => {
@@ -383,6 +410,7 @@ describe('SporeDetailPage', () => {
     });
 
     expect(screen.getByText('Test Collection')).toBeInTheDocument();
+    expect(screen.getByText('Composition')).toBeInTheDocument();
     expect(screen.getByText('Supply')).toBeInTheDocument();
     expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Activities \(150\)$/ })).toBeInTheDocument();

@@ -515,7 +515,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
 
             {/* Stat cards row */}
             <div className="border-base-border mt-4 grid grid-cols-2 gap-3 border-t pt-4 sm:grid-cols-4">
-              {/* Storage profile card */}
+              {/* Composition card */}
               {cluster.composition?.tier &&
                 (() => {
                   const style = compositionTierCardStyle(cluster.composition.tier);
@@ -524,7 +524,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                       <div
                         className={`mb-1.5 font-mono text-[10px] uppercase tracking-wider ${style.label}`}
                       >
-                        Storage Profile
+                        Composition
                       </div>
                       <div className="flex items-center gap-1">
                         <span
