@@ -1445,12 +1445,14 @@ impl Indexer {
                             cell.data_size,
                         );
                         let reference_entry = script_reference_usage_changes
-                            .entry((cell.lock_code_hash.clone(), lock_hash_type))
-                            .or_insert((0, 0, 0, 0));
+                            .entry((cell.lock_code_hash.clone(), lock_hash_type, false))
+                            .or_insert((0, 0, 0, 0, 0, 0));
                         reference_entry.0 += 1;
                         reference_entry.1 += 1;
                         reference_entry.2 += i128::from(cell.capacity);
-                        reference_entry.3 += i128::from(cell_occupied);
+                        reference_entry.3 += i128::from(cell.capacity);
+                        reference_entry.4 += i128::from(cell_occupied);
+                        reference_entry.5 += i128::from(cell_occupied);
                         let entry = script_usage_changes
                             .entry(lock_key)
                             .or_insert((0, 0, 0, 0, 0, 0));
@@ -1501,12 +1503,14 @@ impl Indexer {
                             };
                             let type_key = (type_code_hash.clone(), true);
                             let reference_entry = script_reference_usage_changes
-                                .entry((type_code_hash.clone(), type_hash_type))
-                                .or_insert((0, 0, 0, 0));
+                                .entry((type_code_hash.clone(), type_hash_type, true))
+                                .or_insert((0, 0, 0, 0, 0, 0));
                             reference_entry.0 += 1;
                             reference_entry.1 += 1;
                             reference_entry.2 += i128::from(cell.capacity);
-                            reference_entry.3 += i128::from(cell_occupied);
+                            reference_entry.3 += i128::from(cell.capacity);
+                            reference_entry.4 += i128::from(cell_occupied);
+                            reference_entry.5 += i128::from(cell_occupied);
                             let entry = script_usage_changes
                                 .entry(type_key)
                                 .or_insert((0, 0, 0, 0, 0, 0));
@@ -1648,11 +1652,11 @@ impl Indexer {
                                     }
                                 };
                                 let reference_entry = script_reference_usage_changes
-                                    .entry((info.lock_code_hash.clone(), lock_hash_type))
-                                    .or_insert((0, 0, 0, 0));
+                                    .entry((info.lock_code_hash.clone(), lock_hash_type, false))
+                                    .or_insert((0, 0, 0, 0, 0, 0));
                                 reference_entry.1 -= 1;
-                                reference_entry.2 -= i128::from(info.capacity);
-                                reference_entry.3 -= i128::from(info.occupied_capacity);
+                                reference_entry.3 -= i128::from(info.capacity);
+                                reference_entry.5 -= i128::from(info.occupied_capacity);
                                 let entry = script_usage_changes
                                     .entry(lock_key)
                                     .or_insert((0, 0, 0, 0, 0, 0));
@@ -1700,11 +1704,11 @@ impl Indexer {
                                     };
                                     let type_key = (type_code_hash.clone(), true);
                                     let reference_entry = script_reference_usage_changes
-                                        .entry((type_code_hash.clone(), type_hash_type))
-                                        .or_insert((0, 0, 0, 0));
+                                        .entry((type_code_hash.clone(), type_hash_type, true))
+                                        .or_insert((0, 0, 0, 0, 0, 0));
                                     reference_entry.1 -= 1;
-                                    reference_entry.2 -= i128::from(info.capacity);
-                                    reference_entry.3 -= i128::from(info.occupied_capacity);
+                                    reference_entry.3 -= i128::from(info.capacity);
+                                    reference_entry.5 -= i128::from(info.occupied_capacity);
                                     let entry = script_usage_changes
                                         .entry(type_key)
                                         .or_insert((0, 0, 0, 0, 0, 0));

@@ -98,6 +98,36 @@ impl CkbadgerStore {
         }
     }
 
+    pub fn list_script_families(&self) -> anyhow::Result<Vec<(String, ScriptFamilyInfo)>> {
+        let iter = self.iterator_cf(self.cf_script_families(), rocksdb::IteratorMode::Start);
+        let mut results = Vec::new();
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate script_families in list_script_families: {}",
+                    e
+                )
+            })?;
+            let family_id = String::from_utf8(key.to_vec()).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to decode script family id in list_script_families: error={}",
+                    e
+                )
+            })?;
+            let info: ScriptFamilyInfo = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize script family in list_script_families: family_id={}, error={}",
+                    family_id,
+                    e
+                )
+            })?;
+            results.push((family_id, info));
+        }
+
+        Ok(results)
+    }
+
     pub fn put_script_family_name_direct(
         &self,
         family_name: &str,
@@ -256,5 +286,30 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to deserialize script family"));
+    }
+
+    #[test]
+    fn test_list_script_families_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+        let family = ScriptFamilyInfo {
+            family_id: "family/default-lock".to_string(),
+            name: "Default Lock".to_string(),
+            description: Some("Mainnet lock family".to_string()),
+            website: Some("https://nervos.org".to_string()),
+            category: Some("lock".to_string()),
+            versions_count: 2,
+            live_cells_count: 3,
+            cells_count: 5,
+            owned_capacity_sum: 600,
+            owned_knowledge_sum: 420,
+        };
+
+        store
+            .put_script_family_direct(&family.family_id, &family)
+            .unwrap();
+
+        let loaded = store.list_script_families().unwrap();
+        assert_eq!(loaded, vec![(family.family_id.clone(), family)]);
     }
 }

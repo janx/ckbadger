@@ -1,9 +1,11 @@
 use anyhow::{bail, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::types::{AddressBalance, ScriptDailyDelta, ScriptReferenceInfo};
+use ckbadger_store::types::{
+    AddressBalance, ScriptDailyDelta, ScriptFamilyInfo, ScriptReferenceInfo, ScriptVersionInfo,
+};
 
 use super::BatchWriter;
 
@@ -145,6 +147,342 @@ fn overlay_script_metadata(
     // are no longer overlaid here. Label import no longer writes these correctness
     // fields; code cell resolution uses script_references/script_versions CFs instead.
     base
+}
+
+fn clear_script_version_usage(info: &mut ScriptVersionInfo) {
+    info.lock_cells_count = 0;
+    info.lock_live_cells_count = 0;
+    info.lock_capacity_sum = 0;
+    info.lock_owned_capacity_sum = 0;
+    info.lock_used_capacity_sum = 0;
+    info.lock_owned_knowledge_sum = 0;
+    info.type_cells_count = 0;
+    info.type_live_cells_count = 0;
+    info.type_capacity_sum = 0;
+    info.type_owned_capacity_sum = 0;
+    info.type_used_capacity_sum = 0;
+    info.type_owned_knowledge_sum = 0;
+}
+
+fn clear_script_family_usage(info: &mut ScriptFamilyInfo) {
+    info.versions_count = 0;
+    info.live_cells_count = 0;
+    info.cells_count = 0;
+    info.owned_capacity_sum = 0;
+    info.owned_knowledge_sum = 0;
+}
+
+fn checked_add_version_i64(
+    version_hash: &[u8],
+    metric: &str,
+    current: i64,
+    delta: i64,
+) -> Result<i64> {
+    current.checked_add(delta).ok_or_else(|| {
+        anyhow::anyhow!(
+            "script version {} overflow: version_hash=0x{}, current={}, delta={}",
+            metric,
+            hex::encode(version_hash),
+            current,
+            delta
+        )
+    })
+}
+
+fn checked_add_version_i128(
+    version_hash: &[u8],
+    metric: &str,
+    current: i128,
+    delta: i128,
+) -> Result<i128> {
+    current.checked_add(delta).ok_or_else(|| {
+        anyhow::anyhow!(
+            "script version {} overflow: version_hash=0x{}, current={}, delta={}",
+            metric,
+            hex::encode(version_hash),
+            current,
+            delta
+        )
+    })
+}
+
+fn checked_add_family_i64(family_id: &str, metric: &str, current: i64, delta: i64) -> Result<i64> {
+    current.checked_add(delta).ok_or_else(|| {
+        anyhow::anyhow!(
+            "script family {} overflow: family_id={}, current={}, delta={}",
+            metric,
+            family_id,
+            current,
+            delta
+        )
+    })
+}
+
+fn checked_add_family_i128(
+    family_id: &str,
+    metric: &str,
+    current: i128,
+    delta: i128,
+) -> Result<i128> {
+    current.checked_add(delta).ok_or_else(|| {
+        anyhow::anyhow!(
+            "script family {} overflow: family_id={}, current={}, delta={}",
+            metric,
+            family_id,
+            current,
+            delta
+        )
+    })
+}
+
+fn resolve_reference_version_hash(
+    store: &ckbadger_store::CkbadgerStore,
+    append_only_store: &ckbadger_store::CkbadgerStore,
+    reference_hash: &[u8],
+    hash_type: u8,
+) -> Result<Option<Vec<u8>>> {
+    match hash_type {
+        0 | 2 | 4 => Ok(Some(reference_hash.to_vec())),
+        1 => {
+            let mut seen = HashSet::new();
+            let mut versions = Vec::new();
+            for (tx_hash, output_index, cell) in
+                store.list_cells_by_type(reference_hash, usize::MAX, None, append_only_store)?
+            {
+                let version_hash = cell.cell.data_hash.clone().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "live type-referenced code cell missing data_hash while rebuilding reference rollups: reference_hash=0x{}, outpoint=0x{}:{}",
+                        hex::encode(reference_hash),
+                        hex::encode(&tx_hash),
+                        output_index
+                    )
+                })?;
+                if seen.insert(version_hash.clone()) {
+                    versions.push(version_hash);
+                }
+            }
+            Ok((versions.len() == 1).then(|| versions.remove(0)))
+        }
+        _ => bail!(
+            "unsupported script reference hash_type while rebuilding rollups: reference_hash=0x{}, hash_type={}, expected_one_of=[0,1,2,4]",
+            hex::encode(reference_hash),
+            hash_type
+        ),
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ScriptReferenceRollupState {
+    pub(crate) reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
+    pub(crate) versions: Vec<(Vec<u8>, ScriptVersionInfo)>,
+    pub(crate) families: Vec<(String, ScriptFamilyInfo)>,
+}
+
+fn build_script_reference_rollup_state(
+    store: &ckbadger_store::CkbadgerStore,
+    mut reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
+) -> Result<ScriptReferenceRollupState> {
+    let reference_info_map = store
+        .list_script_reference_infos()?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+    let existing_versions = store.list_script_versions()?;
+    let existing_families = store.list_script_families()?;
+
+    let mut version_map: HashMap<Vec<u8>, ScriptVersionInfo> =
+        existing_versions.into_iter().collect();
+    for version in version_map.values_mut() {
+        clear_script_version_usage(version);
+    }
+
+    for ((reference_hash, hash_type), resolved_version) in &reference_mappings {
+        let Some(reference_info) = reference_info_map.get(&(reference_hash.clone(), *hash_type))
+        else {
+            bail!(
+                "missing script reference info while building rollups: reference_hash=0x{}, hash_type={}",
+                hex::encode(reference_hash),
+                hash_type
+            );
+        };
+
+        let Some(version_hash) = resolved_version else {
+            continue;
+        };
+        let version =
+            version_map
+                .entry(version_hash.clone())
+                .or_insert_with(|| ScriptVersionInfo {
+                    version_hash: version_hash.clone(),
+                    ..Default::default()
+                });
+        version.version_hash = version_hash.clone();
+        version.lock_cells_count = checked_add_version_i64(
+            version_hash,
+            "lock_cells_count",
+            version.lock_cells_count,
+            reference_info.lock_cells_count,
+        )?;
+        version.lock_live_cells_count = checked_add_version_i64(
+            version_hash,
+            "lock_live_cells_count",
+            version.lock_live_cells_count,
+            reference_info.lock_live_cells_count,
+        )?;
+        version.lock_capacity_sum = checked_add_version_i128(
+            version_hash,
+            "lock_capacity_sum",
+            version.lock_capacity_sum,
+            reference_info.lock_capacity_sum,
+        )?;
+        version.lock_owned_capacity_sum = checked_add_version_i128(
+            version_hash,
+            "lock_owned_capacity_sum",
+            version.lock_owned_capacity_sum,
+            reference_info.lock_owned_capacity_sum,
+        )?;
+        version.lock_used_capacity_sum = checked_add_version_i128(
+            version_hash,
+            "lock_used_capacity_sum",
+            version.lock_used_capacity_sum,
+            reference_info.lock_used_capacity_sum,
+        )?;
+        version.lock_owned_knowledge_sum = checked_add_version_i128(
+            version_hash,
+            "lock_owned_knowledge_sum",
+            version.lock_owned_knowledge_sum,
+            reference_info.lock_owned_knowledge_sum,
+        )?;
+        version.type_cells_count = checked_add_version_i64(
+            version_hash,
+            "type_cells_count",
+            version.type_cells_count,
+            reference_info.type_cells_count,
+        )?;
+        version.type_live_cells_count = checked_add_version_i64(
+            version_hash,
+            "type_live_cells_count",
+            version.type_live_cells_count,
+            reference_info.type_live_cells_count,
+        )?;
+        version.type_capacity_sum = checked_add_version_i128(
+            version_hash,
+            "type_capacity_sum",
+            version.type_capacity_sum,
+            reference_info.type_capacity_sum,
+        )?;
+        version.type_owned_capacity_sum = checked_add_version_i128(
+            version_hash,
+            "type_owned_capacity_sum",
+            version.type_owned_capacity_sum,
+            reference_info.type_owned_capacity_sum,
+        )?;
+        version.type_used_capacity_sum = checked_add_version_i128(
+            version_hash,
+            "type_used_capacity_sum",
+            version.type_used_capacity_sum,
+            reference_info.type_used_capacity_sum,
+        )?;
+        version.type_owned_knowledge_sum = checked_add_version_i128(
+            version_hash,
+            "type_owned_knowledge_sum",
+            version.type_owned_knowledge_sum,
+            reference_info.type_owned_knowledge_sum,
+        )?;
+    }
+
+    let mut family_map: HashMap<String, ScriptFamilyInfo> = existing_families.into_iter().collect();
+    for family in family_map.values_mut() {
+        clear_script_family_usage(family);
+    }
+
+    for version in version_map.values() {
+        let Some(family_id) = version.family_id.as_deref() else {
+            continue;
+        };
+        let family = family_map
+            .entry(family_id.to_string())
+            .or_insert_with(|| ScriptFamilyInfo {
+                family_id: family_id.to_string(),
+                ..Default::default()
+            });
+        family.family_id = family_id.to_string();
+        family.versions_count =
+            checked_add_family_i64(family_id, "versions_count", family.versions_count, 1)?;
+        family.live_cells_count = checked_add_family_i64(
+            family_id,
+            "live_cells_count",
+            family.live_cells_count,
+            version.lock_live_cells_count + version.type_live_cells_count,
+        )?;
+        family.cells_count = checked_add_family_i64(
+            family_id,
+            "cells_count",
+            family.cells_count,
+            version.lock_cells_count + version.type_cells_count,
+        )?;
+        family.owned_capacity_sum = checked_add_family_i128(
+            family_id,
+            "owned_capacity_sum",
+            family.owned_capacity_sum,
+            version.lock_owned_capacity_sum + version.type_owned_capacity_sum,
+        )?;
+        family.owned_knowledge_sum = checked_add_family_i128(
+            family_id,
+            "owned_knowledge_sum",
+            family.owned_knowledge_sum,
+            version.lock_owned_knowledge_sum + version.type_owned_knowledge_sum,
+        )?;
+    }
+
+    let mut versions = version_map.into_iter().collect::<Vec<_>>();
+    versions.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut families = family_map.into_iter().collect::<Vec<_>>();
+    families.sort_by(|left, right| left.0.cmp(&right.0));
+
+    reference_mappings.sort_by(|left, right| left.0.cmp(&right.0));
+
+    Ok(ScriptReferenceRollupState {
+        reference_mappings,
+        versions,
+        families,
+    })
+}
+
+pub(crate) fn collect_script_reference_rollup_state(
+    store: &ckbadger_store::CkbadgerStore,
+    _append_only_store: &ckbadger_store::CkbadgerStore,
+) -> Result<ScriptReferenceRollupState> {
+    let reference_mappings = store
+        .list_script_reference_infos()?
+        .into_iter()
+        .map(|((reference_hash, hash_type), _info)| {
+            let version_hash =
+                store.get_script_reference_version_hash(hash_type, &reference_hash)?;
+            Ok(((reference_hash, hash_type), version_hash))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    build_script_reference_rollup_state(store, reference_mappings)
+}
+
+pub(crate) fn collect_current_script_reference_rollup_state(
+    store: &ckbadger_store::CkbadgerStore,
+    append_only_store: &ckbadger_store::CkbadgerStore,
+) -> Result<ScriptReferenceRollupState> {
+    let reference_mappings = store
+        .list_script_reference_infos()?
+        .into_iter()
+        .map(|((reference_hash, hash_type), _info)| {
+            let version_hash = resolve_reference_version_hash(
+                store,
+                append_only_store,
+                &reference_hash,
+                hash_type,
+            )?;
+            Ok(((reference_hash, hash_type), version_hash))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    build_script_reference_rollup_state(store, reference_mappings)
 }
 
 impl BatchWriter {
@@ -590,19 +928,26 @@ impl BatchWriter {
     pub fn apply_script_reference_usage_deltas(
         &self,
         existing: &HashMap<(Vec<u8>, u8), Option<ScriptReferenceInfo>>,
-        changes: &HashMap<(Vec<u8>, u8), (i64, i64, i128, i128)>,
+        changes: &HashMap<(Vec<u8>, u8, bool), (i64, i64, i128, i128, i128, i128)>,
         batch: &mut StoreBatch,
-    ) -> Result<()> {
+    ) -> Result<HashMap<(Vec<u8>, u8), ScriptReferenceInfo>> {
         if changes.is_empty() {
-            return Ok(());
+            return Ok(HashMap::new());
         }
 
         let mut updated_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo> =
             HashMap::with_capacity(existing.len());
 
         for (
-            (reference_hash, hash_type),
-            (cells_delta, live_delta, owned_cap_delta, owned_knowledge_delta),
+            (reference_hash, hash_type, is_type),
+            (
+                cells_delta,
+                live_delta,
+                capacity_delta,
+                owned_cap_delta,
+                used_delta,
+                owned_knowledge_delta,
+            ),
         ) in changes
         {
             let key = (reference_hash.clone(), *hash_type);
@@ -610,16 +955,21 @@ impl BatchWriter {
             if existing_info.is_none()
                 && (*cells_delta < 0
                     || *live_delta < 0
+                    || *capacity_delta < 0
                     || *owned_cap_delta < 0
+                    || *used_delta < 0
                     || *owned_knowledge_delta < 0)
             {
                 bail!(
-                    "script reference delta underflow for unseen reference: reference_hash=0x{}, hash_type={}, cells_delta={}, live_delta={}, owned_capacity_delta={}, owned_knowledge_delta={}",
+                    "script reference delta underflow for unseen reference: reference_hash=0x{}, hash_type={}, is_type={}, cells_delta={}, live_delta={}, capacity_delta={}, owned_capacity_delta={}, used_delta={}, owned_knowledge_delta={}",
                     hex::encode(reference_hash),
                     hash_type,
+                    is_type,
                     cells_delta,
                     live_delta,
+                    capacity_delta,
                     owned_cap_delta,
+                    used_delta,
                     owned_knowledge_delta
                 );
             }
@@ -632,56 +982,152 @@ impl BatchWriter {
                 })
             });
 
-            let next_cells_count = checked_next_script_reference_metric_i64(
-                reference_hash,
-                *hash_type,
-                "cells_count",
-                info.cells_count,
-                *cells_delta,
-            )?;
-            let next_live_cells_count = checked_next_script_reference_metric_i64(
-                reference_hash,
-                *hash_type,
-                "live_cells_count",
-                info.live_cells_count,
-                *live_delta,
-            )?;
-            let next_owned_capacity_sum = checked_next_script_reference_metric_i128(
-                reference_hash,
-                *hash_type,
-                "owned_capacity_sum",
-                info.owned_capacity_sum,
-                *owned_cap_delta,
-            )?;
-            let next_owned_knowledge_sum = checked_next_script_reference_metric_i128(
-                reference_hash,
-                *hash_type,
-                "owned_knowledge_sum",
-                info.owned_knowledge_sum,
-                *owned_knowledge_delta,
-            )?;
+            if *is_type {
+                let next_cells_count = checked_next_script_reference_metric_i64(
+                    reference_hash,
+                    *hash_type,
+                    "type cells_count",
+                    info.type_cells_count,
+                    *cells_delta,
+                )?;
+                let next_live_cells_count = checked_next_script_reference_metric_i64(
+                    reference_hash,
+                    *hash_type,
+                    "type live_cells_count",
+                    info.type_live_cells_count,
+                    *live_delta,
+                )?;
+                let next_capacity_sum = checked_next_script_reference_metric_i128(
+                    reference_hash,
+                    *hash_type,
+                    "type capacity_sum",
+                    info.type_capacity_sum,
+                    *capacity_delta,
+                )?;
+                let next_owned_capacity_sum = checked_next_script_reference_metric_i128(
+                    reference_hash,
+                    *hash_type,
+                    "type owned_capacity_sum",
+                    info.type_owned_capacity_sum,
+                    *owned_cap_delta,
+                )?;
+                let next_used_capacity_sum = checked_next_script_reference_metric_i128(
+                    reference_hash,
+                    *hash_type,
+                    "type used_capacity_sum",
+                    info.type_used_capacity_sum,
+                    *used_delta,
+                )?;
+                let next_owned_knowledge_sum = checked_next_script_reference_metric_i128(
+                    reference_hash,
+                    *hash_type,
+                    "type owned_knowledge_sum",
+                    info.type_owned_knowledge_sum,
+                    *owned_knowledge_delta,
+                )?;
 
-            if next_owned_knowledge_sum > next_owned_capacity_sum {
-                bail!(
-                    "script reference owned knowledge exceeds owned capacity: reference_hash=0x{}, hash_type={}, owned_knowledge_sum={}, owned_capacity_sum={}",
-                    hex::encode(reference_hash),
-                    hash_type,
-                    next_owned_knowledge_sum,
-                    next_owned_capacity_sum
-                );
+                if next_used_capacity_sum > next_capacity_sum {
+                    bail!(
+                        "script reference type used capacity exceeds total: reference_hash=0x{}, hash_type={}, type_used_capacity_sum={}, type_capacity_sum={}",
+                        hex::encode(reference_hash),
+                        hash_type,
+                        next_used_capacity_sum,
+                        next_capacity_sum
+                    );
+                }
+                if next_owned_knowledge_sum > next_owned_capacity_sum {
+                    bail!(
+                        "script reference type owned knowledge exceeds owned capacity: reference_hash=0x{}, hash_type={}, type_owned_knowledge_sum={}, type_owned_capacity_sum={}",
+                        hex::encode(reference_hash),
+                        hash_type,
+                        next_owned_knowledge_sum,
+                        next_owned_capacity_sum
+                    );
+                }
+
+                info.type_cells_count = next_cells_count;
+                info.type_live_cells_count = next_live_cells_count;
+                info.type_capacity_sum = next_capacity_sum;
+                info.type_owned_capacity_sum = next_owned_capacity_sum;
+                info.type_used_capacity_sum = next_used_capacity_sum;
+                info.type_owned_knowledge_sum = next_owned_knowledge_sum;
+            } else {
+                let next_cells_count = checked_next_script_reference_metric_i64(
+                    reference_hash,
+                    *hash_type,
+                    "lock cells_count",
+                    info.lock_cells_count,
+                    *cells_delta,
+                )?;
+                let next_live_cells_count = checked_next_script_reference_metric_i64(
+                    reference_hash,
+                    *hash_type,
+                    "lock live_cells_count",
+                    info.lock_live_cells_count,
+                    *live_delta,
+                )?;
+                let next_capacity_sum = checked_next_script_reference_metric_i128(
+                    reference_hash,
+                    *hash_type,
+                    "lock capacity_sum",
+                    info.lock_capacity_sum,
+                    *capacity_delta,
+                )?;
+                let next_owned_capacity_sum = checked_next_script_reference_metric_i128(
+                    reference_hash,
+                    *hash_type,
+                    "lock owned_capacity_sum",
+                    info.lock_owned_capacity_sum,
+                    *owned_cap_delta,
+                )?;
+                let next_used_capacity_sum = checked_next_script_reference_metric_i128(
+                    reference_hash,
+                    *hash_type,
+                    "lock used_capacity_sum",
+                    info.lock_used_capacity_sum,
+                    *used_delta,
+                )?;
+                let next_owned_knowledge_sum = checked_next_script_reference_metric_i128(
+                    reference_hash,
+                    *hash_type,
+                    "lock owned_knowledge_sum",
+                    info.lock_owned_knowledge_sum,
+                    *owned_knowledge_delta,
+                )?;
+
+                if next_used_capacity_sum > next_capacity_sum {
+                    bail!(
+                        "script reference lock used capacity exceeds total: reference_hash=0x{}, hash_type={}, lock_used_capacity_sum={}, lock_capacity_sum={}",
+                        hex::encode(reference_hash),
+                        hash_type,
+                        next_used_capacity_sum,
+                        next_capacity_sum
+                    );
+                }
+                if next_owned_knowledge_sum > next_owned_capacity_sum {
+                    bail!(
+                        "script reference lock owned knowledge exceeds owned capacity: reference_hash=0x{}, hash_type={}, lock_owned_knowledge_sum={}, lock_owned_capacity_sum={}",
+                        hex::encode(reference_hash),
+                        hash_type,
+                        next_owned_knowledge_sum,
+                        next_owned_capacity_sum
+                    );
+                }
+
+                info.lock_cells_count = next_cells_count;
+                info.lock_live_cells_count = next_live_cells_count;
+                info.lock_capacity_sum = next_capacity_sum;
+                info.lock_owned_capacity_sum = next_owned_capacity_sum;
+                info.lock_used_capacity_sum = next_used_capacity_sum;
+                info.lock_owned_knowledge_sum = next_owned_knowledge_sum;
             }
-
-            info.cells_count = next_cells_count;
-            info.live_cells_count = next_live_cells_count;
-            info.owned_capacity_sum = next_owned_capacity_sum;
-            info.owned_knowledge_sum = next_owned_knowledge_sum;
         }
 
         for ((reference_hash, hash_type), info) in &updated_map {
             batch.put_script_reference_info(*hash_type, reference_hash, info);
         }
 
-        Ok(())
+        Ok(updated_map)
     }
 
     pub fn update_script_usage_batch(
@@ -714,19 +1160,98 @@ impl BatchWriter {
 
     pub fn update_script_reference_usage_batch(
         &self,
-        changes: &HashMap<(Vec<u8>, u8), (i64, i64, i128, i128)>,
+        changes: &HashMap<(Vec<u8>, u8, bool), (i64, i64, i128, i128, i128, i128)>,
         batch: &mut StoreBatch,
-    ) -> Result<()> {
+    ) -> Result<HashMap<(Vec<u8>, u8), ScriptReferenceInfo>> {
         if changes.is_empty() {
-            return Ok(());
+            return Ok(HashMap::new());
         }
 
+        let mut seen = HashSet::new();
         let references: Vec<(Vec<u8>, u8)> = changes
             .keys()
-            .map(|(reference_hash, hash_type)| (reference_hash.clone(), *hash_type))
+            .filter_map(|(reference_hash, hash_type, _is_type)| {
+                let key = (reference_hash.clone(), *hash_type);
+                seen.insert(key.clone()).then_some(key)
+            })
             .collect();
         let existing = self.read_script_reference_info(&references)?;
         self.apply_script_reference_usage_deltas(&existing, changes, batch)
+    }
+
+    pub fn refresh_script_reference_rollups(&self) -> Result<()> {
+        let rollups = collect_current_script_reference_rollup_state(
+            self.store.as_ref(),
+            self.append_only_store.as_ref(),
+        )?;
+
+        let mut batch = StoreBatch::new(self.store.as_ref());
+        for ((reference_hash, hash_type), version_hash) in rollups.reference_mappings {
+            if let Some(version_hash) = version_hash {
+                batch.put_script_reference_to_version(hash_type, &reference_hash, &version_hash);
+            } else {
+                batch.delete_script_reference_to_version(hash_type, &reference_hash);
+            }
+        }
+        for (version_hash, info) in rollups.versions {
+            batch.put_script_version(&version_hash, &info);
+        }
+        for (family_id, info) in rollups.families {
+            batch.put_script_family(&family_id, &info);
+        }
+
+        if batch.is_empty() {
+            return Ok(());
+        }
+        batch.commit()
+    }
+
+    pub fn materialize_script_versions_and_families(
+        &self,
+        _references: &[(Vec<u8>, u8)],
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        let rollups = collect_script_reference_rollup_state(
+            self.store.as_ref(),
+            self.append_only_store.as_ref(),
+        )?;
+
+        for ((reference_hash, hash_type), version_hash) in rollups.reference_mappings {
+            if let Some(version_hash) = version_hash {
+                batch.put_script_reference_to_version(hash_type, &reference_hash, &version_hash);
+            } else {
+                batch.delete_script_reference_to_version(hash_type, &reference_hash);
+            }
+        }
+        for (version_hash, info) in rollups.versions {
+            batch.put_script_version(&version_hash, &info);
+        }
+        for (family_id, info) in rollups.families {
+            batch.put_script_family(&family_id, &info);
+        }
+
+        Ok(())
+    }
+
+    pub fn refresh_type_script_reference_version_mappings(
+        &self,
+        reference_hashes: &[Vec<u8>],
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        for reference_hash in reference_hashes {
+            let version_hash = resolve_reference_version_hash(
+                self.store.as_ref(),
+                self.append_only_store.as_ref(),
+                reference_hash,
+                1,
+            )?;
+            if let Some(version_hash) = version_hash {
+                batch.put_script_reference_to_version(1, reference_hash, &version_hash);
+            } else {
+                batch.delete_script_reference_to_version(1, reference_hash);
+            }
+        }
+        Ok(())
     }
 
     pub fn update_script_daily_deltas_batch(
@@ -1071,17 +1596,31 @@ mod tests {
             Some(ScriptReferenceInfo {
                 reference_hash: reference_hash.clone(),
                 hash_type: 0,
-                live_cells_count: 2,
-                cells_count: 2,
-                owned_capacity_sum: 200,
-                owned_knowledge_sum: 120,
+                lock_cells_count: 2,
+                lock_live_cells_count: 2,
+                lock_capacity_sum: 200,
+                lock_owned_capacity_sum: 200,
+                lock_used_capacity_sum: 120,
+                lock_owned_knowledge_sum: 120,
+                type_cells_count: 0,
+                type_live_cells_count: 0,
+                type_capacity_sum: 0,
+                type_owned_capacity_sum: 0,
+                type_used_capacity_sum: 0,
+                type_owned_knowledge_sum: 0,
             }),
         );
         existing.insert((reference_hash.clone(), 1u8), None);
 
         let mut changes = HashMap::new();
-        changes.insert((reference_hash.clone(), 0u8), (1, 1, 100, 61));
-        changes.insert((reference_hash.clone(), 1u8), (3, 2, 300, 183));
+        changes.insert(
+            (reference_hash.clone(), 0u8, false),
+            (1, 1, 100, 100, 61, 61),
+        );
+        changes.insert(
+            (reference_hash.clone(), 1u8, true),
+            (3, 2, 300, 300, 183, 183),
+        );
 
         let mut batch = StoreBatch::new(&store);
         writer
@@ -1093,19 +1632,196 @@ mod tests {
             .get_script_reference_info(0, &reference_hash)
             .unwrap()
             .unwrap();
-        assert_eq!(data_hash_info.cells_count, 3);
-        assert_eq!(data_hash_info.live_cells_count, 3);
-        assert_eq!(data_hash_info.owned_capacity_sum, 300);
-        assert_eq!(data_hash_info.owned_knowledge_sum, 181);
+        assert_eq!(data_hash_info.lock_cells_count, 3);
+        assert_eq!(data_hash_info.lock_live_cells_count, 3);
+        assert_eq!(data_hash_info.lock_capacity_sum, 300);
+        assert_eq!(data_hash_info.lock_owned_capacity_sum, 300);
+        assert_eq!(data_hash_info.lock_used_capacity_sum, 181);
+        assert_eq!(data_hash_info.lock_owned_knowledge_sum, 181);
+        assert_eq!(data_hash_info.type_cells_count, 0);
 
         let type_hash_info = store
             .get_script_reference_info(1, &reference_hash)
             .unwrap()
             .unwrap();
-        assert_eq!(type_hash_info.cells_count, 3);
-        assert_eq!(type_hash_info.live_cells_count, 2);
-        assert_eq!(type_hash_info.owned_capacity_sum, 300);
-        assert_eq!(type_hash_info.owned_knowledge_sum, 183);
+        assert_eq!(type_hash_info.type_cells_count, 3);
+        assert_eq!(type_hash_info.type_live_cells_count, 2);
+        assert_eq!(type_hash_info.type_capacity_sum, 300);
+        assert_eq!(type_hash_info.type_owned_capacity_sum, 300);
+        assert_eq!(type_hash_info.type_used_capacity_sum, 183);
+        assert_eq!(type_hash_info.type_owned_knowledge_sum, 183);
+        assert_eq!(type_hash_info.lock_cells_count, 0);
+    }
+
+    #[test]
+    fn test_materialize_script_versions_and_families_rolls_up_reference_records_exactly() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let family_id = "default-lock";
+        let version_hash = vec![0x41; 32];
+        let type_reference_hash = vec![0x51; 32];
+        let data_reference_hash = vec![0x61; 32];
+
+        store
+            .put_script_family_direct(
+                family_id,
+                &ckbadger_store::ScriptFamilyInfo {
+                    family_id: family_id.to_string(),
+                    name: "Default Lock".to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_version(
+                &version_hash,
+                &ckbadger_store::ScriptVersionInfo {
+                    version_hash: version_hash.clone(),
+                    family_id: Some(family_id.to_string()),
+                    canonical_reference_hash: Some(type_reference_hash.clone()),
+                    canonical_hash_type: Some(1),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_reference_info_direct(
+                1,
+                &type_reference_hash,
+                &ScriptReferenceInfo {
+                    reference_hash: type_reference_hash.clone(),
+                    hash_type: 1,
+                    lock_cells_count: 1,
+                    lock_live_cells_count: 1,
+                    lock_capacity_sum: 100,
+                    lock_owned_capacity_sum: 100,
+                    lock_used_capacity_sum: 61,
+                    lock_owned_knowledge_sum: 61,
+                    type_cells_count: 2,
+                    type_live_cells_count: 1,
+                    type_capacity_sum: 200,
+                    type_owned_capacity_sum: 90,
+                    type_used_capacity_sum: 122,
+                    type_owned_knowledge_sum: 55,
+                },
+            )
+            .unwrap();
+        store
+            .put_script_reference_info_direct(
+                0,
+                &data_reference_hash,
+                &ScriptReferenceInfo {
+                    reference_hash: data_reference_hash.clone(),
+                    hash_type: 0,
+                    lock_cells_count: 3,
+                    lock_live_cells_count: 2,
+                    lock_capacity_sum: 300,
+                    lock_owned_capacity_sum: 180,
+                    lock_used_capacity_sum: 183,
+                    lock_owned_knowledge_sum: 110,
+                    type_cells_count: 4,
+                    type_live_cells_count: 3,
+                    type_capacity_sum: 400,
+                    type_owned_capacity_sum: 270,
+                    type_used_capacity_sum: 244,
+                    type_owned_knowledge_sum: 166,
+                },
+            )
+            .unwrap();
+        store
+            .put_script_reference_to_version_direct(1, &type_reference_hash, &version_hash)
+            .unwrap();
+        store
+            .put_script_reference_to_version_direct(0, &data_reference_hash, &version_hash)
+            .unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .materialize_script_versions_and_families(
+                &[
+                    (type_reference_hash.clone(), 1),
+                    (data_reference_hash.clone(), 0),
+                ],
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let version = store.get_script_version(&version_hash).unwrap().unwrap();
+        assert_eq!(version.lock_cells_count, 4);
+        assert_eq!(version.lock_live_cells_count, 3);
+        assert_eq!(version.lock_capacity_sum, 400);
+        assert_eq!(version.lock_owned_capacity_sum, 280);
+        assert_eq!(version.lock_used_capacity_sum, 244);
+        assert_eq!(version.lock_owned_knowledge_sum, 171);
+        assert_eq!(version.type_cells_count, 6);
+        assert_eq!(version.type_live_cells_count, 4);
+        assert_eq!(version.type_capacity_sum, 600);
+        assert_eq!(version.type_owned_capacity_sum, 360);
+        assert_eq!(version.type_used_capacity_sum, 366);
+        assert_eq!(version.type_owned_knowledge_sum, 221);
+
+        let family = store.get_script_family(family_id).unwrap().unwrap();
+        assert_eq!(family.versions_count, 1);
+        assert_eq!(family.cells_count, 10);
+        assert_eq!(family.live_cells_count, 7);
+        assert_eq!(family.owned_capacity_sum, 640);
+        assert_eq!(family.owned_knowledge_sum, 392);
+    }
+
+    #[test]
+    fn test_refresh_type_script_reference_version_mapping_replaces_stale_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let reference_hash = vec![0x71; 32];
+        let stale_version = vec![0x81; 32];
+        let live_version = vec![0x91; 32];
+
+        store
+            .put_script_reference_to_version_direct(1, &reference_hash, &stale_version)
+            .unwrap();
+
+        let mut seed_batch = StoreBatch::new(&store);
+        seed_batch.put_cell(
+            &[0x45; 32],
+            0,
+            &ckbadger_store::types::LiveCellInfo {
+                capacity: 100,
+                lock_script_hash: vec![0x11; 32],
+                lock_code_hash: vec![0x12; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: Some(reference_hash.clone()),
+                type_code_hash: Some(vec![0x13; 32]),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]),
+                data_size: 0,
+                occupied_capacity: 80,
+                udt_amount: None,
+                data_hash: Some(live_version.clone()),
+            },
+            10,
+        );
+        seed_batch.put_cell_by_type(&reference_hash, 10, &[0x45; 32], 0);
+        seed_batch.commit().unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .refresh_type_script_reference_version_mappings(
+                std::slice::from_ref(&reference_hash),
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let resolved = store
+            .get_script_reference_version_hash(1, &reference_hash)
+            .unwrap();
+        assert_eq!(resolved, Some(live_version));
     }
 
     #[test]

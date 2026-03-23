@@ -875,7 +875,8 @@ fn truncate_to_hour(dt: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 pub(super) type ScriptUsageChanges = HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
-pub(super) type ScriptReferenceUsageChanges = HashMap<(Vec<u8>, u8), (i64, i64, i128, i128)>;
+pub(super) type ScriptReferenceUsageChanges =
+    HashMap<(Vec<u8>, u8, bool), (i64, i64, i128, i128, i128, i128)>;
 pub(super) fn parse_blocks_parallel(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<(
@@ -1415,9 +1416,13 @@ impl Indexer {
             vec![]
         };
         let reference_keys: Vec<(Vec<u8>, u8)> = if !script_reference_usage_changes.is_empty() {
+            let mut seen = std::collections::HashSet::new();
             script_reference_usage_changes
                 .keys()
-                .map(|(reference_hash, hash_type)| (reference_hash.clone(), *hash_type))
+                .filter_map(|(reference_hash, hash_type, _is_type)| {
+                    let key = (reference_hash.clone(), *hash_type);
+                    seen.insert(key.clone()).then_some(key)
+                })
                 .collect()
         } else {
             vec![]
@@ -3025,6 +3030,14 @@ impl Indexer {
                     first_block, last_block
                 )
             })?;
+            self.writer
+                .refresh_script_reference_rollups()
+                .with_context(|| {
+                    format!(
+                        "script reference rollup refresh failed after commit for blocks {}-{}",
+                        first_block, last_block
+                    )
+                })?;
             let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
             write_commit_ms += commit_ms;
             if commit_ms >= BULK_PHASE_COMMIT_SLOW_WARN_MS {

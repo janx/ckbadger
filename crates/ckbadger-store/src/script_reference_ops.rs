@@ -4,6 +4,8 @@ use crate::bytes_to_hex;
 use crate::keys;
 use crate::{CkbadgerStore, ScriptReferenceInfo};
 
+pub type ScriptReferenceInfoEntry = ((Vec<u8>, u8), ScriptReferenceInfo);
+
 impl CkbadgerStore {
     pub fn get_script_reference_info(
         &self,
@@ -81,6 +83,34 @@ impl CkbadgerStore {
         }
     }
 
+    pub fn list_script_reference_infos(&self) -> anyhow::Result<Vec<ScriptReferenceInfoEntry>> {
+        let iter = self.iterator_cf(
+            self.cf_script_reference_info(),
+            rocksdb::IteratorMode::Start,
+        );
+        let mut results = Vec::new();
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate script_reference_info in list_script_reference_infos: {}",
+                    e
+                )
+            })?;
+            let (hash_type, reference_hash) = keys::decode_script_reference_key(&key);
+            let info: ScriptReferenceInfo = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize script reference info in list_script_reference_infos: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            results.push(((reference_hash, hash_type), info));
+        }
+
+        Ok(results)
+    }
+
     pub fn put_script_reference_to_version_direct(
         &self,
         hash_type: u8,
@@ -119,10 +149,18 @@ mod tests {
         let reference = ScriptReferenceInfo {
             reference_hash: reference_hash.clone(),
             hash_type: 1,
-            live_cells_count: 4,
-            cells_count: 7,
-            owned_capacity_sum: 900,
-            owned_knowledge_sum: 640,
+            lock_cells_count: 4,
+            lock_live_cells_count: 3,
+            lock_capacity_sum: 700,
+            lock_owned_capacity_sum: 500,
+            lock_used_capacity_sum: 280,
+            lock_owned_knowledge_sum: 200,
+            type_cells_count: 3,
+            type_live_cells_count: 1,
+            type_capacity_sum: 400,
+            type_owned_capacity_sum: 400,
+            type_used_capacity_sum: 220,
+            type_owned_knowledge_sum: 160,
         };
 
         store
@@ -283,5 +321,35 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to deserialize script reference info"));
+    }
+
+    #[test]
+    fn test_list_script_reference_infos_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+        let reference_hash = vec![0x66; 32];
+        let reference = ScriptReferenceInfo {
+            reference_hash: reference_hash.clone(),
+            hash_type: 2,
+            lock_cells_count: 1,
+            lock_live_cells_count: 1,
+            lock_capacity_sum: 100,
+            lock_owned_capacity_sum: 100,
+            lock_used_capacity_sum: 61,
+            lock_owned_knowledge_sum: 61,
+            type_cells_count: 2,
+            type_live_cells_count: 1,
+            type_capacity_sum: 200,
+            type_owned_capacity_sum: 120,
+            type_used_capacity_sum: 142,
+            type_owned_knowledge_sum: 71,
+        };
+
+        store
+            .put_script_reference_info_direct(2, &reference_hash, &reference)
+            .unwrap();
+
+        let loaded = store.list_script_reference_infos().unwrap();
+        assert_eq!(loaded, vec![((reference_hash, 2), reference)]);
     }
 }

@@ -9,6 +9,7 @@ use ckbadger_store::{
 use rustc_hash::FxHashMap;
 
 use super::{BulkReducer, ReducerContext};
+use crate::db::writer::collect_current_script_reference_rollup_state;
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::facts::{CellFacts, ResolvedInputFacts, ResolvedTxFacts};
 use crate::sync::bulk_build::interner::IdentityInterner;
@@ -262,7 +263,49 @@ impl BulkReducer for ScriptOwner {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        materializer.materialize_final_snapshot(&reference_rows)
+        materializer.materialize_final_snapshot(&reference_rows)?;
+
+        let rollups =
+            collect_current_script_reference_rollup_state(store, materializer.append_only_store())?;
+        let mut mapping_rows = Vec::new();
+        for ((reference_hash, hash_type), version_hash) in rollups.reference_mappings {
+            if let Some(version_hash) = version_hash {
+                mapping_rows.push(MaterializedRow::new(
+                    ckbadger_store::CF_SCRIPT_REFERENCE_TO_VERSION,
+                    keys::encode_script_reference_key(hash_type, &reference_hash).to_vec(),
+                    version_hash,
+                ));
+            }
+        }
+        materializer.materialize_final_snapshot(&mapping_rows)?;
+
+        let version_rows = rollups
+            .versions
+            .into_iter()
+            .map(|(version_hash, info)| {
+                Ok(MaterializedRow::new(
+                    ckbadger_store::CF_SCRIPT_VERSIONS,
+                    version_hash,
+                    bincode::serialize(&info)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        materializer.materialize_final_snapshot(&version_rows)?;
+
+        let family_rows = rollups
+            .families
+            .into_iter()
+            .map(
+                |(family_id, info): (String, ckbadger_store::ScriptFamilyInfo)| {
+                    Ok(MaterializedRow::new(
+                        ckbadger_store::CF_SCRIPT_FAMILIES,
+                        family_id.into_bytes(),
+                        bincode::serialize(&info)?,
+                    ))
+                },
+            )
+            .collect::<Result<Vec<_>>>()?;
+        materializer.materialize_final_snapshot(&family_rows)
     }
 }
 
@@ -285,10 +328,18 @@ struct ScriptDelta {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct ScriptReferenceDelta {
-    cells_delta: i64,
-    live_cells_delta: i64,
-    owned_capacity_delta: i128,
-    owned_knowledge_delta: i128,
+    lock_cells_delta: i64,
+    lock_live_cells_delta: i64,
+    lock_capacity_delta: i128,
+    lock_owned_capacity_delta: i128,
+    lock_used_capacity_delta: i128,
+    lock_owned_knowledge_delta: i128,
+    type_cells_delta: i64,
+    type_live_cells_delta: i64,
+    type_capacity_delta: i128,
+    type_owned_capacity_delta: i128,
+    type_used_capacity_delta: i128,
+    type_owned_knowledge_delta: i128,
 }
 
 fn parse_hash_type_u8(
@@ -361,9 +412,9 @@ fn apply_input_reference_deltas(
     let lock_delta = deltas
         .entry((lock_reference_hash.clone(), lock_hash_type))
         .or_default();
-    lock_delta.live_cells_delta -= 1;
-    lock_delta.owned_capacity_delta -= i128::from(input.capacity);
-    lock_delta.owned_knowledge_delta -= i128::from(input.occupied_capacity);
+    lock_delta.lock_live_cells_delta -= 1;
+    lock_delta.lock_owned_capacity_delta -= i128::from(input.capacity);
+    lock_delta.lock_owned_knowledge_delta -= i128::from(input.occupied_capacity);
 
     if let Some(type_code_hash_id) = input.type_code_hash_id {
         let type_hash_type = input.type_hash_type.ok_or_else(|| {
@@ -381,9 +432,9 @@ fn apply_input_reference_deltas(
         let type_delta = deltas
             .entry((type_reference_hash.clone(), type_hash_type))
             .or_default();
-        type_delta.live_cells_delta -= 1;
-        type_delta.owned_capacity_delta -= i128::from(input.capacity);
-        type_delta.owned_knowledge_delta -= i128::from(input.occupied_capacity);
+        type_delta.type_live_cells_delta -= 1;
+        type_delta.type_owned_capacity_delta -= i128::from(input.capacity);
+        type_delta.type_owned_knowledge_delta -= i128::from(input.occupied_capacity);
     }
 
     Ok(())
@@ -450,10 +501,12 @@ fn apply_output_reference_deltas(
     let lock_delta = deltas
         .entry((lock_reference_hash.clone(), lock_hash_type))
         .or_default();
-    lock_delta.cells_delta += 1;
-    lock_delta.live_cells_delta += 1;
-    lock_delta.owned_capacity_delta += i128::from(cell.capacity);
-    lock_delta.owned_knowledge_delta += i128::from(cell.occupied_capacity);
+    lock_delta.lock_cells_delta += 1;
+    lock_delta.lock_live_cells_delta += 1;
+    lock_delta.lock_capacity_delta += i128::from(cell.capacity);
+    lock_delta.lock_owned_capacity_delta += i128::from(cell.capacity);
+    lock_delta.lock_used_capacity_delta += i128::from(cell.occupied_capacity);
+    lock_delta.lock_owned_knowledge_delta += i128::from(cell.occupied_capacity);
 
     if let Some(type_code_hash_id) = cell.type_code_hash_id {
         let type_hash_type = cell.type_hash_type.ok_or_else(|| {
@@ -471,10 +524,12 @@ fn apply_output_reference_deltas(
         let type_delta = deltas
             .entry((type_reference_hash.clone(), type_hash_type))
             .or_default();
-        type_delta.cells_delta += 1;
-        type_delta.live_cells_delta += 1;
-        type_delta.owned_capacity_delta += i128::from(cell.capacity);
-        type_delta.owned_knowledge_delta += i128::from(cell.occupied_capacity);
+        type_delta.type_cells_delta += 1;
+        type_delta.type_live_cells_delta += 1;
+        type_delta.type_capacity_delta += i128::from(cell.capacity);
+        type_delta.type_owned_capacity_delta += i128::from(cell.capacity);
+        type_delta.type_used_capacity_delta += i128::from(cell.occupied_capacity);
+        type_delta.type_owned_knowledge_delta += i128::from(cell.occupied_capacity);
     }
 
     Ok(())
@@ -562,46 +617,138 @@ fn apply_reference_delta(
     delta: &ScriptReferenceDelta,
     tx: &ResolvedTxFacts<'_>,
 ) -> Result<()> {
-    info.cells_count = checked_next_reference_i64(
+    info.lock_cells_count = checked_next_reference_i64(
         reference_hash,
         hash_type,
-        "cells_count",
-        info.cells_count,
-        delta.cells_delta,
+        "lock cells_count",
+        info.lock_cells_count,
+        delta.lock_cells_delta,
         tx,
     )?;
-    info.live_cells_count = checked_next_reference_i64(
+    info.lock_live_cells_count = checked_next_reference_i64(
         reference_hash,
         hash_type,
-        "live_cells_count",
-        info.live_cells_count,
-        delta.live_cells_delta,
+        "lock live_cells_count",
+        info.lock_live_cells_count,
+        delta.lock_live_cells_delta,
         tx,
     )?;
-    info.owned_capacity_sum = checked_next_reference_i128(
+    info.lock_capacity_sum = checked_next_reference_i128(
         reference_hash,
         hash_type,
-        "owned_capacity_sum",
-        info.owned_capacity_sum,
-        delta.owned_capacity_delta,
+        "lock capacity_sum",
+        info.lock_capacity_sum,
+        delta.lock_capacity_delta,
         tx,
     )?;
-    info.owned_knowledge_sum = checked_next_reference_i128(
+    info.lock_owned_capacity_sum = checked_next_reference_i128(
         reference_hash,
         hash_type,
-        "owned_knowledge_sum",
-        info.owned_knowledge_sum,
-        delta.owned_knowledge_delta,
+        "lock owned_capacity_sum",
+        info.lock_owned_capacity_sum,
+        delta.lock_owned_capacity_delta,
+        tx,
+    )?;
+    info.lock_used_capacity_sum = checked_next_reference_i128(
+        reference_hash,
+        hash_type,
+        "lock used_capacity_sum",
+        info.lock_used_capacity_sum,
+        delta.lock_used_capacity_delta,
+        tx,
+    )?;
+    info.lock_owned_knowledge_sum = checked_next_reference_i128(
+        reference_hash,
+        hash_type,
+        "lock owned_knowledge_sum",
+        info.lock_owned_knowledge_sum,
+        delta.lock_owned_knowledge_delta,
         tx,
     )?;
 
-    if info.owned_knowledge_sum > info.owned_capacity_sum {
+    info.type_cells_count = checked_next_reference_i64(
+        reference_hash,
+        hash_type,
+        "type cells_count",
+        info.type_cells_count,
+        delta.type_cells_delta,
+        tx,
+    )?;
+    info.type_live_cells_count = checked_next_reference_i64(
+        reference_hash,
+        hash_type,
+        "type live_cells_count",
+        info.type_live_cells_count,
+        delta.type_live_cells_delta,
+        tx,
+    )?;
+    info.type_capacity_sum = checked_next_reference_i128(
+        reference_hash,
+        hash_type,
+        "type capacity_sum",
+        info.type_capacity_sum,
+        delta.type_capacity_delta,
+        tx,
+    )?;
+    info.type_owned_capacity_sum = checked_next_reference_i128(
+        reference_hash,
+        hash_type,
+        "type owned_capacity_sum",
+        info.type_owned_capacity_sum,
+        delta.type_owned_capacity_delta,
+        tx,
+    )?;
+    info.type_used_capacity_sum = checked_next_reference_i128(
+        reference_hash,
+        hash_type,
+        "type used_capacity_sum",
+        info.type_used_capacity_sum,
+        delta.type_used_capacity_delta,
+        tx,
+    )?;
+    info.type_owned_knowledge_sum = checked_next_reference_i128(
+        reference_hash,
+        hash_type,
+        "type owned_knowledge_sum",
+        info.type_owned_knowledge_sum,
+        delta.type_owned_knowledge_delta,
+        tx,
+    )?;
+
+    if info.lock_used_capacity_sum > info.lock_capacity_sum {
         bail!(
-            "script reference owned knowledge exceeds owned capacity: reference_hash=0x{}, hash_type={}, owned_knowledge_sum={}, owned_capacity_sum={}",
+            "script reference lock used capacity exceeds total: reference_hash=0x{}, hash_type={}, lock_used_capacity_sum={}, lock_capacity_sum={}",
             hex::encode(reference_hash),
             hash_type,
-            info.owned_knowledge_sum,
-            info.owned_capacity_sum
+            info.lock_used_capacity_sum,
+            info.lock_capacity_sum
+        );
+    }
+    if info.lock_owned_knowledge_sum > info.lock_owned_capacity_sum {
+        bail!(
+            "script reference lock owned knowledge exceeds owned capacity: reference_hash=0x{}, hash_type={}, lock_owned_knowledge_sum={}, lock_owned_capacity_sum={}",
+            hex::encode(reference_hash),
+            hash_type,
+            info.lock_owned_knowledge_sum,
+            info.lock_owned_capacity_sum
+        );
+    }
+    if info.type_used_capacity_sum > info.type_capacity_sum {
+        bail!(
+            "script reference type used capacity exceeds total: reference_hash=0x{}, hash_type={}, type_used_capacity_sum={}, type_capacity_sum={}",
+            hex::encode(reference_hash),
+            hash_type,
+            info.type_used_capacity_sum,
+            info.type_capacity_sum
+        );
+    }
+    if info.type_owned_knowledge_sum > info.type_owned_capacity_sum {
+        bail!(
+            "script reference type owned knowledge exceeds owned capacity: reference_hash=0x{}, hash_type={}, type_owned_knowledge_sum={}, type_owned_capacity_sum={}",
+            hex::encode(reference_hash),
+            hash_type,
+            info.type_owned_knowledge_sum,
+            info.type_owned_capacity_sum
         );
     }
 
@@ -920,12 +1067,29 @@ pub(crate) fn materialize_script_infos_for_test(
     Ok(infos)
 }
 
+pub(crate) fn materialize_script_reference_infos_for_test(
+    blocks: &[BlockResponseWithCycles],
+) -> Result<HashMap<(Vec<u8>, u8), ScriptReferenceInfo>> {
+    let interner = IdentityInterner::default();
+    let (arena, _) = build_bulk_facts_arena_from_blocks(blocks, &interner)?;
+    let resolved = BulkSequencer::default().resolve(&arena)?;
+    let frozen = interner.snapshot_for_reads();
+    let ctx = ReducerContext::new(&frozen);
+    let mut owner = ScriptOwner::default();
+
+    for tx in &resolved {
+        owner.apply_tx(tx, &ctx)?;
+    }
+
+    Ok(owner.reference_infos.into_iter().collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sync::bulk_build::facts::{CellFacts, OutPointKey, ResolvedInputFacts};
     use crate::sync::types::InternId;
-    use ckbadger_store::ScriptReferenceInfo;
+    use ckbadger_store::{ScriptFamilyInfo, ScriptReferenceInfo, ScriptVersionInfo};
 
     #[test]
     fn script_owner_reduces_lock_and_type_live_usage() {
@@ -1248,10 +1412,18 @@ mod tests {
             Some(ScriptReferenceInfo {
                 reference_hash: reference_hash.clone(),
                 hash_type: 0,
-                live_cells_count: 1,
-                cells_count: 1,
-                owned_capacity_sum: 100_00000000,
-                owned_knowledge_sum: 61_00000000,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                lock_capacity_sum: 100_00000000,
+                lock_owned_capacity_sum: 100_00000000,
+                lock_used_capacity_sum: 61_00000000,
+                lock_owned_knowledge_sum: 61_00000000,
+                type_cells_count: 0,
+                type_live_cells_count: 0,
+                type_capacity_sum: 0,
+                type_owned_capacity_sum: 0,
+                type_used_capacity_sum: 0,
+                type_owned_knowledge_sum: 0,
             })
         );
 
@@ -1263,11 +1435,177 @@ mod tests {
             Some(ScriptReferenceInfo {
                 reference_hash: reference_hash.clone(),
                 hash_type: 1,
-                live_cells_count: 1,
-                cells_count: 1,
-                owned_capacity_sum: 150_00000000,
-                owned_knowledge_sum: 71_00000000,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                lock_capacity_sum: 150_00000000,
+                lock_owned_capacity_sum: 150_00000000,
+                lock_used_capacity_sum: 71_00000000,
+                lock_owned_knowledge_sum: 71_00000000,
+                type_cells_count: 0,
+                type_live_cells_count: 0,
+                type_capacity_sum: 0,
+                type_owned_capacity_sum: 0,
+                type_used_capacity_sum: 0,
+                type_owned_knowledge_sum: 0,
             })
         );
+    }
+
+    #[test]
+    fn script_owner_materialize_final_rolls_reference_stats_into_version_and_family() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain_path = dir.path().join("domain");
+        let append_path = dir.path().join("append-only");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+
+        let domain_store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
+
+        let version_hash = vec![0x66; 32];
+        let family_id = "family/test-script";
+        domain_store
+            .put_script_version(
+                &version_hash,
+                &ScriptVersionInfo {
+                    version_hash: version_hash.clone(),
+                    family_id: Some(family_id.to_string()),
+                    name: Some("Test Script".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        domain_store
+            .put_script_family_direct(
+                family_id,
+                &ScriptFamilyInfo {
+                    family_id: family_id.to_string(),
+                    name: "Test Script".to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let unrelated_lock_hash = vec![0x77; 32];
+        let interner = IdentityInterner::default();
+        interner.intern_bytes(vec![0xaa; 32]);
+        let version_hash_id = interner.intern_bytes(version_hash.clone());
+        interner.intern_bytes(vec![0xab; 20]);
+        interner.intern_bytes(vec![0xbb; 32]);
+        interner.intern_bytes(vec![0xac; 20]);
+        interner.intern_bytes(vec![0xdd; 32]);
+        let unrelated_lock_hash_id = interner.intern_bytes(unrelated_lock_hash);
+        interner.intern_bytes(vec![0xde; 20]);
+        interner.intern_bytes(vec![0xee; 32]);
+        interner.intern_bytes(vec![0xef; 20]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        let tx = ResolvedTxFacts {
+            tx_hash: [0x51; 32],
+            block_number: 300,
+            block_hash: [0x0a; 32],
+            timestamp_ms: 1_700_000_200_000,
+            block_dao_ar: 1,
+            tx_index: 0,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![
+                CellFacts {
+                    outpoint: OutPointKey::new([0x51; 32], 0),
+                    created_at_block: 300,
+                    created_by_block_dao_ar: 1,
+                    capacity: 100_00000000,
+                    lock_script_hash_id: InternId::new(0),
+                    lock_code_hash_id: version_hash_id,
+                    lock_hash_type: 0,
+                    lock_args_id: InternId::new(2),
+                    type_script_hash_id: None,
+                    type_code_hash_id: None,
+                    type_hash_type: None,
+                    type_args_id: None,
+                    occupied_capacity: 61_00000000,
+                    data_size: 0,
+                    data: Vec::new(),
+                    data_hash: None,
+                    udt_amount: None,
+                    semantic_tag: crate::sync::CellSemanticTag::Plain,
+                    dao_state: None,
+                    protocol_facts: None,
+                },
+                CellFacts {
+                    outpoint: OutPointKey::new([0x51; 32], 1),
+                    created_at_block: 300,
+                    created_by_block_dao_ar: 1,
+                    capacity: 200_00000000,
+                    lock_script_hash_id: InternId::new(3),
+                    lock_code_hash_id: unrelated_lock_hash_id,
+                    lock_hash_type: 1,
+                    lock_args_id: InternId::new(4),
+                    type_script_hash_id: Some(InternId::new(6)),
+                    type_code_hash_id: Some(version_hash_id),
+                    type_hash_type: Some(2),
+                    type_args_id: Some(InternId::new(7)),
+                    occupied_capacity: 142_00000000,
+                    data_size: 16,
+                    data: Vec::new(),
+                    data_hash: None,
+                    udt_amount: None,
+                    semantic_tag: crate::sync::CellSemanticTag::Plain,
+                    dao_state: None,
+                    protocol_facts: None,
+                },
+            ]
+            .into(),
+        };
+
+        let mut owner = ScriptOwner::default();
+        owner.apply_tx(&tx, &ctx).unwrap();
+
+        let mut materializer = Materializer::new(&domain_store, &append_store);
+        owner.materialize_final(&mut materializer).unwrap();
+        let _ = materializer.finish();
+
+        assert_eq!(
+            domain_store
+                .get_script_reference_version_hash(0, &version_hash)
+                .unwrap(),
+            Some(version_hash.clone())
+        );
+        assert_eq!(
+            domain_store
+                .get_script_reference_version_hash(2, &version_hash)
+                .unwrap(),
+            Some(version_hash.clone())
+        );
+
+        let version = domain_store
+            .get_script_version(&version_hash)
+            .unwrap()
+            .expect("version should exist");
+        assert_eq!(version.family_id.as_deref(), Some(family_id));
+        assert_eq!(version.name.as_deref(), Some("Test Script"));
+        assert_eq!(version.lock_cells_count, 1);
+        assert_eq!(version.lock_live_cells_count, 1);
+        assert_eq!(version.lock_capacity_sum, 100_00000000);
+        assert_eq!(version.lock_owned_capacity_sum, 100_00000000);
+        assert_eq!(version.lock_used_capacity_sum, 61_00000000);
+        assert_eq!(version.lock_owned_knowledge_sum, 61_00000000);
+        assert_eq!(version.type_cells_count, 1);
+        assert_eq!(version.type_live_cells_count, 1);
+        assert_eq!(version.type_capacity_sum, 200_00000000);
+        assert_eq!(version.type_owned_capacity_sum, 200_00000000);
+        assert_eq!(version.type_used_capacity_sum, 142_00000000);
+        assert_eq!(version.type_owned_knowledge_sum, 142_00000000);
+
+        let family = domain_store
+            .get_script_family(family_id)
+            .unwrap()
+            .expect("family should exist");
+        assert_eq!(family.versions_count, 1);
+        assert_eq!(family.live_cells_count, 2);
+        assert_eq!(family.cells_count, 2);
+        assert_eq!(family.owned_capacity_sum, 300_00000000);
+        assert_eq!(family.owned_knowledge_sum, 203_00000000);
     }
 }
