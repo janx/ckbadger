@@ -2695,33 +2695,84 @@ impl Indexer {
 
     /// Fetch blocks from CKB RocksDB as raw molecule `BlockView` + cycles.
     /// Bypasses `block_view_to_rpc` hex encoding for binary-native bulk sync.
+    ///
+    /// Uses batch `multi_get_cf` per thread chunk to reduce RocksDB lock
+    /// contention: 3 multi_get calls per chunk instead of 5N individual gets.
     pub(crate) fn fetch_blocks_direct_binary(
         store: &CkbChainReader,
         start: u64,
         end: u64,
         max_threads: u32,
     ) -> Result<Vec<crate::sync::bulk_build::binary_facts::RawCkbBlock>> {
-        use ckb_types::prelude::*;
         let block_numbers: Vec<u64> = (start..=end).collect();
-        Self::scoped_parallel_fetch(&block_numbers, max_threads as usize, |&num| {
-            let hash = store
-                .get_block_hash(num)
-                .ok_or_else(|| anyhow::anyhow!("Block {} hash not found in CKB RocksDB", num))?;
-            let block = store
-                .get_block(&hash)
-                .ok_or_else(|| anyhow::anyhow!("Block {} data not found in CKB RocksDB", num))?;
-            let hash_bytes: [u8; 32] = block.hash().unpack();
-            let cycles = store
-                .get_block_ext(&hash_bytes)
-                .and_then(|(_, cycles_vec)| {
-                    if cycles_vec.is_empty() {
-                        None
-                    } else {
-                        Some(cycles_vec)
-                    }
+        if block_numbers.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let thread_count = (max_threads as usize).max(1).min(block_numbers.len());
+        let chunk_size = block_numbers.len().div_ceil(thread_count);
+
+        std::thread::scope(|s| {
+            let handles: Vec<_> = block_numbers
+                .chunks(chunk_size)
+                .map(|chunk| {
+                    s.spawn(move || -> Result<Vec<crate::sync::bulk_build::binary_facts::RawCkbBlock>> {
+                        // Batch 1: multi_get all block hashes
+                        let hash_opts = store.get_block_hashes_batch(chunk);
+                        let mut hashes = Vec::with_capacity(chunk.len());
+                        for (i, h) in hash_opts.into_iter().enumerate() {
+                            hashes.push(h.ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "Block {} hash not found in CKB RocksDB",
+                                    chunk[i]
+                                )
+                            })?);
+                        }
+
+                        // Batch 2: multi_get headers + uncles + proposals (3N keys),
+                        // body still per-block prefix iteration
+                        let block_opts = store.get_blocks_batch(&hashes);
+
+                        // Batch 3: multi_get all block extensions (N keys)
+                        let ext_opts = store.get_block_exts_batch(&hashes);
+
+                        // Assemble RawCkbBlock results
+                        let mut results = Vec::with_capacity(chunk.len());
+                        for (i, (block_opt, ext_opt)) in
+                            block_opts.into_iter().zip(ext_opts).enumerate()
+                        {
+                            let block = block_opt.ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "Block {} data not found in CKB RocksDB",
+                                    chunk[i]
+                                )
+                            })?;
+                            let cycles = ext_opt
+                                .and_then(|(_, cycles_vec)| {
+                                    if cycles_vec.is_empty() {
+                                        None
+                                    } else {
+                                        Some(cycles_vec)
+                                    }
+                                })
+                                .unwrap_or_default();
+                            results.push(
+                                crate::sync::bulk_build::binary_facts::RawCkbBlock {
+                                    block,
+                                    cycles,
+                                },
+                            );
+                        }
+                        Ok(results)
+                    })
                 })
-                .unwrap_or_default();
-            Ok(crate::sync::bulk_build::binary_facts::RawCkbBlock { block, cycles })
+                .collect();
+
+            let mut results = Vec::with_capacity(block_numbers.len());
+            for handle in handles {
+                results.extend(handle.join().unwrap()?);
+            }
+            Ok(results)
         })
     }
 

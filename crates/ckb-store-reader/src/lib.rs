@@ -460,6 +460,203 @@ impl CkbChainReader {
         }
     }
 
+    // -- Batch methods (multi_get) --
+
+    /// Batch-fetch block hashes for multiple block numbers.
+    ///
+    /// Uses RocksDB `multi_get_cf` to batch all lookups into a single call,
+    /// reducing lock contention compared to individual `get_block_hash` calls.
+    pub fn get_block_hashes_batch(&self, numbers: &[u64]) -> Vec<Option<[u8; 32]>> {
+        if numbers.is_empty() {
+            return vec![];
+        }
+        let cf = match self.db.cf_handle(COLUMN_INDEX) {
+            Some(cf) => cf,
+            None => return vec![None; numbers.len()],
+        };
+        let keys: Vec<[u8; 8]> = numbers.iter().map(|n| n.to_le_bytes()).collect();
+        let cf_keys: Vec<_> = keys.iter().map(|k| (cf, k.as_slice())).collect();
+        self.db
+            .multi_get_cf(cf_keys)
+            .into_iter()
+            .map(|r| {
+                let raw = r.ok()??;
+                if raw.len() != 32 {
+                    return None;
+                }
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&raw);
+                Some(hash)
+            })
+            .collect()
+    }
+
+    /// Batch-fetch full blocks for multiple block hashes.
+    ///
+    /// Point lookups (headers, uncles, proposals) are batched into a single
+    /// `multi_get_cf` call across three column families. Block bodies still
+    /// require per-block prefix iteration.
+    pub fn get_blocks_batch(&self, hashes: &[[u8; 32]]) -> Vec<Option<BlockView>> {
+        if hashes.is_empty() {
+            return vec![];
+        }
+        let cf_header = match self.db.cf_handle(COLUMN_BLOCK_HEADER) {
+            Some(cf) => cf,
+            None => return vec![None; hashes.len()],
+        };
+        let cf_uncle = match self.db.cf_handle(COLUMN_BLOCK_UNCLE) {
+            Some(cf) => cf,
+            None => return vec![None; hashes.len()],
+        };
+        let cf_proposals = match self.db.cf_handle(COLUMN_BLOCK_PROPOSAL_IDS) {
+            Some(cf) => cf,
+            None => return vec![None; hashes.len()],
+        };
+
+        let n = hashes.len();
+        // Mixed-CF multi_get: [N headers, N uncles, N proposals]
+        let mut cf_keys: Vec<_> = Vec::with_capacity(3 * n);
+        for hash in hashes {
+            cf_keys.push((cf_header, hash.as_slice()));
+        }
+        for hash in hashes {
+            cf_keys.push((cf_uncle, hash.as_slice()));
+        }
+        for hash in hashes {
+            cf_keys.push((cf_proposals, hash.as_slice()));
+        }
+
+        let mg = self.db.multi_get_cf(cf_keys);
+        // mg layout: [0..n) headers, [n..2n) uncles, [2n..3n) proposals
+
+        let mut blocks = Vec::with_capacity(n);
+        for i in 0..n {
+            let header = match &mg[i] {
+                Ok(Some(raw)) => match packed::HeaderViewReader::from_slice(raw) {
+                    Ok(r) => r.to_entity(),
+                    Err(_) => {
+                        blocks.push(None);
+                        continue;
+                    }
+                },
+                _ => {
+                    blocks.push(None);
+                    continue;
+                }
+            };
+            let uncles = match &mg[n + i] {
+                Ok(Some(raw)) => match packed::UncleBlockVecViewReader::from_slice(raw) {
+                    Ok(r) => r.to_entity(),
+                    Err(_) => {
+                        blocks.push(None);
+                        continue;
+                    }
+                },
+                _ => {
+                    blocks.push(None);
+                    continue;
+                }
+            };
+            let proposals = match &mg[2 * n + i] {
+                Ok(Some(raw)) => match packed::ProposalShortIdVecReader::from_slice(raw) {
+                    Ok(r) => r.to_entity(),
+                    Err(_) => {
+                        blocks.push(None);
+                        continue;
+                    }
+                },
+                _ => {
+                    blocks.push(None);
+                    continue;
+                }
+            };
+
+            // Body: prefix iteration per block (cannot be batched)
+            let transactions = self.get_block_body_packed(&hashes[i]);
+
+            let tx_views: Vec<ckb_types::core::TransactionView> = transactions
+                .into_iter()
+                .map(|tv| {
+                    let hash = tv.hash();
+                    let witness_hash = tv.witness_hash();
+                    tv.data()
+                        .into_view()
+                        .fake_hash(hash)
+                        .fake_witness_hash(witness_hash)
+                })
+                .collect();
+
+            let block = packed::Block::new_builder()
+                .header(header.data())
+                .uncles(uncles.data())
+                .transactions(
+                    packed::TransactionVec::new_builder()
+                        .set(tx_views.iter().map(|tv| tv.data()).collect::<Vec<_>>())
+                        .build(),
+                )
+                .proposals(proposals)
+                .build();
+
+            let view = block.into_view().fake_hash(packed::Byte32::new(hashes[i]));
+            blocks.push(Some(view));
+        }
+
+        blocks
+    }
+
+    /// Batch-fetch block extension data for multiple block hashes.
+    ///
+    /// Uses RocksDB `multi_get_cf` to batch all lookups into a single call.
+    pub fn get_block_exts_batch(
+        &self,
+        hashes: &[[u8; 32]],
+    ) -> Vec<Option<(u64, Vec<Option<u64>>)>> {
+        if hashes.is_empty() {
+            return vec![];
+        }
+        let cf = match self.db.cf_handle(COLUMN_BLOCK_EXT) {
+            Some(cf) => cf,
+            None => return vec![None; hashes.len()],
+        };
+        let cf_keys: Vec<_> = hashes.iter().map(|h| (cf, h.as_slice())).collect();
+        self.db
+            .multi_get_cf(cf_keys)
+            .into_iter()
+            .map(|r| {
+                let raw = r.ok()??;
+                if let Ok(reader) = packed::BlockExtV1Reader::from_compatible_slice(&raw) {
+                    let td_bytes = reader.total_difficulty().raw_data();
+                    let total_difficulty =
+                        u64::from_le_bytes(td_bytes[..8].try_into().unwrap_or([0u8; 8]));
+                    let cycles: Vec<Option<u64>> = reader
+                        .cycles()
+                        .to_opt()
+                        .map(|c| {
+                            let entity = c.to_entity();
+                            (0..entity.len())
+                                .map(|j| {
+                                    let v = entity.get(j).expect("valid index");
+                                    let bytes = v.raw_data();
+                                    Some(u64::from_le_bytes(
+                                        bytes[..8].try_into().unwrap_or([0u8; 8]),
+                                    ))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    Some((total_difficulty, cycles))
+                } else if let Ok(reader) = packed::BlockExtReader::from_compatible_slice(&raw) {
+                    let td_bytes = reader.total_difficulty().raw_data();
+                    let total_difficulty =
+                        u64::from_le_bytes(td_bytes[..8].try_into().unwrap_or([0u8; 8]));
+                    Some((total_difficulty, vec![]))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     // -- Internal helpers --
 
     fn get_block_header_packed(&self, hash: &[u8; 32]) -> Option<packed::HeaderView> {
@@ -610,5 +807,68 @@ mod tests {
             "secondary path should be removed when reader is dropped: {}",
             secondary_path.display()
         );
+    }
+
+    #[test]
+    fn batch_methods_return_empty_for_empty_input() {
+        let primary_dir = tempdir().unwrap();
+        let mut db_opts = Options::default();
+        db_opts.create_if_missing(true);
+        db_opts.create_missing_column_families(true);
+        let cf_descriptors: Vec<ColumnFamilyDescriptor> = ALL_COLUMN_FAMILIES
+            .iter()
+            .map(|name| ColumnFamilyDescriptor::new(*name, Options::default()))
+            .collect();
+        let _primary_db =
+            DB::open_cf_descriptors(&db_opts, primary_dir.path(), cf_descriptors).unwrap();
+
+        let secondary_path = std::path::PathBuf::from(format!(
+            "/tmp/ckbadger-rocksdb-secondary-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&secondary_path);
+
+        let reader = CkbChainReader::open(primary_dir.path().to_str().unwrap()).unwrap();
+
+        assert!(reader.get_block_hashes_batch(&[]).is_empty());
+        assert!(reader.get_blocks_batch(&[]).is_empty());
+        assert!(reader.get_block_exts_batch(&[]).is_empty());
+    }
+
+    #[test]
+    fn batch_methods_return_none_for_missing_blocks() {
+        let primary_dir = tempdir().unwrap();
+        let mut db_opts = Options::default();
+        db_opts.create_if_missing(true);
+        db_opts.create_missing_column_families(true);
+        let cf_descriptors: Vec<ColumnFamilyDescriptor> = ALL_COLUMN_FAMILIES
+            .iter()
+            .map(|name| ColumnFamilyDescriptor::new(*name, Options::default()))
+            .collect();
+        let _primary_db =
+            DB::open_cf_descriptors(&db_opts, primary_dir.path(), cf_descriptors).unwrap();
+
+        let secondary_path = std::path::PathBuf::from(format!(
+            "/tmp/ckbadger-rocksdb-secondary-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&secondary_path);
+
+        let reader = CkbChainReader::open(primary_dir.path().to_str().unwrap()).unwrap();
+
+        // Non-existent block numbers should return None
+        let hashes = reader.get_block_hashes_batch(&[0, 1, 2]);
+        assert_eq!(hashes.len(), 3);
+        assert!(hashes.iter().all(|h| h.is_none()));
+
+        // Non-existent block hashes should return None
+        let fake_hashes = [[0u8; 32], [1u8; 32]];
+        let blocks = reader.get_blocks_batch(&fake_hashes);
+        assert_eq!(blocks.len(), 2);
+        assert!(blocks.iter().all(|b| b.is_none()));
+
+        let exts = reader.get_block_exts_batch(&fake_hashes);
+        assert_eq!(exts.len(), 2);
+        assert!(exts.iter().all(|e| e.is_none()));
     }
 }
