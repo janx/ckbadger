@@ -478,7 +478,7 @@ impl BulkBuildPerfStats {
             .store(state.is_some(), Ordering::Relaxed);
     }
 
-    #[allow(dead_code, clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_controller(
         &self,
         bottleneck_code: u8,

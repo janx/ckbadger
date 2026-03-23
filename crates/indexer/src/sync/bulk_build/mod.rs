@@ -447,6 +447,18 @@ impl BulkBuildEngine {
                     l0_ema = format!("{:.1}", output.l0_ema),
                     "Bottleneck controller adjusted"
                 );
+
+                indexer.bulk_build_perf.record_controller(
+                    output.bottleneck.to_code(),
+                    output.recv_ema,
+                    output.build_ema,
+                    output.wait_ema,
+                    output.l0_ema,
+                    output.prefetch_ahead,
+                    output.fetch_threads,
+                    output.bg_jobs,
+                    controller.rows_per_block_ema(),
+                );
             }
 
             // Periodic memory summary every 10 batches

@@ -62,7 +62,6 @@ pub(crate) enum Bottleneck {
     Flush,
 }
 
-#[allow(dead_code)]
 impl Bottleneck {
     /// Encode as u8 for atomic storage: 1=Fetch, 2=Build, 3=Flush.
     pub(crate) fn to_code(self) -> u8 {
@@ -74,6 +73,7 @@ impl Bottleneck {
     }
 
     /// Decode from u8. Returns None for unknown codes.
+    #[allow(dead_code)] // used by TUI reader in a later task
     pub(crate) fn from_code(code: u8) -> Option<Self> {
         match code {
             1 => Some(Self::Fetch),
@@ -306,6 +306,10 @@ impl BottleneckController {
         } else {
             None
         }
+    }
+
+    pub(crate) fn rows_per_block_ema(&self) -> f64 {
+        self.rows_per_block_ema
     }
 }
 
