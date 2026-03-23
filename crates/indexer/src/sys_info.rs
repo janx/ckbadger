@@ -629,16 +629,23 @@ fn find_diskstats_device_by_name(diskstats: &str, name: &str) -> Option<()> {
 pub fn detect_disk_device(data_path: &str) -> String {
     #[cfg(target_os = "linux")]
     {
+        // Mount points in /proc/self/mountinfo are absolute, so canonicalize
+        // the data path first.  Falls back to the original if the path doesn't
+        // exist yet (e.g. first run before DB creation).
+        let abs_path =
+            fs::canonicalize(data_path).unwrap_or_else(|_| std::path::PathBuf::from(data_path));
+        let data_path = abs_path.to_string_lossy();
+
         let mountinfo = fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
         let diskstats = fs::read_to_string("/proc/diskstats").unwrap_or_default();
 
         // Try pure resolution (major:minor or source device basename)
-        if let Some(device) = resolve_diskstats_device(&mountinfo, &diskstats, data_path) {
+        if let Some(device) = resolve_diskstats_device(&mountinfo, &diskstats, &data_path) {
             return device;
         }
 
         // Source device needs deeper resolution (e.g., /dev/mapper/luks-...)
-        if let Some(entry) = parse_mountinfo_entry(&mountinfo, data_path) {
+        if let Some(entry) = parse_mountinfo_entry(&mountinfo, &data_path) {
             // Fallback 1: symlink resolution (/dev/mapper/luks-... -> ../dm-0)
             if let Ok(target) = fs::read_link(&entry.source_device) {
                 if let Some(name) = target.file_name().and_then(|n| n.to_str()) {
@@ -1590,6 +1597,20 @@ MemAvailable:   45000000 kB
                 !device.is_empty(),
                 "detect_disk_device(/home) returned empty — \
                  expected a diskstats device like dm-0, nvme0n1, sda, etc."
+            );
+        }
+    }
+
+    #[test]
+    fn test_detect_disk_device_resolves_relative_path() {
+        // Relative paths must be canonicalized to absolute before matching
+        // against /proc/self/mountinfo entries (which are always absolute).
+        if cfg!(target_os = "linux") {
+            let device = detect_disk_device(".");
+            assert!(
+                !device.is_empty(),
+                "detect_disk_device(\".\") returned empty — \
+                 relative paths should be canonicalized before mount matching"
             );
         }
     }
