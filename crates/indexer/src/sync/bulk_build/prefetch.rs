@@ -56,6 +56,7 @@ impl PrefetchChannelHandle {
         handoff_target: u64,
         initial_span: u64,
         ahead_rx: tokio::sync::watch::Receiver<u64>,
+        threads_rx: tokio::sync::watch::Receiver<u32>,
     ) -> Self {
         let (result_tx, result_rx) = tokio::sync::mpsc::channel(max_depth);
         let (span_tx, span_rx) = tokio::sync::watch::channel(initial_span);
@@ -65,6 +66,7 @@ impl PrefetchChannelHandle {
                 result_tx,
                 span_rx,
                 ahead_rx,
+                threads_rx,
                 ckb_store,
                 start_block,
                 handoff_target,
@@ -83,6 +85,7 @@ impl PrefetchChannelHandle {
         result_tx: tokio::sync::mpsc::Sender<Result<PrefetchResult>>,
         span_rx: tokio::sync::watch::Receiver<u64>,
         ahead_rx: tokio::sync::watch::Receiver<u64>,
+        threads_rx: tokio::sync::watch::Receiver<u32>,
         ckb_store: Arc<CkbChainReader>,
         start_block: u64,
         handoff_target: u64,
@@ -124,7 +127,9 @@ impl PrefetchChannelHandle {
             );
 
             let started = Instant::now();
-            let fetch_result = Indexer::fetch_blocks_direct_binary(&ckb_store, position, end);
+            let fetch_threads = *threads_rx.borrow();
+            let fetch_result =
+                Indexer::fetch_blocks_direct_binary(&ckb_store, position, end, fetch_threads);
 
             let to_send = match fetch_result {
                 Ok(blocks) => {

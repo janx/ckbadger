@@ -128,8 +128,14 @@ impl BulkBuildEngine {
             )
         })?;
         let mem_profile = indexer.writer.store().memory_profile();
-        let mut controller =
-            BottleneckController::new(configured_batch_size, mem_profile.max_background_jobs);
+        let max_fetch_threads = std::thread::available_parallelism()
+            .map(|n| (n.get() / 2).max(2) as u32)
+            .unwrap_or(4);
+        let mut controller = BottleneckController::new(
+            configured_batch_size,
+            max_fetch_threads,
+            mem_profile.max_background_jobs,
+        );
         let mut batch_block_span = controller.batch_span();
         let mut batch_count: u64 = 0;
         // Compute initial handoff_target for the prefetch worker.
@@ -143,6 +149,7 @@ impl BulkBuildEngine {
             indexer.progress.current() + 1
         };
         let (ahead_tx, ahead_rx) = tokio::sync::watch::channel(controller.prefetch_ahead());
+        let (threads_tx, threads_rx) = tokio::sync::watch::channel(controller.fetch_threads());
         let mut prefetch = prefetch::PrefetchChannelHandle::new(
             MAX_PREFETCH as usize,
             ckb_store.clone(),
@@ -150,6 +157,7 @@ impl BulkBuildEngine {
             initial_handoff,
             configured_batch_size,
             ahead_rx,
+            threads_rx,
         );
         // Bounded flush channel: the build loop sends PendingFlush into
         // a channel. A dedicated worker drains it serially, committing
@@ -412,6 +420,7 @@ impl BulkBuildEngine {
                 batch_block_span = output.batch_span;
                 prefetch.update_span(batch_block_span);
                 let _ = ahead_tx.send(output.prefetch_ahead);
+                let _ = threads_tx.send(output.fetch_threads);
 
                 if let Some(new_bg_jobs) = controller.bg_jobs_if_changed() {
                     if let Err(e) = indexer.writer.store().set_max_background_jobs(new_bg_jobs) {
@@ -426,6 +435,7 @@ impl BulkBuildEngine {
                     bottleneck = %output.bottleneck,
                     batch_span = output.batch_span,
                     prefetch_ahead = output.prefetch_ahead,
+                    fetch_threads = output.fetch_threads,
                     bg_jobs = output.bg_jobs,
                     recv_ema = format!("{:.1}", output.recv_ema),
                     build_ema = format!("{:.1}", output.build_ema),

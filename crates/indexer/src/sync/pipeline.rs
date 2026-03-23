@@ -2677,8 +2677,11 @@ impl Indexer {
         start: u64,
         end: u64,
     ) -> Result<Vec<BlockResponseWithCycles>> {
+        let default_threads = std::thread::available_parallelism()
+            .map(|n| (n.get() / 2).max(2))
+            .unwrap_or(4);
         let block_numbers: Vec<u64> = (start..=end).collect();
-        Self::scoped_parallel_fetch(&block_numbers, |&num| {
+        Self::scoped_parallel_fetch(&block_numbers, default_threads, |&num| {
             let hash = store
                 .get_block_hash(num)
                 .ok_or_else(|| anyhow::anyhow!("Block {} hash not found in CKB RocksDB", num))?;
@@ -2696,10 +2699,11 @@ impl Indexer {
         store: &CkbChainReader,
         start: u64,
         end: u64,
+        max_threads: u32,
     ) -> Result<Vec<crate::sync::bulk_build::binary_facts::RawCkbBlock>> {
         use ckb_types::prelude::*;
         let block_numbers: Vec<u64> = (start..=end).collect();
-        Self::scoped_parallel_fetch(&block_numbers, |&num| {
+        Self::scoped_parallel_fetch(&block_numbers, max_threads as usize, |&num| {
             let hash = store
                 .get_block_hash(num)
                 .ok_or_else(|| anyhow::anyhow!("Block {} hash not found in CKB RocksDB", num))?;
@@ -2722,10 +2726,11 @@ impl Indexer {
     }
 
     /// Run `f` over `items` on temporary scoped threads, collecting results
-    /// in order.  Thread count scales to half of available cores (floor 2).
+    /// in order.  `max_threads` controls parallelism — set by the bottleneck
+    /// controller for bulk build, or a reasonable default for pipeline fetch.
     /// Threads are destroyed after the call — no persistent pool, no rayon
     /// contention with CPU-bound build work.
-    fn scoped_parallel_fetch<T, F>(items: &[u64], f: F) -> Result<Vec<T>>
+    fn scoped_parallel_fetch<T, F>(items: &[u64], max_threads: usize, f: F) -> Result<Vec<T>>
     where
         T: Send,
         F: Fn(&u64) -> Result<T> + Sync,
@@ -2733,10 +2738,7 @@ impl Indexer {
         if items.is_empty() {
             return Ok(Vec::new());
         }
-        let thread_count = std::thread::available_parallelism()
-            .map(|n| (n.get() / 2).max(2))
-            .unwrap_or(4)
-            .min(items.len());
+        let thread_count = max_threads.max(1).min(items.len());
         let chunk_size = items.len().div_ceil(thread_count);
 
         std::thread::scope(|s| {

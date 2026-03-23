@@ -25,6 +25,9 @@ const MIN_PREFETCH: u64 = 1;
 pub(crate) const MAX_PREFETCH: u64 = 8;
 const INITIAL_PREFETCH: u64 = 4;
 
+// Fetch thread bounds
+const MIN_FETCH_THREADS: u32 = 2;
+
 // Background jobs bounds
 const MIN_BG_JOBS: i32 = 2;
 
@@ -76,6 +79,7 @@ pub(crate) struct BatchSignals {
 pub(crate) struct ControllerOutput {
     pub batch_span: u64,
     pub prefetch_ahead: u64,
+    pub fetch_threads: u32,
     pub bg_jobs: i32,
     pub bottleneck: Bottleneck,
     pub recv_ema: f64,
@@ -97,9 +101,11 @@ pub(crate) struct BottleneckController {
     // Current outputs
     batch_span: u64,
     prefetch_ahead: u64,
+    fetch_threads: u32,
     bg_jobs: i32,
 
     // Bounds
+    max_fetch_threads: u32,
     min_bg_jobs: i32,
     max_bg_jobs: i32,
 
@@ -109,9 +115,10 @@ pub(crate) struct BottleneckController {
 }
 
 impl BottleneckController {
-    pub(crate) fn new(initial_span: u64, max_bg_jobs: i32) -> Self {
+    pub(crate) fn new(initial_span: u64, max_fetch_threads: u32, max_bg_jobs: i32) -> Self {
         let max_bg_jobs = max_bg_jobs.max(MIN_BG_JOBS);
         let min_bg_jobs = (max_bg_jobs / 4).max(MIN_BG_JOBS);
+        let max_fetch_threads = max_fetch_threads.max(MIN_FETCH_THREADS);
         Self {
             recv_ema: 0.0,
             build_ema: 0.0,
@@ -122,8 +129,10 @@ impl BottleneckController {
 
             batch_span: initial_span.clamp(MIN_SPAN, MAX_SPAN),
             prefetch_ahead: INITIAL_PREFETCH,
+            fetch_threads: max_fetch_threads,
             bg_jobs: max_bg_jobs,
 
+            max_fetch_threads,
             min_bg_jobs,
             max_bg_jobs,
 
@@ -164,15 +173,18 @@ impl BottleneckController {
         match bottleneck {
             Bottleneck::Fetch => {
                 self.prefetch_ahead = (self.prefetch_ahead + 1).min(MAX_PREFETCH);
+                self.fetch_threads = (self.fetch_threads + 1).min(self.max_fetch_threads);
                 self.batch_span = grow_span(self.batch_span);
                 self.bg_jobs = (self.bg_jobs - 1).max(self.min_bg_jobs);
             }
             Bottleneck::Build => {
-                // Build-bound is the ideal state: CPU is doing actual work.
+                // Build-bound: shrink fetch threads to reduce overlap contention.
                 // Grow span for better RocksDB write amortization.
+                self.fetch_threads = (self.fetch_threads - 1).max(MIN_FETCH_THREADS);
                 self.batch_span = grow_span(self.batch_span);
             }
             Bottleneck::Flush => {
+                self.fetch_threads = (self.fetch_threads - 1).max(MIN_FETCH_THREADS);
                 self.batch_span = shrink_span(self.batch_span);
                 self.bg_jobs = (self.bg_jobs + 1).min(self.max_bg_jobs);
             }
@@ -193,6 +205,7 @@ impl BottleneckController {
         Some(ControllerOutput {
             batch_span: self.batch_span,
             prefetch_ahead: self.prefetch_ahead,
+            fetch_threads: self.fetch_threads,
             bg_jobs: self.bg_jobs,
             bottleneck,
             recv_ema: self.recv_ema,
@@ -227,6 +240,10 @@ impl BottleneckController {
 
     pub(crate) fn prefetch_ahead(&self) -> u64 {
         self.prefetch_ahead
+    }
+
+    pub(crate) fn fetch_threads(&self) -> u32 {
+        self.fetch_threads
     }
 
     /// Returns (current_bg_jobs, changed) where `changed` is true only if
@@ -272,14 +289,14 @@ mod tests {
 
     #[test]
     fn first_batch_returns_none() {
-        let mut ctrl = BottleneckController::new(50_000, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8);
         let output = ctrl.observe(&healthy_signals());
         assert!(output.is_none());
     }
 
     #[test]
     fn fetch_starved_grows_prefetch_and_span() {
-        let mut ctrl = BottleneckController::new(50_000, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8);
         let initial_span = ctrl.batch_span;
         let initial_prefetch = ctrl.prefetch_ahead;
 
@@ -305,7 +322,7 @@ mod tests {
 
     #[test]
     fn flush_pressure_shrinks_span_grows_bg_jobs() {
-        let mut ctrl = BottleneckController::new(50_000, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8);
         // Start bg_jobs below max so we can see it grow.
         ctrl.bg_jobs = 4;
         ctrl.prev_bg_jobs = 4;
@@ -331,7 +348,7 @@ mod tests {
 
     #[test]
     fn build_bound_grows_span() {
-        let mut ctrl = BottleneckController::new(50_000, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8);
         let initial_span = ctrl.batch_span;
 
         ctrl.observe(&healthy_signals()); // warmup
@@ -353,7 +370,7 @@ mod tests {
 
     #[test]
     fn row_budget_caps_span() {
-        let mut ctrl = BottleneckController::new(50_000, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -380,7 +397,7 @@ mod tests {
 
     #[test]
     fn span_bounds_enforced() {
-        let mut ctrl = BottleneckController::new(50_000, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -401,7 +418,7 @@ mod tests {
 
     #[test]
     fn bg_jobs_bounds_enforced() {
-        let mut ctrl = BottleneckController::new(50_000, 4);
+        let mut ctrl = BottleneckController::new(50_000, 12, 4);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -433,8 +450,54 @@ mod tests {
     }
 
     #[test]
+    fn fetch_threads_grow_when_fetch_bound_shrink_when_build_bound() {
+        let mut ctrl = BottleneckController::new(50_000, 12, 8);
+        let initial = ctrl.fetch_threads;
+
+        ctrl.observe(&healthy_signals()); // warmup
+
+        // Build-bound: fetch_threads should shrink.
+        for _ in 0..10 {
+            ctrl.observe(&BatchSignals {
+                prefetch_recv_ms: 50.0,
+                build_ms: 5000.0,
+                flush_wait_ms: 0.0,
+                l0_files: 5,
+                actual_blocks: 10_000,
+                history_rows: 100_000,
+            });
+        }
+        assert!(
+            ctrl.fetch_threads < initial,
+            "build-bound should shrink fetch_threads: {} vs initial {}",
+            ctrl.fetch_threads,
+            initial
+        );
+
+        let after_build = ctrl.fetch_threads;
+
+        // Fetch-bound: fetch_threads should grow back.
+        for _ in 0..10 {
+            ctrl.observe(&BatchSignals {
+                prefetch_recv_ms: 5000.0,
+                build_ms: 1000.0,
+                flush_wait_ms: 0.0,
+                l0_files: 5,
+                actual_blocks: 10_000,
+                history_rows: 100_000,
+            });
+        }
+        assert!(
+            ctrl.fetch_threads > after_build,
+            "fetch-bound should grow fetch_threads: {} vs after_build {}",
+            ctrl.fetch_threads,
+            after_build
+        );
+    }
+
+    #[test]
     fn l0_leading_indicator_triggers_flush() {
-        let mut ctrl = BottleneckController::new(50_000, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -455,7 +518,7 @@ mod tests {
 
     #[test]
     fn bg_jobs_if_changed_tracks_transitions() {
-        let mut ctrl = BottleneckController::new(50_000, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8);
         assert!(ctrl.bg_jobs_if_changed().is_none()); // no change yet
 
         ctrl.bg_jobs = 6;
@@ -465,7 +528,7 @@ mod tests {
 
     #[test]
     fn prefetch_ahead_bounds() {
-        let mut ctrl = BottleneckController::new(50_000, 8);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8);
         assert_eq!(ctrl.prefetch_ahead, INITIAL_PREFETCH);
 
         ctrl.observe(&healthy_signals()); // warmup
