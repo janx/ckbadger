@@ -193,7 +193,6 @@ port = 8100                       # Static file HTTP server
 
 [indexer]
 batch_size = 10000
-parallel_fetch_size = 64
 pipeline_buffer = 8
 bulk_sync_threshold = 1000
 

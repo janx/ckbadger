@@ -7,6 +7,11 @@ code_hash = "0x3714af858b8b82b2bb8f13d51f3cffede2dd8d352a6938334bb79e6b845e3658"
 data_hash = "0x8ae445bca5ebe150fb01b17f0e3e639c38fe2db9dc5bc149644e447068bace84"
 hash_type = "type"
 
+[[mainnet]]
+code_hash = "0xf1717ee388b181fcb14352055c00b7ea7cd7c27350ffd1a2dd231e059dde2fed"
+data_hash = "0x364cb5680cf30c2e93d9fbac3fb4e1cc7a4efc5d70208673d05b101568cb1946"
+hash_type = "type"
+
 [[testnet]]
 code_hash = "0x06ae0706bb2d7997d66224741d3ec7c173dbb2854a6d2cf97088796b677269c6"
 data_hash = "0x8ae445bca5ebe150fb01b17f0e3e639c38fe2db9dc5bc149644e447068bace84"

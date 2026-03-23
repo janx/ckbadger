@@ -24,8 +24,6 @@ pub struct Config {
     pub poll_interval_ms: u64,
     #[serde(default)]
     pub start_block: Option<u64>,
-    #[serde(default = "default_parallel_fetch_size")]
-    pub parallel_fetch_size: usize,
     #[serde(default = "default_pipeline_buffer")]
     pub pipeline_buffer: usize,
     #[serde(default = "default_bulk_sync_threshold")]
@@ -61,10 +59,6 @@ fn default_batch_size() -> usize {
 
 fn default_poll_interval_ms() -> u64 {
     1000
-}
-
-fn default_parallel_fetch_size() -> usize {
-    64
 }
 
 fn default_pipeline_buffer() -> usize {
@@ -106,9 +100,6 @@ impl Config {
         if self.pipeline_buffer == 0 {
             bail!("config: pipeline_buffer must be > 0");
         }
-        if self.parallel_fetch_size == 0 {
-            bail!("config: parallel_fetch_size must be > 0");
-        }
         if self.store_runtime_config.memory_budget_gb == Some(0) {
             bail!("config: store.memory_budget_gb must be > 0 when set");
         }
@@ -128,11 +119,6 @@ mod tests {
     #[test]
     fn test_default_pipeline_buffer() {
         assert_eq!(default_pipeline_buffer(), 16);
-    }
-
-    #[test]
-    fn test_default_parallel_fetch_size() {
-        assert_eq!(default_parallel_fetch_size(), 64);
     }
 
     #[test]
@@ -167,7 +153,6 @@ mod tests {
             batch_size: 10000,
             poll_interval_ms: 1000,
             start_block: None,
-            parallel_fetch_size: 64,
             pipeline_buffer: 16,
             bulk_sync_threshold: 72,
             fast_sync_mode: true,
@@ -207,14 +192,6 @@ mod tests {
         config.pipeline_buffer = 0;
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("pipeline_buffer must be > 0"));
-    }
-
-    #[test]
-    fn test_validate_rejects_zero_parallel_fetch_size() {
-        let mut config = make_valid_config();
-        config.parallel_fetch_size = 0;
-        let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("parallel_fetch_size must be > 0"));
     }
 
     #[test]

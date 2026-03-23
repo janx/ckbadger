@@ -55,7 +55,6 @@ pub struct FrontendConfig {
 #[serde(default)]
 pub struct IndexerConfig {
     pub batch_size: usize,
-    pub parallel_fetch_size: usize,
     pub pipeline_buffer: usize,
     pub bulk_sync_threshold: u64,
     pub poll_interval_ms: u64,
@@ -121,7 +120,6 @@ impl Default for IndexerConfig {
     fn default() -> Self {
         Self {
             batch_size: 10000,
-            parallel_fetch_size: 64,
             pipeline_buffer: 8,
             bulk_sync_threshold: 1000,
             poll_interval_ms: 1000,
@@ -290,7 +288,6 @@ port = 8100
 
 [indexer]
 batch_size = 10000
-parallel_fetch_size = 64
 pipeline_buffer = 8
 bulk_sync_threshold = 1000
 poll_interval_ms = 1000
@@ -482,7 +479,6 @@ mod tests {
         assert_eq!(cfg.frontend.port, 8100);
 
         assert_eq!(cfg.indexer.batch_size, 10000);
-        assert_eq!(cfg.indexer.parallel_fetch_size, 64);
         assert_eq!(cfg.indexer.pipeline_buffer, 8);
         assert_eq!(cfg.indexer.bulk_sync_threshold, 1000);
         assert_eq!(cfg.indexer.poll_interval_ms, 1000);
@@ -541,7 +537,6 @@ port = 3000
 
 [indexer]
 batch_size = 5000
-parallel_fetch_size = 32
 pipeline_buffer = 4
 bulk_sync_threshold = 500
 poll_interval_ms = 2000
@@ -566,7 +561,6 @@ level = "debug"
         assert_eq!(cfg.frontend.host, "0.0.0.0");
         assert_eq!(cfg.frontend.port, 3000);
         assert_eq!(cfg.indexer.batch_size, 5000);
-        assert_eq!(cfg.indexer.parallel_fetch_size, 32);
         assert_eq!(cfg.indexer.pipeline_buffer, 4);
         assert_eq!(cfg.indexer.bulk_sync_threshold, 500);
         assert_eq!(cfg.indexer.poll_interval_ms, 2000);
