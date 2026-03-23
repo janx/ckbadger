@@ -337,6 +337,16 @@ pub(crate) struct BulkBuildPerfStats {
     last_disk_wr_iops_bits: AtomicU64,
     last_disk_state_code: AtomicU8,
     last_disk_telemetry_valid: AtomicBool,
+    // Bottleneck controller state
+    controller_bottleneck_code: AtomicU8,
+    controller_recv_ema_bits: AtomicU64,
+    controller_build_ema_bits: AtomicU64,
+    controller_wait_ema_bits: AtomicU64,
+    controller_l0_ema_bits: AtomicU64,
+    controller_prefetch_ahead: AtomicU64,
+    controller_fetch_threads: AtomicU64,
+    controller_bg_jobs: AtomicU64,
+    controller_rows_per_block_ema_bits: AtomicU64,
 }
 
 impl BulkBuildPerfStats {
@@ -468,6 +478,39 @@ impl BulkBuildPerfStats {
             .store(state.is_some(), Ordering::Relaxed);
     }
 
+    #[allow(dead_code, clippy::too_many_arguments)]
+    pub(crate) fn record_controller(
+        &self,
+        bottleneck_code: u8,
+        recv_ema: f64,
+        build_ema: f64,
+        wait_ema: f64,
+        l0_ema: f64,
+        prefetch_ahead: u64,
+        fetch_threads: u32,
+        bg_jobs: i32,
+        rows_per_block_ema: f64,
+    ) {
+        self.controller_bottleneck_code
+            .store(bottleneck_code, Ordering::Relaxed);
+        self.controller_recv_ema_bits
+            .store(recv_ema.to_bits(), Ordering::Relaxed);
+        self.controller_build_ema_bits
+            .store(build_ema.to_bits(), Ordering::Relaxed);
+        self.controller_wait_ema_bits
+            .store(wait_ema.to_bits(), Ordering::Relaxed);
+        self.controller_l0_ema_bits
+            .store(l0_ema.to_bits(), Ordering::Relaxed);
+        self.controller_prefetch_ahead
+            .store(prefetch_ahead, Ordering::Relaxed);
+        self.controller_fetch_threads
+            .store(fetch_threads as u64, Ordering::Relaxed);
+        self.controller_bg_jobs
+            .store(bg_jobs as u64, Ordering::Relaxed);
+        self.controller_rows_per_block_ema_bits
+            .store(rows_per_block_ema.to_bits(), Ordering::Relaxed);
+    }
+
     pub(crate) fn snapshot(&self) -> Option<BulkBuildProgressData> {
         let batch_count = self.batch_count.load(Ordering::Relaxed);
         if batch_count == 0 {
@@ -566,15 +609,35 @@ impl BulkBuildPerfStats {
             prefetch_channel_capacity: Some(self.prefetch_channel_capacity.load(Ordering::Relaxed)),
             flush_channel_pending: Some(self.flush_channel_pending.load(Ordering::Relaxed)),
             flush_channel_capacity: Some(self.flush_channel_capacity.load(Ordering::Relaxed)),
-            controller_bottleneck: None,
-            controller_recv_ema: None,
-            controller_build_ema: None,
-            controller_wait_ema: None,
-            controller_l0_ema: None,
-            controller_prefetch_ahead: None,
-            controller_fetch_threads: None,
-            controller_bg_jobs: None,
-            controller_rows_per_block_ema: None,
+            controller_bottleneck: {
+                let code = self.controller_bottleneck_code.load(Ordering::Relaxed);
+                if code > 0 {
+                    Some(code)
+                } else {
+                    None
+                }
+            },
+            controller_recv_ema: Some(f64::from_bits(
+                self.controller_recv_ema_bits.load(Ordering::Relaxed),
+            )),
+            controller_build_ema: Some(f64::from_bits(
+                self.controller_build_ema_bits.load(Ordering::Relaxed),
+            )),
+            controller_wait_ema: Some(f64::from_bits(
+                self.controller_wait_ema_bits.load(Ordering::Relaxed),
+            )),
+            controller_l0_ema: Some(f64::from_bits(
+                self.controller_l0_ema_bits.load(Ordering::Relaxed),
+            )),
+            controller_prefetch_ahead: Some(self.controller_prefetch_ahead.load(Ordering::Relaxed)),
+            controller_fetch_threads: Some(
+                self.controller_fetch_threads.load(Ordering::Relaxed) as u32
+            ),
+            controller_bg_jobs: Some(self.controller_bg_jobs.load(Ordering::Relaxed) as i32),
+            controller_rows_per_block_ema: Some(f64::from_bits(
+                self.controller_rows_per_block_ema_bits
+                    .load(Ordering::Relaxed),
+            )),
         })
     }
 

@@ -62,6 +62,28 @@ pub(crate) enum Bottleneck {
     Flush,
 }
 
+#[allow(dead_code)]
+impl Bottleneck {
+    /// Encode as u8 for atomic storage: 1=Fetch, 2=Build, 3=Flush.
+    pub(crate) fn to_code(self) -> u8 {
+        match self {
+            Self::Fetch => 1,
+            Self::Build => 2,
+            Self::Flush => 3,
+        }
+    }
+
+    /// Decode from u8. Returns None for unknown codes.
+    pub(crate) fn from_code(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(Self::Fetch),
+            2 => Some(Self::Build),
+            3 => Some(Self::Flush),
+            _ => None,
+        }
+    }
+}
+
 impl std::fmt::Display for Bottleneck {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -614,5 +636,14 @@ mod tests {
         assert_eq!(channel_depth_for_ram(64 * GB), 8);
         assert_eq!(channel_depth_for_ram(128 * GB), 8); // capped
         assert_eq!(channel_depth_for_ram(256 * GB), 8); // capped
+    }
+
+    #[test]
+    fn bottleneck_code_round_trip() {
+        for b in [Bottleneck::Fetch, Bottleneck::Build, Bottleneck::Flush] {
+            assert_eq!(Bottleneck::from_code(b.to_code()), Some(b));
+        }
+        assert_eq!(Bottleneck::from_code(0), None);
+        assert_eq!(Bottleneck::from_code(255), None);
     }
 }
