@@ -339,6 +339,33 @@ pub struct BulkBuildProgressData {
     /// Maximum capacity of the flush channel.
     #[serde(default)]
     pub flush_channel_capacity: Option<u64>,
+    /// Bottleneck classification: 0=unknown, 1=fetch, 2=build, 3=flush.
+    #[serde(default)]
+    pub controller_bottleneck: Option<u8>,
+    /// Controller EMA: prefetch recv wait (ms).
+    #[serde(default)]
+    pub controller_recv_ema: Option<f64>,
+    /// Controller EMA: build CPU (ms).
+    #[serde(default)]
+    pub controller_build_ema: Option<f64>,
+    /// Controller EMA: flush wait (ms).
+    #[serde(default)]
+    pub controller_wait_ema: Option<f64>,
+    /// Controller EMA: RocksDB L0 file count.
+    #[serde(default)]
+    pub controller_l0_ema: Option<f64>,
+    /// Controller output: prefetch ahead depth (batches).
+    #[serde(default)]
+    pub controller_prefetch_ahead: Option<u64>,
+    /// Controller output: fetch thread count.
+    #[serde(default)]
+    pub controller_fetch_threads: Option<u32>,
+    /// Controller output: RocksDB background jobs.
+    #[serde(default)]
+    pub controller_bg_jobs: Option<i32>,
+    /// Controller EMA: rows per block (for row budget cap).
+    #[serde(default)]
+    pub controller_rows_per_block_ema: Option<f64>,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {
@@ -900,6 +927,15 @@ mod tests {
             prefetch_channel_capacity: Some(4),
             flush_channel_pending: Some(2),
             flush_channel_capacity: Some(4),
+            controller_bottleneck: Some(2),
+            controller_recv_ema: Some(15.3),
+            controller_build_ema: Some(120.5),
+            controller_wait_ema: Some(42.0),
+            controller_l0_ema: Some(3.7),
+            controller_prefetch_ahead: Some(4),
+            controller_fetch_threads: Some(8),
+            controller_bg_jobs: Some(6),
+            controller_rows_per_block_ema: Some(12.5),
         };
 
         let json = serde_json::to_string(&bb).unwrap();
@@ -915,6 +951,15 @@ mod tests {
         assert_eq!(parsed.prefetch_channel_capacity, Some(4));
         assert_eq!(parsed.flush_channel_pending, Some(2));
         assert_eq!(parsed.flush_channel_capacity, Some(4));
+        assert_eq!(parsed.controller_bottleneck, Some(2));
+        assert_eq!(parsed.controller_recv_ema, Some(15.3));
+        assert_eq!(parsed.controller_build_ema, Some(120.5));
+        assert_eq!(parsed.controller_wait_ema, Some(42.0));
+        assert_eq!(parsed.controller_l0_ema, Some(3.7));
+        assert_eq!(parsed.controller_prefetch_ahead, Some(4));
+        assert_eq!(parsed.controller_fetch_threads, Some(8));
+        assert_eq!(parsed.controller_bg_jobs, Some(6));
+        assert_eq!(parsed.controller_rows_per_block_ema, Some(12.5));
     }
 
     #[test]

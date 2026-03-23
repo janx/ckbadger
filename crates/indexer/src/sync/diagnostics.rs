@@ -566,6 +566,15 @@ impl BulkBuildPerfStats {
             prefetch_channel_capacity: Some(self.prefetch_channel_capacity.load(Ordering::Relaxed)),
             flush_channel_pending: Some(self.flush_channel_pending.load(Ordering::Relaxed)),
             flush_channel_capacity: Some(self.flush_channel_capacity.load(Ordering::Relaxed)),
+            controller_bottleneck: None,
+            controller_recv_ema: None,
+            controller_build_ema: None,
+            controller_wait_ema: None,
+            controller_l0_ema: None,
+            controller_prefetch_ahead: None,
+            controller_fetch_threads: None,
+            controller_bg_jobs: None,
+            controller_rows_per_block_ema: None,
         })
     }
 
