@@ -13,6 +13,41 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
 
+/// Infer MIME type from content bytes.
+///
+/// Detection rules (evaluated in order):
+/// 1. Empty content -> `"application/octet-stream"`
+/// 2. Not valid UTF-8 -> `"application/octet-stream"`
+/// 3. Trimmed text starts with `<svg` or `<SVG` -> `"image/svg+xml"`
+/// 4. Trimmed text starts with `[`/ends with `]`, or starts with `{`/ends with `}`,
+///    AND is valid JSON -> `"application/json"`
+/// 5. Everything else -> `"text/plain"`
+pub fn sniff_media_type(content: &[u8]) -> &'static str {
+    if content.is_empty() {
+        return "application/octet-stream";
+    }
+
+    let text = match std::str::from_utf8(content) {
+        Ok(s) => s,
+        Err(_) => return "application/octet-stream",
+    };
+
+    let trimmed = text.trim();
+
+    if trimmed.starts_with("<svg") || trimmed.starts_with("<SVG") {
+        return "image/svg+xml";
+    }
+
+    let looks_like_json = (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        || (trimmed.starts_with('{') && trimmed.ends_with('}'));
+
+    if looks_like_json && serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+        return "application/json";
+    }
+
+    "text/plain"
+}
+
 /// Filesystem-backed content-addressed blob store for decoded media.
 pub struct MediaBlobStore {
     media_dir: PathBuf,
@@ -159,5 +194,40 @@ mod tests {
 
         let path = store.blob_path(collection_id, hash);
         assert_eq!(path, PathBuf::from("/data/media/abcdef01/cafebabe"));
+    }
+
+    #[test]
+    fn test_sniff_svg() {
+        let content = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><circle/></svg>";
+        assert_eq!(sniff_media_type(content), "image/svg+xml");
+    }
+
+    #[test]
+    fn test_sniff_svg_with_leading_whitespace() {
+        let content = b"  \n  <svg><rect/></svg>";
+        assert_eq!(sniff_media_type(content), "image/svg+xml");
+    }
+
+    #[test]
+    fn test_sniff_json_array() {
+        let content = b"[{\"trait\":\"color\",\"value\":\"red\"}]";
+        assert_eq!(sniff_media_type(content), "application/json");
+    }
+
+    #[test]
+    fn test_sniff_json_object() {
+        let content = b"{\"name\":\"spore\",\"traits\":[]}";
+        assert_eq!(sniff_media_type(content), "application/json");
+    }
+
+    #[test]
+    fn test_sniff_plain_text() {
+        let content = b"hello world, this is just text";
+        assert_eq!(sniff_media_type(content), "text/plain");
+    }
+
+    #[test]
+    fn test_sniff_empty() {
+        assert_eq!(sniff_media_type(b""), "application/octet-stream");
     }
 }
