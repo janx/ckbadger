@@ -281,6 +281,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 rate_limit_burst: config.api.rate_limit_burst,
                 ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
                 store_runtime_config,
+                media_dir: work.media_dir.clone(),
             };
             run_api(api_config).await
         }

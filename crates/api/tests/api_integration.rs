@@ -92,6 +92,7 @@ fn test_config_with_ckb_db_path(
         start_background_tasks: false,
         ckb_db_path,
         ckb_db_cleanup,
+        media_dir: std::path::PathBuf::from("/tmp/ckbadger-test-media"),
     }
 }
 
@@ -113,6 +114,7 @@ fn create_router_without_warmup(config: AppConfig) -> axum::Router {
         mem_cache: InMemoryCache::new(),
         asset_cache_warmup_error: Arc::new(std::sync::RwLock::new(None)),
         background_tasks: Arc::new(std::sync::RwLock::new(Default::default())),
+        media_dir: config.media_dir,
     });
 
     axum::Router::new()
@@ -9551,6 +9553,7 @@ async fn test_network_stats_includes_api_background_tasks() {
         mem_cache: InMemoryCache::new(),
         asset_cache_warmup_error: Arc::new(std::sync::RwLock::new(None)),
         background_tasks: Arc::new(std::sync::RwLock::new(Default::default())),
+        media_dir: config.media_dir,
     });
 
     // Register a watcher-shaped background task.

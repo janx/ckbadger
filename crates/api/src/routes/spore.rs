@@ -1,11 +1,15 @@
 use axum::{
     extract::{Path, Query, State},
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
     routing::get,
     Router,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
+
+use ckbadger_indexer::media_store::MediaBlobStore;
 
 use super::assets::{
     count_nft_collection_activities_cached, list_canonical_nft_collection_activities_page,
@@ -43,6 +47,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/spore/objects", get(list_spores))
         .route("/spore/objects/{spore_id}", get(get_spore))
         .route("/spore/objects/{spore_id}/decode", get(decode_spore))
+        .route("/spore/objects/{spore_id}/media/{hash}", get(serve_media))
         .route(
             "/spore/objects/{spore_id}/charts/capacity-history",
             get(get_spore_capacity_chart),
@@ -264,6 +269,19 @@ pub struct DobTraitResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DecodedMediaResponse {
+    pub media_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    pub size: u64,
+    pub hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<u32>,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SporeDobDecodeResponse {
     pub status: String,
     pub spore_id: String,
@@ -272,7 +290,7 @@ pub struct SporeDobDecodeResponse {
     pub dna_hex: Option<String>,
     pub traits: Vec<DobTraitResponse>,
     #[serde(default)]
-    pub media: Vec<ckbadger_store::DecodedMedia>,
+    pub media: Vec<DecodedMediaResponse>,
     pub issues: Vec<String>,
 }
 
@@ -1120,6 +1138,8 @@ async fn decode_spore(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
+    let spore_id_hex = format!("0x{}", hex::encode(&id));
+
     match decoded {
         Some(entry) => {
             let traits = entry
@@ -1130,19 +1150,31 @@ async fn decode_spore(
                     value: t.value,
                 })
                 .collect();
+            let media: Vec<DecodedMediaResponse> = entry
+                .media
+                .iter()
+                .map(|m| DecodedMediaResponse {
+                    media_type: m.media_type.clone(),
+                    role: m.role.clone(),
+                    size: m.size,
+                    hash: m.hash.clone(),
+                    step: m.step,
+                    url: format!("/api/v1/spore/objects/{}/media/{}", spore_id_hex, m.hash),
+                })
+                .collect();
             ok(SporeDobDecodeResponse {
                 status: "decoded".to_string(),
-                spore_id: format!("0x{}", hex::encode(&id)),
+                spore_id: spore_id_hex,
                 content_type,
                 dna_hex: None,
                 traits,
-                media: entry.media,
+                media,
                 issues: Vec::new(),
             })
         }
         None => ok(SporeDobDecodeResponse {
             status: "pending".to_string(),
-            spore_id: format!("0x{}", hex::encode(&id)),
+            spore_id: spore_id_hex,
             content_type,
             dna_hex: None,
             traits: Vec::new(),
@@ -1153,6 +1185,75 @@ async fn decode_spore(
             ],
         }),
     }
+}
+
+/// Serve a content-addressed media blob for a decoded DOB spore.
+///
+/// `GET /spore/objects/{spore_id}/media/{hash}`
+///
+/// Returns the raw blob bytes with the appropriate Content-Type header.
+/// Content-addressed blobs are immutable, so the response sets a long-lived
+/// `Cache-Control` header.
+async fn serve_media(
+    State(state): State<Arc<AppState>>,
+    Path((spore_id, hash)): Path<(String, String)>,
+) -> Result<Response, (StatusCode, axum::Json<ApiError>)> {
+    // 1. Parse spore_id
+    let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
+        .map_err(|_| ApiError::bad_request("Invalid spore ID hex"))?;
+
+    // 2. Load decoded entry to validate hash membership
+    let store = state.store.clone();
+    let id_for_decode = id.clone();
+    let decoded_entry = tokio::task::spawn_blocking(move || store.get_dob_decoded(&id_for_decode))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("No decoded data for this spore"))?;
+
+    // 3. Validate that the requested hash exists in the media list
+    let matched_media = decoded_entry
+        .media
+        .iter()
+        .find(|m| m.hash == hash)
+        .ok_or_else(|| ApiError::not_found("Media hash not found for this spore"))?;
+
+    let content_type = matched_media.media_type.clone();
+
+    // 4. Load spore entry to get collection_id for filesystem path
+    let store = state.store.clone();
+    let id_for_spore = id.clone();
+    let spore_entry = tokio::task::spawn_blocking(move || store.get_spore(&id_for_spore))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Spore not found"))?;
+
+    let collection_id = spore_entry.collection_id.as_deref().unwrap_or(&id);
+
+    // 5. Read blob from filesystem
+    let blob_store = MediaBlobStore::new(state.media_dir.clone());
+    let blob_hash = hash.clone();
+    let collection_id_owned = collection_id.to_vec();
+    let blob =
+        tokio::task::spawn_blocking(move || blob_store.read(&collection_id_owned, &blob_hash))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(format!("Failed to read media blob: {e}")))?;
+
+    // 6. Return binary response with appropriate headers
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, content_type),
+            (
+                header::CACHE_CONTROL,
+                "public, max-age=31536000, immutable".to_string(),
+            ),
+        ],
+        blob,
+    )
+        .into_response())
 }
 
 async fn get_cluster_capacity_chart(
