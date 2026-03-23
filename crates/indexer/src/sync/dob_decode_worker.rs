@@ -199,10 +199,13 @@ impl DobDecodeWorker {
 
                 // Update media profiles (sequential — may touch same cluster aggregate)
                 for (spore_id, entry) in &decoded_results {
-                    if !entry.media_sources.is_empty() {
-                        if let Err(e) =
-                            self.update_spore_media_profile(spore_id, &entry.media_sources)
-                        {
+                    let has_renderable_image = entry.svg_markup.is_some();
+                    if !entry.media_sources.is_empty() || has_renderable_image {
+                        if let Err(e) = self.update_spore_media_profile(
+                            spore_id,
+                            &entry.media_sources,
+                            has_renderable_image,
+                        ) {
                             warn!(
                                 spore_id = hex::encode(spore_id),
                                 error = %e,
@@ -268,6 +271,7 @@ impl DobDecodeWorker {
         &self,
         spore_id: &[u8],
         new_sources: &[SporeMediaSource],
+        has_renderable_image: bool,
     ) -> Result<()> {
         let mut entry = self.store.get_spore(spore_id)?.with_context(|| {
             format!(
@@ -283,6 +287,9 @@ impl DobDecodeWorker {
         {
             let old_tier = media_profile.tier;
             merge_media_sources(media_profile, new_sources);
+            if has_renderable_image {
+                media_profile.has_renderable_image = true;
+            }
             (old_tier, media_profile.tier)
         } else {
             // Not a spore entry — this shouldn't happen since we only decode DOB spores,
@@ -406,6 +413,18 @@ struct DecodeContext {
     rpc_url: String,
 }
 
+#[derive(Debug, Clone)]
+struct DecoderStep {
+    decoder_ref: DecoderRef,
+    pattern_json: String,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedDecoderStep {
+    binary: Vec<u8>,
+    pattern_json: String,
+}
+
 /// Decode a single DOB spore. Standalone function for concurrent use.
 ///
 /// Loads cluster metadata, fetches the decoder binary, and executes it
@@ -443,21 +462,36 @@ async fn decode_single_spore(
         .get("dob")
         .context("cluster metadata missing 'dob' field")?;
 
-    let decoder_ref = parse_decoder_ref(dob_obj)?;
-    let pattern_json = extract_pattern_json(dob_obj)?;
-
-    // Fetch decoder binary (from cache or chain)
-    let decoder_binary = load_decoder_binary(&decoder_ref, ctx).await?;
+    let decoder_steps = parse_decoder_steps(dob_obj)?;
+    let mut resolved_steps = Vec::with_capacity(decoder_steps.len());
+    for step in decoder_steps {
+        let binary = load_decoder_binary(&step.decoder_ref, ctx).await?;
+        resolved_steps.push(ResolvedDecoderStep {
+            binary,
+            pattern_json: step.pattern_json,
+        });
+    }
 
     // Determine DOB version from content type
     let dob_version = parse_dob_version(content_type);
 
     // Execute decoder on a blocking thread (CKB-VM is CPU-bound)
     let decoded = tokio::task::spawn_blocking(move || match dob_version {
-        0 => ckbadger_dob_decoder::decode_dob0(&decoder_binary, &dna_hex, &pattern_json),
+        0 => {
+            let Some(first_step) = resolved_steps.first() else {
+                return Err(anyhow::anyhow!("decoder chain is empty"));
+            };
+            ckbadger_dob_decoder::decode_dob0(
+                &first_step.binary,
+                &dna_hex,
+                &first_step.pattern_json,
+            )
+        }
         1 => {
-            let decoders: Vec<(&[u8], &str)> =
-                vec![(decoder_binary.as_slice(), pattern_json.as_str())];
+            let decoders: Vec<(&[u8], &str)> = resolved_steps
+                .iter()
+                .map(|step| (step.binary.as_slice(), step.pattern_json.as_str()))
+                .collect();
             ckbadger_dob_decoder::decode_dob1_chain(&decoders, &dna_hex)
         }
         v => Err(anyhow::anyhow!("unsupported DOB version: {v}")),
@@ -685,17 +719,53 @@ fn parse_dob_version(content_type: &str) -> u32 {
 /// Supports two formats:
 /// - `{"dob": {"decoders": [{"type": "code_hash", "hash": "0x..."}]}}`
 /// - `{"dob": {"decoder": {"type": "type_id", "hash": "0x..."}}}`
+#[cfg(test)]
 fn parse_decoder_ref(dob: &Value) -> Result<DecoderRef> {
-    // Try decoders array first (DOB/1 and newer DOB/0)
     if let Some(decoders) = dob.get("decoders").and_then(|v| v.as_array()) {
         if let Some(first) = decoders.first() {
-            return parse_single_decoder_ref(first);
+            return parse_single_decoder_ref(first.get("decoder").unwrap_or(first));
         }
     }
 
-    // Try singular decoder field (older DOB/0)
     if let Some(decoder) = dob.get("decoder") {
         return parse_single_decoder_ref(decoder);
+    }
+
+    bail!("no decoder reference found in DOB metadata")
+}
+
+fn parse_decoder_steps(dob: &Value) -> Result<Vec<DecoderStep>> {
+    if let Some(decoders) = dob.get("decoders").and_then(|v| v.as_array()) {
+        let mut steps = Vec::with_capacity(decoders.len());
+        for (index, entry) in decoders.iter().enumerate() {
+            let decoder_value = entry.get("decoder").unwrap_or(entry);
+            let decoder_ref = parse_single_decoder_ref(decoder_value)
+                .with_context(|| format!("invalid decoder entry at index {index}"))?;
+            let pattern = entry.get("pattern").with_context(|| {
+                format!("decoder entry missing 'pattern' field at index {index}")
+            })?;
+            let pattern_json =
+                serde_json::to_string(pattern).context("failed to serialize pattern")?;
+            steps.push(DecoderStep {
+                decoder_ref,
+                pattern_json,
+            });
+        }
+        if !steps.is_empty() {
+            return Ok(steps);
+        }
+    }
+
+    if let Some(decoder) = dob.get("decoder") {
+        let decoder_ref = parse_single_decoder_ref(decoder)?;
+        let pattern = dob
+            .get("pattern")
+            .context("no pattern found in DOB metadata")?;
+        let pattern_json = serde_json::to_string(pattern).context("failed to serialize pattern")?;
+        return Ok(vec![DecoderStep {
+            decoder_ref,
+            pattern_json,
+        }]);
     }
 
     bail!("no decoder reference found in DOB metadata")
@@ -725,8 +795,8 @@ fn parse_single_decoder_ref(decoder: &Value) -> Result<DecoderRef> {
 /// Extract the pattern JSON string from DOB metadata.
 ///
 /// Looks for the first decoder's `pattern` field and serializes it to JSON.
+#[cfg(test)]
 fn extract_pattern_json(dob: &Value) -> Result<String> {
-    // Try decoders array
     if let Some(decoders) = dob.get("decoders").and_then(|v| v.as_array()) {
         if let Some(first) = decoders.first() {
             if let Some(pattern) = first.get("pattern") {
@@ -735,7 +805,6 @@ fn extract_pattern_json(dob: &Value) -> Result<String> {
         }
     }
 
-    // Try top-level pattern (DOB/0 ver=0)
     if let Some(pattern) = dob.get("pattern") {
         return serde_json::to_string(pattern).context("failed to serialize pattern");
     }
@@ -852,6 +921,24 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_decoder_ref_nested_decoder_entry() {
+        let dob = json!({
+            "decoders": [{
+                "decoder": {
+                    "type": "code_hash",
+                    "hash": "0xabcd"
+                },
+                "pattern": []
+            }]
+        });
+        let decoder_ref = parse_decoder_ref(&dob).unwrap();
+        match decoder_ref {
+            DecoderRef::CodeHash(hash) => assert_eq!(hash, vec![0xAB, 0xCD]),
+            _ => panic!("expected CodeHash"),
+        }
+    }
+
+    #[test]
     fn test_parse_decoder_ref_singular_decoder() {
         let dob = json!({
             "decoder": {
@@ -864,6 +951,58 @@ mod tests {
             DecoderRef::CodeHash(hash) => assert_eq!(hash, vec![0xFF]),
             _ => panic!("expected CodeHash"),
         }
+    }
+
+    #[test]
+    fn test_parse_decoder_steps_preserve_nested_chain_order() {
+        let dob = json!({
+            "decoders": [
+                {
+                    "decoder": {
+                        "type": "code_hash",
+                        "hash": "0xabcd"
+                    },
+                    "pattern": ["first"]
+                },
+                {
+                    "decoder": {
+                        "type": "type_id",
+                        "hash": "0x1234"
+                    },
+                    "pattern": ["second"]
+                }
+            ]
+        });
+        let steps = parse_decoder_steps(&dob).unwrap();
+        assert_eq!(steps.len(), 2);
+        match &steps[0].decoder_ref {
+            DecoderRef::CodeHash(hash) => assert_eq!(hash, &vec![0xAB, 0xCD]),
+            _ => panic!("expected first step to use code_hash"),
+        }
+        assert_eq!(steps[0].pattern_json, "[\"first\"]");
+        match &steps[1].decoder_ref {
+            DecoderRef::TypeId(hash) => assert_eq!(hash, &vec![0x12, 0x34]),
+            _ => panic!("expected second step to use type_id"),
+        }
+        assert_eq!(steps[1].pattern_json, "[\"second\"]");
+    }
+
+    #[test]
+    fn test_parse_decoder_steps_from_singular_decoder() {
+        let dob = json!({
+            "decoder": {
+                "type": "code_hash",
+                "hash": "0xff"
+            },
+            "pattern": ["legacy"]
+        });
+        let steps = parse_decoder_steps(&dob).unwrap();
+        assert_eq!(steps.len(), 1);
+        match &steps[0].decoder_ref {
+            DecoderRef::CodeHash(hash) => assert_eq!(hash, &vec![0xFF]),
+            _ => panic!("expected CodeHash"),
+        }
+        assert_eq!(steps[0].pattern_json, "[\"legacy\"]");
     }
 
     #[test]
@@ -1090,7 +1229,7 @@ mod tests {
         }];
 
         worker
-            .update_spore_media_profile(&spore_id, &new_sources)
+            .update_spore_media_profile(&spore_id, &new_sources, false)
             .unwrap();
 
         let updated_spore = store.get_spore(&spore_id).unwrap().unwrap();
@@ -1109,6 +1248,63 @@ mod tests {
         assert_eq!(updated_agg.btc_ckb_count, 1);
         assert_eq!(updated_agg.live_count, 1);
         assert_eq!(updated_agg.total_count, 1);
+    }
+
+    #[test]
+    fn test_update_spore_media_profile_marks_renderable_without_new_uris() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let cache_dir = dir.path().join("decoder-cache");
+        let decoder_cache = Arc::new(DecoderBinaryCache::new(&cache_dir).unwrap());
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker = DobDecodeWorker::new(
+            store.clone(),
+            store.clone(),
+            decoder_cache,
+            "http://localhost:9999".to_string(),
+            shutdown,
+        );
+
+        let spore_id = [0x77u8; 32];
+        let spore_entry = ckbadger_store::types::ObjectEntry {
+            standard: ckbadger_store::types::ObjectStandard::Spore,
+            collection_id: None,
+            token_id: None,
+            owner_lock_hash: Some(vec![0x33; 32]),
+            name: None,
+            description: None,
+            is_live: true,
+            created_at_block: 42,
+            created_at_tx: vec![0x44; 32],
+            extra: ckbadger_store::types::ObjectExtra::Spore {
+                content_type: "dob/1".to_string(),
+                content_length: 3,
+                media_profile: SporeMediaProfile {
+                    tier: ckbadger_store::types::CompositionTier::PureCkb,
+                    sources: vec![],
+                    has_renderable_image: false,
+                    issues: vec![],
+                },
+            },
+        };
+        store.put_spore_direct(&spore_id, &spore_entry).unwrap();
+
+        worker
+            .update_spore_media_profile(&spore_id, &[], true)
+            .unwrap();
+
+        let updated_spore = store.get_spore(&spore_id).unwrap().unwrap();
+        match updated_spore.extra {
+            ObjectExtra::Spore { media_profile, .. } => {
+                assert!(media_profile.has_renderable_image);
+                assert!(media_profile.sources.is_empty());
+                assert_eq!(
+                    media_profile.tier,
+                    ckbadger_store::types::CompositionTier::PureCkb
+                );
+            }
+            other => panic!("expected spore extra, got {other:?}"),
+        }
     }
 
     #[test]
