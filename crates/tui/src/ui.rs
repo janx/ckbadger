@@ -2498,8 +2498,9 @@ fn build_bulk_build_diagnostics(
             Line::from(Span::styled("Compact -", Style::default().fg(SLATE_500))),
         )
     };
+    let disk_lines = disk_pressure_lines(Some(bb), cols[1].width);
 
-    let right = vec![
+    let mut right = vec![
         Line::from(vec![
             Span::styled("Owner mem ", Style::default().fg(SLATE_500)),
             Span::styled(owner_mem_text, Style::default().fg(FOREGROUND)),
@@ -2517,13 +2518,14 @@ fn build_bulk_build_diagnostics(
         l0_line,
         wbm_line,
         pressure_line,
-        Line::from(vec![
-            Span::styled("ETA ", Style::default().fg(SLATE_500)),
-            Span::styled(eta_conf.0, Style::default().fg(eta_conf.1)),
-            Span::styled("  jitter ", Style::default().fg(SLATE_500)),
-            Span::styled(rate_jitter_text.to_string(), Style::default().fg(AMBER)),
-        ]),
     ];
+    right.extend(disk_lines);
+    right.push(Line::from(vec![
+        Span::styled("ETA ", Style::default().fg(SLATE_500)),
+        Span::styled(eta_conf.0, Style::default().fg(eta_conf.1)),
+        Span::styled("  jitter ", Style::default().fg(SLATE_500)),
+        Span::styled(rate_jitter_text.to_string(), Style::default().fg(AMBER)),
+    ]));
 
     (left, right)
 }
@@ -4530,6 +4532,103 @@ fn storage_pressure_summary_line(mem: &MemoryStatsData) -> Line<'static> {
     ])
 }
 
+fn disk_pressure_lines(bb: Option<&BulkBuildProgressData>, width: u16) -> Vec<Line<'static>> {
+    let width = width as usize;
+    let Some(bb) = bb else {
+        return vec![Line::from(vec![
+            Span::styled("Disk ", Style::default().fg(SLATE_500)),
+            Span::styled("-", Style::default().fg(SLATE_500)),
+        ])];
+    };
+
+    let state = match bb.disk_state.as_deref() {
+        Some(state @ ("idle" | "active" | "saturated")) => state,
+        Some("unavailable") | None => "unavailable",
+        Some(other) => panic!("unknown bulk-build disk state: {other}"),
+    };
+    let state_color = match state {
+        "saturated" => ERROR_RED,
+        "active" => TERMINAL_GREEN,
+        "idle" | "unavailable" => SLATE_500,
+        _ => SLATE_500,
+    };
+
+    let state_text = trim_for_panel(
+        &format!(
+            "Disk {} util {}",
+            state.to_ascii_uppercase(),
+            format_disk_util_text(bb.disk_util_pct, state)
+        ),
+        width,
+    );
+    let detail_text = trim_for_panel(
+        &format!(
+            "await {} qd {} wr {} iops {}",
+            format_disk_await_text(bb.disk_await_ms, state),
+            format_disk_qd_text(bb.disk_avg_queue_depth, state),
+            format_disk_write_text(bb.disk_write_mb_s, state),
+            format_disk_iops_text(bb.disk_write_iops, state),
+        ),
+        width,
+    );
+
+    vec![
+        Line::from(vec![Span::styled(
+            state_text,
+            Style::default().fg(state_color),
+        )]),
+        Line::from(vec![Span::styled(
+            detail_text,
+            Style::default().fg(FOREGROUND),
+        )]),
+    ]
+}
+
+fn format_disk_util_text(value: Option<f64>, state: &str) -> String {
+    if state == "unavailable" {
+        return "n/a".to_string();
+    }
+    value
+        .map(|v| format!("{v:.1}%"))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn format_disk_await_text(value: Option<f64>, state: &str) -> String {
+    if state == "unavailable" {
+        return "n/a".to_string();
+    }
+    value
+        .map(|v| format!("{v:.1}ms"))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn format_disk_qd_text(value: Option<f64>, state: &str) -> String {
+    if state == "unavailable" {
+        return "n/a".to_string();
+    }
+    value
+        .map(|v| format!("{v:.2}"))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn format_disk_write_text(value: Option<f64>, state: &str) -> String {
+    if state == "unavailable" {
+        return "n/a".to_string();
+    }
+    value
+        .map(|v| format!("{v:.1} MB/s"))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn format_disk_iops_text(value: Option<f64>, state: &str) -> String {
+    if state == "unavailable" {
+        return "n/a".to_string();
+    }
+    value
+        .map(|v| format_num_compact(v.round() as u64))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn merged_sparkline_p95_line(
     label_a: &'static str,
@@ -5231,10 +5330,10 @@ mod tests {
         build_finalize_left_column, bulk_queue_indicator_line, chart_height_warning,
         compact_overview_layout, consumed_cells_source_color, consumed_cells_source_label,
         dense_right_lines, detail_right_lines, diagnostics_dense_panel, direct_io_reads_label,
-        eta_confidence_label, footer_hint_line, footer_status_message, format_age_secs, format_num,
-        format_num_commas, format_num_compact, format_rate_expanded, format_signed_num_i128,
-        format_stage_commit_gap_ms, header_right_line, header_title_line, heartbeat_is_on,
-        io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
+        disk_pressure_lines, eta_confidence_label, footer_hint_line, footer_status_message,
+        format_age_secs, format_num, format_num_commas, format_num_compact, format_rate_expanded,
+        format_signed_num_i128, format_stage_commit_gap_ms, header_right_line, header_title_line,
+        heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
         overview_log_min_height, overview_services_min_height, percentile_from_history,
         pipeline_bottleneck, pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state,
         runtime_live_delta, service_log_tails_line, sparkline, stale_age_secs, stale_status,
@@ -6187,6 +6286,66 @@ mod tests {
     #[test]
     fn test_bulk_queue_indicator_line_returns_none_without_capacity() {
         assert!(bulk_queue_indicator_line("Prefetch", Some(2), None).is_none());
+    }
+
+    #[test]
+    fn test_disk_pressure_lines_renders_saturated_state() {
+        let bb = BulkBuildProgressData {
+            disk_state: Some("saturated".to_string()),
+            disk_util_pct: Some(96.5),
+            disk_await_ms: Some(18.0),
+            disk_avg_queue_depth: Some(3.25),
+            disk_write_mb_s: Some(712.0),
+            disk_write_iops: Some(18_400.0),
+            ..Default::default()
+        };
+
+        let lines = disk_pressure_lines(Some(&bb), 120);
+        assert_eq!(lines.len(), 2);
+        let state = line_text(&lines[0]);
+        let detail = line_text(&lines[1]);
+        assert!(state.contains("Disk SATURATED"));
+        assert!(state.contains("96.5%"));
+        assert!(detail.contains("18.0ms"));
+        assert!(detail.contains("3.25"));
+        assert!(detail.contains("712.0 MB/s"));
+        assert!(detail.contains("18K"));
+    }
+
+    #[test]
+    fn test_disk_pressure_lines_renders_unavailable_state() {
+        let bb = BulkBuildProgressData {
+            disk_state: Some("unavailable".to_string()),
+            ..Default::default()
+        };
+
+        let lines = disk_pressure_lines(Some(&bb), 120);
+        assert_eq!(lines.len(), 2);
+        let state = line_text(&lines[0]);
+        let detail = line_text(&lines[1]);
+        assert!(state.contains("Disk UNAVAILABLE"));
+        assert!(state.contains("n/a"));
+        assert!(detail.contains("n/a"));
+        assert!(!detail.contains("0.0"));
+    }
+
+    #[test]
+    fn test_disk_pressure_lines_trims_without_dropping_state_line() {
+        let bb = BulkBuildProgressData {
+            disk_state: Some("active".to_string()),
+            disk_util_pct: Some(72.0),
+            disk_await_ms: Some(4.5),
+            disk_avg_queue_depth: Some(1.5),
+            disk_write_mb_s: Some(128.0),
+            disk_write_iops: Some(5_120.0),
+            ..Default::default()
+        };
+
+        let lines = disk_pressure_lines(Some(&bb), 18);
+        assert_eq!(lines.len(), 2);
+        let state = line_text(&lines[0]);
+        assert!(!state.is_empty());
+        assert!(state.contains("Disk") || state.contains("..."));
     }
 
     #[test]

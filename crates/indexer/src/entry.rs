@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
-use ckbadger_common::LabelImportConfig;
+use ckbadger_common::{BulkBuildProgressData, LabelImportConfig};
 use ckbadger_store::{types::SyncStatus, CkbadgerStore, RuntimeStatus, StoreRuntimeConfig};
 
 use crate::cycles_worker::spawn_cycles_task_worker;
@@ -315,6 +315,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         let mut last_progress_advanced_at = Instant::now();
         let mut last_stall_warn_at: Option<Instant> = None;
         let mut suppressed_stall_warns: u64 = 0;
+        let mut last_bulk_disk_state: Option<String> = None;
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
@@ -339,6 +340,8 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                     "tip_sync".to_string()
                 }
             });
+            let bulk_build = indexer_for_progress.bulk_build_progress_snapshot();
+            let bulk_disk = summarize_bulk_build_disk(bulk_build.as_ref());
             indexer_for_progress.record_runtime_heartbeat(
                 progress.current(),
                 progress.target(),
@@ -384,7 +387,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                 adaptive_adjustment_seq: adaptive.as_ref().map(|s| s.adjustment_seq),
                 adaptive_backoff_streak: adaptive.as_ref().map(|s| s.backoff_streak),
                 adaptive_last_adjusted_at: adaptive.as_ref().and_then(|s| s.last_adjusted_at),
-                bulk_build: indexer_for_progress.bulk_build_progress_snapshot(),
+                bulk_build: bulk_build.clone(),
             };
             indexer_for_progress
                 .cache_invalidator()
@@ -502,27 +505,74 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
             }
 
             if indexer_for_progress.is_bulk_sync_active() {
-                info!(
-                    run_id = %indexer_for_progress.run_id(),
-                    source = data_source,
-                    progress_pct = format!("{:.2}", progress.progress_percentage()),
-                    current = progress.current(),
-                    target = progress.target(),
-                    bps = format!("{:.1}", bps),
-                    ema_bps = format!("{:.1}", ema_rate),
-                    eta = %eta,
-                    db_stage_write_ms = ?(perf_db_stage_ms > 0.0).then_some(format!("{:.1}", perf_db_stage_ms)),
-                    db_commit_ms = ?(perf_db_commit_ms > 0.0).then_some(format!("{:.1}", perf_db_commit_ms)),
-                    pipeline_fetch_ms = ?pipeline_log.as_ref().and_then(|p| p.fetch_ms).map(|v| format!("{:.1}", v)),
-                    pipeline_parse_ms = ?pipeline_log.as_ref().and_then(|p| p.parse_ms).map(|v| format!("{:.1}", v)),
-                    pipeline_write_stage_ms = ?pipeline_log.as_ref().and_then(|p| p.write_ms).map(|v| format!("{:.1}", v)),
-                    pipeline_write_commit_ms = ?pipeline_log.as_ref().and_then(|p| p.commit_ms).map(|v| format!("{:.1}", v)),
-                    pipeline_writer_wait_ms = ?pipeline_log.as_ref().and_then(|p| p.writer_wait_ms).map(|v| format!("{:.1}", v)),
-                    fetch_queue_fill_pct = ?fetch_fill_pct.map(|v| format!("{:.1}", v)),
-                    parse_queue_fill_pct = ?parse_fill_pct.map(|v| format!("{:.1}", v)),
-                    writer_queue_fill_pct = ?writer_fill_pct.map(|v| format!("{:.1}", v)),
-                    "Bulk sync progress"
-                );
+                if let Some(disk) = bulk_disk.as_ref() {
+                    if disk.is_unavailable()
+                        && last_bulk_disk_state.as_deref() != Some("unavailable")
+                    {
+                        warn!(
+                            run_id = %indexer_for_progress.run_id(),
+                            stage = %heartbeat_stage,
+                            disk_state = %disk.disk_state(),
+                            "Bulk-build disk telemetry unavailable"
+                        );
+                    }
+                    last_bulk_disk_state = Some(disk.disk_state().to_string());
+                } else {
+                    last_bulk_disk_state = None;
+                }
+
+                if let Some(disk) = bulk_disk.as_ref() {
+                    info!(
+                        run_id = %indexer_for_progress.run_id(),
+                        source = data_source,
+                        progress_pct = format!("{:.2}", progress.progress_percentage()),
+                        current = progress.current(),
+                        target = progress.target(),
+                        bps = format!("{:.1}", bps),
+                        ema_bps = format!("{:.1}", ema_rate),
+                        eta = %eta,
+                        db_stage_write_ms = ?(perf_db_stage_ms > 0.0).then_some(format!("{:.1}", perf_db_stage_ms)),
+                        db_commit_ms = ?(perf_db_commit_ms > 0.0).then_some(format!("{:.1}", perf_db_commit_ms)),
+                        pipeline_fetch_ms = ?pipeline_log.as_ref().and_then(|p| p.fetch_ms).map(|v| format!("{:.1}", v)),
+                        pipeline_parse_ms = ?pipeline_log.as_ref().and_then(|p| p.parse_ms).map(|v| format!("{:.1}", v)),
+                        pipeline_write_stage_ms = ?pipeline_log.as_ref().and_then(|p| p.write_ms).map(|v| format!("{:.1}", v)),
+                        pipeline_write_commit_ms = ?pipeline_log.as_ref().and_then(|p| p.commit_ms).map(|v| format!("{:.1}", v)),
+                        pipeline_writer_wait_ms = ?pipeline_log.as_ref().and_then(|p| p.writer_wait_ms).map(|v| format!("{:.1}", v)),
+                        fetch_queue_fill_pct = ?fetch_fill_pct.map(|v| format!("{:.1}", v)),
+                        parse_queue_fill_pct = ?parse_fill_pct.map(|v| format!("{:.1}", v)),
+                        writer_queue_fill_pct = ?writer_fill_pct.map(|v| format!("{:.1}", v)),
+                        disk_state = %disk.disk_state(),
+                        disk_util_pct = %disk.disk_util_pct(),
+                        disk_await_ms = %disk.disk_await_ms(),
+                        disk_qd = %disk.disk_qd(),
+                        disk_wr_mb_s = %disk.disk_wr_mb_s(),
+                        disk_wr_iops = %disk.disk_wr_iops(),
+                        "Bulk sync progress"
+                    );
+                } else {
+                    info!(
+                        run_id = %indexer_for_progress.run_id(),
+                        source = data_source,
+                        progress_pct = format!("{:.2}", progress.progress_percentage()),
+                        current = progress.current(),
+                        target = progress.target(),
+                        bps = format!("{:.1}", bps),
+                        ema_bps = format!("{:.1}", ema_rate),
+                        eta = %eta,
+                        db_stage_write_ms = ?(perf_db_stage_ms > 0.0).then_some(format!("{:.1}", perf_db_stage_ms)),
+                        db_commit_ms = ?(perf_db_commit_ms > 0.0).then_some(format!("{:.1}", perf_db_commit_ms)),
+                        pipeline_fetch_ms = ?pipeline_log.as_ref().and_then(|p| p.fetch_ms).map(|v| format!("{:.1}", v)),
+                        pipeline_parse_ms = ?pipeline_log.as_ref().and_then(|p| p.parse_ms).map(|v| format!("{:.1}", v)),
+                        pipeline_write_stage_ms = ?pipeline_log.as_ref().and_then(|p| p.write_ms).map(|v| format!("{:.1}", v)),
+                        pipeline_write_commit_ms = ?pipeline_log.as_ref().and_then(|p| p.commit_ms).map(|v| format!("{:.1}", v)),
+                        pipeline_writer_wait_ms = ?pipeline_log.as_ref().and_then(|p| p.writer_wait_ms).map(|v| format!("{:.1}", v)),
+                        fetch_queue_fill_pct = ?fetch_fill_pct.map(|v| format!("{:.1}", v)),
+                        parse_queue_fill_pct = ?parse_fill_pct.map(|v| format!("{:.1}", v)),
+                        writer_queue_fill_pct = ?writer_fill_pct.map(|v| format!("{:.1}", v)),
+                        "Bulk sync progress"
+                    );
+                }
+
                 if parse_fill_pct.is_some_and(|p| p >= 80.0)
                     || writer_fill_pct.is_some_and(|p| p >= 80.0)
                 {
@@ -555,6 +605,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                     suppressed_queue_pressure_warns = 0;
                 }
             } else {
+                last_bulk_disk_state = None;
                 info!(
                     run_id = %indexer_for_progress.run_id(),
                     source = data_source,
@@ -677,6 +728,89 @@ fn should_warn_progress_stall(
 ) -> bool {
     current_block < target_block
         && now.duration_since(last_progress_advanced_at) >= min_stall_duration
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiskLogSummary {
+    state: String,
+    util_pct: String,
+    await_ms: String,
+    queue_depth: String,
+    write_mb_s: String,
+    write_iops: String,
+}
+
+impl DiskLogSummary {
+    fn is_unavailable(&self) -> bool {
+        self.state == "unavailable"
+    }
+
+    fn disk_state(&self) -> &str {
+        &self.state
+    }
+
+    fn disk_util_pct(&self) -> &str {
+        &self.util_pct
+    }
+
+    fn disk_await_ms(&self) -> &str {
+        &self.await_ms
+    }
+
+    fn disk_qd(&self) -> &str {
+        &self.queue_depth
+    }
+
+    fn disk_wr_mb_s(&self) -> &str {
+        &self.write_mb_s
+    }
+
+    fn disk_wr_iops(&self) -> &str {
+        &self.write_iops
+    }
+}
+
+fn summarize_bulk_build_disk(bb: Option<&BulkBuildProgressData>) -> Option<DiskLogSummary> {
+    let bb = bb?;
+    let state = match bb.disk_state.as_deref() {
+        Some(state @ ("idle" | "active" | "saturated")) => state.to_string(),
+        Some("unavailable") | None => "unavailable".to_string(),
+        Some(other) => panic!("unknown bulk-build disk state: {other}"),
+    };
+    let unavailable = state == "unavailable";
+
+    Some(DiskLogSummary {
+        state,
+        util_pct: format_disk_metric(if unavailable { None } else { bb.disk_util_pct }),
+        await_ms: format_disk_metric(if unavailable { None } else { bb.disk_await_ms }),
+        queue_depth: format_disk_queue_depth(if unavailable {
+            None
+        } else {
+            bb.disk_avg_queue_depth
+        }),
+        write_mb_s: format_disk_metric(if unavailable {
+            None
+        } else {
+            bb.disk_write_mb_s
+        }),
+        write_iops: format_disk_metric(if unavailable {
+            None
+        } else {
+            bb.disk_write_iops
+        }),
+    })
+}
+
+fn format_disk_metric(value: Option<f64>) -> String {
+    value
+        .map(|v| format!("{v:.1}"))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn format_disk_queue_depth(value: Option<f64>) -> String {
+    value
+        .map(|v| format!("{v:.2}"))
+        .unwrap_or_else(|| "n/a".to_string())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -911,6 +1045,48 @@ mod tests {
             200,
             Duration::from_secs(60)
         ));
+    }
+
+    #[test]
+    fn test_summarize_bulk_build_disk_formats_valid_window() {
+        let bulk_build = BulkBuildProgressData {
+            disk_state: Some("active".to_string()),
+            disk_util_pct: Some(87.5),
+            disk_await_ms: Some(3.5),
+            disk_avg_queue_depth: Some(1.25),
+            disk_write_mb_s: Some(712.0),
+            disk_write_iops: Some(18_400.0),
+            ..Default::default()
+        };
+
+        let summary = summarize_bulk_build_disk(Some(&bulk_build)).unwrap();
+        assert_eq!(summary.disk_state(), "active");
+        assert_eq!(summary.disk_util_pct(), "87.5");
+        assert_eq!(summary.disk_await_ms(), "3.5");
+        assert_eq!(summary.disk_qd(), "1.25");
+        assert_eq!(summary.disk_wr_mb_s(), "712.0");
+        assert_eq!(summary.disk_wr_iops(), "18400.0");
+    }
+
+    #[test]
+    fn test_summarize_bulk_build_disk_keeps_unavailable_unavailable() {
+        let bulk_build = BulkBuildProgressData {
+            disk_state: Some("unavailable".to_string()),
+            ..Default::default()
+        };
+
+        let summary = summarize_bulk_build_disk(Some(&bulk_build)).unwrap();
+        assert_eq!(summary.disk_state(), "unavailable");
+        assert_eq!(summary.disk_util_pct(), "n/a");
+        assert_eq!(summary.disk_await_ms(), "n/a");
+        assert_eq!(summary.disk_qd(), "n/a");
+        assert_eq!(summary.disk_wr_mb_s(), "n/a");
+        assert_eq!(summary.disk_wr_iops(), "n/a");
+    }
+
+    #[test]
+    fn test_summarize_bulk_build_disk_returns_none_without_bulk_build() {
+        assert!(summarize_bulk_build_disk(None).is_none());
     }
 
     #[test]
