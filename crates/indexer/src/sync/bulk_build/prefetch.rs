@@ -52,7 +52,6 @@ impl PrefetchChannelHandle {
     pub(crate) fn new(
         max_depth: usize,
         ckb_store: Arc<CkbChainReader>,
-        fetch_pool: Arc<rayon::ThreadPool>,
         start_block: u64,
         handoff_target: u64,
         initial_span: u64,
@@ -67,7 +66,6 @@ impl PrefetchChannelHandle {
                 span_rx,
                 ahead_rx,
                 ckb_store,
-                fetch_pool,
                 start_block,
                 handoff_target,
             )
@@ -86,7 +84,6 @@ impl PrefetchChannelHandle {
         span_rx: tokio::sync::watch::Receiver<u64>,
         ahead_rx: tokio::sync::watch::Receiver<u64>,
         ckb_store: Arc<CkbChainReader>,
-        fetch_pool: Arc<rayon::ThreadPool>,
         start_block: u64,
         handoff_target: u64,
     ) -> Result<PrefetchWorkerStats> {
@@ -127,8 +124,7 @@ impl PrefetchChannelHandle {
             );
 
             let started = Instant::now();
-            let fetch_result =
-                Indexer::fetch_blocks_direct_binary(&ckb_store, position, end, Some(&fetch_pool));
+            let fetch_result = Indexer::fetch_blocks_direct_binary(&ckb_store, position, end);
 
             let to_send = match fetch_result {
                 Ok(blocks) => {

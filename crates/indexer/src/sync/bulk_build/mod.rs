@@ -55,40 +55,6 @@ use crate::sync::bottleneck::{BatchSignals, BottleneckController, MAX_PREFETCH};
 const BULK_BUILD_MIN_BLOCK_SPAN: u64 = 10_000;
 const FLUSH_CHANNEL_DEPTH: usize = 4;
 
-fn fetch_pool_thread_count(
-    configured_parallel_fetch_size: usize,
-    available_parallelism: usize,
-) -> Result<usize> {
-    if configured_parallel_fetch_size == 0 {
-        bail!("bulk build fetch pool size must be > 0");
-    }
-    if available_parallelism == 0 {
-        bail!("bulk build available parallelism must be > 0");
-    }
-    // Scale to ~1/3 of available cores to avoid cache contention with the
-    // build phase's global rayon pool. Clamped to [2, 8]: floor 2 for
-    // minimum parallelism, ceiling 8 because fetch is I/O-bound (more
-    // threads don't improve SSD random read throughput).
-    let scaled = (available_parallelism / 3).clamp(2, 8);
-    Ok(configured_parallel_fetch_size.min(scaled))
-}
-
-fn build_fetch_pool(parallel_fetch_size: usize) -> Result<rayon::ThreadPool> {
-    let available_parallelism = std::thread::available_parallelism().map_err(|e| {
-        anyhow!(
-            "failed to read available parallelism for bulk build fetch pool sizing: {}",
-            e
-        )
-    })?;
-    let thread_count = fetch_pool_thread_count(parallel_fetch_size, available_parallelism.get())?;
-
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(thread_count)
-        .thread_name(|i| format!("ckb-fetch-{}", i))
-        .build()
-        .map_err(|e| anyhow!("failed to create fetch rayon pool: {}", e))
-}
-
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PreparedFinalizeArtifacts {
     activity_sealed_rows: Vec<materialize::MaterializedRow>,
@@ -155,7 +121,6 @@ impl BulkBuildEngine {
             disk_device,
         );
         let token_info_cache = preload_token_info_cache(indexer.writer.store().as_ref())?;
-        let fetch_pool = std::sync::Arc::new(build_fetch_pool(indexer.config.parallel_fetch_size)?);
         let configured_batch_size = u64::try_from(indexer.config.batch_size).map_err(|_| {
             anyhow!(
                 "bulk build batch_size exceeds u64 range: batch_size={}",
@@ -181,7 +146,6 @@ impl BulkBuildEngine {
         let mut prefetch = prefetch::PrefetchChannelHandle::new(
             MAX_PREFETCH as usize,
             ckb_store.clone(),
-            Arc::clone(&fetch_pool),
             prefetch_start,
             initial_handoff,
             configured_batch_size,
@@ -5863,21 +5827,6 @@ mod tests {
         let standard = bincode::serialize(&header).unwrap();
         let presized = bincode_serialize_presized(&header).unwrap();
         assert_eq!(standard, presized);
-    }
-
-    #[test]
-    fn fetch_pool_thread_count_scales_with_available_parallelism() {
-        // Formula: min(configured, (parallelism / 3).clamp(2, 8))
-        // 24 cores → scaled=8, 16 cores → scaled=5, 12 → 4, 8 → 2, 4 → 2
-        assert_eq!(fetch_pool_thread_count(64, 24).unwrap(), 8); // 24/3=8
-        assert_eq!(fetch_pool_thread_count(64, 16).unwrap(), 5); // 16/3=5
-        assert_eq!(fetch_pool_thread_count(64, 12).unwrap(), 4); // 12/3=4
-        assert_eq!(fetch_pool_thread_count(64, 8).unwrap(), 2); // 8/3=2, clamped to 2
-        assert_eq!(fetch_pool_thread_count(64, 4).unwrap(), 2); // 4/3=1, clamped to 2
-        assert_eq!(fetch_pool_thread_count(64, 32).unwrap(), 8); // 32/3=10, capped at 8
-        assert_eq!(fetch_pool_thread_count(64, 64).unwrap(), 8); // 64/3=21, capped at 8
-        assert_eq!(fetch_pool_thread_count(3, 24).unwrap(), 3); // configured < scaled
-        assert_eq!(fetch_pool_thread_count(1, 24).unwrap(), 1); // configured < floor
     }
 
     #[test]

@@ -717,7 +717,7 @@ impl Indexer {
                 let sb = start_block;
                 let eb = end_block;
                 let blocks = match tokio::task::spawn_blocking(move || {
-                    Self::fetch_blocks_direct(&store, sb, eb, None)
+                    Self::fetch_blocks_direct(&store, sb, eb)
                 })
                 .await
                 {
@@ -2667,34 +2667,27 @@ impl Indexer {
         }
     }
 
+    /// Fetch blocks from CKB RocksDB using scoped threads for parallel I/O.
+    ///
+    /// Uses `std::thread::scope` instead of rayon so that blocking RocksDB
+    /// reads run on temporary threads that don't compete with the global
+    /// rayon pool used by CPU-bound build phases (facts/reduce/history).
     pub(crate) fn fetch_blocks_direct(
         store: &CkbChainReader,
         start: u64,
         end: u64,
-        fetch_pool: Option<&rayon::ThreadPool>,
     ) -> Result<Vec<BlockResponseWithCycles>> {
-        let do_fetch = || {
-            let block_numbers: Vec<u64> = (start..=end).collect();
-            let results: Vec<Result<BlockResponseWithCycles>> = block_numbers
-                .par_iter()
-                .map(|&num| {
-                    let hash = store.get_block_hash(num).ok_or_else(|| {
-                        anyhow::anyhow!("Block {} hash not found in CKB RocksDB", num)
-                    })?;
-                    let block = store.get_block(&hash).ok_or_else(|| {
-                        anyhow::anyhow!("Block {} data not found in CKB RocksDB", num)
-                    })?;
-                    let rpc_block = ckb_store_reader::block_view_to_rpc(&block, store);
-                    Ok(rpc_block.into())
-                })
-                .collect();
-            results.into_iter().collect()
-        };
-        if let Some(pool) = fetch_pool {
-            pool.install(do_fetch)
-        } else {
-            do_fetch()
-        }
+        let block_numbers: Vec<u64> = (start..=end).collect();
+        Self::scoped_parallel_fetch(&block_numbers, |&num| {
+            let hash = store
+                .get_block_hash(num)
+                .ok_or_else(|| anyhow::anyhow!("Block {} hash not found in CKB RocksDB", num))?;
+            let block = store
+                .get_block(&hash)
+                .ok_or_else(|| anyhow::anyhow!("Block {} data not found in CKB RocksDB", num))?;
+            let rpc_block = ckb_store_reader::block_view_to_rpc(&block, store);
+            Ok(rpc_block.into())
+        })
     }
 
     /// Fetch blocks from CKB RocksDB as raw molecule `BlockView` + cycles.
@@ -2703,42 +2696,60 @@ impl Indexer {
         store: &CkbChainReader,
         start: u64,
         end: u64,
-        fetch_pool: Option<&rayon::ThreadPool>,
     ) -> Result<Vec<crate::sync::bulk_build::binary_facts::RawCkbBlock>> {
         use ckb_types::prelude::*;
-        let do_fetch = || {
-            let block_numbers: Vec<u64> = (start..=end).collect();
-            let results: Vec<Result<crate::sync::bulk_build::binary_facts::RawCkbBlock>> =
-                block_numbers
-                    .par_iter()
-                    .map(|&num| {
-                        let hash = store.get_block_hash(num).ok_or_else(|| {
-                            anyhow::anyhow!("Block {} hash not found in CKB RocksDB", num)
-                        })?;
-                        let block = store.get_block(&hash).ok_or_else(|| {
-                            anyhow::anyhow!("Block {} data not found in CKB RocksDB", num)
-                        })?;
-                        let hash_bytes: [u8; 32] = block.hash().unpack();
-                        let cycles = store
-                            .get_block_ext(&hash_bytes)
-                            .and_then(|(_, cycles_vec)| {
-                                if cycles_vec.is_empty() {
-                                    None
-                                } else {
-                                    Some(cycles_vec)
-                                }
-                            })
-                            .unwrap_or_default();
-                        Ok(crate::sync::bulk_build::binary_facts::RawCkbBlock { block, cycles })
-                    })
-                    .collect();
-            results.into_iter().collect()
-        };
-        if let Some(pool) = fetch_pool {
-            pool.install(do_fetch)
-        } else {
-            do_fetch()
+        let block_numbers: Vec<u64> = (start..=end).collect();
+        Self::scoped_parallel_fetch(&block_numbers, |&num| {
+            let hash = store
+                .get_block_hash(num)
+                .ok_or_else(|| anyhow::anyhow!("Block {} hash not found in CKB RocksDB", num))?;
+            let block = store
+                .get_block(&hash)
+                .ok_or_else(|| anyhow::anyhow!("Block {} data not found in CKB RocksDB", num))?;
+            let hash_bytes: [u8; 32] = block.hash().unpack();
+            let cycles = store
+                .get_block_ext(&hash_bytes)
+                .and_then(|(_, cycles_vec)| {
+                    if cycles_vec.is_empty() {
+                        None
+                    } else {
+                        Some(cycles_vec)
+                    }
+                })
+                .unwrap_or_default();
+            Ok(crate::sync::bulk_build::binary_facts::RawCkbBlock { block, cycles })
+        })
+    }
+
+    /// Run `f` over `items` on temporary scoped threads, collecting results
+    /// in order.  Thread count scales to half of available cores (floor 2).
+    /// Threads are destroyed after the call — no persistent pool, no rayon
+    /// contention with CPU-bound build work.
+    fn scoped_parallel_fetch<T, F>(items: &[u64], f: F) -> Result<Vec<T>>
+    where
+        T: Send,
+        F: Fn(&u64) -> Result<T> + Sync,
+    {
+        if items.is_empty() {
+            return Ok(Vec::new());
         }
+        let thread_count = std::thread::available_parallelism()
+            .map(|n| (n.get() / 2).max(2))
+            .unwrap_or(4)
+            .min(items.len());
+        let chunk_size = items.len().div_ceil(thread_count);
+
+        std::thread::scope(|s| {
+            let handles: Vec<_> = items
+                .chunks(chunk_size)
+                .map(|chunk| s.spawn(|| chunk.iter().map(&f).collect::<Result<Vec<T>>>()))
+                .collect();
+            let mut results = Vec::with_capacity(items.len());
+            for handle in handles {
+                results.extend(handle.join().unwrap()?);
+            }
+            Ok(results)
+        })
     }
 
     async fn drain_channel<T>(rx: &mut tokio::sync::mpsc::Receiver<T>) -> usize {
