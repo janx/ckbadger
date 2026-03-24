@@ -547,6 +547,13 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
         deleted.push(format!("  {}/", store_paths.append_only_data.display()));
     }
 
+    // Delete decoder cache contents (DOB decoder RISC-V binaries)
+    if store_paths.decoder_cache.exists() {
+        remove_dir_contents(&store_paths.decoder_cache)
+            .with_context(|| format!("failed to purge {}", store_paths.decoder_cache.display()))?;
+        deleted.push(format!("  {}/", store_paths.decoder_cache.display()));
+    }
+
     // Delete media directory contents (decoded DOB media blobs)
     if work.media_dir.exists() {
         remove_dir_contents(&work.media_dir)
@@ -982,6 +989,11 @@ mod tests {
         let append_file = root.join("data/append-only/test.db");
         std::fs::write(&append_file, "append data").unwrap();
 
+        let decoder_cache_dir = root.join("data/decoder-cache");
+        std::fs::create_dir_all(&decoder_cache_dir).unwrap();
+        let decoder_file = decoder_cache_dir.join("0xabc.bin");
+        std::fs::write(&decoder_file, "decoder binary").unwrap();
+
         let log_file = root.join("run/logs/test.log");
         std::fs::write(&log_file, "log data").unwrap();
 
@@ -994,6 +1006,7 @@ mod tests {
         // Data should be gone
         assert!(!domain_file.exists(), "domain data should be deleted");
         assert!(!append_file.exists(), "append data should be deleted");
+        assert!(!decoder_file.exists(), "decoder cache should be deleted");
         assert!(!log_file.exists(), "log files should be deleted");
         assert!(!run_file.exists(), "run files should be deleted");
 
@@ -1005,6 +1018,10 @@ mod tests {
         assert!(
             root.join("data/append-only").exists(),
             "append-only dir should remain"
+        );
+        assert!(
+            decoder_cache_dir.exists(),
+            "decoder-cache dir should remain"
         );
         assert!(root.join("run").exists(), "run dir should remain");
     }
