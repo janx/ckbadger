@@ -16,7 +16,7 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { Address } from '@/components/ui/address';
 import { CapacityUtilization } from '@/components/ui/capacity-utilization';
 import { ScriptView } from '@/components/ui/script-view';
-import { InventoryContextSection } from '@/components/cell/inventory-context';
+import { useInventoryLabel } from '@/components/cell/inventory-context';
 import { api, type GraphNode } from '@/lib/api';
 import {
   getScriptRefBadgeLabel,
@@ -204,6 +204,7 @@ export default function CellDetailPage() {
     enabled: codeHashes.length > 0,
     staleTime: Infinity,
   });
+  const inventoryLabel = useInventoryLabel(cell);
   const [hoveredSegmentKey, setHoveredSegmentKey] = useState<string | null>(null);
   const [hoveredDataSegmentIndex, setHoveredDataSegmentIndex] = useState<number | null>(null);
   const [hoveredDataByteOffset, setHoveredDataByteOffset] = useState<number | null>(null);
@@ -818,15 +819,31 @@ export default function CellDetailPage() {
                       <Badge variant="blue">{typeScriptInfo.name}</Badge>
                     </Link>
                   )}
+                  {inventoryLabel &&
+                    (inventoryLabel.href ? (
+                      <Link href={inventoryLabel.href}>
+                        <Badge variant="gold">
+                          {inventoryLabel.displayName ?? inventoryLabel.typeLabel}
+                        </Badge>
+                      </Link>
+                    ) : (
+                      <Badge variant="gold">
+                        {inventoryLabel.displayName ?? inventoryLabel.typeLabel}
+                      </Badge>
+                    ))}
                 </div>
               </TerminalPanelHeader>
               <TerminalPanelContent>
                 <ScriptView script={cell.type ?? null} collapsible={false} />
+                {inventoryLabel?.summary && (
+                  <div className="border-base-border/50 mt-3 border-t pt-3">
+                    <span className="text-text-bright text-sm">{inventoryLabel.summary}</span>
+                  </div>
+                )}
               </TerminalPanelContent>
             </TerminalPanel>
           </div>
         </div>
-        <InventoryContextSection cell={cell} />
         {cell.daoInfo && (
           <TerminalPanel className="mt-6">
             <TerminalPanelHeader indicator="active">
