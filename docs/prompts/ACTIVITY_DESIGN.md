@@ -2,34 +2,30 @@
 
 ## Philosophy
 
-Activities are **interpretations, not facts**. A CKB UTXO transaction is an atomic action bundle involving multiple parties. The activity system interprets each transaction from two complementary perspectives:
+Activities include both facts and interpretations. A CKB UTXO transaction is an atomic action bundle involving multiple parties. The activity system interprets each transaction from two complementary perspectives:
 
 - **Per-participant**: what changed in each participant's personal balance sheet (Layer 1 + Layer 2)
 - **Per-transaction**: what happened as a whole, across all participants (Layer 3)
-
-The storage unit is one record per transaction containing both perspectives. TX-level interpretations (Layer 3) are stored once; per-participant accounting (Layer 1 + Layer 2) is stored per participant. This eliminates the redundancy of repeating TX-level data per participant, while preserving precise per-participant numbers.
 
 ## Three-Layer Analysis Model
 
 Activity analysis decomposes into three layers. Each layer adds interpretation on top of the layers below. Layers are **composable, not mutually exclusive** — a single activity may have signals at all three layers simultaneously.
 
 ```
-Layer 3: Protocol Action     WHY — TX level, stored once
-                             3a. Cross-user behavior: "RGB++ leap", "UTXOSwap swap"
-                             3b. Item action: "DAO deposit", "pet pat", ".bit update"
+Layer 3: Protocol Action     TX level interpretations
+                             - Cross-user behavior: "RGB++ leap", "UTXOSwap swap"
+                             - Item action: "DAO deposit", "pet pat", ".bit update"
                              Present when a ProtocolDetector matches
 
-Layer 2: Item Delta          WHAT — per-participant balance sheet
-                             Token delta, Object arrived/departed, Identity arrived/departed
+Layer 2: Item Delta          User level interpretations, per-participant balance sheet
+                             Token delta, Item arrived/departed
                              Only records position changes (delta != 0)
                              Present when participant gained or lost items
 
-Layer 1: CKB Position        HOW MUCH — per-participant capacity arithmetic
+Layer 1: CKB Position        User level, changes of CKBytes, the raw material
                              ckb_delta, used_delta
                              Always present. Not a fallback.
 ```
-
-Raw cells (InputCellView, ParsedCell, witnesses) are Layer 0 — the ground truth that all layers derive from, but not stored in activities. Available via transaction lookup.
 
 ### Layer 1: CKB Position (per-participant, always present)
 
@@ -40,15 +36,11 @@ ckb_delta  = sum(output_capacities) - sum(input_capacities)  for this participan
 used_delta = change in occupied capacity
 ```
 
-CKB delta is a **dimension**, not a classification. A DAO deposit has `ckb_delta = -102 CKB`. A token transfer has `ckb_delta = -0.001 CKB` (fee). A coinbase has `ckb_delta = +1065 CKB`. The CKB position is the bedrock measurement that is always meaningful.
-
-"CKB transfer" as a display type means: "the only interesting signal is CKB delta" — the degenerate case where Layers 2 and 3 are empty. It is not a separate activity type; it is the absence of higher-layer signals.
-
-Layer 1 is **pre-computed** and stored per-participant. It is not derived at read time.
+CKB delta is a **dimension**, not a classification. A DAO deposit has `ckb_delta = -102 CKB`. A token transfer may have `ckb_delta = -188 CKB` (capacity transferred with tokens). A coinbase has `ckb_delta = +1065 CKB`. The CKB position is the bedrock measurement that is always meaningful.
 
 ### Layer 2: Item Delta (per-participant balance sheet)
 
-Layer 2 is the participant's **personal balance sheet** — what items were gained or lost. It follows double-entry bookkeeping principles: each participant independently records their own position changes.
+Layer 2 records the participant's **personal balance sheet** — what items were gained or lost. It follows double-entry bookkeeping principles: each participant independently records their own position changes.
 
 All item types — fungible tokens, non-fungible objects, identities — are recorded uniformly. Each entry is an item identifier, a kind tag, and a signed delta. Fungible items carry precise amounts; non-fungible items carry +1 (arrived) or -1 (departed). The kind tag is extensible to future asset types without structural changes.
 
@@ -66,7 +58,7 @@ Layer 2 records **only position changes** (delta != 0):
 
 - **DAO operations** — A DAO cell is CKB in a different state (locked vs free), not a separate item in the portfolio. The CKB movement is captured at Layer 1; the protocol semantics belong at Layer 3.
 
-- **Mint/Transfer/Burn classification** — Layer 2 records what happened to _your_ holdings, not why. Classification is derived from the pattern of deltas across participants or provided by Layer 3 protocol actions:
+- **Mint/Transfer/Burn classification** — Layer 2 records what happened to your holdings, not why. Classification is derived from the pattern of deltas across participants or provided by Layer 3 protocol actions:
 
   | Scenario             | Alice's L2    | Bob's L2             | Layer 3 narrative          |
   | -------------------- | ------------- | -------------------- | -------------------------- |
@@ -78,24 +70,20 @@ Layer 2 records **only position changes** (delta != 0):
 
 - **Counterparty information** — Layer 2 is self-contained per-participant. "Who did I trade with" is a Layer 3 cross-user interpretation.
 
-- **Display metadata** — Token symbol/decimals, object names, identity labels are not stored in activities. They are looked up from metadata stores at read time.
+### Layer 3: Protocol Action (TX level interpretations)
 
-### Layer 3: Protocol Action (TX level)
+Protocol actions are the highest-level interpretation. Layer 3 concerns about:
 
-Protocol actions are the highest-level interpretation. They are stored **once per transaction**, not per-participant. Layer 3 has two complementary concerns:
+- **Cross-user behavior interpretation** — actions that span multiple participants:
+  - "Alice and Bob completed a UTXOSwap trade"
+  - "RGB++ leap from BTC to CKB"
+  - "Fiber channel opened between Alice and Bob"
 
-**3a. Cross-user behavior interpretation** — actions that span multiple participants:
-
-- "Alice and Bob completed a UTXOSwap trade"
-- "RGB++ leap from BTC to CKB"
-- "Fiber channel opened between Alice and Bob"
-
-**3b. Item action interpretation** — actions performed on specific items:
-
-- "DAO deposit of 102 CKB"
-- "Pet #123 was patted"
-- ".bit xyz records updated"
-- "DAO withdrawal requested"
+- **Item action interpretation** — actions performed on specific items:
+  - "DAO deposit of 102 CKB"
+  - "Pet #123 was patted"
+  - ".bit xyz records updated"
+  - "DAO withdrawal requested"
 
 These two concerns are not mutually exclusive — a single protocol action may express both (e.g., "Spore transfer from Alice to Bob" is both a cross-user action and an item action).
 
