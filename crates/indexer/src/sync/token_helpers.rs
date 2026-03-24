@@ -512,7 +512,7 @@ pub(crate) fn collect_token_max_supply_observations(
     observations
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, dead_code)]
 pub(crate) fn load_activity_token_info_cache(
     store: &CkbadgerStore,
     tx_data: &[TxData],

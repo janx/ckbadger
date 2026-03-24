@@ -1,7 +1,9 @@
 //! Stable++ protocol detector: identifies CDP vault lifecycle events
 //! by analyzing Vault Lock cell transitions and token deltas.
 
-use ckbadger_store::types::{ItemDelta, LockCallEntry, ProtocolAction, TypeCallEntry, ITEM_KIND_TOKEN};
+use ckbadger_store::types::{
+    ItemDelta, LockCallEntry, ProtocolAction, TypeCallEntry, ITEM_KIND_TOKEN,
+};
 
 use crate::parser::stablepp::{
     is_stablepp_asset, is_stablepp_intent_lock, is_stablepp_script, is_stablepp_vault_lock,
@@ -99,7 +101,9 @@ impl StableppDetector {
     ) -> i128 {
         item_deltas
             .iter()
-            .filter(|d| d.kind == ITEM_KIND_TOKEN && stablepp_type_script_hashes.contains(&d.item_id))
+            .filter(|d| {
+                d.kind == ITEM_KIND_TOKEN && stablepp_type_script_hashes.contains(&d.item_id)
+            })
             .map(|d| d.delta)
             .sum()
     }
@@ -205,13 +209,8 @@ impl ProtocolDetector for StableppDetector {
 #[cfg(test)]
 #[allow(clippy::useless_vec)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
-    use crate::db::writer::activities::{
-        build_tx_actions_for_block, OutputCellView, TxView,
-    };
-    use ckbadger_store::types::TAG_PROTOCOL;
+    use crate::db::writer::activities::{build_tx_actions_for_block, OutputCellView, TxView};
     use crate::parser::stablepp::{
         INTENT_LOCK_CODE_HASH_MAINNET, POOL_CODE_HASH_MAINNET, VAULT_LOCK_CODE_HASH_MAINNET,
     };
@@ -352,8 +351,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         assert!(
@@ -414,8 +412,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -481,8 +478,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -556,8 +552,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -635,8 +630,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -691,8 +685,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -790,8 +783,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];

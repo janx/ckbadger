@@ -7,10 +7,6 @@ use super::BULK_BUILD_MIN_BLOCK_SPAN;
 use crate::sync::indexer::Indexer;
 use ckb_store_reader::CkbChainReader;
 
-/// How long the worker sleeps when gated by the ahead limit before
-/// re-checking.
-const AHEAD_GATE_POLL_MS: u64 = 20;
-
 pub(crate) struct PrefetchResult {
     pub blocks: Vec<RawCkbBlock>,
     pub fetch_elapsed: Duration,
@@ -37,7 +33,6 @@ pub(crate) enum PrefetchExitReason {
 pub(crate) struct PrefetchWorkerStats {
     pub total_fetches: u64,
     pub total_blocks: u64,
-    pub ahead_gate_count: u64,
     pub exit_reason: PrefetchExitReason,
 }
 
@@ -55,7 +50,6 @@ impl PrefetchChannelHandle {
         start_block: u64,
         handoff_target: u64,
         initial_span: u64,
-        ahead_rx: tokio::sync::watch::Receiver<u64>,
         threads_rx: tokio::sync::watch::Receiver<u32>,
     ) -> Self {
         let (result_tx, result_rx) = tokio::sync::mpsc::channel(max_depth);
@@ -65,7 +59,6 @@ impl PrefetchChannelHandle {
             Self::prefetch_worker(
                 result_tx,
                 span_rx,
-                ahead_rx,
                 threads_rx,
                 ckb_store,
                 start_block,
@@ -84,7 +77,6 @@ impl PrefetchChannelHandle {
     fn prefetch_worker(
         result_tx: tokio::sync::mpsc::Sender<Result<PrefetchResult>>,
         span_rx: tokio::sync::watch::Receiver<u64>,
-        ahead_rx: tokio::sync::watch::Receiver<u64>,
         threads_rx: tokio::sync::watch::Receiver<u32>,
         ckb_store: Arc<CkbChainReader>,
         start_block: u64,
@@ -93,32 +85,14 @@ impl PrefetchChannelHandle {
         let mut stats = PrefetchWorkerStats {
             total_fetches: 0,
             total_blocks: 0,
-            ahead_gate_count: 0,
             exit_reason: PrefetchExitReason::Completed,
         };
         let mut position = start_block;
 
         while position <= handoff_target {
-            // Dynamic ahead gate: the bottleneck controller sets how many
-            // batches to prefetch ahead.  When the channel has that many
-            // pending, we wait — freeing CPU and I/O for build/flush.
-            let ahead_limit = (*ahead_rx.borrow()).max(1);
-            let pending = result_tx.max_capacity() - result_tx.capacity();
-            if pending >= ahead_limit as usize {
-                let mut gated = false;
-                loop {
-                    let current_pending = result_tx.max_capacity() - result_tx.capacity();
-                    let current_limit = (*ahead_rx.borrow()).max(1);
-                    if current_pending < current_limit as usize {
-                        break;
-                    }
-                    if !gated {
-                        stats.ahead_gate_count += 1;
-                        gated = true;
-                    }
-                    std::thread::sleep(Duration::from_millis(AHEAD_GATE_POLL_MS));
-                }
-            }
+            // Backpressure is provided by the bounded channel — when the
+            // channel is full, `blocking_send` below naturally blocks until
+            // the build loop consumes a batch.
 
             let span = (*span_rx.borrow()).max(BULK_BUILD_MIN_BLOCK_SPAN);
             let end = std::cmp::min(
@@ -203,7 +177,6 @@ mod tests {
             Ok(PrefetchWorkerStats {
                 total_fetches: 0,
                 total_blocks: 0,
-                ahead_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -236,7 +209,6 @@ mod tests {
             Ok(PrefetchWorkerStats {
                 total_fetches: 0,
                 total_blocks: 0,
-                ahead_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -276,7 +248,6 @@ mod tests {
             Ok(PrefetchWorkerStats {
                 total_fetches: 0,
                 total_blocks: 0,
-                ahead_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -307,7 +278,6 @@ mod tests {
             Ok(PrefetchWorkerStats {
                 total_fetches: 0,
                 total_blocks: 0,
-                ahead_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -342,7 +312,6 @@ mod tests {
             Ok(PrefetchWorkerStats {
                 total_fetches: 42,
                 total_blocks: 420_000,
-                ahead_gate_count: 0,
                 exit_reason: PrefetchExitReason::Completed,
             })
         });
@@ -358,55 +327,5 @@ mod tests {
         assert_eq!(stats.total_fetches, 42);
         assert_eq!(stats.total_blocks, 420_000);
         assert!(matches!(stats.exit_reason, PrefetchExitReason::Completed));
-    }
-
-    #[tokio::test]
-    async fn prefetch_ahead_gate_blocks_when_at_limit() {
-        let (_ahead_tx, ahead_rx) = tokio::sync::watch::channel(3u64); // limit=3
-
-        let (result_tx, result_rx) = tokio::sync::mpsc::channel::<Result<PrefetchResult>>(8);
-
-        // Pre-fill channel to pending=3 so the gate should engage.
-        for _ in 0..3 {
-            result_tx
-                .send(Ok(PrefetchResult {
-                    blocks: vec![],
-                    fetch_elapsed: Duration::from_millis(1),
-                    effective_end: 0,
-                }))
-                .await
-                .unwrap();
-        }
-
-        let tx_for_check = result_tx.clone();
-        let ahead_for_check = ahead_rx.clone();
-        let gate_task = tokio::task::spawn_blocking(move || {
-            let pending = tx_for_check.max_capacity() - tx_for_check.capacity();
-            assert_eq!(pending, 3, "channel should have 3 pending");
-            let limit = *ahead_for_check.borrow();
-            // pending (3) >= limit (3) → should gate
-            pending >= limit as usize
-        });
-        assert!(gate_task.await.unwrap());
-
-        drop(result_rx);
-    }
-
-    #[tokio::test]
-    async fn prefetch_ahead_gate_open_when_below_limit() {
-        let (_ahead_tx, ahead_rx) = tokio::sync::watch::channel(4u64); // limit=4
-
-        let (result_tx, _result_rx) = tokio::sync::mpsc::channel::<Result<PrefetchResult>>(8);
-
-        // Channel is empty (pending = 0) — should NOT gate
-        let tx_for_check = result_tx.clone();
-        let ahead_for_check = ahead_rx.clone();
-        let gate_task = tokio::task::spawn_blocking(move || {
-            let pending = tx_for_check.max_capacity() - tx_for_check.capacity();
-            assert_eq!(pending, 0, "channel should be empty");
-            let limit = *ahead_for_check.borrow();
-            pending < limit as usize // should be open
-        });
-        assert!(gate_task.await.unwrap());
     }
 }

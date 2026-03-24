@@ -133,12 +133,8 @@ impl ProtocolDetector for UtxoSwapDetector {
 #[cfg(test)]
 #[allow(clippy::useless_vec)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
-    use crate::db::writer::activities::{
-        build_tx_actions_for_block, OutputCellView, TxView,
-    };
+    use crate::db::writer::activities::{build_tx_actions_for_block, OutputCellView, TxView};
     use crate::parser::utxoswap::INTENT_LOCK_CODE_HASH_MAINNET;
     use crate::rpc::parse_hex_to_bytes;
 
@@ -279,8 +275,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         assert!(
@@ -324,8 +319,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -385,8 +379,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -436,8 +429,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -493,8 +485,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -546,8 +537,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
 

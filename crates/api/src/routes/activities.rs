@@ -144,6 +144,7 @@ fn default_latest_limit() -> usize {
 }
 
 /// Convert an `ItemDelta` to `ItemDeltaResponse`, enriching tokens with symbol/decimals.
+#[allow(clippy::type_complexity)]
 fn convert_item_delta(
     item: &ItemDelta,
     token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
@@ -180,6 +181,7 @@ fn convert_item_delta(
 }
 
 /// Look up token symbol and decimals from CF_TOKENS, caching results.
+#[allow(clippy::type_complexity)]
 fn lookup_token_info(
     store: &CkbadgerStore,
     cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
@@ -191,16 +193,13 @@ fn lookup_token_info(
             .map(|(s, d)| (s.clone(), *d))
             .unwrap_or((None, None));
     }
-    let result = store.get_token(type_script_hash).ok().flatten().map(|t| {
-        (
-            t.symbol.clone(),
-            t.decimals.map(|d| d as u8),
-        )
-    });
+    let result = store
+        .get_token(type_script_hash)
+        .ok()
+        .flatten()
+        .map(|t| (t.symbol.clone(), t.decimals.map(|d| d as u8)));
     cache.insert(type_script_hash.to_vec(), result.clone());
-    result
-        .map(|(s, d)| (s, d))
-        .unwrap_or((None, None))
+    result.unwrap_or((None, None))
 }
 
 fn normalized_script_name(info: Option<&ScriptInfo>) -> Option<String> {
@@ -481,6 +480,7 @@ fn convert_protocol_action(
 }
 
 /// Build an address-scoped activity response from a TxActions for a specific participant.
+#[allow(clippy::type_complexity)]
 pub(crate) fn build_activity_response(
     store: &CkbadgerStore,
     actions: &TxActions,
@@ -523,6 +523,7 @@ pub(crate) fn build_activity_response(
 }
 
 /// Build a global activity response showing all participants from a TxActions.
+#[allow(clippy::type_complexity)]
 pub(crate) fn build_global_activity_response(
     store: &CkbadgerStore,
     _network: &str,
@@ -613,7 +614,6 @@ fn parse_activity_cursor(value: &str) -> Option<(i64, i32)> {
     }
 }
 
-
 /// Check if an addr_tx entry is canonical using the same logic as
 /// the transactions endpoint (`is_canonical_addr_tx` in cells.rs):
 /// verify tx_hash location matches (block_num, tx_idx) in TX_HASH_MAP + TX_INDEX.
@@ -691,7 +691,10 @@ fn matches_global_activity_filter(actions: &TxActions, filter: Option<&str>) -> 
         if !actions.protocol_actions.is_empty() {
             return "protocol";
         }
-        let combined_tags: u16 = actions.participants.iter().fold(0u16, |acc, p| acc | p.tags);
+        let combined_tags: u16 = actions
+            .participants
+            .iter()
+            .fold(0u16, |acc, p| acc | p.tags);
         if combined_tags & TAG_DAO != 0 {
             return "dao";
         }

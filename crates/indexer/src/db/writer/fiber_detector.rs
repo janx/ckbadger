@@ -373,15 +373,11 @@ impl ProtocolDetector for FiberDetector {
 #[cfg(test)]
 #[allow(clippy::useless_vec)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
-    use crate::db::writer::activities::{
-        build_tx_actions_for_block, OutputCellView, TxView,
-    };
-    use ckbadger_store::types::TAG_PROTOCOL;
+    use crate::db::writer::activities::{build_tx_actions_for_block, OutputCellView, TxView};
     use crate::parser::fiber::{COMMITMENT_LOCK_CODE_HASH_MAINNET, FUNDING_LOCK_CODE_HASH_MAINNET};
     use crate::rpc::parse_hex_to_bytes;
+    use ckbadger_store::types::TAG_PROTOCOL;
 
     struct OwnedInput {
         lock_script_hash: Vec<u8>,
@@ -534,8 +530,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -624,8 +619,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -711,8 +705,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -735,8 +728,14 @@ mod tests {
         );
 
         // All participants should be present
-        assert!(actions.participants.iter().any(|p| p.lock_hash == vec![funding_owner; 32]));
-        assert!(actions.participants.iter().any(|p| p.lock_hash == vec![commitment_owner; 32]));
+        assert!(actions
+            .participants
+            .iter()
+            .any(|p| p.lock_hash == vec![funding_owner; 32]));
+        assert!(actions
+            .participants
+            .iter()
+            .any(|p| p.lock_hash == vec![commitment_owner; 32]));
     }
 
     #[test]
@@ -786,8 +785,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -806,7 +804,10 @@ mod tests {
         );
 
         // Commitment lock owner should still be a participant
-        assert!(actions.participants.iter().any(|p| p.lock_hash == vec![commitment_owner; 32]));
+        assert!(actions
+            .participants
+            .iter()
+            .any(|p| p.lock_hash == vec![commitment_owner; 32]));
     }
 
     #[test]
@@ -846,8 +847,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         assert!(
@@ -908,8 +908,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         let actions = &actions_list[0];
         let open_action = actions
@@ -1034,8 +1033,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];

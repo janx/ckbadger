@@ -331,7 +331,7 @@ mod tests {
         batch.commit().unwrap();
 
         let got = store
-            .get_tx_actions(100, 0, &vec![0xAA; 32])
+            .get_tx_actions(100, 0, &[0xAA; 32])
             .unwrap()
             .expect("should find tx actions");
         assert_eq!(got.block_number, 100);
@@ -376,8 +376,14 @@ mod tests {
     fn test_matches_activity_filter_all() {
         let actions = make_tx_actions(100, 0, 0xAA);
         let lock_hash = vec![0xAA; 32];
-        assert!(CkbadgerStore::matches_activity_filter(&actions, &lock_hash, None));
-        assert!(CkbadgerStore::matches_activity_filter(&actions, &lock_hash, Some("all")));
+        assert!(CkbadgerStore::matches_activity_filter(
+            &actions, &lock_hash, None
+        ));
+        assert!(CkbadgerStore::matches_activity_filter(
+            &actions,
+            &lock_hash,
+            Some("all")
+        ));
     }
 
     #[test]
@@ -385,7 +391,11 @@ mod tests {
         let actions = make_tx_actions(100, 0, 0xAA);
         let lock_hash = vec![0xAA; 32];
         // tags=0 means pure CKB
-        assert!(CkbadgerStore::matches_activity_filter(&actions, &lock_hash, Some("ckb")));
+        assert!(CkbadgerStore::matches_activity_filter(
+            &actions,
+            &lock_hash,
+            Some("ckb")
+        ));
     }
 
     #[test]
@@ -393,8 +403,16 @@ mod tests {
         let mut actions = make_tx_actions(100, 0, 0xAA);
         actions.participants[0].tags = TAG_TOKEN;
         let lock_hash = vec![0xAA; 32];
-        assert!(CkbadgerStore::matches_activity_filter(&actions, &lock_hash, Some("token")));
-        assert!(!CkbadgerStore::matches_activity_filter(&actions, &lock_hash, Some("ckb")));
+        assert!(CkbadgerStore::matches_activity_filter(
+            &actions,
+            &lock_hash,
+            Some("token")
+        ));
+        assert!(!CkbadgerStore::matches_activity_filter(
+            &actions,
+            &lock_hash,
+            Some("ckb")
+        ));
     }
 
     #[test]
@@ -402,24 +420,42 @@ mod tests {
         let actions = make_tx_actions(100, 0, 0xAA);
         let unknown_lock = vec![0xFF; 32];
         // No matching participant -> false for any filter
-        assert!(!CkbadgerStore::matches_activity_filter(&actions, &unknown_lock, Some("token")));
+        assert!(!CkbadgerStore::matches_activity_filter(
+            &actions,
+            &unknown_lock,
+            Some("token")
+        ));
     }
 
     #[test]
     fn test_matches_activity_filter_protocol() {
         let mut actions = make_tx_actions(100, 0, 0xAA);
         actions.participants[0].tags = TAG_PROTOCOL;
-        actions.protocol_actions = vec![ProtocolAction::new("rgbpp", "transfer", serde_json::json!({}))];
+        actions.protocol_actions = vec![ProtocolAction::new(
+            "rgbpp",
+            "transfer",
+            serde_json::json!({}),
+        )];
         let lock_hash = vec![0xAA; 32];
-        assert!(CkbadgerStore::matches_activity_filter(&actions, &lock_hash, Some("protocol:rgbpp")));
-        assert!(!CkbadgerStore::matches_activity_filter(&actions, &lock_hash, Some("protocol:fiber")));
+        assert!(CkbadgerStore::matches_activity_filter(
+            &actions,
+            &lock_hash,
+            Some("protocol:rgbpp")
+        ));
+        assert!(!CkbadgerStore::matches_activity_filter(
+            &actions,
+            &lock_hash,
+            Some("protocol:fiber")
+        ));
     }
 
     #[test]
     fn test_list_activities_rejects_non_32_byte_lock_hash() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let err = store.list_activities(&[0xAA; 16], 10, None, None).unwrap_err();
+        let err = store
+            .list_activities(&[0xAA; 16], 10, None, None)
+            .unwrap_err();
         assert!(err.to_string().contains("32-byte lock_hash"));
     }
 }

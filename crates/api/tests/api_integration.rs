@@ -284,7 +284,12 @@ fn make_test_tx_actions(
 }
 
 /// Create a participant delta for multi-participant TxActions.
-fn make_test_participant(lock_byte: u8, ckb_delta: i128, tags: u16) -> ckbadger_store::types::ParticipantDelta {
+#[allow(dead_code)]
+fn make_test_participant(
+    lock_byte: u8,
+    ckb_delta: i128,
+    tags: u16,
+) -> ckbadger_store::types::ParticipantDelta {
     ckbadger_store::types::ParticipantDelta {
         lock_hash: vec![lock_byte; 32],
         ckb_delta,
@@ -8913,7 +8918,7 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
 
 #[tokio::test]
 async fn test_latest_activities_return_type_calls() {
-    use ckbadger_store::types::{ParticipantDelta, TAG_TYPE_CALL, TAG_DAO};
+    use ckbadger_store::types::{ParticipantDelta, TAG_DAO, TAG_TYPE_CALL};
     let core_store = test_store();
     let append_only_store = test_append_only_store();
     let tx_hash = vec![0x68; 32];
@@ -8932,7 +8937,11 @@ async fn test_latest_activities_return_type_calls() {
         tx_index: 1,
         timestamp: 1_700_000_999,
         is_cellbase: false,
-        protocol_actions: vec![ProtocolAction::new("dao", "deposit", serde_json::json!({"capacity": 102_00000000i64}))],
+        protocol_actions: vec![ProtocolAction::new(
+            "dao",
+            "deposit",
+            serde_json::json!({"capacity": 102_00000000i64}),
+        )],
         type_calls: vec![TypeCallEntry {
             type_code_hash: type_code_hash.clone(),
             type_hash_type: 1,
@@ -9018,7 +9027,7 @@ async fn test_global_activities_basic() {
     let tx_hash = vec![0x91; 32];
     let block_hash = vec![0xA1; 32];
 
-    let actions = make_test_tx_actions(&vec![0x11; 32], &tx_hash, &block_hash, 200, 0, 111, 0);
+    let actions = make_test_tx_actions(&[0x11; 32], &tx_hash, &block_hash, 200, 0, 111, 0);
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_block_header(
@@ -9063,10 +9072,7 @@ async fn test_global_activities_basic() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let data = json["data"].as_array().expect("data array");
     assert!(!data.is_empty());
-    assert_eq!(
-        data[0]["txHash"],
-        format!("0x{}", hex::encode(&tx_hash))
-    );
+    assert_eq!(data[0]["txHash"], format!("0x{}", hex::encode(&tx_hash)));
 }
 
 #[tokio::test]

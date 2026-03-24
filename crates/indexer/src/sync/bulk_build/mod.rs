@@ -19,11 +19,11 @@ use ckbadger_store::types::{
     DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
-    AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX,
-    CF_BLOCK_HEADERS, CF_CELLS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE,
-    CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE, CF_CONSUMED_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES,
-    CF_LIVE_CELLS, CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_ACTIONS,
-    CF_TX_HASH_MAP, CF_TX_INDEX,
+    AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS,
+    CF_CELLS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE,
+    CF_CELL_BY_TYPE_CODE, CF_CONSUMED_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_LIVE_CELLS,
+    CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_ACTIONS, CF_TX_HASH_MAP,
+    CF_TX_INDEX,
 };
 use rayon::prelude::*;
 use rocksdb::IteratorMode;
@@ -151,7 +151,6 @@ impl BulkBuildEngine {
         } else {
             indexer.progress.current() + 1
         };
-        let (ahead_tx, ahead_rx) = tokio::sync::watch::channel(controller.prefetch_ahead());
         let (threads_tx, threads_rx) = tokio::sync::watch::channel(controller.fetch_threads());
         let mut prefetch = prefetch::PrefetchChannelHandle::new(
             channel_depth,
@@ -159,7 +158,6 @@ impl BulkBuildEngine {
             prefetch_start,
             initial_handoff,
             configured_batch_size,
-            ahead_rx,
             threads_rx,
         );
         // Bounded flush channel: the build loop sends PendingFlush into
@@ -423,7 +421,6 @@ impl BulkBuildEngine {
             }) {
                 batch_block_span = output.batch_span;
                 prefetch.update_span(batch_block_span);
-                let _ = ahead_tx.send(output.prefetch_ahead);
                 let _ = threads_tx.send(output.fetch_threads);
 
                 if let Some(new_bg_jobs) = controller.bg_jobs_if_changed() {
@@ -487,7 +484,6 @@ impl BulkBuildEngine {
         info!(
             total_fetches = prefetch_stats.total_fetches,
             total_blocks = prefetch_stats.total_blocks,
-            ahead_gate_count = prefetch_stats.ahead_gate_count,
             exit_reason = ?prefetch_stats.exit_reason,
             "Prefetch worker finished"
         );
@@ -2815,10 +2811,7 @@ fn build_history_rows_for_block(
             .collect::<Vec<_>>();
 
         let actions_list =
-            crate::db::writer::activities::build_tx_actions_for_block(
-                &tx_views,
-                detectors,
-            )?;
+            crate::db::writer::activities::build_tx_actions_for_block(&tx_views, detectors)?;
         tx_actions_list = Vec::with_capacity(actions_list.len());
         for tx_actions in actions_list {
             rows.push(materialize::MaterializedRow::new(
@@ -4263,12 +4256,11 @@ mod tests {
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
     use ckbadger_store::types::{
         AssetAction, FiberChannelState, ObjectCollectionActivityEntry, TokenInfo,
-        TokenTransferRecord, TxActions, DID_CKB_SENTINEL_COLLECTION,
-        DOTBIT_SENTINEL_COLLECTION,
+        TokenTransferRecord, TxActions, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
     };
     use ckbadger_store::{
-        keys, CF_TX_ACTIONS, CF_ADDR_TXS, CF_IDENTITY_COLLECTION_ACTIVITIES,
-        CF_OBJECT_COLLECTION_ACTIVITIES,
+        keys, CF_ADDR_TXS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_OBJECT_COLLECTION_ACTIVITIES,
+        CF_TX_ACTIONS,
     };
 
     fn open_empty_domain_store(name: &str) -> (CkbadgerStore, std::path::PathBuf) {
@@ -5002,7 +4994,9 @@ mod tests {
 
         let create_key = keys::encode_tx_actions_key(14_000_888, 0, &create_tx_hash);
         let split_key = keys::encode_tx_actions_key(14_000_888, 1, &split_tx_hash);
-        let create_actions = tx_actions_map.get(&create_key).expect("cellbase tx_actions");
+        let create_actions = tx_actions_map
+            .get(&create_key)
+            .expect("cellbase tx_actions");
         assert_eq!(create_actions.tx_hash, create_tx_hash);
         assert!(create_actions.is_cellbase);
         assert_eq!(create_actions.participants.len(), 1);
@@ -5090,12 +5084,14 @@ mod tests {
             .iter()
             .filter(|row| row.cf_name == CF_TX_ACTIONS)
             .map(|row| {
-                bincode::deserialize::<TxActions>(&row.value)
-                    .expect("deserialize TxActions")
+                bincode::deserialize::<TxActions>(&row.value).expect("deserialize TxActions")
             })
             .find(|actions| !actions.is_cellbase)
             .expect("non-cellbase TxActions");
-        assert!(!open_tx_actions.protocol_actions.is_empty(), "fiber protocol actions should be at TX level");
+        assert!(
+            !open_tx_actions.protocol_actions.is_empty(),
+            "fiber protocol actions should be at TX level"
+        );
         assert_eq!(open_tx_actions.protocol_actions[0].protocol, "fiber");
         assert_eq!(open_tx_actions.protocol_actions[0].action, "channel_open");
 

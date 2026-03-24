@@ -42,10 +42,7 @@ fn deserialize_stats<T: serde::de::DeserializeOwned>(raw: &[u8], metric: &str) -
 /// - CKB moved: sum |participant.ckb_delta| for non-cellbase
 /// - Transfer count: participant has no asset/protocol/script flags
 /// - Coinbase: tx_actions.is_cellbase
-fn accumulate_tx_actions_stats(
-    tx_actions: &TxActions,
-    stats: &mut DailyActivityStats,
-) {
+fn accumulate_tx_actions_stats(tx_actions: &TxActions, stats: &mut DailyActivityStats) {
     // Coinbase transactions are counted but excluded from all other metrics
     if tx_actions.is_cellbase {
         stats.coinbase_count += 1;
@@ -132,7 +129,10 @@ fn accumulate_tx_actions_stats(
         || has_protocol_action;
     if !matched {
         // Check if any participant has a type_call tag (meaning type script was involved)
-        let has_type_call_tag = tx_actions.participants.iter().any(|p| p.tags & TAG_TYPE_CALL != 0);
+        let has_type_call_tag = tx_actions
+            .participants
+            .iter()
+            .any(|p| p.tags & TAG_TYPE_CALL != 0);
         if !has_type_call_tag {
             stats.transfer_count += 1;
         } else {
@@ -632,10 +632,7 @@ impl BatchWriter {
 
     /// Accumulate activity stats from a TxActions into DailyActivityStats.
     /// Call once per TxActions from build_tx_actions_for_block().
-    pub fn accumulate_tx_activity_stats(
-        tx_actions: &TxActions,
-        stats: &mut DailyActivityStats,
-    ) {
+    pub fn accumulate_tx_activity_stats(tx_actions: &TxActions, stats: &mut DailyActivityStats) {
         accumulate_tx_actions_stats(tx_actions, stats);
     }
 
@@ -1654,10 +1651,9 @@ mod activity_stats_tests {
     use std::sync::Arc;
 
     use ckbadger_store::types::{
-        DailyActivityStats, ItemDelta, ParticipantDelta, ProtocolAction, TxActions,
-        TypeCallEntry, LockCallEntry,
-        ITEM_KIND_TOKEN, ITEM_KIND_OBJECT, ITEM_KIND_IDENTITY,
-        TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_DAO, TAG_TYPE_CALL,
+        DailyActivityStats, ItemDelta, ParticipantDelta, ProtocolAction, TxActions, TypeCallEntry,
+        ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN, TAG_DAO, TAG_IDENTITY, TAG_OBJECT,
+        TAG_TOKEN, TAG_TYPE_CALL,
     };
     use ckbadger_store::CkbadgerStore;
 
@@ -1695,7 +1691,12 @@ mod activity_stats_tests {
     #[test]
     fn test_coinbase_classified_correctly() {
         let mut stats = DailyActivityStats::default();
-        let actions = make_tx_actions(true, vec![make_participant(500_00000000, 0)], vec![], vec![]);
+        let actions = make_tx_actions(
+            true,
+            vec![make_participant(500_00000000, 0)],
+            vec![],
+            vec![],
+        );
         accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(stats.coinbase_count, 1);
         assert_eq!(stats.transfer_count, 0);
@@ -1706,7 +1707,12 @@ mod activity_stats_tests {
     #[test]
     fn test_plain_transfer_classified_correctly() {
         let mut stats = DailyActivityStats::default();
-        let actions = make_tx_actions(false, vec![make_participant(-100_00000000, 0)], vec![], vec![]);
+        let actions = make_tx_actions(
+            false,
+            vec![make_participant(-100_00000000, 0)],
+            vec![],
+            vec![],
+        );
         accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(stats.transfer_count, 1);
         assert_eq!(stats.coinbase_count, 0);
@@ -1719,7 +1725,11 @@ mod activity_stats_tests {
         let actions = make_tx_actions(
             false,
             vec![make_participant(-200_00000000, TAG_DAO)],
-            vec![ProtocolAction::new("dao", "deposit", serde_json::json!({"capacity": 200_00000000i64}))],
+            vec![ProtocolAction::new(
+                "dao",
+                "deposit",
+                serde_json::json!({"capacity": 200_00000000i64}),
+            )],
             vec![],
         );
         accumulate_tx_actions_stats(&actions, &mut stats);
@@ -1733,7 +1743,11 @@ mod activity_stats_tests {
         let actions = make_tx_actions(
             false,
             vec![make_participant(0, TAG_DAO)],
-            vec![ProtocolAction::new("dao", "withdraw_request", serde_json::json!({}))],
+            vec![ProtocolAction::new(
+                "dao",
+                "withdraw_request",
+                serde_json::json!({}),
+            )],
             vec![],
         );
         accumulate_tx_actions_stats(&actions, &mut stats);
@@ -1747,7 +1761,11 @@ mod activity_stats_tests {
         let actions = make_tx_actions(
             false,
             vec![make_participant(200_00000000, TAG_DAO)],
-            vec![ProtocolAction::new("dao", "withdraw_complete", serde_json::json!({}))],
+            vec![ProtocolAction::new(
+                "dao",
+                "withdraw_complete",
+                serde_json::json!({}),
+            )],
             vec![],
         );
         accumulate_tx_actions_stats(&actions, &mut stats);
@@ -1762,7 +1780,11 @@ mod activity_stats_tests {
             false,
             vec![{
                 let mut p = make_participant(0, TAG_TOKEN);
-                p.item_deltas = vec![ItemDelta { item_id: vec![0xAA; 32], kind: ITEM_KIND_TOKEN, delta: 1000 }];
+                p.item_deltas = vec![ItemDelta {
+                    item_id: vec![0xAA; 32],
+                    kind: ITEM_KIND_TOKEN,
+                    delta: 1000,
+                }];
                 p
             }],
             vec![],
@@ -1780,7 +1802,11 @@ mod activity_stats_tests {
             false,
             vec![{
                 let mut p = make_participant(0, TAG_OBJECT);
-                p.item_deltas = vec![ItemDelta { item_id: vec![0xBB; 32], kind: ITEM_KIND_OBJECT, delta: 1 }];
+                p.item_deltas = vec![ItemDelta {
+                    item_id: vec![0xBB; 32],
+                    kind: ITEM_KIND_OBJECT,
+                    delta: 1,
+                }];
                 p
             }],
             vec![],
@@ -1798,7 +1824,11 @@ mod activity_stats_tests {
             false,
             vec![{
                 let mut p = make_participant(0, TAG_IDENTITY);
-                p.item_deltas = vec![ItemDelta { item_id: vec![0xCC; 32], kind: ITEM_KIND_IDENTITY, delta: 1 }];
+                p.item_deltas = vec![ItemDelta {
+                    item_id: vec![0xCC; 32],
+                    kind: ITEM_KIND_IDENTITY,
+                    delta: 1,
+                }];
                 p
             }],
             vec![],
@@ -1816,7 +1846,11 @@ mod activity_stats_tests {
             false,
             vec![{
                 let mut p = make_participant(-500_00000000, TAG_TOKEN | TAG_DAO);
-                p.item_deltas = vec![ItemDelta { item_id: vec![0xAA; 32], kind: ITEM_KIND_TOKEN, delta: 1000 }];
+                p.item_deltas = vec![ItemDelta {
+                    item_id: vec![0xAA; 32],
+                    kind: ITEM_KIND_TOKEN,
+                    delta: 1000,
+                }];
                 p
             }],
             vec![ProtocolAction::new("dao", "deposit", serde_json::json!({}))],
@@ -1833,15 +1867,30 @@ mod activity_stats_tests {
         let mut stats = DailyActivityStats::default();
         // 2 transfers + 1 coinbase
         accumulate_tx_actions_stats(
-            &make_tx_actions(false, vec![make_participant(-50_00000000, 0)], vec![], vec![]),
+            &make_tx_actions(
+                false,
+                vec![make_participant(-50_00000000, 0)],
+                vec![],
+                vec![],
+            ),
             &mut stats,
         );
         accumulate_tx_actions_stats(
-            &make_tx_actions(false, vec![make_participant(30_00000000, 0)], vec![], vec![]),
+            &make_tx_actions(
+                false,
+                vec![make_participant(30_00000000, 0)],
+                vec![],
+                vec![],
+            ),
             &mut stats,
         );
         accumulate_tx_actions_stats(
-            &make_tx_actions(true, vec![make_participant(100_00000000, 0)], vec![], vec![]),
+            &make_tx_actions(
+                true,
+                vec![make_participant(100_00000000, 0)],
+                vec![],
+                vec![],
+            ),
             &mut stats,
         );
         assert_eq!(stats.transfer_count, 2);
@@ -1852,7 +1901,12 @@ mod activity_stats_tests {
     #[test]
     fn test_negative_delta_uses_absolute_value() {
         let mut stats = DailyActivityStats::default();
-        let actions = make_tx_actions(false, vec![make_participant(-999_00000000, 0)], vec![], vec![]);
+        let actions = make_tx_actions(
+            false,
+            vec![make_participant(-999_00000000, 0)],
+            vec![],
+            vec![],
+        );
         accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(stats.total_ckb_moved, 999_00000000);
     }
@@ -1882,12 +1936,19 @@ mod activity_stats_tests {
         let actions = make_tx_actions(
             false,
             vec![make_participant(100, 0)],
-            vec![ProtocolAction::new("rgbpp", "leap_to_ckb", serde_json::json!({}))],
+            vec![ProtocolAction::new(
+                "rgbpp",
+                "leap_to_ckb",
+                serde_json::json!({}),
+            )],
             vec![],
         );
         accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(
-            *stats.protocol_action_counts.get("rgbpp:leap_to_ckb").unwrap(),
+            *stats
+                .protocol_action_counts
+                .get("rgbpp:leap_to_ckb")
+                .unwrap(),
             1
         );
     }

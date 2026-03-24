@@ -28,21 +28,6 @@ pub(crate) struct MaterializedRow {
     pub(crate) value: Vec<u8>,
 }
 
-impl PendingFlush {
-    fn history_row_count(&self) -> usize {
-        self.history_rows.len()
-    }
-
-    fn sealed_row_count(&self) -> usize {
-        self.sealed_rows.len()
-    }
-
-    fn append(&mut self, other: PendingFlush) {
-        self.history_rows.extend(other.history_rows);
-        self.sealed_rows.extend(other.sealed_rows);
-    }
-}
-
 impl MaterializedRow {
     pub(crate) fn new(cf_name: &'static str, key: Vec<u8>, value: Vec<u8>) -> Self {
         Self {
@@ -200,37 +185,6 @@ pub(crate) struct FlushResult {
     pub(crate) history_rows: usize,
     pub(crate) sealed_rows: usize,
     pub(crate) flush_ms: f64,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FlushCoalesceLimits {
-    max_batches: usize,
-    max_history_rows: usize,
-    max_sealed_rows: usize,
-}
-
-impl Default for FlushCoalesceLimits {
-    fn default() -> Self {
-        Self {
-            max_batches: 4,
-            max_history_rows: 1_500_000,
-            max_sealed_rows: 16_000,
-        }
-    }
-}
-
-fn can_coalesce_pending_flush(
-    current: &PendingFlush,
-    candidate: &PendingFlush,
-    merged_batches: usize,
-    limits: FlushCoalesceLimits,
-) -> bool {
-    if merged_batches >= limits.max_batches {
-        return false;
-    }
-
-    current.history_row_count() + candidate.history_row_count() <= limits.max_history_rows
-        && current.sealed_row_count() + candidate.sealed_row_count() <= limits.max_sealed_rows
 }
 
 /// Flush materialized rows to RocksDB. Designed for use in `spawn_blocking`
@@ -398,13 +352,7 @@ impl FlushChannelHandle {
         let (tx, rx) = tokio::sync::mpsc::channel::<PendingFlush>(depth);
         let (flush_ms_tx, flush_ms_rx) = tokio::sync::watch::channel(0.0_f64);
         let worker_handle = tokio::task::spawn_blocking(move || {
-            Self::flush_worker(
-                rx,
-                &domain_store,
-                &append_only_store,
-                flush_ms_tx,
-                FlushCoalesceLimits::default(),
-            )
+            Self::flush_worker(rx, &domain_store, &append_only_store, flush_ms_tx)
         });
         Self {
             tx,
@@ -418,31 +366,10 @@ impl FlushChannelHandle {
         domain_store: &CkbadgerStore,
         append_only_store: &CkbadgerStore,
         flush_ms_tx: tokio::sync::watch::Sender<f64>,
-        limits: FlushCoalesceLimits,
     ) -> Result<FlushChannelStats> {
         let mut stats = FlushChannelStats::default();
-        let mut carry = None;
 
-        while let Some(mut pending) = carry.take().or_else(|| rx.blocking_recv()) {
-            let mut merged_batches = 1usize;
-
-            while merged_batches < limits.max_batches {
-                match rx.try_recv() {
-                    Ok(candidate) => {
-                        if can_coalesce_pending_flush(&pending, &candidate, merged_batches, limits)
-                        {
-                            pending.append(candidate);
-                            merged_batches += 1;
-                        } else {
-                            carry = Some(candidate);
-                            break;
-                        }
-                    }
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
-                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
-                }
-            }
-
+        while let Some(pending) = rx.blocking_recv() {
             let result = flush_rows_to_stores(
                 domain_store,
                 append_only_store,
@@ -490,57 +417,6 @@ impl FlushChannelHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn test_pending_flush(history_rows: usize, sealed_rows: usize, seed: u8) -> PendingFlush {
-        let history = (0..history_rows)
-            .map(|offset| {
-                MaterializedRow::new(
-                    CF_BLOCK_HEADERS,
-                    vec![seed, offset as u8],
-                    vec![seed.wrapping_add(offset as u8)],
-                )
-            })
-            .collect();
-        let sealed = (0..sealed_rows)
-            .map(|offset| {
-                MaterializedRow::new(
-                    ckbadger_store::CF_STATS_CHAIN,
-                    vec![seed, offset as u8],
-                    vec![seed.wrapping_add(offset as u8)],
-                )
-            })
-            .collect();
-        PendingFlush {
-            history_rows: history,
-            sealed_rows: sealed,
-        }
-    }
-
-    #[test]
-    fn can_coalesce_pending_flush_accepts_candidate_within_limits() {
-        let current = test_pending_flush(4, 2, 0x10);
-        let candidate = test_pending_flush(3, 2, 0x20);
-        let limits = FlushCoalesceLimits {
-            max_batches: 4,
-            max_history_rows: 8,
-            max_sealed_rows: 8,
-        };
-
-        assert!(can_coalesce_pending_flush(&current, &candidate, 1, limits,));
-    }
-
-    #[test]
-    fn can_coalesce_pending_flush_rejects_candidate_that_exceeds_history_budget() {
-        let current = test_pending_flush(4, 2, 0x10);
-        let candidate = test_pending_flush(3, 1, 0x20);
-        let limits = FlushCoalesceLimits {
-            max_batches: 4,
-            max_history_rows: 6,
-            max_sealed_rows: 8,
-        };
-
-        assert!(!can_coalesce_pending_flush(&current, &candidate, 1, limits,));
-    }
 
     #[test]
     fn materializer_rejects_append_only_rows_in_final_snapshot() {
