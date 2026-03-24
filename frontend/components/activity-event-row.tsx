@@ -12,7 +12,7 @@ import { formatCkbAmount, truncateHash, cn } from '@/lib/utils';
 import { formatTokenBalance } from '@/lib/format-asset';
 import type {
   Activity,
-  ActivityAssetChange,
+  ItemDelta,
   ActivityTypeCall,
   ActivityLockCall,
   ActivityProtocolAction,
@@ -150,52 +150,18 @@ interface EventParts {
   value: React.ReactNode;
 }
 
-function getAssetEventParts(change: ActivityAssetChange): EventParts {
-  switch (change.type) {
-    case 'daoDeposit':
-      return {
-        badge: <span className="text-gold font-mono text-xs">{'\u25C6'} DAO Deposit</span>,
-        value: (
-          <span className="text-positive font-mono text-xs tabular-nums">
-            +{formatCkbAmount(change.capacity).full} CKB locked
-          </span>
-        ),
-      };
-    case 'daoWithdrawRequest':
-      return {
-        badge: <span className="text-gold font-mono text-xs">{'\u25C6'} DAO Withdraw Request</span>,
-        value: (
-          <span className="text-gold font-mono text-xs tabular-nums">
-            {formatCkbAmount(change.capacity).full} CKB
-          </span>
-        ),
-      };
-    case 'daoWithdrawComplete':
-      return {
-        badge: (
-          <span className="text-positive font-mono text-xs">{'\u25C6'} DAO Withdraw Complete</span>
-        ),
-        value: (
-          <div className="flex flex-col items-end gap-0.5">
-            <span className="text-positive font-mono text-xs tabular-nums">
-              +{formatCkbAmount(change.capacity).full} CKB
-            </span>
-            <span className="text-positive font-mono text-[10px] tabular-nums">
-              +{formatCkbAmount(change.compensation).full} CKB compensation
-            </span>
-          </div>
-        ),
-      };
+function getItemDeltaEventParts(item: ItemDelta): EventParts {
+  switch (item.kind) {
     case 'token': {
-      const delta = BigInt(change.delta);
+      const delta = BigInt(item.delta);
       const isPositive = delta > BigInt(0);
       const isZero = delta === BigInt(0);
       const prefix = isZero ? '' : isPositive ? '+' : '-';
-      const absDelta = change.delta.startsWith('-') ? change.delta.slice(1) : change.delta;
-      const formatted = formatTokenBalance(absDelta, change.decimals ?? 0);
+      const absDelta = item.delta.startsWith('-') ? item.delta.slice(1) : item.delta;
+      const formatted = formatTokenBalance(absDelta, item.decimals ?? 0);
       const color = isZero ? 'text-text-dim' : isPositive ? 'text-positive' : 'text-negative';
-      const symbol = change.symbol?.trim();
-      const label = symbol || truncateHash(change.typeScriptHash, 8, 6);
+      const symbol = item.symbol?.trim();
+      const label = symbol || truncateHash(item.typeScriptHash, 8, 6);
       return {
         badge: (
           <span className="text-token font-mono text-xs">
@@ -204,7 +170,7 @@ function getAssetEventParts(change: ActivityAssetChange): EventParts {
         ),
         value: (
           <Link
-            href={getTokenDetailHref(change.typeScriptHash)}
+            href={getTokenDetailHref(item.typeScriptHash)}
             className={cn(
               'font-mono text-xs tabular-nums transition-colors hover:underline',
               color
@@ -218,45 +184,100 @@ function getAssetEventParts(change: ActivityAssetChange): EventParts {
       };
     }
     case 'object': {
-      const std = formatStandard(change.standard);
-      const action = capitalizeAction(change.action);
+      const isAdd = item.delta > 0;
+      const actionLabel = isAdd ? 'Received' : 'Sent';
       return {
         badge: (
           <span className="text-lavender font-mono text-xs">
-            {'\u2B21'} {std} {action}
+            {'\u2B21'} Object {actionLabel}
           </span>
         ),
         value: (
           <Link
-            href={getObjectDetailHref(change.objectId)}
+            href={getObjectDetailHref(item.objectId)}
             className="text-lavender/80 hover:text-lavender font-mono text-xs transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
-            {truncateHash(change.objectId, 8, 6)}
+            {truncateHash(item.objectId, 8, 6)}
           </Link>
         ),
       };
     }
     case 'identity': {
-      const std = formatStandard(change.standard);
-      const action = capitalizeAction(change.action);
+      const isAdd = item.delta > 0;
+      const actionLabel = isAdd ? 'Registered' : 'Released';
       return {
         badge: (
           <span className="text-aqua font-mono text-xs">
-            {'\u2736'} {std} {action}
+            {'\u2736'} Identity {actionLabel}
           </span>
         ),
         value: (
           <Link
-            href={getIdentityItemDetailHref(change.standard, change.identityId)}
+            href={getIdentityItemDetailHref('identity', item.identityId)}
             className="text-aqua/80 hover:text-aqua font-mono text-xs transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
-            {truncateHash(change.identityId, 8, 6)}
+            {truncateHash(item.identityId, 8, 6)}
           </Link>
         ),
       };
     }
+  }
+}
+
+function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
+  const capacity = pa.metadata?.capacity as string | undefined;
+  const compensation = pa.metadata?.compensation as string | undefined;
+
+  switch (pa.action) {
+    case 'deposit':
+      return {
+        badge: <span className="text-gold font-mono text-xs">{'\u25C6'} DAO Deposit</span>,
+        value: (
+          <span className="text-positive font-mono text-xs tabular-nums">
+            +{capacity ? formatCkbAmount(capacity).full : '0'} CKB locked
+          </span>
+        ),
+      };
+    case 'withdraw_request':
+      return {
+        badge: (
+          <span className="text-gold font-mono text-xs">{'\u25C6'} DAO Withdraw Request</span>
+        ),
+        value: (
+          <span className="text-gold font-mono text-xs tabular-nums">
+            {capacity ? formatCkbAmount(capacity).full : '0'} CKB
+          </span>
+        ),
+      };
+    case 'withdraw_complete':
+      return {
+        badge: (
+          <span className="text-positive font-mono text-xs">{'\u25C6'} DAO Withdraw Complete</span>
+        ),
+        value: (
+          <div className="flex flex-col items-end gap-0.5">
+            <span className="text-positive font-mono text-xs tabular-nums">
+              +{capacity ? formatCkbAmount(capacity).full : '0'} CKB
+            </span>
+            {compensation && (
+              <span className="text-positive font-mono text-[10px] tabular-nums">
+                +{formatCkbAmount(compensation).full} CKB compensation
+              </span>
+            )}
+          </div>
+        ),
+      };
+    default:
+      return {
+        badge: <span className="text-gold font-mono text-xs">{'\u25C6'} DAO</span>,
+        value: capacity ? (
+          <span className="text-gold font-mono text-xs tabular-nums">
+            {formatCkbAmount(capacity).full} CKB
+          </span>
+        ) : null,
+      };
   }
 }
 
@@ -306,6 +327,11 @@ function getFiberActionLabel(action: string): string {
 }
 
 function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {
+  // DAO is handled separately via getDaoEventParts
+  if (pa.protocol === 'dao') {
+    return getDaoEventParts(pa);
+  }
+
   const isFiber = pa.protocol === 'fiber';
   const actionLabel = isFiber ? getFiberActionLabel(pa.action) : formatProtocolAction(pa.action);
   const label = `${pa.protocol} \u00B7 ${actionLabel}`;
@@ -355,7 +381,7 @@ export interface ActivityEventGroupProps {
 /**
  * Renders a TX group as both:
  *  - Narrow (< md): a self-contained stacked card
- *  - Wide (≥ md): bare grid cells — the **parent** must be the grid container
+ *  - Wide (>= md): bare grid cells — the **parent** must be the grid container
  *    (`md:grid` with `gridTemplateColumns: '13rem 1fr auto 5rem'`)
  */
 export function ActivityEventGroup({
@@ -368,8 +394,8 @@ export function ActivityEventGroup({
   activity.protocolActions.forEach((pa) => {
     events.push(getProtocolActionEventParts(pa));
   });
-  activity.assetChanges.forEach((change) => {
-    events.push(getAssetEventParts(change));
+  activity.itemDeltas.forEach((item) => {
+    events.push(getItemDeltaEventParts(item));
   });
   activity.typeCalls.forEach((sc) => {
     events.push(getTypeEventParts(sc));
@@ -424,7 +450,7 @@ export function ActivityEventGroup({
         </div>
       </div>
 
-      {/* === Wide viewport (≥ md): bare grid cells — parent provides the grid === */}
+      {/* === Wide viewport (>= md): bare grid cells — parent provides the grid === */}
       {/* Group separator — full-width border between TX groups */}
       {!isFirst && (
         <div

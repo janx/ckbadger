@@ -99,20 +99,25 @@ describe('renderMarkdownPage', () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
         {
-          address: 'ckt1qyq9sampleaddress0000000000000000000000000',
           txHash: `0x${'a'.repeat(64)}`,
           blockNumber: 123,
           txIndex: 0,
           timestamp: '1700000000',
-          ckbDelta: '10000000000',
-          usedDelta: '0',
           isCellbase: false,
-          hasTypeScript: true,
-          assetChanges: [{ type: 'daoDeposit', capacity: '10000000000' }],
           typeCalls: [],
           lockCalls: [],
-          protocolActions: [],
-          peers: [],
+          protocolActions: [
+            { protocol: 'dao', action: 'deposit', metadata: { capacity: '10000000000' } },
+          ],
+          participants: [
+            {
+              address: 'ckt1qyq9sampleaddress0000000000000000000000000',
+              ckbDelta: '10000000000',
+              usedDelta: '0',
+              itemDeltas: [],
+              tags: 8,
+            },
+          ],
         },
       ],
       total: 1,

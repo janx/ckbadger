@@ -315,14 +315,14 @@ describe('AddressDetailPage', () => {
           ckbDelta: '0',
           usedDelta: '0',
           isCellbase: false,
-          hasTypeScript: false,
-          peers: [],
+          participants: [],
+          tags: 1,
           typeCalls: [],
           lockCalls: [],
           protocolActions: [],
-          assetChanges: [
+          itemDeltas: [
             {
-              type: 'token',
+              kind: 'token',
               typeScriptHash,
               delta: '100000000',
               decimals: 8,
@@ -531,17 +531,16 @@ describe('AddressDetailPage', () => {
           ckbDelta: '0',
           usedDelta: '0',
           isCellbase: false,
-          hasTypeScript: false,
-          peers: [],
+          participants: [],
+          tags: 4,
           typeCalls: [],
           lockCalls: [],
           protocolActions: [],
-          assetChanges: [
+          itemDeltas: [
             {
-              type: 'identity',
+              kind: 'identity',
               identityId: '0x1111111111111111111111111111111111111111',
-              standard: 'dotbit',
-              action: 'mint',
+              delta: 1,
             },
           ],
         },
@@ -554,9 +553,9 @@ describe('AddressDetailPage', () => {
 
     render(<AddressDetailPage />);
 
-    // ActivityEventGroup renders identity as "\u2736 .bit Mint" (appears in both mobile + desktop views)
+    // ActivityEventGroup renders identity as "\u2736 Identity Registered" (appears in both mobile + desktop views)
     await waitFor(() => {
-      expect(screen.getAllByText(/\.bit Mint/)[0]).toBeInTheDocument();
+      expect(screen.getAllByText(/Identity Registered/)[0]).toBeInTheDocument();
     });
   });
 
@@ -572,17 +571,16 @@ describe('AddressDetailPage', () => {
           ckbDelta: '0',
           usedDelta: '0',
           isCellbase: false,
-          hasTypeScript: false,
-          peers: [],
+          participants: [],
+          tags: 4,
           typeCalls: [],
           lockCalls: [],
           protocolActions: [],
-          assetChanges: [
+          itemDeltas: [
             {
-              type: 'identity',
+              kind: 'identity',
               identityId: '0x2222222222222222222222222222222222222222222222222222222222222222',
-              standard: 'did_ckb',
-              action: 'mint',
+              delta: 1,
             },
           ],
         },
@@ -595,9 +593,9 @@ describe('AddressDetailPage', () => {
 
     render(<AddressDetailPage />);
 
-    // ActivityEventGroup renders identity as "\u2736 did:ckb Mint" (appears in both mobile + desktop views)
+    // ActivityEventGroup renders identity as "\u2736 Identity Registered" (appears in both mobile + desktop views)
     await waitFor(() => {
-      expect(screen.getAllByText(/did:ckb Mint/)[0]).toBeInTheDocument();
+      expect(screen.getAllByText(/Identity Registered/)[0]).toBeInTheDocument();
     });
   });
 
@@ -613,11 +611,11 @@ describe('AddressDetailPage', () => {
           ckbDelta: '0',
           usedDelta: '0',
           isCellbase: false,
-          hasTypeScript: false,
-          peers: [],
-          assetChanges: [
+          participants: [],
+          tags: 1,
+          itemDeltas: [
             {
-              type: 'token',
+              kind: 'token',
               typeScriptHash: '0xtokenhash',
               delta: '100000000',
               symbol: 'SEAL',

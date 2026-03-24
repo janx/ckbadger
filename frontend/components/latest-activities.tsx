@@ -18,8 +18,6 @@ import {
 } from '@/components/ui/terminal-panel';
 import {
   CkbDelta,
-  formatStandard,
-  capitalizeAction,
   TypeCallExpr,
   LockCallExpr,
   LockCallBadge,
@@ -59,8 +57,19 @@ function formatAddress(address: string): string {
   return truncateHash(address);
 }
 
+/** Get a unique key for a global activity. TX-level now, so txHash is sufficient. */
 function itemKey(activity: GlobalActivity): string {
-  return `${activity.txHash}:${activity.address}`;
+  return activity.txHash;
+}
+
+/** Get the primary address from the first participant. */
+function primaryAddress(activity: GlobalActivity): string {
+  return activity.participants[0]?.address ?? '';
+}
+
+/** Get the primary CKB delta from the first participant. */
+function primaryCkbDelta(activity: GlobalActivity): string {
+  return activity.participants[0]?.ckbDelta ?? '0';
 }
 
 interface TypeBadgeInfo {
@@ -70,7 +79,7 @@ interface TypeBadgeInfo {
 }
 
 function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
-  const { displayType, primaryAssetChange } = classified;
+  const { displayType, primaryItemDelta } = classified;
 
   switch (displayType) {
     case 'daoDeposit':
@@ -80,28 +89,23 @@ function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
     case 'daoWithdrawComplete':
       return { icon: '\u25C6', label: 'DAO Withdraw Complete', colorClass: 'text-positive' };
     case 'token': {
-      const change = primaryAssetChange;
-      if (change && change.type === 'token') {
-        const label = change.symbol ?? truncateHash(change.typeScriptHash, 8, 6);
+      if (primaryItemDelta && primaryItemDelta.kind === 'token') {
+        const label = primaryItemDelta.symbol ?? truncateHash(primaryItemDelta.typeScriptHash, 8, 6);
         return { icon: '\u25CE', label: `${label} Transfer`, colorClass: 'text-token' };
       }
       return { icon: '\u25CE', label: 'Token Transfer', colorClass: 'text-token' };
     }
     case 'object': {
-      const change = primaryAssetChange;
-      if (change && change.type === 'object') {
-        const std = formatStandard(change.standard);
-        const action = capitalizeAction(change.action);
-        return { icon: '\u2B21', label: `${std} ${action}`, colorClass: 'text-lavender' };
+      if (primaryItemDelta && primaryItemDelta.kind === 'object') {
+        const actionLabel = primaryItemDelta.delta > 0 ? 'Received' : 'Sent';
+        return { icon: '\u2B21', label: `Object ${actionLabel}`, colorClass: 'text-lavender' };
       }
       return { icon: '\u2B21', label: 'Object', colorClass: 'text-lavender' };
     }
     case 'identity': {
-      const change = primaryAssetChange;
-      if (change && change.type === 'identity') {
-        const std = formatStandard(change.standard);
-        const action = capitalizeAction(change.action);
-        return { icon: '\u2726', label: `${std} ${action}`, colorClass: 'text-aqua' };
+      if (primaryItemDelta && primaryItemDelta.kind === 'identity') {
+        const actionLabel = primaryItemDelta.delta > 0 ? 'Registered' : 'Released';
+        return { icon: '\u2726', label: `Identity ${actionLabel}`, colorClass: 'text-aqua' };
       }
       return { icon: '\u2726', label: 'Identity', colorClass: 'text-aqua' };
     }
@@ -134,6 +138,8 @@ function AddressLink({ address }: { address: string }) {
 function StreamItemCkbTransfer({ classified }: { classified: ClassifiedActivity }) {
   const { activity } = classified;
   const badge = getTypeBadge(classified);
+  const addr = primaryAddress(activity);
+  const ckbDelta = primaryCkbDelta(activity);
 
   return (
     <>
@@ -149,20 +155,18 @@ function StreamItemCkbTransfer({ classified }: { classified: ClassifiedActivity 
         </span>
       </div>
       <div className="flex items-center justify-between gap-2">
-        <AddressLink address={activity.address} />
-        <CkbDelta delta={activity.ckbDelta} />
+        {addr && <AddressLink address={addr} />}
+        <CkbDelta delta={ckbDelta} />
       </div>
     </>
   );
 }
 
 function StreamItemDaoDeposit({ classified }: { classified: ClassifiedActivity }) {
-  const { activity, primaryAssetChange } = classified;
+  const { activity, primaryProtocolAction } = classified;
   const badge = getTypeBadge(classified);
-  const capacity =
-    primaryAssetChange && primaryAssetChange.type === 'daoDeposit'
-      ? primaryAssetChange.capacity
-      : '0';
+  const capacity = (primaryProtocolAction?.metadata?.capacity as string) ?? '0';
+  const addr = primaryAddress(activity);
 
   return (
     <>
@@ -175,7 +179,7 @@ function StreamItemDaoDeposit({ classified }: { classified: ClassifiedActivity }
         </span>
       </div>
       <div className="flex items-center justify-between gap-2">
-        <AddressLink address={activity.address} />
+        {addr && <AddressLink address={addr} />}
         <span className="text-positive font-mono text-xs tabular-nums">
           +{formatCkbAmount(capacity).full} CKB locked
         </span>
@@ -185,12 +189,10 @@ function StreamItemDaoDeposit({ classified }: { classified: ClassifiedActivity }
 }
 
 function StreamItemDaoWithdrawRequest({ classified }: { classified: ClassifiedActivity }) {
-  const { activity, primaryAssetChange } = classified;
+  const { activity, primaryProtocolAction } = classified;
   const badge = getTypeBadge(classified);
-  const capacity =
-    primaryAssetChange && primaryAssetChange.type === 'daoWithdrawRequest'
-      ? primaryAssetChange.capacity
-      : '0';
+  const capacity = (primaryProtocolAction?.metadata?.capacity as string) ?? '0';
+  const addr = primaryAddress(activity);
 
   return (
     <>
@@ -203,7 +205,7 @@ function StreamItemDaoWithdrawRequest({ classified }: { classified: ClassifiedAc
         </span>
       </div>
       <div className="flex items-center justify-between gap-2">
-        <AddressLink address={activity.address} />
+        {addr && <AddressLink address={addr} />}
         <span className="text-gold font-mono text-xs tabular-nums">
           {formatCkbAmount(capacity).full} CKB
         </span>
@@ -213,16 +215,11 @@ function StreamItemDaoWithdrawRequest({ classified }: { classified: ClassifiedAc
 }
 
 function StreamItemDaoWithdrawComplete({ classified }: { classified: ClassifiedActivity }) {
-  const { activity, primaryAssetChange } = classified;
+  const { activity, primaryProtocolAction } = classified;
   const badge = getTypeBadge(classified);
-  const capacity =
-    primaryAssetChange && primaryAssetChange.type === 'daoWithdrawComplete'
-      ? primaryAssetChange.capacity
-      : '0';
-  const compensation =
-    primaryAssetChange && primaryAssetChange.type === 'daoWithdrawComplete'
-      ? primaryAssetChange.compensation
-      : '0';
+  const capacity = (primaryProtocolAction?.metadata?.capacity as string) ?? '0';
+  const compensation = (primaryProtocolAction?.metadata?.compensation as string) ?? '0';
+  const addr = primaryAddress(activity);
 
   return (
     <>
@@ -235,7 +232,7 @@ function StreamItemDaoWithdrawComplete({ classified }: { classified: ClassifiedA
         </span>
       </div>
       <div className="flex items-center justify-between gap-2">
-        <AddressLink address={activity.address} />
+        {addr && <AddressLink address={addr} />}
         <span className="text-positive font-mono text-xs tabular-nums">
           +{formatCkbAmount(capacity).full} CKB
         </span>
@@ -250,20 +247,22 @@ function StreamItemDaoWithdrawComplete({ classified }: { classified: ClassifiedA
 }
 
 function StreamItemToken({ classified }: { classified: ClassifiedActivity }) {
-  const { activity, primaryAssetChange } = classified;
+  const { activity, primaryItemDelta } = classified;
   const badge = getTypeBadge(classified);
+  const addr = primaryAddress(activity);
+  const ckbDelta = primaryCkbDelta(activity);
 
   let tokenDelta = '';
   let typeScriptHash = '';
-  if (primaryAssetChange && primaryAssetChange.type === 'token') {
-    const delta = BigInt(primaryAssetChange.delta);
+  if (primaryItemDelta && primaryItemDelta.kind === 'token') {
+    const delta = BigInt(primaryItemDelta.delta);
     const sign = delta > BigInt(0) ? '+' : '';
-    const symbol = primaryAssetChange.symbol;
-    typeScriptHash = primaryAssetChange.typeScriptHash;
-    tokenDelta = `${sign}${primaryAssetChange.delta}${symbol ? ` ${symbol}` : ''}`;
+    const symbol = primaryItemDelta.symbol;
+    typeScriptHash = primaryItemDelta.typeScriptHash;
+    tokenDelta = `${sign}${primaryItemDelta.delta}${symbol ? ` ${symbol}` : ''}`;
   }
 
-  const ckbValue = BigInt(activity.ckbDelta);
+  const ckbValue = BigInt(ckbDelta);
   const showCkbDelta = ckbValue !== BigInt(0);
 
   return (
@@ -280,7 +279,7 @@ function StreamItemToken({ classified }: { classified: ClassifiedActivity }) {
         </span>
       </div>
       <div className="flex items-center justify-between gap-2">
-        <AddressLink address={activity.address} />
+        {addr && <AddressLink address={addr} />}
         {typeScriptHash ? (
           <Link
             href={getTokenDetailHref(typeScriptHash)}
@@ -295,7 +294,7 @@ function StreamItemToken({ classified }: { classified: ClassifiedActivity }) {
       </div>
       {showCkbDelta && (
         <div className="flex justify-end">
-          <CkbDelta delta={activity.ckbDelta} />
+          <CkbDelta delta={ckbDelta} />
         </div>
       )}
     </>
@@ -303,12 +302,13 @@ function StreamItemToken({ classified }: { classified: ClassifiedActivity }) {
 }
 
 function StreamItemObject({ classified }: { classified: ClassifiedActivity }) {
-  const { activity, primaryAssetChange } = classified;
+  const { activity, primaryItemDelta } = classified;
   const badge = getTypeBadge(classified);
+  const addr = primaryAddress(activity);
 
   let objectId = '';
-  if (primaryAssetChange && primaryAssetChange.type === 'object') {
-    objectId = primaryAssetChange.objectId;
+  if (primaryItemDelta && primaryItemDelta.kind === 'object') {
+    objectId = primaryItemDelta.objectId;
   }
 
   return (
@@ -322,7 +322,7 @@ function StreamItemObject({ classified }: { classified: ClassifiedActivity }) {
         </span>
       </div>
       <div className="flex items-center justify-between gap-2">
-        <AddressLink address={activity.address} />
+        {addr && <AddressLink address={addr} />}
         {objectId ? (
           <Link
             href={getObjectDetailHref(objectId)}
@@ -340,14 +340,13 @@ function StreamItemObject({ classified }: { classified: ClassifiedActivity }) {
 }
 
 function StreamItemIdentity({ classified }: { classified: ClassifiedActivity }) {
-  const { activity, primaryAssetChange } = classified;
+  const { activity, primaryItemDelta } = classified;
   const badge = getTypeBadge(classified);
+  const addr = primaryAddress(activity);
 
   let identityId = '';
-  let standard = '';
-  if (primaryAssetChange && primaryAssetChange.type === 'identity') {
-    identityId = primaryAssetChange.identityId;
-    standard = primaryAssetChange.standard;
+  if (primaryItemDelta && primaryItemDelta.kind === 'identity') {
+    identityId = primaryItemDelta.identityId;
   }
 
   return (
@@ -361,10 +360,10 @@ function StreamItemIdentity({ classified }: { classified: ClassifiedActivity }) 
         </span>
       </div>
       <div className="flex items-center justify-between gap-2">
-        <AddressLink address={activity.address} />
+        {addr && <AddressLink address={addr} />}
         {identityId ? (
           <Link
-            href={getIdentityItemDetailHref(standard, identityId)}
+            href={getIdentityItemDetailHref('identity', identityId)}
             className="text-aqua/80 hover:text-aqua font-mono text-xs transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
@@ -381,6 +380,8 @@ function StreamItemIdentity({ classified }: { classified: ClassifiedActivity }) 
 function StreamItemTypeCall({ classified }: { classified: ClassifiedActivity }) {
   const { activity, primaryTypeCall } = classified;
   const badge = getTypeBadge(classified);
+  const addr = primaryAddress(activity);
+  const ckbDelta = primaryCkbDelta(activity);
 
   return (
     <>
@@ -394,8 +395,8 @@ function StreamItemTypeCall({ classified }: { classified: ClassifiedActivity }) 
         </span>
       </div>
       <div className="flex items-center justify-between gap-2">
-        <AddressLink address={activity.address} />
-        <CkbDelta delta={activity.ckbDelta} />
+        {addr && <AddressLink address={addr} />}
+        <CkbDelta delta={ckbDelta} />
       </div>
     </>
   );
@@ -426,7 +427,9 @@ const PROTOCOL_ACTION_LABELS: Record<string, Record<string, string>> = {
 };
 
 function StreamItemProtocolAction({ classified }: { classified: ClassifiedActivity }) {
-  const { activity, primaryProtocolAction, primaryLockCall, primaryAssetChange } = classified;
+  const { activity, primaryProtocolAction, primaryLockCall, primaryItemDelta } = classified;
+  const addr = primaryAddress(activity);
+  const ckbDelta = primaryCkbDelta(activity);
 
   // Layer 3: prefer ProtocolAction, fall back to legacy lock-call-only path
   const protocolName = primaryProtocolAction
@@ -443,14 +446,14 @@ function StreamItemProtocolAction({ classified }: { classified: ClassifiedActivi
 
   // Layer 2: carried asset summary (e.g., "+1,000 XUDT")
   let assetDetail: React.ReactNode = null;
-  if (primaryAssetChange && primaryAssetChange.type === 'token') {
-    const delta = BigInt(primaryAssetChange.delta);
+  if (primaryItemDelta && primaryItemDelta.kind === 'token') {
+    const delta = BigInt(primaryItemDelta.delta);
     const sign = delta > BigInt(0) ? '+' : '';
-    const symbol = primaryAssetChange.symbol;
+    const symbol = primaryItemDelta.symbol;
     assetDetail = (
       <span className="text-token font-mono text-[10px] tabular-nums">
         {sign}
-        {primaryAssetChange.delta}
+        {primaryItemDelta.delta}
         {symbol ? ` ${symbol}` : ''}
       </span>
     );
@@ -488,8 +491,8 @@ function StreamItemProtocolAction({ classified }: { classified: ClassifiedActivi
         </span>
       </div>
       <div className="flex items-center justify-between gap-2">
-        <AddressLink address={activity.address} />
-        <CkbDelta delta={activity.ckbDelta} />
+        {addr && <AddressLink address={addr} />}
+        <CkbDelta delta={ckbDelta} />
       </div>
       {assetDetail && <div className="flex justify-end">{assetDetail}</div>}
     </>

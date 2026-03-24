@@ -8,8 +8,6 @@ import {
   LockCallExpr,
   TypeCallExpr,
   TYPE_SCRIPT_CALL_LABEL,
-  capitalizeAction,
-  formatStandard,
 } from '@/components/activity-event-row';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { startTransition, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -93,7 +91,17 @@ function safeScrollIntoView(element: HTMLDivElement | null, options?: ScrollInto
 }
 
 function itemKey(activity: GlobalActivity): string {
-  return `${activity.txHash}:${activity.address}`;
+  return activity.txHash;
+}
+
+/** Get the primary address from the first participant. */
+function primaryAddress(activity: GlobalActivity): string {
+  return activity.participants[0]?.address ?? '';
+}
+
+/** Get the primary CKB delta from the first participant. */
+function primaryCkbDelta(activity: GlobalActivity): string {
+  return activity.participants[0]?.ckbDelta ?? '0';
 }
 
 function toActivityDate(timestamp: string): Date {
@@ -249,7 +257,7 @@ function titleize(value: string): string {
 }
 
 function getActivityHeadline(classified: ClassifiedActivity): string {
-  const { primaryAssetChange, primaryProtocolAction } = classified;
+  const { primaryItemDelta, primaryProtocolAction } = classified;
 
   switch (classified.displayType) {
     case 'daoDeposit':
@@ -259,23 +267,22 @@ function getActivityHeadline(classified: ClassifiedActivity): string {
     case 'daoWithdrawComplete':
       return 'DAO Withdraw Complete';
     case 'token': {
-      const change = primaryAssetChange;
-      if (change && change.type === 'token') {
-        return `${change.symbol ?? truncateHash(change.typeScriptHash, 8, 6)} Transfer`;
+      if (primaryItemDelta && primaryItemDelta.kind === 'token') {
+        return `${primaryItemDelta.symbol ?? truncateHash(primaryItemDelta.typeScriptHash, 8, 6)} Transfer`;
       }
       return 'Token Transfer';
     }
     case 'object': {
-      const change = primaryAssetChange;
-      if (change && change.type === 'object') {
-        return `${formatStandard(change.standard)} ${capitalizeAction(change.action)}`;
+      if (primaryItemDelta && primaryItemDelta.kind === 'object') {
+        const actionLabel = primaryItemDelta.delta > 0 ? 'Received' : 'Sent';
+        return `Object ${actionLabel}`;
       }
       return 'Object Activity';
     }
     case 'identity': {
-      const change = primaryAssetChange;
-      if (change && change.type === 'identity') {
-        return `${formatStandard(change.standard)} ${capitalizeAction(change.action)}`;
+      if (primaryItemDelta && primaryItemDelta.kind === 'identity') {
+        const actionLabel = primaryItemDelta.delta > 0 ? 'Registered' : 'Released';
+        return `Identity ${actionLabel}`;
       }
       return 'Identity Activity';
     }
@@ -306,14 +313,12 @@ function AddressLink({ address, className }: { address: string; className?: stri
 }
 
 function renderPrimaryValue(classified: ClassifiedActivity) {
-  const { activity, primaryAssetChange, primaryProtocolAction } = classified;
+  const { activity, primaryItemDelta, primaryProtocolAction } = classified;
+  const ckbDelta = primaryCkbDelta(activity);
 
   switch (classified.displayType) {
     case 'daoDeposit': {
-      const capacity =
-        primaryAssetChange && primaryAssetChange.type === 'daoDeposit'
-          ? primaryAssetChange.capacity
-          : '0';
+      const capacity = (primaryProtocolAction?.metadata?.capacity as string) ?? '0';
       return (
         <span className="text-positive font-mono text-xs tabular-nums">
           +{formatCkbAmount(capacity).full} CKB locked
@@ -321,10 +326,7 @@ function renderPrimaryValue(classified: ClassifiedActivity) {
       );
     }
     case 'daoWithdrawRequest': {
-      const capacity =
-        primaryAssetChange && primaryAssetChange.type === 'daoWithdrawRequest'
-          ? primaryAssetChange.capacity
-          : '0';
+      const capacity = (primaryProtocolAction?.metadata?.capacity as string) ?? '0';
       return (
         <span className="text-gold font-mono text-xs tabular-nums">
           {formatCkbAmount(capacity).full} CKB
@@ -332,10 +334,7 @@ function renderPrimaryValue(classified: ClassifiedActivity) {
       );
     }
     case 'daoWithdrawComplete': {
-      const capacity =
-        primaryAssetChange && primaryAssetChange.type === 'daoWithdrawComplete'
-          ? primaryAssetChange.capacity
-          : '0';
+      const capacity = (primaryProtocolAction?.metadata?.capacity as string) ?? '0';
       return (
         <span className="text-positive font-mono text-xs tabular-nums">
           +{formatCkbAmount(capacity).full} CKB
@@ -343,24 +342,24 @@ function renderPrimaryValue(classified: ClassifiedActivity) {
       );
     }
     case 'token': {
-      if (primaryAssetChange?.type !== 'token') {
-        return <CkbDelta delta={activity.ckbDelta} />;
+      if (primaryItemDelta?.kind !== 'token') {
+        return <CkbDelta delta={ckbDelta} />;
       }
-      const delta = BigInt(primaryAssetChange.delta);
+      const delta = BigInt(primaryItemDelta.delta);
       const prefix = delta > BigInt(0) ? '+' : delta < BigInt(0) ? '-' : '';
       const balance = formatTokenBalance(
-        primaryAssetChange.delta.startsWith('-')
-          ? primaryAssetChange.delta.slice(1)
-          : primaryAssetChange.delta,
-        primaryAssetChange.decimals ?? 0
+        primaryItemDelta.delta.startsWith('-')
+          ? primaryItemDelta.delta.slice(1)
+          : primaryItemDelta.delta,
+        primaryItemDelta.decimals ?? 0
       );
       const label =
-        primaryAssetChange.symbol ?? truncateHash(primaryAssetChange.typeScriptHash, 8, 6);
+        primaryItemDelta.symbol ?? truncateHash(primaryItemDelta.typeScriptHash, 8, 6);
       const colorClass =
         delta > BigInt(0) ? 'text-positive' : delta < BigInt(0) ? 'text-negative' : 'text-text-dim';
       return (
         <Link
-          href={getTokenDetailHref(primaryAssetChange.typeScriptHash)}
+          href={getTokenDetailHref(primaryItemDelta.typeScriptHash)}
           className={cn('font-mono text-xs tabular-nums hover:underline', colorClass)}
         >
           {prefix}
@@ -369,23 +368,23 @@ function renderPrimaryValue(classified: ClassifiedActivity) {
       );
     }
     case 'object': {
-      return <CkbDelta delta={activity.ckbDelta} />;
+      return <CkbDelta delta={ckbDelta} />;
     }
     case 'identity': {
-      return <CkbDelta delta={activity.ckbDelta} />;
+      return <CkbDelta delta={ckbDelta} />;
     }
     case 'protocolAction': {
-      if (primaryAssetChange?.type === 'token') {
-        const delta = BigInt(primaryAssetChange.delta);
+      if (primaryItemDelta?.kind === 'token') {
+        const delta = BigInt(primaryItemDelta.delta);
         const prefix = delta > BigInt(0) ? '+' : delta < BigInt(0) ? '-' : '';
         const balance = formatTokenBalance(
-          primaryAssetChange.delta.startsWith('-')
-            ? primaryAssetChange.delta.slice(1)
-            : primaryAssetChange.delta,
-          primaryAssetChange.decimals ?? 0
+          primaryItemDelta.delta.startsWith('-')
+            ? primaryItemDelta.delta.slice(1)
+            : primaryItemDelta.delta,
+          primaryItemDelta.decimals ?? 0
         );
         const label =
-          primaryAssetChange.symbol ?? truncateHash(primaryAssetChange.typeScriptHash, 8, 6);
+          primaryItemDelta.symbol ?? truncateHash(primaryItemDelta.typeScriptHash, 8, 6);
         const colorClass =
           delta > BigInt(0)
             ? 'text-positive'
@@ -394,7 +393,7 @@ function renderPrimaryValue(classified: ClassifiedActivity) {
               : 'text-text-dim';
         return (
           <Link
-            href={getTokenDetailHref(primaryAssetChange.typeScriptHash)}
+            href={getTokenDetailHref(primaryItemDelta.typeScriptHash)}
             className={cn('font-mono text-xs tabular-nums hover:underline', colorClass)}
           >
             {prefix}
@@ -412,13 +411,13 @@ function renderPrimaryValue(classified: ClassifiedActivity) {
         );
       }
 
-      return <CkbDelta delta={activity.ckbDelta} />;
+      return <CkbDelta delta={ckbDelta} />;
     }
     case 'typeCall':
-      return <CkbDelta delta={activity.ckbDelta} />;
+      return <CkbDelta delta={ckbDelta} />;
     case 'ckbTransfer':
     default:
-      return <CkbDelta delta={activity.ckbDelta} />;
+      return <CkbDelta delta={ckbDelta} />;
   }
 }
 
@@ -518,82 +517,84 @@ function ActivityDayDivider({ label }: { label: string }) {
 }
 
 function renderSubjectLine(classified: ClassifiedActivity) {
-  const { activity, primaryProtocolAction, primaryAssetChange, primaryTypeCall, primaryLockCall } =
+  const { activity, primaryProtocolAction, primaryItemDelta, primaryTypeCall, primaryLockCall } =
     classified;
+  const ckbDelta = primaryCkbDelta(activity);
 
   switch (classified.displayType) {
     case 'daoDeposit':
       return <span className="text-text-dim">NervosDAO position created</span>;
-    case 'daoWithdrawRequest':
-      return primaryAssetChange?.type === 'daoWithdrawRequest' ? (
+    case 'daoWithdrawRequest': {
+      const depositBlock = primaryProtocolAction?.metadata?.depositBlock as number | undefined;
+      return depositBlock ? (
         <>
           <span className="text-text-dim">deposit block</span>
-          <MetaChip>#{primaryAssetChange.depositBlock.toLocaleString()}</MetaChip>
+          <MetaChip>#{depositBlock.toLocaleString()}</MetaChip>
         </>
       ) : (
         <span className="text-text-dim">NervosDAO withdraw request</span>
       );
-    case 'daoWithdrawComplete':
-      return primaryAssetChange?.type === 'daoWithdrawComplete' ? (
+    }
+    case 'daoWithdrawComplete': {
+      const compensation = primaryProtocolAction?.metadata?.compensation as string | undefined;
+      return compensation ? (
         <>
           <span className="text-text-dim">compensation</span>
           <span className="text-positive font-mono text-xs tabular-nums">
-            +{formatCkbAmount(primaryAssetChange.compensation).full} CKB
+            +{formatCkbAmount(compensation).full} CKB
           </span>
         </>
       ) : (
         <span className="text-text-dim">NervosDAO withdrawal completed</span>
       );
+    }
     case 'token':
-      return primaryAssetChange?.type === 'token' ? (
+      return primaryItemDelta?.kind === 'token' ? (
         <>
           <Link
-            href={getTokenDetailHref(primaryAssetChange.typeScriptHash)}
+            href={getTokenDetailHref(primaryItemDelta.typeScriptHash)}
             className="text-token/85 hover:text-token font-mono text-xs transition-colors"
           >
-            {primaryAssetChange.symbol ?? truncateHash(primaryAssetChange.typeScriptHash, 8, 6)}
+            {primaryItemDelta.symbol ?? truncateHash(primaryItemDelta.typeScriptHash, 8, 6)}
           </Link>
-          {activity.ckbDelta !== '0' && (
+          {ckbDelta !== '0' && (
             <>
               <span className="text-text-dim">ckb</span>
-              <CkbDelta delta={activity.ckbDelta} />
+              <CkbDelta delta={ckbDelta} />
             </>
           )}
         </>
       ) : null;
     case 'object':
-      return primaryAssetChange?.type === 'object' ? (
+      return primaryItemDelta?.kind === 'object' ? (
         <>
           <Link
-            href={getObjectDetailHref(primaryAssetChange.objectId)}
+            href={getObjectDetailHref(primaryItemDelta.objectId)}
             className="text-lavender/80 hover:text-lavender font-mono text-xs transition-colors"
           >
-            {truncateHash(primaryAssetChange.objectId, 8, 6)}
+            {truncateHash(primaryItemDelta.objectId, 8, 6)}
           </Link>
-          {activity.ckbDelta !== '0' && (
+          {ckbDelta !== '0' && (
             <>
               <span className="text-text-dim">ckb</span>
-              <CkbDelta delta={activity.ckbDelta} />
+              <CkbDelta delta={ckbDelta} />
             </>
           )}
         </>
       ) : null;
     case 'identity':
-      return primaryAssetChange?.type === 'identity' ? (
+      return primaryItemDelta?.kind === 'identity' ? (
         <>
           <Link
-            href={getIdentityItemDetailHref(
-              primaryAssetChange.standard,
-              primaryAssetChange.identityId
-            )}
+            href={getIdentityItemDetailHref('identity', primaryItemDelta.identityId)}
             className="text-aqua/80 hover:text-aqua font-mono text-xs transition-colors"
           >
-            {truncateHash(primaryAssetChange.identityId, 8, 6)}
+            {truncateHash(primaryItemDelta.identityId, 8, 6)}
           </Link>
-          {activity.ckbDelta !== '0' && (
+          {ckbDelta !== '0' && (
             <>
               <span className="text-text-dim">ckb</span>
-              <CkbDelta delta={activity.ckbDelta} />
+              <CkbDelta delta={ckbDelta} />
             </>
           )}
         </>
@@ -603,13 +604,13 @@ function renderSubjectLine(classified: ClassifiedActivity) {
       const btcTxid = primaryProtocolAction?.metadata?.btcTxid;
       const capacity = primaryProtocolAction?.metadata?.capacity;
 
-      if (primaryAssetChange?.type === 'token') {
+      if (primaryItemDelta?.kind === 'token') {
         const label =
-          primaryAssetChange.symbol ?? truncateHash(primaryAssetChange.typeScriptHash, 8, 6);
+          primaryItemDelta.symbol ?? truncateHash(primaryItemDelta.typeScriptHash, 8, 6);
         pieces.push(
           <Link
             key="token"
-            href={getTokenDetailHref(primaryAssetChange.typeScriptHash)}
+            href={getTokenDetailHref(primaryItemDelta.typeScriptHash)}
             className="text-token/85 hover:text-token font-mono text-xs transition-colors"
           >
             {label}
@@ -662,23 +663,27 @@ function renderSubjectLine(classified: ClassifiedActivity) {
         <span className="text-text-dim">Type script activity</span>
       );
     case 'ckbTransfer':
-    default:
-      if (activity.peers.length === 0) {
+    default: {
+      const participants = activity.participants;
+      if (participants.length <= 1) {
         return <span className="text-text-dim">Owner balance change</span>;
       }
-      if (activity.peers.length === 1) {
+      if (participants.length === 2) {
+        // Show the other participant (second one)
+        const otherAddr = participants[1].address;
         return (
           <>
             <span className="text-text-dim">with</span>
-            <AddressLink address={activity.peers[0]} className="text-xs" />
+            <AddressLink address={otherAddr} className="text-xs" />
           </>
         );
       }
       return (
         <span className="text-text-dim font-mono text-xs">
-          {activity.peers.length} counterparties
+          {participants.length} participants
         </span>
       );
+    }
   }
 }
 
@@ -693,6 +698,7 @@ function ActivityStreamRow({ activity, isNew = false }: ActivityStreamRowProps) 
   const headline = getActivityHeadline(classified);
   const txHref = `/tx/${activity.txHash}`;
   const blockHref = `/blocks/${activity.blockNumber}`;
+  const addr = primaryAddress(activity);
   const subjectLine = renderSubjectLine(classified);
   const metaChipClass =
     'border-base-border/45 bg-base-elevated/55 text-text-dim hover:text-aqua inline-flex items-center rounded-md border px-2 py-1 font-mono text-[10px] leading-none transition-colors';
@@ -738,7 +744,7 @@ function ActivityStreamRow({ activity, isNew = false }: ActivityStreamRowProps) 
             <span className="text-text-dim font-mono text-[10px] uppercase tracking-[0.18em]">
               Owner
             </span>
-            <AddressLink address={activity.address} className="text-[11px]" />
+            {addr && <AddressLink address={addr} className="text-[11px]" />}
             <Link href={txHref} className={metaChipClass}>
               tx {truncateHash(activity.txHash, 8, 6)}
             </Link>
@@ -1037,12 +1043,13 @@ export function ActivitiesStreamExplorer() {
                   <div className="text-negative font-mono text-xs uppercase">
                     Failed to load older activities
                   </div>
-                </div>
-              )}
-
-              {!hasNextPage && !isFetchingNextPage && visibleItems.length > 0 && (
-                <div className="text-text-dim border-base-border/50 border-t px-3 py-3 text-center font-mono text-xs uppercase">
-                  End of stream
+                  <button
+                    type="button"
+                    className="text-jade hover:text-jade/80 mt-1 cursor-pointer font-mono text-xs uppercase underline transition-colors"
+                    onClick={() => void fetchNextPage()}
+                  >
+                    Retry
+                  </button>
                 </div>
               )}
             </div>

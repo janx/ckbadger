@@ -236,23 +236,28 @@ function renderActivityDetail(activity: GlobalActivity): string {
   const classified = classifyActivity(activity);
 
   if (classified.primaryProtocolAction) {
-    return `${classified.primaryProtocolAction.protocol}:${classified.primaryProtocolAction.action}`;
+    const pa = classified.primaryProtocolAction;
+    if (pa.protocol === 'dao') {
+      const capacity = pa.metadata?.capacity as string | undefined;
+      const compensation = pa.metadata?.compensation as string | undefined;
+      const depositBlock = pa.metadata?.depositBlock as number | undefined;
+      let detail = `dao:${pa.action}`;
+      if (capacity) detail += ` capacity=${capacity}`;
+      if (depositBlock) detail += ` depositBlock=${depositBlock}`;
+      if (compensation) detail += ` compensation=${compensation}`;
+      return detail;
+    }
+    return `${pa.protocol}:${pa.action}`;
   }
 
-  if (classified.primaryAssetChange) {
-    switch (classified.primaryAssetChange.type) {
+  if (classified.primaryItemDelta) {
+    switch (classified.primaryItemDelta.kind) {
       case 'token':
-        return `${classified.primaryAssetChange.symbol ?? hashShort(classified.primaryAssetChange.typeScriptHash)} delta=${classified.primaryAssetChange.delta}`;
+        return `${classified.primaryItemDelta.symbol ?? hashShort(classified.primaryItemDelta.typeScriptHash)} delta=${classified.primaryItemDelta.delta}`;
       case 'object':
-        return `${classified.primaryAssetChange.standard}:${classified.primaryAssetChange.action} ${hashShort(classified.primaryAssetChange.objectId)}`;
+        return `object ${hashShort(classified.primaryItemDelta.objectId)} delta=${classified.primaryItemDelta.delta}`;
       case 'identity':
-        return `${classified.primaryAssetChange.standard}:${classified.primaryAssetChange.action} ${hashShort(classified.primaryAssetChange.identityId)}`;
-      case 'daoDeposit':
-        return `capacity=${classified.primaryAssetChange.capacity}`;
-      case 'daoWithdrawRequest':
-        return `capacity=${classified.primaryAssetChange.capacity} depositBlock=${classified.primaryAssetChange.depositBlock}`;
-      case 'daoWithdrawComplete':
-        return `capacity=${classified.primaryAssetChange.capacity} compensation=${classified.primaryAssetChange.compensation}`;
+        return `identity ${hashShort(classified.primaryItemDelta.identityId)} delta=${classified.primaryItemDelta.delta}`;
     }
   }
 
@@ -274,13 +279,15 @@ function renderActivityDetail(activity: GlobalActivity): string {
 function renderGlobalActivityRows(activities: GlobalActivity[]): unknown[][] {
   return activities.map((activity) => {
     const classified = classifyActivity(activity);
+    const addr = activity.participants[0]?.address ?? '';
+    const ckbDelta = activity.participants[0]?.ckbDelta ?? '0';
     return [
       activity.timestamp,
-      hashShort(activity.address),
+      hashShort(addr),
       hashShort(activity.txHash),
       activity.blockNumber,
       classified.displayType,
-      activity.ckbDelta,
+      ckbDelta,
       renderActivityDetail(activity),
     ];
   });

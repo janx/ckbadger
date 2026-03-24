@@ -4,76 +4,115 @@ import { classifyActivity } from '@/lib/activity-classify';
 
 function makeActivity(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
   return {
-    address: overrides.address ?? 'ckb1qtest',
     txHash: overrides.txHash ?? '0xtx',
     blockNumber: overrides.blockNumber ?? 10_000,
     txIndex: overrides.txIndex ?? 0,
     timestamp: overrides.timestamp ?? '1700000000',
-    ckbDelta: overrides.ckbDelta ?? '0',
-    usedDelta: overrides.usedDelta ?? '0',
     isCellbase: overrides.isCellbase ?? false,
-    hasTypeScript: overrides.hasTypeScript ?? false,
-    assetChanges: overrides.assetChanges ?? [],
     typeCalls: overrides.typeCalls ?? [],
     lockCalls: overrides.lockCalls ?? [],
     protocolActions: overrides.protocolActions ?? [],
-    peers: overrides.peers ?? [],
+    participants: overrides.participants ?? [
+      {
+        address: 'ckb1qtest',
+        ckbDelta: '0',
+        usedDelta: '0',
+        itemDeltas: [],
+        tags: 0,
+      },
+    ],
   };
 }
 
 describe('classifyActivity', () => {
-  it('classifies DAO deposit', () => {
+  it('classifies DAO deposit from protocolActions', () => {
     const result = classifyActivity(
-      makeActivity({ assetChanges: [{ type: 'daoDeposit', capacity: '10200000000' }] })
+      makeActivity({
+        protocolActions: [
+          { protocol: 'dao', action: 'deposit', metadata: { capacity: '10200000000' } },
+        ],
+      })
     );
     expect(result.displayType).toBe('daoDeposit');
   });
 
-  it('classifies DAO withdraw request', () => {
+  it('classifies DAO withdraw request from protocolActions', () => {
     const result = classifyActivity(
       makeActivity({
-        assetChanges: [{ type: 'daoWithdrawRequest', capacity: '10200000000', depositBlock: 100 }],
+        protocolActions: [
+          {
+            protocol: 'dao',
+            action: 'withdraw_request',
+            metadata: { capacity: '10200000000', depositBlock: 100 },
+          },
+        ],
       })
     );
     expect(result.displayType).toBe('daoWithdrawRequest');
   });
 
-  it('classifies DAO withdraw complete', () => {
+  it('classifies DAO withdraw complete from protocolActions', () => {
     const result = classifyActivity(
       makeActivity({
-        assetChanges: [
-          { type: 'daoWithdrawComplete', capacity: '10200000000', compensation: '42000000' },
+        protocolActions: [
+          {
+            protocol: 'dao',
+            action: 'withdraw_complete',
+            metadata: { capacity: '10200000000', compensation: '42000000' },
+          },
         ],
       })
     );
     expect(result.displayType).toBe('daoWithdrawComplete');
   });
 
-  it('classifies token transfer', () => {
+  it('classifies token transfer via itemDeltas', () => {
     const result = classifyActivity(
       makeActivity({
-        assetChanges: [
-          { type: 'token', typeScriptHash: '0xtoken', delta: '500', symbol: 'SEAL', decimals: 8 },
+        participants: [
+          {
+            address: 'ckb1qtest',
+            ckbDelta: '0',
+            usedDelta: '0',
+            itemDeltas: [
+              { kind: 'token', typeScriptHash: '0xtoken', delta: '500', symbol: 'SEAL', decimals: 8 },
+            ],
+            tags: 1,
+          },
         ],
       })
     );
     expect(result.displayType).toBe('token');
   });
 
-  it('classifies object action', () => {
+  it('classifies object action via itemDeltas', () => {
     const result = classifyActivity(
       makeActivity({
-        assetChanges: [{ type: 'object', objectId: '0xspore', standard: 'spore', action: 'mint' }],
+        participants: [
+          {
+            address: 'ckb1qtest',
+            ckbDelta: '0',
+            usedDelta: '0',
+            itemDeltas: [{ kind: 'object', objectId: '0xspore', delta: 1 }],
+            tags: 2,
+          },
+        ],
       })
     );
     expect(result.displayType).toBe('object');
   });
 
-  it('classifies identity action', () => {
+  it('classifies identity action via itemDeltas', () => {
     const result = classifyActivity(
       makeActivity({
-        assetChanges: [
-          { type: 'identity', identityId: '0xdotbit', standard: 'dotbit', action: 'update' },
+        participants: [
+          {
+            address: 'ckb1qtest',
+            ckbDelta: '0',
+            usedDelta: '0',
+            itemDeltas: [{ kind: 'identity', identityId: '0xdotbit', delta: 1 }],
+            tags: 4,
+          },
         ],
       })
     );
@@ -98,16 +137,38 @@ describe('classifyActivity', () => {
   });
 
   it('classifies CKB transfer as fallback', () => {
-    const result = classifyActivity(makeActivity({ ckbDelta: '-50000000000' }));
+    const result = classifyActivity(
+      makeActivity({
+        participants: [
+          {
+            address: 'ckb1qtest',
+            ckbDelta: '-50000000000',
+            usedDelta: '0',
+            itemDeltas: [],
+            tags: 0,
+          },
+        ],
+      })
+    );
     expect(result.displayType).toBe('ckbTransfer');
   });
 
   it('DAO deposit takes priority over token in same activity', () => {
     const result = classifyActivity(
       makeActivity({
-        assetChanges: [
-          { type: 'token', typeScriptHash: '0xt', delta: '100', symbol: 'X', decimals: 8 },
-          { type: 'daoDeposit', capacity: '10200000000' },
+        protocolActions: [
+          { protocol: 'dao', action: 'deposit', metadata: { capacity: '10200000000' } },
+        ],
+        participants: [
+          {
+            address: 'ckb1qtest',
+            ckbDelta: '0',
+            usedDelta: '0',
+            itemDeltas: [
+              { kind: 'token', typeScriptHash: '0xt', delta: '100', symbol: 'X', decimals: 8 },
+            ],
+            tags: 9, // TAG_TOKEN | TAG_DAO
+          },
         ],
       })
     );
@@ -117,8 +178,16 @@ describe('classifyActivity', () => {
   it('token takes priority over script call', () => {
     const result = classifyActivity(
       makeActivity({
-        assetChanges: [
-          { type: 'token', typeScriptHash: '0xt', delta: '100', symbol: 'X', decimals: 8 },
+        participants: [
+          {
+            address: 'ckb1qtest',
+            ckbDelta: '0',
+            usedDelta: '0',
+            itemDeltas: [
+              { kind: 'token', typeScriptHash: '0xt', delta: '100', symbol: 'X', decimals: 8 },
+            ],
+            tags: 1,
+          },
         ],
         typeCalls: [
           {
@@ -134,21 +203,35 @@ describe('classifyActivity', () => {
     expect(result.displayType).toBe('token');
   });
 
-  it('returns the first matching asset change for the classified type', () => {
+  it('returns the first matching item delta for the classified type', () => {
     const result = classifyActivity(
       makeActivity({
-        assetChanges: [{ type: 'daoDeposit', capacity: '10200000000' }],
+        protocolActions: [
+          { protocol: 'dao', action: 'deposit', metadata: { capacity: '10200000000' } },
+        ],
       })
     );
     expect(result.displayType).toBe('daoDeposit');
-    expect(result.primaryAssetChange).toEqual({ type: 'daoDeposit', capacity: '10200000000' });
+    expect(result.primaryProtocolAction).toEqual({
+      protocol: 'dao',
+      action: 'deposit',
+      metadata: { capacity: '10200000000' },
+    });
   });
 
-  it('asset change takes priority over lock calls', () => {
+  it('item delta takes priority over lock calls', () => {
     const result = classifyActivity(
       makeActivity({
-        assetChanges: [
-          { type: 'token', typeScriptHash: '0xt', delta: '100', symbol: 'X', decimals: 8 },
+        participants: [
+          {
+            address: 'ckb1qtest',
+            ckbDelta: '0',
+            usedDelta: '0',
+            itemDeltas: [
+              { kind: 'token', typeScriptHash: '0xt', delta: '100', symbol: 'X', decimals: 8 },
+            ],
+            tags: 1,
+          },
         ],
         lockCalls: [
           {
@@ -193,40 +276,40 @@ describe('classifyActivity', () => {
     expect(result.primaryProtocolAction?.action).toBe('leap_to_ckb');
   });
 
-  it('protocol action takes priority over asset changes', () => {
+  it('protocol action takes priority over item deltas', () => {
     const result = classifyActivity(
       makeActivity({
         protocolActions: [{ protocol: 'rgbpp', action: 'transfer', metadata: {} }],
-        assetChanges: [
-          { type: 'token', typeScriptHash: '0xt', delta: '100', symbol: 'X', decimals: 8 },
+        participants: [
+          {
+            address: 'ckb1qtest',
+            ckbDelta: '0',
+            usedDelta: '0',
+            itemDeltas: [
+              { kind: 'token', typeScriptHash: '0xt', delta: '100', symbol: 'X', decimals: 8 },
+            ],
+            tags: 1,
+          },
         ],
       })
     );
     expect(result.displayType).toBe('protocolAction');
-    expect(result.primaryAssetChange?.type).toBe('token');
-  });
-
-  it('classifies hasTypeScript without changes as typeCall', () => {
-    // Zero-delta UDT: type script is present but no asset changes emitted
-    const result = classifyActivity(makeActivity({ hasTypeScript: true }));
-    expect(result.displayType).toBe('typeCall');
-  });
-
-  it('hasTypeScript does not override recognized asset changes', () => {
-    const result = classifyActivity(
-      makeActivity({
-        hasTypeScript: true,
-        assetChanges: [
-          { type: 'token', typeScriptHash: '0xt', delta: '100', symbol: 'X', decimals: 8 },
-        ],
-      })
-    );
-    expect(result.displayType).toBe('token');
+    expect(result.primaryItemDelta?.kind).toBe('token');
   });
 
   it('ckbTransfer only when no type script involved', () => {
     const result = classifyActivity(
-      makeActivity({ hasTypeScript: false, ckbDelta: '-50000000000' })
+      makeActivity({
+        participants: [
+          {
+            address: 'ckb1qtest',
+            ckbDelta: '-50000000000',
+            usedDelta: '0',
+            itemDeltas: [],
+            tags: 0,
+          },
+        ],
+      })
     );
     expect(result.displayType).toBe('ckbTransfer');
   });

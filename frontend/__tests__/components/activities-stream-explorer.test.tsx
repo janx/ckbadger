@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
-import type { GlobalActivity } from '@/lib/api';
+import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { api } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 
@@ -10,26 +10,37 @@ vi.mock('@/lib/api', () => ({
     getGlobalActivities: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
+  TAG_TOKEN: 1,
+  TAG_OBJECT: 2,
+  TAG_IDENTITY: 4,
+  TAG_DAO: 8,
+  TAG_PROTOCOL: 16,
+  TAG_CELLBASE: 32,
 }));
 
+function makeParticipant(overrides: Partial<ParticipantInfo> = {}): ParticipantInfo {
+  return {
+    address: overrides.address ?? 'ckb1qtest',
+    ckbDelta: overrides.ckbDelta ?? '0',
+    usedDelta: overrides.usedDelta ?? '0',
+    itemDeltas: overrides.itemDeltas ?? [],
+    tags: overrides.tags ?? 0,
+  };
+}
+
 function makeActivity(
-  overrides: Partial<GlobalActivity> & Pick<GlobalActivity, 'address' | 'txHash'>
+  overrides: Partial<GlobalActivity> & { participants: ParticipantInfo[] }
 ): GlobalActivity {
   return {
-    address: overrides.address,
-    txHash: overrides.txHash,
+    txHash: overrides.txHash ?? '0xtx',
     blockNumber: overrides.blockNumber ?? 10_000,
     txIndex: overrides.txIndex ?? 0,
     timestamp: overrides.timestamp ?? '1700000000000',
-    ckbDelta: overrides.ckbDelta ?? '0',
-    usedDelta: overrides.usedDelta ?? '0',
     isCellbase: overrides.isCellbase ?? false,
-    hasTypeScript: overrides.hasTypeScript ?? false,
-    assetChanges: overrides.assetChanges ?? [],
     typeCalls: overrides.typeCalls ?? [],
     lockCalls: overrides.lockCalls ?? [],
     protocolActions: overrides.protocolActions ?? [],
-    peers: overrides.peers ?? [],
+    participants: overrides.participants,
   };
 }
 
@@ -93,9 +104,13 @@ describe('ActivitiesStreamExplorer', () => {
       .mockResolvedValueOnce({
         data: [
           makeActivity({
-            address: 'ckb1qall1111111111111111111111111111111111111111111',
             txHash: '0xall-head',
-            ckbDelta: '100000000',
+            participants: [
+              makeParticipant({
+                address: 'ckb1qall1111111111111111111111111111111111111111111',
+                ckbDelta: '100000000',
+              }),
+            ],
             blockNumber: 500,
           }),
         ],
@@ -106,9 +121,13 @@ describe('ActivitiesStreamExplorer', () => {
       .mockResolvedValueOnce({
         data: [
           makeActivity({
-            address: 'ckb1qall1111111111111111111111111111111111111111111',
             txHash: '0xall-head',
-            ckbDelta: '100000000',
+            participants: [
+              makeParticipant({
+                address: 'ckb1qall1111111111111111111111111111111111111111111',
+                ckbDelta: '100000000',
+              }),
+            ],
             blockNumber: 500,
           }),
         ],
@@ -119,9 +138,13 @@ describe('ActivitiesStreamExplorer', () => {
       .mockResolvedValueOnce({
         data: [
           makeActivity({
-            address: 'ckb1qall2222222222222222222222222222222222222222222',
             txHash: '0xall-older',
-            ckbDelta: '200000000',
+            participants: [
+              makeParticipant({
+                address: 'ckb1qall2222222222222222222222222222222222222222222',
+                ckbDelta: '200000000',
+              }),
+            ],
             blockNumber: 499,
           }),
         ],
@@ -132,16 +155,21 @@ describe('ActivitiesStreamExplorer', () => {
       .mockResolvedValueOnce({
         data: [
           makeActivity({
-            address: 'ckb1qtoken111111111111111111111111111111111111111111',
             txHash: '0xtoken-only',
-            assetChanges: [
-              {
-                type: 'token',
-                typeScriptHash: '0xtoken',
-                delta: '4200',
-                symbol: 'TKN',
-                decimals: 2,
-              },
+            participants: [
+              makeParticipant({
+                address: 'ckb1qtoken111111111111111111111111111111111111111111',
+                itemDeltas: [
+                  {
+                    kind: 'token',
+                    typeScriptHash: '0xtoken',
+                    delta: '4200',
+                    symbol: 'TKN',
+                    decimals: 2,
+                  },
+                ],
+                tags: 1,
+              }),
             ],
             blockNumber: 480,
           }),
@@ -153,16 +181,21 @@ describe('ActivitiesStreamExplorer', () => {
       .mockResolvedValueOnce({
         data: [
           makeActivity({
-            address: 'ckb1qtoken111111111111111111111111111111111111111111',
             txHash: '0xtoken-only',
-            assetChanges: [
-              {
-                type: 'token',
-                typeScriptHash: '0xtoken',
-                delta: '4200',
-                symbol: 'TKN',
-                decimals: 2,
-              },
+            participants: [
+              makeParticipant({
+                address: 'ckb1qtoken111111111111111111111111111111111111111111',
+                itemDeltas: [
+                  {
+                    kind: 'token',
+                    typeScriptHash: '0xtoken',
+                    delta: '4200',
+                    symbol: 'TKN',
+                    decimals: 2,
+                  },
+                ],
+                tags: 1,
+              }),
             ],
             blockNumber: 480,
           }),
@@ -246,12 +279,9 @@ describe('ActivitiesStreamExplorer', () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
         makeActivity({
-          address: 'ckb1qzdaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaq3q7ue',
           txHash: '0xscriptcall0000000000000000000000000000000000000000000000000001',
           blockNumber: 123_456,
           timestamp: String(Date.now() - 23_000),
-          ckbDelta: '-30000',
-          hasTypeScript: true,
           typeCalls: [
             {
               scriptHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
@@ -260,6 +290,12 @@ describe('ActivitiesStreamExplorer', () => {
               typeHashType: 'type',
               typeArgs: '0x00',
             },
+          ],
+          participants: [
+            makeParticipant({
+              address: 'ckb1qzdaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaq3q7ue',
+              ckbDelta: '-30000',
+            }),
           ],
         }),
       ],
@@ -301,9 +337,13 @@ describe('ActivitiesStreamExplorer', () => {
       .mockResolvedValueOnce({
         data: [
           makeActivity({
-            address: 'ckb1qfresh111111111111111111111111111111111111111111',
             txHash: '0xfresh-head',
-            ckbDelta: '300000000',
+            participants: [
+              makeParticipant({
+                address: 'ckb1qfresh111111111111111111111111111111111111111111',
+                ckbDelta: '300000000',
+              }),
+            ],
             blockNumber: 777,
           }),
         ],
@@ -335,9 +375,13 @@ describe('ActivitiesStreamExplorer', () => {
       .mockResolvedValueOnce({
         data: [
           makeActivity({
-            address: 'ckb1qold11111111111111111111111111111111111111111111',
             txHash: '0xolder-head',
-            ckbDelta: '100000000',
+            participants: [
+              makeParticipant({
+                address: 'ckb1qold11111111111111111111111111111111111111111111',
+                ckbDelta: '100000000',
+              }),
+            ],
             blockNumber: 900,
           }),
         ],
@@ -348,15 +392,23 @@ describe('ActivitiesStreamExplorer', () => {
       .mockResolvedValueOnce({
         data: [
           makeActivity({
-            address: 'ckb1qnew11111111111111111111111111111111111111111111',
             txHash: '0xnew-head',
-            ckbDelta: '400000000',
+            participants: [
+              makeParticipant({
+                address: 'ckb1qnew11111111111111111111111111111111111111111111',
+                ckbDelta: '400000000',
+              }),
+            ],
             blockNumber: 901,
           }),
           makeActivity({
-            address: 'ckb1qold11111111111111111111111111111111111111111111',
             txHash: '0xolder-head',
-            ckbDelta: '100000000',
+            participants: [
+              makeParticipant({
+                address: 'ckb1qold11111111111111111111111111111111111111111111',
+                ckbDelta: '100000000',
+              }),
+            ],
             blockNumber: 900,
           }),
         ],
@@ -410,9 +462,13 @@ describe('ActivitiesStreamExplorer', () => {
 
     const headPageOne = Array.from({ length: DEFAULT_PAGE_SIZE }, (_, index) =>
       makeActivity({
-        address: `ckb1qhead${String(index).padStart(2, '0')}111111111111111111111111111111111111`,
         txHash: `0xhead-page-one-${index}`,
-        ckbDelta: `${(index + 2) * 100000000}`,
+        participants: [
+          makeParticipant({
+            address: `ckb1qhead${String(index).padStart(2, '0')}111111111111111111111111111111111111`,
+            ckbDelta: `${(index + 2) * 100000000}`,
+          }),
+        ],
         blockNumber: 1_000 - index,
       })
     );
@@ -421,9 +477,13 @@ describe('ActivitiesStreamExplorer', () => {
       .mockResolvedValueOnce({
         data: [
           makeActivity({
-            address: 'ckb1qanchor111111111111111111111111111111111111111111',
             txHash: '0xanchor-head',
-            ckbDelta: '100000000',
+            participants: [
+              makeParticipant({
+                address: 'ckb1qanchor111111111111111111111111111111111111111111',
+                ckbDelta: '100000000',
+              }),
+            ],
             blockNumber: 900,
           }),
         ],
@@ -440,15 +500,23 @@ describe('ActivitiesStreamExplorer', () => {
       .mockResolvedValueOnce({
         data: [
           makeActivity({
-            address: `ckb1qhead${String(DEFAULT_PAGE_SIZE).padStart(2, '0')}111111111111111111111111111111111111`,
             txHash: `0xhead-page-two-${DEFAULT_PAGE_SIZE}`,
-            ckbDelta: '2200000000',
+            participants: [
+              makeParticipant({
+                address: `ckb1qhead${String(DEFAULT_PAGE_SIZE).padStart(2, '0')}111111111111111111111111111111111111`,
+                ckbDelta: '2200000000',
+              }),
+            ],
             blockNumber: 980,
           }),
           makeActivity({
-            address: 'ckb1qanchor111111111111111111111111111111111111111111',
             txHash: '0xanchor-head',
-            ckbDelta: '100000000',
+            participants: [
+              makeParticipant({
+                address: 'ckb1qanchor111111111111111111111111111111111111111111',
+                ckbDelta: '100000000',
+              }),
+            ],
             blockNumber: 900,
           }),
         ],
@@ -496,9 +564,13 @@ describe('ActivitiesStreamExplorer', () => {
       .mockResolvedValueOnce({
         data: [
           makeActivity({
-            address: 'ckb1qold11111111111111111111111111111111111111111111',
             txHash: '0xolder-head',
-            ckbDelta: '100000000',
+            participants: [
+              makeParticipant({
+                address: 'ckb1qold11111111111111111111111111111111111111111111',
+                ckbDelta: '100000000',
+              }),
+            ],
             blockNumber: 900,
           }),
         ],
@@ -509,15 +581,23 @@ describe('ActivitiesStreamExplorer', () => {
       .mockResolvedValueOnce({
         data: [
           makeActivity({
-            address: 'ckb1qnew11111111111111111111111111111111111111111111',
             txHash: '0xnew-head',
-            ckbDelta: '400000000',
+            participants: [
+              makeParticipant({
+                address: 'ckb1qnew11111111111111111111111111111111111111111111',
+                ckbDelta: '400000000',
+              }),
+            ],
             blockNumber: 901,
           }),
           makeActivity({
-            address: 'ckb1qold11111111111111111111111111111111111111111111',
             txHash: '0xolder-head',
-            ckbDelta: '100000000',
+            participants: [
+              makeParticipant({
+                address: 'ckb1qold11111111111111111111111111111111111111111111',
+                ckbDelta: '100000000',
+              }),
+            ],
             blockNumber: 900,
           }),
         ],
@@ -547,9 +627,13 @@ describe('ActivitiesStreamExplorer', () => {
       .mockResolvedValueOnce({
         data: [
           makeActivity({
-            address: 'ckb1qstable111111111111111111111111111111111111111111',
             txHash: '0xstable-head',
-            ckbDelta: '100000000',
+            participants: [
+              makeParticipant({
+                address: 'ckb1qstable111111111111111111111111111111111111111111',
+                ckbDelta: '100000000',
+              }),
+            ],
             blockNumber: 321,
           }),
         ],

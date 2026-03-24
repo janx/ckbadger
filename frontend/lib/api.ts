@@ -512,13 +512,10 @@ interface AssetTransferParams {
   category?: 'token' | 'object' | 'identity' | 'dao';
 }
 
-type ActivityAssetChange =
-  | { type: 'token'; typeScriptHash: string; delta: string; symbol?: string; decimals?: number }
-  | { type: 'object'; objectId: string; standard: string; action: string }
-  | { type: 'identity'; identityId: string; standard: string; action: string }
-  | { type: 'daoDeposit'; capacity: string }
-  | { type: 'daoWithdrawRequest'; capacity: string; depositBlock: number }
-  | { type: 'daoWithdrawComplete'; capacity: string; compensation: string };
+type ItemDelta =
+  | { kind: 'token'; typeScriptHash: string; delta: string; symbol?: string; decimals?: number }
+  | { kind: 'object'; objectId: string; delta: number }
+  | { kind: 'identity'; identityId: string; delta: number };
 
 interface ActivityTypeCall {
   typeCodeHash: string;
@@ -543,6 +540,15 @@ interface ActivityProtocolAction {
   metadata: Record<string, unknown>;
 }
 
+/** Tag bitmask constants for activity classification. */
+const TAG_TOKEN = 1;
+const TAG_OBJECT = 2;
+const TAG_IDENTITY = 4;
+const TAG_DAO = 8;
+const TAG_PROTOCOL = 16;
+const TAG_CELLBASE = 32;
+
+/** Address activity response (GET /addresses/{addr}/activities). */
 interface Activity {
   txHash: string;
   blockNumber: number;
@@ -551,29 +557,34 @@ interface Activity {
   ckbDelta: string;
   usedDelta: string;
   isCellbase: boolean;
-  hasTypeScript: boolean;
-  assetChanges: ActivityAssetChange[];
+  itemDeltas: ItemDelta[];
   typeCalls: ActivityTypeCall[];
   lockCalls: ActivityLockCall[];
   protocolActions: ActivityProtocolAction[];
-  peers: string[];
+  participants: string[];
+  tags: number;
 }
 
-interface GlobalActivity {
+/** Per-participant data within a global activity response. */
+interface ParticipantInfo {
   address: string;
+  ckbDelta: string;
+  usedDelta: string;
+  itemDeltas: ItemDelta[];
+  tags: number;
+}
+
+/** Global activity response (GET /activities, GET /activities/latest). */
+interface GlobalActivity {
   txHash: string;
   blockNumber: number;
   txIndex: number;
   timestamp: string;
-  ckbDelta: string;
-  usedDelta: string;
   isCellbase: boolean;
-  hasTypeScript: boolean;
-  assetChanges: ActivityAssetChange[];
+  protocolActions: ActivityProtocolAction[];
   typeCalls: ActivityTypeCall[];
   lockCalls: ActivityLockCall[];
-  protocolActions: ActivityProtocolAction[];
-  peers: string[];
+  participants: ParticipantInfo[];
 }
 
 type GlobalActivityFilter =
@@ -1730,10 +1741,11 @@ export type {
   HardforkTimelineResponse,
   HardforkActivation,
   Activity,
-  ActivityAssetChange,
+  ItemDelta,
   ActivityTypeCall,
   ActivityLockCall,
   ActivityProtocolAction,
+  ParticipantInfo,
   GlobalActivity,
   GlobalActivityFilter,
   ScriptCountEntry,
@@ -1749,6 +1761,8 @@ export type {
   FiberChannelState,
   FiberChannelQueryParams,
 };
+
+export { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_DAO, TAG_PROTOCOL, TAG_CELLBASE };
 
 export const api = {
   getForks: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<ReorgEvent>> => {

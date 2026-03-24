@@ -13,12 +13,12 @@ function makeActivity(overrides: Partial<Activity> = {}): Activity {
     ckbDelta: overrides.ckbDelta ?? '0',
     usedDelta: overrides.usedDelta ?? '0',
     isCellbase: overrides.isCellbase ?? false,
-    hasTypeScript: overrides.hasTypeScript ?? false,
-    assetChanges: overrides.assetChanges ?? [],
+    itemDeltas: overrides.itemDeltas ?? [],
     typeCalls: overrides.typeCalls ?? [],
     lockCalls: overrides.lockCalls ?? [],
     protocolActions: overrides.protocolActions ?? [],
-    peers: overrides.peers ?? [],
+    participants: overrides.participants ?? [],
+    tags: overrides.tags ?? 0,
   };
 }
 
@@ -60,7 +60,9 @@ describe('ActivityEventGroup', () => {
       <ActivityEventGroup
         activity={makeActivity({
           ckbDelta: '-10200000000',
-          assetChanges: [{ type: 'daoDeposit', capacity: '10200000000' }],
+          protocolActions: [
+            { protocol: 'dao', action: 'deposit', metadata: { capacity: '10200000000' } },
+          ],
         })}
         formatTimeAgo={mockFormatTimeAgo}
       />
@@ -73,9 +75,9 @@ describe('ActivityEventGroup', () => {
     render(
       <ActivityEventGroup
         activity={makeActivity({
-          assetChanges: [
+          itemDeltas: [
             {
-              type: 'token',
+              kind: 'token',
               typeScriptHash: '0xtoken',
               delta: '1200',
               symbol: 'SEAL',
@@ -159,9 +161,9 @@ describe('ActivityEventGroup', () => {
       <ActivityEventGroup
         activity={makeActivity({
           ckbDelta: '-1000000000',
-          assetChanges: [
-            { type: 'token', typeScriptHash: '0xt', delta: '500', symbol: 'SEAL', decimals: 0 },
-            { type: 'object', objectId: '0xobj123', standard: 'spore', action: 'mint' },
+          itemDeltas: [
+            { kind: 'token', typeScriptHash: '0xt', delta: '500', symbol: 'SEAL', decimals: 0 },
+            { kind: 'object', objectId: '0xobj123', delta: 1 },
           ],
           typeCalls: [
             {
@@ -178,7 +180,7 @@ describe('ActivityEventGroup', () => {
     );
     // All four event types present: token, object, script call (labeled by scriptName), CKB
     expect(screen.getAllByText(/SEAL Transfer/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Spore Mint/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Object/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Spore/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/CKB Transfer/).length).toBeGreaterThan(0);
   });
@@ -187,8 +189,12 @@ describe('ActivityEventGroup', () => {
     render(
       <ActivityEventGroup
         activity={makeActivity({
-          assetChanges: [
-            { type: 'daoWithdrawComplete', capacity: '20000000000', compensation: '500000000' },
+          protocolActions: [
+            {
+              protocol: 'dao',
+              action: 'withdraw_complete',
+              metadata: { capacity: '20000000000', compensation: '500000000' },
+            },
           ],
         })}
         formatTimeAgo={mockFormatTimeAgo}
@@ -202,14 +208,12 @@ describe('ActivityEventGroup', () => {
     render(
       <ActivityEventGroup
         activity={makeActivity({
-          assetChanges: [
-            { type: 'identity', identityId: '0xid123', standard: 'dotbit', action: 'register' },
-          ],
+          itemDeltas: [{ kind: 'identity', identityId: '0xid123', delta: 1 }],
         })}
         formatTimeAgo={mockFormatTimeAgo}
       />
     );
-    expect(screen.getAllByText(/\.bit Register/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Identity/).length).toBeGreaterThan(0);
   });
 
   it('renders time ago text', () => {
