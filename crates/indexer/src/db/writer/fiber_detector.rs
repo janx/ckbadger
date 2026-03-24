@@ -370,16 +370,16 @@ impl ProtocolDetector for FiberDetector {
     }
 }
 
-// TODO: Task 8 — rewrite detector tests for TxActions
-#[cfg(any())]
+#[cfg(test)]
 #[allow(clippy::useless_vec)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
     use crate::db::writer::activities::{
-        build_activity_bundles_for_block_with_detectors, OutputCellView, TxView,
+        build_tx_actions_for_block, OutputCellView, TxView,
     };
+    use ckbadger_store::types::TAG_PROTOCOL;
     use crate::parser::fiber::{COMMITMENT_LOCK_CODE_HASH_MAINNET, FUNDING_LOCK_CODE_HASH_MAINNET};
     use crate::rpc::parse_hex_to_bytes;
 
@@ -534,26 +534,29 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        // Participant should get channel_open action
-        let participant_delta = bundles[0]
-            .owners
+        // Protocol actions are TX-level — check for channel_open
+        let open_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![participant; 32])
+            .find(|a| a.protocol == "fiber" && a.action == "channel_open")
+            .expect("should have fiber channel_open action");
+
+        // Participant should have TAG_PROTOCOL
+        let participant_p = actions
+            .participants
+            .iter()
+            .find(|p| p.lock_hash == vec![participant; 32])
             .expect("participant should be present");
-        assert_eq!(participant_delta.protocol_actions.len(), 1);
-        assert_eq!(participant_delta.protocol_actions[0].protocol, "fiber");
-        assert_eq!(participant_delta.protocol_actions[0].action, "channel_open");
+        assert!(participant_p.tags & TAG_PROTOCOL != 0);
 
         // Verify metadata
-        let meta = participant_delta.protocol_actions[0]
-            .metadata_value()
-            .unwrap();
+        let meta = open_action.metadata_value().unwrap();
         assert_eq!(meta["event"], "channel_open");
         assert!(meta["channelOutpoint"].as_str().unwrap().starts_with("0x"));
         assert_eq!(meta["capacity"], "14500000000");
@@ -571,16 +574,11 @@ mod tests {
         };
         assert_eq!(meta["channelOutpoint"], expected_outpoint);
 
-        // Funding lock owner should NOT get action
-        let funding_delta = bundles[0]
-            .owners
+        // Funding lock owner should still be a participant (but protocol_actions are TX-level)
+        assert!(actions
+            .participants
             .iter()
-            .find(|o| o.lock_hash == vec![funding_owner; 32])
-            .expect("funding owner should be present");
-        assert!(
-            funding_delta.protocol_actions.is_empty(),
-            "funding lock owner should not receive protocol action"
-        );
+            .any(|p| p.lock_hash == vec![funding_owner; 32]));
     }
 
     #[test]
@@ -626,27 +624,18 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        let participant_delta = bundles[0]
-            .owners
+        let close_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![participant; 32])
-            .expect("participant should be present");
-        assert_eq!(participant_delta.protocol_actions.len(), 1);
-        assert_eq!(participant_delta.protocol_actions[0].protocol, "fiber");
-        assert_eq!(
-            participant_delta.protocol_actions[0].action,
-            "channel_close"
-        );
-
-        let meta = participant_delta.protocol_actions[0]
-            .metadata_value()
-            .unwrap();
+            .find(|a| a.protocol == "fiber" && a.action == "channel_close")
+            .expect("should have fiber channel_close action");
+        let meta = close_action.metadata_value().unwrap();
         assert_eq!(meta["event"], "channel_close");
         assert_eq!(meta["capacity"], "14500000000");
         assert_eq!(
@@ -654,13 +643,11 @@ mod tests {
             format!("0x{}", hex::encode(&funding_args))
         );
 
-        // Funding lock owner should NOT get action
-        let funding_delta = bundles[0]
-            .owners
+        // Funding lock owner should still be a participant
+        assert!(actions
+            .participants
             .iter()
-            .find(|o| o.lock_hash == vec![funding_owner; 32])
-            .expect("funding owner should be present");
-        assert!(funding_delta.protocol_actions.is_empty());
+            .any(|p| p.lock_hash == vec![funding_owner; 32]));
     }
 
     #[test]
@@ -724,24 +711,18 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        let participant_delta = bundles[0]
-            .owners
+        let force_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![participant; 32])
-            .expect("participant should be present");
-        assert_eq!(participant_delta.protocol_actions.len(), 1);
-        assert_eq!(participant_delta.protocol_actions[0].protocol, "fiber");
-        assert_eq!(participant_delta.protocol_actions[0].action, "force_close");
-
-        let meta = participant_delta.protocol_actions[0]
-            .metadata_value()
-            .unwrap();
+            .find(|a| a.protocol == "fiber" && a.action == "force_close")
+            .expect("should have fiber force_close action");
+        let meta = force_action.metadata_value().unwrap();
         assert_eq!(meta["event"], "force_close");
         assert_eq!(meta["capacity"], "14500000000");
         assert_eq!(
@@ -753,21 +734,9 @@ mod tests {
             format!("0x{}", hex::encode(&commitment_args))
         );
 
-        // Funding lock owner should NOT get action
-        let funding_delta = bundles[0]
-            .owners
-            .iter()
-            .find(|o| o.lock_hash == vec![funding_owner; 32])
-            .expect("funding owner should be present");
-        assert!(funding_delta.protocol_actions.is_empty());
-
-        // Commitment lock owner should NOT get action
-        let commitment_delta = bundles[0]
-            .owners
-            .iter()
-            .find(|o| o.lock_hash == vec![commitment_owner; 32])
-            .expect("commitment owner should be present");
-        assert!(commitment_delta.protocol_actions.is_empty());
+        // All participants should be present
+        assert!(actions.participants.iter().any(|p| p.lock_hash == vec![funding_owner; 32]));
+        assert!(actions.participants.iter().any(|p| p.lock_hash == vec![commitment_owner; 32]));
     }
 
     #[test]
@@ -817,24 +786,18 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        let participant_delta = bundles[0]
-            .owners
+        let settle_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![participant; 32])
-            .expect("participant should be present");
-        assert_eq!(participant_delta.protocol_actions.len(), 1);
-        assert_eq!(participant_delta.protocol_actions[0].protocol, "fiber");
-        assert_eq!(participant_delta.protocol_actions[0].action, "settlement");
-
-        let meta = participant_delta.protocol_actions[0]
-            .metadata_value()
-            .unwrap();
+            .find(|a| a.protocol == "fiber" && a.action == "settlement")
+            .expect("should have fiber settlement action");
+        let meta = settle_action.metadata_value().unwrap();
         assert_eq!(meta["event"], "settlement");
         assert_eq!(meta["capacity"], "10000000000");
         assert_eq!(
@@ -842,13 +805,8 @@ mod tests {
             format!("0x{}", hex::encode(&commitment_args))
         );
 
-        // Commitment lock owner should NOT get action
-        let commitment_delta = bundles[0]
-            .owners
-            .iter()
-            .find(|o| o.lock_hash == vec![commitment_owner; 32])
-            .expect("commitment owner should be present");
-        assert!(commitment_delta.protocol_actions.is_empty());
+        // Commitment lock owner should still be a participant
+        assert!(actions.participants.iter().any(|p| p.lock_hash == vec![commitment_owner; 32]));
     }
 
     #[test]
@@ -888,17 +846,14 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
-        for owner in &bundles[0].owners {
-            assert!(
-                owner.protocol_actions.is_empty(),
-                "no fiber actions expected for standard-only tx"
-            );
-        }
+        assert_eq!(actions_list.len(), 1);
+        assert!(
+            actions_list[0].protocol_actions.is_empty(),
+            "no fiber actions expected for standard-only tx"
+        );
     }
 
     #[test]
@@ -953,20 +908,16 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        let participant_delta = bundles[0]
-            .owners
+        let actions = &actions_list[0];
+        let open_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![participant; 32])
-            .expect("participant should be present");
-        assert_eq!(participant_delta.protocol_actions.len(), 1);
-
-        let meta = participant_delta.protocol_actions[0]
-            .metadata_value()
-            .unwrap();
+            .find(|a| a.protocol == "fiber" && a.action == "channel_open")
+            .expect("should have fiber channel_open action");
+        let meta = open_action.metadata_value().unwrap();
         // output_index = 1 as LE u32 -> [0x01, 0x00, 0x00, 0x00]
         let expected_outpoint = {
             let mut buf = Vec::with_capacity(36);
@@ -1083,27 +1034,18 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(FiberDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        let participant_delta = bundles[0]
-            .owners
+        let revoke_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![participant; 32])
-            .expect("participant should be present");
-        assert_eq!(participant_delta.protocol_actions.len(), 1);
-        assert_eq!(participant_delta.protocol_actions[0].protocol, "fiber");
-        assert_eq!(
-            participant_delta.protocol_actions[0].action,
-            "commitment_revocation"
-        );
-
-        let meta = participant_delta.protocol_actions[0]
-            .metadata_value()
-            .unwrap();
+            .find(|a| a.protocol == "fiber" && a.action == "commitment_revocation")
+            .expect("should have fiber commitment_revocation action");
+        let meta = revoke_action.metadata_value().unwrap();
         assert_eq!(meta["event"], "commitment_revocation");
         assert_eq!(
             meta["oldCommitmentLockArgs"],
@@ -1113,15 +1055,6 @@ mod tests {
             meta["newCommitmentLockArgs"],
             format!("0x{}", hex::encode(&new_commitment_args))
         );
-
-        // Commitment lock owners should NOT get action
-        let commitment_in = bundles[0]
-            .owners
-            .iter()
-            .find(|o| o.lock_hash == vec![commitment_owner_in; 32]);
-        if let Some(delta) = commitment_in {
-            assert!(delta.protocol_actions.is_empty());
-        }
     }
 
     #[test]

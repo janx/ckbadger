@@ -1648,96 +1648,66 @@ mod tests {
     }
 }
 
-// TODO: Task 8 — rewrite activity_stats_tests for TxActions
-#[cfg(any())]
+#[cfg(test)]
 mod activity_stats_tests {
     use super::*;
     use std::sync::Arc;
 
     use ckbadger_store::types::{
-        ActivityEntry, AssetAction, AssetChange, DailyActivityStats, OwnerActivityDelta,
-        ProtocolAction, TypeCallEntry,
+        DailyActivityStats, ItemDelta, ParticipantDelta, ProtocolAction, TxActions,
+        TypeCallEntry, LockCallEntry,
+        ITEM_KIND_TOKEN, ITEM_KIND_OBJECT, ITEM_KIND_IDENTITY,
+        TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_DAO, TAG_TYPE_CALL,
     };
     use ckbadger_store::CkbadgerStore;
 
-    fn make_entry(
-        ckb_delta: i128,
+    /// Build a TxActions for testing accumulate_tx_actions_stats.
+    fn make_tx_actions(
         is_cellbase: bool,
-        has_type_script: bool,
-        changes: Vec<AssetChange>,
-    ) -> ActivityEntry {
-        ActivityEntry {
+        participants: Vec<ParticipantDelta>,
+        protocol_actions: Vec<ProtocolAction>,
+        type_calls: Vec<TypeCallEntry>,
+    ) -> TxActions {
+        TxActions {
             tx_hash: vec![0; 32],
             block_hash: vec![0; 32],
             block_number: 100,
             tx_index: 0,
             timestamp: 1700000000000,
-            ckb_delta,
-            used_delta: 0,
             is_cellbase,
-            has_type_script,
-            asset_changes: changes,
-            type_calls: None,
-            lock_calls: None,
-            protocol_actions: vec![],
-            peers: vec![],
+            protocol_actions,
+            type_calls,
+            lock_calls: vec![],
+            participants,
         }
     }
 
-    fn make_owner_delta(
-        ckb_delta: i128,
-        has_type_script: bool,
-        changes: Vec<AssetChange>,
-    ) -> OwnerActivityDelta {
-        OwnerActivityDelta {
+    fn make_participant(ckb_delta: i128, tags: u16) -> ParticipantDelta {
+        ParticipantDelta {
             lock_hash: vec![0xAA; 32],
-            lock_code_hash: vec![0x11; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0x22; 20],
             ckb_delta,
             used_delta: 0,
-            has_type_script,
-            involved_script_code_hashes: vec![vec![0x11; 32]],
-            asset_changes: changes,
-            type_calls: None,
-            lock_calls: None,
-            protocol_actions: vec![],
-            peers: vec![],
+            item_deltas: vec![],
+            tags,
         }
     }
 
     #[test]
     fn test_coinbase_classified_correctly() {
         let mut stats = DailyActivityStats::default();
-        let scripts = vec![vec![0x11; 32]];
-        let entry = make_entry(500_00000000, true, false, vec![]);
-        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
+        let actions = make_tx_actions(true, vec![make_participant(500_00000000, 0)], vec![], vec![]);
+        accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(stats.coinbase_count, 1);
         assert_eq!(stats.transfer_count, 0);
-        // Coinbase excluded from total_ckb_moved and script_counts
         assert_eq!(stats.total_ckb_moved, 0);
         assert!(stats.script_counts.is_empty());
     }
 
     #[test]
-    fn test_owner_activity_stats_classify_transfers_from_bundle_owner() {
-        let mut stats = DailyActivityStats::default();
-        let owner = make_owner_delta(-100_00000000, false, vec![]);
-        BatchWriter::accumulate_owner_activity_stats(false, &owner, &mut stats);
-        assert_eq!(stats.transfer_count, 1);
-        assert_eq!(stats.total_ckb_moved, 100_00000000);
-        assert_eq!(
-            *stats.script_counts.get(&hex::encode([0x11; 32])).unwrap(),
-            1
-        );
-    }
-
-    #[test]
     fn test_plain_transfer_classified_correctly() {
         let mut stats = DailyActivityStats::default();
-        let scripts = vec![vec![0x11; 32]];
-        let entry = make_entry(-100_00000000, false, false, vec![]);
-        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
+        let actions = make_tx_actions(false, vec![make_participant(-100_00000000, 0)], vec![], vec![]);
+        accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(stats.transfer_count, 1);
         assert_eq!(stats.coinbase_count, 0);
         assert_eq!(stats.total_ckb_moved, 100_00000000);
@@ -1746,16 +1716,13 @@ mod activity_stats_tests {
     #[test]
     fn test_dao_deposit_classified_correctly() {
         let mut stats = DailyActivityStats::default();
-        let scripts = vec![vec![0x11; 32]];
-        let entry = make_entry(
-            -200_00000000,
+        let actions = make_tx_actions(
             false,
-            true,
-            vec![AssetChange::DaoDeposit {
-                capacity: 200_00000000,
-            }],
+            vec![make_participant(-200_00000000, TAG_DAO)],
+            vec![ProtocolAction::new("dao", "deposit", serde_json::json!({"capacity": 200_00000000i64}))],
+            vec![],
         );
-        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(stats.dao_deposit_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -1763,17 +1730,13 @@ mod activity_stats_tests {
     #[test]
     fn test_dao_withdraw_request_classified_correctly() {
         let mut stats = DailyActivityStats::default();
-        let scripts = vec![vec![0x11; 32]];
-        let entry = make_entry(
-            0,
+        let actions = make_tx_actions(
             false,
-            true,
-            vec![AssetChange::DaoWithdrawRequest {
-                capacity: 200_00000000,
-                deposit_block: 50,
-            }],
+            vec![make_participant(0, TAG_DAO)],
+            vec![ProtocolAction::new("dao", "withdraw_request", serde_json::json!({}))],
+            vec![],
         );
-        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(stats.dao_withdraw_request_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -1781,17 +1744,13 @@ mod activity_stats_tests {
     #[test]
     fn test_dao_withdraw_complete_classified_correctly() {
         let mut stats = DailyActivityStats::default();
-        let scripts = vec![vec![0x11; 32]];
-        let entry = make_entry(
-            200_00000000,
+        let actions = make_tx_actions(
             false,
-            true,
-            vec![AssetChange::DaoWithdrawComplete {
-                capacity: 200_00000000,
-                compensation: 5_00000000,
-            }],
+            vec![make_participant(200_00000000, TAG_DAO)],
+            vec![ProtocolAction::new("dao", "withdraw_complete", serde_json::json!({}))],
+            vec![],
         );
-        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(stats.dao_withdraw_complete_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -1799,19 +1758,17 @@ mod activity_stats_tests {
     #[test]
     fn test_token_transfer_classified_correctly() {
         let mut stats = DailyActivityStats::default();
-        let scripts = vec![vec![0x11; 32]];
-        let entry = make_entry(
-            0,
+        let actions = make_tx_actions(
             false,
-            true,
-            vec![AssetChange::Token {
-                type_script_hash: vec![0xAA; 32],
-                delta: 1000,
-                symbol: Some("SEAL".to_string()),
-                decimals: Some(8),
+            vec![{
+                let mut p = make_participant(0, TAG_TOKEN);
+                p.item_deltas = vec![ItemDelta { item_id: vec![0xAA; 32], kind: ITEM_KIND_TOKEN, delta: 1000 }];
+                p
             }],
+            vec![],
+            vec![],
         );
-        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(stats.token_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -1819,18 +1776,17 @@ mod activity_stats_tests {
     #[test]
     fn test_object_classified_correctly() {
         let mut stats = DailyActivityStats::default();
-        let scripts = vec![vec![0x11; 32]];
-        let entry = make_entry(
-            0,
+        let actions = make_tx_actions(
             false,
-            true,
-            vec![AssetChange::Object {
-                object_id: vec![0xBB; 32],
-                standard: "spore".to_string(),
-                action: AssetAction::Mint,
+            vec![{
+                let mut p = make_participant(0, TAG_OBJECT);
+                p.item_deltas = vec![ItemDelta { item_id: vec![0xBB; 32], kind: ITEM_KIND_OBJECT, delta: 1 }];
+                p
             }],
+            vec![],
+            vec![],
         );
-        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(stats.object_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -1838,18 +1794,17 @@ mod activity_stats_tests {
     #[test]
     fn test_identity_classified_correctly() {
         let mut stats = DailyActivityStats::default();
-        let scripts = vec![vec![0x11; 32]];
-        let entry = make_entry(
-            0,
+        let actions = make_tx_actions(
             false,
-            true,
-            vec![AssetChange::Identity {
-                identity_id: vec![0xCC; 32],
-                standard: "dotbit".to_string(),
-                action: AssetAction::Transfer,
+            vec![{
+                let mut p = make_participant(0, TAG_IDENTITY);
+                p.item_deltas = vec![ItemDelta { item_id: vec![0xCC; 32], kind: ITEM_KIND_IDENTITY, delta: 1 }];
+                p
             }],
+            vec![],
+            vec![],
         );
-        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(stats.identity_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -1857,62 +1812,84 @@ mod activity_stats_tests {
     #[test]
     fn test_mixed_token_and_dao_counts_both() {
         let mut stats = DailyActivityStats::default();
-        let scripts = vec![vec![0x11; 32]];
-        let entry = make_entry(
-            -500_00000000,
+        let actions = make_tx_actions(
             false,
-            true,
-            vec![
-                AssetChange::Token {
-                    type_script_hash: vec![0xAA; 32],
-                    delta: 1000,
-                    symbol: None,
-                    decimals: None,
-                },
-                AssetChange::DaoDeposit {
-                    capacity: 100_00000000,
-                },
-            ],
+            vec![{
+                let mut p = make_participant(-500_00000000, TAG_TOKEN | TAG_DAO);
+                p.item_deltas = vec![ItemDelta { item_id: vec![0xAA; 32], kind: ITEM_KIND_TOKEN, delta: 1000 }];
+                p
+            }],
+            vec![ProtocolAction::new("dao", "deposit", serde_json::json!({}))],
+            vec![],
         );
-        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
+        accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(stats.dao_deposit_count, 1);
         assert_eq!(stats.token_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
 
     #[test]
-    fn test_multiple_activities_accumulate() {
+    fn test_multiple_txactions_accumulate() {
         let mut stats = DailyActivityStats::default();
-        let scripts = vec![vec![0x11; 32]];
         // 2 transfers + 1 coinbase
-        BatchWriter::accumulate_activity_stats(
-            &make_entry(-50_00000000, false, false, vec![]),
-            &scripts,
+        accumulate_tx_actions_stats(
+            &make_tx_actions(false, vec![make_participant(-50_00000000, 0)], vec![], vec![]),
             &mut stats,
         );
-        BatchWriter::accumulate_activity_stats(
-            &make_entry(30_00000000, false, false, vec![]),
-            &scripts,
+        accumulate_tx_actions_stats(
+            &make_tx_actions(false, vec![make_participant(30_00000000, 0)], vec![], vec![]),
             &mut stats,
         );
-        BatchWriter::accumulate_activity_stats(
-            &make_entry(100_00000000, true, false, vec![]),
-            &scripts,
+        accumulate_tx_actions_stats(
+            &make_tx_actions(true, vec![make_participant(100_00000000, 0)], vec![], vec![]),
             &mut stats,
         );
         assert_eq!(stats.transfer_count, 2);
         assert_eq!(stats.coinbase_count, 1);
-        // Coinbase (100 CKB) excluded from total_ckb_moved: 50 + 30 = 80
         assert_eq!(stats.total_ckb_moved, 80_00000000);
     }
 
     #[test]
     fn test_negative_delta_uses_absolute_value() {
         let mut stats = DailyActivityStats::default();
-        let scripts = vec![vec![0x11; 32]];
-        let entry = make_entry(-999_00000000, false, false, vec![]);
-        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
+        let actions = make_tx_actions(false, vec![make_participant(-999_00000000, 0)], vec![], vec![]);
+        accumulate_tx_actions_stats(&actions, &mut stats);
         assert_eq!(stats.total_ckb_moved, 999_00000000);
+    }
+
+    #[test]
+    fn test_script_call_classified_correctly() {
+        let mut stats = DailyActivityStats::default();
+        let actions = make_tx_actions(
+            false,
+            vec![make_participant(-50_00000000, TAG_TYPE_CALL)],
+            vec![],
+            vec![TypeCallEntry {
+                type_code_hash: vec![0xFF; 32],
+                type_hash_type: 1,
+                type_args: vec![0xEE; 20],
+            }],
+        );
+        accumulate_tx_actions_stats(&actions, &mut stats);
+        assert_eq!(stats.script_call_count, 1);
+        assert_eq!(stats.transfer_count, 0);
+        assert_eq!(stats.unknown_count, 0);
+    }
+
+    #[test]
+    fn test_accumulate_protocol_action_counts() {
+        let mut stats = DailyActivityStats::default();
+        let actions = make_tx_actions(
+            false,
+            vec![make_participant(100, 0)],
+            vec![ProtocolAction::new("rgbpp", "leap_to_ckb", serde_json::json!({}))],
+            vec![],
+        );
+        accumulate_tx_actions_stats(&actions, &mut stats);
+        assert_eq!(
+            *stats.protocol_action_counts.get("rgbpp:leap_to_ckb").unwrap(),
+            1
+        );
     }
 
     #[test]
@@ -1978,121 +1955,6 @@ mod activity_stats_tests {
         assert_eq!(got.dao_deposit_count, 2);
         assert_eq!(got.total_ckb_moved, 150_00000000);
         assert_eq!(got.unique_address_count, 10); // 3 + 7, summed across batches
-    }
-
-    #[test]
-    fn test_script_counts_accumulated() {
-        let mut stats = DailyActivityStats::default();
-        let lock_ch = vec![0xAA; 32];
-        let type_ch = vec![0xBB; 32];
-
-        let entry = make_entry(
-            -100_00000000,
-            false,
-            true,
-            vec![AssetChange::DaoDeposit {
-                capacity: 100_00000000,
-            }],
-        );
-        let scripts = vec![lock_ch.clone(), type_ch.clone()];
-        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
-
-        assert_eq!(*stats.script_counts.get(&hex::encode(&lock_ch)).unwrap(), 1);
-        assert_eq!(*stats.script_counts.get(&hex::encode(&type_ch)).unwrap(), 1);
-
-        let entry2 = make_entry(-50_00000000, false, false, vec![]);
-        let scripts2 = vec![lock_ch.clone()];
-        BatchWriter::accumulate_activity_stats(&entry2, &scripts2, &mut stats);
-
-        assert_eq!(*stats.script_counts.get(&hex::encode(&lock_ch)).unwrap(), 2);
-        assert_eq!(*stats.script_counts.get(&hex::encode(&type_ch)).unwrap(), 1);
-    }
-
-    #[test]
-    fn test_script_call_classified_correctly() {
-        let mut stats = DailyActivityStats::default();
-        let scripts = vec![vec![0xFF; 32]];
-        let entry = ActivityEntry {
-            tx_hash: vec![0; 32],
-            block_hash: vec![0; 32],
-            block_number: 100,
-            tx_index: 0,
-            timestamp: 1700000000000,
-            ckb_delta: -50_00000000,
-            used_delta: 0,
-            is_cellbase: false,
-            has_type_script: true,
-            asset_changes: vec![],
-            type_calls: Some(vec![TypeCallEntry {
-                type_code_hash: vec![0xFF; 32],
-                type_hash_type: 1,
-                type_args: vec![0xEE; 20],
-            }]),
-            lock_calls: None,
-            protocol_actions: vec![],
-            peers: vec![],
-        };
-        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
-        assert_eq!(stats.script_call_count, 1);
-        assert_eq!(stats.transfer_count, 0);
-        assert_eq!(stats.unknown_count, 0);
-    }
-
-    #[test]
-    fn test_unknown_is_unconditional_fallback() {
-        let mut stats = DailyActivityStats::default();
-        let scripts = vec![vec![0x11; 32]];
-        // has_type_script=true but no asset changes — this is the Unknown case
-        let entry = make_entry(0, false, true, vec![]);
-        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
-        assert_eq!(stats.unknown_count, 1);
-        assert_eq!(stats.transfer_count, 0);
-        assert_eq!(stats.script_call_count, 0);
-    }
-
-    #[test]
-    fn test_transfer_requires_no_type_script() {
-        let mut stats = DailyActivityStats::default();
-        let scripts = vec![vec![0x11; 32]];
-        // Pure CKB: no type scripts, no asset changes
-        let entry = make_entry(-100_00000000, false, false, vec![]);
-        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
-        assert_eq!(stats.transfer_count, 1);
-        assert_eq!(stats.unknown_count, 0);
-        assert_eq!(stats.script_call_count, 0);
-    }
-
-    #[test]
-    fn test_accumulate_protocol_action_counts() {
-        let mut stats = DailyActivityStats::default();
-        let entry = ActivityEntry {
-            tx_hash: vec![1; 32],
-            block_hash: vec![2; 32],
-            block_number: 100,
-            tx_index: 0,
-            timestamp: 1_700_000_000,
-            ckb_delta: 100,
-            used_delta: 0,
-            is_cellbase: false,
-            has_type_script: true,
-            asset_changes: vec![],
-            type_calls: None,
-            lock_calls: None,
-            protocol_actions: vec![ProtocolAction::new(
-                "rgbpp",
-                "leap_to_ckb",
-                serde_json::json!({}),
-            )],
-            peers: vec![],
-        };
-        BatchWriter::accumulate_activity_stats(&entry, &[], &mut stats);
-        assert_eq!(
-            *stats
-                .protocol_action_counts
-                .get("rgbpp:leap_to_ckb")
-                .unwrap(),
-            1
-        );
     }
 
     #[test]

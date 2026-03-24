@@ -202,16 +202,16 @@ impl ProtocolDetector for StableppDetector {
     }
 }
 
-// TODO: Task 8 — rewrite detector tests for TxActions
-#[cfg(any())]
+#[cfg(test)]
 #[allow(clippy::useless_vec)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
     use crate::db::writer::activities::{
-        build_activity_bundles_for_block_with_detectors, OutputCellView, TxView,
+        build_tx_actions_for_block, OutputCellView, TxView,
     };
+    use ckbadger_store::types::TAG_PROTOCOL;
     use crate::parser::stablepp::{
         INTENT_LOCK_CODE_HASH_MAINNET, POOL_CODE_HASH_MAINNET, VAULT_LOCK_CODE_HASH_MAINNET,
     };
@@ -352,17 +352,14 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
-        for owner in &bundles[0].owners {
-            assert!(
-                owner.protocol_actions.is_empty(),
-                "no stablepp actions expected for standard-only tx"
-            );
-        }
+        assert_eq!(actions_list.len(), 1);
+        assert!(
+            actions_list[0].protocol_actions.is_empty(),
+            "no stablepp actions expected for standard-only tx"
+        );
     }
 
     #[test]
@@ -417,25 +414,18 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        // Participant should get deposit action (no token delta = deposit per truth table)
-        let participant_delta = bundles[0]
-            .owners
+        let deposit_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![participant; 32])
-            .expect("participant should be present");
-        assert_eq!(participant_delta.protocol_actions.len(), 1);
-        assert_eq!(participant_delta.protocol_actions[0].protocol, "stablepp");
-        assert_eq!(participant_delta.protocol_actions[0].action, "deposit");
-
-        let meta = participant_delta.protocol_actions[0]
-            .metadata_value()
-            .unwrap();
+            .find(|a| a.protocol == "stablepp" && a.action == "deposit")
+            .expect("should have stablepp deposit action");
+        let meta = deposit_action.metadata_value().unwrap();
         assert_eq!(meta["vaultCount"], 1);
     }
 
@@ -491,21 +481,18 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        let participant_delta = bundles[0]
-            .owners
+        let liquidation_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![participant; 32])
-            .expect("participant should be present");
-        assert_eq!(participant_delta.protocol_actions.len(), 1);
-        assert_eq!(participant_delta.protocol_actions[0].protocol, "stablepp");
-        // No token delta (no UDT in this test), vault consumed -> liquidation
-        assert_eq!(participant_delta.protocol_actions[0].action, "liquidation");
+            .find(|a| a.protocol == "stablepp" && a.action == "liquidation")
+            .expect("should have stablepp liquidation action");
+        assert_eq!(liquidation_action.protocol, "stablepp");
     }
 
     #[test]
@@ -569,24 +556,18 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        let participant_delta = bundles[0]
-            .owners
+        let adjust_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![participant; 32])
-            .expect("participant should be present");
-        assert_eq!(participant_delta.protocol_actions.len(), 1);
-        assert_eq!(participant_delta.protocol_actions[0].protocol, "stablepp");
-        assert_eq!(participant_delta.protocol_actions[0].action, "adjust");
-
-        let meta = participant_delta.protocol_actions[0]
-            .metadata_value()
-            .unwrap();
+            .find(|a| a.protocol == "stablepp" && a.action == "adjust")
+            .expect("should have stablepp adjust action");
+        let meta = adjust_action.metadata_value().unwrap();
         assert_eq!(meta["vaultCount"], 1);
         assert_eq!(meta["hasIntent"], false);
     }
@@ -654,23 +635,18 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        let participant_delta = bundles[0]
-            .owners
+        let stablepp_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![participant; 32])
-            .expect("participant should be present");
-        assert_eq!(participant_delta.protocol_actions.len(), 1);
-        assert_eq!(participant_delta.protocol_actions[0].protocol, "stablepp");
-
-        let meta = participant_delta.protocol_actions[0]
-            .metadata_value()
-            .unwrap();
+            .find(|a| a.protocol == "stablepp")
+            .expect("should have stablepp action");
+        let meta = stablepp_action.metadata_value().unwrap();
         assert_eq!(meta["hasIntent"], true);
     }
 
@@ -715,18 +691,16 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        // Check that at least one owner gets the interaction action
-        let has_interaction = bundles[0].owners.iter().any(|o| {
-            o.protocol_actions
-                .iter()
-                .any(|pa| pa.protocol == "stablepp" && pa.action == "interaction")
-        });
+        let has_interaction = actions
+            .protocol_actions
+            .iter()
+            .any(|a| a.protocol == "stablepp" && a.action == "interaction");
         assert!(
             has_interaction,
             "expected interaction action for pool-only tx"
@@ -816,21 +790,18 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(StableppDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        // Alice should get a stablepp action (vault lock detected in her lock_calls)
-        let alice_delta = bundles[0]
-            .owners
+        // Protocol actions are TX-level — check for deposit
+        let deposit_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![alice; 32])
-            .expect("alice should be present");
-        assert_eq!(alice_delta.protocol_actions.len(), 1);
-        assert_eq!(alice_delta.protocol_actions[0].protocol, "stablepp");
-        // No vault in inputs, vault in outputs, no token delta -> deposit
-        assert_eq!(alice_delta.protocol_actions[0].action, "deposit");
+            .find(|a| a.protocol == "stablepp" && a.action == "deposit")
+            .expect("should have stablepp deposit action");
+        assert_eq!(deposit_action.protocol, "stablepp");
     }
 }

@@ -130,15 +130,14 @@ impl ProtocolDetector for UtxoSwapDetector {
     }
 }
 
-// TODO: Task 8 — rewrite detector tests for TxActions
-#[cfg(any())]
+#[cfg(test)]
 #[allow(clippy::useless_vec)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
     use crate::db::writer::activities::{
-        build_activity_bundles_for_block_with_detectors, OutputCellView, TxView,
+        build_tx_actions_for_block, OutputCellView, TxView,
     };
     use crate::parser::utxoswap::INTENT_LOCK_CODE_HASH_MAINNET;
     use crate::rpc::parse_hex_to_bytes;
@@ -280,17 +279,14 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
-        for owner in &bundles[0].owners {
-            assert!(
-                owner.protocol_actions.is_empty(),
-                "no utxoswap actions expected for standard-only tx"
-            );
-        }
+        assert_eq!(actions_list.len(), 1);
+        assert!(
+            actions_list[0].protocol_actions.is_empty(),
+            "no utxoswap actions expected for standard-only tx"
+        );
     }
 
     #[test]
@@ -328,30 +324,22 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        let alice_owner = bundles[0]
-            .owners
+        let submit_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![alice; 32])
-            .expect("alice should be present");
-        assert_eq!(alice_owner.protocol_actions.len(), 1);
-        assert_eq!(alice_owner.protocol_actions[0].protocol, "utxoswap");
-        assert_eq!(
-            alice_owner.protocol_actions[0].action,
-            "swap_exact_input_submitted"
-        );
-
-        let meta = alice_owner.protocol_actions[0].metadata_value().unwrap();
+            .find(|a| a.protocol == "utxoswap" && a.action == "swap_exact_input_submitted")
+            .expect("should have utxoswap swap_exact_input_submitted action");
+        let meta = submit_action.metadata_value().unwrap();
         assert_eq!(meta["intentType"], "SwapExactInputForOutput");
         assert_eq!(meta["amountIn"], "1000");
         assert_eq!(meta["amountOutMin"], "500");
         assert_eq!(meta["assetInIndex"], 0);
-        // poolTypeHash should be a hex string
         assert!(meta["poolTypeHash"].as_str().unwrap().starts_with("0x"));
     }
 
@@ -397,25 +385,18 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        let alice_owner = bundles[0]
-            .owners
+        let settle_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![alice; 32])
-            .expect("alice should be present");
-        assert_eq!(alice_owner.protocol_actions.len(), 1);
-        assert_eq!(alice_owner.protocol_actions[0].protocol, "utxoswap");
-        assert_eq!(
-            alice_owner.protocol_actions[0].action,
-            "swap_exact_input_settled"
-        );
-
-        let meta = alice_owner.protocol_actions[0].metadata_value().unwrap();
+            .find(|a| a.protocol == "utxoswap" && a.action == "swap_exact_input_settled")
+            .expect("should have utxoswap swap_exact_input_settled action");
+        let meta = settle_action.metadata_value().unwrap();
         assert_eq!(meta["intentType"], "SwapExactInputForOutput");
         assert_eq!(meta["amountIn"], "2000");
         assert_eq!(meta["amountOutMin"], "1500");
@@ -455,25 +436,18 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        let alice_owner = bundles[0]
-            .owners
+        let add_liq_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![alice; 32])
-            .expect("alice should be present");
-        assert_eq!(alice_owner.protocol_actions.len(), 1);
-        assert_eq!(alice_owner.protocol_actions[0].protocol, "utxoswap");
-        assert_eq!(
-            alice_owner.protocol_actions[0].action,
-            "add_liquidity_submitted"
-        );
-
-        let meta = alice_owner.protocol_actions[0].metadata_value().unwrap();
+            .find(|a| a.protocol == "utxoswap" && a.action == "add_liquidity_submitted")
+            .expect("should have utxoswap add_liquidity_submitted action");
+        let meta = add_liq_action.metadata_value().unwrap();
         assert_eq!(meta["intentType"], "AddLiquidity");
     }
 
@@ -519,24 +493,19 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        // Bob should have no utxoswap actions because the prefix doesn't match
-        let bob_owner = bundles[0]
-            .owners
-            .iter()
-            .find(|o| o.lock_hash == vec![bob; 32])
-            .expect("bob should be present");
+        // No utxoswap actions at TX level because prefix doesn't match bob
         assert!(
-            bob_owner
+            !actions
                 .protocol_actions
                 .iter()
-                .all(|pa| pa.protocol != "utxoswap"),
-            "bob should have no utxoswap actions because prefix mismatch"
+                .any(|a| a.protocol == "utxoswap"),
+            "no utxoswap actions expected because prefix mismatch"
         );
     }
 
@@ -577,20 +546,17 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(UtxoSwapDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
 
-        for owner in &bundles[0].owners {
-            assert!(
-                owner
-                    .protocol_actions
-                    .iter()
-                    .all(|pa| pa.protocol != "utxoswap"),
-                "no utxoswap actions expected with malformed args"
-            );
-        }
+        assert!(
+            !actions_list[0]
+                .protocol_actions
+                .iter()
+                .any(|a| a.protocol == "utxoswap"),
+            "no utxoswap actions expected with malformed args"
+        );
     }
 }

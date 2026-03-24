@@ -996,9 +996,7 @@ mod tests {
         assert_eq!(parse_activity_cursor("100"), None);
     }
 
-    // TODO: Task 8 — add integration tests for list_canonical_activities_page,
-    // list_canonical_global_activities_page, and matches_global_activity_filter
-    // using TxActions and ParticipantDelta.
+    // Integration tests for activities are in crates/api/tests/api_integration.rs
 
     #[test]
     fn test_decode_rgbpp_lock_args_valid() {

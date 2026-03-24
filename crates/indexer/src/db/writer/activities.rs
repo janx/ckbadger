@@ -930,12 +930,11 @@ fn emit_identity_item_deltas<T: AsRef<[u8]>>(
     }
 }
 
-// Tests temporarily disabled — will be rewritten in Task 8 to use TxActions/ItemDelta.
-#[cfg(any())]
+// Tests rewritten for TxActions/ItemDelta model.
+#[cfg(test)]
 #[allow(clippy::useless_vec)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     /// Owned data for constructing test OutputCellView instances.
     struct OwnedOutput {
@@ -1046,8 +1045,17 @@ mod tests {
         }
     }
 
+    /// Helper: find participant by lock_hash byte pattern in a TxActions.
+    fn find_participant(actions: &TxActions, lock_byte: u8) -> &ParticipantDelta {
+        actions
+            .participants
+            .iter()
+            .find(|p| p.lock_hash == vec![lock_byte; 32])
+            .unwrap_or_else(|| panic!("participant 0x{:02x} not found", lock_byte))
+    }
+
     #[test]
-    fn test_build_activity_bundles_preserves_input_only_owner_lock_script() {
+    fn test_build_tx_actions_preserves_participant_lock_hash() {
         let owner = 0xAA;
         let input = make_input(owner, 100_00000000, 61_00000000);
 
@@ -1062,19 +1070,14 @@ mod tests {
             outputs: vec![],
         };
 
-        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
-        assert_eq!(bundles.len(), 1);
-        assert_eq!(bundles[0].owners.len(), 1);
-
-        let owner_delta = &bundles[0].owners[0];
-        assert_eq!(owner_delta.lock_hash, vec![owner; 32]);
-        assert_eq!(owner_delta.lock_code_hash, vec![0x11; 32]);
-        assert_eq!(owner_delta.lock_hash_type, 1);
-        assert_eq!(owner_delta.lock_args, vec![0x22; 20]);
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        assert_eq!(actions_list[0].participants.len(), 1);
+        assert_eq!(actions_list[0].participants[0].lock_hash, vec![owner; 32]);
     }
 
     #[test]
-    fn test_build_activity_bundles_sorts_owners_by_lock_hash() {
+    fn test_build_tx_actions_sorts_participants_by_lock_hash() {
         let alice = 0xAA;
         let bob = 0xBB;
         let outputs = vec![
@@ -1094,14 +1097,14 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
-        assert_eq!(bundles.len(), 1);
-        let owner_hashes: Vec<Vec<u8>> = bundles[0]
-            .owners
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        let hashes: Vec<Vec<u8>> = actions_list[0]
+            .participants
             .iter()
-            .map(|owner| owner.lock_hash.clone())
+            .map(|p| p.lock_hash.clone())
             .collect();
-        assert_eq!(owner_hashes, vec![vec![alice; 32], vec![bob; 32]]);
+        assert_eq!(hashes, vec![vec![alice; 32], vec![bob; 32]]);
     }
 
     #[test]
@@ -1127,28 +1130,17 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
-        assert_eq!(activities.len(), 2);
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
+        assert_eq!(actions.participants.len(), 2);
 
-        let alice_act = activities
-            .iter()
-            .find(|(lh, _, _)| lh == &vec![alice; 32])
-            .map(|(_, _, e)| e)
-            .unwrap();
-        assert_eq!(alice_act.ckb_delta, -100_00000000);
-        assert_eq!(alice_act.peers.len(), 1);
-        assert_eq!(alice_act.peers[0], vec![bob; 32]);
-        assert!(!alice_act.is_cellbase);
-        assert!(!alice_act.has_type_script);
+        let alice_p = find_participant(actions, alice);
+        assert_eq!(alice_p.ckb_delta, -100_00000000);
+        assert!(!actions.is_cellbase);
 
-        let bob_act = activities
-            .iter()
-            .find(|(lh, _, _)| lh == &vec![bob; 32])
-            .map(|(_, _, e)| e)
-            .unwrap();
-        assert_eq!(bob_act.ckb_delta, 100_00000000);
-        assert_eq!(bob_act.peers.len(), 1);
-        assert_eq!(bob_act.peers[0], vec![alice; 32]);
+        let bob_p = find_participant(actions, bob);
+        assert_eq!(bob_p.ckb_delta, 100_00000000);
     }
 
     #[test]
@@ -1167,14 +1159,14 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
-        assert_eq!(activities.len(), 1);
-        let (lock_hash, _, entry) = &activities[0];
-        assert_eq!(lock_hash, &vec![miner; 32]);
-        assert_eq!(entry.ckb_delta, 5000_00000000);
-        assert!(entry.is_cellbase);
-        assert!(entry.peers.is_empty());
-        assert!(!entry.has_type_script);
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
+        assert!(actions.is_cellbase);
+        assert_eq!(actions.participants.len(), 1);
+        let miner_p = find_participant(actions, miner);
+        assert_eq!(miner_p.ckb_delta, 5000_00000000);
+        assert!(miner_p.tags & TAG_CELLBASE != 0);
     }
 
     #[test]
@@ -1201,17 +1193,17 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
-        assert_eq!(activities.len(), 1);
-        let (_, _, entry) = &activities[0];
-        assert_eq!(entry.ckb_delta, 0);
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        let alice_p = find_participant(&actions_list[0], alice);
+        assert_eq!(alice_p.ckb_delta, 0);
         // Output occupied = (8 + (32+1+20) + 0 + 100) * 100_000_000 = 16_100_000_000
         // used_delta = 16_100_000_000 - 6_100_000_000 = 10_000_000_000
-        assert_eq!(entry.used_delta, 100_00000000);
+        assert_eq!(alice_p.used_delta, 100_00000000);
     }
 
     #[test]
-    fn test_three_party_peers() {
+    fn test_three_party_participants() {
         let alice = 0xAA;
         let bob = 0xBB;
         let carol = 0xCC;
@@ -1234,13 +1226,9 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
-        assert_eq!(activities.len(), 3);
-
-        for (lock_hash, _, entry) in &activities {
-            assert_eq!(entry.peers.len(), 2);
-            assert!(!entry.peers.contains(lock_hash));
-        }
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        assert_eq!(actions_list[0].participants.len(), 3);
     }
 
     #[test]
@@ -1275,14 +1263,13 @@ mod tests {
             outputs: outputs2.iter().map(|o| o.view()).collect(),
         };
 
-        let activities = build_activities_for_block(&[tx1, tx2], &HashMap::new()).unwrap();
-        assert_eq!(activities.len(), 3);
-
-        let alice_entries: Vec<_> = activities
-            .iter()
-            .filter(|(lh, _, _)| lh == &vec![alice; 32])
-            .collect();
-        assert_eq!(alice_entries.len(), 2);
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx1, tx2]).unwrap();
+        // One TxActions per transaction
+        assert_eq!(actions_list.len(), 2);
+        // First tx: cellbase with alice
+        assert_eq!(actions_list[0].participants.len(), 1);
+        // Second tx: alice + bob
+        assert_eq!(actions_list[1].participants.len(), 2);
     }
 
     #[test]
@@ -1327,55 +1314,26 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let mut token_cache = HashMap::new();
-        token_cache.insert(
-            type_script_hash.clone(),
-            (Some("SEAL".to_string()), Some(8u8)),
-        );
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let actions = &actions_list[0];
 
-        let activities = build_activities_for_block(&[tx], &token_cache).unwrap();
+        let alice_p = find_participant(actions, alice);
+        assert!(alice_p.tags & TAG_TOKEN != 0);
+        let alice_token = alice_p
+            .item_deltas
+            .iter()
+            .find(|d| d.kind == ITEM_KIND_TOKEN)
+            .expect("alice should have token item delta");
+        assert_eq!(alice_token.delta, -1000);
+        assert_eq!(alice_token.item_id, type_script_hash);
 
-        let alice_act = activities
+        let bob_p = find_participant(actions, bob);
+        let bob_token = bob_p
+            .item_deltas
             .iter()
-            .find(|(lh, _, _)| lh == &vec![alice; 32])
-            .map(|(_, _, e)| e)
-            .unwrap();
-        assert!(alice_act.has_type_script);
-        let token_change = alice_act
-            .asset_changes
-            .iter()
-            .find(|c| matches!(c, AssetChange::Token { .. }))
-            .unwrap();
-        match token_change {
-            AssetChange::Token {
-                delta,
-                symbol,
-                decimals,
-                ..
-            } => {
-                assert_eq!(*delta, -1000);
-                assert_eq!(symbol.as_deref(), Some("SEAL"));
-                assert_eq!(*decimals, Some(8));
-            }
-            _ => unreachable!(),
-        }
-
-        let bob_act = activities
-            .iter()
-            .find(|(lh, _, _)| lh == &vec![bob; 32])
-            .map(|(_, _, e)| e)
-            .unwrap();
-        let token_change = bob_act
-            .asset_changes
-            .iter()
-            .find(|c| matches!(c, AssetChange::Token { .. }))
-            .unwrap();
-        match token_change {
-            AssetChange::Token { delta, .. } => {
-                assert_eq!(*delta, 1000);
-            }
-            _ => unreachable!(),
-        }
+            .find(|d| d.kind == ITEM_KIND_TOKEN)
+            .expect("bob should have token item delta");
+        assert_eq!(bob_token.delta, 1000);
     }
 
     #[test]
@@ -1422,33 +1380,20 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let mut token_cache = HashMap::new();
-        token_cache.insert(
-            type_script_hash.clone(),
-            (Some("SEAL".to_string()), Some(8u8)),
-        );
-
-        let activities = build_activities_for_block(&[tx], &token_cache).unwrap();
-        let alice_act = activities
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let alice_p = find_participant(&actions_list[0], alice);
+        let alice_token = alice_p
+            .item_deltas
             .iter()
-            .find(|(lh, _, _)| lh == &vec![alice; 32])
-            .map(|(_, _, e)| e)
-            .unwrap();
-        let token_change = alice_act
-            .asset_changes
-            .iter()
-            .find(|c| matches!(c, AssetChange::Token { .. }))
-            .unwrap();
-        match token_change {
-            AssetChange::Token { delta, .. } => assert_eq!(*delta, -1000),
-            _ => unreachable!(),
-        }
+            .find(|d| d.kind == ITEM_KIND_TOKEN)
+            .expect("alice should have token item delta");
+        assert_eq!(alice_token.delta, -1000);
     }
 
     #[test]
-    fn test_no_activities_for_empty_block() {
-        let activities = build_activities_for_block(&[], &HashMap::new()).unwrap();
-        assert!(activities.is_empty());
+    fn test_no_actions_for_empty_block() {
+        let actions_list = build_tx_actions_for_block_no_detectors(&[]).unwrap();
+        assert!(actions_list.is_empty());
     }
 
     #[test]
@@ -1481,31 +1426,21 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
-        assert_eq!(activities.len(), 1);
-        let (_, _, entry) = &activities[0];
-
-        let dotbit_change = entry
-            .asset_changes
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        let owner_p = find_participant(&actions_list[0], owner);
+        assert!(owner_p.tags & TAG_IDENTITY != 0);
+        let identity_delta = owner_p
+            .item_deltas
             .iter()
-            .find(|c| matches!(c, AssetChange::Identity { standard, .. } if standard == "dotbit"))
-            .expect("dotbit identity change should be present");
-        match dotbit_change {
-            AssetChange::Identity {
-                identity_id,
-                standard,
-                action,
-            } => {
-                assert_eq!(identity_id, &account_id);
-                assert_eq!(standard, "dotbit");
-                assert!(matches!(action, AssetAction::Mint));
-            }
-            _ => unreachable!(),
-        }
+            .find(|d| d.kind == ITEM_KIND_IDENTITY)
+            .expect("dotbit identity item delta should be present");
+        assert_eq!(identity_delta.item_id, account_id);
+        assert_eq!(identity_delta.delta, 1); // output-only = +1
     }
 
     #[test]
-    fn test_did_ckb_changes_are_labeled_as_did_ckb_identity() {
+    fn test_did_ckb_changes_are_labeled_as_identity() {
         let owner = 0xBB;
         let did_code_hash =
             crate::rpc::parse_hex_to_bytes(crate::parser::spore::SPORE_CODE_HASH_MAINNET_DID);
@@ -1531,31 +1466,21 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
-        assert_eq!(activities.len(), 1);
-        let (_, _, entry) = &activities[0];
-
-        let did_change = entry
-            .asset_changes
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        let owner_p = find_participant(&actions_list[0], owner);
+        assert!(owner_p.tags & TAG_IDENTITY != 0);
+        let identity_delta = owner_p
+            .item_deltas
             .iter()
-            .find(|c| matches!(c, AssetChange::Identity { standard, .. } if standard == "did_ckb"))
-            .expect("did_ckb identity change should be present");
-        match did_change {
-            AssetChange::Identity {
-                identity_id,
-                standard,
-                action,
-            } => {
-                assert_eq!(identity_id, &did_id);
-                assert_eq!(standard, "did_ckb");
-                assert!(matches!(action, AssetAction::Mint));
-            }
-            _ => unreachable!(),
-        }
+            .find(|d| d.kind == ITEM_KIND_IDENTITY)
+            .expect("did_ckb identity item delta should be present");
+        assert_eq!(identity_delta.item_id, did_id);
+        assert_eq!(identity_delta.delta, 1); // output-only = +1
     }
 
     #[test]
-    fn test_dao_withdraw_complete_is_classified_from_input_view_flag() {
+    fn test_dao_withdraw_complete_produces_protocol_action() {
         let owner = 0xAA;
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
 
@@ -1577,57 +1502,24 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
-        assert_eq!(activities.len(), 1);
-        let (_, _, entry) = &activities[0];
-        assert!(entry.has_type_script);
-        assert!(entry.asset_changes.iter().any(|change| matches!(
-            change,
-            AssetChange::DaoWithdrawComplete {
-                capacity,
-                compensation
-            } if *capacity == 102_00000000 && *compensation == 5_00000000
-        )));
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
+        let owner_p = find_participant(actions, owner);
+        assert!(owner_p.tags & TAG_DAO != 0);
+        // DAO withdraw_complete is now a TX-level protocol_action
+        let dao_action = actions
+            .protocol_actions
+            .iter()
+            .find(|a| a.protocol == "dao" && a.action == "withdraw_complete")
+            .expect("should have dao withdraw_complete protocol action");
+        let meta = dao_action.metadata_value().unwrap();
+        assert_eq!(meta["capacity"], 102_00000000i64);
+        assert_eq!(meta["compensation"], 5_00000000i64);
     }
 
     #[test]
-    fn test_scripts_tracked_for_transfer() {
-        let alice = 0xAA;
-        let bob = 0xBB;
-
-        let outputs = vec![
-            make_output(bob, 100_00000000, None, None, None, vec![]),
-            make_output(alice, 200_00000000, None, None, None, vec![]),
-        ];
-
-        let alice_input_owned = make_input(alice, 300_00000000, 61_00000000);
-        let tx = TxView {
-            tx_hash: &[0x01; 32],
-            block_hash: &[0xA1; 32],
-            tx_index: 1,
-            block_number: 1000,
-            timestamp: 1_700_000_000,
-            is_cellbase: false,
-            inputs: vec![alice_input_owned.view()],
-            outputs: outputs.iter().map(|o| o.view()).collect(),
-        };
-
-        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
-        let (_, alice_scripts, _) = activities
-            .iter()
-            .find(|(lh, _, _)| lh == &vec![alice; 32])
-            .unwrap();
-        assert!(alice_scripts.contains(&vec![0x11; 32]));
-
-        let (_, bob_scripts, _) = activities
-            .iter()
-            .find(|(lh, _, _)| lh == &vec![bob; 32])
-            .unwrap();
-        assert!(bob_scripts.contains(&vec![0x11; 32]));
-    }
-
-    #[test]
-    fn test_unrecognized_type_script_produces_script_call() {
+    fn test_unrecognized_type_script_produces_type_call() {
         let alice = 0xAA;
         let bob = 0xBB;
         let unknown_code_hash = vec![0xFF; 32];
@@ -1662,43 +1554,26 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let actions = &actions_list[0];
 
-        let alice_act = activities
-            .iter()
-            .find(|(lh, _, _)| lh == &vec![alice; 32])
-            .map(|(_, _, e)| e)
-            .unwrap();
-        assert!(alice_act.has_type_script);
-        assert!(alice_act.asset_changes.is_empty());
-        let alice_type_calls = alice_act
-            .type_calls
-            .as_ref()
-            .expect("should have script calls for unrecognized type script");
-        assert_eq!(alice_type_calls.len(), 1);
-        assert_eq!(alice_type_calls[0].type_code_hash, vec![0xFF; 32]);
-        assert_eq!(alice_type_calls[0].type_hash_type, 1);
-        assert_eq!(alice_type_calls[0].type_args, alice_type_args);
+        // Type calls are now TX-level (deduplicated)
+        // Both alice_type_args and bob_type_args should appear since they differ
+        assert!(!actions.type_calls.is_empty());
+        assert!(actions.type_calls.iter().any(|tc| tc.type_code_hash == vec![0xFF; 32]));
 
-        let bob_act = activities
-            .iter()
-            .find(|(lh, _, _)| lh == &vec![bob; 32])
-            .map(|(_, _, e)| e)
-            .unwrap();
-        assert!(bob_act.has_type_script);
-        assert!(bob_act.asset_changes.is_empty());
-        let bob_type_calls = bob_act
-            .type_calls
-            .as_ref()
-            .expect("bob should have script calls");
-        assert_eq!(bob_type_calls.len(), 1);
-        assert_eq!(bob_type_calls[0].type_code_hash, vec![0xFF; 32]);
-        assert_eq!(bob_type_calls[0].type_hash_type, 1);
-        assert_eq!(bob_type_calls[0].type_args, bob_type_args);
+        // Participants should have TYPE_CALL tag
+        let alice_p = find_participant(actions, alice);
+        assert!(alice_p.tags & TAG_TYPE_CALL != 0);
+        assert!(alice_p.item_deltas.is_empty());
+
+        let bob_p = find_participant(actions, bob);
+        assert!(bob_p.tags & TAG_TYPE_CALL != 0);
+        assert!(bob_p.item_deltas.is_empty());
     }
 
     #[test]
-    fn test_pure_ckb_transfer_has_no_type_script() {
+    fn test_pure_ckb_transfer_has_no_asset_tags() {
         let alice = 0xAA;
         let bob = 0xBB;
 
@@ -1719,10 +1594,14 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
-        for (_, _, entry) in &activities {
-            assert!(!entry.has_type_script);
-            assert!(entry.asset_changes.is_empty());
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let actions = &actions_list[0];
+        for p in &actions.participants {
+            // Pure CKB: no token/object/identity/dao/type_call
+            // (lock_call may be set because test helper uses non-standard lock code_hash 0x11..11)
+            let asset_mask = TAG_TOKEN | TAG_OBJECT | TAG_IDENTITY | TAG_DAO | TAG_TYPE_CALL;
+            assert_eq!(p.tags & asset_mask, 0);
+            assert!(p.item_deltas.is_empty());
         }
     }
 
@@ -1770,21 +1649,17 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
-        let (_, _, entry) = &activities[0];
-        assert!(entry.has_type_script);
-        assert!(entry
-            .asset_changes
-            .iter()
-            .any(|c| matches!(c, AssetChange::Token { .. })));
-        let type_calls = entry
-            .type_calls
-            .as_ref()
-            .expect("script calls should exist");
-        assert_eq!(type_calls.len(), 1);
-        assert_eq!(type_calls[0].type_code_hash, unknown_code_hash);
-        assert_eq!(type_calls[0].type_hash_type, 1);
-        assert_eq!(type_calls[0].type_args, vec![0xEE; 20]);
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let actions = &actions_list[0];
+        let alice_p = find_participant(actions, alice);
+        // Has token item delta
+        assert!(alice_p.tags & TAG_TOKEN != 0);
+        assert!(alice_p.item_deltas.iter().any(|d| d.kind == ITEM_KIND_TOKEN));
+        // Type calls at TX level
+        assert_eq!(actions.type_calls.len(), 1);
+        assert_eq!(actions.type_calls[0].type_code_hash, unknown_code_hash);
+        assert_eq!(actions.type_calls[0].type_hash_type, 1);
+        assert_eq!(actions.type_calls[0].type_args, vec![0xEE; 20]);
     }
 
     #[test]
@@ -1817,7 +1692,7 @@ mod tests {
     }
 
     #[test]
-    fn test_xudt_compatible_produces_token_change_not_script_call() {
+    fn test_xudt_compatible_produces_token_item_delta_not_type_call() {
         use crate::rpc::parse_hex_to_bytes;
 
         let alice = 0xAA;
@@ -1862,25 +1737,20 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let activities = build_activities_for_block(&[tx], &HashMap::new()).unwrap();
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let actions = &actions_list[0];
 
-        // Alice should have a Token asset change (negative delta), NOT a script_call
-        let alice_act = activities
-            .iter()
-            .find(|(lh, _, _)| lh == &vec![alice; 32])
-            .map(|(_, _, e)| e)
-            .unwrap();
+        // No type_calls at TX level (xudt is recognized, not an unknown script)
         assert!(
-            alice_act.type_calls.is_none() || alice_act.type_calls.as_ref().unwrap().is_empty(),
+            actions.type_calls.is_empty(),
             "xudt_compatible should not produce type_calls"
         );
-        let has_token_change = alice_act
-            .asset_changes
-            .iter()
-            .any(|c| matches!(c, AssetChange::Token { .. }));
+
+        // Alice should have a token item delta
+        let alice_p = find_participant(actions, alice);
         assert!(
-            has_token_change,
-            "xudt_compatible should produce Token asset change"
+            alice_p.item_deltas.iter().any(|d| d.kind == ITEM_KIND_TOKEN),
+            "xudt_compatible should produce Token item delta"
         );
     }
 
@@ -1909,21 +1779,18 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
-        let alice_delta = bundles[0]
-            .owners
-            .iter()
-            .find(|o| o.lock_hash == vec![alice; 32])
-            .expect("alice should be in owners");
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let actions = &actions_list[0];
 
-        let lock_calls = alice_delta
-            .lock_calls
-            .as_ref()
-            .expect("should have lock_calls");
-        assert_eq!(lock_calls.len(), 1);
-        assert_eq!(lock_calls[0].lock_code_hash, non_standard_lock_code_hash);
-        assert_eq!(lock_calls[0].lock_hash_type, 1);
-        assert_eq!(lock_calls[0].lock_args, non_standard_lock_args);
+        // Lock calls are TX-level
+        assert_eq!(actions.lock_calls.len(), 1);
+        assert_eq!(actions.lock_calls[0].lock_code_hash, non_standard_lock_code_hash);
+        assert_eq!(actions.lock_calls[0].lock_hash_type, 1);
+        assert_eq!(actions.lock_calls[0].lock_args, non_standard_lock_args);
+
+        // Alice should have LOCK_CALL tag
+        let alice_p = find_participant(actions, alice);
+        assert!(alice_p.tags & TAG_LOCK_CALL != 0);
     }
 
     #[test]
@@ -1951,14 +1818,9 @@ mod tests {
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
 
-        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new()).unwrap();
-        let alice_delta = bundles[0]
-            .owners
-            .iter()
-            .find(|o| o.lock_hash == vec![alice; 32])
-            .expect("alice should be in owners");
-
-        assert!(alice_delta.lock_calls.is_none());
+        let actions_list = build_tx_actions_for_block_no_detectors(&[tx]).unwrap();
+        let actions = &actions_list[0];
+        assert!(actions.lock_calls.is_empty());
     }
 
     // ---- RGB++ detector tests ----
@@ -2068,31 +1930,24 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        // Check CKB owner (output side) gets leap_to_ckb action
-        let ckb_owner_delta = bundles[0]
-            .owners
+        // Protocol actions are TX-level; check for leap_to_ckb
+        assert!(actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![ckb_owner; 32])
-            .expect("ckb owner should be present");
-        assert_eq!(ckb_owner_delta.protocol_actions.len(), 1);
-        assert_eq!(ckb_owner_delta.protocol_actions[0].protocol, "rgbpp");
-        assert_eq!(ckb_owner_delta.protocol_actions[0].action, "leap_to_ckb");
+            .any(|a| a.protocol == "rgbpp" && a.action == "leap_to_ckb"));
 
-        // Check rgbpp owner (input side) also gets leap_to_ckb action
-        let rgbpp_owner_delta = bundles[0]
-            .owners
-            .iter()
-            .find(|o| o.lock_hash == vec![rgbpp_owner; 32])
-            .expect("rgbpp owner should be present");
-        assert_eq!(rgbpp_owner_delta.protocol_actions.len(), 1);
-        assert_eq!(rgbpp_owner_delta.protocol_actions[0].protocol, "rgbpp");
-        assert_eq!(rgbpp_owner_delta.protocol_actions[0].action, "leap_to_ckb");
+        // Both participants should have TAG_PROTOCOL
+        let ckb_p = find_participant(actions, ckb_owner);
+        assert!(ckb_p.tags & TAG_PROTOCOL != 0);
+
+        let rgbpp_p = find_participant(actions, rgbpp_owner);
+        assert!(rgbpp_p.tags & TAG_PROTOCOL != 0);
     }
 
     #[test]
@@ -2146,35 +2001,28 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
+        assert_eq!(actions_list.len(), 1);
+        let actions = &actions_list[0];
 
-        // Both owners should see the "transfer" action
-        let input_owner_delta = bundles[0]
-            .owners
+        // Protocol actions are TX-level; check for transfer
+        let transfer_action = actions
+            .protocol_actions
             .iter()
-            .find(|o| o.lock_hash == vec![input_owner; 32])
-            .expect("input owner should be present");
-        assert_eq!(input_owner_delta.protocol_actions.len(), 1);
-        assert_eq!(input_owner_delta.protocol_actions[0].protocol, "rgbpp");
-        assert_eq!(input_owner_delta.protocol_actions[0].action, "transfer");
+            .find(|a| a.protocol == "rgbpp" && a.action == "transfer")
+            .expect("should have rgbpp transfer action");
 
-        let output_owner_delta = bundles[0]
-            .owners
-            .iter()
-            .find(|o| o.lock_hash == vec![output_owner; 32])
-            .expect("output owner should be present");
-        assert_eq!(output_owner_delta.protocol_actions.len(), 1);
-        assert_eq!(output_owner_delta.protocol_actions[0].protocol, "rgbpp");
-        assert_eq!(output_owner_delta.protocol_actions[0].action, "transfer");
+        // Both participants should have TAG_PROTOCOL
+        let input_p = find_participant(actions, input_owner);
+        assert!(input_p.tags & TAG_PROTOCOL != 0);
 
-        // Verify metadata contains btcTxid from output
-        let metadata = output_owner_delta.protocol_actions[0]
-            .metadata_value()
-            .unwrap();
+        let output_p = find_participant(actions, output_owner);
+        assert!(output_p.tags & TAG_PROTOCOL != 0);
+
+        // Verify metadata contains btcTxid
+        let metadata = transfer_action.metadata_value().unwrap();
         assert!(metadata.get("btcTxid").is_some());
         assert!(metadata.get("outIndex").is_some());
     }
@@ -2218,17 +2066,14 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
-        let bundles =
-            build_activity_bundles_for_block_with_detectors(&[tx], &HashMap::new(), &detectors)
-                .unwrap();
+        let actions_list =
+            build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
-        assert_eq!(bundles.len(), 1);
-        for owner in &bundles[0].owners {
-            assert!(
-                owner.protocol_actions.is_empty(),
-                "no rgbpp actions expected for standard-lock-only tx"
-            );
-        }
+        assert_eq!(actions_list.len(), 1);
+        assert!(
+            actions_list[0].protocol_actions.is_empty(),
+            "no rgbpp actions expected for standard-lock-only tx"
+        );
     }
 
     #[test]

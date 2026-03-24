@@ -1472,33 +1472,6 @@ mod tests {
         assert_eq!(i64::from_le_bytes(val[..8].try_into().unwrap()), 7);
     }
 
-    // TODO: Task 8 — update for TxActions
-    // Helpers and tests below commented out: old TxActivityBundle / OwnerActivityDelta types removed.
-
-    /*
-    fn make_single_owner_bundle(
-        lock_hash: &[u8],
-        tx_hash: &[u8],
-        block_hash: &[u8],
-        block_num: i64,
-        tx_idx: i32,
-        delta: i128,
-    ) -> TxActivityBundle { ... }
-
-    fn put_single_owner_activity(
-        batch: &mut StoreBatch<'_>,
-        lock_hash: &[u8],
-        block_num: i64,
-        tx_idx: i32,
-        delta: i128,
-    ) { ... }
-
-    fn make_tx_activity_bundle(block_num: i64, tx_idx: i32, owners: usize) -> TxActivityBundle { ... }
-
-    fn test_put_and_list_activities() { ... }
-    fn test_put_tx_activity_bundle_roundtrip() { ... }
-    */
-
     #[test]
     fn test_put_addr_tx_stores_empty_value() {
         let dir = TempDir::new().unwrap();
@@ -1515,15 +1488,7 @@ mod tests {
         assert!(value.is_empty());
     }
 
-    // TODO: Task 8 — update these tests for TxActions (old return types / helpers removed)
-    /*
-    fn test_list_activities_with_limit() { ... }
-    fn test_list_activities_cursor_pagination() { ... }
-    fn test_list_activities_different_locks_isolated() { ... }
-    fn test_list_activities_empty() { ... }
-    fn test_list_activities_rejects_non_32_byte_lock_hash() { ... }
-    fn test_list_activities_cursor_i32_max_does_not_overflow() { ... }
-    */
+    // Activity list tests moved to activity_ops.rs tests module.
 
     #[test]
     fn test_append_only_batch_rejects_duplicate_key_in_same_commit() {
@@ -1688,8 +1653,6 @@ mod tests {
         assert!(err.to_string().contains("append-only overwrite blocked"));
     }
 
-    // TODO: Task 8 — update for TxActions
-    // fn test_domain_activity_bundle_overwrites_same_key() { ... }
 
     #[test]
     fn test_append_only_nft_collection_activity_preserves_competing_block_hash_history() {
@@ -1800,8 +1763,6 @@ mod tests {
         assert_eq!(payload, info);
     }
 
-    // TODO: Task 8 — update for TxActions
-    // fn test_append_only_bulk_sync_skips_existing_probe_on_conflicting_key() { ... }
 
     #[test]
     fn test_put_cell_raw_key_produces_same_result() {
@@ -2168,8 +2129,6 @@ mod tests {
         assert_eq!(&val[..], b"42");
     }
 
-    // TODO: Task 8 — update for TxActions
-    // fn test_merge_append_only_batches() { ... }
 
     #[test]
     #[should_panic(expected = "both batches must reference the same CkbadgerStore")]
