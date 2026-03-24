@@ -259,13 +259,13 @@ fn broadcast_latest_activities(
         Ok(items) if !items.is_empty() => {
             let mut script_info_cache = HashMap::new();
             let activities: Vec<serde_json::Value> = items
-                .into_iter()
+                .iter()
                 .take(8)
-                .filter_map(|item| {
+                .filter_map(|actions| {
                     match build_global_activity_response(
                         store,
                         ckb_network,
-                        &item,
+                        actions,
                         &mut script_info_cache,
                     ) {
                         Ok(activity) => match serde_json::to_value(activity) {
@@ -273,7 +273,7 @@ fn broadcast_latest_activities(
                             Err(e) => {
                                 error!(
                                     "Failed to encode latest activity broadcast for tx=0x{}: {}",
-                                    hex::encode(&item.entry.tx_hash),
+                                    hex::encode(&actions.tx_hash),
                                     e
                                 );
                                 None
@@ -282,7 +282,7 @@ fn broadcast_latest_activities(
                         Err(e) => {
                             error!(
                                 "Failed to serialize latest activity broadcast for tx=0x{}: {}",
-                                hex::encode(&item.entry.tx_hash),
+                                hex::encode(&actions.tx_hash),
                                 e
                             );
                             None

@@ -4,14 +4,12 @@ use axum::{
     Router,
 };
 use ckbadger_store::{
-    keys,
     types::{
-        ActivityEntry, AssetAction, AssetChange, LatestActivityItem, LockCallEntry,
-        OwnerActivityDelta, ScriptInfo, TxActivityBundle, TypeCallEntry,
+        ItemDelta, LockCallEntry, ParticipantDelta, ScriptInfo, TxActions, TypeCallEntry,
+        ITEM_KIND_IDENTITY, ITEM_KIND_OBJECT, ITEM_KIND_TOKEN,
     },
     CkbadgerStore,
 };
-use rocksdb::{Direction, IteratorMode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -20,7 +18,7 @@ use crate::response::{
     default_limit, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
     CursorPaginatedResponse,
 };
-use crate::utils::address::{address_to_lock_script_hash, compute_script_hash, script_to_address};
+use crate::utils::address::{address_to_lock_script_hash, compute_script_hash};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -38,6 +36,7 @@ pub struct ActivityParams {
     filter: Option<String>,
 }
 
+/// Per-address activity response: shows one participant's perspective of a transaction.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivityResponse {
@@ -45,51 +44,36 @@ pub struct ActivityResponse {
     pub block_number: i64,
     pub tx_index: i32,
     pub timestamp: String,
+    // This participant's Layer 1
     pub ckb_delta: String,
     pub used_delta: String,
     pub is_cellbase: bool,
-    pub has_type_script: bool,
-    pub asset_changes: Vec<AssetChangeResponse>,
+    // This participant's Layer 2
+    pub item_deltas: Vec<ItemDeltaResponse>,
+    // TX-level Layer 3
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
     pub protocol_actions: Vec<ProtocolActionResponse>,
-    pub peers: Vec<String>,
+    // Other participants
+    pub participants: Vec<String>,
+    pub tags: u16,
 }
 
+/// Item delta response — tagged enum keyed on `kind`.
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type")]
-pub enum AssetChangeResponse {
-    #[serde(rename = "token", rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum ItemDeltaResponse {
+    #[serde(rename = "token")]
     Token {
         type_script_hash: String,
         delta: String,
         symbol: Option<String>,
         decimals: Option<u8>,
     },
-    #[serde(rename = "object", rename_all = "camelCase")]
-    Object {
-        object_id: String,
-        standard: String,
-        action: String,
-    },
-    #[serde(rename = "identity", rename_all = "camelCase")]
-    Identity {
-        identity_id: String,
-        standard: String,
-        action: String,
-    },
-    #[serde(rename = "daoDeposit")]
-    DaoDeposit { capacity: String },
-    #[serde(rename = "daoWithdrawRequest", rename_all = "camelCase")]
-    DaoWithdrawRequest {
-        capacity: String,
-        deposit_block: i64,
-    },
-    #[serde(rename = "daoWithdrawComplete")]
-    DaoWithdrawComplete {
-        capacity: String,
-        compensation: String,
-    },
+    #[serde(rename = "object")]
+    Object { object_id: String, delta: i8 },
+    #[serde(rename = "identity")]
+    Identity { identity_id: String, delta: i8 },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,23 +105,32 @@ pub struct ProtocolActionResponse {
     pub metadata: serde_json::Value,
 }
 
+/// Global activity response: shows all participants in a transaction.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlobalActivityResponse {
-    pub address: String,
     pub tx_hash: String,
     pub block_number: i64,
     pub tx_index: i32,
     pub timestamp: String,
-    pub ckb_delta: String,
-    pub used_delta: String,
     pub is_cellbase: bool,
-    pub has_type_script: bool,
-    pub asset_changes: Vec<AssetChangeResponse>,
+    // TX-level Layer 3
+    pub protocol_actions: Vec<ProtocolActionResponse>,
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
-    pub protocol_actions: Vec<ProtocolActionResponse>,
-    pub peers: Vec<String>,
+    // All participants with their data
+    pub participants: Vec<ParticipantResponse>,
+}
+
+/// A single participant's delta within a global activity response.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticipantResponse {
+    pub address: String,
+    pub ckb_delta: String,
+    pub used_delta: String,
+    pub item_deltas: Vec<ItemDeltaResponse>,
+    pub tags: u16,
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,66 +143,64 @@ fn default_latest_limit() -> usize {
     8
 }
 
-fn action_to_string(action: &AssetAction) -> String {
-    match action {
-        AssetAction::Mint => "mint".to_string(),
-        AssetAction::Transfer => "transfer".to_string(),
-        AssetAction::Burn => "burn".to_string(),
-        AssetAction::Recycle => "recycle".to_string(),
-        AssetAction::Renew => "renew".to_string(),
-        AssetAction::Update => "update".to_string(),
+/// Convert an `ItemDelta` to `ItemDeltaResponse`, enriching tokens with symbol/decimals.
+fn convert_item_delta(
+    item: &ItemDelta,
+    token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
+    store: &CkbadgerStore,
+) -> ItemDeltaResponse {
+    match item.kind {
+        ITEM_KIND_TOKEN => {
+            let (symbol, decimals) = lookup_token_info(store, token_cache, &item.item_id);
+            ItemDeltaResponse::Token {
+                type_script_hash: format!("0x{}", hex::encode(&item.item_id)),
+                delta: item.delta.to_string(),
+                symbol,
+                decimals,
+            }
+        }
+        ITEM_KIND_OBJECT => ItemDeltaResponse::Object {
+            object_id: format!("0x{}", hex::encode(&item.item_id)),
+            delta: item.delta as i8,
+        },
+        ITEM_KIND_IDENTITY => ItemDeltaResponse::Identity {
+            identity_id: format!("0x{}", hex::encode(&item.item_id)),
+            delta: item.delta as i8,
+        },
+        _ => {
+            // Unknown kind — treat as token for forward compatibility
+            ItemDeltaResponse::Token {
+                type_script_hash: format!("0x{}", hex::encode(&item.item_id)),
+                delta: item.delta.to_string(),
+                symbol: None,
+                decimals: None,
+            }
+        }
     }
 }
 
-fn convert_asset_change(change: &AssetChange) -> AssetChangeResponse {
-    match change {
-        AssetChange::Token {
-            type_script_hash,
-            delta,
-            symbol,
-            decimals,
-        } => AssetChangeResponse::Token {
-            type_script_hash: format!("0x{}", hex::encode(type_script_hash)),
-            delta: delta.to_string(),
-            symbol: symbol.clone(),
-            decimals: *decimals,
-        },
-        AssetChange::Object {
-            object_id,
-            standard,
-            action,
-        } => AssetChangeResponse::Object {
-            object_id: format!("0x{}", hex::encode(object_id)),
-            standard: standard.clone(),
-            action: action_to_string(action),
-        },
-        AssetChange::Identity {
-            identity_id,
-            standard,
-            action,
-        } => AssetChangeResponse::Identity {
-            identity_id: format!("0x{}", hex::encode(identity_id)),
-            standard: standard.clone(),
-            action: action_to_string(action),
-        },
-        AssetChange::DaoDeposit { capacity } => AssetChangeResponse::DaoDeposit {
-            capacity: capacity.to_string(),
-        },
-        AssetChange::DaoWithdrawRequest {
-            capacity,
-            deposit_block,
-        } => AssetChangeResponse::DaoWithdrawRequest {
-            capacity: capacity.to_string(),
-            deposit_block: *deposit_block,
-        },
-        AssetChange::DaoWithdrawComplete {
-            capacity,
-            compensation,
-        } => AssetChangeResponse::DaoWithdrawComplete {
-            capacity: capacity.to_string(),
-            compensation: compensation.to_string(),
-        },
+/// Look up token symbol and decimals from CF_TOKENS, caching results.
+fn lookup_token_info(
+    store: &CkbadgerStore,
+    cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
+    type_script_hash: &[u8],
+) -> (Option<String>, Option<u8>) {
+    if let Some(cached) = cache.get(type_script_hash) {
+        return cached
+            .as_ref()
+            .map(|(s, d)| (s.clone(), *d))
+            .unwrap_or((None, None));
     }
+    let result = store.get_token(type_script_hash).ok().flatten().map(|t| {
+        (
+            t.symbol.clone(),
+            t.decimals.map(|d| d as u8),
+        )
+    });
+    cache.insert(type_script_hash.to_vec(), result.clone());
+    result
+        .map(|(s, d)| (s, d))
+        .unwrap_or((None, None))
 }
 
 fn normalized_script_name(info: Option<&ScriptInfo>) -> Option<String> {
@@ -261,11 +252,10 @@ fn convert_type_call(
 fn convert_type_calls(
     store: &CkbadgerStore,
     cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
-    calls: Option<&Vec<TypeCallEntry>>,
+    calls: &[TypeCallEntry],
 ) -> anyhow::Result<Vec<TypeCallResponse>> {
     calls
-        .into_iter()
-        .flatten()
+        .iter()
         .map(|call| convert_type_call(store, cache, call))
         .collect()
 }
@@ -463,11 +453,10 @@ fn convert_lock_call(
 fn convert_lock_calls(
     store: &CkbadgerStore,
     cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
-    calls: Option<&Vec<LockCallEntry>>,
+    calls: &[LockCallEntry],
 ) -> anyhow::Result<Vec<LockCallResponse>> {
     calls
-        .into_iter()
-        .flatten()
+        .iter()
         .map(|call| convert_lock_call(store, cache, call))
         .collect()
 }
@@ -491,88 +480,91 @@ fn convert_protocol_action(
     })
 }
 
+/// Build an address-scoped activity response from a TxActions for a specific participant.
 pub(crate) fn build_activity_response(
     store: &CkbadgerStore,
-    entry: &ActivityEntry,
+    actions: &TxActions,
+    participant: &ParticipantDelta,
     script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
 ) -> anyhow::Result<ActivityResponse> {
+    let item_deltas = participant
+        .item_deltas
+        .iter()
+        .map(|item| convert_item_delta(item, token_cache, store))
+        .collect();
+
+    let participants = actions
+        .participants
+        .iter()
+        .filter(|p| p.lock_hash != participant.lock_hash)
+        .map(|p| format!("0x{}", hex::encode(&p.lock_hash)))
+        .collect();
+
     Ok(ActivityResponse {
-        tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
-        block_number: entry.block_number,
-        tx_index: entry.tx_index,
-        timestamp: entry.timestamp.to_string(),
-        ckb_delta: entry.ckb_delta.to_string(),
-        used_delta: entry.used_delta.to_string(),
-        is_cellbase: entry.is_cellbase,
-        has_type_script: entry.has_type_script,
-        asset_changes: entry
-            .asset_changes
-            .iter()
-            .map(convert_asset_change)
-            .collect(),
-        type_calls: convert_type_calls(store, script_info_cache, entry.type_calls.as_ref())?,
-        lock_calls: convert_lock_calls(store, script_info_cache, entry.lock_calls.as_ref())?,
-        protocol_actions: entry
+        tx_hash: format!("0x{}", hex::encode(&actions.tx_hash)),
+        block_number: actions.block_number,
+        tx_index: actions.tx_index,
+        timestamp: actions.timestamp.to_string(),
+        ckb_delta: participant.ckb_delta.to_string(),
+        used_delta: participant.used_delta.to_string(),
+        is_cellbase: actions.is_cellbase,
+        item_deltas,
+        type_calls: convert_type_calls(store, script_info_cache, &actions.type_calls)?,
+        lock_calls: convert_lock_calls(store, script_info_cache, &actions.lock_calls)?,
+        protocol_actions: actions
             .protocol_actions
             .iter()
             .map(convert_protocol_action)
             .collect::<anyhow::Result<Vec<_>>>()?,
-        peers: entry
-            .peers
-            .iter()
-            .map(|h| format!("0x{}", hex::encode(h)))
-            .collect(),
+        participants,
+        tags: participant.tags,
     })
 }
 
+/// Build a global activity response showing all participants from a TxActions.
 pub(crate) fn build_global_activity_response(
     store: &CkbadgerStore,
-    network: &str,
-    item: &LatestActivityItem,
+    _network: &str,
+    actions: &TxActions,
     script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
 ) -> anyhow::Result<GlobalActivityResponse> {
-    let address = if !item.lock_code_hash.is_empty() {
-        script_to_address(
-            &item.lock_code_hash,
-            item.lock_hash_type,
-            &item.lock_args,
-            network,
-        )
-        .unwrap_or_else(|_| format!("0x{}", hex::encode(&item.lock_hash)))
-    } else {
-        format!("0x{}", hex::encode(&item.lock_hash))
-    };
+    let mut token_cache: HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>> = HashMap::new();
+
+    let participants = actions
+        .participants
+        .iter()
+        .map(|p| {
+            let address = format!("0x{}", hex::encode(&p.lock_hash));
+            let item_deltas = p
+                .item_deltas
+                .iter()
+                .map(|item| convert_item_delta(item, &mut token_cache, store))
+                .collect();
+            ParticipantResponse {
+                address,
+                ckb_delta: p.ckb_delta.to_string(),
+                used_delta: p.used_delta.to_string(),
+                item_deltas,
+                tags: p.tags,
+            }
+        })
+        .collect();
 
     Ok(GlobalActivityResponse {
-        address,
-        tx_hash: format!("0x{}", hex::encode(&item.entry.tx_hash)),
-        block_number: item.entry.block_number,
-        tx_index: item.entry.tx_index,
-        timestamp: item.entry.timestamp.to_string(),
-        ckb_delta: item.entry.ckb_delta.to_string(),
-        used_delta: item.entry.used_delta.to_string(),
-        is_cellbase: item.entry.is_cellbase,
-        has_type_script: item.entry.has_type_script,
-        asset_changes: item
-            .entry
-            .asset_changes
-            .iter()
-            .map(convert_asset_change)
-            .collect(),
-        type_calls: convert_type_calls(store, script_info_cache, item.entry.type_calls.as_ref())?,
-        lock_calls: convert_lock_calls(store, script_info_cache, item.entry.lock_calls.as_ref())?,
-        protocol_actions: item
-            .entry
+        tx_hash: format!("0x{}", hex::encode(&actions.tx_hash)),
+        block_number: actions.block_number,
+        tx_index: actions.tx_index,
+        timestamp: actions.timestamp.to_string(),
+        is_cellbase: actions.is_cellbase,
+        protocol_actions: actions
             .protocol_actions
             .iter()
             .map(convert_protocol_action)
             .collect::<anyhow::Result<Vec<_>>>()?,
-        peers: item
-            .entry
-            .peers
-            .iter()
-            .map(|h| format!("0x{}", hex::encode(h)))
-            .collect(),
+        type_calls: convert_type_calls(store, script_info_cache, &actions.type_calls)?,
+        lock_calls: convert_lock_calls(store, script_info_cache, &actions.lock_calls)?,
+        participants,
     })
 }
 
@@ -621,35 +613,6 @@ fn parse_activity_cursor(value: &str) -> Option<(i64, i32)> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct GlobalActivityCursor {
-    block_num: i64,
-    tx_idx: i32,
-    owner_idx: usize,
-}
-
-fn parse_global_activity_cursor(value: &str) -> Option<GlobalActivityCursor> {
-    let parts: Vec<&str> = value.split(':').collect();
-    match parts.as_slice() {
-        [block_num, tx_idx, owner_idx] => Some(GlobalActivityCursor {
-            block_num: block_num.parse::<i64>().ok()?,
-            tx_idx: tx_idx.parse::<i32>().ok()?,
-            owner_idx: owner_idx.parse::<usize>().ok()?,
-        }),
-        _ => None,
-    }
-}
-
-fn encode_global_activity_cursor(cursor: GlobalActivityCursor) -> String {
-    format!(
-        "{}:{}:{}",
-        cursor.block_num, cursor.tx_idx, cursor.owner_idx
-    )
-}
-
-fn global_activity_seek_key(cursor: GlobalActivityCursor) -> Vec<u8> {
-    keys::encode_tx_activity_bundle_key(cursor.block_num, cursor.tx_idx, &[0; 32])
-}
 
 /// Check if an addr_tx entry is canonical using the same logic as
 /// the transactions endpoint (`is_canonical_addr_tx` in cells.rs):
@@ -673,13 +636,12 @@ fn is_canonical_activity(
 }
 
 fn list_canonical_activities_page(
-    activity_store: &CkbadgerStore,
-    canonical_store: &CkbadgerStore,
+    store: &CkbadgerStore,
     lock_hash: &[u8],
     limit: usize,
     cursor: Option<(i64, i32)>,
     filter: Option<&str>,
-) -> anyhow::Result<Vec<(i64, i32, ActivityEntry)>> {
+) -> anyhow::Result<Vec<TxActions>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
@@ -689,19 +651,21 @@ fn list_canonical_activities_page(
     let mut scan_cursor = cursor;
 
     loop {
-        let rows = activity_store.list_activities(lock_hash, scan_limit, scan_cursor, filter)?;
+        let rows = store.list_activities(lock_hash, scan_limit, scan_cursor, filter)?;
         if rows.is_empty() {
             break;
         }
         let rows_len = rows.len();
         let mut last_seen = None;
-        for (block_num, tx_idx, entry) in rows {
-            last_seen = Some((block_num, tx_idx));
-            if entry.block_number == block_num
-                && entry.tx_index == tx_idx
-                && is_canonical_activity(canonical_store, block_num, tx_idx, &entry.tx_hash)?
-            {
-                out.push((block_num, tx_idx, entry));
+        for actions in rows {
+            last_seen = Some((actions.block_number, actions.tx_index));
+            if is_canonical_activity(
+                store,
+                actions.block_number,
+                actions.tx_index,
+                &actions.tx_hash,
+            )? {
+                out.push(actions);
                 if out.len() >= limit {
                     return Ok(out);
                 }
@@ -719,117 +683,30 @@ fn list_canonical_activities_page(
     Ok(out)
 }
 
-fn build_latest_activity_item(
-    bundle: &TxActivityBundle,
-    owner: &OwnerActivityDelta,
-) -> LatestActivityItem {
-    LatestActivityItem {
-        lock_hash: owner.lock_hash.clone(),
-        lock_code_hash: owner.lock_code_hash.clone(),
-        lock_hash_type: owner.lock_hash_type,
-        lock_args: owner.lock_args.clone(),
-        entry: ActivityEntry {
-            tx_hash: bundle.tx_hash.clone(),
-            block_hash: bundle.block_hash.clone(),
-            block_number: bundle.block_number,
-            tx_index: bundle.tx_index,
-            timestamp: bundle.timestamp,
-            ckb_delta: owner.ckb_delta,
-            used_delta: owner.used_delta,
-            is_cellbase: bundle.is_cellbase,
-            has_type_script: owner.has_type_script,
-            asset_changes: owner.asset_changes.clone(),
-            type_calls: owner.type_calls.clone(),
-            lock_calls: owner.lock_calls.clone(),
-            protocol_actions: owner.protocol_actions.clone(),
-            peers: owner.peers.clone(),
-        },
-    }
-}
+/// Classify a TxActions for global activity filtering based on aggregate participant tags.
+fn matches_global_activity_filter(actions: &TxActions, filter: Option<&str>) -> bool {
+    use ckbadger_store::types::*;
 
-fn validate_tx_activity_bundle_identity(
-    bundle: &TxActivityBundle,
-    block_num: i64,
-    tx_idx: i32,
-    tx_hash_from_key: &[u8],
-) -> anyhow::Result<()> {
-    if bundle.block_number != block_num || bundle.tx_index != tx_idx {
-        anyhow::bail!(
-            "tx activity bundle key/value location mismatch in global activities: key_block_num={}, value_block_num={}, key_tx_idx={}, value_tx_idx={}",
-            block_num,
-            bundle.block_number,
-            tx_idx,
-            bundle.tx_index
-        );
-    }
-    if bundle.tx_hash != tx_hash_from_key {
-        anyhow::bail!(
-            "tx activity bundle key/value tx_hash mismatch in global activities: block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
-            block_num,
-            tx_idx,
-            hex::encode(tx_hash_from_key),
-            hex::encode(&bundle.tx_hash)
-        );
-    }
-    Ok(())
-}
-
-fn matches_global_activity_filter(entry: &ActivityEntry, filter: Option<&str>) -> bool {
-    fn classify_global_activity_bucket(entry: &ActivityEntry) -> &'static str {
-        if !entry.protocol_actions.is_empty() {
+    fn classify_global_bucket(actions: &TxActions) -> &'static str {
+        if !actions.protocol_actions.is_empty() {
             return "protocol";
         }
-        if entry
-            .asset_changes
-            .iter()
-            .any(|change| matches!(change, AssetChange::DaoDeposit { .. }))
-        {
+        let combined_tags: u16 = actions.participants.iter().fold(0u16, |acc, p| acc | p.tags);
+        if combined_tags & TAG_DAO != 0 {
             return "dao";
         }
-        if entry
-            .asset_changes
-            .iter()
-            .any(|change| matches!(change, AssetChange::DaoWithdrawRequest { .. }))
-        {
-            return "dao";
-        }
-        if entry
-            .asset_changes
-            .iter()
-            .any(|change| matches!(change, AssetChange::DaoWithdrawComplete { .. }))
-        {
-            return "dao";
-        }
-        if entry
-            .asset_changes
-            .iter()
-            .any(|change| matches!(change, AssetChange::Token { .. }))
-        {
+        if combined_tags & TAG_TOKEN != 0 {
             return "token";
         }
-        if entry
-            .asset_changes
-            .iter()
-            .any(|change| matches!(change, AssetChange::Object { .. }))
-        {
+        if combined_tags & TAG_OBJECT != 0 {
             return "object";
         }
-        if entry
-            .asset_changes
-            .iter()
-            .any(|change| matches!(change, AssetChange::Identity { .. }))
-        {
+        if combined_tags & TAG_IDENTITY != 0 {
             return "identity";
         }
-        if entry.has_type_script
-            || entry
-                .type_calls
-                .as_ref()
-                .is_some_and(|calls| !calls.is_empty())
-            || entry
-                .lock_calls
-                .as_ref()
-                .is_some_and(|calls| !calls.is_empty())
+        if combined_tags & (TAG_TYPE_CALL | TAG_LOCK_CALL) != 0
+            || !actions.type_calls.is_empty()
+            || !actions.lock_calls.is_empty()
         {
             return "script";
         }
@@ -838,96 +715,60 @@ fn matches_global_activity_filter(entry: &ActivityEntry, filter: Option<&str>) -
 
     match filter {
         None | Some("") | Some("all") => true,
-        Some(expected) => classify_global_activity_bucket(entry) == expected,
+        Some(expected) => classify_global_bucket(actions) == expected,
     }
 }
 
+/// List canonical global activities (TX-level), applying filter and canonicity checks.
 fn list_canonical_global_activities_page(
     store: &CkbadgerStore,
     limit: usize,
-    cursor: Option<GlobalActivityCursor>,
+    cursor: Option<(i64, i32)>,
     filter: Option<&str>,
-) -> anyhow::Result<Vec<(GlobalActivityCursor, LatestActivityItem)>> {
+) -> anyhow::Result<Vec<TxActions>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
 
-    let iter = match cursor {
-        Some(cursor) => store.iterator_cf(
-            store.cf_activities(),
-            IteratorMode::From(&global_activity_seek_key(cursor), Direction::Forward),
-        ),
-        None => store.iterator_cf(store.cf_activities(), IteratorMode::Start),
-    };
-
+    let scan_limit = ACTIVITY_SCAN_CHUNK_SIZE.max(limit);
     let mut out = Vec::with_capacity(limit);
-    for item in iter {
-        let (key, value) = item.map_err(|e| {
-            anyhow::anyhow!(
-                "failed to iterate tx activity bundles in global activities: {}",
-                e
-            )
-        })?;
-        if key.len() != keys::TX_ACTIVITY_BUNDLE_KEY_SIZE {
-            continue;
+    let mut scan_cursor = cursor;
+
+    loop {
+        let rows = store.list_tx_actions_recent(scan_limit, scan_cursor)?;
+        if rows.is_empty() {
+            break;
         }
-
-        let (block_num, tx_idx, tx_hash_from_key) = keys::decode_tx_activity_bundle_key(&key);
-        let bundle: TxActivityBundle = bincode::deserialize(&value).map_err(|e| {
-            anyhow::anyhow!(
-                "failed to deserialize tx activity bundle in global activities: block_num={}, tx_idx={}, tx_hash=0x{}, error={}",
-                block_num,
-                tx_idx,
-                hex::encode(&tx_hash_from_key),
-                e
-            )
-        })?;
-        validate_tx_activity_bundle_identity(&bundle, block_num, tx_idx, &tx_hash_from_key)?;
-
-        if bundle.is_cellbase || !is_canonical_activity(store, block_num, tx_idx, &bundle.tx_hash)?
-        {
-            continue;
-        }
-
-        let owner_start_idx = match cursor {
-            Some(cursor) if cursor.block_num == block_num && cursor.tx_idx == tx_idx => {
-                if cursor.owner_idx >= bundle.owners.len() {
-                    anyhow::bail!(
-                        "global activities cursor owner_idx out of range: block_num={}, tx_idx={}, owner_idx={}, owner_count={}",
-                        block_num,
-                        tx_idx,
-                        cursor.owner_idx,
-                        bundle.owners.len()
-                    );
-                }
-                cursor.owner_idx.checked_add(1).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "global activities cursor owner_idx overflow: block_num={}, tx_idx={}, owner_idx={}",
-                        block_num,
-                        tx_idx,
-                        cursor.owner_idx
-                    )
-                })?
-            }
-            _ => 0,
-        };
-
-        for (owner_idx, owner) in bundle.owners.iter().enumerate().skip(owner_start_idx) {
-            let row_cursor = GlobalActivityCursor {
-                block_num,
-                tx_idx,
-                owner_idx,
-            };
-            let item = build_latest_activity_item(&bundle, owner);
-            if !matches_global_activity_filter(&item.entry, filter) {
+        let rows_len = rows.len();
+        let mut last_seen = None;
+        for actions in rows {
+            last_seen = Some((actions.block_number, actions.tx_index));
+            if actions.is_cellbase {
                 continue;
             }
-
-            out.push((row_cursor, item));
+            if !is_canonical_activity(
+                store,
+                actions.block_number,
+                actions.tx_index,
+                &actions.tx_hash,
+            )? {
+                continue;
+            }
+            if !matches_global_activity_filter(&actions, filter) {
+                continue;
+            }
+            out.push(actions);
             if out.len() >= limit {
                 return Ok(out);
             }
         }
+        if rows_len < scan_limit {
+            break;
+        }
+        let Some(next_cursor) = last_seen else {
+            break;
+        };
+        scan_cursor = Some(next_cursor);
     }
 
     Ok(out)
@@ -959,9 +800,9 @@ async fn get_address_activities(
 
     let filter = params.filter.clone();
     let store = state.store.clone();
+    let lock_hash_clone = lock_hash.clone();
     let (next_cursor, activities) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let results = list_canonical_activities_page(
-            store.as_ref(),
             store.as_ref(),
             &lock_hash,
             limit + 1,
@@ -974,16 +815,27 @@ async fn get_address_activities(
 
         let next_cursor = if has_more {
             page.last()
-                .map(|(block_num, tx_idx, _)| format!("{}:{}", block_num, tx_idx))
+                .map(|actions| format!("{}:{}", actions.block_number, actions.tx_index))
         } else {
             None
         };
 
         let mut script_info_cache = HashMap::new();
+        let mut token_cache = HashMap::new();
         let activities: Vec<ActivityResponse> = page
-            .into_iter()
-            .map(|(_, _, entry)| {
-                build_activity_response(store.as_ref(), &entry, &mut script_info_cache)
+            .iter()
+            .filter_map(|actions| {
+                let participant = actions
+                    .participants
+                    .iter()
+                    .find(|p| p.lock_hash == lock_hash_clone)?;
+                Some(build_activity_response(
+                    store.as_ref(),
+                    actions,
+                    participant,
+                    &mut script_info_cache,
+                    &mut token_cache,
+                ))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
@@ -1010,7 +862,7 @@ async fn get_global_activities(
     let cursor = match params.cursor.as_deref() {
         None | Some("") => None,
         Some(value) => Some(
-            parse_global_activity_cursor(value)
+            parse_activity_cursor(value)
                 .ok_or_else(|| ApiError::bad_request("invalid cursor format"))?,
         ),
     };
@@ -1030,19 +882,19 @@ async fn get_global_activities(
         let page: Vec<_> = results.into_iter().take(limit).collect();
         let next_cursor = if has_more {
             page.last()
-                .map(|(cursor, _)| encode_global_activity_cursor(*cursor))
+                .map(|actions| format!("{}:{}", actions.block_number, actions.tx_index))
         } else {
             None
         };
 
         let mut script_info_cache = HashMap::new();
         let activities = page
-            .into_iter()
-            .map(|(_, item)| {
+            .iter()
+            .map(|actions| {
                 build_global_activity_response(
                     store.as_ref(),
                     &network,
-                    &item,
+                    actions,
                     &mut script_info_cache,
                 )
             })
@@ -1071,26 +923,26 @@ async fn get_latest_activities(
     let activities = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let items = store.get_latest_activities()?;
 
-        // Filter to canonical entries only (same logic as address activities):
+        // Filter to canonical entries only:
         // verify tx location matches (block_num, tx_idx) — no block_hash comparison.
         let mut script_info_cache = HashMap::new();
         let activities: Vec<GlobalActivityResponse> = items
-            .into_iter()
-            .filter(|item| {
+            .iter()
+            .filter(|actions| {
                 is_canonical_activity(
                     store.as_ref(),
-                    item.entry.block_number,
-                    item.entry.tx_index,
-                    &item.entry.tx_hash,
+                    actions.block_number,
+                    actions.tx_index,
+                    &actions.tx_hash,
                 )
                 .unwrap_or(false)
             })
             .take(limit)
-            .map(|item| {
+            .map(|actions| {
                 build_global_activity_response(
                     store.as_ref(),
                     &network,
-                    &item,
+                    actions,
                     &mut script_info_cache,
                 )
             })
@@ -1108,54 +960,6 @@ async fn get_latest_activities(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ckbadger_store::batch::StoreBatch;
-    use ckbadger_store::types::{
-        CachedBlockHeader, OwnerActivityDelta, TxActivityBundle, TxIndexEntry,
-    };
-
-    fn make_header(hash_byte: u8) -> CachedBlockHeader {
-        CachedBlockHeader {
-            hash: vec![hash_byte; 32],
-            timestamp: 1_700_000_000_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        }
-    }
-
-    fn make_bundle_with_block_hash(
-        tx_hash: &[u8],
-        block_hash: &[u8],
-        block_number: i64,
-        tx_index: i32,
-        lock_hash: &[u8],
-    ) -> TxActivityBundle {
-        TxActivityBundle {
-            tx_hash: tx_hash.to_vec(),
-            block_hash: block_hash.to_vec(),
-            block_number,
-            tx_index,
-            timestamp: 1_700_000_000 + block_number,
-            is_cellbase: false,
-            owners: vec![OwnerActivityDelta {
-                lock_hash: lock_hash.to_vec(),
-                lock_code_hash: vec![0x11; 32],
-                lock_hash_type: 1,
-                lock_args: vec![0x22; 20],
-                ckb_delta: 0,
-                used_delta: 0,
-                has_type_script: false,
-                involved_script_code_hashes: vec![vec![0x33; 32]],
-                asset_changes: vec![],
-                type_calls: None,
-                lock_calls: None,
-                protocol_actions: vec![],
-                peers: vec![],
-            }],
-        }
-    }
 
     #[test]
     fn test_validate_activity_filter_rejects_unknown() {
@@ -1186,114 +990,15 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_activity_cursor_rejects_non_current_format() {
+    fn test_parse_activity_cursor_format() {
         assert_eq!(parse_activity_cursor("100:2"), Some((100, 2)));
         assert_eq!(parse_activity_cursor("100:2:7"), None);
         assert_eq!(parse_activity_cursor("100"), None);
     }
 
-    #[test]
-    fn test_parse_global_activity_cursor_requires_owner_index() {
-        assert_eq!(
-            parse_global_activity_cursor("100:2:7"),
-            Some(GlobalActivityCursor {
-                block_num: 100,
-                tx_idx: 2,
-                owner_idx: 7,
-            })
-        );
-        assert_eq!(parse_global_activity_cursor("100:2"), None);
-        assert_eq!(parse_global_activity_cursor("100"), None);
-    }
-
-    #[test]
-    fn test_list_canonical_activities_page_filters_orphaned_entries() {
-        let root = tempfile::tempdir().unwrap();
-        let domain_path = root.path().join("domain");
-        let domain = CkbadgerStore::open_domain(&domain_path).unwrap();
-
-        let lock_hash = [0xAA; 32];
-        let stale_tx = vec![0x30; 32];
-        let canonical_tx_new = vec![0x20; 32];
-        let canonical_tx_old = vec![0x10; 32];
-
-        let tx_index = TxIndexEntry {
-            is_cellbase: false,
-            timestamp: 1_700_000_000_000,
-            inputs_count: 1,
-            outputs_count: 1,
-            fee: 0,
-            tx_size: 1,
-            cycles: None,
-        };
-
-        let mut domain_batch = StoreBatch::new(&domain);
-        let stale_bundle =
-            make_bundle_with_block_hash(&stale_tx, &[0x60 | 30; 32], 30, 0, &lock_hash);
-        let canonical_new_bundle =
-            make_bundle_with_block_hash(&canonical_tx_new, &[0x60 | 20; 32], 20, 0, &lock_hash);
-        let canonical_old_bundle =
-            make_bundle_with_block_hash(&canonical_tx_old, &[0x60 | 10; 32], 10, 0, &lock_hash);
-        domain_batch.put_tx_activity_bundle(&stale_bundle);
-        domain_batch.put_tx_activity_bundle(&canonical_new_bundle);
-        domain_batch.put_tx_activity_bundle(&canonical_old_bundle);
-        domain_batch.put_addr_tx(&lock_hash, 30, 0, &stale_tx);
-        domain_batch.put_addr_tx(&lock_hash, 20, 0, &canonical_tx_new);
-        domain_batch.put_addr_tx(&lock_hash, 10, 0, &canonical_tx_old);
-        // Simulate stale/orphan-like mapping without canonical tx_index entry.
-        domain_batch.put_tx_hash_map(&stale_tx, 30, 0);
-        domain_batch.put_tx_hash_map(&canonical_tx_new, 20, 0);
-        domain_batch.put_tx_hash_map(&canonical_tx_old, 10, 0);
-        domain_batch.put_tx_index(20, 0, &tx_index);
-        domain_batch.put_tx_index(10, 0, &tx_index);
-        domain_batch.put_block_header(30, &make_header(0x60 | 30));
-        domain_batch.put_block_header(20, &make_header(0x60 | 20));
-        domain_batch.put_block_header(10, &make_header(0x60 | 10));
-        domain_batch.commit().unwrap();
-
-        let rows =
-            list_canonical_activities_page(&domain, &domain, &lock_hash, 3, None, None).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].0, 20);
-        assert_eq!(rows[1].0, 10);
-        assert_eq!(rows[0].2.tx_hash, canonical_tx_new);
-        assert_eq!(rows[1].2.tx_hash, canonical_tx_old);
-    }
-
-    #[test]
-    fn test_list_canonical_activities_page_filters_competing_block_hash_history() {
-        let root = tempfile::tempdir().unwrap();
-        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
-        let lock_hash = [0x44; 32];
-        let tx_hash = vec![0x77; 32];
-
-        let tx_index = TxIndexEntry {
-            is_cellbase: false,
-            timestamp: 1_700_000_000_000,
-            inputs_count: 1,
-            outputs_count: 1,
-            fee: 0,
-            tx_size: 1,
-            cycles: None,
-        };
-
-        let mut domain_batch = StoreBatch::new(&domain);
-        let first_bundle = make_bundle_with_block_hash(&tx_hash, &[0xAA; 32], 20, 0, &lock_hash);
-        let second_bundle = make_bundle_with_block_hash(&tx_hash, &[0xBB; 32], 20, 0, &lock_hash);
-        domain_batch.put_tx_activity_bundle(&first_bundle);
-        domain_batch.put_tx_activity_bundle(&second_bundle);
-        domain_batch.put_addr_tx(&lock_hash, 20, 0, &tx_hash);
-        domain_batch.put_tx_hash_map(&tx_hash, 20, 0);
-        domain_batch.put_tx_index(20, 0, &tx_index);
-        domain_batch.put_block_header(20, &make_header(0xBB));
-        domain_batch.commit().unwrap();
-
-        let rows =
-            list_canonical_activities_page(&domain, &domain, &lock_hash, 10, None, None).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].2.tx_hash, tx_hash);
-        assert_eq!(rows[0].2.block_hash, vec![0xBB; 32]);
-    }
+    // TODO: Task 8 — add integration tests for list_canonical_activities_page,
+    // list_canonical_global_activities_page, and matches_global_activity_filter
+    // using TxActions and ParticipantDelta.
 
     #[test]
     fn test_decode_rgbpp_lock_args_valid() {
