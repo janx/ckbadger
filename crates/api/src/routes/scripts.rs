@@ -98,7 +98,7 @@ pub struct ListParams {
 #[serde(rename_all = "snake_case")]
 enum ScriptSortKey {
     Name,
-    Kind,
+    UsedAs,
     Description,
     Used,
     Capacity,
@@ -578,8 +578,13 @@ fn family_display_name(info: &ckbadger_store::types::ScriptFamilyInfo) -> &str {
     info.name.as_str()
 }
 
-fn family_kind_for_sort(info: &ckbadger_store::types::ScriptFamilyInfo) -> &str {
-    info.category.as_deref().unwrap_or("")
+fn family_used_as_for_sort(info: &ckbadger_store::types::ScriptFamilyInfo) -> &str {
+    match (info.lock_cells_count > 0, info.type_cells_count > 0) {
+        (true, true) => "lock+type",
+        (true, false) => "lock",
+        (false, true) => "type",
+        (false, false) => "",
+    }
 }
 
 fn used_ratio_for_family_sort(
@@ -602,8 +607,8 @@ fn compare_script_family_entries(
             family_display_name(&left.1).cmp(family_display_name(&right.1)),
             direction,
         ),
-        ScriptSortKey::Kind => apply_direction(
-            family_kind_for_sort(&left.1).cmp(family_kind_for_sort(&right.1)),
+        ScriptSortKey::UsedAs => apply_direction(
+            family_used_as_for_sort(&left.1).cmp(family_used_as_for_sort(&right.1)),
             direction,
         ),
         ScriptSortKey::Description => apply_direction(
@@ -654,7 +659,8 @@ fn script_family_to_response(
         family_id: family_id.to_string(),
         name: info.name.clone(),
         description: info.description.clone(),
-        script_kind: info.category.clone(),
+        script_kind: script_kind_from_counts(info.lock_cells_count, info.type_cells_count),
+        deprecated: info.deprecated,
         website: info.website.clone(),
         live_cells_count: info.live_cells_count,
         cells_count: info.cells_count,
@@ -1485,7 +1491,7 @@ async fn get_script(
         family_id,
         name: family.name,
         description: family.description,
-        script_kind: family.category,
+        script_kind: script_kind_from_counts(family.lock_cells_count, family.type_cells_count),
         website: family.website,
         live_cells_count: family.live_cells_count,
         cells_count: family.cells_count,

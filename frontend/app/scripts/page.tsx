@@ -25,7 +25,14 @@ import {
 import { formatCkbCompact, truncateHash } from '@/lib/utils';
 
 type SortDirection = 'asc' | 'desc';
-type ScriptSortKey = 'name' | 'kind' | 'description' | 'used' | 'capacity' | 'liveCells' | 'cells';
+type ScriptSortKey =
+  | 'name'
+  | 'usedAs'
+  | 'description'
+  | 'used'
+  | 'capacity'
+  | 'liveCells'
+  | 'cells';
 const UNKNOWN_SCRIPT_NAME = 'unknown';
 const UNLABELED_SCRIPT_LABEL = 'Unlabeled';
 
@@ -69,7 +76,7 @@ export default function ScriptsPage() {
     } else {
       setSortKey(nextKey);
       setSortDirection(
-        nextKey === 'name' || nextKey === 'description' || nextKey === 'kind' ? 'asc' : 'desc'
+        nextKey === 'name' || nextKey === 'description' || nextKey === 'usedAs' ? 'asc' : 'desc'
       );
     }
     pagination.reset();
@@ -210,7 +217,7 @@ export default function ScriptsPage() {
               <>
                 <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:flex">
                   {renderSortHeader('name', 'Script', 'w-44 shrink-0')}
-                  {renderSortHeader('kind', 'Kind', 'w-16 shrink-0')}
+                  {renderSortHeader('usedAs', 'Used as', 'w-16 shrink-0')}
                   {renderSortHeader('description', 'Description', 'min-w-0 flex-1 px-4')}
                   <div className="hidden xl:contents">
                     {renderSortHeader('liveCells', 'Live Cells', 'w-24 shrink-0', 'right')}

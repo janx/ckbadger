@@ -165,9 +165,12 @@ fn clear_script_version_usage(info: &mut ScriptVersionInfo) {
 }
 
 fn clear_script_family_usage(info: &mut ScriptFamilyInfo) {
+    info.deprecated = true;
     info.versions_count = 0;
     info.live_cells_count = 0;
     info.cells_count = 0;
+    info.lock_cells_count = 0;
+    info.type_cells_count = 0;
     info.owned_capacity_sum = 0;
     info.owned_knowledge_sum = 0;
 }
@@ -414,9 +417,13 @@ fn build_script_reference_rollup_state(
             .entry(family_id.to_string())
             .or_insert_with(|| ScriptFamilyInfo {
                 family_id: family_id.to_string(),
+                deprecated: true,
                 ..Default::default()
             });
         family.family_id = family_id.to_string();
+        if !version.deprecated {
+            family.deprecated = false;
+        }
         family.versions_count =
             checked_add_family_i64(family_id, "versions_count", family.versions_count, 1)?;
         family.live_cells_count = checked_add_family_i64(
@@ -430,6 +437,18 @@ fn build_script_reference_rollup_state(
             "cells_count",
             family.cells_count,
             version.lock_cells_count + version.type_cells_count,
+        )?;
+        family.lock_cells_count = checked_add_family_i64(
+            family_id,
+            "lock_cells_count",
+            family.lock_cells_count,
+            version.lock_cells_count,
+        )?;
+        family.type_cells_count = checked_add_family_i64(
+            family_id,
+            "type_cells_count",
+            family.type_cells_count,
+            version.type_cells_count,
         )?;
         family.owned_capacity_sum = checked_add_family_i128(
             family_id,

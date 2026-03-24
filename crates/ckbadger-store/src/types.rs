@@ -780,9 +780,13 @@ pub struct ScriptFamilyInfo {
     pub description: Option<String>,
     pub website: Option<String>,
     pub category: Option<String>,
+    #[serde(default)]
+    pub deprecated: bool,
     pub versions_count: i64,
     pub live_cells_count: i64,
     pub cells_count: i64,
+    pub lock_cells_count: i64,
+    pub type_cells_count: i64,
     pub owned_capacity_sum: i128,
     pub owned_knowledge_sum: i128,
 }

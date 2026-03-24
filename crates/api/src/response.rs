@@ -178,6 +178,7 @@ pub struct ScriptFamilyListItemResponse {
     pub name: String,
     pub description: Option<String>,
     pub script_kind: Option<String>,
+    pub deprecated: bool,
     pub website: Option<String>,
     pub live_cells_count: i64,
     pub cells_count: i64,

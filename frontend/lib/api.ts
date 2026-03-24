@@ -1273,6 +1273,7 @@ interface ScriptFamilyListItemApi {
   name: string;
   description: string | null;
   scriptKind: string | null;
+  deprecated: boolean;
   website: string | null;
   liveCellsCount: number;
   cellsCount: number;
@@ -1341,7 +1342,7 @@ interface ScriptQueryParams {
   search?: string;
   sortKey?:
     | 'name'
-    | 'kind'
+    | 'usedAs'
     | 'description'
     | 'used'
     | 'capacity'
@@ -1394,7 +1395,7 @@ function scriptFamilyListItemToKnownScript(script: ScriptFamilyListItemApi): Kno
     dataHash: null,
     typeHash: null,
     tag: null,
-    deprecated: false,
+    deprecated: script.deprecated,
     isSystem: false,
     codeCellTxHash: null,
     codeCellOutputIndex: null,
@@ -2464,7 +2465,13 @@ export const api = {
     if (params.decoderType) query.set('decoder_type', params.decoderType);
     if (params.search) query.set('search', params.search);
     if (params.sortKey) {
-      query.set('sort_key', params.sortKey === 'usedRatio' ? 'used_ratio' : params.sortKey);
+      const snakeKey =
+        params.sortKey === 'usedRatio'
+          ? 'used_ratio'
+          : params.sortKey === 'usedAs'
+            ? 'used_as'
+            : params.sortKey;
+      query.set('sort_key', snakeKey);
     }
     if (params.sortDirection) query.set('sort_direction', params.sortDirection);
     return fetchApi<CursorPaginatedResponse<ScriptFamilyListItemApi>>(`/scripts?${query}`).then(

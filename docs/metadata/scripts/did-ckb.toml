@@ -1,6 +1,6 @@
 name = "did:ckb"
 description = "Decentralized Identifier (DID) method specification that utilizes the Nervos CKB (Common Knowledge Base) blockchain for creating, updating, and deactivating DIDs."
-website = "https://web5.fans"
+website = "https://github.com/web5fans/did-ckb"
 category = "web5-did"
 
 [mainnet]
