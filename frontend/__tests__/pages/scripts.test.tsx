@@ -107,7 +107,7 @@ describe('ScriptsPage', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getAllByText('Kind').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Used as').length).toBeGreaterThan(0);
     });
 
     expect(screen.getAllByRole('link', { name: 'SECP256K1_BLAKE160' })[0]).toBeInTheDocument();

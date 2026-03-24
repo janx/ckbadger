@@ -6849,8 +6849,8 @@ mod tests {
             ..Default::default()
         };
         let lines = controller_panel_lines(&bb, false);
-        assert_eq!(lines.len(), 3);
-        let text: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(lines.len(), 5);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
             text.contains("[FLUSH]"),
             "should contain bottleneck label, got: {}",
