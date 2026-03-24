@@ -2799,6 +2799,7 @@ async fn test_scripts_list_supports_cursor_pagination() {
             &ScriptFamilyInfo {
                 family_id: family_id.to_string(),
                 name: name.to_string(),
+                versions_count: 1,
                 ..Default::default()
             },
         );
@@ -2863,6 +2864,7 @@ async fn test_scripts_list_sorts_before_cursor_pagination() {
                 family_id: family_id.to_string(),
                 name: name.to_string(),
                 owned_capacity_sum,
+                versions_count: 1,
                 ..Default::default()
             },
         );
@@ -3263,6 +3265,7 @@ async fn test_scripts_list_merges_unknown_reference_into_known_deployment() {
         &ScriptFamilyInfo {
             family_id: family_id.to_string(),
             name: "Default Lock".to_string(),
+            versions_count: 1,
             ..Default::default()
         },
     );
@@ -9859,6 +9862,7 @@ async fn test_scripts_list_reads_from_derived_store() {
         &ScriptFamilyInfo {
             family_id: family_id.to_string(),
             name: "CoreOnlyScript".to_string(),
+            versions_count: 1,
             ..Default::default()
         },
     );
