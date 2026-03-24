@@ -766,8 +766,7 @@ fn parse_decoder_steps(dob: &Value) -> Result<Vec<DecoderStep>> {
             let pattern = entry.get("pattern").with_context(|| {
                 format!("decoder entry missing 'pattern' field at index {index}")
             })?;
-            let pattern_json =
-                serde_json::to_string(pattern).context("failed to serialize pattern")?;
+            let pattern_json = serialize_pattern(pattern);
             steps.push(DecoderStep {
                 decoder_ref,
                 pattern_json,
@@ -783,7 +782,7 @@ fn parse_decoder_steps(dob: &Value) -> Result<Vec<DecoderStep>> {
         let pattern = dob
             .get("pattern")
             .context("no pattern found in DOB metadata")?;
-        let pattern_json = serde_json::to_string(pattern).context("failed to serialize pattern")?;
+        let pattern_json = serialize_pattern(pattern);
         return Ok(vec![DecoderStep {
             decoder_ref,
             pattern_json,
@@ -791,6 +790,19 @@ fn parse_decoder_steps(dob: &Value) -> Result<Vec<DecoderStep>> {
     }
 
     bail!("no decoder reference found in DOB metadata")
+}
+
+/// Serialize a pattern value for passing to a DOB decoder binary.
+///
+/// If the pattern is a JSON string, return its inner string value (unwrapped).
+/// Otherwise serialize to JSON. This matches the DOB protocol convention where
+/// string-typed patterns contain pre-serialized data (e.g. molecule hex) that
+/// decoders parse directly, without an outer JSON string wrapper.
+fn serialize_pattern(pattern: &Value) -> String {
+    match pattern {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
 }
 
 /// Parse a single decoder reference object.

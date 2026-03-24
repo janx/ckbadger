@@ -49,8 +49,10 @@ pub fn decode_dob0(
 /// Decode a DOB1 spore by running a chain of decoders.
 ///
 /// Each entry in `decoders` is `(binary, pattern_json)`. The first decoder
-/// receives the original `dna_hex`; subsequent decoders receive the raw
-/// output of the previous decoder as their DNA input.
+/// receives `argv = [dna_hex, pattern]`. Subsequent decoders receive
+/// `argv = [dna_hex, pattern, previous_output_json]` — the original DNA
+/// is always passed as the first argument, and the previous step's output
+/// is appended as the third argument.
 ///
 /// Traits are extracted from the latest step whose output is valid JSON
 /// `DobTraitGroup[]`. The final step's raw output is returned as-is — it
@@ -64,12 +66,18 @@ pub fn decode_dob1_chain(
         bail!("decoder chain is empty");
     }
 
-    let mut current_dna = dna_hex.to_string();
+    let mut previous_output: Option<String> = None;
     let mut last_raw_output = String::new();
     let mut traits: Vec<DobTrait> = Vec::new();
 
     for (i, (binary, pattern_json)) in decoders.iter().enumerate() {
-        let (exit_code, output) = execute_riscv_binary(binary, &[&current_dna, pattern_json])?;
+        let (exit_code, output) = if let Some(prev) = &previous_output {
+            // Step 1+: pass original DNA, pattern, and previous step output
+            execute_riscv_binary(binary, &[dna_hex, pattern_json, prev])?
+        } else {
+            // Step 0: pass DNA and pattern only
+            execute_riscv_binary(binary, &[dna_hex, pattern_json])?
+        };
 
         if exit_code != 0 {
             bail!("decoder {i} exited with non-zero code: {exit_code}");
@@ -89,9 +97,7 @@ pub fn decode_dob1_chain(
             traits = flatten_trait_groups(&groups);
         }
 
-        // For chained decoders, the raw output becomes the next decoder's DNA
-        // input (hex-encoded).
-        current_dna = hex::encode(last_raw_output.as_bytes());
+        previous_output = Some(last_raw_output.clone());
     }
 
     Ok(DobDecodedResult {
