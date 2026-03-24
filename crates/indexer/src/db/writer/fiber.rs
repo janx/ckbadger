@@ -1,4 +1,4 @@
-//! Fiber channel writer: processes TxActivityBundles and updates CF_FIBER_CHANNELS state.
+//! Fiber channel writer: processes TxActions and updates CF_FIBER_CHANNELS state.
 //!
 //! Scans protocol_actions for `protocol == "fiber"` and applies lifecycle
 //! state transitions (open, close, force_close, settlement) to the channel store.
@@ -8,58 +8,63 @@ use tracing::warn;
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::types::{FiberChannel, FiberChannelState, TxActivityBundle};
+use ckbadger_store::types::{FiberChannel, FiberChannelState, TxActions};
 use ckbadger_store::CkbadgerStore;
 
-/// Process Fiber channel lifecycle events from a TxActivityBundle.
+/// Process Fiber channel lifecycle events from a TxActions.
 ///
-/// Scans each owner's `protocol_actions` for `protocol == "fiber"`,
+/// Scans TX-level `protocol_actions` for `protocol == "fiber"`,
 /// reads the action/metadata, and applies state transitions to
 /// CF_FIBER_CHANNELS, CF_ADDR_FIBER_CHANNELS, CF_FIBER_CHANNEL_BY_COMMITMENT,
 /// and CF_FIBER_CHANNEL_BY_FUNDING_ARGS.
 pub fn process_fiber_channel_events(
     batch: &mut StoreBatch<'_>,
     store: &CkbadgerStore,
-    bundle: &TxActivityBundle,
+    tx_actions: &TxActions,
 ) -> Result<()> {
-    for owner in &bundle.owners {
-        for action in &owner.protocol_actions {
-            if action.protocol != "fiber" {
-                continue;
+    for action in &tx_actions.protocol_actions {
+        if action.protocol != "fiber" {
+            continue;
+        }
+
+        let metadata = action.metadata_value().map_err(|e| {
+            anyhow::anyhow!(
+                "failed to decode fiber metadata for tx 0x{} action={}: {}",
+                hex::encode(&tx_actions.tx_hash),
+                action.action,
+                e
+            )
+        })?;
+
+        // Use the first participant's lock_hash as the "first participant" for channel_open.
+        let first_participant_lock_hash = tx_actions
+            .participants
+            .first()
+            .map(|p| p.lock_hash.as_slice())
+            .unwrap_or(&[]);
+
+        match action.action.as_str() {
+            "channel_open" => {
+                handle_channel_open(batch, tx_actions, first_participant_lock_hash, &metadata)?;
             }
-
-            let metadata = action.metadata_value().map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to decode fiber metadata for tx 0x{} action={}: {}",
-                    hex::encode(&bundle.tx_hash),
-                    action.action,
-                    e
-                )
-            })?;
-
-            match action.action.as_str() {
-                "channel_open" => {
-                    handle_channel_open(batch, bundle, &owner.lock_hash, &metadata)?;
-                }
-                "channel_close" => {
-                    handle_channel_close(batch, store, bundle, &metadata)?;
-                }
-                "force_close" => {
-                    handle_force_close(batch, store, bundle, &metadata)?;
-                }
-                "settlement" => {
-                    handle_settlement(batch, store, bundle, &metadata)?;
-                }
-                "commitment_revocation" => {
-                    handle_commitment_revocation(batch, store, bundle, &metadata)?;
-                }
-                other => {
-                    warn!(
-                        action = other,
-                        tx_hash = %hex::encode(&bundle.tx_hash),
-                        "unknown fiber action, skipping"
-                    );
-                }
+            "channel_close" => {
+                handle_channel_close(batch, store, tx_actions, &metadata)?;
+            }
+            "force_close" => {
+                handle_force_close(batch, store, tx_actions, &metadata)?;
+            }
+            "settlement" => {
+                handle_settlement(batch, store, tx_actions, &metadata)?;
+            }
+            "commitment_revocation" => {
+                handle_commitment_revocation(batch, store, tx_actions, &metadata)?;
+            }
+            other => {
+                warn!(
+                    action = other,
+                    tx_hash = %hex::encode(&tx_actions.tx_hash),
+                    "unknown fiber action, skipping"
+                );
             }
         }
     }
@@ -69,7 +74,7 @@ pub fn process_fiber_channel_events(
 /// Handle `channel_open`: create a new FiberChannel with state Open.
 fn handle_channel_open(
     batch: &mut StoreBatch<'_>,
-    bundle: &TxActivityBundle,
+    tx_actions: &TxActions,
     first_participant_lock_hash: &[u8],
     metadata: &serde_json::Value,
 ) -> Result<()> {
@@ -78,7 +83,7 @@ fn handle_channel_open(
         None => {
             anyhow::bail!(
                 "fiber channel_open missing channelOutpoint metadata in tx 0x{} — detector bug",
-                hex::encode(&bundle.tx_hash)
+                hex::encode(&tx_actions.tx_hash)
             );
         }
     };
@@ -88,7 +93,7 @@ fn handle_channel_open(
         None => {
             anyhow::bail!(
                 "fiber channel_open missing capacity metadata in tx 0x{} — detector bug",
-                hex::encode(&bundle.tx_hash)
+                hex::encode(&tx_actions.tx_hash)
             );
         }
     };
@@ -128,25 +133,20 @@ fn handle_channel_open(
             anyhow::anyhow!(
                 "fiber channel_open: failed to decode fundingLockArgs hex '{}' in tx 0x{}",
                 hex_str,
-                hex::encode(&bundle.tx_hash)
+                hex::encode(&tx_actions.tx_hash)
             )
         })?,
         None => Vec::new(),
     };
 
-    // Collect participant lock_hashes: all non-fiber-lock owners in this bundle.
-    // The first_participant_lock_hash is the owner who received this action.
-    // We also include all other owners who have the same fiber action.
-    let mut participants: Vec<Vec<u8>> = Vec::new();
-    for o in &bundle.owners {
-        let has_fiber_open = o
-            .protocol_actions
-            .iter()
-            .any(|a| a.protocol == "fiber" && a.action == "channel_open");
-        if has_fiber_open {
-            participants.push(o.lock_hash.clone());
-        }
-    }
+    // Collect participant lock_hashes from tx_actions.participants.
+    // With TxActions, protocol_actions are TX-level, so all participants in the
+    // transaction are potential channel participants.
+    let mut participants: Vec<Vec<u8>> = tx_actions
+        .participants
+        .iter()
+        .map(|p| p.lock_hash.clone())
+        .collect();
     // Ensure the first participant is included (should already be, but be safe)
     if !participants
         .iter()
@@ -162,8 +162,8 @@ fn handle_channel_open(
         capacity,
         udt_type_hash: None,
         udt_amount: None,
-        open_block: bundle.block_number,
-        open_timestamp: bundle.timestamp,
+        open_block: tx_actions.block_number,
+        open_timestamp: tx_actions.timestamp,
         close_tx_hash: None,
         close_block: None,
         close_timestamp: None,
@@ -196,7 +196,7 @@ fn handle_channel_open(
 fn handle_channel_close(
     batch: &mut StoreBatch<'_>,
     store: &CkbadgerStore,
-    bundle: &TxActivityBundle,
+    tx_actions: &TxActions,
     metadata: &serde_json::Value,
 ) -> Result<()> {
     let funding_lock_args_hex = match metadata.get("fundingLockArgs").and_then(|v| v.as_str()) {
@@ -204,7 +204,7 @@ fn handle_channel_close(
         None => {
             anyhow::bail!(
                 "fiber channel_close missing fundingLockArgs metadata in tx 0x{} — detector bug",
-                hex::encode(&bundle.tx_hash)
+                hex::encode(&tx_actions.tx_hash)
             );
         }
     };
@@ -213,7 +213,7 @@ fn handle_channel_close(
         anyhow::anyhow!(
             "fiber channel_close: failed to decode fundingLockArgs hex '{}' in tx 0x{}",
             funding_lock_args_hex,
-            hex::encode(&bundle.tx_hash)
+            hex::encode(&tx_actions.tx_hash)
         )
     })?;
 
@@ -221,7 +221,7 @@ fn handle_channel_close(
         Some(id) => id,
         None => {
             warn!(
-                tx_hash = %hex::encode(&bundle.tx_hash),
+                tx_hash = %hex::encode(&tx_actions.tx_hash),
                 funding_lock_args = %funding_lock_args_hex,
                 "fiber channel_close: no channel found for fundingLockArgs, skipping"
             );
@@ -233,7 +233,7 @@ fn handle_channel_close(
         Some(ch) => ch,
         None => {
             warn!(
-                tx_hash = %hex::encode(&bundle.tx_hash),
+                tx_hash = %hex::encode(&tx_actions.tx_hash),
                 channel_id = %hex::encode(&channel_id),
                 "fiber channel_close: channel not found by id, skipping"
             );
@@ -242,9 +242,9 @@ fn handle_channel_close(
     };
 
     channel.state = FiberChannelState::CooperativelyClosed;
-    channel.close_tx_hash = Some(bundle.tx_hash.clone());
-    channel.close_block = Some(bundle.block_number);
-    channel.close_timestamp = Some(bundle.timestamp);
+    channel.close_tx_hash = Some(tx_actions.tx_hash.clone());
+    channel.close_block = Some(tx_actions.block_number);
+    channel.close_timestamp = Some(tx_actions.timestamp);
 
     batch.put_fiber_channel(&channel_id, &channel);
 
@@ -255,7 +255,7 @@ fn handle_channel_close(
 fn handle_force_close(
     batch: &mut StoreBatch<'_>,
     store: &CkbadgerStore,
-    bundle: &TxActivityBundle,
+    tx_actions: &TxActions,
     metadata: &serde_json::Value,
 ) -> Result<()> {
     let funding_lock_args_hex = match metadata.get("fundingLockArgs").and_then(|v| v.as_str()) {
@@ -263,7 +263,7 @@ fn handle_force_close(
         None => {
             anyhow::bail!(
                 "fiber force_close missing fundingLockArgs metadata in tx 0x{} — detector bug",
-                hex::encode(&bundle.tx_hash)
+                hex::encode(&tx_actions.tx_hash)
             );
         }
     };
@@ -272,7 +272,7 @@ fn handle_force_close(
         anyhow::anyhow!(
             "fiber force_close: failed to decode fundingLockArgs hex '{}' in tx 0x{}",
             funding_lock_args_hex,
-            hex::encode(&bundle.tx_hash)
+            hex::encode(&tx_actions.tx_hash)
         )
     })?;
 
@@ -280,7 +280,7 @@ fn handle_force_close(
         Some(id) => id,
         None => {
             warn!(
-                tx_hash = %hex::encode(&bundle.tx_hash),
+                tx_hash = %hex::encode(&tx_actions.tx_hash),
                 funding_lock_args = %funding_lock_args_hex,
                 "fiber force_close: no channel found for fundingLockArgs, skipping"
             );
@@ -292,7 +292,7 @@ fn handle_force_close(
         Some(ch) => ch,
         None => {
             warn!(
-                tx_hash = %hex::encode(&bundle.tx_hash),
+                tx_hash = %hex::encode(&tx_actions.tx_hash),
                 channel_id = %hex::encode(&channel_id),
                 "fiber force_close: channel not found by id, skipping"
             );
@@ -301,9 +301,9 @@ fn handle_force_close(
     };
 
     channel.state = FiberChannelState::ForceClosed;
-    channel.close_tx_hash = Some(bundle.tx_hash.clone());
-    channel.close_block = Some(bundle.block_number);
-    channel.close_timestamp = Some(bundle.timestamp);
+    channel.close_tx_hash = Some(tx_actions.tx_hash.clone());
+    channel.close_block = Some(tx_actions.block_number);
+    channel.close_timestamp = Some(tx_actions.timestamp);
 
     // Store commitment info if present in metadata
     if let Some(commitment_args_hex) = metadata.get("commitmentLockArgs").and_then(|v| v.as_str()) {
@@ -311,13 +311,13 @@ fn handle_force_close(
             anyhow::anyhow!(
                 "fiber force_close: failed to decode commitmentLockArgs hex '{}' in tx 0x{}",
                 commitment_args_hex,
-                hex::encode(&bundle.tx_hash)
+                hex::encode(&tx_actions.tx_hash)
             )
         })?;
         if !commitment_args.is_empty() {
             // Use blake2b hash of commitment lock args as the commitment index key
             let commitment_hash = blake2b_hash(&commitment_args);
-            channel.commitment_tx_hash = Some(bundle.tx_hash.clone());
+            channel.commitment_tx_hash = Some(tx_actions.tx_hash.clone());
             batch.put_fiber_channel_by_commitment(&commitment_hash, &channel_id);
         }
     }
@@ -331,7 +331,7 @@ fn handle_force_close(
 fn handle_settlement(
     batch: &mut StoreBatch<'_>,
     store: &CkbadgerStore,
-    bundle: &TxActivityBundle,
+    tx_actions: &TxActions,
     metadata: &serde_json::Value,
 ) -> Result<()> {
     let commitment_args_hex = match metadata.get("commitmentLockArgs").and_then(|v| v.as_str()) {
@@ -339,7 +339,7 @@ fn handle_settlement(
         None => {
             anyhow::bail!(
                 "fiber settlement missing commitmentLockArgs metadata in tx 0x{} — detector bug",
-                hex::encode(&bundle.tx_hash)
+                hex::encode(&tx_actions.tx_hash)
             );
         }
     };
@@ -348,7 +348,7 @@ fn handle_settlement(
         anyhow::anyhow!(
             "fiber settlement: failed to decode commitmentLockArgs hex '{}' in tx 0x{}",
             commitment_args_hex,
-            hex::encode(&bundle.tx_hash)
+            hex::encode(&tx_actions.tx_hash)
         )
     })?;
     let commitment_hash = blake2b_hash(&commitment_args);
@@ -357,7 +357,7 @@ fn handle_settlement(
         Some(id) => id,
         None => {
             warn!(
-                tx_hash = %hex::encode(&bundle.tx_hash),
+                tx_hash = %hex::encode(&tx_actions.tx_hash),
                 commitment_lock_args = %commitment_args_hex,
                 "fiber settlement: no channel found for commitment, skipping"
             );
@@ -369,7 +369,7 @@ fn handle_settlement(
         Some(ch) => ch,
         None => {
             warn!(
-                tx_hash = %hex::encode(&bundle.tx_hash),
+                tx_hash = %hex::encode(&tx_actions.tx_hash),
                 channel_id = %hex::encode(&channel_id),
                 "fiber settlement: channel not found by id, skipping"
             );
@@ -378,9 +378,9 @@ fn handle_settlement(
     };
 
     channel.state = FiberChannelState::Settled;
-    channel.settlement_tx_hash = Some(bundle.tx_hash.clone());
-    channel.settlement_block = Some(bundle.block_number);
-    channel.settlement_timestamp = Some(bundle.timestamp);
+    channel.settlement_tx_hash = Some(tx_actions.tx_hash.clone());
+    channel.settlement_block = Some(tx_actions.block_number);
+    channel.settlement_timestamp = Some(tx_actions.timestamp);
 
     batch.put_fiber_channel(&channel_id, &channel);
 
@@ -392,7 +392,7 @@ fn handle_settlement(
 fn handle_commitment_revocation(
     batch: &mut StoreBatch<'_>,
     store: &CkbadgerStore,
-    bundle: &TxActivityBundle,
+    tx_actions: &TxActions,
     metadata: &serde_json::Value,
 ) -> Result<()> {
     let old_args_hex = match metadata
@@ -403,7 +403,7 @@ fn handle_commitment_revocation(
         None => {
             anyhow::bail!(
                 "fiber commitment_revocation missing oldCommitmentLockArgs metadata in tx 0x{} — detector bug",
-                hex::encode(&bundle.tx_hash)
+                hex::encode(&tx_actions.tx_hash)
             );
         }
     };
@@ -415,7 +415,7 @@ fn handle_commitment_revocation(
         None => {
             anyhow::bail!(
                 "fiber commitment_revocation missing newCommitmentLockArgs metadata in tx 0x{} — detector bug",
-                hex::encode(&bundle.tx_hash)
+                hex::encode(&tx_actions.tx_hash)
             );
         }
     };
@@ -424,14 +424,14 @@ fn handle_commitment_revocation(
         anyhow::anyhow!(
             "fiber commitment_revocation: failed to decode oldCommitmentLockArgs hex '{}' in tx 0x{}",
             old_args_hex,
-            hex::encode(&bundle.tx_hash)
+            hex::encode(&tx_actions.tx_hash)
         )
     })?;
     let new_args = decode_hex_with_prefix(new_args_hex).ok_or_else(|| {
         anyhow::anyhow!(
             "fiber commitment_revocation: failed to decode newCommitmentLockArgs hex '{}' in tx 0x{}",
             new_args_hex,
-            hex::encode(&bundle.tx_hash)
+            hex::encode(&tx_actions.tx_hash)
         )
     })?;
 
@@ -442,7 +442,7 @@ fn handle_commitment_revocation(
         Some(id) => id,
         None => {
             warn!(
-                tx_hash = %hex::encode(&bundle.tx_hash),
+                tx_hash = %hex::encode(&tx_actions.tx_hash),
                 old_commitment_lock_args = %old_args_hex,
                 "fiber commitment_revocation: no channel found for old commitment, skipping"
             );
@@ -454,7 +454,7 @@ fn handle_commitment_revocation(
         Some(ch) => ch,
         None => {
             warn!(
-                tx_hash = %hex::encode(&bundle.tx_hash),
+                tx_hash = %hex::encode(&tx_actions.tx_hash),
                 channel_id = %hex::encode(&channel_id),
                 "fiber commitment_revocation: channel not found by id, skipping"
             );
@@ -463,7 +463,7 @@ fn handle_commitment_revocation(
     };
 
     // Update commitment metadata, keep state as ForceClosed
-    channel.commitment_tx_hash = Some(bundle.tx_hash.clone());
+    channel.commitment_tx_hash = Some(tx_actions.tx_hash.clone());
 
     // Rotate commitment hash index: remove old, insert new
     batch.delete_fiber_channel_by_commitment(&old_hash);
@@ -493,46 +493,76 @@ fn blake2b_hash(data: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
     use ckbadger_store::batch::StoreBatch;
-    use ckbadger_store::types::{OwnerActivityDelta, ProtocolAction};
+    use ckbadger_store::types::{ParticipantDelta, ProtocolAction};
     use tempfile::TempDir;
 
-    fn make_bundle(
+    fn make_tx_actions(
         tx_hash: &[u8],
         block_number: i64,
         timestamp: i64,
-        owners: Vec<OwnerActivityDelta>,
-    ) -> TxActivityBundle {
-        TxActivityBundle {
+        participants: Vec<ParticipantDelta>,
+        protocol_actions: Vec<ProtocolAction>,
+    ) -> TxActions {
+        TxActions {
             tx_hash: tx_hash.to_vec(),
             block_hash: vec![0xBB; 32],
             block_number,
             tx_index: 1,
             timestamp,
             is_cellbase: false,
-            owners,
+            protocol_actions,
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants,
         }
     }
 
-    fn make_owner_with_fiber_action(
+    fn make_participant(lock_hash: &[u8]) -> ParticipantDelta {
+        ParticipantDelta {
+            lock_hash: lock_hash.to_vec(),
+            ckb_delta: 0,
+            used_delta: 0,
+            item_deltas: vec![],
+            tags: 0,
+        }
+    }
+
+    /// Convenience: build TxActions from a single participant + fiber action.
+    /// Replicates the old test pattern of `make_owner_with_fiber_action` + `make_bundle`.
+    fn make_tx_actions_with_fiber_action(
+        tx_hash: &[u8],
+        block_number: i64,
+        timestamp: i64,
         lock_hash: &[u8],
         action: &str,
         metadata: serde_json::Value,
-    ) -> OwnerActivityDelta {
-        OwnerActivityDelta {
-            lock_hash: lock_hash.to_vec(),
-            lock_code_hash: vec![0x11; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0x22; 20],
-            ckb_delta: 0,
-            used_delta: 0,
-            has_type_script: false,
-            involved_script_code_hashes: vec![],
-            asset_changes: vec![],
-            type_calls: None,
-            lock_calls: None,
-            protocol_actions: vec![ProtocolAction::new("fiber", action, metadata)],
-            peers: vec![],
-        }
+    ) -> TxActions {
+        make_tx_actions(
+            tx_hash,
+            block_number,
+            timestamp,
+            vec![make_participant(lock_hash)],
+            vec![ProtocolAction::new("fiber", action, metadata)],
+        )
+    }
+
+    /// Convenience: build TxActions from multiple participants + fiber action.
+    fn make_tx_actions_with_participants_fiber_action(
+        tx_hash: &[u8],
+        block_number: i64,
+        timestamp: i64,
+        lock_hashes: &[&[u8]],
+        action: &str,
+        metadata: serde_json::Value,
+    ) -> TxActions {
+        let participants = lock_hashes.iter().map(|lh| make_participant(lh)).collect();
+        make_tx_actions(
+            tx_hash,
+            block_number,
+            timestamp,
+            participants,
+            vec![ProtocolAction::new("fiber", action, metadata)],
+        )
     }
 
     fn make_channel_open_metadata(
@@ -564,11 +594,12 @@ mod tests {
 
         let metadata =
             make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
-        let owner = make_owner_with_fiber_action(&participant, "channel_open", metadata);
-        let bundle = make_bundle(&[0x40; 32], 5000, 1_700_000_000, vec![owner]);
+        let actions = make_tx_actions_with_fiber_action(
+            &[0x40; 32], 5000, 1_700_000_000, &participant, "channel_open", metadata,
+        );
 
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &actions).unwrap();
         batch.commit().unwrap();
 
         let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, 0);
@@ -606,11 +637,12 @@ mod tests {
         // First open the channel
         let open_metadata =
             make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
-        let open_owner = make_owner_with_fiber_action(&participant, "channel_open", open_metadata);
-        let open_bundle = make_bundle(&[0x40; 32], 5000, 1_700_000_000, vec![open_owner]);
+        let open_actions = make_tx_actions_with_fiber_action(
+            &[0x40; 32], 5000, 1_700_000_000, &participant, "channel_open", open_metadata,
+        );
 
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &open_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &open_actions).unwrap();
         batch.commit().unwrap();
 
         // Now close the channel
@@ -619,12 +651,12 @@ mod tests {
             "capacity": "50000000000",
             "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
         });
-        let close_owner =
-            make_owner_with_fiber_action(&participant, "channel_close", close_metadata);
-        let close_bundle = make_bundle(&[0x41; 32], 5001, 1_700_000_010, vec![close_owner]);
+        let close_actions = make_tx_actions_with_fiber_action(
+            &[0x41; 32], 5001, 1_700_000_010, &participant, "channel_close", close_metadata,
+        );
 
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &close_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &close_actions).unwrap();
         batch.commit().unwrap();
 
         let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, 0);
@@ -646,11 +678,12 @@ mod tests {
         // Open channel
         let open_metadata =
             make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
-        let open_owner = make_owner_with_fiber_action(&participant, "channel_open", open_metadata);
-        let open_bundle = make_bundle(&[0x40; 32], 5000, 1_700_000_000, vec![open_owner]);
+        let open_actions = make_tx_actions_with_fiber_action(
+            &[0x40; 32], 5000, 1_700_000_000, &participant, "channel_open", open_metadata,
+        );
 
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &open_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &open_actions).unwrap();
         batch.commit().unwrap();
 
         // Force close
@@ -666,12 +699,12 @@ mod tests {
             "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
             "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args)),
         });
-        let fc_owner =
-            make_owner_with_fiber_action(&participant, "force_close", force_close_metadata);
-        let fc_bundle = make_bundle(&[0x42; 32], 5002, 1_700_000_020, vec![fc_owner]);
+        let fc_actions = make_tx_actions_with_fiber_action(
+            &[0x42; 32], 5002, 1_700_000_020, &participant, "force_close", force_close_metadata,
+        );
 
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &fc_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &fc_actions).unwrap();
         batch.commit().unwrap();
 
         let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, 0);
@@ -701,11 +734,12 @@ mod tests {
         // Open channel
         let open_metadata =
             make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
-        let open_owner = make_owner_with_fiber_action(&participant, "channel_open", open_metadata);
-        let open_bundle = make_bundle(&[0x40; 32], 5000, 1_700_000_000, vec![open_owner]);
+        let open_actions = make_tx_actions_with_fiber_action(
+            &[0x40; 32], 5000, 1_700_000_000, &participant, "channel_open", open_metadata,
+        );
 
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &open_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &open_actions).unwrap();
         batch.commit().unwrap();
 
         // Force close (to create commitment index)
@@ -721,12 +755,12 @@ mod tests {
             "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
             "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args)),
         });
-        let fc_owner =
-            make_owner_with_fiber_action(&participant, "force_close", force_close_metadata);
-        let fc_bundle = make_bundle(&[0x42; 32], 5002, 1_700_000_020, vec![fc_owner]);
+        let fc_actions = make_tx_actions_with_fiber_action(
+            &[0x42; 32], 5002, 1_700_000_020, &participant, "force_close", force_close_metadata,
+        );
 
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &fc_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &fc_actions).unwrap();
         batch.commit().unwrap();
 
         // Settlement
@@ -735,12 +769,12 @@ mod tests {
             "capacity": "50000000000",
             "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args)),
         });
-        let settle_owner =
-            make_owner_with_fiber_action(&participant, "settlement", settlement_metadata);
-        let settle_bundle = make_bundle(&[0x43; 32], 5003, 1_700_000_030, vec![settle_owner]);
+        let settle_actions = make_tx_actions_with_fiber_action(
+            &[0x43; 32], 5003, 1_700_000_030, &participant, "settlement", settlement_metadata,
+        );
 
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &settle_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &settle_actions).unwrap();
         batch.commit().unwrap();
 
         let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, 0);
@@ -755,25 +789,14 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
-        let owner = OwnerActivityDelta {
-            lock_hash: vec![0xAA; 32],
-            lock_code_hash: vec![0x11; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0x22; 20],
-            ckb_delta: 100_00000000,
-            used_delta: 0,
-            has_type_script: false,
-            involved_script_code_hashes: vec![],
-            asset_changes: vec![],
-            type_calls: None,
-            lock_calls: None,
-            protocol_actions: vec![], // no fiber actions
-            peers: vec![],
-        };
-        let bundle = make_bundle(&[0x50; 32], 6000, 1_700_100_000, vec![owner]);
+        let actions = make_tx_actions(
+            &[0x50; 32], 6000, 1_700_100_000,
+            vec![make_participant(&[0xAA; 32])],
+            vec![], // no fiber actions
+        );
 
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &actions).unwrap();
         batch.commit().unwrap();
 
         // No channels should exist
@@ -791,12 +814,13 @@ mod tests {
             "capacity": "50000000000",
             "fundingLockArgs": "0xcccccccccccccccccccccccccccccccccccccccc",
         });
-        let owner = make_owner_with_fiber_action(&[0xAA; 32], "channel_close", close_metadata);
-        let bundle = make_bundle(&[0x41; 32], 5001, 1_700_000_010, vec![owner]);
+        let actions = make_tx_actions_with_fiber_action(
+            &[0x41; 32], 5001, 1_700_000_010, &[0xAA; 32], "channel_close", close_metadata,
+        );
 
         let mut batch = StoreBatch::new(&store);
         // Should not error, just warn and skip
-        process_fiber_channel_events(&mut batch, &store, &bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &actions).unwrap();
         batch.commit().unwrap();
     }
 
@@ -813,13 +837,14 @@ mod tests {
         let metadata =
             make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
 
-        let owner_a =
-            make_owner_with_fiber_action(&participant_a, "channel_open", metadata.clone());
-        let owner_b = make_owner_with_fiber_action(&participant_b, "channel_open", metadata);
-        let bundle = make_bundle(&[0x40; 32], 5000, 1_700_000_000, vec![owner_a, owner_b]);
+        let actions = make_tx_actions_with_participants_fiber_action(
+            &[0x40; 32], 5000, 1_700_000_000,
+            &[&participant_a[..], &participant_b[..]],
+            "channel_open", metadata,
+        );
 
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &actions).unwrap();
         batch.commit().unwrap();
 
         let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, 0);
@@ -845,11 +870,12 @@ mod tests {
         // Open channel
         let open_metadata =
             make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
-        let open_owner = make_owner_with_fiber_action(&participant, "channel_open", open_metadata);
-        let open_bundle = make_bundle(&[0x40; 32], 5000, 1_700_000_000, vec![open_owner]);
+        let open_actions = make_tx_actions_with_fiber_action(
+            &[0x40; 32], 5000, 1_700_000_000, &participant, "channel_open", open_metadata,
+        );
 
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &open_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &open_actions).unwrap();
         batch.commit().unwrap();
 
         // Force close
@@ -865,12 +891,12 @@ mod tests {
             "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
             "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v1)),
         });
-        let fc_owner =
-            make_owner_with_fiber_action(&participant, "force_close", force_close_metadata);
-        let fc_bundle = make_bundle(&[0x42; 32], 5002, 1_700_000_020, vec![fc_owner]);
+        let fc_actions = make_tx_actions_with_fiber_action(
+            &[0x42; 32], 5002, 1_700_000_020, &participant, "force_close", force_close_metadata,
+        );
 
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &fc_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &fc_actions).unwrap();
         batch.commit().unwrap();
 
         let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, 0);
@@ -892,15 +918,12 @@ mod tests {
             "oldCommitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v1)),
             "newCommitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v2)),
         });
-        let rev_owner = make_owner_with_fiber_action(
-            &participant,
-            "commitment_revocation",
-            revocation_metadata,
+        let rev_actions = make_tx_actions_with_fiber_action(
+            &[0x44; 32], 5004, 1_700_000_040, &participant, "commitment_revocation", revocation_metadata,
         );
-        let rev_bundle = make_bundle(&[0x44; 32], 5004, 1_700_000_040, vec![rev_owner]);
 
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &rev_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &rev_actions).unwrap();
         batch.commit().unwrap();
 
         // Old hash should be gone, new hash should map to the channel
@@ -935,10 +958,11 @@ mod tests {
         // Open
         let open_metadata =
             make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
-        let open_owner = make_owner_with_fiber_action(&participant, "channel_open", open_metadata);
-        let open_bundle = make_bundle(&[0x40; 32], 5000, 1_700_000_000, vec![open_owner]);
+        let open_actions = make_tx_actions_with_fiber_action(
+            &[0x40; 32], 5000, 1_700_000_000, &participant, "channel_open", open_metadata,
+        );
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &open_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &open_actions).unwrap();
         batch.commit().unwrap();
 
         // Force close with v1
@@ -954,10 +978,11 @@ mod tests {
             "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
             "commitmentLockArgs": format!("0x{}", hex::encode(&args_v1)),
         });
-        let fc_owner = make_owner_with_fiber_action(&participant, "force_close", fc_meta);
-        let fc_bundle = make_bundle(&[0x42; 32], 5002, 1_700_000_020, vec![fc_owner]);
+        let fc_actions = make_tx_actions_with_fiber_action(
+            &[0x42; 32], 5002, 1_700_000_020, &participant, "force_close", fc_meta,
+        );
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &fc_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &fc_actions).unwrap();
         batch.commit().unwrap();
 
         // Revocation 1: v1 → v2
@@ -972,11 +997,11 @@ mod tests {
             "oldCommitmentLockArgs": format!("0x{}", hex::encode(&args_v1)),
             "newCommitmentLockArgs": format!("0x{}", hex::encode(&args_v2)),
         });
-        let rev1_owner =
-            make_owner_with_fiber_action(&participant, "commitment_revocation", rev1_meta);
-        let rev1_bundle = make_bundle(&[0x44; 32], 5004, 1_700_000_040, vec![rev1_owner]);
+        let rev1_actions = make_tx_actions_with_fiber_action(
+            &[0x44; 32], 5004, 1_700_000_040, &participant, "commitment_revocation", rev1_meta,
+        );
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &rev1_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &rev1_actions).unwrap();
         batch.commit().unwrap();
 
         // Revocation 2: v2 → v3
@@ -991,11 +1016,11 @@ mod tests {
             "oldCommitmentLockArgs": format!("0x{}", hex::encode(&args_v2)),
             "newCommitmentLockArgs": format!("0x{}", hex::encode(&args_v3)),
         });
-        let rev2_owner =
-            make_owner_with_fiber_action(&participant, "commitment_revocation", rev2_meta);
-        let rev2_bundle = make_bundle(&[0x45; 32], 5005, 1_700_000_050, vec![rev2_owner]);
+        let rev2_actions = make_tx_actions_with_fiber_action(
+            &[0x45; 32], 5005, 1_700_000_050, &participant, "commitment_revocation", rev2_meta,
+        );
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &rev2_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &rev2_actions).unwrap();
         batch.commit().unwrap();
 
         // Settlement using v3
@@ -1004,10 +1029,11 @@ mod tests {
             "capacity": "50000000000",
             "commitmentLockArgs": format!("0x{}", hex::encode(&args_v3)),
         });
-        let settle_owner = make_owner_with_fiber_action(&participant, "settlement", settle_meta);
-        let settle_bundle = make_bundle(&[0x46; 32], 5006, 1_700_000_060, vec![settle_owner]);
+        let settle_actions = make_tx_actions_with_fiber_action(
+            &[0x46; 32], 5006, 1_700_000_060, &participant, "settlement", settle_meta,
+        );
         let mut batch = StoreBatch::new(&store);
-        process_fiber_channel_events(&mut batch, &store, &settle_bundle).unwrap();
+        process_fiber_channel_events(&mut batch, &store, &settle_actions).unwrap();
         batch.commit().unwrap();
 
         let channel_id = keys::encode_fiber_channel_id(&funding_tx_hash, 0);

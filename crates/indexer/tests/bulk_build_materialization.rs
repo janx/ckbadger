@@ -13,7 +13,7 @@ use ckbadger_indexer::sync::{
     run_sample_bulk_materialization_for_test, simulate_startup_sync_path_for_test,
 };
 use ckbadger_store::keys;
-use ckbadger_store::types::{AssetChange, ConsumedCellMeta, DID_CKB_SENTINEL_COLLECTION};
+use ckbadger_store::types::{ConsumedCellMeta, DID_CKB_SENTINEL_COLLECTION};
 use ckbadger_store::SyncStatus;
 
 fn fixture_lock_script() -> Script {
@@ -990,7 +990,7 @@ fn bulk_build_materializes_consumed_cells_and_live_cell_indexes_from_single_pass
 }
 
 #[test]
-fn bulk_build_materializes_activity_bundles_from_single_pass() {
+fn bulk_build_materializes_tx_actions_from_single_pass() {
     let block = same_block_create_then_consume_fixture();
     let create_tx_hash =
         hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
@@ -1001,28 +1001,27 @@ fn bulk_build_materializes_activity_bundles_from_single_pass() {
     let snapshot =
         materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
 
-    assert_eq!(snapshot.activity_bundles.len(), 2);
+    assert_eq!(snapshot.tx_actions_map.len(), 2);
 
-    let create_key = keys::encode_tx_activity_bundle_key(14_000_321, 0, &create_tx_hash);
-    let consume_key = keys::encode_tx_activity_bundle_key(14_000_321, 1, &consume_tx_hash);
+    let create_key = keys::encode_tx_actions_key(14_000_321, 0, &create_tx_hash);
+    let consume_key = keys::encode_tx_actions_key(14_000_321, 1, &consume_tx_hash);
 
-    let create_bundle = snapshot
-        .activity_bundles
+    let create_actions = snapshot
+        .tx_actions_map
         .get(&create_key)
-        .expect("cellbase activity bundle");
-    assert!(create_bundle.is_cellbase);
-    assert_eq!(create_bundle.owners.len(), 1);
-    assert_eq!(create_bundle.owners[0].lock_hash, lock_hash);
+        .expect("cellbase tx actions");
+    assert!(create_actions.is_cellbase);
+    assert_eq!(create_actions.participants.len(), 1);
+    assert_eq!(create_actions.participants[0].lock_hash, lock_hash);
 
-    let consume_bundle = snapshot
-        .activity_bundles
+    let consume_actions = snapshot
+        .tx_actions_map
         .get(&consume_key)
-        .expect("consume activity bundle");
-    assert!(!consume_bundle.is_cellbase);
-    assert_eq!(consume_bundle.owners.len(), 1);
-    assert_eq!(consume_bundle.owners[0].lock_hash, lock_hash);
-    assert_eq!(consume_bundle.owners[0].ckb_delta, 0);
-    assert!(consume_bundle.owners[0].asset_changes.is_empty());
+        .expect("consume tx actions");
+    assert!(!consume_actions.is_cellbase);
+    assert_eq!(consume_actions.participants.len(), 1);
+    assert_eq!(consume_actions.participants[0].lock_hash, lock_hash);
+    assert_eq!(consume_actions.participants[0].ckb_delta, 0);
 }
 
 #[test]
@@ -1109,7 +1108,7 @@ fn bulk_build_multi_batch_materialization_matches_single_pass_for_cross_batch_st
         split.report.final_snapshot_rows,
         single.report.final_snapshot_rows
     );
-    assert_eq!(split.activity_bundles.len(), single.activity_bundles.len());
+    assert_eq!(split.tx_actions_map.len(), single.tx_actions_map.len());
     assert_eq!(split.live_cells.len(), single.live_cells.len());
     assert_eq!(split.consumed_cells.len(), single.consumed_cells.len());
     assert_eq!(
@@ -1184,18 +1183,19 @@ fn bulk_build_multi_batch_materialization_matches_single_pass_for_dao_activity_a
 
     let dao_withdraw_complete = |snapshot: &ckbadger_indexer::sync::BulkArtifactSnapshot| {
         snapshot
-            .activity_bundles
+            .tx_actions_map
             .values()
-            .find(|bundle| bundle.tx_hash == completion_tx_hash)
-            .and_then(|bundle| {
-                bundle.owners.iter().find_map(|owner| {
-                    owner.asset_changes.iter().find_map(|change| match change {
-                        AssetChange::DaoWithdrawComplete {
-                            capacity,
-                            compensation,
-                        } => Some((*capacity, *compensation)),
-                        _ => None,
-                    })
+            .find(|actions| actions.tx_hash == completion_tx_hash)
+            .and_then(|actions| {
+                actions.protocol_actions.iter().find_map(|pa| {
+                    if pa.protocol == "dao" && pa.action == "withdraw_complete" {
+                        let meta = pa.metadata_value().ok()?;
+                        let capacity = meta.get("capacity")?.as_i64()?;
+                        let compensation = meta.get("compensation")?.as_i64()?;
+                        Some((capacity, compensation))
+                    } else {
+                        None
+                    }
                 })
             })
     };

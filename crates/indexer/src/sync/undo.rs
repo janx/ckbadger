@@ -136,18 +136,18 @@ pub(crate) fn put_addr_tx(
     batch.put_addr_tx(lock_hash, block_num, tx_idx, tx_hash);
 }
 
-pub(crate) fn put_tx_activity_bundle(
+pub(crate) fn put_tx_actions(
     batch: &mut StoreBatch<'_>,
     _undo_seq_by_block: &mut HashMap<i64, u64>,
     block_num: i64,
-    bundle: &ckbadger_store::types::TxActivityBundle,
+    actions: &ckbadger_store::types::TxActions,
 ) {
     assert_eq!(
-        bundle.block_number, block_num,
-        "tx activity bundle block number mismatch in undo helper"
+        actions.block_number, block_num,
+        "tx actions block number mismatch in undo helper"
     );
     // activities is now in domain store; rollback deletes entries directly (no undo log needed)
-    batch.put_tx_activity_bundle(bundle);
+    batch.put_tx_actions(actions);
 }
 
 pub(crate) fn rollback_undo_log_after_batch_cleanup(
@@ -295,36 +295,31 @@ mod tests {
     }
 
     #[test]
-    fn test_put_tx_activity_bundle_writes_to_domain_without_undo() {
+    fn test_put_tx_actions_writes_to_domain_without_undo() {
         let domain_dir = tempfile::tempdir().unwrap();
         let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
-        let bundle = ckbadger_store::types::TxActivityBundle {
+        let actions = ckbadger_store::types::TxActions {
             tx_hash: vec![0xAB; 32],
             block_hash: vec![0xBC; 32],
             block_number: 42,
             tx_index: 3,
             timestamp: 1_700_000_000,
             is_cellbase: false,
-            owners: vec![ckbadger_store::types::OwnerActivityDelta {
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ckbadger_store::types::ParticipantDelta {
                 lock_hash: vec![0x44; 32],
-                lock_code_hash: vec![0x11; 32],
-                lock_hash_type: 1,
-                lock_args: vec![0x22; 20],
                 ckb_delta: 0,
                 used_delta: 0,
-                has_type_script: false,
-                involved_script_code_hashes: vec![vec![0x11; 32]],
-                asset_changes: vec![],
-                type_calls: None,
-                lock_calls: None,
-                protocol_actions: vec![],
-                peers: vec![],
+                item_deltas: vec![],
+                tags: 0,
             }],
         };
 
         let mut domain_batch = StoreBatch::new(&domain_store);
         let mut undo_seq_by_block = HashMap::new();
-        put_tx_activity_bundle(&mut domain_batch, &mut undo_seq_by_block, 42, &bundle);
+        put_tx_actions(&mut domain_batch, &mut undo_seq_by_block, 42, &actions);
         domain_batch.commit().unwrap();
 
         let iter = domain_store.iterator_cf(
@@ -333,7 +328,7 @@ mod tests {
         );
         assert_eq!(iter.count(), 0);
         assert!(domain_store
-            .get_tx_activity_bundle(42, 3, &bundle.tx_hash)
+            .get_tx_actions(42, 3, &actions.tx_hash)
             .unwrap()
             .is_some());
     }

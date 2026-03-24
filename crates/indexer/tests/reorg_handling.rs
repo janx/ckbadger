@@ -2,7 +2,7 @@
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    AddressBalance, OwnerActivityDelta, ScriptInfo, TokenInfo, TxActivityBundle,
+    AddressBalance, ParticipantDelta, ScriptInfo, TokenInfo, TxActions,
 };
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{
@@ -399,30 +399,25 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
     for i in 1..=5i64 {
         let block = i * 100;
         let tx_hash = vec![i as u8; 32];
-        let bundle = TxActivityBundle {
+        let tx_actions = TxActions {
             tx_hash: tx_hash.clone(),
             block_hash: vec![0xD0 | (i as u8); 32],
             block_number: block,
             tx_index: 0,
             timestamp: 1_700_000_000 + block,
             is_cellbase: false,
-            owners: vec![OwnerActivityDelta {
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ParticipantDelta {
                 lock_hash: lock_hash.clone(),
-                lock_code_hash: vec![0x11; 32],
-                lock_hash_type: 1,
-                lock_args: vec![0x22; 20],
                 ckb_delta: block as i128 * 100_000_000,
                 used_delta: 0,
-                has_type_script: false,
-                involved_script_code_hashes: vec![vec![0x11; 32]],
-                asset_changes: vec![],
-                type_calls: None,
-                lock_calls: None,
-                protocol_actions: vec![],
-                peers: vec![],
+                item_deltas: vec![],
+                tags: 0,
             }],
         };
-        domain_batch.put_tx_activity_bundle(&bundle);
+        domain_batch.put_tx_actions(&tx_actions);
         domain_batch.put_addr_tx(&lock_hash, block, 0, &tx_hash);
     }
     // Also insert block headers so rollback_to_block works
@@ -448,9 +443,9 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
         "activities at blocks > 300 should be deleted"
     );
     // Remaining activities in descending block order
-    assert_eq!(after[0].0, 300);
-    assert_eq!(after[1].0, 200);
-    assert_eq!(after[2].0, 100);
+    assert_eq!(after[0].block_number, 300);
+    assert_eq!(after[1].block_number, 200);
+    assert_eq!(after[2].block_number, 100);
 }
 
 /// Create a UDT cell with type_script_hash, type_code_hash, and udt_amount set.

@@ -2505,12 +2505,6 @@ impl Indexer {
             .collect();
         let mut activity_batch = StoreBatch::new(self.writer.store());
         {
-            let token_info_cache = load_activity_token_info_cache(
-                self.writer.store(),
-                &all_tx_data,
-                &input_cell_info,
-                &batch_cell_infos,
-            )?;
             let mut block_tx_idx = 0usize;
             for parsed in all_parsed_blocks {
                 let tx_count = checked_tx_count(parsed.transactions_count, parsed.number)?;
@@ -2559,60 +2553,51 @@ impl Indexer {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let bundles =
-                    crate::db::writer::activities::build_activity_bundles_for_block_with_detectors(
+                let tx_actions_list =
+                    crate::db::writer::activities::build_tx_actions_for_block(
                         &tx_views,
-                        &token_info_cache,
                         &protocol_detectors,
                     )?;
 
-                for bundle in bundles {
-                    for owner in &bundle.owners {
-                        // Accumulate daily activity stats
-                        let date = ckbadger_common::block_date_from_ms(bundle.timestamp)
-                            .format("%Y%m%d")
-                            .to_string();
-                        let day_stats = daily_activity_accum.entry(date.clone()).or_default();
-                        BatchWriter::accumulate_owner_activity_stats(
-                            bundle.is_cellbase,
-                            owner,
-                            day_stats,
-                        );
-                        // Exclude coinbase from unique address count
-                        if !bundle.is_cellbase && owner.lock_hash.len() == 32 {
-                            let mut hash = [0u8; 32];
-                            hash.copy_from_slice(&owner.lock_hash);
-                            daily_activity_addrs.entry(date).or_default().insert(hash);
-                        }
+                for tx_actions in &tx_actions_list {
+                    // Accumulate daily activity stats
+                    let date = ckbadger_common::block_date_from_ms(tx_actions.timestamp)
+                        .format("%Y%m%d")
+                        .to_string();
+                    let day_stats = daily_activity_accum.entry(date.clone()).or_default();
+                    BatchWriter::accumulate_tx_activity_stats(tx_actions, day_stats);
 
-                        // Accumulate hourly activity stats
-                        let hour = ckbadger_common::block_datetime_from_ms(bundle.timestamp)
-                            .format("%Y%m%d%H")
-                            .to_string();
-                        let hour_stats = hourly_activity_accum.entry(hour.clone()).or_default();
-                        BatchWriter::accumulate_owner_activity_stats(
-                            bundle.is_cellbase,
-                            owner,
-                            hour_stats,
-                        );
-                        if !bundle.is_cellbase && owner.lock_hash.len() == 32 {
-                            let mut hash = [0u8; 32];
-                            hash.copy_from_slice(&owner.lock_hash);
-                            hourly_activity_addrs.entry(hour).or_default().insert(hash);
+                    // Accumulate hourly activity stats
+                    let hour = ckbadger_common::block_datetime_from_ms(tx_actions.timestamp)
+                        .format("%Y%m%d%H")
+                        .to_string();
+                    let hour_stats = hourly_activity_accum.entry(hour.clone()).or_default();
+                    BatchWriter::accumulate_tx_activity_stats(tx_actions, hour_stats);
+
+                    // Unique address counts (exclude coinbase)
+                    if !tx_actions.is_cellbase {
+                        for participant in &tx_actions.participants {
+                            if participant.lock_hash.len() == 32 {
+                                let mut hash = [0u8; 32];
+                                hash.copy_from_slice(&participant.lock_hash);
+                                daily_activity_addrs.entry(date.clone()).or_default().insert(hash);
+                                hourly_activity_addrs.entry(hour.clone()).or_default().insert(hash);
+                            }
                         }
                     }
-                    put_tx_activity_bundle(
+
+                    put_tx_actions(
                         &mut activity_batch,
                         &mut append_undo_seq_by_block,
-                        bundle.block_number,
-                        &bundle,
+                        tx_actions.block_number,
+                        tx_actions,
                     );
 
                     // Process Fiber channel lifecycle events
                     crate::db::writer::fiber::process_fiber_channel_events(
                         &mut activity_batch,
                         self.writer.store(),
-                        &bundle,
+                        tx_actions,
                     )?;
                 }
             }
