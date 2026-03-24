@@ -60,19 +60,22 @@ pub struct ActivityResponse {
 }
 
 /// Item delta response — tagged enum keyed on `kind`.
+///
+/// NOTE: `rename_all` on an internally-tagged enum only renames the tag values,
+/// NOT the fields inside each variant. Each variant needs its own `rename_all`.
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(tag = "kind")]
 pub enum ItemDeltaResponse {
-    #[serde(rename = "token")]
+    #[serde(rename = "token", rename_all = "camelCase")]
     Token {
         type_script_hash: String,
         delta: String,
         symbol: Option<String>,
         decimals: Option<u8>,
     },
-    #[serde(rename = "object")]
+    #[serde(rename = "object", rename_all = "camelCase")]
     Object { object_id: String, delta: i8 },
-    #[serde(rename = "identity")]
+    #[serde(rename = "identity", rename_all = "camelCase")]
     Identity { identity_id: String, delta: i8 },
 }
 
@@ -1215,5 +1218,54 @@ mod tests {
         );
         assert!(LOCK_ARGS_DECODERS.contains_key(&mainnet));
         assert!(LOCK_ARGS_DECODERS.contains_key(&testnet));
+    }
+
+    #[test]
+    fn test_item_delta_response_json_format() {
+        let token = ItemDeltaResponse::Token {
+            type_script_hash: "0xabcdef1234".to_string(),
+            delta: "100".to_string(),
+            symbol: None,
+            decimals: None,
+        };
+        let json = serde_json::to_string(&token).unwrap();
+        assert!(
+            json.contains("\"typeScriptHash\""),
+            "missing typeScriptHash: {}",
+            json
+        );
+        assert!(
+            json.contains("\"kind\":\"token\""),
+            "missing kind: {}",
+            json
+        );
+
+        let object = ItemDeltaResponse::Object {
+            object_id: "0xabcdef".to_string(),
+            delta: 1,
+        };
+        let json = serde_json::to_string(&object).unwrap();
+        assert!(json.contains("\"objectId\""), "missing objectId: {}", json);
+        assert!(
+            json.contains("\"kind\":\"object\""),
+            "missing kind: {}",
+            json
+        );
+
+        let identity = ItemDeltaResponse::Identity {
+            identity_id: "0xabcdef".to_string(),
+            delta: -1,
+        };
+        let json = serde_json::to_string(&identity).unwrap();
+        assert!(
+            json.contains("\"identityId\""),
+            "missing identityId: {}",
+            json
+        );
+        assert!(
+            json.contains("\"kind\":\"identity\""),
+            "missing kind: {}",
+            json
+        );
     }
 }

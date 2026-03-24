@@ -2553,11 +2553,10 @@ impl Indexer {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let tx_actions_list =
-                    crate::db::writer::activities::build_tx_actions_for_block(
-                        &tx_views,
-                        &protocol_detectors,
-                    )?;
+                let tx_actions_list = crate::db::writer::activities::build_tx_actions_for_block(
+                    &tx_views,
+                    &protocol_detectors,
+                )?;
 
                 for tx_actions in &tx_actions_list {
                     // Accumulate daily activity stats
@@ -2580,8 +2579,14 @@ impl Indexer {
                             if participant.lock_hash.len() == 32 {
                                 let mut hash = [0u8; 32];
                                 hash.copy_from_slice(&participant.lock_hash);
-                                daily_activity_addrs.entry(date.clone()).or_default().insert(hash);
-                                hourly_activity_addrs.entry(hour.clone()).or_default().insert(hash);
+                                daily_activity_addrs
+                                    .entry(date.clone())
+                                    .or_default()
+                                    .insert(hash);
+                                hourly_activity_addrs
+                                    .entry(hour.clone())
+                                    .or_default()
+                                    .insert(hash);
                             }
                         }
                     }

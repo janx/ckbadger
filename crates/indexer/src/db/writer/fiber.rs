@@ -595,7 +595,12 @@ mod tests {
         let metadata =
             make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
         let actions = make_tx_actions_with_fiber_action(
-            &[0x40; 32], 5000, 1_700_000_000, &participant, "channel_open", metadata,
+            &[0x40; 32],
+            5000,
+            1_700_000_000,
+            &participant,
+            "channel_open",
+            metadata,
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -638,7 +643,12 @@ mod tests {
         let open_metadata =
             make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
         let open_actions = make_tx_actions_with_fiber_action(
-            &[0x40; 32], 5000, 1_700_000_000, &participant, "channel_open", open_metadata,
+            &[0x40; 32],
+            5000,
+            1_700_000_000,
+            &participant,
+            "channel_open",
+            open_metadata,
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -652,7 +662,12 @@ mod tests {
             "fundingLockArgs": format!("0x{}", hex::encode(funding_lock_args)),
         });
         let close_actions = make_tx_actions_with_fiber_action(
-            &[0x41; 32], 5001, 1_700_000_010, &participant, "channel_close", close_metadata,
+            &[0x41; 32],
+            5001,
+            1_700_000_010,
+            &participant,
+            "channel_close",
+            close_metadata,
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -679,7 +694,12 @@ mod tests {
         let open_metadata =
             make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
         let open_actions = make_tx_actions_with_fiber_action(
-            &[0x40; 32], 5000, 1_700_000_000, &participant, "channel_open", open_metadata,
+            &[0x40; 32],
+            5000,
+            1_700_000_000,
+            &participant,
+            "channel_open",
+            open_metadata,
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -700,7 +720,12 @@ mod tests {
             "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args)),
         });
         let fc_actions = make_tx_actions_with_fiber_action(
-            &[0x42; 32], 5002, 1_700_000_020, &participant, "force_close", force_close_metadata,
+            &[0x42; 32],
+            5002,
+            1_700_000_020,
+            &participant,
+            "force_close",
+            force_close_metadata,
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -735,7 +760,12 @@ mod tests {
         let open_metadata =
             make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
         let open_actions = make_tx_actions_with_fiber_action(
-            &[0x40; 32], 5000, 1_700_000_000, &participant, "channel_open", open_metadata,
+            &[0x40; 32],
+            5000,
+            1_700_000_000,
+            &participant,
+            "channel_open",
+            open_metadata,
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -756,7 +786,12 @@ mod tests {
             "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args)),
         });
         let fc_actions = make_tx_actions_with_fiber_action(
-            &[0x42; 32], 5002, 1_700_000_020, &participant, "force_close", force_close_metadata,
+            &[0x42; 32],
+            5002,
+            1_700_000_020,
+            &participant,
+            "force_close",
+            force_close_metadata,
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -770,7 +805,12 @@ mod tests {
             "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args)),
         });
         let settle_actions = make_tx_actions_with_fiber_action(
-            &[0x43; 32], 5003, 1_700_000_030, &participant, "settlement", settlement_metadata,
+            &[0x43; 32],
+            5003,
+            1_700_000_030,
+            &participant,
+            "settlement",
+            settlement_metadata,
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -790,7 +830,9 @@ mod tests {
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
         let actions = make_tx_actions(
-            &[0x50; 32], 6000, 1_700_100_000,
+            &[0x50; 32],
+            6000,
+            1_700_100_000,
             vec![make_participant(&[0xAA; 32])],
             vec![], // no fiber actions
         );
@@ -815,7 +857,12 @@ mod tests {
             "fundingLockArgs": "0xcccccccccccccccccccccccccccccccccccccccc",
         });
         let actions = make_tx_actions_with_fiber_action(
-            &[0x41; 32], 5001, 1_700_000_010, &[0xAA; 32], "channel_close", close_metadata,
+            &[0x41; 32],
+            5001,
+            1_700_000_010,
+            &[0xAA; 32],
+            "channel_close",
+            close_metadata,
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -838,9 +885,12 @@ mod tests {
             make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
 
         let actions = make_tx_actions_with_participants_fiber_action(
-            &[0x40; 32], 5000, 1_700_000_000,
+            &[0x40; 32],
+            5000,
+            1_700_000_000,
             &[&participant_a[..], &participant_b[..]],
-            "channel_open", metadata,
+            "channel_open",
+            metadata,
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -871,7 +921,12 @@ mod tests {
         let open_metadata =
             make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
         let open_actions = make_tx_actions_with_fiber_action(
-            &[0x40; 32], 5000, 1_700_000_000, &participant, "channel_open", open_metadata,
+            &[0x40; 32],
+            5000,
+            1_700_000_000,
+            &participant,
+            "channel_open",
+            open_metadata,
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -892,7 +947,12 @@ mod tests {
             "commitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v1)),
         });
         let fc_actions = make_tx_actions_with_fiber_action(
-            &[0x42; 32], 5002, 1_700_000_020, &participant, "force_close", force_close_metadata,
+            &[0x42; 32],
+            5002,
+            1_700_000_020,
+            &participant,
+            "force_close",
+            force_close_metadata,
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -919,7 +979,12 @@ mod tests {
             "newCommitmentLockArgs": format!("0x{}", hex::encode(&commitment_args_v2)),
         });
         let rev_actions = make_tx_actions_with_fiber_action(
-            &[0x44; 32], 5004, 1_700_000_040, &participant, "commitment_revocation", revocation_metadata,
+            &[0x44; 32],
+            5004,
+            1_700_000_040,
+            &participant,
+            "commitment_revocation",
+            revocation_metadata,
         );
 
         let mut batch = StoreBatch::new(&store);
@@ -959,7 +1024,12 @@ mod tests {
         let open_metadata =
             make_channel_open_metadata(&funding_tx_hash, 0, 500_00000000, &funding_lock_args);
         let open_actions = make_tx_actions_with_fiber_action(
-            &[0x40; 32], 5000, 1_700_000_000, &participant, "channel_open", open_metadata,
+            &[0x40; 32],
+            5000,
+            1_700_000_000,
+            &participant,
+            "channel_open",
+            open_metadata,
         );
         let mut batch = StoreBatch::new(&store);
         process_fiber_channel_events(&mut batch, &store, &open_actions).unwrap();
@@ -979,7 +1049,12 @@ mod tests {
             "commitmentLockArgs": format!("0x{}", hex::encode(&args_v1)),
         });
         let fc_actions = make_tx_actions_with_fiber_action(
-            &[0x42; 32], 5002, 1_700_000_020, &participant, "force_close", fc_meta,
+            &[0x42; 32],
+            5002,
+            1_700_000_020,
+            &participant,
+            "force_close",
+            fc_meta,
         );
         let mut batch = StoreBatch::new(&store);
         process_fiber_channel_events(&mut batch, &store, &fc_actions).unwrap();
@@ -998,7 +1073,12 @@ mod tests {
             "newCommitmentLockArgs": format!("0x{}", hex::encode(&args_v2)),
         });
         let rev1_actions = make_tx_actions_with_fiber_action(
-            &[0x44; 32], 5004, 1_700_000_040, &participant, "commitment_revocation", rev1_meta,
+            &[0x44; 32],
+            5004,
+            1_700_000_040,
+            &participant,
+            "commitment_revocation",
+            rev1_meta,
         );
         let mut batch = StoreBatch::new(&store);
         process_fiber_channel_events(&mut batch, &store, &rev1_actions).unwrap();
@@ -1017,7 +1097,12 @@ mod tests {
             "newCommitmentLockArgs": format!("0x{}", hex::encode(&args_v3)),
         });
         let rev2_actions = make_tx_actions_with_fiber_action(
-            &[0x45; 32], 5005, 1_700_000_050, &participant, "commitment_revocation", rev2_meta,
+            &[0x45; 32],
+            5005,
+            1_700_000_050,
+            &participant,
+            "commitment_revocation",
+            rev2_meta,
         );
         let mut batch = StoreBatch::new(&store);
         process_fiber_channel_events(&mut batch, &store, &rev2_actions).unwrap();
@@ -1030,7 +1115,12 @@ mod tests {
             "commitmentLockArgs": format!("0x{}", hex::encode(&args_v3)),
         });
         let settle_actions = make_tx_actions_with_fiber_action(
-            &[0x46; 32], 5006, 1_700_000_060, &participant, "settlement", settle_meta,
+            &[0x46; 32],
+            5006,
+            1_700_000_060,
+            &participant,
+            "settlement",
+            settle_meta,
         );
         let mut batch = StoreBatch::new(&store);
         process_fiber_channel_events(&mut batch, &store, &settle_actions).unwrap();

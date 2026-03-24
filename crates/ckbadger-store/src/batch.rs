@@ -1653,7 +1653,6 @@ mod tests {
         assert!(err.to_string().contains("append-only overwrite blocked"));
     }
 
-
     #[test]
     fn test_append_only_nft_collection_activity_preserves_competing_block_hash_history() {
         let dir = TempDir::new().unwrap();
@@ -1762,7 +1761,6 @@ mod tests {
         let payload: LiveCellInfo = bincode::deserialize(&stored).unwrap();
         assert_eq!(payload, info);
     }
-
 
     #[test]
     fn test_put_cell_raw_key_produces_same_result() {
@@ -2128,7 +2126,6 @@ mod tests {
         let val = store.get_cf(store.cf_sync_meta(), b"tip").unwrap().unwrap();
         assert_eq!(&val[..], b"42");
     }
-
 
     #[test]
     #[should_panic(expected = "both batches must reference the same CkbadgerStore")]

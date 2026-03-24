@@ -1,9 +1,7 @@
 //! Integration tests for chain reorganization (rollback) handling via ckbadger-store.
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{
-    AddressBalance, ParticipantDelta, ScriptInfo, TokenInfo, TxActions,
-};
+use ckbadger_store::types::{AddressBalance, ParticipantDelta, ScriptInfo, TokenInfo, TxActions};
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{
     CachedBlockHeader, DeepForkInfo, LiveCellInfo, PositionedCellInfo, RollbackResult, TxIndexEntry,

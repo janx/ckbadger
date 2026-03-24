@@ -224,9 +224,7 @@ pub(crate) trait ProtocolDetector: Send + Sync {
 
 /// Build `TxActions` for all transactions in a block (no protocol detectors).
 #[cfg(test)]
-pub fn build_tx_actions_for_block_no_detectors(
-    txs: &[TxView<'_>],
-) -> Result<Vec<TxActions>> {
+pub fn build_tx_actions_for_block_no_detectors(txs: &[TxView<'_>]) -> Result<Vec<TxActions>> {
     build_tx_actions_for_block(txs, &[])
 }
 
@@ -480,18 +478,10 @@ fn build_tx_actions<'a>(
         }
 
         // Spore/DOB changes → ItemDelta (object, +1/-1)
-        emit_object_item_deltas(
-            &accum.spore_inputs,
-            &accum.spore_outputs,
-            &mut item_deltas,
-        );
+        emit_object_item_deltas(&accum.spore_inputs, &accum.spore_outputs, &mut item_deltas);
 
         // mNFT changes → ItemDelta (object, +1/-1)
-        emit_object_item_deltas(
-            &accum.nft_inputs,
-            &accum.nft_outputs,
-            &mut item_deltas,
-        );
+        emit_object_item_deltas(&accum.nft_inputs, &accum.nft_outputs, &mut item_deltas);
 
         // DotBit changes → ItemDelta (identity, +1/-1)
         emit_identity_item_deltas(
@@ -672,7 +662,11 @@ fn build_tx_actions<'a>(
 fn dedup_protocol_actions(actions: &mut Vec<ProtocolAction>) {
     let mut seen = HashSet::new();
     actions.retain(|a| {
-        let key = (a.protocol.clone(), a.action.clone(), a.metadata.raw().to_string());
+        let key = (
+            a.protocol.clone(),
+            a.action.clone(),
+            a.metadata.raw().to_string(),
+        );
         seen.insert(key)
     });
 }
@@ -1560,7 +1554,10 @@ mod tests {
         // Type calls are now TX-level (deduplicated)
         // Both alice_type_args and bob_type_args should appear since they differ
         assert!(!actions.type_calls.is_empty());
-        assert!(actions.type_calls.iter().any(|tc| tc.type_code_hash == vec![0xFF; 32]));
+        assert!(actions
+            .type_calls
+            .iter()
+            .any(|tc| tc.type_code_hash == vec![0xFF; 32]));
 
         // Participants should have TYPE_CALL tag
         let alice_p = find_participant(actions, alice);
@@ -1654,7 +1651,10 @@ mod tests {
         let alice_p = find_participant(actions, alice);
         // Has token item delta
         assert!(alice_p.tags & TAG_TOKEN != 0);
-        assert!(alice_p.item_deltas.iter().any(|d| d.kind == ITEM_KIND_TOKEN));
+        assert!(alice_p
+            .item_deltas
+            .iter()
+            .any(|d| d.kind == ITEM_KIND_TOKEN));
         // Type calls at TX level
         assert_eq!(actions.type_calls.len(), 1);
         assert_eq!(actions.type_calls[0].type_code_hash, unknown_code_hash);
@@ -1749,7 +1749,10 @@ mod tests {
         // Alice should have a token item delta
         let alice_p = find_participant(actions, alice);
         assert!(
-            alice_p.item_deltas.iter().any(|d| d.kind == ITEM_KIND_TOKEN),
+            alice_p
+                .item_deltas
+                .iter()
+                .any(|d| d.kind == ITEM_KIND_TOKEN),
             "xudt_compatible should produce Token item delta"
         );
     }
@@ -1784,7 +1787,10 @@ mod tests {
 
         // Lock calls are TX-level
         assert_eq!(actions.lock_calls.len(), 1);
-        assert_eq!(actions.lock_calls[0].lock_code_hash, non_standard_lock_code_hash);
+        assert_eq!(
+            actions.lock_calls[0].lock_code_hash,
+            non_standard_lock_code_hash
+        );
         assert_eq!(actions.lock_calls[0].lock_hash_type, 1);
         assert_eq!(actions.lock_calls[0].lock_args, non_standard_lock_args);
 
@@ -1930,8 +1936,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -2001,8 +2006,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         let actions = &actions_list[0];
@@ -2066,8 +2070,7 @@ mod tests {
         };
 
         let detectors: Vec<Box<dyn ProtocolDetector>> = vec![Box::new(RgbppDetector::new(true))];
-        let actions_list =
-            build_tx_actions_for_block(&[tx], &detectors).unwrap();
+        let actions_list = build_tx_actions_for_block(&[tx], &detectors).unwrap();
 
         assert_eq!(actions_list.len(), 1);
         assert!(
