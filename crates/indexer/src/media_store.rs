@@ -52,11 +52,9 @@ pub fn sniff_media_type(content: &[u8]) -> &'static str {
     let lower = trimmed.as_bytes();
 
     // SVG (case-insensitive: handles <svg, <SVG, <Svg, etc.)
-    if trimmed.len() >= 4 {
-        let svg_prefix: String = trimmed.chars().take(4).collect::<String>().to_lowercase();
-        if svg_prefix == "<svg" {
-            return "image/svg+xml";
-        }
+    // Also handles SVG with XML declaration: <?xml ...?><svg ...>
+    if contains_svg_root(trimmed) {
+        return "image/svg+xml";
     }
 
     // HTML
@@ -81,6 +79,22 @@ pub fn sniff_media_type(content: &[u8]) -> &'static str {
     }
 
     "text/plain"
+}
+
+/// Check whether text contains an `<svg` root element, scanning past an optional
+/// `<?xml ...?>` declaration. Matches case-insensitively.
+fn contains_svg_root(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let search = if lower.starts_with("<?xml") {
+        // Skip past the XML declaration (find closing `?>`)
+        match lower.find("?>") {
+            Some(pos) => lower[pos + 2..].trim_start(),
+            None => return false,
+        }
+    } else {
+        lower.as_str()
+    };
+    search.starts_with("<svg")
 }
 
 /// Maximum blob size (10 MiB). Decoder outputs exceeding this are likely bugs,
@@ -276,6 +290,18 @@ mod tests {
             sniff_media_type(b"<sVg viewBox=\"0 0 100 100\"/>"),
             "image/svg+xml"
         );
+    }
+
+    #[test]
+    fn test_sniff_svg_with_xml_declaration() {
+        let content = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><svg xmlns=\"http://www.w3.org/2000/svg\"><circle/></svg>";
+        assert_eq!(sniff_media_type(content), "image/svg+xml");
+    }
+
+    #[test]
+    fn test_sniff_svg_with_xml_declaration_and_whitespace() {
+        let content = b"<?xml version=\"1.0\"?>  \n  <svg><rect/></svg>";
+        assert_eq!(sniff_media_type(content), "image/svg+xml");
     }
 
     #[test]

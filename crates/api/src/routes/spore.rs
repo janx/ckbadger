@@ -1159,7 +1159,7 @@ async fn decode_spore(
                     size: m.size,
                     hash: m.hash.clone(),
                     step: m.step,
-                    url: format!("/api/v1/spore/objects/{}/media/{}", spore_id_hex, m.hash),
+                    url: format!("/spore/objects/{}/media/{}", spore_id_hex, m.hash),
                 })
                 .collect();
             ok(SporeDobDecodeResponse {
