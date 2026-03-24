@@ -24,7 +24,7 @@ const EMA_ALPHA: f64 = 0.3;
 
 // Batch span bounds (blocks)
 pub(crate) const MIN_SPAN: u64 = 10_000;
-pub(crate) const MAX_SPAN: u64 = 100_000;
+pub(crate) const MAX_SPAN: u64 = 200_000;
 
 // Channel depth bounds (batches).  Max is computed from system RAM at
 // startup to cap total buffered data.  Each slot holds one batch of raw
@@ -47,8 +47,8 @@ const MIN_BG_JOBS: i32 = 2;
 // Row budget (materialization cap per batch).  This is a proactive upper
 // bound; the reactive flush_fill_ema signal in classify() handles the case
 // where flush actually falls behind.  Set high enough to not constrain
-// normal operation — at avg 30 rows/block this allows ~67K blocks/batch.
-const MAX_HISTORY_ROWS: f64 = 2_000_000.0;
+// normal operation — at avg 30 rows/block this allows ~133K blocks/batch.
+const MAX_HISTORY_ROWS: f64 = 4_000_000.0;
 const ROWS_EMA_ALPHA: f64 = 0.3;
 const INITIAL_ROWS_PER_BLOCK: f64 = 30.0;
 
@@ -549,8 +549,8 @@ mod tests {
 
         ctrl.observe(&healthy_signals()); // warmup
 
-        // 40 rows/block → after EMA converges, budget = 2M/40 = 50K blocks.
-        // Without row cap, build-bound would grow span past 50K toward MAX.
+        // 40 rows/block → after EMA converges, budget = 4M/40 = 100K blocks.
+        // Without row cap, build-bound would grow span past 100K toward MAX.
         for _ in 0..20 {
             ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 100.0,
@@ -565,8 +565,8 @@ mod tests {
         }
 
         assert!(
-            ctrl.batch_span <= 55_000,
-            "span {} should be capped by row budget (~50K)",
+            ctrl.batch_span <= 105_000,
+            "span {} should be capped by row budget (~100K)",
             ctrl.batch_span
         );
     }
