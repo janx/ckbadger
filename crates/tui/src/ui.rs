@@ -905,7 +905,7 @@ fn draw_sync_content(f: &mut Frame, app: &App, area: Rect) {
                 Constraint::Length(status_height),
                 Constraint::Length(charts_height),
                 Constraint::Min(6),
-                Constraint::Length(bg_height.min(12)),
+                Constraint::Length(bg_height.min(14)),
             ])
             .split(area);
 
@@ -2499,48 +2499,25 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
         .unwrap_or_else(|| "-".to_string());
 
     if dense {
-        // Compact: 2 lines
+        // Compact: 2 lines (fits ~22 char inner width)
         vec![
             Line::from(vec![
-                Span::styled("Ctrl ", Style::default().fg(SLATE_500)),
                 Span::styled(
                     format!("[{}]", bn_label),
                     Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!(
-                        "  recv {:.0}%  build {:.0}%  flush {:.0}%",
-                        recv_pct, build_pct, flush_pct,
-                    ),
+                    format!(" r{:.0}% b{:.0}% f{:.0}%", recv_pct, build_pct, flush_pct),
                     Style::default().fg(TERMINAL_DIM),
-                ),
-                Span::styled(
-                    format!("  L0 {:.0}", l0_ema),
-                    Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
-                ),
-                Span::styled("  fill ", Style::default().fg(SLATE_500)),
-                Span::styled(
-                    format!(
-                        "{:.0}%",
-                        bb.controller_flush_fill_ema.unwrap_or(0.0) * 100.0
-                    ),
-                    Style::default().fg(if bb.controller_flush_fill_ema.unwrap_or(0.0) > 0.75 {
-                        ERROR_RED
-                    } else {
-                        FOREGROUND
-                    }),
                 ),
             ]),
             Line::from(vec![
-                Span::styled("     ", Style::default().fg(SLATE_500)),
                 Span::styled("span ", Style::default().fg(SLATE_500)),
                 Span::styled(span_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  prefetch ", Style::default().fg(SLATE_500)),
+                Span::styled("  pre ", Style::default().fg(SLATE_500)),
                 Span::styled(prefetch_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  threads ", Style::default().fg(SLATE_500)),
+                Span::styled("  thr ", Style::default().fg(SLATE_500)),
                 Span::styled(threads_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  bg ", Style::default().fg(SLATE_500)),
-                Span::styled(bg_text, Style::default().fg(FOREGROUND)),
             ]),
         ]
     } else {
@@ -2558,15 +2535,23 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
             .unwrap_or_else(|| "-".to_string());
 
         vec![
-            // Line 1: EMA signals
+            // Line 1: Bottleneck + time-share (recv, build)
             Line::from(vec![
-                Span::styled("Ctrl EMA ", Style::default().fg(SLATE_500)),
-                Span::styled("recv ", Style::default().fg(SLATE_500)),
-                Span::styled(format!("{:.0}", recv_ema), Style::default().fg(FOREGROUND)),
-                Span::styled("  build ", Style::default().fg(SLATE_500)),
-                Span::styled(format!("{:.0}", build_ema), Style::default().fg(FOREGROUND)),
-                Span::styled("  flush ", Style::default().fg(SLATE_500)),
-                Span::styled(format!("{:.0}", wait_ema), Style::default().fg(FOREGROUND)),
+                Span::styled(
+                    format!("[{}]", bn_label),
+                    Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  recv {:.0}%  build {:.0}%", recv_pct, build_pct),
+                    Style::default().fg(TERMINAL_DIM),
+                ),
+            ]),
+            // Line 2: flush + L0 + fill
+            Line::from(vec![
+                Span::styled(
+                    format!("flush {:.0}%", flush_pct),
+                    Style::default().fg(TERMINAL_DIM),
+                ),
                 Span::styled("  L0 ", Style::default().fg(SLATE_500)),
                 Span::styled(
                     format!("{:.0}", l0_ema),
@@ -2585,33 +2570,23 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
                     }),
                 ),
             ]),
-            // Line 2: Bottleneck classification
+            // Line 3: rows/blk + cap
             Line::from(vec![
-                Span::styled("     ", Style::default().fg(SLATE_500)),
-                Span::styled(
-                    format!("[{}]", bn_label),
-                    Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(
-                        "  recv {:.0}%  build {:.0}%  flush {:.0}%",
-                        recv_pct, build_pct, flush_pct,
-                    ),
-                    Style::default().fg(TERMINAL_DIM),
-                ),
-                Span::styled(
-                    format!("  rows/blk {} cap {}", rows_ema_text, row_cap_text),
-                    Style::default().fg(SLATE_500),
-                ),
+                Span::styled("rows/blk ", Style::default().fg(SLATE_500)),
+                Span::styled(rows_ema_text, Style::default().fg(FOREGROUND)),
+                Span::styled("  cap ", Style::default().fg(SLATE_500)),
+                Span::styled(row_cap_text, Style::default().fg(FOREGROUND)),
             ]),
-            // Line 3: Knob outputs
+            // Line 4: span + prefetch
             Line::from(vec![
-                Span::styled("     ", Style::default().fg(SLATE_500)),
                 Span::styled("span ", Style::default().fg(SLATE_500)),
                 Span::styled(span_text, Style::default().fg(FOREGROUND)),
                 Span::styled("  prefetch ", Style::default().fg(SLATE_500)),
                 Span::styled(prefetch_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  threads ", Style::default().fg(SLATE_500)),
+            ]),
+            // Line 5: threads + bg_jobs
+            Line::from(vec![
+                Span::styled("threads ", Style::default().fg(SLATE_500)),
                 Span::styled(threads_text, Style::default().fg(FOREGROUND)),
                 Span::styled("  bg_jobs ", Style::default().fg(SLATE_500)),
                 Span::styled(bg_text, Style::default().fg(FOREGROUND)),
@@ -3516,13 +3491,13 @@ fn background_tasks_height(app: &App) -> u16 {
         return 0;
     }
 
-    // Controller needs 5 lines (2 border + 3 detail lines).
+    // Controller needs 7 lines (2 border + 5 detail lines).
     // Tables need 3 + rows (2 border + 1 header + rows).
-    let controller_h: u16 = if has_controller { 5 } else { 3 };
-    let jobs_h = desired_background_task_table_height(jobs.len()).max(3);
-    let watchers_h = desired_background_task_table_height(watchers.len()).max(3);
+    let controller_h: u16 = if has_controller { 7 } else { 5 };
+    let jobs_h = desired_background_task_table_height(jobs.len()).max(5);
+    let watchers_h = desired_background_task_table_height(watchers.len()).max(5);
 
-    controller_h.max(jobs_h).max(watchers_h).min(10)
+    controller_h.max(jobs_h).max(watchers_h).min(12)
 }
 
 fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
