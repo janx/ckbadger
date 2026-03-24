@@ -1526,12 +1526,22 @@ impl Indexer {
                             daily_entry.0 += i128::from(cell.capacity);
                             daily_entry.1 += i128::from(cell_occupied);
                         }
-                        if let Some(ref type_script_hash) = cell.type_script_hash {
-                            let daily_entry = token_daily_changes
-                                .entry((type_script_hash.clone(), date_yyyymmdd))
-                                .or_insert((0, 0));
-                            daily_entry.0 += i128::from(cell.capacity);
-                            daily_entry.1 += i128::from(cell_occupied);
+                        if let (Some(ref type_script_hash), Some(ref type_code_hash)) =
+                            (&cell.type_script_hash, &cell.type_code_hash)
+                        {
+                            if cell
+                                .type_hash_type
+                                .and_then(|ht| {
+                                    UdtParser::is_udt_code_hash_bytes(type_code_hash, ht)
+                                })
+                                .is_some()
+                            {
+                                let daily_entry = token_daily_changes
+                                    .entry((type_script_hash.clone(), date_yyyymmdd))
+                                    .or_insert((0, 0));
+                                daily_entry.0 += i128::from(cell.capacity);
+                                daily_entry.1 += i128::from(cell_occupied);
+                            }
                         }
                         if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
                             cell.type_script_hash.as_ref(),
@@ -1721,12 +1731,22 @@ impl Indexer {
                                     daily_entry.0 -= i128::from(info.capacity);
                                     daily_entry.1 -= i128::from(info.occupied_capacity);
                                 }
-                                if let Some(ref type_script_hash) = info.type_script_hash {
-                                    let daily_entry = token_daily_changes
-                                        .entry((type_script_hash.clone(), date_yyyymmdd))
-                                        .or_insert((0, 0));
-                                    daily_entry.0 -= i128::from(info.capacity);
-                                    daily_entry.1 -= i128::from(info.occupied_capacity);
+                                if let (Some(ref type_script_hash), Some(ref type_code_hash)) =
+                                    (&info.type_script_hash, &info.type_code_hash)
+                                {
+                                    if info
+                                        .type_hash_type
+                                        .and_then(|ht| {
+                                            UdtParser::is_udt_code_hash_bytes(type_code_hash, ht)
+                                        })
+                                        .is_some()
+                                    {
+                                        let daily_entry = token_daily_changes
+                                            .entry((type_script_hash.clone(), date_yyyymmdd))
+                                            .or_insert((0, 0));
+                                        daily_entry.0 -= i128::from(info.capacity);
+                                        daily_entry.1 -= i128::from(info.occupied_capacity);
+                                    }
                                 }
                                 if let (Some(type_script_hash), Some(type_code_hash)) =
                                     (info.type_script_hash.as_ref(), info.type_code_hash.as_ref())
