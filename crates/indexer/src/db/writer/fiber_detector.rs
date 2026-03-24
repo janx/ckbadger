@@ -330,7 +330,7 @@ impl ProtocolDetector for FiberDetector {
         tx: &TxView<'_>,
         owner_lock_hash: &[u8],
         _accum: &OwnerAccum<'_>,
-        _asset_changes: &[ckbadger_store::types::AssetChange],
+        _item_deltas: &[ckbadger_store::types::ItemDelta],
         _type_calls: &[ckbadger_store::types::TypeCallEntry],
         _lock_calls: &[ckbadger_store::types::LockCallEntry],
     ) -> Vec<ProtocolAction> {

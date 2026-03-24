@@ -1,7 +1,7 @@
 //! Stable++ protocol detector: identifies CDP vault lifecycle events
 //! by analyzing Vault Lock cell transitions and token deltas.
 
-use ckbadger_store::types::{AssetChange, LockCallEntry, ProtocolAction, TypeCallEntry};
+use ckbadger_store::types::{ItemDelta, LockCallEntry, ProtocolAction, TypeCallEntry, ITEM_KIND_TOKEN};
 
 use crate::parser::stablepp::{
     is_stablepp_asset, is_stablepp_intent_lock, is_stablepp_script, is_stablepp_vault_lock,
@@ -94,19 +94,13 @@ impl StableppDetector {
     /// Sum Token deltas only for Stable++ Asset tokens (identified by type_script_hash).
     fn stablepp_token_delta(
         &self,
-        asset_changes: &[AssetChange],
+        item_deltas: &[ItemDelta],
         stablepp_type_script_hashes: &[Vec<u8>],
     ) -> i128 {
-        asset_changes
+        item_deltas
             .iter()
-            .filter_map(|ac| match ac {
-                AssetChange::Token {
-                    type_script_hash,
-                    delta,
-                    ..
-                } if stablepp_type_script_hashes.contains(type_script_hash) => Some(delta),
-                _ => None,
-            })
+            .filter(|d| d.kind == ITEM_KIND_TOKEN && stablepp_type_script_hashes.contains(&d.item_id))
+            .map(|d| d.delta)
             .sum()
     }
 
@@ -180,7 +174,7 @@ impl ProtocolDetector for StableppDetector {
         tx: &TxView<'_>,
         _owner_lock_hash: &[u8],
         accum: &OwnerAccum<'_>,
-        asset_changes: &[AssetChange],
+        item_deltas: &[ItemDelta],
         type_calls: &[TypeCallEntry],
         lock_calls: &[LockCallEntry],
     ) -> Vec<ProtocolAction> {
@@ -194,7 +188,7 @@ impl ProtocolDetector for StableppDetector {
         let (vault_in, vault_out) = self.count_vault_cells(tx);
         let has_intent = self.has_intent_in_inputs(tx);
         let stablepp_hashes = self.stablepp_asset_type_script_hashes(tx);
-        let token_delta = self.stablepp_token_delta(asset_changes, &stablepp_hashes);
+        let token_delta = self.stablepp_token_delta(item_deltas, &stablepp_hashes);
 
         let action = self.infer_action(vault_in, vault_out, token_delta);
 

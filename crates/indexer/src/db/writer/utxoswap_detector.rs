@@ -1,7 +1,7 @@
 //! UTXOSwap protocol detector: identifies intent lifecycle events
 //! (submitted / settled) by analyzing Intent Lock cell transitions.
 
-use ckbadger_store::types::{AssetChange, LockCallEntry, ProtocolAction, TypeCallEntry};
+use ckbadger_store::types::{ItemDelta, LockCallEntry, ProtocolAction, TypeCallEntry};
 
 use crate::parser::utxoswap::{is_intent_lock, parse_intent_args};
 
@@ -44,7 +44,7 @@ impl ProtocolDetector for UtxoSwapDetector {
         tx: &TxView<'_>,
         owner_lock_hash: &[u8],
         accum: &OwnerAccum<'_>,
-        _asset_changes: &[AssetChange],
+        _item_deltas: &[ItemDelta],
         _type_calls: &[TypeCallEntry],
         _lock_calls: &[LockCallEntry],
     ) -> Vec<ProtocolAction> {
