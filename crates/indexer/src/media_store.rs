@@ -128,17 +128,26 @@ impl MediaBlobStore {
         fs::create_dir_all(dir)
             .with_context(|| format!("failed to create collection dir: {}", dir.display()))?;
 
-        // Atomic write: temp file in the same directory, then rename
-        let temp_path = dir.join(format!(".tmp_{hash}"));
+        // Atomic write: temp file in the same directory, then rename.
+        // Include thread ID to avoid collisions when concurrent workers produce
+        // identical content for the same collection (same hash = same temp name).
+        let tid = std::thread::current().id();
+        let temp_path = dir.join(format!(".tmp_{hash}_{tid:?}"));
         fs::write(&temp_path, content)
             .with_context(|| format!("failed to write temp blob: {}", temp_path.display()))?;
-        fs::rename(&temp_path, &path).with_context(|| {
-            format!(
-                "failed to rename temp blob {} -> {}",
-                temp_path.display(),
-                path.display()
-            )
-        })?;
+        match fs::rename(&temp_path, &path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && path.exists() => {
+                // Another writer already placed the identical blob — dedup race, not an error.
+            }
+            Err(e) => {
+                return Err(anyhow::Error::new(e).context(format!(
+                    "failed to rename temp blob {} -> {}",
+                    temp_path.display(),
+                    path.display()
+                )));
+            }
+        }
 
         Ok(hash)
     }

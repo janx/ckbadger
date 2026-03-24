@@ -468,7 +468,12 @@ fn upsert_script_label(
         }
     };
 
-    upsert_script_family(store, script, family_id, &active)?;
+    // Only create/update the family when there are active deployments for this
+    // network. Without this guard, scripts with deployments on only the other
+    // network leak into this network's /scripts listing with versions_count=0.
+    if !active.is_empty() {
+        upsert_script_family(store, script, family_id, &active)?;
+    }
 
     // Clean up entries from the excluded network: clear label fields so they don't
     // appear in name-based queries. Preserves indexer-maintained usage stats.

@@ -1111,6 +1111,15 @@ async fn lookup_scripts(
                 } = *resolved;
                 sort_code_cells(&mut code_cells);
                 let script_info = state.store.get_script_info(code_hash).ok().flatten();
+                // Only pass direct ScriptInfo when the query hash IS the version hash.
+                // For type-hash scripts the query hash is the reference (type_hash) whose
+                // ScriptInfo holds aggregate totals across all versions — passing it as
+                // direct_script_info would short-circuit version-level resolution.
+                let direct_info_for_version = if code_hash.as_slice() == version_hash.as_slice() {
+                    script_info.as_ref()
+                } else {
+                    None
+                };
                 let (
                     _cells_count,
                     live_cells_count,
@@ -1120,7 +1129,7 @@ async fn lookup_scripts(
                     owned_knowledge,
                 ) = resolve_version_capacity(
                     &version_info,
-                    script_info.as_ref(),
+                    direct_info_for_version,
                     &all_script_infos,
                 )?;
                 let code_cell = code_cells.first();
@@ -1384,6 +1393,11 @@ async fn list_scripts(
     let mut filtered: Vec<_> = all_families
         .into_iter()
         .filter(|(_, info)| {
+            // Exclude families with zero versions (e.g. other-network-only scripts
+            // that leaked through a prior label import).
+            if info.versions_count <= 0 {
+                return false;
+            }
             if let Some(ref pattern) = search_pattern {
                 if !info.name.to_lowercase().contains(pattern) {
                     return false;

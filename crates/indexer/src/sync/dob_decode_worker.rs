@@ -198,37 +198,39 @@ impl DobDecodeWorker {
                 }
             }
 
-            // Batch-write all decoded results (single commit)
-            if !decoded_results.is_empty() {
-                let mut store_batch = StoreBatch::new(&self.store);
-                for (spore_id, entry) in &decoded_results {
-                    store_batch.put_dob_decoded(spore_id, entry);
-                }
-                store_batch.commit()?;
-
-                // Update media profiles (sequential — may touch same cluster aggregate)
-                for (spore_id, entry) in &decoded_results {
-                    let has_renderable_image = entry
-                        .media
-                        .iter()
-                        .any(|m| m.media_type.starts_with("image/"));
-                    if !entry.media_sources.is_empty() || has_renderable_image {
-                        if let Err(e) = self.update_spore_media_profile(
-                            spore_id,
-                            &entry.media_sources,
-                            has_renderable_image,
-                        ) {
-                            warn!(
-                                spore_id = hex::encode(spore_id),
-                                error = %e,
-                                "failed to update spore media profile after DOB decode"
-                            );
-                        }
+            // Write decoded results per-spore: update media profile first, then
+            // mark as decoded in the same commit. This ensures a failed profile
+            // update does not leave the spore permanently marked decoded with
+            // stale media_profile (list_undecoded_dob_spores would never retry).
+            let mut batch_committed: u64 = 0;
+            for (spore_id, entry) in &decoded_results {
+                let has_renderable_image = entry
+                    .media
+                    .iter()
+                    .any(|m| m.media_type.starts_with("image/"));
+                if !entry.media_sources.is_empty() || has_renderable_image {
+                    if let Err(e) = self.update_spore_media_profile(
+                        spore_id,
+                        &entry.media_sources,
+                        has_renderable_image,
+                    ) {
+                        warn!(
+                            spore_id = hex::encode(spore_id),
+                            error = %e,
+                            "failed to update spore media profile after DOB decode — \
+                             skipping put_dob_decoded so it will be retried"
+                        );
+                        batch_skipped += 1;
+                        continue;
                     }
                 }
+                let mut store_batch = StoreBatch::new(&self.store);
+                store_batch.put_dob_decoded(spore_id, entry);
+                store_batch.commit()?;
+                batch_committed += 1;
             }
 
-            total_decoded += decoded_results.len() as u64;
+            total_decoded += batch_committed;
             total_skipped += batch_skipped;
 
             // Update progress at batch boundary
