@@ -16,6 +16,7 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { Address } from '@/components/ui/address';
 import { CapacityUtilization } from '@/components/ui/capacity-utilization';
 import { ScriptView } from '@/components/ui/script-view';
+import { InventoryContextSection } from '@/components/cell/inventory-context';
 import { api, type GraphNode } from '@/lib/api';
 import {
   getScriptRefBadgeLabel,
@@ -825,6 +826,7 @@ export default function CellDetailPage() {
             </TerminalPanel>
           </div>
         </div>
+        <InventoryContextSection cell={cell} />
         {cell.daoInfo && (
           <TerminalPanel className="mt-6">
             <TerminalPanelHeader indicator="active">
