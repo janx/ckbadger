@@ -9,6 +9,153 @@ use crate::keys;
 use crate::store::*;
 use crate::types::*;
 
+/// Cell distribution size bucket — must match the logic in
+/// `crates/indexer/src/db/writer/cell_distribution.rs::size_bucket`.
+fn cell_dist_size_bucket(occupied_capacity: i64) -> usize {
+    const CKB: i64 = 100_000_000;
+    let ckb = occupied_capacity / CKB;
+    match ckb {
+        0..=99 => 0,
+        100..=999 => 1,
+        1_000..=9_999 => 2,
+        10_000..=99_999 => 3,
+        100_000..=999_999 => 4,
+        _ => 5,
+    }
+}
+
+/// Attempt to repair a daily or hourly stats entry on the cutoff date by
+/// subtracting the rolled-back block/tx/cell deltas instead of deleting.
+/// Returns `true` if the entry was repaired (caller should NOT delete it),
+/// `false` if it should be deleted as before (e.g. not a daily/hourly prefix,
+/// or the entire day's blocks were rolled back).
+#[allow(clippy::too_many_arguments)]
+fn repair_cutoff_date_stats(
+    key: &[u8],
+    value: &[u8],
+    cutoff_date: &str,
+    date_deltas: &HashMap<String, (i32, i32, i32, i32)>,
+    hour_deltas: &HashMap<String, (i32, i32, i32, i32)>,
+    date_capacity_deltas: &HashMap<String, (i128, i128, i128, i64, i64)>,
+    store: &CkbadgerStore,
+    batch: &mut WriteBatch,
+) -> anyhow::Result<bool> {
+    if key.is_empty() {
+        return Ok(false);
+    }
+    let prefix = key[0];
+    let suffix = &key[1..];
+
+    match prefix {
+        keys::STATS_PREFIX_DAILY => {
+            if suffix.len() < 8 {
+                return Ok(false);
+            }
+            let date_str = std::str::from_utf8(&suffix[..8])
+                .map_err(|e| anyhow::anyhow!("invalid daily stats date: {}", e))?;
+            if date_str != cutoff_date {
+                return Ok(false); // strictly after — delete as before
+            }
+            let delta = date_deltas.get(date_str);
+            let cap_delta = date_capacity_deltas.get(date_str);
+            if delta.is_none() && cap_delta.is_none() {
+                return Ok(false);
+            }
+            let (rb_blocks, rb_txs, rb_created, rb_consumed) = delta.copied().unwrap_or_default();
+            let (rb_cap, rb_used_created, rb_used_consumed, rb_data_created, rb_data_consumed) =
+                cap_delta.copied().unwrap_or_default();
+
+            let mut s: DailyStats = bincode::deserialize(value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize daily stats for rollback repair: date={}, {}",
+                    date_str,
+                    e
+                )
+            })?;
+            s.blocks_count -= rb_blocks;
+            s.transactions_count -= rb_txs;
+            s.cells_created -= rb_created;
+            s.cells_consumed -= rb_consumed;
+            s.capacity_transferred -= rb_cap;
+            s.used_capacity_created -= rb_used_created;
+            s.used_capacity_consumed -= rb_used_consumed;
+            // Recompute cumulative fields from previous day + corrected per-day values.
+            let prev_date_str = {
+                let d = chrono::NaiveDate::parse_from_str(date_str, "%Y%m%d")
+                    .map_err(|e| anyhow::anyhow!("bad date in stats repair: {}", e))?;
+                (d - chrono::Duration::days(1)).format("%Y%m%d").to_string()
+            };
+            let prev_key =
+                keys::encode_stats_key(keys::STATS_PREFIX_DAILY, prev_date_str.as_bytes());
+            let (prev_live, prev_dead, prev_all, _prev_data) = store
+                .get_stats_key(&prev_key)?
+                .map(|v| bincode::deserialize::<DailyStats>(&v))
+                .transpose()
+                .map_err(|e| anyhow::anyhow!("bad prev-day stats in repair: {}", e))?
+                .map(|p| {
+                    (
+                        p.total_live_cells,
+                        p.total_dead_cells,
+                        p.total_all_cells,
+                        p.total_data_size,
+                    )
+                })
+                .unwrap_or((0, 0, 0, 0));
+            s.total_live_cells = prev_live + (s.cells_created - s.cells_consumed) as i64;
+            s.total_dead_cells = prev_dead + s.cells_consumed as i64;
+            s.total_all_cells = prev_all + s.cells_created as i64;
+            // total_data_size = prev_data + (data_added - data_consumed) for the day.
+            // Subtract the rolled-back portion's net data contribution.
+            s.total_data_size -= rb_data_created - rb_data_consumed;
+
+            let cf = store.stats_cf_by_prefix(prefix)?;
+            let encoded = bincode::serialize(&s)
+                .map_err(|e| anyhow::anyhow!("serialize daily stats repair: {}", e))?;
+            batch.put_cf(cf, key, &encoded);
+            Ok(true)
+        }
+        keys::STATS_PREFIX_HOURLY => {
+            if suffix.len() < 10 {
+                return Ok(false);
+            }
+            let hour_str = std::str::from_utf8(&suffix[..10])
+                .map_err(|e| anyhow::anyhow!("invalid hourly stats hour: {}", e))?;
+            let date_part = &hour_str[..8];
+            if date_part != cutoff_date {
+                return Ok(false);
+            }
+            let delta = match hour_deltas.get(hour_str) {
+                Some(d) => *d,
+                None => return Ok(false),
+            };
+            let (rb_blocks, rb_txs, rb_created, rb_consumed) = delta;
+            let mut s: HourlyStats = bincode::deserialize(value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize hourly stats for rollback repair: hour={}, {}",
+                    hour_str,
+                    e
+                )
+            })?;
+            s.blocks_count -= rb_blocks;
+            s.transactions_count -= rb_txs;
+            s.cells_created -= rb_created;
+            s.cells_consumed -= rb_consumed;
+            // capacity_transferred for hourly — subtract from date-level
+            // capacity deltas (not tracked per-hour; leave unchanged for hourly)
+
+            let cf = store.stats_cf_by_prefix(prefix)?;
+            let encoded = bincode::serialize(&s)
+                .map_err(|e| anyhow::anyhow!("serialize hourly stats repair: {}", e))?;
+            batch.put_cf(cf, key, &encoded);
+            Ok(true)
+        }
+        // Other date-scoped prefixes (miner, activity, per-entity stats):
+        // these are lower-impact and harder to subtract precisely.
+        // Fall through to deletion.
+        _ => Ok(false),
+    }
+}
+
 fn parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd: &[u8]) -> anyhow::Result<u32> {
     let cutoff_str = std::str::from_utf8(cutoff_yyyymmdd)
         .map_err(|e| anyhow::anyhow!("invalid cutoff date utf8 {:?}: {}", cutoff_yyyymmdd, e))?;
@@ -225,6 +372,7 @@ fn put_cell_index_entries(
 /// (cells_delta, live_delta, capacity_delta, owned_cap_delta, used_delta, owned_knowledge_delta)
 type ScriptReferenceDelta = (i64, i64, i128, i128, i128, i128);
 
+#[allow(clippy::too_many_arguments)]
 fn accumulate_cell_deltas(
     cell: &LiveCellInfo,
     sign: i128,
@@ -232,10 +380,19 @@ fn accumulate_cell_deltas(
     script_deltas: &mut HashMap<(Vec<u8>, bool), (i64, i128, i128)>,
     token_holder_deltas: &mut HashMap<(Vec<u8>, Vec<u8>), i128>,
     script_reference_deltas: &mut HashMap<(Vec<u8>, u8, bool), ScriptReferenceDelta>,
+    cell_dist_count_deltas: &mut [i64; 6],
+    cell_dist_capacity_deltas: &mut [i128; 6],
 ) {
     let cap = cell.capacity as i128 * sign;
     let occ = cell.occupied_capacity as i128 * sign;
     let live_d = sign as i32;
+
+    // cell distribution bucket: live cell count and capacity per size bucket.
+    // sign=+1 when restoring a consumed cell (add back to bucket),
+    // sign=-1 when removing a created cell (subtract from bucket).
+    let bucket = cell_dist_size_bucket(cell.occupied_capacity);
+    cell_dist_count_deltas[bucket] += live_d as i64;
+    cell_dist_capacity_deltas[bucket] += occ;
 
     // addr_balance: (balance_delta, used_delta, live_cells_delta, total_cells_delta)
     // total_cells_delta only counts cells being removed (sign == -1 means cell was created
@@ -498,6 +655,8 @@ fn truncate_hodl_tracker_state_for_rollback(
 fn truncate_cell_dist_tracker_state_for_rollback(
     state: &mut CellDistributionTrackerState,
     rollback_to: i64,
+    count_deltas: &[i64; 6],
+    capacity_deltas: &[i128; 6],
 ) -> anyhow::Result<bool> {
     if rollback_to < 0 {
         return Ok(true);
@@ -541,10 +700,41 @@ fn truncate_cell_dist_tracker_state_for_rollback(
         }
     }
 
-    // Note: count_by_bucket (cell counts per size bucket) and cohort_accum
-    // (address cohort accumulator) cannot be precisely adjusted without per-cell
-    // or per-address tracking. For shallow reorgs (1-2 blocks), the drift is
-    // negligible. The next forward sync corrects incrementally.
+    // Note: cohort_accum (address cohort accumulator) cannot be precisely
+    // adjusted without per-address tracking. For shallow reorgs the drift is
+    // negligible; the next forward sync corrects incrementally.
+
+    // 4. Apply cell distribution bucket deltas from cell rollback.
+    // count_deltas/capacity_deltas were accumulated during stages 4-5:
+    //   cells removed  → bucket -= 1 / capacity -= occ
+    //   cells restored → bucket += 1 / capacity += occ
+    for i in 0..6 {
+        if count_deltas[i] != 0 || capacity_deltas[i] != 0 {
+            let new_count = state.count_by_bucket[i] + count_deltas[i];
+            let new_cap = state.total_capacity_by_bucket[i] + capacity_deltas[i];
+            if new_count < 0 {
+                anyhow::bail!(
+                    "cell_dist count_by_bucket underflow during rollback: bucket={}, current={}, delta={}, result={}",
+                    i,
+                    state.count_by_bucket[i],
+                    count_deltas[i],
+                    new_count
+                );
+            }
+            if new_cap < 0 {
+                anyhow::bail!(
+                    "cell_dist total_capacity_by_bucket underflow during rollback: bucket={}, current={}, delta={}, result={}",
+                    i,
+                    state.total_capacity_by_bucket[i],
+                    capacity_deltas[i],
+                    new_cap
+                );
+            }
+            state.count_by_bucket[i] = new_count;
+            state.total_capacity_by_bucket[i] = new_cap;
+            changed = true;
+        }
+    }
 
     // Update last_processed_block to match rollback target.
     if state.last_processed_block.is_some_and(|b| b > rollback_to) {
@@ -730,7 +920,24 @@ impl CkbadgerStore {
             .as_ref()
             .map(|h| h.timestamp / 3_600_000);
 
+        // Determine the date of the fork_point itself so we can detect
+        // partial-day rollbacks (fork_point and first rolled-back block on
+        // the same calendar day).
+        let fork_point_date = if rollback_to >= 0 {
+            self.get_block_header(rollback_to)?.map(|h| {
+                ckbadger_common::block_date_from_ms(h.timestamp)
+                    .format("%Y%m%d")
+                    .to_string()
+            })
+        } else {
+            None
+        };
+
         info!(rollback_to, replay_start, "Rollback cleanup started");
+
+        // block_date_map: block_num → (date_yyyymmdd, hour_yyyymmddhh) for
+        // rolled-back blocks, used for per-date stats delta subtraction.
+        let mut block_date_map: HashMap<i64, (String, String)> = HashMap::new();
 
         // 1. Delete block headers > rollback_to
         let mut stage = RollbackStageProgress::new("delete_block_headers");
@@ -762,12 +969,41 @@ impl CkbadgerStore {
                     e
                 )
             })?;
+            // Collect block→date/hour mapping for stats delta subtraction.
+            let block_dt = ckbadger_common::block_datetime_from_ms(header.timestamp);
+            let date_str = block_dt.format("%Y%m%d").to_string();
+            let hour_str = block_dt.format("%Y%m%d%H").to_string();
+            block_date_map.insert(block_num, (date_str, hour_str));
+
             batch.delete_cf(self.cf_block_headers(), &key);
             batch.delete_cf(self.cf_block_hash_index(), &header.hash);
             blocks_removed += 1;
             stage.tick(blocks_removed);
         }
         stage.finish(blocks_removed);
+
+        // Per-date stats rollback deltas: for the cutoff date, we subtract
+        // these from the existing daily/hourly stats instead of deleting.
+        // Keyed by date_yyyymmdd.  Fields: (blocks, txs, cells_created, cells_consumed).
+        let mut stats_date_deltas: HashMap<String, (i32, i32, i32, i32)> = HashMap::new();
+        // Per-hour stats rollback deltas, keyed by hour_yyyymmddhh.
+        let mut stats_hour_deltas: HashMap<String, (i32, i32, i32, i32)> = HashMap::new();
+        // Per-date capacity/used_capacity/data_size deltas, populated during cell rollback.
+        // Keyed by date_yyyymmdd: (capacity_transferred, used_capacity_created,
+        //                          used_capacity_consumed, data_size_created, data_size_consumed)
+        let mut stats_date_capacity_deltas: HashMap<String, (i128, i128, i128, i64, i64)> =
+            HashMap::new();
+        // Cellbase tx hashes for rolled-back blocks (used to exclude cellbase
+        // outputs from capacity_transferred in stage 4).
+        let mut cellbase_tx_hashes: HashSet<Vec<u8>> = HashSet::new();
+
+        // Count rolled-back blocks per date for the blocks_count delta.
+        for (date_str, hour_str) in block_date_map.values() {
+            let e = stats_date_deltas.entry(date_str.clone()).or_default();
+            e.0 += 1;
+            let e = stats_hour_deltas.entry(hour_str.clone()).or_default();
+            e.0 += 1;
+        }
 
         // 2. Delete tx_index entries > rollback_to
         let mut stage = RollbackStageProgress::new("delete_tx_index");
@@ -817,6 +1053,23 @@ impl CkbadgerStore {
                 };
                 batch.delete_cf(self.cf_tx_index(), &key);
                 txs_removed += 1;
+
+                // Accumulate per-date and per-hour tx/cell deltas.
+                if let Some((date_str, hour_str)) = block_date_map.get(&block_num) {
+                    let de = stats_date_deltas.entry(date_str.clone()).or_default();
+                    de.1 += 1; // txs
+                    de.2 += tx_index.outputs_count as i32; // cells_created
+                    if !tx_index.is_cellbase {
+                        de.3 += tx_index.inputs_count as i32; // cells_consumed
+                    }
+                    let he = stats_hour_deltas.entry(hour_str.clone()).or_default();
+                    he.1 += 1;
+                    he.2 += tx_index.outputs_count as i32;
+                    if !tx_index.is_cellbase {
+                        he.3 += tx_index.inputs_count as i32;
+                    }
+                }
+
                 if block_num <= rollback_accounted_tip {
                     rollback_total_transactions = rollback_total_transactions
                         .checked_add(1)
@@ -872,6 +1125,15 @@ impl CkbadgerStore {
                 if !seen_tx_hashes.insert(ctx.tx_hash.as_slice()) {
                     continue;
                 }
+                // Collect cellbase tx hashes before deleting the mapping.
+                if let Some(val) = self.get_cf(self.cf_tx_hash_map(), &ctx.tx_hash)? {
+                    if val.len() == 12 {
+                        let tx_idx = keys::decode_tx_idx(&val[8..12]);
+                        if tx_idx == 0 {
+                            cellbase_tx_hashes.insert(ctx.tx_hash.clone());
+                        }
+                    }
+                }
                 batch.delete_cf(self.cf_tx_hash_map(), &ctx.tx_hash);
                 tx_hash_map_removed += 1;
                 stage.tick(tx_hash_map_removed);
@@ -894,6 +1156,10 @@ impl CkbadgerStore {
                 }
                 let mapped_block = keys::decode_block_num(&value[..8]);
                 if mapped_block > rollback_to {
+                    let tx_idx = keys::decode_tx_idx(&value[8..12]);
+                    if tx_idx == 0 {
+                        cellbase_tx_hashes.insert(key.to_vec());
+                    }
                     batch.delete_cf(self.cf_tx_hash_map(), &key);
                     tx_hash_map_removed += 1;
                 }
@@ -901,6 +1167,42 @@ impl CkbadgerStore {
             }
         }
         stage.finish(tx_hash_map_removed);
+
+        // Helper: accumulate per-date capacity deltas for stats repair.
+        // `tx_hash`: first 32 bytes of outpoint key
+        // `created_at_block`: block where cell was created
+        // `is_removal`: true if cell is being removed (created after fork), false if restored
+        let accumulate_stats_capacity_delta =
+            |cell: &LiveCellInfo,
+             tx_hash: &[u8],
+             created_at_block: i64,
+             consumed_at_block: Option<i64>,
+             is_removal: bool,
+             block_date_map: &HashMap<i64, (String, String)>,
+             cellbase_tx_hashes: &HashSet<Vec<u8>>,
+             date_cap_deltas: &mut HashMap<String, (i128, i128, i128, i64, i64)>| {
+                if is_removal {
+                    // Cell was created after fork_point — subtract its contribution.
+                    if let Some((date_str, _)) = block_date_map.get(&created_at_block) {
+                        let e = date_cap_deltas.entry(date_str.clone()).or_default();
+                        // capacity_transferred: only non-cellbase tx outputs
+                        if !cellbase_tx_hashes.contains(tx_hash) {
+                            e.0 += cell.capacity as i128;
+                        }
+                        e.1 += cell.occupied_capacity as i128; // used_capacity_created
+                        e.3 += cell.data_size as i64; // data_size_created
+                    }
+                } else {
+                    // Cell was consumed after fork_point — subtract its consumption.
+                    if let Some(consumed_block) = consumed_at_block {
+                        if let Some((date_str, _)) = block_date_map.get(&consumed_block) {
+                            let e = date_cap_deltas.entry(date_str.clone()).or_default();
+                            e.2 += cell.occupied_capacity as i128; // used_capacity_consumed
+                            e.4 += cell.data_size as i64; // data_size_consumed
+                        }
+                    }
+                }
+            };
 
         // 4-5. Roll back cell/live/consumed/index state.
         // Prefer tx-context entries from reorg_undo_log_by_block to derive touched outpoints.
@@ -916,6 +1218,11 @@ impl CkbadgerStore {
         // script_reference_deltas: (code_hash, hash_type, is_type) -> ScriptReferenceDelta
         let mut script_reference_deltas: HashMap<(Vec<u8>, u8, bool), ScriptReferenceDelta> =
             HashMap::new();
+        // cell_dist_bucket_deltas: per-bucket (count_delta, capacity_delta) for cell
+        // distribution tracker repair.  Cells removed (created after fork_point)
+        // subtract from buckets; cells restored (consumed after fork_point) add back.
+        let mut cell_dist_count_deltas: [i64; 6] = [0; 6];
+        let mut cell_dist_capacity_deltas: [i128; 6] = [0; 6];
 
         if !use_tx_context {
             if txs_removed > 0 {
@@ -979,6 +1286,18 @@ impl CkbadgerStore {
                         &mut script_info_deltas,
                         &mut token_holder_deltas,
                         &mut script_reference_deltas,
+                        &mut cell_dist_count_deltas,
+                        &mut cell_dist_capacity_deltas,
+                    );
+                    accumulate_stats_capacity_delta(
+                        &positioned.cell,
+                        &tx_hash,
+                        positioned.created_at_block,
+                        None,
+                        true,
+                        &block_date_map,
+                        &cellbase_tx_hashes,
+                        &mut stats_date_capacity_deltas,
                     );
                 }
                 stage.tick(cells_removed);
@@ -1047,6 +1366,18 @@ impl CkbadgerStore {
                         &mut script_info_deltas,
                         &mut token_holder_deltas,
                         &mut script_reference_deltas,
+                        &mut cell_dist_count_deltas,
+                        &mut cell_dist_capacity_deltas,
+                    );
+                    accumulate_stats_capacity_delta(
+                        &info,
+                        &tx_hash,
+                        meta.created_at_block,
+                        Some(meta.consumed_at_block),
+                        false,
+                        &block_date_map,
+                        &cellbase_tx_hashes,
+                        &mut stats_date_capacity_deltas,
                     );
                 }
                 stage.tick(cells_restored);
@@ -1105,6 +1436,18 @@ impl CkbadgerStore {
                             &mut script_info_deltas,
                             &mut token_holder_deltas,
                             &mut script_reference_deltas,
+                            &mut cell_dist_count_deltas,
+                            &mut cell_dist_capacity_deltas,
+                        );
+                        accumulate_stats_capacity_delta(
+                            &positioned.cell,
+                            &ctx.tx_hash,
+                            positioned.created_at_block,
+                            None,
+                            true,
+                            &block_date_map,
+                            &cellbase_tx_hashes,
+                            &mut stats_date_capacity_deltas,
                         );
                     }
                     // Remove consumed marker for outputs created in rolled-back blocks.
@@ -1184,6 +1527,18 @@ impl CkbadgerStore {
                                     &mut script_info_deltas,
                                     &mut token_holder_deltas,
                                     &mut script_reference_deltas,
+                                    &mut cell_dist_count_deltas,
+                                    &mut cell_dist_capacity_deltas,
+                                );
+                                accumulate_stats_capacity_delta(
+                                    &consumed.cell,
+                                    &input.tx_hash,
+                                    consumed.created_at_block,
+                                    Some(consumed.consumed_at_block),
+                                    false,
+                                    &block_date_map,
+                                    &cellbase_tx_hashes,
+                                    &mut stats_date_capacity_deltas,
                                 );
                             }
                         }
@@ -1312,12 +1667,17 @@ impl CkbadgerStore {
         stage.finish(dao_deposits_deleted + dao_deposits_repaired + dao_indexes_rebuilt);
 
         // 7. Delete date-scoped stats entries from replay cutoff date onward.
-        // These are additive snapshots and would be double-counted after replay.
-        // Scan all split stats CFs that may contain date-scoped prefixes.
+        // For the cutoff date itself (when fork_point is on the same day),
+        // subtract per-date rollback deltas instead of deleting so that the
+        // retained portion of that day is preserved.
         if let Some(cutoff) = replay_cutoff_date.as_deref() {
             let cutoff_hour =
                 replay_cutoff_hour.expect("cutoff_hour must be set when cutoff_date is set");
+            // Detect partial-day rollback: fork_point and first rolled-back block
+            // share the same calendar date.
+            let is_partial_day = fork_point_date.as_deref().is_some_and(|fpd| fpd == cutoff);
             let mut stats_removed = 0u64;
+            let mut stats_repaired = 0u64;
             let mut stage = RollbackStageProgress::new("delete_stats_from_cutoff");
             let stats_cfs = [
                 self.cf_stats_chain(),
@@ -1331,20 +1691,47 @@ impl CkbadgerStore {
             for cf in stats_cfs {
                 let iter = self.iterator_cf(cf, IteratorMode::Start);
                 for item in iter {
-                    let (key, _) = item.map_err(|e| {
+                    let (key, value) = item.map_err(|e| {
                         anyhow::anyhow!(
                             "failed to iterate stats CF in rollback_to_block cleanup: {}",
                             e
                         )
                     })?;
-                    if should_delete_stats_for_replay(&key, cutoff.as_bytes(), cutoff_hour)? {
-                        batch.delete_cf(cf, &key);
-                        stats_removed += 1;
+                    if !should_delete_stats_for_replay(&key, cutoff.as_bytes(), cutoff_hour)? {
+                        stage.tick(stats_removed + stats_repaired);
+                        continue;
                     }
-                    stage.tick(stats_removed);
+                    // For daily/hourly main stats on the cutoff date in a partial-day
+                    // rollback, subtract the rolled-back deltas instead of deleting.
+                    if is_partial_day && !key.is_empty() {
+                        let repaired = repair_cutoff_date_stats(
+                            &key,
+                            &value,
+                            cutoff,
+                            &stats_date_deltas,
+                            &stats_hour_deltas,
+                            &stats_date_capacity_deltas,
+                            self,
+                            &mut batch,
+                        )?;
+                        if repaired {
+                            stats_repaired += 1;
+                            stage.tick(stats_removed + stats_repaired);
+                            continue;
+                        }
+                    }
+                    batch.delete_cf(cf, &key);
+                    stats_removed += 1;
+                    stage.tick(stats_removed + stats_repaired);
                 }
             }
-            stage.finish(stats_removed);
+            stage.finish(stats_removed + stats_repaired);
+            if stats_repaired > 0 {
+                info!(
+                    stats_repaired,
+                    stats_removed, "rollback: cutoff-day stats repaired via delta subtraction"
+                );
+            }
         }
 
         // 8. Delete token_transfers entries > rollback_to
@@ -1631,11 +2018,16 @@ impl CkbadgerStore {
                         e
                     )
                 })?;
-                // value is the channel_id; check if that channel is still in a
-                // force-closed/settled state
+                // value is the channel_id; check if that channel was opened,
+                // force-closed, or settled after rollback_to (i.e. it will be
+                // deleted or reset to Open by the channel sweep above).
+                // NOTE: this reads from the DB, which still holds the PRE-reset
+                // channel state, so settlement_block is still set even though
+                // the batch already reset the channel to Open.
                 if let Ok(Some(ch)) = self.get_fiber_channel(&value) {
                     if ch.open_block > rollback_to
                         || ch.close_block.is_some_and(|b| b > rollback_to)
+                        || ch.settlement_block.is_some_and(|b| b > rollback_to)
                     {
                         batch.delete_cf(self.cf_fiber_channel_by_commitment(), &key);
                     }
@@ -2583,7 +2975,12 @@ impl CkbadgerStore {
                 cell_dist_tracker_repaired += 1;
             }
         } else if let Some(mut state) = self.get_cell_dist_tracker_state()? {
-            if truncate_cell_dist_tracker_state_for_rollback(&mut state, rollback_to)? {
+            if truncate_cell_dist_tracker_state_for_rollback(
+                &mut state,
+                rollback_to,
+                &cell_dist_count_deltas,
+                &cell_dist_capacity_deltas,
+            )? {
                 let encoded = bincode::serialize(&state).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to serialize repaired cell_dist tracker state during rollback cleanup: {}",
@@ -4937,7 +5334,9 @@ mod tests {
             last_processed_block: Some(200),
         };
 
-        let changed = truncate_cell_dist_tracker_state_for_rollback(&mut state, 150).unwrap();
+        let changed =
+            truncate_cell_dist_tracker_state_for_rollback(&mut state, 150, &[0; 6], &[0; 6])
+                .unwrap();
         assert!(changed);
         assert_eq!(state.date_transitions.len(), 2);
         assert_eq!(state.total_capacity_by_bucket, [80, 100, 200, 500, 0, 0]);
@@ -4959,7 +5358,9 @@ mod tests {
             last_processed_block: Some(200),
         };
 
-        let changed = truncate_cell_dist_tracker_state_for_rollback(&mut state, 150).unwrap();
+        let changed =
+            truncate_cell_dist_tracker_state_for_rollback(&mut state, 150, &[0; 6], &[0; 6])
+                .unwrap();
         assert!(changed);
         assert_eq!(state.date_transitions.len(), 2);
         assert_eq!(state.total_capacity_by_bucket, [80, 100, 200, 500, 0, 0]);
@@ -4977,7 +5378,237 @@ mod tests {
             last_processed_block: Some(100),
         };
         // Rollback to block 50 — before any transition → should error.
-        let err = truncate_cell_dist_tracker_state_for_rollback(&mut state, 50).unwrap_err();
+        let err = truncate_cell_dist_tracker_state_for_rollback(&mut state, 50, &[0; 6], &[0; 6])
+            .unwrap_err();
         assert!(err.to_string().contains("no remaining date transitions"));
+    }
+
+    #[test]
+    fn test_cell_dist_bucket_deltas_applied_during_rollback() {
+        let mut state = CellDistributionTrackerState {
+            count_by_bucket: [10, 5, 3, 0, 0, 0],
+            total_capacity_by_bucket: [500, 3000, 50000, 0, 0, 0],
+            date_transitions: vec![(1, "20231114".to_string()), (100, "20231115".to_string())],
+            last_snapshot_date: Some("20231115".to_string()),
+            cohort_accum: vec![],
+            last_processed_block: Some(100),
+        };
+        // Simulate: 2 cells removed from bucket 0, 1 cell restored to bucket 1.
+        let count_deltas: [i64; 6] = [-2, 1, 0, 0, 0, 0];
+        let cap_deltas: [i128; 6] = [-100, 800, 0, 0, 0, 0];
+        let changed = truncate_cell_dist_tracker_state_for_rollback(
+            &mut state,
+            50,
+            &count_deltas,
+            &cap_deltas,
+        )
+        .unwrap();
+        assert!(changed);
+        assert_eq!(state.count_by_bucket[0], 8); // 10 - 2
+        assert_eq!(state.count_by_bucket[1], 6); // 5 + 1
+        assert_eq!(state.total_capacity_by_bucket[0], 400); // 500 - 100
+        assert_eq!(state.total_capacity_by_bucket[1], 3800); // 3000 + 800
+    }
+
+    #[test]
+    fn test_cell_dist_bucket_underflow_is_rejected() {
+        let mut state = CellDistributionTrackerState {
+            count_by_bucket: [1, 0, 0, 0, 0, 0],
+            total_capacity_by_bucket: [100, 0, 0, 0, 0, 0],
+            date_transitions: vec![(1, "20231114".to_string())],
+            last_snapshot_date: Some("20231114".to_string()),
+            cohort_accum: vec![],
+            last_processed_block: Some(1),
+        };
+        // Try to remove 5 cells from bucket 0 which only has 1.
+        let count_deltas: [i64; 6] = [-5, 0, 0, 0, 0, 0];
+        let cap_deltas: [i128; 6] = [0; 6];
+        // rollback_to must be > 0 to avoid the early-return for genesis reset.
+        let err = truncate_cell_dist_tracker_state_for_rollback(
+            &mut state,
+            1,
+            &count_deltas,
+            &cap_deltas,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("count_by_bucket underflow"));
+    }
+
+    #[test]
+    fn test_fiber_commitment_sweep_cleans_settlement_after_rollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // Set up: channel opened at block 50 (before rollback), force-closed
+        // at block 100 (before rollback), settled at block 150 (after rollback=120).
+        let channel_id = vec![0xCC; 32];
+        let commitment_hash = vec![0xDD; 32];
+        let channel = FiberChannel {
+            funding_tx_hash: vec![0xBB; 32],
+            funding_output_index: 0,
+            open_block: 50,
+            open_timestamp: 1000,
+            state: FiberChannelState::Settled,
+            capacity: 1000,
+            udt_type_hash: None,
+            udt_amount: None,
+            participants: vec![],
+            funding_lock_args: vec![],
+            close_tx_hash: Some(vec![0xEE; 32]),
+            close_block: Some(100),
+            close_timestamp: Some(2000),
+            commitment_tx_hash: Some(vec![0xFF; 32]),
+            commitment_output_index: Some(0),
+            delay_epoch: None,
+            settlement_tx_hash: Some(vec![0xAA; 32]),
+            settlement_block: Some(150),
+            settlement_timestamp: Some(3000),
+        };
+        // Write channel and commitment index.
+        let mut batch = StoreBatch::new(&store);
+        batch.put_fiber_channel(&channel_id, &channel);
+        batch.put_fiber_channel_by_commitment(&commitment_hash, &channel_id);
+
+        // Need block headers, tx_index, and sync_status for rollback to work.
+        for b in 50..=160 {
+            batch.put_block_header(
+                b,
+                &CachedBlockHeader {
+                    hash: vec![b as u8; 32],
+                    timestamp: 1_700_000_000_000 + b * 1000,
+                    epoch_number: 0,
+                    epoch_index: 0,
+                    epoch_length: 1800,
+                    dao: vec![0; 32],
+                    transactions_count: 0,
+                },
+            );
+        }
+        batch.commit().unwrap();
+        seed_sync_status(&store, 160, &[160u8; 32], 0, 0, 0);
+
+        // Rollback to block 120.
+        store.rollback_to_block(120).unwrap();
+
+        // Verify commitment index was cleaned up.
+        let commitment_entry = store
+            .get_cf(store.cf_fiber_channel_by_commitment(), &commitment_hash)
+            .unwrap();
+        assert!(
+            commitment_entry.is_none(),
+            "commitment index should be deleted when settlement_block > rollback_to"
+        );
+
+        // Verify channel was reset to Open.
+        let ch = store.get_fiber_channel(&channel_id).unwrap().unwrap();
+        assert_eq!(ch.state, FiberChannelState::Open);
+        assert!(ch.settlement_block.is_none());
+    }
+
+    #[test]
+    fn test_cutoff_day_stats_preserved_during_partial_day_rollback() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // Place all blocks on the same day (same UTC+8 date).
+        // CKB uses UTC+8, so timestamps are in ms.
+        // 2024-03-24 12:00:00 UTC+8 = 2024-03-24 04:00:00 UTC = 1711252800 seconds
+        let base_ts_ms: i64 = 1_711_252_800_000;
+
+        let mut batch = StoreBatch::new(&store);
+        // Blocks 1..5 on the same day, 1 hour apart.
+        for b in 1..=5 {
+            batch.put_block_header(
+                b,
+                &CachedBlockHeader {
+                    hash: vec![b as u8; 32],
+                    timestamp: base_ts_ms + b * 3_600_000, // 1h apart
+                    epoch_number: 0,
+                    epoch_index: 0,
+                    epoch_length: 1800,
+                    dao: vec![0; 32],
+                    transactions_count: 3,
+                },
+            );
+            // Each block has 1 cellbase + 1 non-cellbase tx.
+            let cb_hash = [b as u8; 32];
+            let tx_hash = [0x10 + b as u8; 32];
+            batch.put_tx_hash_map(&cb_hash, b, 0);
+            batch.put_tx_index(
+                b,
+                0,
+                &TxIndexEntry {
+                    is_cellbase: true,
+                    timestamp: base_ts_ms + b * 3_600_000,
+                    inputs_count: 0,
+                    outputs_count: 1,
+                    fee: 0,
+                    tx_size: 100,
+                    cycles: None,
+                },
+            );
+            batch.put_tx_hash_map(&tx_hash, b, 1);
+            batch.put_tx_index(
+                b,
+                1,
+                &TxIndexEntry {
+                    is_cellbase: false,
+                    timestamp: base_ts_ms + b * 3_600_000,
+                    inputs_count: 2,
+                    outputs_count: 3,
+                    fee: 100,
+                    tx_size: 200,
+                    cycles: None,
+                },
+            );
+        }
+        batch.commit().unwrap();
+        // Total txs=10, cells_created=20, cells_consumed=10
+        seed_sync_status(&store, 5, &[5u8; 32], 10, 20, 10);
+
+        // Write daily stats for the day covering blocks 1-5.
+        // Per block: 2 txs (1 cellbase + 1 non-cb), 4 cells_created (1+3), 2 cells_consumed (0+2)
+        // 5 blocks: txs=10, cells_created=20, cells_consumed=10
+        let date_str = "20240324";
+        let daily_key = keys::encode_stats_key(keys::STATS_PREFIX_DAILY, date_str.as_bytes());
+        let daily_stats = DailyStats {
+            blocks_count: 5,
+            transactions_count: 10,
+            cells_created: 20,
+            cells_consumed: 10,
+            capacity_transferred: 5000,
+            used_capacity_created: 0,
+            used_capacity_consumed: 0,
+            total_live_cells: 100,
+            total_dead_cells: 10,
+            total_all_cells: 110,
+            total_data_size: 500,
+            knowledge_size: None,
+            avg_block_time_ms: None,
+        };
+        store
+            .put_cf(
+                store.cf_stats_chain(),
+                &daily_key,
+                &bincode::serialize(&daily_stats).unwrap(),
+            )
+            .unwrap();
+
+        // Rollback to block 3 — blocks 4 and 5 are rolled back.
+        // Fork point (block 3) is on the same day as the cutoff.
+        store.rollback_to_block(3).unwrap();
+
+        // The daily stats for 20240324 should be REPAIRED, not deleted.
+        let repaired_raw = store.get_stats_key(&daily_key).unwrap();
+        assert!(
+            repaired_raw.is_some(),
+            "cutoff-day daily stats must be preserved (repaired), not deleted"
+        );
+        let repaired: DailyStats = bincode::deserialize(&repaired_raw.unwrap()).unwrap();
+        // Rolled back: 2 blocks, 4 txs (2 cb + 2 non-cb), 8 cells_created (2*4), 4 cells_consumed (2*2)
+        assert_eq!(repaired.blocks_count, 3); // 5 - 2
+        assert_eq!(repaired.transactions_count, 6); // 10 - 4
+        assert_eq!(repaired.cells_created, 12); // 20 - 8
+        assert_eq!(repaired.cells_consumed, 6); // 10 - 4
     }
 }
