@@ -340,4 +340,163 @@ export const handlers = [
       ],
     });
   }),
+
+  // --- Inventory context mock handlers ---
+
+  http.get(`${API_BASE}/spore/objects/:sporeId`, () => {
+    return HttpResponse.json({
+      sporeId: '0xspore123',
+      txHash: '0xabc123',
+      outputIndex: 0,
+      clusterId: '0xcluster456',
+      contentType: 'image/png',
+      contentSize: 1024,
+      ownerLockHash: '0xownerhash789',
+      ownerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xws',
+      isLive: true,
+      createdAtBlock: 100000,
+      ownedCapacity: '14500000000',
+      ownedKnowledge: null,
+      mediaProfile: {
+        tier: 'pure_ckb',
+        sources: [],
+        hasRenderableImage: true,
+        issues: [],
+      },
+    });
+  }),
+
+  http.get(`${API_BASE}/spore/clusters/:clusterId`, () => {
+    return HttpResponse.json({
+      clusterId: '0xcluster456',
+      name: 'Test Cluster',
+      description: 'A test cluster',
+      ownerLockHash: '0xownerhash789',
+      ownerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xws',
+      sporesCount: 42,
+      holdersCount: 15,
+      activitiesCount: 100,
+      createdAtBlock: 90000,
+    });
+  }),
+
+  http.get(`${API_BASE}/tokens/:typeHash`, () => {
+    return HttpResponse.json({
+      typeScriptHash: '0xtokenhash123',
+      typeCodeHash: '0xcode123',
+      typeHashType: 'type',
+      typeArgs: '0xargs123',
+      standard: 'xudt',
+      name: 'Test Token',
+      symbol: 'TT',
+      decimals: 8,
+      description: 'A test token',
+      iconUrl: null,
+      published: true,
+      famous: false,
+      tags: null,
+      udtType: null,
+      manager: null,
+      email: null,
+      operatorWebsite: null,
+      totalSupply: '1000000000000000000',
+      maximumSupply: null,
+      maximumSupplyStatus: 'unlimited',
+      holdersCount: 500,
+      transfersCount: 10000,
+      transfers24h: 50,
+      cellsCount: 200,
+      totalCapacity: null,
+      totalCommonKnowledgeSize: null,
+    });
+  }),
+
+  http.get(`${API_BASE}/assets/objects/items/:nftId`, () => {
+    return HttpResponse.json({
+      nftId: '0xmnft_token_id',
+      standard: 'mnft',
+      isLive: true,
+      ownerLockHash: '0xownerhash789',
+      createdAtBlock: 100000,
+      tokenIndex: 0,
+      characteristicHex: '0x0102030405060708',
+      configure: 0,
+      state: 0,
+      txHash: '0xabc123',
+      outputIndex: 0,
+      class: {
+        classId: '0xclass123',
+        issuerId: '0xissuer123',
+        name: 'Test NFT Class',
+        description: 'A test class',
+        renderer: null,
+        total: 100,
+        issued: 42,
+        configure: 0,
+      },
+      issuer: {
+        issuerId: '0xissuer123',
+        name: 'Test Issuer',
+        classCount: 5,
+        setCount: 2,
+        infoHex: null,
+      },
+      lifecycle: [],
+    });
+  }),
+
+  http.get(`${API_BASE}/assets/objects/:collectionId`, () => {
+    return HttpResponse.json({
+      collectionId: '0xclass123',
+      standard: 'mnft',
+      name: 'Test Collection',
+      totalCount: 100,
+      liveCount: 90,
+      holdersCount: 30,
+      activitiesCount: 200,
+      ownedCapacity: '50000000000',
+      ownedKnowledge: '40000000000',
+      classDetail: {
+        classId: '0xclass123',
+        issuerId: '0xissuer123',
+        name: 'Test NFT Class',
+        description: 'A test class',
+        renderer: null,
+        total: 100,
+        issued: 42,
+        configure: 0,
+      },
+      issuerDetail: {
+        issuerId: '0xissuer123',
+        name: 'Test Issuer',
+        classCount: 5,
+        setCount: 2,
+        infoHex: null,
+      },
+    });
+  }),
+
+  http.get(`${API_BASE}/assets/identities/dotbit/items/:nftId`, () => {
+    return HttpResponse.json({
+      nftId: '0xdotbit_account_id',
+      name: 'alice.bit',
+      standard: 'dotbit',
+      ownerLockHash: '0xownerhash789',
+      isLive: true,
+      createdAtBlock: 100000,
+      expiredAt: 1750000000,
+    });
+  }),
+
+  http.get(`${API_BASE}/assets/identities/did/items/:nftId`, () => {
+    return HttpResponse.json({
+      nftId: '0xdid_ckb_id',
+      name: 'did:ckb:alice',
+      standard: 'did_ckb',
+      ownerLockHash: '0xownerhash789',
+      isLive: true,
+      createdAtBlock: 100000,
+      expiredAt: null,
+    });
+  }),
 ];
