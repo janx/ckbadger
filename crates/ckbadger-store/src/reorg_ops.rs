@@ -1766,7 +1766,7 @@ impl CkbadgerStore {
         {
             let mut activities_removed = 0u64;
             let mut stage = RollbackStageProgress::new("delete_activities");
-            let iter = self.iterator_cf(self.cf_activities(), IteratorMode::Start);
+            let iter = self.iterator_cf(self.cf_tx_actions(), IteratorMode::Start);
             for item in iter {
                 let (key, _) = item.map_err(|e| {
                     anyhow::anyhow!(
@@ -1774,16 +1774,16 @@ impl CkbadgerStore {
                         e
                     )
                 })?;
-                if key.len() != keys::TX_ACTIVITY_BUNDLE_KEY_SIZE {
+                if key.len() != keys::TX_ACTIONS_KEY_SIZE {
                     continue;
                 }
-                let (block_num, _tx_idx, _tx_hash) = keys::decode_tx_activity_bundle_key(&key);
+                let (block_num, _tx_idx, _tx_hash) = keys::decode_tx_actions_key(&key);
                 if block_num <= rollback_to {
                     // Keys are in descending block_num order; all remaining entries
                     // are also <= rollback_to, so stop scanning.
                     break;
                 }
-                batch.delete_cf(self.cf_activities(), &key);
+                batch.delete_cf(self.cf_tx_actions(), &key);
                 activities_removed += 1;
                 stage.tick(activities_removed);
             }
@@ -3066,8 +3066,8 @@ mod tests {
         AddressBalance, AssetAction, CachedBlockHeader, CellDistributionTrackerState,
         CompositionTier, DaoDepositCacheEntry, HodlTrackerState, LiveCellInfo,
         ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectEntry, ObjectExtra,
-        ObjectStandard, OwnerActivityDelta, ScriptInfo, SporeMediaProfile, SyncStatus, TokenInfo,
-        TxActivityBundle, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
+        ObjectStandard, ParticipantDelta, ScriptInfo, SporeMediaProfile, SyncStatus, TokenInfo,
+        TxActions, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
 
     fn put_canonical_tx(batch: &mut StoreBatch<'_>, block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
@@ -3087,28 +3087,23 @@ mod tests {
         );
     }
 
-    fn make_tx_activity_bundle(tx_hash: &[u8], block_num: i64, tx_idx: i32) -> TxActivityBundle {
-        TxActivityBundle {
+    fn make_tx_actions(tx_hash: &[u8], block_num: i64, tx_idx: i32) -> TxActions {
+        TxActions {
             tx_hash: tx_hash.to_vec(),
             block_hash: vec![0x40 | (block_num as u8); 32],
             block_number: block_num,
             tx_index: tx_idx,
             timestamp: 1_700_000_000 + block_num,
             is_cellbase: false,
-            owners: vec![OwnerActivityDelta {
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ParticipantDelta {
                 lock_hash: vec![0xAA; 32],
-                lock_code_hash: vec![0x11; 32],
-                lock_hash_type: 1,
-                lock_args: vec![0x22; 20],
                 ckb_delta: 0,
                 used_delta: 0,
-                has_type_script: false,
-                involved_script_code_hashes: vec![vec![0x11; 32]],
-                asset_changes: vec![],
-                type_calls: None,
-                lock_calls: None,
-                protocol_actions: vec![],
-                peers: vec![],
+                item_deltas: vec![],
+                tags: 0,
             }],
         }
     }
@@ -3345,7 +3340,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_to_block_deletes_tx_activity_bundles_above_target() {
+    fn test_rollback_to_block_deletes_tx_actions_above_target() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock_hash = [0xAA; 32];
@@ -3371,16 +3366,16 @@ mod tests {
             transactions_count: 1,
         };
 
-        let keep_bundle = make_tx_activity_bundle(&tx_hash_keep, 1, 0);
-        let drop_bundle = make_tx_activity_bundle(&tx_hash_drop, 2, 0);
+        let keep_actions = make_tx_actions(&tx_hash_keep, 1, 0);
+        let drop_actions = make_tx_actions(&tx_hash_drop, 2, 0);
 
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
         put_canonical_tx(&mut batch, 1, 0, &tx_hash_keep);
         put_canonical_tx(&mut batch, 2, 0, &tx_hash_drop);
-        batch.put_tx_activity_bundle(&keep_bundle);
-        batch.put_tx_activity_bundle(&drop_bundle);
+        batch.put_tx_actions(&keep_actions);
+        batch.put_tx_actions(&drop_actions);
         batch.put_addr_tx(&lock_hash, 1, 0, &tx_hash_keep);
         batch.put_addr_tx(&lock_hash, 2, 0, &tx_hash_drop);
         batch.commit().unwrap();
@@ -3388,14 +3383,8 @@ mod tests {
 
         store.rollback_to_block(1).unwrap();
 
-        assert!(store
-            .get_tx_activity_bundle(1, 0, &tx_hash_keep)
-            .unwrap()
-            .is_some());
-        assert!(store
-            .get_tx_activity_bundle(2, 0, &tx_hash_drop)
-            .unwrap()
-            .is_none());
+        assert!(store.get_tx_actions(1, 0, &tx_hash_keep).unwrap().is_some());
+        assert!(store.get_tx_actions(2, 0, &tx_hash_drop).unwrap().is_none());
         let addr_rows = store.list_addr_txs_recent(&lock_hash, 10, None).unwrap();
         assert_eq!(addr_rows, vec![(1, 0, tx_hash_keep)]);
     }

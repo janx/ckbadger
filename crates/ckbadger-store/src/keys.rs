@@ -1041,35 +1041,35 @@ pub fn encode_spore_by_cluster_key(cluster_id: &[u8], spore_id: &[u8]) -> [u8; 6
     key
 }
 
-/// Tx-activity bundle key: block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B)
-pub const TX_ACTIVITY_BUNDLE_KEY_SIZE: usize = 44;
+/// TxActions key: block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B)
+pub const TX_ACTIONS_KEY_SIZE: usize = 44;
 
-pub fn encode_tx_activity_bundle_key(block_num: i64, tx_idx: i32, tx_hash: &[u8]) -> Vec<u8> {
+pub fn encode_tx_actions_key(block_num: i64, tx_idx: i32, tx_hash: &[u8]) -> Vec<u8> {
     assert!(
         tx_hash.len() >= 32,
-        "encode_tx_activity_bundle_key: tx_hash must be >= 32 bytes, got {}",
+        "encode_tx_actions_key: tx_hash must be >= 32 bytes, got {}",
         tx_hash.len()
     );
-    let mut key = Vec::with_capacity(TX_ACTIVITY_BUNDLE_KEY_SIZE);
+    let mut key = Vec::with_capacity(TX_ACTIONS_KEY_SIZE);
     key.extend_from_slice(&encode_desc_block_num(block_num));
     key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
     key.extend_from_slice(&tx_hash[..32]);
     key
 }
 
-pub fn encode_tx_activity_bundle_seek_after_key(block_num: i64, tx_idx: i32) -> Vec<u8> {
-    let mut key = Vec::with_capacity(TX_ACTIVITY_BUNDLE_KEY_SIZE);
+pub fn encode_tx_actions_seek_after_key(block_num: i64, tx_idx: i32) -> Vec<u8> {
+    let mut key = Vec::with_capacity(TX_ACTIONS_KEY_SIZE);
     key.extend_from_slice(&encode_desc_block_num(block_num));
     key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
     key.extend_from_slice(&[0xFF; 32]);
     key
 }
 
-pub fn decode_tx_activity_bundle_key(key: &[u8]) -> (i64, i32, Vec<u8>) {
+pub fn decode_tx_actions_key(key: &[u8]) -> (i64, i32, Vec<u8>) {
     assert!(
-        key.len() == TX_ACTIVITY_BUNDLE_KEY_SIZE,
-        "decode_tx_activity_bundle_key: expected {} bytes, got {}",
-        TX_ACTIVITY_BUNDLE_KEY_SIZE,
+        key.len() == TX_ACTIONS_KEY_SIZE,
+        "decode_tx_actions_key: expected {} bytes, got {}",
+        TX_ACTIONS_KEY_SIZE,
         key.len()
     );
     let block_num = decode_desc_block_num(&key[0..8]);
@@ -1795,22 +1795,22 @@ mod tests {
     // ---- Activity key ----
 
     #[test]
-    fn test_tx_activity_bundle_key_roundtrip() {
-        let key = encode_tx_activity_bundle_key(123, 7, &[0x44; 32]);
-        assert_eq!(key.len(), TX_ACTIVITY_BUNDLE_KEY_SIZE);
+    fn test_tx_actions_key_roundtrip() {
+        let key = encode_tx_actions_key(123, 7, &[0x44; 32]);
+        assert_eq!(key.len(), TX_ACTIONS_KEY_SIZE);
 
-        let (block_num, tx_idx, tx_hash) = decode_tx_activity_bundle_key(&key);
+        let (block_num, tx_idx, tx_hash) = decode_tx_actions_key(&key);
         assert_eq!(block_num, 123);
         assert_eq!(tx_idx, 7);
         assert_eq!(tx_hash, vec![0x44; 32]);
     }
 
     #[test]
-    fn test_tx_activity_bundle_key_descending_sort_order() {
-        let k1 = encode_tx_activity_bundle_key(300, 0, &[0x11; 32]);
-        let k2 = encode_tx_activity_bundle_key(200, 0, &[0x22; 32]);
-        let k3 = encode_tx_activity_bundle_key(100, 5, &[0x33; 32]);
-        let k4 = encode_tx_activity_bundle_key(100, 1, &[0x44; 32]);
+    fn test_tx_actions_key_descending_sort_order() {
+        let k1 = encode_tx_actions_key(300, 0, &[0x11; 32]);
+        let k2 = encode_tx_actions_key(200, 0, &[0x22; 32]);
+        let k3 = encode_tx_actions_key(100, 5, &[0x33; 32]);
+        let k4 = encode_tx_actions_key(100, 1, &[0x44; 32]);
 
         assert!(k1 < k2);
         assert!(k2 < k3);

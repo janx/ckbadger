@@ -324,7 +324,7 @@ pub const CF_SPORE_BY_CLUSTER: &str = "spore_by_cluster";
 pub const CF_CELL_BY_LOCK_CODE: &str = "cell_by_lock_code";
 pub const CF_CELL_BY_TYPE_CODE: &str = "cell_by_type_code";
 pub const CF_TOKEN_TRANSFERS: &str = "token_transfers";
-pub const CF_ACTIVITIES: &str = "activities";
+pub const CF_TX_ACTIONS: &str = "activities";
 pub const CF_CLUSTER_AGG: &str = "cluster_agg";
 pub const CF_OBJECT_COLLECTION_AGG: &str = "object_collection_agg";
 pub const CF_OBJECT_COLLECTION_ACTIVITIES: &str = "object_collection_activities";
@@ -354,7 +354,7 @@ const CF_WRITE_POLICY_APPEND_ONLY: &[&str] = &[
     CF_CELL_BY_DATA_HASH,
     CF_ADDR_TXS,
     CF_TOKEN_TRANSFERS,
-    CF_ACTIVITIES,
+    CF_TX_ACTIONS,
     CF_OBJECT_COLLECTION_ACTIVITIES,
     CF_IDENTITY_COLLECTION_ACTIVITIES,
 ];
@@ -501,7 +501,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
-    CF_ACTIVITIES,
+    CF_TX_ACTIONS,
     CF_CLUSTER_AGG,
     CF_OBJECT_COLLECTION_AGG,
     CF_OBJECT_COLLECTION_ACTIVITIES,
@@ -565,7 +565,7 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
-    CF_ACTIVITIES,
+    CF_TX_ACTIONS,
     CF_CLUSTER_AGG,
     CF_OBJECT_COLLECTION_AGG,
     CF_OBJECT_COLLECTION_ACTIVITIES,
@@ -1023,7 +1023,7 @@ impl CkbadgerStore {
         CF_TX_HASH_MAP,
         CF_ADDR_BALANCE,
         CF_ADDR_TXS,
-        CF_ACTIVITIES,
+        CF_TX_ACTIONS,
     ];
 
     /// High-write column families that benefit from large write buffers (128 MB).
@@ -1044,7 +1044,7 @@ impl CkbadgerStore {
         CF_DAO_BY_BLOCK,
         CF_DAO_BY_LOCK_BLOCK,
         CF_DAO_BY_STATUS_BLOCK,
-        CF_ACTIVITIES,
+        CF_TX_ACTIONS,
         CF_OBJECT_COLLECTION_ACTIVITIES,
         CF_IDENTITY_COLLECTION_ACTIVITIES,
         CF_STATS_CHAIN,
@@ -1354,8 +1354,8 @@ impl CkbadgerStore {
     pub fn cf_token_transfers(&self) -> &ColumnFamily {
         self.cf(CF_TOKEN_TRANSFERS)
     }
-    pub fn cf_activities(&self) -> &ColumnFamily {
-        self.cf(CF_ACTIVITIES)
+    pub fn cf_tx_actions(&self) -> &ColumnFamily {
+        self.cf(CF_TX_ACTIONS)
     }
     pub fn cf_cluster_agg(&self) -> &ColumnFamily {
         self.cf(CF_CLUSTER_AGG)
@@ -1794,7 +1794,7 @@ impl CkbadgerStore {
             CF_LIVE_CELLS,
             CF_CONSUMED_CELLS,
             CF_CELL_BY_LOCK,
-            CF_ACTIVITIES,
+            CF_TX_ACTIONS,
         ] {
             if let Some(cf) = self.db.cf_handle(hot_cf_name) {
                 let result = self
@@ -2159,7 +2159,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         // Activities CF is now in domain store, access should succeed
-        let _ = store.cf_activities();
+        let _ = store.cf_tx_actions();
     }
 
     #[test]
@@ -2584,8 +2584,8 @@ mod tests {
     #[test]
     fn test_mega_write_cfs_contains_activities() {
         assert!(
-            CkbadgerStore::is_mega_write_cf(CF_ACTIVITIES),
-            "CF_ACTIVITIES should be in MEGA_WRITE_CFS"
+            CkbadgerStore::is_mega_write_cf(CF_TX_ACTIONS),
+            "CF_TX_ACTIONS should be in MEGA_WRITE_CFS"
         );
     }
 
@@ -2630,7 +2630,7 @@ mod tests {
             CF_TX_HASH_MAP,
             CF_ADDR_BALANCE,
             CF_ADDR_TXS,
-            CF_ACTIVITIES,
+            CF_TX_ACTIONS,
         ];
         for cf in expected {
             assert!(

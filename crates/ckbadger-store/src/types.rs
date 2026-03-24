@@ -1136,30 +1136,49 @@ pub struct MemoryStats {
 // Group I: Activities
 // ============================================
 
+// Tag bit flags for TxActions / ParticipantDelta classification.
+pub const TAG_TOKEN: u16 = 1 << 0;
+pub const TAG_OBJECT: u16 = 1 << 1;
+pub const TAG_IDENTITY: u16 = 1 << 2;
+pub const TAG_DAO: u16 = 1 << 3;
+pub const TAG_PROTOCOL: u16 = 1 << 4;
+pub const TAG_CELLBASE: u16 = 1 << 5;
+pub const TAG_TYPE_CALL: u16 = 1 << 6;
+pub const TAG_LOCK_CALL: u16 = 1 << 7;
+
+// ItemDelta kind discriminators.
+pub const ITEM_KIND_TOKEN: u8 = 0;
+pub const ITEM_KIND_OBJECT: u8 = 1;
+pub const ITEM_KIND_IDENTITY: u8 = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActivityEntry {
+pub struct ItemDelta {
+    pub item_id: Vec<u8>,
+    pub kind: u8,
+    pub delta: i128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParticipantDelta {
+    pub lock_hash: Vec<u8>,
+    pub ckb_delta: i128,
+    pub used_delta: i64,
+    pub item_deltas: Vec<ItemDelta>,
+    pub tags: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TxActions {
     pub tx_hash: Vec<u8>,
-    #[serde(default)]
     pub block_hash: Vec<u8>,
     pub block_number: i64,
     pub tx_index: i32,
     pub timestamp: i64,
-    /// Net CKB change in shannons.
-    pub ckb_delta: i128,
-    /// Net used capacity change in shannons.
-    pub used_delta: i64,
     pub is_cellbase: bool,
-    /// Whether any cell for this owner in the transaction had a type script.
-    #[serde(default)]
-    pub has_type_script: bool,
-    pub asset_changes: Vec<AssetChange>,
-    pub type_calls: Option<Vec<TypeCallEntry>>,
-    #[serde(default)]
-    pub lock_calls: Option<Vec<LockCallEntry>>,
-    #[serde(default)]
     pub protocol_actions: Vec<ProtocolAction>,
-    /// Lock hashes of other parties in this transaction.
-    pub peers: Vec<Vec<u8>>,
+    pub type_calls: Vec<TypeCallEntry>,
+    pub lock_calls: Vec<LockCallEntry>,
+    pub participants: Vec<ParticipantDelta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1235,78 +1254,6 @@ impl ProtocolAction {
     pub fn metadata_value(&self) -> serde_json::Result<serde_json::Value> {
         self.metadata.to_value()
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OwnerActivityDelta {
-    pub lock_hash: Vec<u8>,
-    pub lock_code_hash: Vec<u8>,
-    pub lock_hash_type: i16,
-    pub lock_args: Vec<u8>,
-    pub ckb_delta: i128,
-    pub used_delta: i64,
-    pub has_type_script: bool,
-    pub involved_script_code_hashes: Vec<Vec<u8>>,
-    pub asset_changes: Vec<AssetChange>,
-    pub type_calls: Option<Vec<TypeCallEntry>>,
-    #[serde(default)]
-    pub lock_calls: Option<Vec<LockCallEntry>>,
-    #[serde(default)]
-    pub protocol_actions: Vec<ProtocolAction>,
-    pub peers: Vec<Vec<u8>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TxActivityBundle {
-    pub tx_hash: Vec<u8>,
-    pub block_hash: Vec<u8>,
-    pub block_number: i64,
-    pub tx_index: i32,
-    pub timestamp: i64,
-    pub is_cellbase: bool,
-    pub owners: Vec<OwnerActivityDelta>,
-}
-
-/// A single activity item for the global latest-activities feed.
-/// Includes lock script components so the API can compute CKB addresses.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LatestActivityItem {
-    pub lock_hash: Vec<u8>,
-    pub lock_code_hash: Vec<u8>,
-    pub lock_hash_type: i16,
-    pub lock_args: Vec<u8>,
-    pub entry: ActivityEntry,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum AssetChange {
-    Token {
-        type_script_hash: Vec<u8>,
-        delta: i128,
-        symbol: Option<String>,
-        decimals: Option<u8>,
-    },
-    Object {
-        object_id: Vec<u8>,
-        standard: String,
-        action: AssetAction,
-    },
-    Identity {
-        identity_id: Vec<u8>,
-        standard: String,
-        action: AssetAction,
-    },
-    DaoDeposit {
-        capacity: i64,
-    },
-    DaoWithdrawRequest {
-        capacity: i64,
-        deposit_block: i64,
-    },
-    DaoWithdrawComplete {
-        capacity: i64,
-        compensation: i64,
-    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1687,324 +1634,284 @@ mod tests {
         assert!(index.collection_id.is_empty());
     }
 
-    // ---- ActivityEntry ----
+    // ---- TxActions / ItemDelta / ParticipantDelta ----
 
     #[test]
-    fn test_activity_entry_roundtrip() {
-        let entry = ActivityEntry {
-            tx_hash: vec![0x01u8; 32],
+    fn test_item_delta_roundtrip() {
+        let item = ItemDelta {
+            item_id: vec![0xAA; 32],
+            kind: ITEM_KIND_TOKEN,
+            delta: -999_000_000,
+        };
+        let bytes = bincode::serialize(&item).unwrap();
+        let decoded: ItemDelta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.item_id, vec![0xAA; 32]);
+        assert_eq!(decoded.kind, ITEM_KIND_TOKEN);
+        assert_eq!(decoded.delta, -999_000_000);
+    }
+
+    #[test]
+    fn test_participant_delta_roundtrip() {
+        let participant = ParticipantDelta {
+            lock_hash: vec![0xBB; 32],
+            ckb_delta: -500_00000000,
+            used_delta: 610_000_000_000,
+            item_deltas: vec![
+                ItemDelta {
+                    item_id: vec![0xAA; 32],
+                    kind: ITEM_KIND_TOKEN,
+                    delta: 1_000_000,
+                },
+                ItemDelta {
+                    item_id: vec![0xCC; 32],
+                    kind: ITEM_KIND_OBJECT,
+                    delta: 1,
+                },
+            ],
+            tags: TAG_TOKEN | TAG_OBJECT,
+        };
+        let bytes = bincode::serialize(&participant).unwrap();
+        let decoded: ParticipantDelta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.lock_hash, vec![0xBB; 32]);
+        assert_eq!(decoded.ckb_delta, -500_00000000);
+        assert_eq!(decoded.used_delta, 610_000_000_000);
+        assert_eq!(decoded.item_deltas.len(), 2);
+        assert_eq!(decoded.item_deltas[0].kind, ITEM_KIND_TOKEN);
+        assert_eq!(decoded.item_deltas[1].kind, ITEM_KIND_OBJECT);
+        assert_eq!(decoded.tags, TAG_TOKEN | TAG_OBJECT);
+    }
+
+    #[test]
+    fn test_tx_actions_roundtrip() {
+        let actions = TxActions {
+            tx_hash: vec![0x01; 32],
             block_hash: vec![0xF1; 32],
             block_number: 12345,
             tx_index: 3,
             timestamp: 1_700_000_000,
-            ckb_delta: -500_00000000,
-            used_delta: 610_000_000_000,
             is_cellbase: false,
-            has_type_script: false,
-            asset_changes: vec![
-                AssetChange::Token {
-                    type_script_hash: vec![0xAA; 32],
-                    delta: 1_000_000,
-                    symbol: Some("SEAL".to_string()),
-                    decimals: Some(8),
-                },
-                AssetChange::DaoDeposit {
-                    capacity: 1_000_000_000_000,
-                },
-            ],
-            type_calls: None,
-            lock_calls: None,
-            protocol_actions: vec![],
-            peers: vec![vec![0xBB; 32], vec![0xCC; 32]],
-        };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.tx_hash, entry.tx_hash);
-        assert_eq!(decoded.block_hash, entry.block_hash);
-        assert_eq!(decoded.block_number, 12345);
-        assert_eq!(decoded.ckb_delta, -500_00000000);
-        assert_eq!(decoded.used_delta, 610_000_000_000);
-        assert!(!decoded.is_cellbase);
-        assert_eq!(decoded.asset_changes.len(), 2);
-        assert_eq!(decoded.peers.len(), 2);
-    }
-
-    #[test]
-    fn test_activity_entry_all_asset_change_variants() {
-        let entry = ActivityEntry {
-            tx_hash: vec![0x02u8; 32],
-            block_hash: vec![0xF2; 32],
-            block_number: 100,
-            tx_index: 0,
-            timestamp: 1_700_000_000,
-            ckb_delta: 0,
-            used_delta: 0,
-            is_cellbase: true,
-            has_type_script: false,
-            asset_changes: vec![
-                AssetChange::Token {
-                    type_script_hash: vec![0xAA; 32],
-                    delta: -999,
-                    symbol: None,
-                    decimals: None,
-                },
-                AssetChange::Object {
-                    object_id: vec![0xBB; 32],
-                    standard: "spore".to_string(),
-                    action: AssetAction::Mint,
-                },
-                AssetChange::Identity {
-                    identity_id: vec![0xCC; 20],
-                    standard: "dotbit".to_string(),
-                    action: AssetAction::Transfer,
-                },
-                AssetChange::DaoDeposit { capacity: 500 },
-                AssetChange::DaoWithdrawRequest {
-                    capacity: 600,
-                    deposit_block: 50,
-                },
-                AssetChange::DaoWithdrawComplete {
-                    capacity: 700,
-                    compensation: 42,
-                },
-            ],
-            type_calls: Some(vec![TypeCallEntry {
+            protocol_actions: vec![ProtocolAction::new(
+                "stablepp",
+                "deposit",
+                serde_json::json!({"vaultCount": 2}),
+            )],
+            type_calls: vec![TypeCallEntry {
                 type_code_hash: vec![0xDD; 32],
                 type_hash_type: 1,
                 type_args: vec![0xEE; 20],
-            }]),
-            lock_calls: None,
-            protocol_actions: vec![],
-            peers: vec![],
+            }],
+            lock_calls: vec![LockCallEntry {
+                lock_code_hash: vec![0xFF; 32],
+                lock_hash_type: 0,
+                lock_args: vec![0x11; 20],
+            }],
+            participants: vec![ParticipantDelta {
+                lock_hash: vec![0xAA; 32],
+                ckb_delta: -500_00000000,
+                used_delta: 0,
+                item_deltas: vec![ItemDelta {
+                    item_id: vec![0xBB; 32],
+                    kind: ITEM_KIND_TOKEN,
+                    delta: 42,
+                }],
+                tags: TAG_TOKEN | TAG_PROTOCOL,
+            }],
         };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.asset_changes.len(), 6);
-        assert!(decoded.is_cellbase);
-        assert!(decoded.peers.is_empty());
-        let type_calls = decoded.type_calls.expect("script calls should exist");
-        assert_eq!(type_calls.len(), 1);
-        assert_eq!(type_calls[0].type_code_hash, vec![0xDD; 32]);
-        assert_eq!(type_calls[0].type_hash_type, 1);
-        assert_eq!(type_calls[0].type_args, vec![0xEE; 20]);
-
-        // Verify each variant survived roundtrip
-        match &decoded.asset_changes[1] {
-            AssetChange::Object {
-                standard, action, ..
-            } => {
-                assert_eq!(standard, "spore");
-                assert!(matches!(action, AssetAction::Mint));
-            }
-            _ => panic!("expected Object variant"),
-        }
-        match &decoded.asset_changes[5] {
-            AssetChange::DaoWithdrawComplete {
-                capacity,
-                compensation,
-            } => {
-                assert_eq!(*capacity, 700);
-                assert_eq!(*compensation, 42);
-            }
-            _ => panic!("expected DaoWithdrawComplete variant"),
-        }
+        let bytes = bincode::serialize(&actions).unwrap();
+        let decoded: TxActions = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.tx_hash, vec![0x01; 32]);
+        assert_eq!(decoded.block_hash, vec![0xF1; 32]);
+        assert_eq!(decoded.block_number, 12345);
+        assert_eq!(decoded.tx_index, 3);
+        assert!(!decoded.is_cellbase);
+        assert_eq!(decoded.protocol_actions.len(), 1);
+        assert_eq!(decoded.type_calls.len(), 1);
+        assert_eq!(decoded.lock_calls.len(), 1);
+        assert_eq!(decoded.participants.len(), 1);
+        assert_eq!(decoded.participants[0].ckb_delta, -500_00000000);
+        assert_eq!(decoded.participants[0].item_deltas.len(), 1);
+        assert_eq!(decoded.participants[0].tags, TAG_TOKEN | TAG_PROTOCOL);
     }
 
     #[test]
-    fn test_activity_entry_empty_roundtrip() {
-        let entry = ActivityEntry {
+    fn test_tx_actions_empty_roundtrip() {
+        let actions = TxActions {
             tx_hash: vec![0x00; 32],
             block_hash: vec![],
             block_number: 0,
             tx_index: 0,
             timestamp: 0,
-            ckb_delta: 0,
-            used_delta: 0,
             is_cellbase: false,
-            has_type_script: false,
-            asset_changes: vec![],
-            type_calls: None,
-            lock_calls: None,
             protocol_actions: vec![],
-            peers: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![],
         };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.ckb_delta, 0);
-        assert!(decoded.asset_changes.is_empty());
-        assert!(decoded.type_calls.is_none());
-        assert!(decoded.peers.is_empty());
+        let bytes = bincode::serialize(&actions).unwrap();
+        let decoded: TxActions = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.block_number, 0);
+        assert!(decoded.protocol_actions.is_empty());
+        assert!(decoded.type_calls.is_empty());
+        assert!(decoded.lock_calls.is_empty());
+        assert!(decoded.participants.is_empty());
     }
 
     #[test]
-    fn test_activity_entry_script_call_roundtrip() {
-        let entry = ActivityEntry {
+    fn test_tx_actions_cellbase_roundtrip() {
+        let actions = TxActions {
             tx_hash: vec![0x10; 32],
             block_hash: vec![0xF0; 32],
             block_number: 500,
-            tx_index: 1,
+            tx_index: 0,
             timestamp: 1_700_000_000,
-            ckb_delta: -100_00000000,
-            used_delta: 0,
-            is_cellbase: false,
-            has_type_script: true,
-            asset_changes: vec![],
-            type_calls: Some(vec![TypeCallEntry {
-                type_code_hash: vec![0xDD; 32],
-                type_hash_type: 1,
-                type_args: vec![0xEE; 20],
-            }]),
-            lock_calls: None,
+            is_cellbase: true,
             protocol_actions: vec![],
-            peers: vec![vec![0xEE; 32]],
-        };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
-        assert!(decoded.has_type_script);
-        let type_calls = decoded.type_calls.expect("script calls should exist");
-        assert_eq!(type_calls.len(), 1);
-        assert_eq!(type_calls[0].type_code_hash, vec![0xDD; 32]);
-        assert_eq!(type_calls[0].type_hash_type, 1);
-        assert_eq!(type_calls[0].type_args, vec![0xEE; 20]);
-        assert!(decoded.asset_changes.is_empty());
-    }
-
-    #[test]
-    fn test_activity_entry_type_calls_none_roundtrip() {
-        let entry = ActivityEntry {
-            tx_hash: vec![0x11; 32],
-            block_hash: vec![0xF1; 32],
-            block_number: 501,
-            tx_index: 2,
-            timestamp: 1_700_000_010,
-            ckb_delta: 0,
-            used_delta: 0,
-            is_cellbase: false,
-            has_type_script: false,
-            asset_changes: vec![],
-            type_calls: None,
-            lock_calls: None,
-            protocol_actions: vec![],
-            peers: vec![],
-        };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
-        assert!(decoded.type_calls.is_none());
-        assert!(decoded.asset_changes.is_empty());
-    }
-
-    #[test]
-    fn test_activity_entry_type_calls_some_roundtrip() {
-        let entry = ActivityEntry {
-            tx_hash: vec![0x12; 32],
-            block_hash: vec![0xF2; 32],
-            block_number: 502,
-            tx_index: 3,
-            timestamp: 1_700_000_020,
-            ckb_delta: -100,
-            used_delta: 200,
-            is_cellbase: false,
-            has_type_script: true,
-            asset_changes: vec![AssetChange::Token {
-                type_script_hash: vec![0xAA; 32],
-                delta: 42,
-                symbol: Some("SEAL".to_string()),
-                decimals: Some(8),
-            }],
-            type_calls: Some(vec![TypeCallEntry {
-                type_code_hash: vec![0xDD; 32],
-                type_hash_type: 1,
-                type_args: vec![0xEE; 20],
-            }]),
-            lock_calls: None,
-            protocol_actions: vec![],
-            peers: vec![vec![0xFF; 32]],
-        };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
-        let type_calls = decoded.type_calls.expect("script calls should exist");
-        assert_eq!(type_calls.len(), 1);
-        assert_eq!(type_calls[0].type_code_hash, vec![0xDD; 32]);
-        assert_eq!(type_calls[0].type_hash_type, 1);
-        assert_eq!(type_calls[0].type_args, vec![0xEE; 20]);
-        assert_eq!(decoded.asset_changes.len(), 1);
-    }
-
-    #[test]
-    fn test_tx_activity_bundle_roundtrip() {
-        let bundle = TxActivityBundle {
-            tx_hash: vec![0x11; 32],
-            block_hash: vec![0x22; 32],
-            block_number: 100,
-            tx_index: 3,
-            timestamp: 1_700_000_000_000,
-            is_cellbase: false,
-            owners: vec![OwnerActivityDelta {
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ParticipantDelta {
                 lock_hash: vec![0xAA; 32],
-                lock_code_hash: vec![0xBB; 32],
-                lock_hash_type: 1,
-                lock_args: vec![0xCC; 20],
-                ckb_delta: 42,
+                ckb_delta: 100_00000000,
                 used_delta: 0,
-                has_type_script: false,
-                involved_script_code_hashes: vec![vec![0xDD; 32]],
-                asset_changes: vec![],
-                type_calls: None,
-                lock_calls: None,
-                protocol_actions: vec![],
-                peers: vec![],
+                item_deltas: vec![],
+                tags: TAG_CELLBASE,
             }],
         };
-
-        let bytes = bincode::serialize(&bundle).unwrap();
-        let decoded: TxActivityBundle = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.block_number, 100);
-        assert_eq!(decoded.tx_index, 3);
-        assert_eq!(decoded.owners.len(), 1);
-        assert_eq!(decoded.owners[0].lock_hash_type, 1);
-        assert_eq!(decoded.owners[0].lock_args, vec![0xCC; 20]);
+        let bytes = bincode::serialize(&actions).unwrap();
+        let decoded: TxActions = bincode::deserialize(&bytes).unwrap();
+        assert!(decoded.is_cellbase);
+        assert_eq!(decoded.participants.len(), 1);
+        assert_eq!(decoded.participants[0].tags, TAG_CELLBASE);
     }
 
     #[test]
-    fn test_tx_activity_bundle_roundtrip_with_protocol_metadata() {
-        let bundle = TxActivityBundle {
+    fn test_tx_actions_multiple_participants_roundtrip() {
+        let actions = TxActions {
+            tx_hash: vec![0x20; 32],
+            block_hash: vec![0xF2; 32],
+            block_number: 1000,
+            tx_index: 5,
+            timestamp: 1_700_000_100,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![
+                ParticipantDelta {
+                    lock_hash: vec![0xAA; 32],
+                    ckb_delta: -200_00000000,
+                    used_delta: -100,
+                    item_deltas: vec![
+                        ItemDelta {
+                            item_id: vec![0x11; 32],
+                            kind: ITEM_KIND_TOKEN,
+                            delta: -50,
+                        },
+                        ItemDelta {
+                            item_id: vec![0x22; 32],
+                            kind: ITEM_KIND_IDENTITY,
+                            delta: -1,
+                        },
+                    ],
+                    tags: TAG_TOKEN | TAG_IDENTITY,
+                },
+                ParticipantDelta {
+                    lock_hash: vec![0xBB; 32],
+                    ckb_delta: 200_00000000,
+                    used_delta: 100,
+                    item_deltas: vec![
+                        ItemDelta {
+                            item_id: vec![0x11; 32],
+                            kind: ITEM_KIND_TOKEN,
+                            delta: 50,
+                        },
+                        ItemDelta {
+                            item_id: vec![0x22; 32],
+                            kind: ITEM_KIND_IDENTITY,
+                            delta: 1,
+                        },
+                    ],
+                    tags: TAG_TOKEN | TAG_IDENTITY,
+                },
+            ],
+        };
+        let bytes = bincode::serialize(&actions).unwrap();
+        let decoded: TxActions = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.participants.len(), 2);
+        assert_eq!(decoded.participants[0].ckb_delta, -200_00000000);
+        assert_eq!(decoded.participants[1].ckb_delta, 200_00000000);
+        assert_eq!(decoded.participants[0].item_deltas.len(), 2);
+        assert_eq!(decoded.participants[1].item_deltas.len(), 2);
+        // Verify conservation: deltas should sum to zero
+        let total_ckb: i128 = decoded.participants.iter().map(|p| p.ckb_delta).sum();
+        assert_eq!(total_ckb, 0);
+    }
+
+    #[test]
+    fn test_tx_actions_with_protocol_metadata_roundtrip() {
+        let actions = TxActions {
             tx_hash: vec![0x21; 32],
             block_hash: vec![0x31; 32],
             block_number: 101,
             tx_index: 4,
             timestamp: 1_700_000_001_000,
             is_cellbase: false,
-            owners: vec![OwnerActivityDelta {
+            protocol_actions: vec![ProtocolAction::new(
+                "stablepp",
+                "deposit",
+                serde_json::json!({
+                    "hasIntent": true,
+                    "vaultCount": 2,
+                }),
+            )],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ParticipantDelta {
                 lock_hash: vec![0xAB; 32],
-                lock_code_hash: vec![0xBC; 32],
-                lock_hash_type: 1,
-                lock_args: vec![0xCD; 20],
                 ckb_delta: 7,
                 used_delta: 0,
-                has_type_script: false,
-                involved_script_code_hashes: vec![vec![0xDE; 32]],
-                asset_changes: vec![],
-                type_calls: None,
-                lock_calls: None,
-                protocol_actions: vec![ProtocolAction::new(
-                    "stablepp",
-                    "deposit",
-                    serde_json::json!({
-                        "hasIntent": true,
-                        "vaultCount": 2,
-                    }),
-                )],
-                peers: vec![],
+                item_deltas: vec![],
+                tags: TAG_PROTOCOL,
             }],
         };
 
-        let bytes = bincode::serialize(&bundle).unwrap();
-        let decoded: TxActivityBundle = bincode::deserialize(&bytes).unwrap();
-        let metadata = decoded.owners[0].protocol_actions[0]
-            .metadata_value()
-            .unwrap();
+        let bytes = bincode::serialize(&actions).unwrap();
+        let decoded: TxActions = bincode::deserialize(&bytes).unwrap();
+        let metadata = decoded.protocol_actions[0].metadata_value().unwrap();
         assert_eq!(metadata["hasIntent"], true);
         assert_eq!(metadata["vaultCount"], 2);
+    }
+
+    #[test]
+    fn test_tag_constants_are_distinct_bits() {
+        let all_tags = [
+            TAG_TOKEN,
+            TAG_OBJECT,
+            TAG_IDENTITY,
+            TAG_DAO,
+            TAG_PROTOCOL,
+            TAG_CELLBASE,
+            TAG_TYPE_CALL,
+            TAG_LOCK_CALL,
+        ];
+        // Each tag should be a single bit (power of 2)
+        for tag in &all_tags {
+            assert!(tag.is_power_of_two(), "tag {tag} is not a power of 2");
+        }
+        // All tags combined should have no overlap
+        let combined: u16 = all_tags.iter().sum();
+        let ored: u16 = all_tags.iter().fold(0, |acc, t| acc | t);
+        assert_eq!(combined, ored, "tags have overlapping bits");
+    }
+
+    #[test]
+    fn test_item_kind_constants() {
+        assert_eq!(ITEM_KIND_TOKEN, 0);
+        assert_eq!(ITEM_KIND_OBJECT, 1);
+        assert_eq!(ITEM_KIND_IDENTITY, 2);
+        // All distinct
+        assert_ne!(ITEM_KIND_TOKEN, ITEM_KIND_OBJECT);
+        assert_ne!(ITEM_KIND_OBJECT, ITEM_KIND_IDENTITY);
+        assert_ne!(ITEM_KIND_TOKEN, ITEM_KIND_IDENTITY);
     }
 
     // ---- ObjectStandard ----
