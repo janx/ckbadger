@@ -525,7 +525,7 @@ async fn decode_single_spore(
     // Store raw output as a media blob
     let raw_bytes = decoded.raw_output.as_bytes();
     let media_type = sniff_media_type(raw_bytes);
-    let coll_id = collection_id.unwrap_or(&[] as &[u8]);
+    let coll_id = collection_id.expect("collection_id guaranteed by earlier bail");
     let hash = ctx.media_store.write(coll_id, raw_bytes)?;
 
     let media = vec![DecodedMedia {

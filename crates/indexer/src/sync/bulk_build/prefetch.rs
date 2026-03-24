@@ -102,13 +102,13 @@ impl PrefetchChannelHandle {
             // Dynamic ahead gate: the bottleneck controller sets how many
             // batches to prefetch ahead.  When the channel has that many
             // pending, we wait — freeing CPU and I/O for build/flush.
-            let ahead_limit = *ahead_rx.borrow();
+            let ahead_limit = (*ahead_rx.borrow()).max(1);
             let pending = result_tx.max_capacity() - result_tx.capacity();
             if pending >= ahead_limit as usize {
                 let mut gated = false;
                 loop {
                     let current_pending = result_tx.max_capacity() - result_tx.capacity();
-                    let current_limit = *ahead_rx.borrow();
+                    let current_limit = (*ahead_rx.borrow()).max(1);
                     if current_pending < current_limit as usize {
                         break;
                     }

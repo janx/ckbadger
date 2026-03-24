@@ -2926,7 +2926,11 @@ impl Indexer {
 
             let mut results = Vec::with_capacity(block_numbers.len());
             for handle in handles {
-                results.extend(handle.join().unwrap()?);
+                results.extend(
+                    handle
+                        .join()
+                        .map_err(|e| anyhow::anyhow!("fetch thread panicked: {:?}", e))??,
+                );
             }
             Ok(results)
         })
@@ -2955,7 +2959,11 @@ impl Indexer {
                 .collect();
             let mut results = Vec::with_capacity(items.len());
             for handle in handles {
-                results.extend(handle.join().unwrap()?);
+                results.extend(
+                    handle
+                        .join()
+                        .map_err(|e| anyhow::anyhow!("fetch thread panicked: {:?}", e))??,
+                );
             }
             Ok(results)
         })

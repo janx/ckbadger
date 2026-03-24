@@ -1784,7 +1784,12 @@ impl BulkBuildRuntimeState {
             BatchExecutionStats {
                 last_block_number: Some(last_block.number),
                 last_block_hash: Some(last_block.hash.to_vec()),
-                block_count: u64::try_from(arena.blocks.len()).unwrap_or(0),
+                block_count: u64::try_from(arena.blocks.len()).map_err(|_| {
+                    anyhow!(
+                        "bulk build block count exceeds u64 range while applying hex block batch: blocks={}",
+                        arena.blocks.len()
+                    )
+                })?,
                 tx_count,
                 cells_created,
                 cells_consumed: consumed_cells,

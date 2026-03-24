@@ -19,7 +19,7 @@ use std::path::PathBuf;
 /// 1. Empty content -> `"application/octet-stream"`
 /// 2. Not valid UTF-8 -> `"application/octet-stream"`
 /// 3. Known binary magic bytes (PNG, JPEG, GIF, WebP) -> image MIME
-/// 4. Trimmed text starts with `<svg` / `<SVG` -> `"image/svg+xml"`
+/// 4. Trimmed text starts with `<svg` (case-insensitive) -> `"image/svg+xml"`
 /// 5. Trimmed text starts with `<!DOCTYPE html` / `<html` -> `"text/html"`
 /// 6. Trimmed text starts with `<?xml` -> `"application/xml"`
 /// 7. JSON-shaped text that parses as valid JSON -> `"application/json"`
@@ -51,9 +51,12 @@ pub fn sniff_media_type(content: &[u8]) -> &'static str {
     let trimmed = text.trim();
     let lower = trimmed.as_bytes();
 
-    // SVG
-    if trimmed.starts_with("<svg") || trimmed.starts_with("<SVG") {
-        return "image/svg+xml";
+    // SVG (case-insensitive: handles <svg, <SVG, <Svg, etc.)
+    if trimmed.len() >= 4 {
+        let svg_prefix: String = trimmed.chars().take(4).collect::<String>().to_lowercase();
+        if svg_prefix == "<svg" {
+            return "image/svg+xml";
+        }
     }
 
     // HTML
@@ -80,6 +83,10 @@ pub fn sniff_media_type(content: &[u8]) -> &'static str {
     "text/plain"
 }
 
+/// Maximum blob size (10 MiB). Decoder outputs exceeding this are likely bugs,
+/// not valid media — CKB-VM decoded content should never be this large.
+const MAX_BLOB_SIZE: usize = 10 * 1024 * 1024;
+
 /// Filesystem-backed content-addressed blob store for decoded media.
 pub struct MediaBlobStore {
     media_dir: PathBuf,
@@ -97,6 +104,15 @@ impl MediaBlobStore {
     /// Writes are atomic: content is written to a temp file first, then renamed
     /// into place to prevent partial reads.
     pub fn write(&self, collection_id: &[u8], content: &[u8]) -> Result<String> {
+        if content.len() > MAX_BLOB_SIZE {
+            anyhow::bail!(
+                "media blob exceeds maximum size: {} bytes > {} bytes limit, collection=0x{}",
+                content.len(),
+                MAX_BLOB_SIZE,
+                hex::encode(&collection_id[..collection_id.len().min(4)])
+            );
+        }
+
         let hash = Self::content_hash(content);
         let path = self.blob_path(collection_id, &hash);
 
@@ -238,6 +254,19 @@ mod tests {
     fn test_sniff_svg_with_leading_whitespace() {
         let content = b"  \n  <svg><rect/></svg>";
         assert_eq!(sniff_media_type(content), "image/svg+xml");
+    }
+
+    #[test]
+    fn test_sniff_svg_mixed_case() {
+        assert_eq!(
+            sniff_media_type(b"<Svg xmlns=\"http://www.w3.org/2000/svg\"/>"),
+            "image/svg+xml"
+        );
+        assert_eq!(sniff_media_type(b"<SVG><rect/></SVG>"), "image/svg+xml");
+        assert_eq!(
+            sniff_media_type(b"<sVg viewBox=\"0 0 100 100\"/>"),
+            "image/svg+xml"
+        );
     }
 
     #[test]

@@ -108,11 +108,11 @@ describe('CommandPalette', () => {
     expect(pushMock).toHaveBeenCalledWith('/blocks');
   });
 
-  it('navigates to assets with g a chord', () => {
+  it('navigates to inventory with g i chord', () => {
     render(<CommandPalette />);
 
     fireEvent.keyDown(window, { key: 'g' });
-    fireEvent.keyDown(window, { key: 'a' });
+    fireEvent.keyDown(window, { key: 'i' });
 
     expect(pushMock).toHaveBeenCalledWith('/inventory/tokens');
   });

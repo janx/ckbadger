@@ -547,6 +547,13 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
         deleted.push(format!("  {}/", store_paths.append_only_data.display()));
     }
 
+    // Delete media directory contents (decoded DOB media blobs)
+    if work.media_dir.exists() {
+        remove_dir_contents(&work.media_dir)
+            .with_context(|| format!("failed to purge {}", work.media_dir.display()))?;
+        deleted.push(format!("  {}/", work.media_dir.display()));
+    }
+
     // Delete run directory contents
     if work.run_dir.exists() {
         remove_dir_contents(&work.run_dir)

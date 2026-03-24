@@ -1198,7 +1198,13 @@ async fn serve_media(
     State(state): State<Arc<AppState>>,
     Path((spore_id, hash)): Path<(String, String)>,
 ) -> Result<Response, (StatusCode, axum::Json<ApiError>)> {
-    // 1. Parse spore_id
+    // 1. Parse spore_id and validate hash parameter
+    if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(ApiError::bad_request(
+            "Invalid media hash: expected exactly 64 hex characters",
+        ));
+    }
+
     let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
         .map_err(|_| ApiError::bad_request("Invalid spore ID hex"))?;
 
@@ -1255,22 +1261,25 @@ async fn serve_media(
     //   within SVG.
     // - `X-Content-Type-Options: nosniff` prevents browsers from MIME-sniffing
     //   a response into a dangerous type.
-    Ok((
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, content_type),
-            (
-                header::CACHE_CONTROL,
-                "public, max-age=31536000, immutable".to_string(),
-            ),
-            (
-                header::CONTENT_SECURITY_POLICY,
-                "default-src 'none'; style-src 'unsafe-inline'; img-src data:".to_string(),
-            ),
-            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
-        ],
-        blob,
-    )
+    // - `Content-Disposition: attachment` on non-image types forces download
+    //   instead of inline rendering, preventing untrusted HTML/SVG execution.
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, &content_type)
+        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .header(
+            header::CONTENT_SECURITY_POLICY,
+            "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+        )
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+
+    if !content_type.starts_with("image/") {
+        builder = builder.header(header::CONTENT_DISPOSITION, "attachment");
+    }
+
+    Ok(builder
+        .body(axum::body::Body::from(blob))
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .into_response())
 }
 

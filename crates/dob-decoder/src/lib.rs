@@ -26,7 +26,13 @@ pub fn decode_dob0(
         bail!("decoder exited with non-zero code: {exit_code}");
     }
 
-    let raw_output = output.last().cloned().unwrap_or_default();
+    let raw_output = output
+        .last()
+        .cloned()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("DOB0 decoder exited successfully but produced no output")
+        })?;
 
     let traits = match serde_json::from_str::<Vec<DobTraitGroup>>(&raw_output) {
         Ok(groups) => flatten_trait_groups(&groups),
@@ -69,7 +75,11 @@ pub fn decode_dob1_chain(
             bail!("decoder {i} exited with non-zero code: {exit_code}");
         }
 
-        last_raw_output = output.last().cloned().unwrap_or_default();
+        last_raw_output = output
+            .last()
+            .cloned()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("decoder {i} produced no output"))?;
 
         // Capture traits from each step that produces valid JSON trait groups.
         // For chains ending with a renderer (SVG output), traits come from an
