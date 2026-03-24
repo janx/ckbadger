@@ -2,37 +2,41 @@
 
 ## Philosophy
 
-Activities are **interpretations, not facts**. A simple form of activity is the interpretation of a per-owner position change in a single transaction: how much CKB moved, how much occupied capacity changed, which assets were affected, and who the counterparties were.
+Activities are **interpretations, not facts**. A CKB UTXO transaction is an atomic action bundle involving multiple parties. The activity system interprets each transaction from two complementary perspectives:
 
-More sophisticated activity systems may interpret two owners' position changes in a single transaction as a single 'swap' activity rather than two separate activities. Since UTXO transactions are atomic action bundles involving multiple parties, the combination possibilities and thus possible interpretations are endless.
+- **Per-participant**: what changed in each participant's personal balance sheet (Layer 1 + Layer 2)
+- **Per-transaction**: what happened as a whole, across all participants (Layer 3)
+
+The storage unit is one record per transaction containing both perspectives. TX-level interpretations (Layer 3) are stored once; per-participant accounting (Layer 1 + Layer 2) is stored per participant. This eliminates the redundancy of repeating TX-level data per participant, while preserving precise per-participant numbers.
 
 ## Three-Layer Analysis Model
 
 Activity analysis decomposes into three layers. Each layer adds interpretation on top of the layers below. Layers are **composable, not mutually exclusive** — a single activity may have signals at all three layers simultaneously.
 
 ```
-Layer 3: Protocol Action     WHY — cross-script pattern interpretation
-                             "RGB++ leap to CKB"
+Layer 3: Protocol Action     WHY — TX level, stored once
+                             3a. Cross-user behavior: "RGB++ leap", "UTXOSwap swap"
+                             3b. Item action: "DAO deposit", "pet pat", ".bit update"
                              Present when a ProtocolDetector matches
 
-Layer 2: Asset Change        WHAT — recognized asset mutations
-                             Token delta, DAO deposit, Spore mint, .bit update
-                             TypeCallEntry / LockCallEntry for unrecognized scripts
-                             Present when type/lock scripts are involved
+Layer 2: Item Delta          WHAT — per-participant balance sheet
+                             Token delta, Object arrived/departed, Identity arrived/departed
+                             Only records position changes (delta != 0)
+                             Present when participant gained or lost items
 
-Layer 1: CKB Position        HOW MUCH — capacity arithmetic
+Layer 1: CKB Position        HOW MUCH — per-participant capacity arithmetic
                              ckb_delta, used_delta
                              Always present. Not a fallback.
 ```
 
 Raw cells (InputCellView, ParsedCell, witnesses) are Layer 0 — the ground truth that all layers derive from, but not stored in activities. Available via transaction lookup.
 
-### Layer 1: CKB Position (always present)
+### Layer 1: CKB Position (per-participant, always present)
 
-Every activity has a CKB position change. It is computed by pure arithmetic on cell capacities:
+Every participant has a CKB position change. It is computed by pure arithmetic on cell capacities:
 
 ```
-ckb_delta  = sum(output_capacities) - sum(input_capacities)  for this owner
+ckb_delta  = sum(output_capacities) - sum(input_capacities)  for this participant
 used_delta = change in occupied capacity
 ```
 
@@ -40,74 +44,143 @@ CKB delta is a **dimension**, not a classification. A DAO deposit has `ckb_delta
 
 "CKB transfer" as a display type means: "the only interesting signal is CKB delta" — the degenerate case where Layers 2 and 3 are empty. It is not a separate activity type; it is the absence of higher-layer signals.
 
-### Layer 2: Asset Change (when type/lock scripts are involved)
+Layer 1 is **pre-computed** and stored per-participant. It is not derived at read time.
 
-Asset changes are derived from recognizing type scripts and parsing cell data. They answer: **what assets were involved and what happened to them?**
+### Layer 2: Item Delta (per-participant balance sheet)
 
-Recognized assets become `AssetChange` variants:
+Layer 2 is the participant's **personal balance sheet** — what items were gained or lost. It follows double-entry bookkeeping principles: each participant independently records their own position changes.
 
-- `Token` — xUDT/sUDT delta (fungible)
-- `DaoDeposit` / `DaoWithdrawRequest` / `DaoWithdrawComplete` — NervosDAO lifecycle
-- `Object` — Spore, mNFT mint/transfer/burn (non-fungible)
-- `Identity` — .bit, did:ckb create/update/recycle (identity)
+All item types — fungible tokens, non-fungible objects, identities — are recorded uniformly. Each entry is an item identifier, a kind tag, and a signed delta. Fungible items carry precise amounts; non-fungible items carry +1 (arrived) or -1 (departed). The kind tag is extensible to future asset types without structural changes.
 
-Unrecognized scripts become catch-all entries:
+#### What Layer 2 records
 
-- `TypeCallEntry` — type scripts we cannot yet interpret
-- `LockCallEntry` — non-standard lock scripts on outputs
+Layer 2 records **only position changes** (delta != 0):
 
-Both recognized and unrecognized entries are the same conceptual layer — "what scripts were involved and what did they do" — differing only in whether we have a dedicated parser. As more parsers and `ProtocolDetector` implementations land, some catch-all entries get promoted: lock calls may become Layer 3 protocol actions; type calls may become recognized asset changes.
+- Token received or sent (with precise amount)
+- Object (Spore, mNFT, ...) arrived or departed
+- Identity (.bit, did:ckb, ...) arrived or departed
 
-### Layer 3: Protocol Action (cross-layer patterns)
+#### What Layer 2 does NOT record
 
-Protocol actions are the highest-level interpretation. They combine Layer 2 signals (asset changes, lock calls) with Layer 0 raw data (cell scripts, witnesses) to identify **protocol-level actions** that span multiple scripts or owners.
+- **delta=0 interactions** — If a participant still holds the same item after the transaction (e.g., patting a pet, updating .bit records, requesting DAO withdrawal), their balance sheet didn't change. The interaction is an item action interpreted at Layer 3.
+
+- **DAO operations** — A DAO cell is CKB in a different state (locked vs free), not a separate item in the portfolio. The CKB movement is captured at Layer 1; the protocol semantics belong at Layer 3.
+
+- **Mint/Transfer/Burn classification** — Layer 2 records what happened to _your_ holdings, not why. Classification is derived from the pattern of deltas across participants or provided by Layer 3 protocol actions:
+
+  | Scenario             | Alice's L2    | Bob's L2             | Layer 3 narrative          |
+  | -------------------- | ------------- | -------------------- | -------------------------- |
+  | Transfer             | spore_123: -1 | spore_123: +1        | "Spore Transfer"           |
+  | Mint                 | —             | spore_123: +1        | "Spore Mint"               |
+  | Burn                 | spore_123: -1 | —                    | "Spore Burn"               |
+  | Pat                  | —             | —                    | "Pet Pat"                  |
+  | Future: 1-to-N split | obj_a: -1     | obj_b: +1, obj_c: +1 | defined by future detector |
+
+- **Counterparty information** — Layer 2 is self-contained per-participant. "Who did I trade with" is a Layer 3 cross-user interpretation.
+
+- **Display metadata** — Token symbol/decimals, object names, identity labels are not stored in activities. They are looked up from metadata stores at read time.
+
+### Layer 3: Protocol Action (TX level)
+
+Protocol actions are the highest-level interpretation. They are stored **once per transaction**, not per-participant. Layer 3 has two complementary concerns:
+
+**3a. Cross-user behavior interpretation** — actions that span multiple participants:
+
+- "Alice and Bob completed a UTXOSwap trade"
+- "RGB++ leap from BTC to CKB"
+- "Fiber channel opened between Alice and Bob"
+
+**3b. Item action interpretation** — actions performed on specific items:
+
+- "DAO deposit of 102 CKB"
+- "Pet #123 was patted"
+- ".bit xyz records updated"
+- "DAO withdrawal requested"
+
+These two concerns are not mutually exclusive — a single protocol action may express both (e.g., "Spore transfer from Alice to Bob" is both a cross-user action and an item action).
 
 A protocol action **explains** the lower-layer signals, it does not **replace** them:
 
 ```
-Layer 3:  rgbpp:leap_to_ckb     ← explains WHY this pattern of changes happened
-Layer 2:  Token +1,000 XUDT     ← explains WHAT asset moved
-Layer 1:  +500 CKB              ← explains HOW MUCH CKB changed
+Layer 3:  rgbpp:leap_to_ckb     <- explains WHY this pattern of changes happened
+Layer 2:  Token +1,000 XUDT     <- explains WHAT item position changed
+Layer 1:  +500 CKB              <- explains HOW MUCH CKB changed
 ```
 
 All three layers are simultaneously true and should be simultaneously visible to the user.
 
-Protocol actions are detected by `ProtocolDetector` implementations (see `docs/plans/2026-03-14-protocol-action-framework-design.md`). Each detector receives ALL accumulated Layer 2 signals and the full transaction view, then returns zero or more `ProtocolAction` values.
+#### DAO as Protocol Actions
+
+NervosDAO operations are protocol actions (Layer 3), not balance sheet items (Layer 2). A DAO cell is CKB reclassified from free to locked — not a new asset acquired.
+
+- **Deposit**: Layer 1 records ckb_delta = -102. Layer 3 explains "this is a DAO deposit."
+- **Withdraw Request**: Layer 1 records ckb_delta = 0 (cell consumed and recreated, same owner). Layer 3 explains "withdrawal was requested." This is a delta=0 interaction — exactly the kind of item action that belongs at Layer 3, not Layer 2.
+- **Withdraw Complete**: Layer 1 records ckb_delta = +102 + compensation. Layer 3 explains "DAO withdrawal completed with X compensation."
+
+All three DAO lifecycle states live at the same layer, providing consistent treatment.
+
+#### Catch-All Entries
+
+Unrecognized type scripts and non-standard lock scripts are recorded as catch-all entries at the TX level. As more `ProtocolDetector` implementations land, some catch-all entries get promoted to named protocol actions. This is the natural growth path: unrecognized today, recognized tomorrow.
+
+Protocol actions are detected by `ProtocolDetector` implementations (see `docs/plans/2026-03-14-protocol-action-framework-design.md`). Each detector receives the full transaction view, then returns zero or more protocol actions.
+
+## Storage Design Principles
+
+**TX-level data stored once.** Protocol actions, unrecognized script calls, and all cross-user interpretations are properties of the transaction, not of individual participants. Storing them once (at the TX level) instead of N times (per participant) eliminates the largest source of redundancy in the current activity storage.
+
+**Per-participant data is minimal.** Each participant stores only: CKB position (Layer 1), item deltas (Layer 2), and a classification bitmask. Lock script metadata (code_hash, hash_type, args), display metadata (symbol, decimals, standard), counterparty lists, and script involvement lists are all derivable from existing stores and are not duplicated in the activity record.
+
+**Classification bitmask bridges layers.** A per-participant bitmask is computed at write time from both Layer 2 and Layer 3 signals. This enables fast filtering (e.g., "show me DAO activities for this address") without deserializing the full activity record. The bitmask is set when a participant has relevant item deltas (Layer 2) **or** is involved in relevant protocol actions (Layer 3), providing uniform filtering regardless of which layer carries the detail.
+
+**Item deltas are uniform.** All asset types share the same structure: an identifier, a kind tag, and a signed delta. This avoids per-type fields that would require schema changes when new asset types emerge. The kind tag is extensible; new item kinds (future NFT standards, new fungible token protocols) are added without structural changes to the activity record.
 
 ## Display Classification
 
 The frontend needs a single "display type" for badge/icon/color selection. This is a **lossy projection** of the layered analysis:
 
 ```
-1. protocolActions.length > 0   → 'protocolAction'
-2. assetChanges (DAO > token > object > identity)
-3. typeCalls.length > 0         → 'typeCall'
-4. (none of the above)          → 'ckbTransfer'
+1. protocol_actions present    -> 'protocolAction'
+2. item_deltas present         -> item kind priority: token > object > identity
+3. type_calls present          -> 'typeCall'
+4. (none of the above)         -> 'ckbTransfer'
 ```
 
 This projection picks a headline. It does NOT mean the other layers are absent or unimportant. The UI should render all non-empty layers, with the display type governing the headline treatment.
 
 ## Rendering: Show All Layers
 
-Activity rendering should present all non-empty layers, not just the winner:
+Activity rendering should present all non-empty layers, not just the winner.
+
+**Cross-user view (global feed, transaction detail):**
+
+All participants visible, protocol actions provide the narrative:
 
 ```
-🔷 RGB++ · leap to ckb          btc:abc1...ef       ← Layer 3 headline
-📦 XUDT Transfer                 +1,000 XUDT         ← Layer 2 detail
-💰 CKB                           +500.00 CKB         ← Layer 1 detail
+RGB++ Leap to CKB                                   <- Layer 3
+  Alice: -500 CKB, XUDT -1,000                      <- Layer 1 + 2
+  Bob:   +500 CKB, XUDT +1,000                      <- Layer 1 + 2
 ```
 
-For a pure CKB transfer (Layers 2 and 3 empty):
+```
+DAO Deposit                                          <- Layer 3
+  Alice: -102 CKB                                    <- Layer 1
+```
 
 ```
-💰 CKB Transfer                  -100.00 CKB         ← Layer 1 only
+Spore Transfer                                       <- Layer 3
+  Alice: -0.001 CKB, Spore #abc departed             <- Layer 1 + 2
+  Bob:   +0.001 CKB, Spore #abc arrived              <- Layer 1 + 2
 ```
 
-For a DAO deposit (Layer 3 empty):
+**Per-participant view (address feed):**
+
+Filtered to one participant, with TX-level context:
 
 ```
-🏦 DAO Deposit                   102.00 CKB          ← Layer 2 headline
-💰 CKB                           -102.00 CKB         ← Layer 1 detail
+RGB++ Leap to CKB          +500 CKB, XUDT +1,000    <- L3 headline, L1+L2 detail
+DAO Deposit                 -102 CKB                 <- L3 headline, L1 detail
+CKB Transfer                -100.00 CKB              <- Layer 1 only
 ```
 
 ## Statistics
@@ -115,8 +188,8 @@ For a DAO deposit (Layer 3 empty):
 Daily activity stats classify each activity for aggregate counting. The classification is **per-layer**, not mutually exclusive:
 
 - Layer 1: every non-coinbase activity contributes to `total_ckb_moved`
-- Layer 2: asset changes contribute to `token_count`, `dao_deposit_count`, `object_count`, etc.
-- Layer 3: protocol actions contribute to `protocol_action_counts` (`"rgbpp:leap_to_ckb" -> 3`)
+- Layer 2: item deltas contribute to `token_count`, `object_count`, etc.
+- Layer 3: protocol actions contribute to `protocol_action_counts` (`"rgbpp:leap_to_ckb" -> 3`, `"dao:deposit" -> 5`)
 
 A single activity may increment counters at multiple layers. For example, an RGB++ token leap increments both `protocol_action_counts["rgbpp:leap_to_ckb"]` AND `token_count`.
 
