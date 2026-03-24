@@ -530,13 +530,29 @@ async fn decode_single_spore(
     let coll_id = collection_id.expect("collection_id guaranteed by earlier bail");
     let hash = ctx.media_store.write(coll_id, raw_bytes)?;
 
-    let media = vec![DecodedMedia {
+    let mut media = vec![DecodedMedia {
         media_type: media_type.to_string(),
         role: None,
         size: raw_bytes.len() as u64,
         hash,
         step: Some(decoded.output_step),
     }];
+
+    // DOB1 pattern-based SVG rendering: when the CKB-VM decoder chain outputs
+    // JSON traits (not rendered media), build SVG from DOB1 patterns + traits.
+    if !media_type.starts_with("image/") {
+        if let Some(svg) = build_dob1_svg(&metadata, &traits) {
+            let svg_bytes = svg.as_bytes();
+            let svg_hash = ctx.media_store.write(coll_id, svg_bytes)?;
+            media.push(DecodedMedia {
+                media_type: "image/svg+xml".to_string(),
+                role: Some("render".to_string()),
+                size: svg_bytes.len() as u64,
+                hash: svg_hash,
+                step: Some(decoded.output_step + 1),
+            });
+        }
+    }
 
     // Extract media sources from decoded trait values
     let media_sources = extract_media_sources_from_traits(&decoded.traits);
@@ -863,6 +879,167 @@ fn format_trait_value(value: &Value) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// DOB1 pattern-based SVG rendering
+//
+// DOB1 clusters define SVG templates via "pattern" arrays in the cluster
+// metadata. Each pattern element maps a decoded trait to an SVG attribute
+// or element snippet. When the CKB-VM decoder chain outputs JSON traits
+// (rather than rendered media), we build the SVG here from patterns + traits.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+struct Dob1PatternElement {
+    image_name: String,
+    svg_fields: String,
+    trait_name: String,
+    pattern_type: String,
+    trait_args: Option<Value>,
+}
+
+fn normalize_dob1_pattern_element(value: &Value) -> Option<Dob1PatternElement> {
+    if let Value::Array(items) = value {
+        let image_name = items.first()?.as_str()?.to_string();
+        let svg_fields = items.get(1)?.as_str()?.to_string();
+        let trait_name = items.get(2)?.as_str()?.to_string();
+        let pattern_type = items.get(3)?.as_str()?.to_string();
+        let trait_args = items.get(4).cloned();
+        return Some(Dob1PatternElement {
+            image_name,
+            svg_fields,
+            trait_name,
+            pattern_type,
+            trait_args,
+        });
+    }
+
+    let obj = value.as_object()?;
+    Some(Dob1PatternElement {
+        image_name: obj.get("imageName")?.as_str()?.to_string(),
+        svg_fields: obj.get("svgFields")?.as_str()?.to_string(),
+        trait_name: obj.get("traitName")?.as_str()?.to_string(),
+        pattern_type: obj.get("patternType")?.as_str()?.to_string(),
+        trait_args: obj.get("traitArgs").cloned(),
+    })
+}
+
+fn extract_dob1_patterns(metadata: &Value) -> Vec<Dob1PatternElement> {
+    let dob = match metadata.get("dob").and_then(|v| v.as_object()) {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+    let decoders = match dob.get("decoders").and_then(|v| v.as_array()) {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+
+    for decoder in decoders {
+        if let Some(patterns) = decoder.get("pattern").and_then(|v| v.as_array()) {
+            let normalized: Vec<Dob1PatternElement> = patterns
+                .iter()
+                .filter_map(normalize_dob1_pattern_element)
+                .collect();
+            if !normalized.is_empty() {
+                return normalized;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn selector_matches(selector: &Value, trait_value: &str) -> bool {
+    match selector {
+        Value::String(s) if s == "*" => true,
+        Value::Array(items) => items.iter().any(|item| selector_matches(item, trait_value)),
+        _ => format_trait_value(selector) == trait_value,
+    }
+}
+
+fn resolve_dob1_snippet(
+    pattern: &Dob1PatternElement,
+    traits: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let kind = pattern.pattern_type.to_ascii_lowercase();
+    if kind == "raw" {
+        return pattern
+            .trait_args
+            .as_ref()
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+    }
+    if kind != "options" {
+        return None;
+    }
+
+    let mut wildcard: Option<String> = None;
+    let trait_value = traits.get(&pattern.trait_name).cloned().unwrap_or_default();
+    let options = pattern.trait_args.as_ref()?.as_array()?;
+    for option in options {
+        let pair = option.as_array()?;
+        if pair.len() < 2 {
+            continue;
+        }
+        let selector = &pair[0];
+        let snippet = pair[1].as_str()?;
+        if selector_matches(selector, "*") {
+            wildcard = Some(snippet.to_string());
+        }
+        if selector_matches(selector, &trait_value) {
+            return Some(snippet.to_string());
+        }
+    }
+    wildcard
+}
+
+/// Build SVG markup from DOB1 patterns and decoded trait values.
+///
+/// Returns `None` if no DOB1 patterns exist or no image elements can be resolved.
+fn build_dob1_svg(metadata: &Value, traits: &[DobDecodedTrait]) -> Option<String> {
+    let patterns = extract_dob1_patterns(metadata);
+    if patterns.is_empty() {
+        return None;
+    }
+
+    let trait_map: std::collections::HashMap<String, String> = traits
+        .iter()
+        .map(|t| (t.name.clone(), t.value.clone()))
+        .collect();
+
+    let mut images: std::collections::BTreeMap<String, (Vec<String>, Vec<String>)> =
+        std::collections::BTreeMap::new();
+    for pattern in &patterns {
+        let Some(snippet) = resolve_dob1_snippet(pattern, &trait_map) else {
+            continue;
+        };
+        let entry = images
+            .entry(pattern.image_name.clone())
+            .or_insert_with(|| (Vec::new(), Vec::new()));
+        if pattern.svg_fields == "attributes" {
+            entry.0.push(snippet);
+        } else if pattern.svg_fields == "elements" {
+            entry.1.push(snippet);
+        }
+    }
+
+    let image_key = if images.contains_key("IMAGE.0") {
+        "IMAGE.0".to_string()
+    } else {
+        images.keys().next()?.to_string()
+    };
+    let (attrs, elements) = images.get(&image_key)?;
+    if elements.is_empty() {
+        return None;
+    }
+
+    let attr_text = if attrs.is_empty() {
+        "xmlns='http://www.w3.org/2000/svg' viewBox='0 0 500 500'".to_string()
+    } else {
+        attrs.join(" ")
+    };
+    let element_text = elements.join("");
+    Some(format!("<svg {attr_text}>{element_text}</svg>"))
+}
+
 /// Scan decoded trait values for URI schemes and extract media sources.
 fn extract_media_sources_from_traits(traits: &[DobTrait]) -> Vec<SporeMediaSource> {
     let mut sources = Vec::new();
@@ -1123,6 +1300,55 @@ mod tests {
         assert_eq!(sources.len(), 2);
         assert_eq!(sources[0].scheme, "btcfs");
         assert_eq!(sources[1].scheme, "ipfs");
+    }
+
+    #[test]
+    fn test_build_dob1_svg_from_patterns_and_traits() {
+        let metadata = json!({
+            "dob": {
+                "ver": 1,
+                "decoders": [{
+                    "decoder": { "type": "code_hash", "hash": "0xabcd" },
+                    "pattern": [
+                        ["IMAGE.0", "attributes", "", "raw", "xmlns='http://www.w3.org/2000/svg' viewBox='0 0 500 500'"],
+                        ["IMAGE.0", "elements", "prev.bg", "options", [
+                            ["blue", "<rect fill='blue' width='500' height='500'/>"],
+                            ["*", "<rect fill='gray' width='500' height='500'/>"]
+                        ]],
+                        ["IMAGE.0", "elements", "prev.hat", "options", [
+                            ["crown", "<text y='50'>crown</text>"],
+                            ["*", ""]
+                        ]]
+                    ]
+                }]
+            }
+        });
+        let traits = vec![
+            DobDecodedTrait {
+                name: "prev.bg".to_string(),
+                value: "blue".to_string(),
+            },
+            DobDecodedTrait {
+                name: "prev.hat".to_string(),
+                value: "crown".to_string(),
+            },
+        ];
+        let svg = build_dob1_svg(&metadata, &traits);
+        assert!(svg.is_some(), "expected SVG to be built");
+        let svg = svg.unwrap();
+        assert!(svg.starts_with("<svg "), "SVG must start with <svg");
+        assert!(svg.contains("fill='blue'"), "SVG must contain blue rect");
+        assert!(svg.contains("crown"), "SVG must contain crown text");
+    }
+
+    #[test]
+    fn test_build_dob1_svg_returns_none_without_patterns() {
+        let metadata = json!({ "dob": { "ver": 1, "decoders": [{}] } });
+        let traits = vec![DobDecodedTrait {
+            name: "bg".to_string(),
+            value: "red".to_string(),
+        }];
+        assert!(build_dob1_svg(&metadata, &traits).is_none());
     }
 
     #[test]
