@@ -268,6 +268,8 @@ impl BatchWriter {
                 };
             self.store
                 .rollback_to_block_with_append_only_store(rollback_target, Some(append_store))?;
+            // Re-derive script version/family rollups from corrected reference info.
+            self.refresh_script_reference_rollups()?;
             info!(
                 start_block,
                 rollback_target, next_block, cleanup_reason, "Startup cleanup complete"
@@ -349,6 +351,8 @@ impl BatchWriter {
         // then the caller will re-sync from start_block
         self.store
             .rollback_to_block_with_append_only_store(start_block - 1, Some(append_store))?;
+        // Re-derive script version/family rollups from corrected reference info.
+        self.refresh_script_reference_rollups()?;
 
         info!(
             "Batch cleanup complete for blocks {} to {}",

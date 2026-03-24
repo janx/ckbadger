@@ -85,6 +85,8 @@ impl BatchWriter {
             .rollback_to_block_with_append_only_store(fork_point, Some(append_store))?;
         // Revert domain mutations from undo-log and prune append undo entries.
         self.store.rollback_via_undo_log(append_store, fork_point)?;
+        // Re-derive script version/family rollups from the corrected reference info.
+        self.refresh_script_reference_rollups()?;
 
         // Record reorg event and clear deep fork flag in one sync_meta batch.
         let event = ReorgEvent {

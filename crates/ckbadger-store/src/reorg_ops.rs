@@ -221,12 +221,17 @@ fn put_cell_index_entries(
 /// Accumulate derived-CF deltas for a cell changing live state during rollback.
 /// `sign` is -1 when removing from live (cell created after rollback_to),
 /// +1 when restoring to live (cell consumed after rollback_to).
+/// Script reference delta tuple:
+/// (cells_delta, live_delta, capacity_delta, owned_cap_delta, used_delta, owned_knowledge_delta)
+type ScriptReferenceDelta = (i64, i64, i128, i128, i128, i128);
+
 fn accumulate_cell_deltas(
     cell: &LiveCellInfo,
     sign: i128,
     addr_deltas: &mut HashMap<Vec<u8>, (i128, i128, i32, i64)>,
     script_deltas: &mut HashMap<(Vec<u8>, bool), (i64, i128, i128)>,
     token_holder_deltas: &mut HashMap<(Vec<u8>, Vec<u8>), i128>,
+    script_reference_deltas: &mut HashMap<(Vec<u8>, u8, bool), ScriptReferenceDelta>,
 ) {
     let cap = cell.capacity as i128 * sign;
     let occ = cell.occupied_capacity as i128 * sign;
@@ -252,6 +257,18 @@ fn accumulate_cell_deltas(
     e.1 += cap;
     e.2 += occ;
 
+    // script_reference_info — lock side
+    let hash_type_u8 = cell.lock_hash_type as u8;
+    let e = script_reference_deltas
+        .entry((cell.lock_code_hash.clone(), hash_type_u8, false))
+        .or_insert((0, 0, 0, 0, 0, 0));
+    e.0 += total_d; // cells_delta (total cells created/removed)
+    e.1 += live_d as i64; // live_delta
+    e.2 += cap; // capacity_delta (owned)
+    e.3 += cap; // owned_cap_delta
+    e.4 += occ; // used_delta
+    e.5 += occ; // owned_knowledge_delta
+
     // script_info — type side (if present)
     if let Some(ref type_code_hash) = cell.type_code_hash {
         let e = script_deltas
@@ -260,6 +277,20 @@ fn accumulate_cell_deltas(
         e.0 += live_d as i64;
         e.1 += cap;
         e.2 += occ;
+
+        // script_reference_info — type side
+        if let Some(type_hash_type) = cell.type_hash_type {
+            let type_ht_u8 = type_hash_type as u8;
+            let e = script_reference_deltas
+                .entry((type_code_hash.clone(), type_ht_u8, true))
+                .or_insert((0, 0, 0, 0, 0, 0));
+            e.0 += total_d;
+            e.1 += live_d as i64;
+            e.2 += cap;
+            e.3 += cap;
+            e.4 += occ;
+            e.5 += occ;
+        }
     }
 
     // token_holder (UDT cells with type_script)
@@ -882,6 +913,9 @@ impl CkbadgerStore {
         let mut script_info_deltas: HashMap<(Vec<u8>, bool), (i64, i128, i128)> = HashMap::new();
         // token_holder_deltas: (type_hash, lock_hash) -> balance_delta
         let mut token_holder_deltas: HashMap<(Vec<u8>, Vec<u8>), i128> = HashMap::new();
+        // script_reference_deltas: (code_hash, hash_type, is_type) -> ScriptReferenceDelta
+        let mut script_reference_deltas: HashMap<(Vec<u8>, u8, bool), ScriptReferenceDelta> =
+            HashMap::new();
 
         if !use_tx_context {
             if txs_removed > 0 {
@@ -944,6 +978,7 @@ impl CkbadgerStore {
                         &mut addr_balance_deltas,
                         &mut script_info_deltas,
                         &mut token_holder_deltas,
+                        &mut script_reference_deltas,
                     );
                 }
                 stage.tick(cells_removed);
@@ -1011,6 +1046,7 @@ impl CkbadgerStore {
                         &mut addr_balance_deltas,
                         &mut script_info_deltas,
                         &mut token_holder_deltas,
+                        &mut script_reference_deltas,
                     );
                 }
                 stage.tick(cells_restored);
@@ -1068,6 +1104,7 @@ impl CkbadgerStore {
                             &mut addr_balance_deltas,
                             &mut script_info_deltas,
                             &mut token_holder_deltas,
+                            &mut script_reference_deltas,
                         );
                     }
                     // Remove consumed marker for outputs created in rolled-back blocks.
@@ -1146,6 +1183,7 @@ impl CkbadgerStore {
                                     &mut addr_balance_deltas,
                                     &mut script_info_deltas,
                                     &mut token_holder_deltas,
+                                    &mut script_reference_deltas,
                                 );
                             }
                         }
@@ -1777,6 +1815,53 @@ impl CkbadgerStore {
             script_infos_updated += 1;
         }
 
+        // 9b2. script_reference_info — apply reference deltas so version/family rollups
+        //      re-derive correctly after rollback.
+        let mut script_refs_updated = 0u64;
+        for ((code_hash, hash_type, is_type), (cells_d, live_d, cap_d, own_d, used_d, know_d)) in
+            &script_reference_deltas
+        {
+            if *cells_d == 0
+                && *live_d == 0
+                && *cap_d == 0
+                && *own_d == 0
+                && *used_d == 0
+                && *know_d == 0
+            {
+                continue;
+            }
+            let key = keys::encode_script_reference_key(*hash_type, code_hash);
+            let mut sri = match self.get_script_reference_info(*hash_type, code_hash)? {
+                Some(v) => v,
+                None => {
+                    // Reference info may not exist yet (e.g. script only appeared in
+                    // rolled-back blocks). Skip — nothing to adjust.
+                    continue;
+                }
+            };
+            if *is_type {
+                sri.type_cells_count += cells_d;
+                sri.type_live_cells_count += live_d;
+                sri.type_capacity_sum += cap_d;
+                sri.type_owned_capacity_sum += own_d;
+                sri.type_used_capacity_sum += used_d;
+                sri.type_owned_knowledge_sum += know_d;
+            } else {
+                sri.lock_cells_count += cells_d;
+                sri.lock_live_cells_count += live_d;
+                sri.lock_capacity_sum += cap_d;
+                sri.lock_owned_capacity_sum += own_d;
+                sri.lock_used_capacity_sum += used_d;
+                sri.lock_owned_knowledge_sum += know_d;
+            }
+            batch.put_cf(
+                self.cf_script_reference_info(),
+                key,
+                bincode::serialize(&sri).expect("serialize ScriptReferenceInfo"),
+            );
+            script_refs_updated += 1;
+        }
+
         // 9c. token_holders — apply balance deltas, track per-type_hash holder count changes
         let mut type_hash_holder_changes: HashMap<Vec<u8>, (i128, i64)> = HashMap::new();
         for ((type_hash, lock_hash), balance_delta) in &token_holder_deltas {
@@ -1878,6 +1963,7 @@ impl CkbadgerStore {
         info!(
             addr_balances_updated,
             script_infos_updated,
+            script_refs_updated,
             holders_updated,
             holders_removed,
             tokens_updated,
@@ -1886,6 +1972,7 @@ impl CkbadgerStore {
         stage.finish(
             addr_balances_updated
                 + script_infos_updated
+                + script_refs_updated
                 + holders_updated
                 + holders_removed
                 + tokens_updated,

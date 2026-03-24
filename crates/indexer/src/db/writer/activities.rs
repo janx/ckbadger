@@ -363,10 +363,17 @@ fn build_tx_activity_bundle<'a, S: BuildHasher>(
 ) -> Result<TxActivityBundle> {
     let mut owners: HashMap<&'a [u8], OwnerAccum<'a>> = HashMap::new();
 
-    // Process inputs (skip inputs with unknown cell info — empty lock_script_hash)
-    for input in &tx.inputs {
-        if input.lock_script_hash.len() < 32 {
-            continue;
+    // Process inputs — lock_script_hash must always be exactly 32 bytes
+    for (input_idx, input) in tx.inputs.iter().enumerate() {
+        if input.lock_script_hash.len() != 32 {
+            bail!(
+                "input lock_script_hash has invalid length: len={}, expected=32, \
+                 tx_hash={}, input_idx={}, block_number={}",
+                input.lock_script_hash.len(),
+                hex::encode(tx.tx_hash),
+                input_idx,
+                tx.block_number,
+            );
         }
         let accum = owners.entry(input.lock_script_hash).or_default();
         record_owner_lock_script(
@@ -697,7 +704,7 @@ fn classify_input<'a>(
     match hashes.classify(type_code_hash) {
         Some(AssetKind::Udt) => {
             if let Some(tsh) = type_script_hash {
-                if let Some(amount) = udt_amount.or_else(|| UdtParser::parse_amount(data)) {
+                if let Some(amount) = udt_amount {
                     let entry = accum.udt_deltas.entry(tsh).or_insert((0, 0));
                     entry.0 += amount as i128;
                 }
@@ -1303,7 +1310,7 @@ mod tests {
         let mut alice_input = make_input(alice, 200_00000000, 61_00000000);
         alice_input.type_code_hash = Some(sudt_code_hash.clone());
         alice_input.type_script_hash = Some(type_script_hash.clone());
-        alice_input.data = 5000u128.to_le_bytes().to_vec();
+        alice_input.udt_amount = Some(5000);
 
         let outputs = vec![
             make_output(
