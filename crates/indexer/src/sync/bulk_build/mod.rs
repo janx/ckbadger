@@ -52,7 +52,6 @@ pub(crate) mod sequencer;
 
 use crate::sync::bottleneck::{self, BatchSignals, BottleneckController};
 
-
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PreparedFinalizeArtifacts {
     activity_sealed_rows: Vec<materialize::MaterializedRow>,
@@ -184,9 +183,9 @@ impl BulkBuildEngine {
                 break;
             }
 
-            // Wait for at least one block in the buffer.
+            // Fill buffer to the controller's bytes budget.
             let recv_started = Instant::now();
-            match buffer.ensure_blocks().await {
+            match buffer.fill_to_budget(controller.target_batch_bytes()).await {
                 Ok(true) => {}
                 Ok(false) => {
                     info!("block buffer exhausted, ending bulk build loop");
@@ -196,8 +195,6 @@ impl BulkBuildEngine {
                     return Err(e.context("prefetch error during bulk build"));
                 }
             }
-            // Greedily pull any additional ready chunks.
-            buffer.try_fill()?;
             let prefetch_recv_elapsed = recv_started.elapsed();
 
             // Determine how many blocks to drain based on bytes budget.
@@ -216,8 +213,11 @@ impl BulkBuildEngine {
             let raw_blocks: Vec<_> = drained.into_iter().map(|b| b.raw).collect();
 
             let build_started = Instant::now();
-            let (batch_stats, build_timings, pending_flush) =
-                runtime.apply_blocks(&raw_blocks, indexer.config.is_mainnet(), &token_info_cache)?;
+            let (batch_stats, build_timings, pending_flush) = runtime.apply_blocks(
+                &raw_blocks,
+                indexer.config.is_mainnet(),
+                &token_info_cache,
+            )?;
             let build_elapsed = build_started.elapsed();
 
             // Read the most recent flush_ms from the worker (non-blocking).

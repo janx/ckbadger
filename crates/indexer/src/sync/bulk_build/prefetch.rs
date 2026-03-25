@@ -6,12 +6,19 @@ use super::block_buffer::BufferedBlock;
 use crate::sync::indexer::Indexer;
 use ckb_store_reader::CkbChainReader;
 
-/// Number of blocks fetched per prefetch iteration.
-///
-/// This is intentionally larger than typical build-loop batch sizes so the
-/// build loop can choose its own byte-budget slices from the buffer without
-/// being constrained by the fetch granularity.
-pub(crate) const PREFETCH_CHUNK_SIZE: u64 = 5000;
+/// Target bytes per prefetch chunk.  The worker adapts block count each
+/// iteration so that chunk size stays roughly constant regardless of
+/// on-chain density.  50 MB keeps fetch time stable (~200-500 ms).
+const CHUNK_BYTES_TARGET: u64 = 50_000_000; // 50 MB
+
+/// Block count bounds for a single prefetch fetch.
+const MIN_CHUNK_BLOCKS: u64 = 500;
+const MAX_CHUNK_BLOCKS: u64 = 500_000;
+
+/// Initial density estimate (bytes/block) before any real data.
+const INITIAL_DENSITY_EMA: f64 = 100.0;
+
+const DENSITY_EMA_ALPHA: f64 = 0.5;
 
 /// Return the molecule-serialized byte size of a raw CKB block.
 ///
@@ -50,7 +57,13 @@ impl PrefetchChannelHandle {
         let (result_tx, result_rx) = tokio::sync::mpsc::channel(channel_depth);
 
         let worker_handle = tokio::task::spawn_blocking(move || {
-            Self::prefetch_worker(result_tx, threads_rx, ckb_store, start_block, handoff_target)
+            Self::prefetch_worker(
+                result_tx,
+                threads_rx,
+                ckb_store,
+                start_block,
+                handoff_target,
+            )
         });
 
         Self {
@@ -72,14 +85,19 @@ impl PrefetchChannelHandle {
             exit_reason: PrefetchExitReason::Completed,
         };
         let mut position = start_block;
+        let mut density_ema: f64 = INITIAL_DENSITY_EMA;
 
         while position <= handoff_target {
             // Backpressure is provided by the bounded channel — when the
             // channel is full, `blocking_send` below naturally blocks until
             // the build loop consumes a chunk.
 
+            // Adapt chunk block count from bytes target and density EMA.
+            let chunk_blocks = (CHUNK_BYTES_TARGET as f64 / density_ema) as u64;
+            let chunk_blocks = chunk_blocks.clamp(MIN_CHUNK_BLOCKS, MAX_CHUNK_BLOCKS);
+
             let end = std::cmp::min(
-                position.saturating_add(PREFETCH_CHUNK_SIZE.saturating_sub(1)),
+                position.saturating_add(chunk_blocks.saturating_sub(1)),
                 handoff_target,
             );
 
@@ -99,6 +117,13 @@ impl PrefetchChannelHandle {
                             BufferedBlock { raw, block_bytes }
                         })
                         .collect();
+                    // Update density EMA from actual chunk data.
+                    if !buffered.is_empty() {
+                        let chunk_bytes: usize = buffered.iter().map(|b| b.block_bytes).sum();
+                        let actual_density = chunk_bytes as f64 / buffered.len() as f64;
+                        density_ema = density_ema * (1.0 - DENSITY_EMA_ALPHA)
+                            + actual_density * DENSITY_EMA_ALPHA;
+                    }
                     Ok(buffered)
                 }
                 Err(e) => Err(e),
@@ -157,13 +182,15 @@ mod tests {
     fn block_bytes_for_raw_reads_molecule_size() {
         let raw = make_dummy_raw_block();
         let bytes = block_bytes_for_raw(&raw);
-        assert!(bytes > 0, "molecule total_size should be non-zero for a default block, got {bytes}");
+        assert!(
+            bytes > 0,
+            "molecule total_size should be non-zero for a default block, got {bytes}"
+        );
     }
 
     #[tokio::test]
     async fn prefetch_channel_close_and_wait_returns_stats() {
-        let (result_tx, result_rx) =
-            tokio::sync::mpsc::channel::<Result<Vec<BufferedBlock>>>(2);
+        let (result_tx, result_rx) = tokio::sync::mpsc::channel::<Result<Vec<BufferedBlock>>>(2);
         drop(result_tx); // simulate worker done
 
         let worker_handle = tokio::task::spawn_blocking(|| {
@@ -187,8 +214,7 @@ mod tests {
 
     #[tokio::test]
     async fn prefetch_channel_take_receiver_returns_rx() {
-        let (result_tx, result_rx) =
-            tokio::sync::mpsc::channel::<Result<Vec<BufferedBlock>>>(4);
+        let (result_tx, result_rx) = tokio::sync::mpsc::channel::<Result<Vec<BufferedBlock>>>(4);
 
         let worker_handle = tokio::task::spawn_blocking(|| {
             Ok(PrefetchWorkerStats {
@@ -219,8 +245,7 @@ mod tests {
     #[tokio::test]
     #[should_panic(expected = "take_receiver called more than once")]
     async fn take_receiver_panics_on_second_call() {
-        let (_result_tx, result_rx) =
-            tokio::sync::mpsc::channel::<Result<Vec<BufferedBlock>>>(2);
+        let (_result_tx, result_rx) = tokio::sync::mpsc::channel::<Result<Vec<BufferedBlock>>>(2);
 
         let worker_handle = tokio::task::spawn_blocking(|| {
             Ok(PrefetchWorkerStats {

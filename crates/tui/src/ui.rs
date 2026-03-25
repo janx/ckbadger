@@ -456,8 +456,7 @@ impl App {
                 };
                 if let Some(prev) = self.prev_controller_knobs {
                     let budget_delta_pct = if prev.target_batch_bytes > 0 {
-                        (current_knobs.target_batch_bytes as f64
-                            - prev.target_batch_bytes as f64)
+                        (current_knobs.target_batch_bytes as f64 - prev.target_batch_bytes as f64)
                             / prev.target_batch_bytes as f64
                             * 100.0
                     } else {
@@ -2484,11 +2483,7 @@ fn controller_panel_lines(
     // 10-char fill bar
     let filled = ((fill_pct / 100.0 * 10.0).round() as usize).min(10);
     let empty = 10 - filled;
-    let bar_str = format!(
-        "{}{}",
-        "\u{2588}".repeat(filled),
-        "\u{2591}".repeat(empty),
-    );
+    let bar_str = format!("{}{}", "\u{2588}".repeat(filled), "\u{2591}".repeat(empty),);
 
     // Budget text: target_bytes in MB
     let budget_mb = target_bytes / 1_000_000;
@@ -2526,22 +2521,17 @@ fn controller_panel_lines(
     if dense {
         // Compact: 2 lines
         // Line 1: build EMA + budget
-        let mut spans1 = vec![
-            Span::styled(
-                format!("build {:.1}s/3s {:.0}%", build_ema / 1000.0, fill_pct),
-                Style::default().fg(build_color),
-            ),
-        ];
+        let mut spans1 = vec![Span::styled(
+            format!("build {:.1}s/3s {:.0}%", build_ema / 1000.0, fill_pct),
+            Style::default().fg(build_color),
+        )];
         if target_bytes > 0 {
             spans1.push(Span::styled(
                 format!("  {}MB", budget_mb),
                 Style::default().fg(FOREGROUND),
             ));
             if let Some((ref txt, col)) = budget_delta_text {
-                spans1.push(Span::styled(
-                    format!(" {}", txt),
-                    Style::default().fg(col),
-                ));
+                spans1.push(Span::styled(format!(" {}", txt), Style::default().fg(col)));
             }
         }
 
@@ -2557,10 +2547,7 @@ fn controller_panel_lines(
             Span::styled(bg_text, Style::default().fg(FOREGROUND)),
         ];
         if let Some((ref txt, col)) = bg_delta_text {
-            spans2.push(Span::styled(
-                format!(" {}", txt),
-                Style::default().fg(col),
-            ));
+            spans2.push(Span::styled(format!(" {}", txt), Style::default().fg(col)));
         }
         spans2.push(Span::styled("  L0 ", Style::default().fg(SLATE_500)));
         spans2.push(Span::styled(
@@ -2603,10 +2590,7 @@ fn controller_panel_lines(
                 Style::default().fg(FOREGROUND),
             ));
             if let Some((ref txt, col)) = budget_delta_text {
-                budget_spans.push(Span::styled(
-                    format!(" {}", txt),
-                    Style::default().fg(col),
-                ));
+                budget_spans.push(Span::styled(format!(" {}", txt), Style::default().fg(col)));
             }
             budget_spans.push(Span::styled(
                 format!("  {} blk", blocks_text),
@@ -2656,18 +2640,12 @@ fn controller_panel_lines(
             Span::styled(threads_text, Style::default().fg(FOREGROUND)),
         ];
         if let Some((ref txt, col)) = threads_delta_text {
-            knob_spans.push(Span::styled(
-                format!(" {}", txt),
-                Style::default().fg(col),
-            ));
+            knob_spans.push(Span::styled(format!(" {}", txt), Style::default().fg(col)));
         }
         knob_spans.push(Span::styled("  bg ", Style::default().fg(SLATE_500)));
         knob_spans.push(Span::styled(bg_text, Style::default().fg(FOREGROUND)));
         if let Some((ref txt, col)) = bg_delta_text {
-            knob_spans.push(Span::styled(
-                format!(" {}", txt),
-                Style::default().fg(col),
-            ));
+            knob_spans.push(Span::styled(format!(" {}", txt), Style::default().fg(col)));
         }
         knob_spans.push(Span::styled("  L0 ", Style::default().fg(SLATE_500)));
         knob_spans.push(Span::styled(
@@ -2705,7 +2683,6 @@ fn delta_span(label: &str, delta: i64, invert_color: bool) -> Vec<Span<'static>>
         Span::styled(text, Style::default().fg(color)),
     ]
 }
-
 
 /// Build the left column for normal per-batch bulk-build diagnostics.
 fn build_batch_left_column(

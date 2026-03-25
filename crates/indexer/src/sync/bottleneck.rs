@@ -153,11 +153,7 @@ pub(crate) struct BottleneckController {
 }
 
 impl BottleneckController {
-    pub(crate) fn new(
-        initial_target_bytes: u64,
-        max_fetch_threads: u32,
-        max_bg_jobs: i32,
-    ) -> Self {
+    pub(crate) fn new(initial_target_bytes: u64, max_fetch_threads: u32, max_bg_jobs: i32) -> Self {
         let max_bg_jobs = max_bg_jobs.max(MIN_BG_JOBS);
         let min_bg_jobs = (max_bg_jobs / 4).max(MIN_BG_JOBS);
         let max_fetch_threads = max_fetch_threads.max(MIN_FETCH_THREADS);
@@ -206,8 +202,8 @@ impl BottleneckController {
         if self.build_ema > 1.0 {
             let ratio = TARGET_ITERATION_MS / self.build_ema;
             let factor = ratio.clamp(BYTES_STEP_MIN, BYTES_STEP_MAX);
-            self.target_batch_bytes =
-                ((self.target_batch_bytes as f64 * factor) as u64).clamp(MIN_BATCH_BYTES, MAX_BATCH_BYTES);
+            self.target_batch_bytes = ((self.target_batch_bytes as f64 * factor) as u64)
+                .clamp(MIN_BATCH_BYTES, MAX_BATCH_BYTES);
         }
 
         // ── I/O resource adjustment: waste classification ──
@@ -367,7 +363,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
-
             });
         }
         let after_flush = ctrl.fetch_threads;
@@ -385,7 +380,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-
             });
         }
 
@@ -412,7 +406,6 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 3000.0,
                 l0_files: 60,
-
             });
         }
 
@@ -434,7 +427,6 @@ mod tests {
                 build_ms: 6000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-
             });
         }
 
@@ -460,7 +452,6 @@ mod tests {
                 build_ms: 500.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-
             });
         }
 
@@ -489,14 +480,12 @@ mod tests {
                 build_ms: 3000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-
             });
             with_flush.observe(&BatchSignals {
                 prefetch_recv_ms: 0.0,
                 build_ms: 3000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 5,
-
             });
         }
 
@@ -522,14 +511,12 @@ mod tests {
                 build_ms: 3000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-
             });
             with_recv.observe(&BatchSignals {
                 prefetch_recv_ms: 5000.0,
                 build_ms: 3000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-
             });
         }
 
@@ -554,7 +541,6 @@ mod tests {
                 build_ms: 3000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-
             });
         }
 
@@ -580,7 +566,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-
             });
         }
         assert!(ctrl.bg_jobs >= MIN_BG_JOBS);
@@ -592,7 +577,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
-
             });
         }
         assert!(ctrl.bg_jobs <= 4);
@@ -615,7 +599,6 @@ mod tests {
                 build_ms: 3000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 60,
-
             });
         }
 
@@ -644,7 +627,6 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 3000.0,
                 l0_files: 5,
-
             });
         }
 
@@ -674,7 +656,6 @@ mod tests {
                 build_ms: 100_000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-
             });
         }
 
@@ -718,7 +699,6 @@ mod tests {
                 build_ms: 5000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-
             });
         }
         assert_eq!(
@@ -733,7 +713,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
-
             });
         }
         assert!(
@@ -752,7 +731,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-
             });
         }
         assert!(

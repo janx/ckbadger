@@ -33,9 +33,10 @@ pub(crate) struct BufferedBlock {
 
 /// Async interface wrapping an mpsc receiver of block chunks.
 ///
-/// The build loop calls [`ensure_blocks`] to wait for at least one block to be
-/// available, [`try_fill`] to greedily drain any additional ready chunks, and
-/// [`drain`] to take a batch for processing.
+/// The build loop calls [`fill_to_budget`] to pull enough blocks for the next
+/// batch, then [`drain`] to take them for processing.  `fill_to_budget` blocks
+/// until at least one chunk arrives, then non-blocking pulls more chunks until
+/// the local buffer has enough bytes — not greedy, not stingy.
 pub(crate) struct BlockBufferHandle {
     chunk_rx: Receiver<Result<Vec<BufferedBlock>>>,
     local: VecDeque<BufferedBlock>,
@@ -59,33 +60,32 @@ impl BlockBufferHandle {
         }
     }
 
-    /// Wait until at least one block is available in the local buffer.
+    /// Pull enough blocks so the local buffer has at least `target_bytes`.
     ///
-    /// Returns `Ok(true)` if a block is available, `Ok(false)` if the channel
-    /// is closed and the local buffer is empty (end of stream), or `Err` if
-    /// the prefetch worker encountered an error.
-    pub(crate) async fn ensure_blocks(&mut self) -> Result<bool> {
-        if !self.local.is_empty() {
-            return Ok(true);
-        }
-        match self.chunk_rx.recv().await {
-            Some(result) => {
-                let chunk = result?;
-                self.absorb(chunk);
-                Ok(true)
+    /// Blocks (async) until at least one chunk arrives when the local buffer
+    /// is empty, then non-blocking pulls additional ready chunks until the
+    /// bytes target is met.  This is the correct middle ground between
+    /// "one chunk only" (starves build when chunks are small) and "greedily
+    /// drain everything" (defeats channel backpressure).
+    ///
+    /// Returns `Ok(true)` when blocks are available, `Ok(false)` at end of
+    /// stream (channel closed + local empty), or `Err` on prefetch error.
+    pub(crate) async fn fill_to_budget(&mut self, target_bytes: u64) -> Result<bool> {
+        // Ensure at least one chunk is available.
+        if self.local.is_empty() {
+            match self.chunk_rx.recv().await {
+                Some(result) => self.absorb(result?),
+                None => return Ok(false),
             }
-            None => Ok(false),
         }
-    }
-
-    /// Non-blocking: drain all immediately-available chunks from the channel
-    /// into the local buffer.  Returns `Err` if a prefetch error is encountered.
-    pub(crate) fn try_fill(&mut self) -> Result<()> {
-        while let Ok(result) = self.chunk_rx.try_recv() {
-            let chunk = result?;
-            self.absorb(chunk);
+        // Non-blocking: pull more chunks until budget is met.
+        while (self.local_bytes as u64) < target_bytes {
+            match self.chunk_rx.try_recv() {
+                Ok(result) => self.absorb(result?),
+                Err(_) => break,
+            }
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Average bytes-per-block across the first `n` blocks in the local buffer.
@@ -159,37 +159,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn buffer_handle_ensure_and_drain() {
+    async fn fill_to_budget_pulls_enough_chunks() {
         let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
 
-        // Send two chunks: 3 blocks then 2 blocks.
+        // Send two chunks: 3 blocks (6000 bytes) then 2 blocks (2000 bytes).
         let chunk1: Vec<BufferedBlock> = vec![
             make_buffered_block(1000),
             make_buffered_block(2000),
             make_buffered_block(3000),
         ];
-        let chunk2: Vec<BufferedBlock> = vec![
-            make_buffered_block(500),
-            make_buffered_block(1500),
-        ];
+        let chunk2: Vec<BufferedBlock> = vec![make_buffered_block(500), make_buffered_block(1500)];
         tx.send(Ok(chunk1)).await.unwrap();
         tx.send(Ok(chunk2)).await.unwrap();
         drop(tx);
 
         let mut handle = BlockBufferHandle::new(rx);
 
-        // Starts empty.
-        assert_eq!(handle.available(), 0);
-        assert_eq!(handle.local_bytes, 0);
-
-        // ensure_blocks waits for the first chunk.
-        let ok = handle.ensure_blocks().await.unwrap();
-        assert!(ok, "ensure_blocks should return true when data available");
-        assert_eq!(handle.available(), 3);
-        assert_eq!(handle.local_bytes, 6000);
-
-        // try_fill should pull the second chunk.
-        handle.try_fill().unwrap();
+        // Budget 7000: chunk1 (6000) not enough, should also pull chunk2 (2000).
+        let ok = handle.fill_to_budget(7000).await.unwrap();
+        assert!(ok);
         assert_eq!(handle.available(), 5);
         assert_eq!(handle.local_bytes, 8000);
 
@@ -206,29 +194,64 @@ mod tests {
         assert_eq!(handle.local_bytes, 5000);
 
         // Drain remaining 3.
-        let rest = handle.drain(10); // request more than available
+        let rest = handle.drain(10);
         assert_eq!(rest.len(), 3);
         assert_eq!(handle.available(), 0);
         assert_eq!(handle.local_bytes, 0);
 
-        // Channel is closed and local is empty: end of stream.
-        let eos = handle.ensure_blocks().await.unwrap();
-        assert!(!eos, "ensure_blocks should return false at end of stream");
+        // Channel closed + local empty → end of stream.
+        let eos = handle.fill_to_budget(1).await.unwrap();
+        assert!(!eos, "fill_to_budget should return false at end of stream");
     }
 
     #[tokio::test]
-    async fn ensure_blocks_propagates_prefetch_error() {
+    async fn fill_to_budget_stops_at_budget() {
+        let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+
+        // 3 chunks of 1000 bytes each.
+        for _ in 0..3 {
+            tx.send(Ok(vec![make_buffered_block(1000)])).await.unwrap();
+        }
+        drop(tx);
+
+        let mut handle = BlockBufferHandle::new(rx);
+
+        // Budget 1500: should pull 2 chunks (2000 >= 1500), NOT all 3.
+        let ok = handle.fill_to_budget(1500).await.unwrap();
+        assert!(ok);
+        assert_eq!(handle.local_bytes, 2000);
+        assert_eq!(handle.available(), 2);
+    }
+
+    #[tokio::test]
+    async fn fill_to_budget_propagates_prefetch_error() {
         let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
 
         tx.send(Err(anyhow::anyhow!("fetch failed"))).await.unwrap();
         drop(tx);
 
         let mut handle = BlockBufferHandle::new(rx);
-        let result = handle.ensure_blocks().await;
-        assert!(result.is_err(), "ensure_blocks should propagate prefetch errors");
-        assert!(
-            result.unwrap_err().to_string().contains("fetch failed"),
-            "error message should be preserved"
-        );
+        let result = handle.fill_to_budget(1000).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("fetch failed"));
+    }
+
+    #[tokio::test]
+    async fn fill_to_budget_reuses_local_without_channel_recv() {
+        let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+
+        tx.send(Ok(vec![make_buffered_block(5000)])).await.unwrap();
+        drop(tx);
+
+        let mut handle = BlockBufferHandle::new(rx);
+
+        // First fill: pulls from channel.
+        handle.fill_to_budget(1000).await.unwrap();
+        assert_eq!(handle.available(), 1);
+
+        // Second fill: local already has 5000 >= 1000, no channel recv.
+        let ok = handle.fill_to_budget(1000).await.unwrap();
+        assert!(ok);
+        assert_eq!(handle.available(), 1); // unchanged
     }
 }

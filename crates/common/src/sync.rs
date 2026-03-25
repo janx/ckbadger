@@ -867,6 +867,8 @@ mod tests {
             controller_l0_ema: Some(3.7),
             controller_fetch_threads: Some(8),
             controller_bg_jobs: Some(6),
+            target_batch_bytes: Some(100_000_000),
+            batch_bytes: Some(85_000_000),
         };
 
         let json = serde_json::to_string(&bb).unwrap();
@@ -889,6 +891,8 @@ mod tests {
         assert_eq!(parsed.controller_l0_ema, Some(3.7));
         assert_eq!(parsed.controller_fetch_threads, Some(8));
         assert_eq!(parsed.controller_bg_jobs, Some(6));
+        assert_eq!(parsed.target_batch_bytes, Some(100_000_000));
+        assert_eq!(parsed.batch_bytes, Some(85_000_000));
     }
 
     #[test]
