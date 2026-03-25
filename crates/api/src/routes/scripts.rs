@@ -17,6 +17,7 @@ use crate::response::{
     ScriptFamilyListItemResponse, ScriptObservedReferenceResponse, ScriptVersionDeploymentResponse,
     ScriptVersionDetailResponse,
 };
+use crate::utils::script_resolution::resolve_dep_cells_for_transaction;
 use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
     hash_type_to_string, list_version_code_cells, merge_script_info_for_reference,
@@ -162,6 +163,8 @@ pub struct DeploymentUsage {
 pub struct LookupScriptsRequest {
     /// List of code_hash values (hex strings with 0x prefix)
     pub code_hashes: Vec<String>,
+    #[serde(default)]
+    pub tx_hash: Option<String>,
 }
 
 /// Lightweight script info for lookup results
@@ -1080,6 +1083,81 @@ fn script_version_to_detail_response(
     })
 }
 
+/// Build a ScriptLookupInfo from a resolved script identifier.
+///
+/// Shared by both per-tx and global resolution paths.
+fn build_lookup_info(
+    state: &AppState,
+    reference_hash: &[u8],
+    reference_hash_hex: &str,
+    version_hash: &[u8],
+    version_info: &ckbadger_store::types::ScriptVersionInfo,
+    mut code_cells: Vec<VersionCodeCell>,
+    all_script_infos: &[(Vec<u8>, ckbadger_store::ScriptInfo)],
+) -> Result<ScriptLookupInfo, ApiRouteError> {
+    sort_code_cells(&mut code_cells);
+    let script_info = state
+        .store
+        .get_script_info(reference_hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let direct_info_for_version = if reference_hash == version_hash {
+        script_info.as_ref()
+    } else {
+        None
+    };
+    let (
+        _cells_count,
+        live_cells_count,
+        _capacity_sum,
+        owned_capacity_sum,
+        _used_sum,
+        owned_knowledge,
+    ) = resolve_version_capacity(version_info, direct_info_for_version, all_script_infos)?;
+    let code_cell = code_cells.first();
+    let hash_type = script_info
+        .as_ref()
+        .and_then(|info| hash_type_to_string(info.hash_type).map(|s| s.to_string()));
+    let (deployment_type_hash, deployment_data_hash) = script_info
+        .as_ref()
+        .map(|info| {
+            let (type_ref, data_ref) = deployment_reference_hashes(info);
+            (
+                type_ref.map(|h| format!("0x{}", hex::encode(h))),
+                data_ref.map(|h| format!("0x{}", hex::encode(h))),
+            )
+        })
+        .unwrap_or((None, None));
+
+    Ok(ScriptLookupInfo {
+        reference_hash: reference_hash_hex.to_string(),
+        code_hash: format!("0x{}", hex::encode(version_hash)),
+        name: resolved_version_name(state, version_hash, version_info, "Unknown")?,
+        deprecated: version_info.deprecated
+            || script_info
+                .as_ref()
+                .map(|info| info.deprecated)
+                .unwrap_or(false),
+        script_kind: version_script_kind(version_info),
+        decoder_type: version_info.category.clone(),
+        hash_type,
+        deployment_type_hash,
+        deployment_data_hash,
+        code_cell_tx_hash: code_cell
+            .map(|(tx_hash, _, _, _)| format!("0x{}", hex::encode(tx_hash))),
+        code_cell_output_index: code_cell.map(|(_, output_index, _, _)| i32::from(*output_index)),
+        live_cells_count,
+        owned_capacity_sum: owned_capacity_sum.to_string(),
+        owned_knowledge_sum: owned_knowledge.to_string(),
+        code_cells_live_count: code_cells
+            .iter()
+            .filter(|(_, _, _, is_live)| *is_live)
+            .count() as i64,
+        code_cells_total: code_cells.len() as i64,
+        resolution_state: "resolved".to_string(),
+        ambiguity: None,
+    })
+}
+
 async fn lookup_scripts(
     State(state): State<Arc<AppState>>,
     Json(request): Json<LookupScriptsRequest>,
@@ -1105,95 +1183,62 @@ async fn lookup_scripts(
 
     let mut result: HashMap<String, ScriptLookupInfo> = HashMap::new();
     let all_script_infos = load_script_infos_cached(&state)?;
+    let per_tx_mappings = request
+        .tx_hash
+        .as_deref()
+        .and_then(|tx_hash| resolve_dep_cells_for_transaction(&state, tx_hash));
 
     for code_hash in &code_hash_bytes {
         let reference_hash_hex = format!("0x{}", hex::encode(code_hash));
+
+        // Per-tx resolution: if cell_deps provide a version_hash, use it directly
+        if let Some(version_hash) = per_tx_mappings
+            .as_ref()
+            .and_then(|m| m.get(code_hash.as_slice()))
+        {
+            let version_info = state
+                .store
+                .get_script_version(version_hash)
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .unwrap_or_else(|| {
+                    fallback_script_version_info(&state, code_hash, version_hash)
+                        .unwrap_or_default()
+                });
+
+            let code_cells =
+                list_version_code_cells(&state.store, &state.append_only_store, version_hash)
+                    .unwrap_or_default();
+
+            let info = build_lookup_info(
+                &state,
+                code_hash,
+                &reference_hash_hex,
+                version_hash,
+                &version_info,
+                code_cells,
+                &all_script_infos,
+            )?;
+            result.insert(reference_hash_hex.clone(), info);
+            continue;
+        }
+
         match resolve_script_identifier(&state, code_hash)? {
             ScriptIdentifierResolution::Resolved(resolved) => {
                 let ResolvedScriptIdentifier {
                     version_hash,
                     version_info,
-                    mut code_cells,
+                    code_cells,
                 } = *resolved;
-                sort_code_cells(&mut code_cells);
-                let script_info = state.store.get_script_info(code_hash).ok().flatten();
-                // Only pass direct ScriptInfo when the query hash IS the version hash.
-                // For type-hash scripts the query hash is the reference (type_hash) whose
-                // ScriptInfo holds aggregate totals across all versions — passing it as
-                // direct_script_info would short-circuit version-level resolution.
-                let direct_info_for_version = if code_hash.as_slice() == version_hash.as_slice() {
-                    script_info.as_ref()
-                } else {
-                    None
-                };
-                let (
-                    _cells_count,
-                    live_cells_count,
-                    _capacity_sum,
-                    owned_capacity_sum,
-                    _used_sum,
-                    owned_knowledge,
-                ) = resolve_version_capacity(
+                let info = build_lookup_info(
+                    &state,
+                    code_hash,
+                    &reference_hash_hex,
+                    &version_hash,
                     &version_info,
-                    direct_info_for_version,
+                    code_cells,
                     &all_script_infos,
                 )?;
-                let code_cell = code_cells.first();
-
-                // Derive hash_type from ScriptInfo if available
-                let hash_type = script_info
-                    .as_ref()
-                    .and_then(|info| hash_type_to_string(info.hash_type).map(|s| s.to_string()));
-
-                // Derive deployment hashes from ScriptInfo
-                let (deployment_type_hash, deployment_data_hash) = script_info
-                    .as_ref()
-                    .map(|info| {
-                        let (type_ref, data_ref) = deployment_reference_hashes(info);
-                        (
-                            type_ref.map(|h| format!("0x{}", hex::encode(h))),
-                            data_ref.map(|h| format!("0x{}", hex::encode(h))),
-                        )
-                    })
-                    .unwrap_or((None, None));
-
-                result.insert(
-                    reference_hash_hex.clone(),
-                    ScriptLookupInfo {
-                        reference_hash: reference_hash_hex.clone(),
-                        code_hash: format!("0x{}", hex::encode(&version_hash)),
-                        name: resolved_version_name(
-                            &state,
-                            &version_hash,
-                            &version_info,
-                            "Unknown",
-                        )?,
-                        deprecated: version_info.deprecated
-                            || script_info
-                                .as_ref()
-                                .map(|info| info.deprecated)
-                                .unwrap_or(false),
-                        script_kind: version_script_kind(&version_info),
-                        decoder_type: version_info.category.clone(),
-                        hash_type,
-                        deployment_type_hash,
-                        deployment_data_hash,
-                        code_cell_tx_hash: code_cell
-                            .map(|(tx_hash, _, _, _)| format!("0x{}", hex::encode(tx_hash))),
-                        code_cell_output_index: code_cell
-                            .map(|(_, output_index, _, _)| i32::from(*output_index)),
-                        live_cells_count,
-                        owned_capacity_sum: owned_capacity_sum.to_string(),
-                        owned_knowledge_sum: owned_knowledge.to_string(),
-                        code_cells_live_count: code_cells
-                            .iter()
-                            .filter(|(_, _, _, is_live)| *is_live)
-                            .count() as i64,
-                        code_cells_total: code_cells.len() as i64,
-                        resolution_state: "resolved".to_string(),
-                        ambiguity: None,
-                    },
-                );
+                result.insert(reference_hash_hex.clone(), info);
             }
             ScriptIdentifierResolution::Ambiguous(ambiguous) => {
                 let AmbiguousScriptIdentifier { version_hashes } = ambiguous;

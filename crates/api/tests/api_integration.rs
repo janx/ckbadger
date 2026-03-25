@@ -9736,3 +9736,22 @@ async fn test_network_stats_includes_api_background_tasks() {
     assert_eq!(tasks[0]["lastSuccessAt"], 1_711_100_123);
     assert_eq!(tasks[0]["lastTriggerReason"], "tip_unchanged");
 }
+
+#[tokio::test]
+async fn test_lookup_scripts_accepts_tx_hash_parameter() {
+    let store = test_store();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            r#"{"codeHashes":[],"txHash":"0x0000000000000000000000000000000000000000000000000000000000000000"}"#,
+        ))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
