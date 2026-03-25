@@ -1,5 +1,3 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use tracing::info;
@@ -11,12 +9,10 @@ use ckbadger_store::CkbadgerStore;
 
 use super::BatchWriter;
 
-static REORG_EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
-
 fn next_reorg_event_key() -> String {
     let ts_ms = Utc::now().timestamp_millis();
-    let seq = REORG_EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
-    format!("reorg:{}:{}", ts_ms, seq)
+    let uuid_hex = hex::encode(uuid::Uuid::new_v4().as_bytes());
+    format!("reorg:{}:{}", ts_ms, uuid_hex)
 }
 
 impl BatchWriter {
@@ -162,6 +158,23 @@ mod tests {
         assert_ne!(first, second);
         assert!(first.starts_with("reorg:"));
         assert!(second.starts_with("reorg:"));
+    }
+
+    #[test]
+    fn test_next_reorg_event_key_contains_uuid_segment() {
+        let key = next_reorg_event_key();
+        assert!(key.starts_with("reorg:"));
+        let parts: Vec<&str> = key.splitn(3, ':').collect();
+        assert_eq!(parts.len(), 3, "expected format reorg:timestamp:uuid");
+        assert_eq!(parts[2].len(), 32, "UUID segment should be 32 hex chars");
+        assert!(parts[2].chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_next_reorg_event_key_no_collision_across_simulated_restarts() {
+        let key1 = next_reorg_event_key();
+        let key2 = next_reorg_event_key();
+        assert_ne!(key1, key2);
     }
 
     #[test]

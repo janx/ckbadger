@@ -40,6 +40,7 @@ dashmap = "6.1"
 rayon = { workspace = true }
 rustc-hash = { workspace = true }
 async-trait = { workspace = true }
+uuid = { workspace = true }
 
 # TOML parsing (for workdir overlay)
 toml = "0.8"
