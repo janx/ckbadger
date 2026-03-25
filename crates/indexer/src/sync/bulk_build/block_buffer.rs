@@ -105,11 +105,6 @@ impl BlockBufferHandle {
         self.local.len()
     }
 
-    /// Total bytes represented by blocks in the local buffer.
-    pub(crate) fn local_bytes(&self) -> usize {
-        self.local_bytes
-    }
-
     /// Take up to `n` blocks from the front of the local buffer.
     pub(crate) fn drain(&mut self, n: usize) -> Vec<BufferedBlock> {
         let count = n.min(self.local.len());
@@ -185,18 +180,18 @@ mod tests {
 
         // Starts empty.
         assert_eq!(handle.available(), 0);
-        assert_eq!(handle.local_bytes(), 0);
+        assert_eq!(handle.local_bytes, 0);
 
         // ensure_blocks waits for the first chunk.
         let ok = handle.ensure_blocks().await.unwrap();
         assert!(ok, "ensure_blocks should return true when data available");
         assert_eq!(handle.available(), 3);
-        assert_eq!(handle.local_bytes(), 6000);
+        assert_eq!(handle.local_bytes, 6000);
 
         // try_fill should pull the second chunk.
         handle.try_fill().unwrap();
         assert_eq!(handle.available(), 5);
-        assert_eq!(handle.local_bytes(), 8000);
+        assert_eq!(handle.local_bytes, 8000);
 
         // peek_density over first 3 blocks: (1000+2000+3000)/3 = 2000.
         let density = handle.peek_density(3);
@@ -208,13 +203,13 @@ mod tests {
         assert_eq!(drained[0].block_bytes, 1000);
         assert_eq!(drained[1].block_bytes, 2000);
         assert_eq!(handle.available(), 3);
-        assert_eq!(handle.local_bytes(), 5000);
+        assert_eq!(handle.local_bytes, 5000);
 
         // Drain remaining 3.
         let rest = handle.drain(10); // request more than available
         assert_eq!(rest.len(), 3);
         assert_eq!(handle.available(), 0);
-        assert_eq!(handle.local_bytes(), 0);
+        assert_eq!(handle.local_bytes, 0);
 
         // Channel is closed and local is empty: end of stream.
         let eos = handle.ensure_blocks().await.unwrap();

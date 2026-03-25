@@ -52,7 +52,6 @@ pub(crate) mod sequencer;
 
 use crate::sync::bottleneck::{self, BatchSignals, BottleneckController};
 
-const BULK_BUILD_MIN_BLOCK_SPAN: u64 = 10_000;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PreparedFinalizeArtifacts {
@@ -418,7 +417,6 @@ impl BulkBuildEngine {
                 build_ms: build_elapsed.as_secs_f64() * 1000.0,
                 flush_wait_ms: flush_wait_elapsed.as_secs_f64() * 1000.0,
                 l0_files: snap.l0_files,
-                batch_bytes,
             }) {
                 let _ = threads_tx.send(output.fetch_threads);
 

@@ -115,7 +115,6 @@ pub(crate) struct BatchSignals {
     pub build_ms: f64,
     pub flush_wait_ms: f64,
     pub l0_files: u64,
-    pub batch_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -344,7 +343,6 @@ mod tests {
             build_ms: 3000.0,
             flush_wait_ms: 0.0,
             l0_files: 5,
-            batch_bytes: 100_000_000,
         }
     }
 
@@ -369,7 +367,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
-                batch_bytes: 100_000_000,
+
             });
         }
         let after_flush = ctrl.fetch_threads;
@@ -387,7 +385,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                batch_bytes: 100_000_000,
+
             });
         }
 
@@ -414,7 +412,7 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 3000.0,
                 l0_files: 60,
-                batch_bytes: 100_000_000,
+
             });
         }
 
@@ -436,7 +434,7 @@ mod tests {
                 build_ms: 6000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                batch_bytes: 100_000_000,
+
             });
         }
 
@@ -462,7 +460,7 @@ mod tests {
                 build_ms: 500.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                batch_bytes: 100_000_000,
+
             });
         }
 
@@ -491,14 +489,14 @@ mod tests {
                 build_ms: 3000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                batch_bytes: 100_000_000,
+
             });
             with_flush.observe(&BatchSignals {
                 prefetch_recv_ms: 0.0,
                 build_ms: 3000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 5,
-                batch_bytes: 100_000_000,
+
             });
         }
 
@@ -524,14 +522,14 @@ mod tests {
                 build_ms: 3000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                batch_bytes: 100_000_000,
+
             });
             with_recv.observe(&BatchSignals {
                 prefetch_recv_ms: 5000.0,
                 build_ms: 3000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                batch_bytes: 100_000_000,
+
             });
         }
 
@@ -556,7 +554,7 @@ mod tests {
                 build_ms: 3000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                batch_bytes: 100_000_000,
+
             });
         }
 
@@ -582,7 +580,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                batch_bytes: 100_000_000,
+
             });
         }
         assert!(ctrl.bg_jobs >= MIN_BG_JOBS);
@@ -594,7 +592,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
-                batch_bytes: 100_000_000,
+
             });
         }
         assert!(ctrl.bg_jobs <= 4);
@@ -617,7 +615,7 @@ mod tests {
                 build_ms: 3000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 60,
-                batch_bytes: 100_000_000,
+
             });
         }
 
@@ -646,7 +644,7 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 3000.0,
                 l0_files: 5,
-                batch_bytes: 100_000_000,
+
             });
         }
 
@@ -676,7 +674,7 @@ mod tests {
                 build_ms: 100_000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                batch_bytes: 100_000_000,
+
             });
         }
 
@@ -720,7 +718,7 @@ mod tests {
                 build_ms: 5000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                batch_bytes: 100_000_000,
+
             });
         }
         assert_eq!(
@@ -735,7 +733,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
-                batch_bytes: 100_000_000,
+
             });
         }
         assert!(
@@ -754,7 +752,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                batch_bytes: 100_000_000,
+
             });
         }
         assert!(
