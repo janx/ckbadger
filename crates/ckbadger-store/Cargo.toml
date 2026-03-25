@@ -16,6 +16,7 @@ uuid = { workspace = true }
 ckbadger-common = { path = "../common" }
 ckb-hash = { workspace = true }
 libc = { workspace = true }
+num_cpus = "1.17"
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -92,7 +92,10 @@ fn scale_clamp(base: u64, scale: f64, min: u64, max: u64) -> usize {
 #[derive(Debug, Clone)]
 pub struct MemoryProfile {
     pub system_ram_bytes: u64,
+    /// Physical cores (for I/O-bound work: fetch threads).
     pub cpu_count: usize,
+    /// Logical cores including SMT/HT (for RocksDB bg_jobs, subcompactions).
+    pub logical_cpu_count: usize,
     pub is_secondary: bool,
     pub rocksdb_budget_bytes: usize,
     pub wbm_normal_bytes: usize,
@@ -124,8 +127,8 @@ impl MemoryProfile {
     }
 
     pub fn for_primary_with_config(runtime_config: StoreRuntimeConfig) -> Self {
-        let (ram, cpus) = detect_system_resources(runtime_config);
-        Self::compute(ram, cpus, false)
+        let (ram, physical, logical) = detect_system_resources(runtime_config);
+        Self::compute(ram, physical, logical, false)
     }
 
     pub fn for_secondary() -> Self {
@@ -133,12 +136,17 @@ impl MemoryProfile {
     }
 
     pub fn for_secondary_with_config(runtime_config: StoreRuntimeConfig) -> Self {
-        let (ram, cpus) = detect_system_resources(runtime_config);
-        Self::compute(ram, cpus, true)
+        let (ram, physical, logical) = detect_system_resources(runtime_config);
+        Self::compute(ram, physical, logical, true)
     }
 
     /// Pure computation from fixed inputs for deterministic unit testing.
-    pub fn compute(system_ram_bytes: u64, cpu_count: usize, is_secondary: bool) -> Self {
+    pub fn compute(
+        system_ram_bytes: u64,
+        cpu_count: usize,
+        logical_cpu_count: usize,
+        is_secondary: bool,
+    ) -> Self {
         let budget = if is_secondary {
             let raw = system_ram_bytes / 4;
             raw.clamp(2 * GB, 16 * GB) as usize
@@ -161,9 +169,10 @@ impl MemoryProfile {
         let wbm_bulk_scale = wbm_bulk as f64 / 13_635_534_029.0;
         let write_buffer_hot = scale_clamp(512 * MB, wbm_bulk_scale, 128 * MB, 2 * GB);
 
-        let cpus = cpu_count.max(1);
-        let max_background_jobs = cpus.clamp(4, 32) as i32;
-        let max_subcompactions = (cpus / 4).clamp(2, 8) as u32;
+        // RocksDB compaction benefits from SMT — use logical cores.
+        let logical = logical_cpu_count.max(1);
+        let max_background_jobs = logical.clamp(4, 32) as i32;
+        let max_subcompactions = (logical / 4).clamp(2, 8) as u32;
 
         let budget_scale = budget_u64 as f64 / (16.0 * GB as f64);
         let bulk_level_base = scale_clamp(2 * GB, budget_scale, 512 * MB, 8 * GB) as u64;
@@ -186,6 +195,7 @@ impl MemoryProfile {
         Self {
             system_ram_bytes,
             cpu_count,
+            logical_cpu_count,
             is_secondary,
             rocksdb_budget_bytes: budget,
             wbm_normal_bytes: wbm_normal,
@@ -248,7 +258,8 @@ fn read_cgroup_memory_limit() -> Option<u64> {
     None
 }
 
-fn detect_system_resources(runtime_config: StoreRuntimeConfig) -> (u64, usize) {
+/// Returns (ram_bytes, physical_cores, logical_cores).
+fn detect_system_resources(runtime_config: StoreRuntimeConfig) -> (u64, usize, usize) {
     let ram = if let Some(gb) = runtime_config.memory_budget_gb {
         if gb > 0 {
             info!(gb, "Using explicit RocksDB memory_budget_gb override");
@@ -268,12 +279,12 @@ fn detect_system_resources(runtime_config: StoreRuntimeConfig) -> (u64, usize) {
             })
     };
 
-    // Physical cores — not logical (SMT/HT) — because all consumers
-    // (RocksDB bg_jobs, subcompactions, fetch threads) are I/O-bound
-    // and do not benefit from hyperthreads sharing execution resources.
-    let cpus = num_cpus::get_physical().max(1);
+    let physical = num_cpus::get_physical().max(1);
+    let logical = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(physical);
 
-    (ram, cpus)
+    (ram, physical, logical)
 }
 
 // Column family name constants
@@ -1659,7 +1670,8 @@ impl CkbadgerStore {
         let p = &self.memory_profile;
         info!(
             system_ram_gb = p.system_ram_bytes / (1024 * 1024 * 1024),
-            cpu_count = p.cpu_count,
+            physical_cores = p.cpu_count,
+            logical_cores = p.logical_cpu_count,
             rocksdb_budget_gb = p.rocksdb_budget_bytes / (1024 * 1024 * 1024),
             write_buffer_mega_mb = p.write_buffer_mega_bytes / (1024 * 1024),
             write_buffer_high_mb = p.write_buffer_high_bytes / (1024 * 1024),
@@ -2782,7 +2794,7 @@ mod tests {
 
     #[test]
     fn test_memory_profile_32gb_primary_reproduces_original_constants() {
-        let profile = MemoryProfile::compute(32 * GB, 24, false);
+        let profile = MemoryProfile::compute(32 * GB, 12, 24, false);
         assert_eq!(profile.rocksdb_budget_bytes, 16 * GB as usize);
         assert_eq!(profile.wbm_normal_bytes, 8 * GB as usize);
         assert_eq!(profile.block_cache_normal_bytes, 8 * GB as usize);
@@ -2799,7 +2811,7 @@ mod tests {
 
     #[test]
     fn test_memory_profile_bulk_pending_thresholds_are_higher() {
-        let profile = MemoryProfile::compute(96 * GB, 24, false);
+        let profile = MemoryProfile::compute(96 * GB, 12, 24, false);
         assert!(
             profile.severe_compaction_pending_bytes_bulk > profile.severe_compaction_pending_bytes,
             "bulk severe pending threshold ({}) should exceed normal ({})",
@@ -2817,7 +2829,7 @@ mod tests {
 
     #[test]
     fn test_memory_profile_secondary_cap() {
-        let profile = MemoryProfile::compute(128 * GB, 24, true);
+        let profile = MemoryProfile::compute(128 * GB, 12, 24, true);
         assert_eq!(profile.rocksdb_budget_bytes, 16 * GB as usize);
     }
 

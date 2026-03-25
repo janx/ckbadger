@@ -5150,7 +5150,11 @@ fn draw_system_environment(
 
     let mut lines = vec![
         system_kv_line("System RAM", format!("{:.1} GB", ram_gb), CYAN),
-        system_kv_line("CPU count", format!("{}", p.cpu_count), CYAN),
+        system_kv_line(
+            "CPU cores",
+            format!("{}P / {}L", p.cpu_count, p.logical_cpu_count),
+            CYAN,
+        ),
         system_kv_line("Store mode", mode_label.to_string(), CYAN),
         system_kv_line(
             "RocksDB budget",

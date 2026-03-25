@@ -366,6 +366,9 @@ pub struct BulkBuildProgressData {
     /// Controller EMA: flush channel fill ratio (0.0-1.0).
     #[serde(default)]
     pub controller_flush_fill_ema: Option<f64>,
+    /// Controller EMA: cells per block (density).
+    #[serde(default)]
+    pub controller_density_ema: Option<f64>,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {
@@ -936,6 +939,7 @@ mod tests {
             controller_fetch_threads: Some(8),
             controller_bg_jobs: Some(6),
             controller_flush_fill_ema: Some(0.35),
+            controller_density_ema: Some(4.7),
         };
 
         let json = serde_json::to_string(&bb).unwrap();

@@ -347,6 +347,7 @@ pub(crate) struct BulkBuildPerfStats {
     controller_fetch_threads: AtomicU64,
     controller_bg_jobs: AtomicU64,
     controller_flush_fill_ema_bits: AtomicU64,
+    controller_density_ema_bits: AtomicU64,
 }
 
 impl BulkBuildPerfStats {
@@ -490,6 +491,7 @@ impl BulkBuildPerfStats {
         fetch_threads: u32,
         bg_jobs: i32,
         flush_fill_ema: f64,
+        density_ema: f64,
     ) {
         self.controller_bottleneck_code
             .store(bottleneck_code, Ordering::Relaxed);
@@ -509,6 +511,8 @@ impl BulkBuildPerfStats {
             .store(bg_jobs as u64, Ordering::Relaxed);
         self.controller_flush_fill_ema_bits
             .store(flush_fill_ema.to_bits(), Ordering::Relaxed);
+        self.controller_density_ema_bits
+            .store(density_ema.to_bits(), Ordering::Relaxed);
     }
 
     pub(crate) fn snapshot(&self) -> Option<BulkBuildProgressData> {
@@ -636,6 +640,9 @@ impl BulkBuildPerfStats {
             controller_bg_jobs: Some(self.controller_bg_jobs.load(Ordering::Relaxed) as i32),
             controller_flush_fill_ema: Some(f64::from_bits(
                 self.controller_flush_fill_ema_bits.load(Ordering::Relaxed),
+            )),
+            controller_density_ema: Some(f64::from_bits(
+                self.controller_density_ema_bits.load(Ordering::Relaxed),
             )),
         })
     }

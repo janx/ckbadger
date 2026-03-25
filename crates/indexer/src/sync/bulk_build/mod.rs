@@ -126,12 +126,10 @@ impl BulkBuildEngine {
             )
         })?;
         let mem_profile = indexer.writer.store().memory_profile();
-        // Max = available cores.  Fetch threads are temporary (std::thread::scope),
-        // so no persistent over-subscription.  The controller shrinks this when
-        // build-bound to reduce overlap contention.
-        let max_fetch_threads = std::thread::available_parallelism()
-            .map(|n| n.get().max(2) as u32)
-            .unwrap_or(4);
+        // Fetch is I/O-bound (CKB RocksDB reads via std::thread::scope).
+        // cpu_count is physical cores (from num_cpus::get_physical).
+        // Reserve 1 for the flush worker so fetch + flush = physical cores.
+        let max_fetch_threads = mem_profile.cpu_count.saturating_sub(1).max(2) as u32;
         let mut controller = BottleneckController::new(
             configured_batch_size,
             max_fetch_threads,
@@ -379,6 +377,7 @@ impl BulkBuildEngine {
                 controller.channel_depth(),
             );
 
+            let batch_cell_count = sample.cells + sample.inputs;
             indexer.record_bulk_sync_perf_batch_sample(sample);
 
             batch_count += 1;
@@ -416,6 +415,8 @@ impl BulkBuildEngine {
                 l0_files: snap.l0_files,
                 flush_channel_pending,
                 flush_channel_capacity: controller.channel_depth(),
+                cell_count: batch_cell_count,
+                block_count: batch_stats.block_count,
             }) {
                 batch_block_span = output.batch_span;
                 prefetch.update_span(batch_block_span);
@@ -441,6 +442,7 @@ impl BulkBuildEngine {
                     build_ema = format!("{:.1}", output.build_ema),
                     wait_ema = format!("{:.1}", output.wait_ema),
                     l0_ema = format!("{:.1}", output.l0_ema),
+                    density_ema = format!("{:.1}", output.density_ema),
                     "Bottleneck controller adjusted"
                 );
 
@@ -454,6 +456,7 @@ impl BulkBuildEngine {
                     output.fetch_threads,
                     output.bg_jobs,
                     output.flush_fill_ema,
+                    output.density_ema,
                 );
             }
 

@@ -111,6 +111,8 @@ pub(crate) struct BatchSignals {
     pub l0_files: u64,
     pub flush_channel_pending: u64,
     pub flush_channel_capacity: u64,
+    pub cell_count: u64,
+    pub block_count: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +127,7 @@ pub(crate) struct ControllerOutput {
     pub wait_ema: f64,
     pub l0_ema: f64,
     pub flush_fill_ema: f64,
+    pub density_ema: f64,
 }
 
 #[derive(Debug)]
@@ -135,6 +138,7 @@ pub(crate) struct BottleneckController {
     wait_ema: f64,
     l0_ema: f64,
     flush_fill_ema: f64,
+    density_ema: f64,
 
     // Current outputs
     batch_span: u64,
@@ -173,6 +177,7 @@ impl BottleneckController {
             wait_ema: 0.0,
             l0_ema: 0.0,
             flush_fill_ema: 0.0,
+            density_ema: 0.0,
 
             batch_span: initial_span.clamp(MIN_SPAN, MAX_SPAN),
             prefetch_ahead: initial_prefetch,
@@ -274,6 +279,32 @@ impl BottleneckController {
             .clamp(MIN_PREFETCH, self.max_channel_depth);
         self.bg_jobs = self.bg_jobs.clamp(self.min_bg_jobs, self.max_bg_jobs);
 
+        // Cell-density correction: scale span inversely with density
+        // change so the next batch targets consistent cell volume, not
+        // block count.  Without this, entering a high-density chain
+        // region causes a build_ms spike that takes multiple iterations
+        // to recover from (the time-based logic reacts one batch late).
+        let batch_density = if signals.block_count > 0 {
+            signals.cell_count as f64 / signals.block_count as f64
+        } else {
+            0.0
+        };
+        if batch_density > 0.0 {
+            let prev = self.density_ema;
+            self.density_ema = if prev > 0.0 {
+                ema(prev, batch_density)
+            } else {
+                batch_density // initialize on first batch with cells
+            };
+            if prev > 0.0 {
+                // prev / new_ema: density increased → ratio < 1 → shrink span
+                //                 density decreased → ratio > 1 → grow span
+                let ratio = prev / self.density_ema;
+                self.batch_span =
+                    ((self.batch_span as f64 * ratio) as u64).clamp(MIN_SPAN, MAX_SPAN);
+            }
+        }
+
         Some(ControllerOutput {
             batch_span: self.batch_span,
             prefetch_ahead: self.prefetch_ahead,
@@ -285,6 +316,7 @@ impl BottleneckController {
             wait_ema: self.wait_ema,
             l0_ema: self.l0_ema,
             flush_fill_ema: self.flush_fill_ema,
+            density_ema: self.density_ema,
         })
     }
 
@@ -393,6 +425,8 @@ mod tests {
             l0_files: 5,
             flush_channel_pending: 1,
             flush_channel_capacity: 8,
+            cell_count: 50_000,
+            block_count: 10_000,
         }
     }
 
@@ -420,6 +454,8 @@ mod tests {
 
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
 
@@ -446,6 +482,8 @@ mod tests {
 
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
 
@@ -470,6 +508,8 @@ mod tests {
 
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
 
@@ -499,6 +539,8 @@ mod tests {
 
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
 
@@ -532,6 +574,8 @@ mod tests {
 
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
 
@@ -554,6 +598,8 @@ mod tests {
 
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
         assert!(ctrl.bg_jobs >= MIN_BG_JOBS);
@@ -568,6 +614,8 @@ mod tests {
 
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
         assert!(ctrl.bg_jobs <= 4);
@@ -591,6 +639,8 @@ mod tests {
 
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
         assert_eq!(
@@ -608,6 +658,8 @@ mod tests {
 
                 flush_channel_pending: 7,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
         assert!(
@@ -629,6 +681,8 @@ mod tests {
 
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
         assert!(
@@ -659,6 +713,8 @@ mod tests {
 
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
 
@@ -690,6 +746,8 @@ mod tests {
 
                 flush_channel_pending: 7,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
 
@@ -713,6 +771,8 @@ mod tests {
 
                 flush_channel_pending: 7,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
 
@@ -735,6 +795,8 @@ mod tests {
 
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
 
@@ -770,6 +832,8 @@ mod tests {
 
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
             });
         }
         assert_eq!(ctrl.prefetch_ahead, ctrl.max_channel_depth);
@@ -797,6 +861,8 @@ mod tests {
             l0_files: 5,
             flush_channel_pending: 1,
             flush_channel_capacity: 8,
+            cell_count: 50_000,
+            block_count: 10_000,
         });
         let mild_growth = mild.batch_span as f64 / 100_000.0;
 
@@ -810,6 +876,8 @@ mod tests {
             l0_files: 5,
             flush_channel_pending: 1,
             flush_channel_capacity: 8,
+            cell_count: 50_000,
+            block_count: 10_000,
         });
         let extreme_growth = extreme.batch_span as f64 / 100_000.0;
 
@@ -830,6 +898,8 @@ mod tests {
             l0_files: 5,
             flush_channel_pending: 1,
             flush_channel_capacity: 8,
+            cell_count: 50_000,
+            block_count: 10_000,
         });
         let mild_shrink = mild_flush.batch_span as f64 / 100_000.0;
 
@@ -842,6 +912,8 @@ mod tests {
             l0_files: 5,
             flush_channel_pending: 1,
             flush_channel_capacity: 8,
+            cell_count: 50_000,
+            block_count: 10_000,
         });
         let extreme_shrink = extreme_flush.batch_span as f64 / 100_000.0;
 
@@ -850,6 +922,156 @@ mod tests {
             "stronger flush signal should produce bigger shrink: extreme {:.2} vs mild {:.2}",
             extreme_shrink,
             mild_shrink
+        );
+    }
+
+    #[test]
+    fn density_increase_shrinks_span() {
+        let mut ctrl = BottleneckController::new(100_000, 12, 8, 32 * GB);
+
+        // Warmup with low density (5 cells/block).
+        ctrl.observe(&BatchSignals {
+            prefetch_recv_ms: 100.0,
+            build_ms: 3000.0,
+            flush_wait_ms: 0.0,
+            l0_files: 5,
+            flush_channel_pending: 1,
+            flush_channel_capacity: 8,
+            cell_count: 50_000,
+            block_count: 10_000,
+        });
+
+        // Second batch initializes density_ema, no correction yet.
+        let output = ctrl.observe(&BatchSignals {
+            prefetch_recv_ms: 100.0,
+            build_ms: 3000.0,
+            flush_wait_ms: 0.0,
+            l0_files: 5,
+            flush_channel_pending: 1,
+            flush_channel_capacity: 8,
+            cell_count: 50_000,
+            block_count: 10_000,
+        });
+        assert!(output.is_some());
+        assert!(
+            ctrl.density_ema > 0.0,
+            "density_ema should be initialized: {}",
+            ctrl.density_ema
+        );
+        let span_before = ctrl.batch_span;
+
+        // 10x density jump (50 cells/block).  Span should shrink.
+        let output = ctrl.observe(&BatchSignals {
+            prefetch_recv_ms: 100.0,
+            build_ms: 3000.0,
+            flush_wait_ms: 0.0,
+            l0_files: 5,
+            flush_channel_pending: 1,
+            flush_channel_capacity: 8,
+            cell_count: 500_000,
+            block_count: 10_000,
+        });
+        assert!(output.is_some());
+        assert!(
+            ctrl.batch_span < span_before,
+            "10x density increase should shrink span: {} vs before {}",
+            ctrl.batch_span,
+            span_before
+        );
+    }
+
+    #[test]
+    fn density_decrease_grows_span() {
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+
+        // Warmup with high density (50 cells/block).
+        ctrl.observe(&BatchSignals {
+            prefetch_recv_ms: 100.0,
+            build_ms: 3000.0,
+            flush_wait_ms: 0.0,
+            l0_files: 5,
+            flush_channel_pending: 1,
+            flush_channel_capacity: 8,
+            cell_count: 500_000,
+            block_count: 10_000,
+        });
+
+        // Initialize density_ema.
+        ctrl.observe(&BatchSignals {
+            prefetch_recv_ms: 100.0,
+            build_ms: 3000.0,
+            flush_wait_ms: 0.0,
+            l0_files: 5,
+            flush_channel_pending: 1,
+            flush_channel_capacity: 8,
+            cell_count: 500_000,
+            block_count: 10_000,
+        });
+        let span_before = ctrl.batch_span;
+
+        // 10x density drop (5 cells/block).  Span should grow.
+        ctrl.observe(&BatchSignals {
+            prefetch_recv_ms: 100.0,
+            build_ms: 3000.0,
+            flush_wait_ms: 0.0,
+            l0_files: 5,
+            flush_channel_pending: 1,
+            flush_channel_capacity: 8,
+            cell_count: 50_000,
+            block_count: 10_000,
+        });
+        assert!(
+            ctrl.batch_span > span_before,
+            "10x density decrease should grow span: {} vs before {}",
+            ctrl.batch_span,
+            span_before
+        );
+    }
+
+    #[test]
+    fn stable_density_no_span_change() {
+        let mut ctrl = BottleneckController::new(100_000, 12, 8, 32 * GB);
+
+        // Warmup.
+        ctrl.observe(&BatchSignals {
+            prefetch_recv_ms: 100.0,
+            build_ms: 3000.0,
+            flush_wait_ms: 0.0,
+            l0_files: 5,
+            flush_channel_pending: 1,
+            flush_channel_capacity: 8,
+            cell_count: 50_000,
+            block_count: 10_000,
+        });
+
+        // Initialize density_ema.
+        ctrl.observe(&BatchSignals {
+            prefetch_recv_ms: 100.0,
+            build_ms: 3000.0,
+            flush_wait_ms: 0.0,
+            l0_files: 5,
+            flush_channel_pending: 1,
+            flush_channel_capacity: 8,
+            cell_count: 50_000,
+            block_count: 10_000,
+        });
+        let span_after_init = ctrl.batch_span;
+
+        // Same density — density correction ratio ≈ 1.0.
+        ctrl.observe(&BatchSignals {
+            prefetch_recv_ms: 100.0,
+            build_ms: 3000.0,
+            flush_wait_ms: 0.0,
+            l0_files: 5,
+            flush_channel_pending: 1,
+            flush_channel_capacity: 8,
+            cell_count: 50_000,
+            block_count: 10_000,
+        });
+        assert_eq!(
+            ctrl.batch_span, span_after_init,
+            "stable density should not change span: {} vs {}",
+            ctrl.batch_span, span_after_init
         );
     }
 
