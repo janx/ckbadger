@@ -2421,7 +2421,7 @@ fn build_bulk_build_diagnostics(
 /// Build the controller observation panel lines for bulk-build diagnostics.
 ///
 /// Two orthogonal sections:
-/// 1. Sizing — build EMA vs 3s target (THE sizing signal) + budget in MB
+/// 1. Sizing — build EMA vs 2s target (THE sizing signal) + budget in MB
 /// 2. I/O — bottleneck classification + waste breakdown + knobs with inline deltas
 fn controller_panel_lines(
     bb: &BulkBuildProgressData,
@@ -2470,11 +2470,11 @@ fn controller_panel_lines(
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string());
 
-    // Build EMA bar: fill_pct = build_ema / 3000.0, color by timing
-    let fill_pct = (build_ema / 3000.0 * 100.0).min(100.0);
-    let build_color = if build_ema > 4000.0 {
+    // Build EMA bar: fill_pct = build_ema / 2000.0, color by timing
+    let fill_pct = (build_ema / 2000.0 * 100.0).min(100.0);
+    let build_color = if build_ema > 3000.0 {
         ERROR_RED
-    } else if build_ema > 3000.0 {
+    } else if build_ema > 2000.0 {
         AMBER
     } else {
         TERMINAL_GREEN
@@ -2522,7 +2522,7 @@ fn controller_panel_lines(
         // Compact: 2 lines
         // Line 1: build EMA + budget
         let mut spans1 = vec![Span::styled(
-            format!("build {:.1}s/3s {:.0}%", build_ema / 1000.0, fill_pct),
+            format!("build {:.1}s/2s {:.0}%", build_ema / 1000.0, fill_pct),
             Style::default().fg(build_color),
         )];
         if target_bytes > 0 {
@@ -2570,7 +2570,7 @@ fn controller_panel_lines(
         let line2 = Line::from(vec![
             Span::styled("build ", Style::default().fg(SLATE_500)),
             Span::styled(
-                format!("{:.1}s/3s", build_ema / 1000.0),
+                format!("{:.1}s/2s", build_ema / 1000.0),
                 Style::default().fg(build_color),
             ),
             Span::styled("  ", Style::default()),
@@ -6709,7 +6709,7 @@ mod tests {
         // Line 1: build EMA summary + budget
         let text0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text0.contains("build") && text0.contains("s/3s"),
+            text0.contains("build") && text0.contains("s/2s"),
             "line 1 should contain build EMA, got: {}",
             text0
         );
@@ -6771,7 +6771,7 @@ mod tests {
         // Line 2: build bar
         let text1: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text1.contains("build") && text1.contains("s/3s"),
+            text1.contains("build") && text1.contains("s/2s"),
             "line 2 should contain build EMA, got: {}",
             text1
         );

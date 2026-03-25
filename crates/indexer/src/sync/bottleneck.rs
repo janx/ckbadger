@@ -62,7 +62,7 @@ const FLUSH_L0_THRESHOLD: f64 = 40.0;
 //   build > target → shrink bytes (batch too large)
 // This is independent of bottleneck classification — classification
 // only governs I/O resource knobs (fetch_threads, bg_jobs).
-const TARGET_ITERATION_MS: f64 = 3000.0;
+const TARGET_ITERATION_MS: f64 = 2000.0;
 
 // Per-step bytes change safety bounds.  These limit how much
 // target_batch_bytes can change in a single iteration, preventing
@@ -346,7 +346,7 @@ mod tests {
     fn healthy_signals() -> BatchSignals {
         BatchSignals {
             prefetch_recv_ms: 100.0,
-            build_ms: 3000.0,
+            build_ms: 2000.0,
             flush_wait_ms: 0.0,
             l0_files: 5,
         }
@@ -487,13 +487,13 @@ mod tests {
         for _ in 0..20 {
             no_flush.observe(&BatchSignals {
                 prefetch_recv_ms: 0.0,
-                build_ms: 3000.0,
+                build_ms: 2000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
             });
             with_flush.observe(&BatchSignals {
                 prefetch_recv_ms: 0.0,
-                build_ms: 3000.0,
+                build_ms: 2000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 5,
             });
@@ -518,13 +518,13 @@ mod tests {
         for _ in 0..20 {
             no_recv.observe(&BatchSignals {
                 prefetch_recv_ms: 0.0,
-                build_ms: 3000.0,
+                build_ms: 2000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
             });
             with_recv.observe(&BatchSignals {
                 prefetch_recv_ms: 5000.0,
-                build_ms: 3000.0,
+                build_ms: 2000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
             });
@@ -548,7 +548,7 @@ mod tests {
         for _ in 0..20 {
             ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 0.0,
-                build_ms: 3000.0,
+                build_ms: 2000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
             });
@@ -606,7 +606,7 @@ mod tests {
         for _ in 0..10 {
             ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 100.0,
-                build_ms: 3000.0,
+                build_ms: 2000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 60,
             });
