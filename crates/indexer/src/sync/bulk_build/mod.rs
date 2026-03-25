@@ -194,8 +194,7 @@ impl BulkBuildEngine {
                     break;
                 }
                 Err(e) => {
-                    info!(error = %e, "prefetch error, ending bulk build loop");
-                    break;
+                    return Err(e.context("prefetch error during bulk build"));
                 }
             }
             // Greedily pull any additional ready chunks.
