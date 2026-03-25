@@ -777,58 +777,11 @@ impl RepeatedWarningTracker {
 
 // ── Queue / memory helper functions ─────────────────────────────────────
 
-pub(crate) fn sender_queue_depth<T>(sender: &tokio::sync::mpsc::Sender<T>) -> u64 {
-    (sender.max_capacity() - sender.capacity()) as u64
-}
-
 pub(crate) fn queue_fill_percentage(depth: Option<u64>, capacity: Option<u64>) -> Option<f64> {
     match (depth, capacity) {
         (Some(d), Some(c)) if c > 0 => Some((d as f64 / c as f64) * 100.0),
         _ => None,
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct QueuePressureSnapshot {
-    pub(crate) parse_queue_pending_txs: u64,
-    pub(crate) parse_queue_capacity_txs: u64,
-    pub(crate) parse_queue_fill_pct: Option<f64>,
-    pub(crate) writer_queue_depth: u64,
-    pub(crate) writer_queue_capacity: u64,
-    pub(crate) writer_queue_fill_pct: Option<f64>,
-}
-
-pub(crate) fn build_queue_pressure_snapshot(
-    parse_queue_pending_txs: u64,
-    parse_queue_capacity_txs: u64,
-    writer_queue_depth: u64,
-    writer_queue_capacity: u64,
-) -> QueuePressureSnapshot {
-    QueuePressureSnapshot {
-        parse_queue_pending_txs,
-        parse_queue_capacity_txs,
-        parse_queue_fill_pct: queue_fill_percentage(
-            Some(parse_queue_pending_txs),
-            Some(parse_queue_capacity_txs),
-        ),
-        writer_queue_depth,
-        writer_queue_capacity,
-        writer_queue_fill_pct: queue_fill_percentage(
-            Some(writer_queue_depth),
-            Some(writer_queue_capacity),
-        ),
-    }
-}
-
-pub(crate) fn parse_queue_capacity_txs(
-    queue_capacity_batches: usize,
-    target_batch_txs: u64,
-) -> u64 {
-    let queue_capacity_batches =
-        u64::try_from(queue_capacity_batches).expect("parse queue capacity exceeds u64");
-    queue_capacity_batches
-        .checked_mul(target_batch_txs)
-        .expect("parse queue tx capacity overflow")
 }
 
 pub(crate) fn should_trim_cell_cache(cache_len: usize) -> bool {
@@ -983,18 +936,6 @@ mod tests {
     }
 
     #[test]
-    fn test_queue_fill_snapshot_keeps_parser_and_writer_pressure_separate() {
-        let snapshot = build_queue_pressure_snapshot(320_000, 1_280_000, 3, 8);
-
-        assert_eq!(snapshot.parse_queue_pending_txs, 320_000);
-        assert_eq!(snapshot.parse_queue_capacity_txs, 1_280_000);
-        assert_eq!(snapshot.parse_queue_fill_pct, Some(25.0));
-        assert_eq!(snapshot.writer_queue_depth, 3);
-        assert_eq!(snapshot.writer_queue_capacity, 8);
-        assert_eq!(snapshot.writer_queue_fill_pct, Some(37.5));
-    }
-
-    #[test]
     fn test_compaction_pressure_snapshot_reports_l0_total_and_l0_max() {
         let snapshot = ckbadger_store::store::CompactionPressureSnapshot {
             l0_files_total: 82,
@@ -1005,29 +946,6 @@ mod tests {
 
         assert_eq!(snapshot.l0_files_total, 82);
         assert_eq!(snapshot.l0_files_max, 3);
-    }
-
-    #[test]
-    fn test_parse_queue_capacity_txs() {
-        assert_eq!(parse_queue_capacity_txs(8, 40_000), 320_000);
-    }
-
-    #[test]
-    #[should_panic(expected = "parse queue tx capacity overflow")]
-    fn test_parse_queue_capacity_txs_panics_on_overflow() {
-        use super::super::adaptive::ADAPTIVE_BATCH_MAX_TXS;
-        let _ = parse_queue_capacity_txs(usize::MAX, ADAPTIVE_BATCH_MAX_TXS);
-    }
-
-    #[tokio::test]
-    async fn test_sender_queue_depth_tracks_runtime_channel_state() {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<u8>(4);
-        assert_eq!(sender_queue_depth(&tx), 0);
-        tx.send(1).await.unwrap();
-        tx.send(2).await.unwrap();
-        assert_eq!(sender_queue_depth(&tx), 2);
-        assert_eq!(rx.recv().await, Some(1));
-        assert_eq!(sender_queue_depth(&tx), 1);
     }
 
     #[test]

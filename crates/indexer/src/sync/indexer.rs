@@ -374,7 +374,7 @@ pub struct Indexer {
     pub(crate) perf: PerfStats,
     pub(crate) pipeline_perf: Arc<PipelinePerfStats>,
     pub(crate) bulk_build_perf: Arc<BulkBuildPerfStats>,
-    pub(crate) adaptive_batch_controller: Arc<AdaptiveBatchController>,
+    pub(crate) adaptive_batch_controller: Arc<LiveBatchController>,
     pub(crate) cache_invalidator: CacheInvalidator,
     pub(crate) last_cache_invalidation: tokio::sync::Mutex<u64>,
     pub(crate) was_bulk_sync_active: std::sync::atomic::AtomicBool,
@@ -430,8 +430,7 @@ impl Indexer {
         progress.start_refresher();
         let cell_cache = Arc::new(DashMap::with_capacity(CELL_CACHE_CAPACITY));
         let udt_cell_cache = Arc::new(DashMap::with_capacity(UDT_CELL_CACHE_CAPACITY));
-        let adaptive_batch_controller =
-            Arc::new(AdaptiveBatchController::new(config.pipeline_buffer as u64));
+        let adaptive_batch_controller = Arc::new(LiveBatchController::new());
 
         let bulk_sync_allowed = is_fresh_sync_tip_state(tip_number, &tip_hash);
         let was_bulk =
@@ -937,21 +936,6 @@ impl Indexer {
 
     pub fn bulk_build_progress_snapshot(&self) -> Option<ckbadger_common::BulkBuildProgressData> {
         self.bulk_build_perf.snapshot()
-    }
-
-    pub fn adaptive_batch_snapshot(&self) -> Option<AdaptiveBatchProgressSnapshot> {
-        let snapshot = self.adaptive_batch_controller.snapshot();
-        Some(AdaptiveBatchProgressSnapshot {
-            target_batch_txs: snapshot.target_batch_txs,
-            inflight_limit: snapshot.inflight_limit,
-            min_target_batch_txs: snapshot.min_target_batch_txs,
-            cooldown_steps: snapshot.cooldown_steps,
-            last_reason: decode_adaptive_batch_reason(snapshot.last_reason_code)
-                .map(str::to_string),
-            adjustment_seq: snapshot.adjustment_seq,
-            backoff_streak: snapshot.backoff_streak,
-            last_adjusted_at: snapshot.last_adjusted_at,
-        })
     }
 
     pub fn pipeline_reset_snapshot(&self) -> Option<(u64, String)> {

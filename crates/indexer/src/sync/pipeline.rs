@@ -1,6 +1,9 @@
 #![allow(clippy::type_complexity)]
 
 use std::collections::{HashMap, HashSet};
+
+/// Bounded channel capacity for the live sync pipeline (Fetcher → Parser → Writer).
+const PIPELINE_CHANNEL_CAPACITY: usize = 16;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,7 +24,6 @@ use crate::parser::{
     DotbitParser, MnftParser, SporeParser, UdtParser,
 };
 use crate::rpc::BlockResponseWithCycles;
-use crate::runtime_diag::read_cgroup_memory_snapshot;
 use ckbadger_store::types::{DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION};
 
 use ckb_store_reader::CkbChainReader;
@@ -600,8 +602,8 @@ impl Indexer {
             parser_perf_sample: ParserBatchPerfSample,
         }
 
-        let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
-        let (parse_tx, mut parse_rx) = mpsc::channel::<ParsedBatch>(self.config.pipeline_buffer);
+        let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(PIPELINE_CHANNEL_CAPACITY);
+        let (parse_tx, mut parse_rx) = mpsc::channel::<ParsedBatch>(PIPELINE_CHANNEL_CAPACITY);
         let parse_tx_pending_txs = Arc::new(AtomicU64::new(0));
         let parser_exit_reason = Arc::new(std::sync::Mutex::new(None::<String>));
         let fetcher_exit_reason = Arc::new(std::sync::Mutex::new(None::<String>));
@@ -611,7 +613,7 @@ impl Indexer {
             parser_cache_committed_tip_from_sync_tip(self.repo.get_sync_tip().await?.0),
         ));
         self.pipeline_perf
-            .set_queue_capacities(self.config.pipeline_buffer, self.config.pipeline_buffer);
+            .set_queue_capacities(PIPELINE_CHANNEL_CAPACITY, PIPELINE_CHANNEL_CAPACITY);
 
         let config = self.config.clone();
         let progress = Arc::clone(&self.progress);
@@ -627,7 +629,6 @@ impl Indexer {
             .expect("ckb_store must exist before pipeline starts");
         let pipeline_perf_for_fetcher = Arc::clone(&self.pipeline_perf);
         let adaptive_batch_controller_for_fetcher = Arc::clone(&self.adaptive_batch_controller);
-        let parse_tx_for_fetcher_depth = parse_tx.clone();
         let parse_tx_pending_txs_for_parser = Arc::clone(&parse_tx_pending_txs);
         let parse_tx_pending_txs_for_writer = Arc::clone(&parse_tx_pending_txs);
         let fetcher_exit_reason_for_fetcher = Arc::clone(&fetcher_exit_reason);
@@ -714,29 +715,12 @@ impl Indexer {
                     continue;
                 }
 
-                let adaptive_snapshot = adaptive_batch_controller_for_fetcher.snapshot();
-                let fetch_queue_depth_now = sender_queue_depth(&fetch_tx);
-                let parse_queue_depth_now = sender_queue_depth(&parse_tx_for_fetcher_depth);
-                let inflight_batches = fetch_queue_depth_now.saturating_add(parse_queue_depth_now);
-                if inflight_batches >= adaptive_snapshot.inflight_limit {
-                    sleep(Duration::from_millis(50)).await;
-                    continue;
-                }
-
-                let dynamic_span = adaptive_batch_controller_for_fetcher
-                    .estimate_block_span(config.batch_size as u64);
+                let dynamic_span = adaptive_batch_controller_for_fetcher.estimate_block_span();
                 let end_block = std::cmp::min(start_block + dynamic_span - 1, chain_tip);
 
                 debug!(
-                    "Fetcher: fetching blocks {} to {} (chain_tip={}, next_block={:?}, adaptive_txs={}, adaptive_min_txs={}, inflight_limit={}, inflight_batches={})",
-                    start_block,
-                    end_block,
-                    chain_tip,
-                    next_block,
-                    adaptive_snapshot.target_batch_txs,
-                    adaptive_snapshot.min_target_batch_txs,
-                    adaptive_snapshot.inflight_limit,
-                    inflight_batches
+                    "Fetcher: fetching blocks {} to {} (chain_tip={}, next_block={:?}, span={})",
+                    start_block, end_block, chain_tip, next_block, dynamic_span
                 );
 
                 let fetch_cycle_epoch = pipeline_epoch_for_fetcher.load(Ordering::SeqCst);
@@ -2595,86 +2579,7 @@ impl Indexer {
                             writer_queue,
                             parse_tx_for_writer_depth.max_capacity(),
                         );
-                        let adaptive_snapshot_before = self.adaptive_batch_controller.snapshot();
-                        let parse_queue_pending_txs =
-                            parse_tx_pending_txs_for_writer.load(Ordering::Relaxed);
-                        let parse_queue_capacity_txs = parse_queue_capacity_txs(
-                            parse_tx_for_writer_depth.max_capacity(),
-                            adaptive_snapshot_before.target_batch_txs,
-                        );
-                        let queue_pressure = build_queue_pressure_snapshot(
-                            parse_queue_pending_txs,
-                            parse_queue_capacity_txs,
-                            writer_queue as u64,
-                            parse_tx_for_writer_depth.max_capacity() as u64,
-                        );
-                        let memory_ratio_pct =
-                            cgroup_memory_ratio_pct(&read_cgroup_memory_snapshot());
-                        let compaction_pressure = self.writer.store().compaction_pressure();
                         let blocks_remaining = self.progress.blocks_remaining();
-                        let db_stage_ms = db_elapsed.as_secs_f64() * 1000.0;
-                        let write_us_per_tx = if batch_tx_count > 0 && db_stage_ms > 0.0 {
-                            Some((db_stage_ms * 1000.0) / batch_tx_count as f64)
-                        } else {
-                            None
-                        };
-                        let mem_profile = self.writer.store().memory_profile();
-                        let is_bulk = self.writer.store().is_bulk_sync_mode();
-                        if let Some(adjustment) =
-                            self.adaptive_batch_controller
-                                .update_after_write(AdaptiveBatchInput {
-                                    write_ms: db_stage_ms,
-                                    commit_ms: write_metrics.commit_ms,
-                                    l0_files_max: Some(compaction_pressure.l0_files_max),
-                                    compaction_pending_bytes: Some(
-                                        compaction_pressure.compaction_pending_bytes,
-                                    ),
-                                    immutable_memtables: Some(
-                                        compaction_pressure.immutable_memtables,
-                                    ),
-                                    severe_pending_threshold: if is_bulk {
-                                        mem_profile.severe_compaction_pending_bytes_bulk
-                                    } else {
-                                        mem_profile.severe_compaction_pending_bytes
-                                    },
-                                    moderate_pending_threshold: if is_bulk {
-                                        mem_profile.moderate_compaction_pending_bytes_bulk
-                                    } else {
-                                        mem_profile.moderate_compaction_pending_bytes
-                                    },
-                                    severe_imm_threshold: mem_profile.severe_immutable_memtables,
-                                    moderate_imm_threshold: mem_profile
-                                        .moderate_immutable_memtables,
-                                    is_bulk_sync: is_bulk,
-                                })
-                        {
-                            info!(
-                                run_id = %self.run_id,
-                                reason = adjustment.reason,
-                                previous_target_batch_txs = adjustment.previous_target_batch_txs,
-                                new_target_batch_txs = adjustment.new_target_batch_txs,
-                                previous_inflight_limit = adjustment.previous_inflight_limit,
-                                new_inflight_limit = adjustment.new_inflight_limit,
-                                previous_min_target_batch_txs = adjustment.previous_min_target_batch_txs,
-                                new_min_target_batch_txs = adjustment.new_min_target_batch_txs,
-                                parse_queue_fill_pct = queue_pressure.parse_queue_fill_pct.map(|v| format!("{:.1}", v)),
-                                writer_queue_fill_pct = queue_pressure.writer_queue_fill_pct.map(|v| format!("{:.1}", v)),
-                                parse_queue_pending_txs = queue_pressure.parse_queue_pending_txs,
-                                parse_queue_capacity_txs = queue_pressure.parse_queue_capacity_txs,
-                                writer_queue_depth = queue_pressure.writer_queue_depth,
-                                writer_queue_capacity = queue_pressure.writer_queue_capacity,
-                                l0_files_total = compaction_pressure.l0_files_total,
-                                l0_files_max = compaction_pressure.l0_files_max,
-                                memory_ratio_pct = memory_ratio_pct.map(|v| format!("{:.1}", v)),
-                                write_us_per_tx = write_us_per_tx.map(|v| format!("{:.1}", v)),
-                                adaptive_cooldown = self.adaptive_batch_controller.snapshot().cooldown_steps,
-                                blocks_remaining,
-                                db_stage_ms = format!("{:.1}", db_stage_ms),
-                                db_commit_ms = format!("{:.1}", write_metrics.commit_ms),
-                                "Adaptive batch controller adjusted"
-                            );
-                        }
-                        let adaptive_snapshot = self.adaptive_batch_controller.snapshot();
                         let perf_stats = self.writer.store().memory_stats();
                         let batch_env = crate::sys_info::read_batch_environment(&mut disk_tracker);
                         self.record_bulk_sync_perf_batch_sample(BatchSample {
@@ -2714,7 +2619,7 @@ impl Indexer {
                             )
                         });
                         info!(
-                            "Wrote blocks {} to {} ({} remaining, {:.2}s, commit={:.0}ms, q={}, wait={:.0}ms, adaptive_txs={}, adaptive_min_txs={}, inflight_limit={}) {}",
+                            "Wrote blocks {} to {} ({} remaining, {:.2}s, commit={:.0}ms, q={}, wait={:.0}ms) {}",
                             start_block,
                             end_block,
                             blocks_remaining,
@@ -2722,9 +2627,6 @@ impl Indexer {
                             write_metrics.commit_ms,
                             writer_queue,
                             recv_wait_ms,
-                            adaptive_snapshot.target_batch_txs,
-                            adaptive_snapshot.min_target_batch_txs,
-                            adaptive_snapshot.inflight_limit,
                             mode
                         );
 

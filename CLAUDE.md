@@ -167,13 +167,12 @@ docs/VERIFY.md               # Data integrity verification details
 
 Three-stage pipeline: **Fetcher** (RPC I/O) -> **Parser** (CPU + DB prefetch) -> **Writer** (DB I/O). See `docs/INDEXER_PIPELINE.md` for architecture details and progress tracking.
 
-| Parameter             | Default | Description                               |
-| --------------------- | ------- | ----------------------------------------- |
-| `pipeline_buffer`     | `16`    | Channel capacity between stages           |
-| `batch_size`          | `10000` | Blocks per batch (initial, then adaptive) |
-| `bulk_sync_threshold` | `72`    | Blocks behind tip to treat as bulk sync   |
+| Parameter             | Default | Description                             |
+| --------------------- | ------- | --------------------------------------- |
+| `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat as bulk sync |
+| `poll_interval_ms`    | `1000`  | Live sync new-block poll interval (ms)  |
 
-Bulk-build mode uses a `BottleneckController` (`crates/indexer/src/sync/bottleneck.rs`) that dynamically adjusts `batch_span`, `prefetch_ahead`, `fetch_threads`, and RocksDB `bg_jobs` based on per-batch timing (fetch wait / build CPU / flush wait). Channel depths (prefetch + flush) are derived from system RAM.
+Bulk-build mode uses a `BottleneckController` (`crates/indexer/src/sync/bottleneck.rs`) with two independent dimensions: span governed by iteration wall-clock vs 3s target, I/O resources governed by waste classification (recv wait vs flush wait). Channel depths (prefetch + flush) are derived from system RAM.
 
 Sync progress and memory stats are stored in RocksDB (`get_sync_tip()`/`get_sync_status()`/`get_sync_progress()`/`get_memory_stats()`).
 

@@ -189,14 +189,6 @@ mod tests {
             pipeline: None,
             pipeline_reset_epoch: None,
             pipeline_reset_reason: None,
-            adaptive_target_batch_txs: None,
-            adaptive_inflight_limit: None,
-            adaptive_min_target_batch_txs: None,
-            adaptive_cooldown_steps: None,
-            adaptive_last_reason: None,
-            adaptive_adjustment_seq: None,
-            adaptive_backoff_streak: None,
-            adaptive_last_adjusted_at: None,
             bulk_build: None,
         };
         invalidator.publish_sync_progress(&data).await;

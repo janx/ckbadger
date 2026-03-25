@@ -8,8 +8,6 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use ckb_hash::new_blake2b;
 
-use crate::runtime_diag::CgroupMemorySnapshot;
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -22,12 +20,6 @@ pub(crate) const PIPELINE_RESET_REASON_BATCH_MISMATCH: u8 = 1;
 pub(crate) const PIPELINE_RESET_REASON_REORG_HANDLED: u8 = 2;
 pub(crate) const PIPELINE_RESET_REASON_DEEP_FORK_PAUSED: u8 = 3;
 pub(crate) const PIPELINE_RESET_REASON_BATCH_WRITE_FAILED: u8 = 4;
-
-pub(crate) const ADAPTIVE_REASON_UNKNOWN: u8 = 0;
-pub(crate) const ADAPTIVE_REASON_SEVERE_BACKOFF: u8 = 1;
-pub(crate) const ADAPTIVE_REASON_MODERATE_BACKOFF: u8 = 2;
-pub(crate) const ADAPTIVE_REASON_GROW_INFLIGHT: u8 = 3;
-pub(crate) const ADAPTIVE_REASON_GROW_BATCH: u8 = 4;
 
 // ---------------------------------------------------------------------------
 // Startup phase codec
@@ -61,30 +53,6 @@ pub(crate) fn decode_pipeline_reset_reason(reason_code: u8) -> &'static str {
         PIPELINE_RESET_REASON_DEEP_FORK_PAUSED => "deep fork paused",
         PIPELINE_RESET_REASON_BATCH_WRITE_FAILED => "batch write failed",
         _ => "unknown",
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Adaptive batch reason codec
-// ---------------------------------------------------------------------------
-
-pub(crate) fn encode_adaptive_batch_reason(reason: &'static str) -> u8 {
-    match reason {
-        "severe_backoff" => ADAPTIVE_REASON_SEVERE_BACKOFF,
-        "moderate_backoff" => ADAPTIVE_REASON_MODERATE_BACKOFF,
-        "grow_inflight" => ADAPTIVE_REASON_GROW_INFLIGHT,
-        "grow_batch" => ADAPTIVE_REASON_GROW_BATCH,
-        _ => ADAPTIVE_REASON_UNKNOWN,
-    }
-}
-
-pub(crate) fn decode_adaptive_batch_reason(reason_code: u8) -> Option<&'static str> {
-    match reason_code {
-        ADAPTIVE_REASON_SEVERE_BACKOFF => Some("severe_backoff"),
-        ADAPTIVE_REASON_MODERATE_BACKOFF => Some("moderate_backoff"),
-        ADAPTIVE_REASON_GROW_INFLIGHT => Some("grow_inflight"),
-        ADAPTIVE_REASON_GROW_BATCH => Some("grow_batch"),
-        _ => None,
     }
 }
 
@@ -179,17 +147,6 @@ pub(crate) fn next_fetch_start_after_batch(end_block: u64) -> u64 {
     end_block
         .checked_add(1)
         .expect("fetch batch end_block overflow while computing next start")
-}
-
-// ---------------------------------------------------------------------------
-// Cgroup / memory
-// ---------------------------------------------------------------------------
-
-pub(crate) fn cgroup_memory_ratio_pct(snapshot: &CgroupMemorySnapshot) -> Option<f64> {
-    match (snapshot.memory_current_bytes, snapshot.memory_max_bytes) {
-        (Some(current), Some(max)) if max > 0 => Some((current as f64 / max as f64) * 100.0),
-        _ => None,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -469,29 +426,6 @@ mod tests {
     }
 
     #[test]
-    fn test_adaptive_reason_roundtrip_known_values() {
-        let reasons = [
-            "severe_backoff",
-            "moderate_backoff",
-            "grow_inflight",
-            "grow_batch",
-        ];
-        for reason in reasons {
-            let code = encode_adaptive_batch_reason(reason);
-            assert_ne!(code, ADAPTIVE_REASON_UNKNOWN);
-            assert_eq!(decode_adaptive_batch_reason(code), Some(reason));
-        }
-    }
-
-    #[test]
-    fn test_adaptive_reason_unknown_fallback() {
-        let code = encode_adaptive_batch_reason("unexpected reason");
-        assert_eq!(code, ADAPTIVE_REASON_UNKNOWN);
-        assert_eq!(decode_adaptive_batch_reason(code), None);
-        assert_eq!(decode_adaptive_batch_reason(255), None);
-    }
-
-    #[test]
     fn test_decode_startup_phase() {
         assert_eq!(decode_startup_phase(STARTUP_PHASE_NONE), None);
         assert_eq!(
@@ -499,30 +433,6 @@ mod tests {
             Some("rollback_cleanup")
         );
         assert_eq!(decode_startup_phase(99), None);
-    }
-
-    #[test]
-    fn test_cgroup_memory_ratio_pct() {
-        let snapshot = CgroupMemorySnapshot {
-            memory_current_bytes: Some(4),
-            memory_max_bytes: Some(8),
-            ..Default::default()
-        };
-        assert_eq!(cgroup_memory_ratio_pct(&snapshot), Some(50.0));
-
-        let unlimited = CgroupMemorySnapshot {
-            memory_current_bytes: Some(4),
-            memory_max_bytes: None,
-            ..Default::default()
-        };
-        assert_eq!(cgroup_memory_ratio_pct(&unlimited), None);
-
-        let zero_max = CgroupMemorySnapshot {
-            memory_current_bytes: Some(4),
-            memory_max_bytes: Some(0),
-            ..Default::default()
-        };
-        assert_eq!(cgroup_memory_ratio_pct(&zero_max), None);
     }
 
     #[test]

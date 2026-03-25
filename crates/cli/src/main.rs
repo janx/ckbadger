@@ -222,9 +222,7 @@ fn build_indexer_service_config(
             .as_ref()
             .map(|p| p.to_string_lossy().to_string()),
         network: config.ckb.network.clone(),
-        batch_size: config.indexer.batch_size,
         poll_interval_ms: config.indexer.poll_interval_ms,
-        pipeline_buffer: config.indexer.pipeline_buffer,
         bulk_sync_threshold: config.indexer.bulk_sync_threshold,
         store_runtime_config: store_runtime_config(&config.store),
         decoder_cache_path: store_paths.decoder_cache.to_string_lossy().to_string(),
@@ -683,8 +681,8 @@ fn print_startup_info(
             }
             "indexer" => {
                 println!(
-                    "    {dim}Indexer{reset}     batch={} buffer={}",
-                    config.indexer.batch_size, config.indexer.pipeline_buffer
+                    "    {dim}Indexer{reset}     threshold={} poll={}ms",
+                    config.indexer.bulk_sync_threshold, config.indexer.poll_interval_ms
                 );
             }
             other => {

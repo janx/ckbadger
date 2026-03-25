@@ -18,14 +18,10 @@ pub struct Config {
     /// Exact build identity propagated from CLI compile-time metadata.
     pub build_version: String,
     pub ckb_rpc_url: String,
-    #[serde(default = "default_batch_size")]
-    pub batch_size: usize,
     #[serde(default = "default_poll_interval_ms")]
     pub poll_interval_ms: u64,
     #[serde(default)]
     pub start_block: Option<u64>,
-    #[serde(default = "default_pipeline_buffer")]
-    pub pipeline_buffer: usize,
     #[serde(default = "default_bulk_sync_threshold")]
     pub bulk_sync_threshold: u64,
     #[serde(default = "default_fast_sync_mode")]
@@ -60,16 +56,8 @@ fn default_media_dir() -> String {
     "media".to_string()
 }
 
-fn default_batch_size() -> usize {
-    10000
-}
-
 fn default_poll_interval_ms() -> u64 {
     1000
-}
-
-fn default_pipeline_buffer() -> usize {
-    16
 }
 
 fn default_bulk_sync_threshold() -> u64 {
@@ -101,12 +89,6 @@ impl Config {
         if self.ckb_db_path.trim().is_empty() {
             bail!("config: ckb_db_path is required and must not be blank");
         }
-        if self.batch_size == 0 {
-            bail!("config: batch_size must be > 0");
-        }
-        if self.pipeline_buffer == 0 {
-            bail!("config: pipeline_buffer must be > 0");
-        }
         if self.store_runtime_config.memory_budget_gb == Some(0) {
             bail!("config: store.memory_budget_gb must be > 0 when set");
         }
@@ -117,16 +99,6 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_default_batch_size() {
-        assert_eq!(default_batch_size(), 10000);
-    }
-
-    #[test]
-    fn test_default_pipeline_buffer() {
-        assert_eq!(default_pipeline_buffer(), 16);
-    }
 
     #[test]
     fn test_bulk_sync_threshold_is_twice_deep_fork_depth() {
@@ -157,10 +129,8 @@ mod tests {
             bulk_sync_perf_output_root: String::new(),
             build_version: "0.1.0+feature/foo@abcdef123456".to_string(),
             ckb_rpc_url: "http://localhost:8114".to_string(),
-            batch_size: 10000,
             poll_interval_ms: 1000,
             start_block: None,
-            pipeline_buffer: 16,
             bulk_sync_threshold: 72,
             fast_sync_mode: true,
             ckb_db_path: "/var/lib/ckb/data/db".to_string(),
@@ -184,22 +154,6 @@ mod tests {
         config.ckb_db_path = "   ".to_string();
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("ckb_db_path is required"));
-    }
-
-    #[test]
-    fn test_validate_rejects_zero_batch_size() {
-        let mut config = make_valid_config();
-        config.batch_size = 0;
-        let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("batch_size must be > 0"));
-    }
-
-    #[test]
-    fn test_validate_rejects_zero_pipeline_buffer() {
-        let mut config = make_valid_config();
-        config.pipeline_buffer = 0;
-        let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("pipeline_buffer must be > 0"));
     }
 
     #[test]

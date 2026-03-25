@@ -161,7 +161,6 @@ pub struct App {
     prev_is_syncing: Option<bool>,
     prev_pipeline_reset_epoch: Option<u64>,
     prev_bottleneck: Option<SyncBottleneck>,
-    prev_adaptive_last_reason: Option<String>,
     last_rate_drop_alert: Option<Instant>,
     last_tx_rate_drop_alert: Option<Instant>,
     stale_warning_active: bool,
@@ -226,7 +225,6 @@ impl App {
             prev_is_syncing: None,
             prev_pipeline_reset_epoch: None,
             prev_bottleneck: None,
-            prev_adaptive_last_reason: None,
             last_rate_drop_alert: None,
             last_tx_rate_drop_alert: None,
             stale_warning_active: false,
@@ -553,7 +551,6 @@ impl App {
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
         let bottleneck = sync_bottleneck(sync.db_write_ms, sync.rpc_fetch_ms);
-        let adaptive_last_reason = sync.adaptive_last_reason.clone();
 
         if let Some(prev_bulk) = self.prev_is_bulk_sync {
             if prev_bulk && !is_bulk_sync {
@@ -598,16 +595,6 @@ impl App {
             }
         }
         self.prev_bottleneck = Some(bottleneck);
-
-        if adaptive_last_reason != self.prev_adaptive_last_reason {
-            if let Some(reason) = adaptive_last_reason.as_deref() {
-                self.push_log(
-                    format!("adaptive state changed: {}", reason),
-                    LogLevel::Info,
-                );
-            }
-        }
-        self.prev_adaptive_last_reason = adaptive_last_reason;
     }
 
     fn detect_stale_state(&mut self) {
@@ -1742,17 +1729,11 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                 pipeline.writer_queue_depth,
                 pipeline.writer_queue_capacity,
             ));
-            let adaptive_inflight_batches =
-                match (pipeline.fetch_queue_depth, pipeline.parse_queue_depth) {
-                    (Some(fetch_depth), Some(parse_depth)) => Some(fetch_depth + parse_depth),
-                    _ => None,
-                };
-
             let spark_width = cols[1].width.saturating_sub(14).clamp(8, 24) as usize;
             let (left, right) = if dense_panel {
                 (
                     {
-                        let mut left = vec![
+                        let left = vec![
                             Line::from(vec![
                                 Span::styled("State ", Style::default().fg(SLATE_500)),
                                 Span::styled(
@@ -1808,25 +1789,6 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                                 ),
                             ]),
                         ];
-                        let adaptive = adaptive_control_lines(
-                            AdaptiveControlSnapshot {
-                                last_batch_blocks: sync.last_batch_blocks,
-                                adaptive_inflight_batches,
-                                adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
-                                adaptive_inflight_limit: sync.adaptive_inflight_limit,
-                                adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
-                                adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
-                                adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
-                                adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
-                                adaptive_last_adjusted_age_secs: sync
-                                    .adaptive_last_adjusted_age_secs,
-                                adaptive_backoff_streak: sync.adaptive_backoff_streak,
-                            },
-                            dense_panel,
-                            sync.pipeline_reset_epoch,
-                            sync.pipeline_reset_reason.as_deref(),
-                        );
-                        left.extend(adaptive);
                         left
                     },
                     {
@@ -1891,7 +1853,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
             } else {
                 (
                     {
-                        let mut left = vec![
+                        let left = vec![
                             Line::from(vec![
                                 Span::styled("State ", Style::default().fg(SLATE_500)),
                                 Span::styled(
@@ -1951,25 +1913,6 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                                 ),
                             ]),
                         ];
-                        let adaptive = adaptive_control_lines(
-                            AdaptiveControlSnapshot {
-                                last_batch_blocks: sync.last_batch_blocks,
-                                adaptive_inflight_batches,
-                                adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
-                                adaptive_inflight_limit: sync.adaptive_inflight_limit,
-                                adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
-                                adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
-                                adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
-                                adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
-                                adaptive_last_adjusted_age_secs: sync
-                                    .adaptive_last_adjusted_age_secs,
-                                adaptive_backoff_streak: sync.adaptive_backoff_streak,
-                            },
-                            false,
-                            sync.pipeline_reset_epoch,
-                            sync.pipeline_reset_reason.as_deref(),
-                        );
-                        left.extend(adaptive);
                         left
                     },
                     {
@@ -2041,7 +1984,7 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
         } else {
             (
                 {
-                    let mut left = vec![
+                    let left = vec![
                         Line::from(vec![
                             Span::styled("State ", Style::default().fg(SLATE_500)),
                             Span::styled("N/A", Style::default().fg(SLATE_500)),
@@ -2058,24 +2001,6 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
                             ),
                         ]),
                     ];
-                    let adaptive = adaptive_control_lines(
-                        AdaptiveControlSnapshot {
-                            last_batch_blocks: sync.last_batch_blocks,
-                            adaptive_inflight_batches: None,
-                            adaptive_target_batch_txs: sync.adaptive_target_batch_txs,
-                            adaptive_inflight_limit: sync.adaptive_inflight_limit,
-                            adaptive_min_target_batch_txs: sync.adaptive_min_target_batch_txs,
-                            adaptive_cooldown_steps: sync.adaptive_cooldown_steps,
-                            adaptive_last_reason: sync.adaptive_last_reason.as_deref(),
-                            adaptive_adjustment_seq: sync.adaptive_adjustment_seq,
-                            adaptive_last_adjusted_age_secs: sync.adaptive_last_adjusted_age_secs,
-                            adaptive_backoff_streak: sync.adaptive_backoff_streak,
-                        },
-                        dense_panel,
-                        sync.pipeline_reset_epoch,
-                        sync.pipeline_reset_reason.as_deref(),
-                    );
-                    left.extend(adaptive);
                     left
                 },
                 vec![
@@ -3063,132 +2988,6 @@ fn format_rate_expanded<'a>(label: &'a str, now: Option<f64>, ema: Option<f64>) 
         Span::styled("  ema ", Style::default().fg(SLATE_500)),
         Span::styled(ema_text, Style::default().fg(TERMINAL_GREEN)),
     ]
-}
-
-#[derive(Clone, Copy)]
-struct AdaptiveControlSnapshot<'a> {
-    last_batch_blocks: Option<u64>,
-    adaptive_inflight_batches: Option<u64>,
-    adaptive_target_batch_txs: Option<u64>,
-    adaptive_inflight_limit: Option<u64>,
-    adaptive_min_target_batch_txs: Option<u64>,
-    adaptive_cooldown_steps: Option<u64>,
-    adaptive_last_reason: Option<&'a str>,
-    adaptive_adjustment_seq: Option<u64>,
-    adaptive_last_adjusted_age_secs: Option<i64>,
-    adaptive_backoff_streak: Option<u64>,
-}
-
-fn adaptive_control_lines(
-    snapshot: AdaptiveControlSnapshot<'_>,
-    dense: bool,
-    pipeline_reset_epoch: Option<u64>,
-    pipeline_reset_reason: Option<&str>,
-) -> Vec<Line<'static>> {
-    let (state, state_color) = adaptive_state_label(snapshot.adaptive_last_reason);
-    let batch_blocks_text = snapshot
-        .last_batch_blocks
-        .map(format_num_u64)
-        .unwrap_or_else(|| "-".to_string());
-    let target_text = snapshot
-        .adaptive_target_batch_txs
-        .map(format_num_compact)
-        .unwrap_or_else(|| "-".to_string());
-    let floor_text = snapshot
-        .adaptive_min_target_batch_txs
-        .map(format_num_compact)
-        .unwrap_or_else(|| "-".to_string());
-    let inflight_text = match (
-        snapshot.adaptive_inflight_batches,
-        snapshot.adaptive_inflight_limit,
-    ) {
-        (Some(current), Some(limit)) => format!("{current}/{limit}"),
-        (Some(current), None) => format!("{current}/-"),
-        (None, Some(limit)) => format!("-/{limit}"),
-        (None, None) => "-".to_string(),
-    };
-
-    let state_text = if let Some(streak) = snapshot.adaptive_backoff_streak.filter(|v| *v > 0) {
-        format!("{state} x{streak}")
-    } else {
-        state.to_string()
-    };
-    let state_text_color = if snapshot.adaptive_backoff_streak.unwrap_or(0) >= 5 {
-        ERROR_RED
-    } else {
-        state_color
-    };
-
-    let line1 = Line::from(vec![
-        Span::styled("Adaptive ", Style::default().fg(SLATE_500)),
-        Span::styled(
-            format!(
-                "batch {} blk  inflight {}  target {} tx  floor {}",
-                batch_blocks_text, inflight_text, target_text, floor_text,
-            ),
-            Style::default().fg(TERMINAL_DIM),
-        ),
-        Span::styled("  ", Style::default().fg(SLATE_700)),
-        Span::styled(
-            state_text,
-            Style::default()
-                .fg(state_text_color)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]);
-
-    if dense {
-        return vec![line1];
-    }
-
-    // Line 2: adjustment history + pipeline reset
-    let cooldown_text = snapshot
-        .adaptive_cooldown_steps
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "-".to_string());
-    let seq_text = snapshot
-        .adaptive_adjustment_seq
-        .map(format_num_u64)
-        .unwrap_or_else(|| "-".to_string());
-    let age_text = snapshot
-        .adaptive_last_adjusted_age_secs
-        .map(|v| format!("{v}s ago"))
-        .unwrap_or_else(|| "-".to_string());
-    let backoff_text = format!("x{}", snapshot.adaptive_backoff_streak.unwrap_or(0));
-
-    let mut line2_spans = vec![
-        Span::styled("          ", Style::default()), // indent to align under "Adaptive "
-        Span::styled(
-            format!(
-                "cooldown {}  adj #{} ({})  backoff {}",
-                cooldown_text, seq_text, age_text, backoff_text,
-            ),
-            Style::default().fg(TERMINAL_DIM),
-        ),
-    ];
-
-    // Merge pipeline reset info if epoch > 0
-    if let Some(epoch) = pipeline_reset_epoch.filter(|e| *e > 0) {
-        let reason = pipeline_reset_reason.unwrap_or("-");
-        line2_spans.push(Span::styled(
-            format!("  reset #{} {}", epoch, reason),
-            Style::default().fg(AMBER),
-        ));
-    }
-
-    vec![line1, Line::from(line2_spans)]
-}
-
-fn adaptive_state_label(adaptive_last_reason: Option<&str>) -> (&'static str, Color) {
-    match adaptive_last_reason {
-        Some("healthy_step_up")
-        | Some("healthy_step_up_floor_recover")
-        | Some("early_height_boost") => ("EXPAND", TERMINAL_GREEN),
-        Some(reason) if reason.contains("backoff") => ("BACKOFF", AMBER),
-        Some("adjusted") => ("TUNE", TERMINAL_DIM),
-        Some(_) => ("TUNE", TERMINAL_DIM),
-        None => ("HOLD", SLATE_500),
-    }
 }
 
 fn dense_right_lines(
@@ -5633,24 +5432,23 @@ fn draw_system_params_compact(
 #[cfg(test)]
 mod tests {
     use super::{
-        adaptive_control_lines, adaptive_state_label, api_health_state,
-        background_task_last_result, background_task_state_label, build_finalize_left_column,
-        bulk_queue_indicator_line, chart_height_warning, compact_overview_layout,
-        consumed_cells_source_color, consumed_cells_source_label, controller_panel_lines,
-        dense_right_lines, detail_right_lines, diagnostics_dense_panel, direct_io_reads_label,
-        disk_pressure_lines, eta_confidence_label, footer_hint_line, footer_status_message,
-        format_age_secs, format_num, format_num_commas, format_num_compact, format_rate_expanded,
-        format_signed_num_i128, format_stage_commit_gap_ms, header_right_line, header_title_line,
-        heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop, merged_sparkline_p95_line,
-        overview_log_min_height, overview_services_min_height, percentile_from_history,
-        pipeline_bottleneck, pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state,
-        runtime_live_delta, service_log_tails_line, sparkline, split_background_tasks,
-        stale_age_secs, stale_status, startup_phase_label, storage_pressure_l0_line,
-        storage_pressure_wbm_line, storage_runtime_columns, supervisor_services_line,
-        sync_bottleneck, system_kv_line, system_store_path_lines, system_workdir_lines,
-        trend_delta, trim_for_panel, visible_background_tasks, AdaptiveControlSnapshot, App, Color,
-        CompactOverviewLayout, ControllerDeltas, DiagnosticsViewMode, SyncBottleneck, AMBER, CYAN,
-        STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
+        api_health_state, background_task_last_result, background_task_state_label,
+        build_finalize_left_column, bulk_queue_indicator_line, chart_height_warning,
+        compact_overview_layout, consumed_cells_source_color, consumed_cells_source_label,
+        controller_panel_lines, dense_right_lines, detail_right_lines, diagnostics_dense_panel,
+        direct_io_reads_label, disk_pressure_lines, eta_confidence_label, footer_hint_line,
+        footer_status_message, format_age_secs, format_num, format_num_commas, format_num_compact,
+        format_rate_expanded, format_signed_num_i128, format_stage_commit_gap_ms,
+        header_right_line, header_title_line, heartbeat_is_on, io_fetch_write_jitter_line,
+        is_rate_drop, merged_sparkline_p95_line, overview_log_min_height,
+        overview_services_min_height, percentile_from_history, pipeline_bottleneck,
+        pipeline_flow_state, rate_jitter, render_gauge, runtime_health_state, runtime_live_delta,
+        service_log_tails_line, sparkline, split_background_tasks, stale_age_secs, stale_status,
+        startup_phase_label, storage_pressure_l0_line, storage_pressure_wbm_line,
+        storage_runtime_columns, supervisor_services_line, sync_bottleneck, system_kv_line,
+        system_store_path_lines, system_workdir_lines, trend_delta, trim_for_panel,
+        visible_background_tasks, App, Color, CompactOverviewLayout, ControllerDeltas,
+        DiagnosticsViewMode, SyncBottleneck, AMBER, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
     use crate::db::{
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
@@ -6067,107 +5865,6 @@ mod tests {
         let spans = format_rate_expanded("Tx/s  ", Some(5.0), None);
         assert_eq!(spans[2].content, "5");
         assert_eq!(spans[4].content, "-");
-    }
-
-    #[test]
-    fn test_adaptive_control_lines_dense() {
-        let lines = adaptive_control_lines(
-            AdaptiveControlSnapshot {
-                last_batch_blocks: Some(512),
-                adaptive_inflight_batches: Some(2),
-                adaptive_target_batch_txs: Some(40_000),
-                adaptive_inflight_limit: Some(3),
-                adaptive_min_target_batch_txs: Some(10_000),
-                adaptive_cooldown_steps: Some(2),
-                adaptive_last_reason: Some("pressure_backoff"),
-                adaptive_adjustment_seq: Some(12),
-                adaptive_last_adjusted_age_secs: Some(7),
-                adaptive_backoff_streak: Some(3),
-            },
-            true,
-            Some(5),
-            Some("batch mismatch"),
-        );
-        assert_eq!(lines.len(), 1, "dense mode should return 1 line");
-        let text = line_text(&lines[0]);
-        assert!(text.contains("Adaptive"));
-        assert!(text.contains("batch 512 blk"));
-        assert!(text.contains("inflight 2/3"));
-        assert!(text.contains("target 40K tx"));
-        assert!(text.contains("floor 10K"));
-        assert!(text.contains("BACKOFF x3"));
-    }
-
-    #[test]
-    fn test_adaptive_control_lines_detail_with_reset() {
-        let lines = adaptive_control_lines(
-            AdaptiveControlSnapshot {
-                last_batch_blocks: Some(512),
-                adaptive_inflight_batches: Some(2),
-                adaptive_target_batch_txs: Some(40_000),
-                adaptive_inflight_limit: Some(3),
-                adaptive_min_target_batch_txs: Some(10_000),
-                adaptive_cooldown_steps: Some(2),
-                adaptive_last_reason: Some("pressure_backoff"),
-                adaptive_adjustment_seq: Some(12),
-                adaptive_last_adjusted_age_secs: Some(7),
-                adaptive_backoff_streak: Some(3),
-            },
-            false,
-            Some(5),
-            Some("batch mismatch"),
-        );
-        assert_eq!(lines.len(), 2, "detail mode should return 2 lines");
-        let text1 = line_text(&lines[0]);
-        assert!(text1.contains("Adaptive"));
-        assert!(text1.contains("batch 512 blk"));
-        assert!(text1.contains("target 40K tx"));
-        let text2 = line_text(&lines[1]);
-        assert!(text2.contains("cooldown 2"));
-        assert!(text2.contains("adj #12"));
-        assert!(text2.contains("7s ago"));
-        assert!(text2.contains("backoff x3"));
-        assert!(text2.contains("reset #5 batch mismatch"));
-    }
-
-    #[test]
-    fn test_adaptive_control_lines_detail_no_reset() {
-        let lines = adaptive_control_lines(
-            AdaptiveControlSnapshot {
-                last_batch_blocks: Some(100),
-                adaptive_inflight_batches: None,
-                adaptive_target_batch_txs: Some(5_000),
-                adaptive_inflight_limit: None,
-                adaptive_min_target_batch_txs: Some(1_000),
-                adaptive_cooldown_steps: None,
-                adaptive_last_reason: None,
-                adaptive_adjustment_seq: None,
-                adaptive_last_adjusted_age_secs: None,
-                adaptive_backoff_streak: None,
-            },
-            false,
-            Some(0),
-            None,
-        );
-        assert_eq!(lines.len(), 2);
-        let text2 = line_text(&lines[1]);
-        assert!(!text2.contains("reset"), "epoch 0 should not show reset");
-    }
-
-    #[test]
-    fn test_adaptive_state_label() {
-        assert_eq!(
-            adaptive_state_label(Some("healthy_step_up")),
-            ("EXPAND", Color::Rgb(0, 255, 65))
-        );
-        assert_eq!(
-            adaptive_state_label(Some("pressure_backoff")),
-            ("BACKOFF", Color::Rgb(255, 176, 0))
-        );
-        assert_eq!(
-            adaptive_state_label(None),
-            ("HOLD", Color::Rgb(160, 174, 192))
-        );
     }
 
     #[test]

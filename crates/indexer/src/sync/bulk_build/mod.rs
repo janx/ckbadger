@@ -119,12 +119,7 @@ impl BulkBuildEngine {
             disk_device,
         );
         let token_info_cache = preload_token_info_cache(indexer.writer.store().as_ref())?;
-        let configured_batch_size = u64::try_from(indexer.config.batch_size).map_err(|_| {
-            anyhow!(
-                "bulk build batch_size exceeds u64 range: batch_size={}",
-                indexer.config.batch_size
-            )
-        })?;
+        let initial_span: u64 = 100_000;
         let mem_profile = indexer.writer.store().memory_profile();
         // Max = available cores.  Fetch threads are temporary (std::thread::scope),
         // so no persistent over-subscription.  The controller shrinks this when
@@ -133,7 +128,7 @@ impl BulkBuildEngine {
             .map(|n| n.get().max(2) as u32)
             .unwrap_or(4);
         let mut controller = BottleneckController::new(
-            configured_batch_size,
+            initial_span,
             max_fetch_threads,
             mem_profile.max_background_jobs,
             mem_profile.system_ram_bytes,
@@ -157,7 +152,7 @@ impl BulkBuildEngine {
             ckb_store.clone(),
             prefetch_start,
             initial_handoff,
-            configured_batch_size,
+            initial_span,
             threads_rx,
         );
         // Bounded flush channel: the build loop sends PendingFlush into

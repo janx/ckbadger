@@ -129,11 +129,12 @@ Block N arrives
 
 | Parameter             | Default | Description                                              |
 | --------------------- | ------- | -------------------------------------------------------- |
-| `pipeline_buffer`     | `16`    | Channel capacity between stages                          |
-| `batch_size`          | `10000` | Blocks per batch                                         |
-| `parallel_fetch_size` | `64`    | Concurrent block fetch work units in the pipeline        |
-| `bulk_sync_threshold` | `72`    | Blocks behind tip to treat sync as bulk mode             |
+| `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat sync as bulk mode             |
+| `poll_interval_ms`    | `1000`  | Live sync new-block poll interval (ms)                   |
 | `ckb.workdir`         | -       | CKB node config directory; ckbadger derives RocksDB path |
+
+Pipeline channel capacity (16) and batch span are hardcoded constants.
+Live batch span is density-adaptive: `40,000 txs / tx_per_block_ema`, clamped to [1, 5000] blocks.
 
 ### Relevant Config
 
@@ -147,8 +148,7 @@ rpc_url = "http://127.0.0.1:8114"
 workdir = "/var/lib/ckb"
 ```
 
-`pipeline_buffer`, `batch_size`, `parallel_fetch_size`, and
-`bulk_sync_threshold` are configured via CLI flags in current builds.
+`bulk_sync_threshold` and `poll_interval_ms` are configured in `ckbadger.toml`.
 
 ### CLI Arguments
 
@@ -240,11 +240,8 @@ With default settings on typical hardware:
 
 Pipeline mode uses more memory due to buffered batches:
 
-```
-Memory ≈ pipeline_buffer × batch_size × (block_size + parsed_data)
-       ≈ 16 × 10000 × (~100KB per block)
-       ≈ 16GB additional
-```
+Pipeline memory is bounded by channel capacity (16) × batch span × block size.
+Live batch span adapts to chain density (~20-5000 blocks per batch).
 
 Bulk-build mode adds in-memory state for the live-cell set (LiveCellOwner), intern tables, and
 reducer-owned domain state. See the Bulk-Build Engine section for details.
@@ -253,7 +250,7 @@ reducer-owned domain state. See the Bulk-Build Engine section for details.
 
 When writer is slower than fetcher+parser:
 
-- Channels fill to capacity (`pipeline_buffer`)
+- Channels fill to capacity (16 batches)
 - Fetcher blocks on send, naturally throttling reads
 - No unbounded memory growth
 
@@ -330,9 +327,8 @@ All code hash data is now available from `LiveCellInfo` — no separate DB reads
 
 ### High Memory Usage
 
-1. Reduce `pipeline_buffer` (e.g., to 4-8 from default 16)
-2. Reduce `batch_size`
-3. Monitor for memory leaks in channel handling
+1. Pipeline channel capacity and batch span are auto-managed
+2. Monitor for memory leaks in channel handling
 
 ## Bulk-Build Engine
 

@@ -145,30 +145,6 @@ pub struct SyncProgressData {
     /// Last known pipeline reset reason.
     #[serde(default)]
     pub pipeline_reset_reason: Option<String>,
-    /// Adaptive target transactions per batch in bulk sync.
-    #[serde(default)]
-    pub adaptive_target_batch_txs: Option<u64>,
-    /// Adaptive inflight batch limit in bulk sync.
-    #[serde(default)]
-    pub adaptive_inflight_limit: Option<u64>,
-    /// Adaptive minimum target transactions per batch floor in bulk sync.
-    #[serde(default)]
-    pub adaptive_min_target_batch_txs: Option<u64>,
-    /// Remaining cooldown steps before adaptive step-up is allowed.
-    #[serde(default)]
-    pub adaptive_cooldown_steps: Option<u64>,
-    /// Last adaptive controller reason, when available.
-    #[serde(default)]
-    pub adaptive_last_reason: Option<String>,
-    /// Monotonic adaptive adjustment sequence number.
-    #[serde(default)]
-    pub adaptive_adjustment_seq: Option<u64>,
-    /// Consecutive adaptive backoff count.
-    #[serde(default)]
-    pub adaptive_backoff_streak: Option<u64>,
-    /// Unix timestamp when adaptive controller last adjusted.
-    #[serde(default)]
-    pub adaptive_last_adjusted_at: Option<i64>,
     /// Bulk-build engine internal metrics, when bulk-build engine is active.
     #[serde(default)]
     pub bulk_build: Option<BulkBuildProgressData>,
@@ -771,14 +747,6 @@ mod tests {
             }),
             pipeline_reset_epoch: Some(3),
             pipeline_reset_reason: Some("pipeline batch mismatch".to_string()),
-            adaptive_target_batch_txs: Some(40_000),
-            adaptive_inflight_limit: Some(3),
-            adaptive_min_target_batch_txs: Some(10_000),
-            adaptive_cooldown_steps: Some(2),
-            adaptive_last_reason: Some("pressure_backoff".to_string()),
-            adaptive_adjustment_seq: Some(42),
-            adaptive_backoff_streak: Some(3),
-            adaptive_last_adjusted_at: Some(1_700_000_123),
             bulk_build: None,
         };
 
@@ -802,21 +770,10 @@ mod tests {
         assert_eq!(parsed.last_batch_blocks, Some(512));
         assert_eq!(parsed.txs_per_second, Some(12_000.0));
         assert_eq!(parsed.ema_txs_per_second, Some(11_100.0));
-        assert_eq!(parsed.adaptive_target_batch_txs, Some(40_000));
-        assert_eq!(parsed.adaptive_inflight_limit, Some(3));
-        assert_eq!(parsed.adaptive_min_target_batch_txs, Some(10_000));
-        assert_eq!(parsed.adaptive_cooldown_steps, Some(2));
-        assert_eq!(
-            parsed.adaptive_last_reason.as_deref(),
-            Some("pressure_backoff")
-        );
-        assert_eq!(parsed.adaptive_adjustment_seq, Some(42));
-        assert_eq!(parsed.adaptive_backoff_streak, Some(3));
-        assert_eq!(parsed.adaptive_last_adjusted_at, Some(1_700_000_123));
     }
 
     #[test]
-    fn test_sync_progress_deserialize_without_adaptive_fields() {
+    fn test_sync_progress_deserialize_without_optional_fields() {
         let mut value = serde_json::to_value(SyncProgressData {
             current_block: 1000,
             target_block: 2000,
@@ -837,14 +794,6 @@ mod tests {
             pipeline: None,
             pipeline_reset_epoch: Some(1),
             pipeline_reset_reason: Some("batch write failed".to_string()),
-            adaptive_target_batch_txs: Some(1),
-            adaptive_inflight_limit: Some(2),
-            adaptive_min_target_batch_txs: Some(1),
-            adaptive_cooldown_steps: Some(1),
-            adaptive_last_reason: Some("healthy_step_up".to_string()),
-            adaptive_adjustment_seq: Some(1),
-            adaptive_backoff_streak: Some(0),
-            adaptive_last_adjusted_at: Some(1),
             bulk_build: None,
         })
         .unwrap();
@@ -854,14 +803,6 @@ mod tests {
             obj.remove("lastBatchBlocks");
             obj.remove("txsPerSecond");
             obj.remove("emaTxsPerSecond");
-            obj.remove("adaptiveTargetBatchTxs");
-            obj.remove("adaptiveInflightLimit");
-            obj.remove("adaptiveMinTargetBatchTxs");
-            obj.remove("adaptiveCooldownSteps");
-            obj.remove("adaptiveLastReason");
-            obj.remove("adaptiveAdjustmentSeq");
-            obj.remove("adaptiveBackoffStreak");
-            obj.remove("adaptiveLastAdjustedAt");
         }
 
         let parsed: SyncProgressData = serde_json::from_value(value).unwrap();
@@ -870,14 +811,6 @@ mod tests {
         assert_eq!(parsed.last_batch_blocks, None);
         assert_eq!(parsed.txs_per_second, None);
         assert_eq!(parsed.ema_txs_per_second, None);
-        assert_eq!(parsed.adaptive_target_batch_txs, None);
-        assert_eq!(parsed.adaptive_inflight_limit, None);
-        assert_eq!(parsed.adaptive_min_target_batch_txs, None);
-        assert_eq!(parsed.adaptive_cooldown_steps, None);
-        assert_eq!(parsed.adaptive_last_reason, None);
-        assert_eq!(parsed.adaptive_adjustment_seq, None);
-        assert_eq!(parsed.adaptive_backoff_streak, None);
-        assert_eq!(parsed.adaptive_last_adjusted_at, None);
         assert_eq!(parsed.bulk_build, None);
     }
 
@@ -1052,14 +985,6 @@ mod tests {
             pipeline: None,
             pipeline_reset_epoch: None,
             pipeline_reset_reason: None,
-            adaptive_target_batch_txs: None,
-            adaptive_inflight_limit: None,
-            adaptive_min_target_batch_txs: None,
-            adaptive_cooldown_steps: None,
-            adaptive_last_reason: None,
-            adaptive_adjustment_seq: None,
-            adaptive_backoff_streak: None,
-            adaptive_last_adjusted_at: None,
             bulk_build: Some(BulkBuildProgressData {
                 facts_ms: Some(10.0),
                 ..Default::default()

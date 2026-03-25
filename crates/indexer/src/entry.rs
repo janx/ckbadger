@@ -25,9 +25,7 @@ pub struct IndexerServiceConfig {
     pub ckb_db_path: String,
     pub metadata_path: Option<String>,
     pub network: String,
-    pub batch_size: usize,
     pub poll_interval_ms: u64,
-    pub pipeline_buffer: usize,
     pub bulk_sync_threshold: u64,
     pub store_runtime_config: StoreRuntimeConfig,
     pub decoder_cache_path: String,
@@ -42,10 +40,8 @@ impl From<IndexerServiceConfig> for Config {
             bulk_sync_perf_output_root: svc.bulk_sync_perf_output_root,
             build_version: svc.build_version,
             ckb_rpc_url: svc.ckb_rpc_url,
-            batch_size: svc.batch_size,
             poll_interval_ms: svc.poll_interval_ms,
             start_block: None,
-            pipeline_buffer: svc.pipeline_buffer,
             bulk_sync_threshold: svc.bulk_sync_threshold,
             fast_sync_mode: true,
             ckb_db_path: svc.ckb_db_path,
@@ -331,7 +327,6 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                 indexer_for_progress.perf_snapshot_ms();
             let pipeline = indexer_for_progress.pipeline_progress_snapshot();
             let pipeline_log = pipeline.clone();
-            let adaptive = indexer_for_progress.adaptive_batch_snapshot();
             let pipeline_reset = indexer_for_progress.pipeline_reset_snapshot();
             let heartbeat_stage = indexer_for_progress.startup_phase().unwrap_or_else(|| {
                 if indexer_for_progress.is_bulk_sync_active() {
@@ -379,14 +374,6 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                 pipeline,
                 pipeline_reset_epoch: pipeline_reset.as_ref().map(|(epoch, _)| *epoch),
                 pipeline_reset_reason: pipeline_reset.as_ref().map(|(_, reason)| reason.clone()),
-                adaptive_target_batch_txs: adaptive.as_ref().map(|s| s.target_batch_txs),
-                adaptive_inflight_limit: adaptive.as_ref().map(|s| s.inflight_limit),
-                adaptive_min_target_batch_txs: adaptive.as_ref().map(|s| s.min_target_batch_txs),
-                adaptive_cooldown_steps: adaptive.as_ref().map(|s| s.cooldown_steps),
-                adaptive_last_reason: adaptive.as_ref().and_then(|s| s.last_reason.clone()),
-                adaptive_adjustment_seq: adaptive.as_ref().map(|s| s.adjustment_seq),
-                adaptive_backoff_streak: adaptive.as_ref().map(|s| s.backoff_streak),
-                adaptive_last_adjusted_at: adaptive.as_ref().and_then(|s| s.last_adjusted_at),
                 bulk_build: bulk_build.clone(),
             };
             indexer_for_progress
@@ -1422,9 +1409,7 @@ mod tests {
             ckb_db_path: "/ckb/data/db".to_string(),
             metadata_path: Some("/workdir/metadata".to_string()),
             network: "mainnet".to_string(),
-            batch_size: 5000,
             poll_interval_ms: 500,
-            pipeline_buffer: 4,
             bulk_sync_threshold: 100,
             store_runtime_config: StoreRuntimeConfig {
                 memory_budget_gb: Some(24),
@@ -1443,9 +1428,7 @@ mod tests {
         assert_eq!(config.ckb_db_path, "/ckb/data/db");
         assert_eq!(config.metadata_path, Some("/workdir/metadata".to_string()));
         assert_eq!(config.network, "mainnet");
-        assert_eq!(config.batch_size, 5000);
         assert_eq!(config.poll_interval_ms, 500);
-        assert_eq!(config.pipeline_buffer, 4);
         assert_eq!(config.bulk_sync_threshold, 100);
         assert!(config.fast_sync_mode);
         assert!(!config.force_startup_cleanup);
