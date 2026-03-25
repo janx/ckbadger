@@ -363,15 +363,9 @@ pub struct BulkBuildProgressData {
     /// Controller output: RocksDB background jobs.
     #[serde(default)]
     pub controller_bg_jobs: Option<i32>,
-    /// Controller EMA: rows per block (for row budget cap).
-    #[serde(default)]
-    pub controller_rows_per_block_ema: Option<f64>,
     /// Controller EMA: flush channel fill ratio (0.0-1.0).
     #[serde(default)]
     pub controller_flush_fill_ema: Option<f64>,
-    /// Controller: max history rows per batch (row budget cap constant).
-    #[serde(default)]
-    pub controller_max_history_rows: Option<f64>,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {
@@ -941,9 +935,7 @@ mod tests {
             controller_prefetch_ahead: Some(4),
             controller_fetch_threads: Some(8),
             controller_bg_jobs: Some(6),
-            controller_rows_per_block_ema: Some(12.5),
             controller_flush_fill_ema: Some(0.35),
-            controller_max_history_rows: Some(2_000_000.0),
         };
 
         let json = serde_json::to_string(&bb).unwrap();
@@ -967,9 +959,7 @@ mod tests {
         assert_eq!(parsed.controller_prefetch_ahead, Some(4));
         assert_eq!(parsed.controller_fetch_threads, Some(8));
         assert_eq!(parsed.controller_bg_jobs, Some(6));
-        assert_eq!(parsed.controller_rows_per_block_ema, Some(12.5));
         assert_eq!(parsed.controller_flush_fill_ema, Some(0.35));
-        assert_eq!(parsed.controller_max_history_rows, Some(2_000_000.0));
     }
 
     #[test]

@@ -20,7 +20,7 @@
 // fetch_threads.  Only Flush suppresses prefetch — and only when the
 // flush channel is actually filling up.
 
-const EMA_ALPHA: f64 = 0.3;
+const EMA_ALPHA: f64 = 0.5;
 
 // Batch span bounds (blocks)
 pub(crate) const MIN_SPAN: u64 = 10_000;
@@ -44,14 +44,6 @@ const MIN_FETCH_THREADS: u32 = 2;
 // Background jobs bounds
 const MIN_BG_JOBS: i32 = 2;
 
-// Row budget (materialization cap per batch).  This is a proactive upper
-// bound; the reactive flush_fill_ema signal in classify() handles the case
-// where flush actually falls behind.  Set high enough to not constrain
-// normal operation — at avg 30 rows/block this allows ~100K blocks/batch.
-const MAX_HISTORY_ROWS: f64 = 3_000_000.0;
-const ROWS_EMA_ALPHA: f64 = 0.3;
-const INITIAL_ROWS_PER_BLOCK: f64 = 30.0;
-
 // Bottleneck classification thresholds (fraction of total iteration time).
 // Flush checked first (compound risk from L0 buildup).
 const FLUSH_PCT_THRESHOLD: f64 = 0.4;
@@ -65,9 +57,12 @@ const FLUSH_L0_THRESHOLD: f64 = 40.0;
 // channel is completely full).
 const FLUSH_CHANNEL_FILL_THRESHOLD: f64 = 0.75;
 
-// Adjustment step factors
-const SPAN_GROW: f64 = 1.20;
-const SPAN_SHRINK: f64 = 0.80;
+// Per-step span change safety bounds.  These limit how much batch_span
+// can change in a single iteration, preventing chaotic overshooting.
+// The actual step factor is derived from signal strength (dominance ratio),
+// not from fixed constants.
+const SPAN_STEP_MIN: f64 = 0.5;
+const SPAN_STEP_MAX: f64 = 2.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Bottleneck {
@@ -114,8 +109,6 @@ pub(crate) struct BatchSignals {
     pub build_ms: f64,
     pub flush_wait_ms: f64,
     pub l0_files: u64,
-    pub actual_blocks: u64,
-    pub history_rows: usize,
     pub flush_channel_pending: u64,
     pub flush_channel_capacity: u64,
 }
@@ -142,8 +135,6 @@ pub(crate) struct BottleneckController {
     wait_ema: f64,
     l0_ema: f64,
     flush_fill_ema: f64,
-    rows_per_block_ema: f64,
-    rows_ema_observed: bool,
 
     // Current outputs
     batch_span: u64,
@@ -182,8 +173,6 @@ impl BottleneckController {
             wait_ema: 0.0,
             l0_ema: 0.0,
             flush_fill_ema: 0.0,
-            rows_per_block_ema: INITIAL_ROWS_PER_BLOCK,
-            rows_ema_observed: false,
 
             batch_span: initial_span.clamp(MIN_SPAN, MAX_SPAN),
             prefetch_ahead: initial_prefetch,
@@ -225,38 +214,48 @@ impl BottleneckController {
         };
         self.flush_fill_ema = ema(self.flush_fill_ema, fill_ratio);
 
-        // Update rows/block EMA for history row budget cap.
-        if signals.history_rows > 0 && signals.actual_blocks > 0 {
-            let sample = signals.history_rows as f64 / signals.actual_blocks as f64;
-            self.rows_per_block_ema =
-                self.rows_per_block_ema * (1.0 - ROWS_EMA_ALPHA) + sample * ROWS_EMA_ALPHA;
-            self.rows_ema_observed = true;
-        }
-
         // Classify bottleneck.
         let bottleneck = self.classify();
 
-        // Adjust knobs.
+        // Adjust knobs.  Span step is proportional to the bottleneck
+        // signal's dominance — stronger signal → larger adjustment,
+        // weak signal near classification boundary → gentle nudge.
+        let total = self.recv_ema + self.build_ema + self.wait_ema;
         match bottleneck {
             Bottleneck::Fetch => {
                 self.prefetch_ahead = (self.prefetch_ahead + 1).min(self.max_channel_depth);
                 self.fetch_threads = grow_threads(self.fetch_threads, self.max_fetch_threads);
-                self.batch_span = grow_span(self.batch_span);
+                let fetch_dominance = if total > 0.0 {
+                    self.recv_ema / total
+                } else {
+                    0.0
+                };
+                let factor = (1.0 + fetch_dominance).clamp(SPAN_STEP_MIN, SPAN_STEP_MAX);
+                self.batch_span = ((self.batch_span as f64 * factor) as u64).min(MAX_SPAN);
                 self.bg_jobs = (self.bg_jobs - 1).max(self.min_bg_jobs);
             }
             Bottleneck::Build => {
-                // Build-bound: grow batch span to amortize per-batch overhead.
-                // Do NOT shrink prefetch_ahead or fetch_threads — fetch uses
-                // independent std::thread::scope threads for CKB RocksDB reads
-                // and does not compete with build CPU (rayon pool).
-                self.batch_span = grow_span(self.batch_span);
+                // Build-bound: do not adjust batch_span.  Growing span
+                // increases per-batch build time, which increases flush
+                // burstiness and slows controller responsiveness without
+                // meaningfully improving throughput.  Fetch resources are
+                // left untouched — fetch uses independent std::thread::scope
+                // threads and does not compete with build CPU (rayon pool).
             }
             Bottleneck::Flush => {
                 // Flush-bound: reduce read I/O (prefetch + fetch_threads) to
-                // yield disk bandwidth to compaction.
+                // yield disk bandwidth to compaction.  Shrink factor derived
+                // from the stronger of the two flush signals (time share or
+                // channel fill ratio).
                 self.prefetch_ahead = (self.prefetch_ahead - 1).max(MIN_PREFETCH);
                 self.fetch_threads = shrink_threads(self.fetch_threads);
-                self.batch_span = shrink_span(self.batch_span);
+                let flush_dominance = if total > 0.0 {
+                    (self.wait_ema / total).max(self.flush_fill_ema)
+                } else {
+                    self.flush_fill_ema
+                };
+                let factor = (1.0 - flush_dominance).clamp(SPAN_STEP_MIN, SPAN_STEP_MAX);
+                self.batch_span = ((self.batch_span as f64 * factor) as u64).max(MIN_SPAN);
                 self.bg_jobs = (self.bg_jobs + 1).min(self.max_bg_jobs);
             }
         }
@@ -266,13 +265,6 @@ impl BottleneckController {
         // catch up — without suppressing the pipeline.
         if bottleneck != Bottleneck::Flush && self.l0_ema > FLUSH_L0_THRESHOLD {
             self.bg_jobs = (self.bg_jobs + 1).min(self.max_bg_jobs);
-        }
-
-        // Row budget cap: prevent a single batch from generating too many
-        // materialization rows (keeps per-batch flush bounded).
-        if self.rows_ema_observed && self.rows_per_block_ema > 0.0 {
-            let row_cap = (MAX_HISTORY_ROWS / self.rows_per_block_ema) as u64;
-            self.batch_span = self.batch_span.min(row_cap);
         }
 
         // Final clamp.
@@ -353,26 +345,10 @@ impl BottleneckController {
             None
         }
     }
-
-    pub(crate) fn rows_per_block_ema(&self) -> f64 {
-        self.rows_per_block_ema
-    }
-
-    pub(crate) fn max_history_rows(&self) -> f64 {
-        MAX_HISTORY_ROWS
-    }
 }
 
 fn ema(current: f64, sample: f64) -> f64 {
     current * (1.0 - EMA_ALPHA) + sample * EMA_ALPHA
-}
-
-fn grow_span(span: u64) -> u64 {
-    ((span as f64 * SPAN_GROW) as u64).min(MAX_SPAN)
-}
-
-fn shrink_span(span: u64) -> u64 {
-    ((span as f64 * SPAN_SHRINK) as u64).max(MIN_SPAN)
 }
 
 /// +25% per step (minimum step of 1).
@@ -415,8 +391,6 @@ mod tests {
             build_ms: 3000.0,
             flush_wait_ms: 0.0,
             l0_files: 5,
-            actual_blocks: 10_000,
-            history_rows: 100_000,
             flush_channel_pending: 1,
             flush_channel_capacity: 8,
         }
@@ -443,8 +417,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_blocks: 10_000,
-                history_rows: 100_000,
+
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
             });
@@ -470,8 +443,7 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 3000.0,
                 l0_files: 60,
-                actual_blocks: 5000,
-                history_rows: 50_000,
+
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
             });
@@ -483,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn build_bound_grows_span() {
+    fn build_bound_does_not_adjust_span() {
         let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
         let initial_span = ctrl.batch_span;
 
@@ -495,15 +467,18 @@ mod tests {
                 build_ms: 5000.0,
                 flush_wait_ms: 100.0,
                 l0_files: 5,
-                actual_blocks: 5000,
-                history_rows: 50_000,
+
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
             });
         }
 
         assert_eq!(ctrl.classify(), Bottleneck::Build);
-        assert!(ctrl.batch_span > initial_span);
+        assert_eq!(
+            ctrl.batch_span, initial_span,
+            "build-bound must not adjust span: {} vs initial {}",
+            ctrl.batch_span, initial_span
+        );
     }
 
     #[test]
@@ -521,8 +496,7 @@ mod tests {
                 build_ms: 5000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_blocks: 10_000,
-                history_rows: 100_000,
+
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
             });
@@ -544,34 +518,6 @@ mod tests {
     }
 
     #[test]
-    fn row_budget_caps_span() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
-
-        ctrl.observe(&healthy_signals()); // warmup
-
-        // 40 rows/block → after EMA converges, budget = 3M/40 = 75K blocks.
-        // Without row cap, build-bound would grow span past 75K toward MAX.
-        for _ in 0..20 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 100.0,
-                build_ms: 5000.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-                actual_blocks: 10_000,
-                history_rows: 400_000, // 40 rows/block
-                flush_channel_pending: 1,
-                flush_channel_capacity: 8,
-            });
-        }
-
-        assert!(
-            ctrl.batch_span <= 80_000,
-            "span {} should be capped by row budget (~75K)",
-            ctrl.batch_span
-        );
-    }
-
-    #[test]
     fn span_bounds_enforced() {
         let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
 
@@ -583,8 +529,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 100,
-                actual_blocks: 10_000,
-                history_rows: 100_000,
+
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
             });
@@ -606,8 +551,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_blocks: 10_000,
-                history_rows: 100_000,
+
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
             });
@@ -621,8 +565,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
-                actual_blocks: 10_000,
-                history_rows: 100_000,
+
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
             });
@@ -645,8 +588,7 @@ mod tests {
                 build_ms: 5000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_blocks: 10_000,
-                history_rows: 100_000,
+
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
             });
@@ -663,8 +605,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
-                actual_blocks: 10_000,
-                history_rows: 100_000,
+
                 flush_channel_pending: 7,
                 flush_channel_capacity: 8,
             });
@@ -685,8 +626,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_blocks: 10_000,
-                history_rows: 100_000,
+
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
             });
@@ -716,8 +656,7 @@ mod tests {
                 build_ms: 3000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 60,
-                actual_blocks: 10_000,
-                history_rows: 100_000,
+
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
             });
@@ -748,8 +687,7 @@ mod tests {
                 build_ms: 3000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 60,
-                actual_blocks: 10_000,
-                history_rows: 100_000,
+
                 flush_channel_pending: 7,
                 flush_channel_capacity: 8,
             });
@@ -772,8 +710,7 @@ mod tests {
                 build_ms: 3000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_blocks: 10_000,
-                history_rows: 100_000,
+
                 flush_channel_pending: 7,
                 flush_channel_capacity: 8,
             });
@@ -795,8 +732,7 @@ mod tests {
                 build_ms: 3000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_blocks: 10_000,
-                history_rows: 100_000,
+
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
             });
@@ -831,8 +767,7 @@ mod tests {
                 build_ms: 100.0,
                 flush_wait_ms: 0.0,
                 l0_files: 0,
-                actual_blocks: 50_000,
-                history_rows: 100_000,
+
                 flush_channel_pending: 1,
                 flush_channel_capacity: 8,
             });
@@ -848,6 +783,74 @@ mod tests {
         assert_eq!(channel_depth_for_ram(64 * GB), 8);
         assert_eq!(channel_depth_for_ram(128 * GB), 8); // capped
         assert_eq!(channel_depth_for_ram(256 * GB), 8); // capped
+    }
+
+    #[test]
+    fn span_step_scales_with_signal_strength() {
+        // Mild fetch dominance → small growth step.
+        let mut mild = BottleneckController::new(100_000, 12, 8, 32 * GB);
+        mild.observe(&healthy_signals()); // warmup
+        mild.observe(&BatchSignals {
+            prefetch_recv_ms: 2600.0, // 52% of total → barely Fetch
+            build_ms: 2000.0,
+            flush_wait_ms: 400.0,
+            l0_files: 5,
+            flush_channel_pending: 1,
+            flush_channel_capacity: 8,
+        });
+        let mild_growth = mild.batch_span as f64 / 100_000.0;
+
+        // Extreme fetch dominance → large growth step.
+        let mut extreme = BottleneckController::new(100_000, 12, 8, 32 * GB);
+        extreme.observe(&healthy_signals()); // warmup
+        extreme.observe(&BatchSignals {
+            prefetch_recv_ms: 9000.0, // 90% of total → severely Fetch
+            build_ms: 500.0,
+            flush_wait_ms: 500.0,
+            l0_files: 5,
+            flush_channel_pending: 1,
+            flush_channel_capacity: 8,
+        });
+        let extreme_growth = extreme.batch_span as f64 / 100_000.0;
+
+        assert!(
+            extreme_growth > mild_growth,
+            "stronger signal should produce larger step: extreme {:.2} vs mild {:.2}",
+            extreme_growth,
+            mild_growth
+        );
+
+        // Similarly for flush: mild vs extreme shrink.
+        let mut mild_flush = BottleneckController::new(100_000, 12, 8, 32 * GB);
+        mild_flush.observe(&healthy_signals()); // warmup
+        mild_flush.observe(&BatchSignals {
+            prefetch_recv_ms: 100.0,
+            build_ms: 2800.0,
+            flush_wait_ms: 2100.0, // 42% → barely Flush
+            l0_files: 5,
+            flush_channel_pending: 1,
+            flush_channel_capacity: 8,
+        });
+        let mild_shrink = mild_flush.batch_span as f64 / 100_000.0;
+
+        let mut extreme_flush = BottleneckController::new(100_000, 12, 8, 32 * GB);
+        extreme_flush.observe(&healthy_signals()); // warmup
+        extreme_flush.observe(&BatchSignals {
+            prefetch_recv_ms: 100.0,
+            build_ms: 1000.0,
+            flush_wait_ms: 8000.0, // 88% → severely Flush
+            l0_files: 5,
+            flush_channel_pending: 1,
+            flush_channel_capacity: 8,
+        });
+        let extreme_shrink = extreme_flush.batch_span as f64 / 100_000.0;
+
+        assert!(
+            extreme_shrink < mild_shrink,
+            "stronger flush signal should produce bigger shrink: extreme {:.2} vs mild {:.2}",
+            extreme_shrink,
+            mild_shrink
+        );
     }
 
     #[test]

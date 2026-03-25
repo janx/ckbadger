@@ -2521,19 +2521,7 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
             ]),
         ]
     } else {
-        // Detail: 3 lines (signals, judgment, knobs)
-        let rows_ema_text = bb
-            .controller_rows_per_block_ema
-            .filter(|v| *v > 0.0 && v.is_finite())
-            .map(|v| format!("{v:.1}"))
-            .unwrap_or_else(|| "-".to_string());
-        let max_rows = bb.controller_max_history_rows.unwrap_or(2_000_000.0);
-        let row_cap_text = bb
-            .controller_rows_per_block_ema
-            .filter(|v| *v > 0.0 && v.is_finite())
-            .map(|v| format!("{}k", (max_rows / v) as u64 / 1000))
-            .unwrap_or_else(|| "-".to_string());
-
+        // Detail: controller signals + knobs
         vec![
             // Line 1: Bottleneck + time-share (recv, build)
             Line::from(vec![
@@ -2570,14 +2558,7 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
                     }),
                 ),
             ]),
-            // Line 3: rows/blk + cap
-            Line::from(vec![
-                Span::styled("rows/blk ", Style::default().fg(SLATE_500)),
-                Span::styled(rows_ema_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  cap ", Style::default().fg(SLATE_500)),
-                Span::styled(row_cap_text, Style::default().fg(FOREGROUND)),
-            ]),
-            // Line 4: span + prefetch
+            // Line 3: span + prefetch
             Line::from(vec![
                 Span::styled("span ", Style::default().fg(SLATE_500)),
                 Span::styled(span_text, Style::default().fg(FOREGROUND)),
@@ -6817,7 +6798,6 @@ mod tests {
             controller_prefetch_ahead: Some(3),
             controller_fetch_threads: Some(8),
             controller_bg_jobs: Some(4),
-            controller_rows_per_block_ema: Some(30.0),
             batch_block_span: Some(50_000),
             prefetch_channel_capacity: Some(4),
             ..Default::default()
@@ -6843,13 +6823,12 @@ mod tests {
             controller_prefetch_ahead: Some(1),
             controller_fetch_threads: Some(4),
             controller_bg_jobs: Some(8),
-            controller_rows_per_block_ema: Some(40.0),
             batch_block_span: Some(20_000),
             prefetch_channel_capacity: Some(4),
             ..Default::default()
         };
         let lines = controller_panel_lines(&bb, false);
-        assert_eq!(lines.len(), 5);
+        assert_eq!(lines.len(), 4);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
             text.contains("[FLUSH]"),
