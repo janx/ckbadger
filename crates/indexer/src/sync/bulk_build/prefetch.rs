@@ -1,26 +1,24 @@
 use anyhow::{anyhow, Result};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use super::binary_facts::RawCkbBlock;
-use super::BULK_BUILD_MIN_BLOCK_SPAN;
+use super::block_buffer::BufferedBlock;
 use crate::sync::indexer::Indexer;
 use ckb_store_reader::CkbChainReader;
 
-pub(crate) struct PrefetchResult {
-    pub blocks: Vec<RawCkbBlock>,
-    pub fetch_elapsed: Duration,
-    pub effective_end: u64,
-}
+/// Number of blocks fetched per prefetch iteration.
+///
+/// This is intentionally larger than typical build-loop batch sizes so the
+/// build loop can choose its own byte-budget slices from the buffer without
+/// being constrained by the fetch granularity.
+pub(crate) const PREFETCH_CHUNK_SIZE: u64 = 5000;
 
-impl std::fmt::Debug for PrefetchResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PrefetchResult")
-            .field("blocks_len", &self.blocks.len())
-            .field("fetch_elapsed", &self.fetch_elapsed)
-            .field("effective_end", &self.effective_end)
-            .finish()
-    }
+/// Return the molecule-serialized byte size of a raw CKB block.
+///
+/// Computed once at prefetch time so the build loop can make bytes-budget
+/// decisions without re-serializing.
+pub(crate) fn block_bytes_for_raw(raw: &RawCkbBlock) -> usize {
+    raw.block.data().total_size()
 }
 
 #[derive(Debug)]
@@ -37,46 +35,32 @@ pub(crate) struct PrefetchWorkerStats {
 }
 
 pub(crate) struct PrefetchChannelHandle {
-    result_rx: tokio::sync::mpsc::Receiver<Result<PrefetchResult>>,
-    depth: usize,
-    span_tx: tokio::sync::watch::Sender<u64>,
+    result_rx: Option<tokio::sync::mpsc::Receiver<Result<Vec<BufferedBlock>>>>,
     worker_handle: tokio::task::JoinHandle<Result<PrefetchWorkerStats>>,
 }
 
 impl PrefetchChannelHandle {
     pub(crate) fn new(
-        max_depth: usize,
+        channel_depth: usize,
         ckb_store: Arc<CkbChainReader>,
         start_block: u64,
         handoff_target: u64,
-        initial_span: u64,
         threads_rx: tokio::sync::watch::Receiver<u32>,
     ) -> Self {
-        let (result_tx, result_rx) = tokio::sync::mpsc::channel(max_depth);
-        let (span_tx, span_rx) = tokio::sync::watch::channel(initial_span);
+        let (result_tx, result_rx) = tokio::sync::mpsc::channel(channel_depth);
 
         let worker_handle = tokio::task::spawn_blocking(move || {
-            Self::prefetch_worker(
-                result_tx,
-                span_rx,
-                threads_rx,
-                ckb_store,
-                start_block,
-                handoff_target,
-            )
+            Self::prefetch_worker(result_tx, threads_rx, ckb_store, start_block, handoff_target)
         });
 
         Self {
-            result_rx,
-            depth: max_depth,
-            span_tx,
+            result_rx: Some(result_rx),
             worker_handle,
         }
     }
 
     fn prefetch_worker(
-        result_tx: tokio::sync::mpsc::Sender<Result<PrefetchResult>>,
-        span_rx: tokio::sync::watch::Receiver<u64>,
+        result_tx: tokio::sync::mpsc::Sender<Result<Vec<BufferedBlock>>>,
         threads_rx: tokio::sync::watch::Receiver<u32>,
         ckb_store: Arc<CkbChainReader>,
         start_block: u64,
@@ -92,15 +76,13 @@ impl PrefetchChannelHandle {
         while position <= handoff_target {
             // Backpressure is provided by the bounded channel — when the
             // channel is full, `blocking_send` below naturally blocks until
-            // the build loop consumes a batch.
+            // the build loop consumes a chunk.
 
-            let span = (*span_rx.borrow()).max(BULK_BUILD_MIN_BLOCK_SPAN);
             let end = std::cmp::min(
-                position.saturating_add(span.saturating_sub(1)),
+                position.saturating_add(PREFETCH_CHUNK_SIZE.saturating_sub(1)),
                 handoff_target,
             );
 
-            let started = Instant::now();
             let fetch_threads = *threads_rx.borrow();
             let fetch_result =
                 Indexer::fetch_blocks_direct_binary(&ckb_store, position, end, fetch_threads);
@@ -110,11 +92,14 @@ impl PrefetchChannelHandle {
                     let block_count = blocks.len() as u64;
                     stats.total_fetches += 1;
                     stats.total_blocks += block_count;
-                    Ok(PrefetchResult {
-                        blocks,
-                        fetch_elapsed: started.elapsed(),
-                        effective_end: end,
-                    })
+                    let buffered: Vec<BufferedBlock> = blocks
+                        .into_iter()
+                        .map(|raw| {
+                            let block_bytes = block_bytes_for_raw(&raw);
+                            BufferedBlock { raw, block_bytes }
+                        })
+                        .collect();
+                    Ok(buffered)
                 }
                 Err(e) => Err(e),
             };
@@ -135,30 +120,20 @@ impl PrefetchChannelHandle {
         Ok(stats)
     }
 
-    pub(crate) async fn recv(&mut self) -> Result<PrefetchResult> {
-        match self.result_rx.recv().await {
-            Some(result) => result,
-            None => Err(anyhow!(
-                "prefetch worker terminated without sending an error"
-            )),
-        }
+    /// Take ownership of the receiver for use with [`BlockBufferHandle`].
+    ///
+    /// May only be called once; panics if called again after the receiver has
+    /// already been taken.
+    pub(crate) fn take_receiver(
+        &mut self,
+    ) -> tokio::sync::mpsc::Receiver<Result<Vec<BufferedBlock>>> {
+        self.result_rx
+            .take()
+            .expect("take_receiver called more than once")
     }
 
-    pub(crate) fn update_span(&self, span: u64) {
-        let _ = self.span_tx.send(span);
-    }
-
-    pub(crate) fn pending(&self) -> usize {
-        self.result_rx.len()
-    }
-
-    pub(crate) fn capacity(&self) -> usize {
-        self.depth
-    }
-
-    pub(crate) async fn close_and_wait(self) -> Result<PrefetchWorkerStats> {
-        drop(self.result_rx);
-        drop(self.span_tx);
+    pub(crate) async fn close_and_wait(mut self) -> Result<PrefetchWorkerStats> {
+        drop(self.result_rx.take());
         self.worker_handle
             .await
             .map_err(|e| anyhow!("prefetch worker panicked: {}", e))?
@@ -167,147 +142,30 @@ impl PrefetchChannelHandle {
 
 #[cfg(test)]
 mod tests {
+    use ckb_types::core::BlockBuilder;
+
     use super::*;
 
-    #[tokio::test]
-    async fn prefetch_channel_reports_pending_and_capacity() {
-        let (result_tx, result_rx) = tokio::sync::mpsc::channel(8);
-        let (span_tx, _span_rx) = tokio::sync::watch::channel(10_000u64);
-        let worker_handle = tokio::task::spawn_blocking(|| {
-            Ok(PrefetchWorkerStats {
-                total_fetches: 0,
-                total_blocks: 0,
-                exit_reason: PrefetchExitReason::Completed,
-            })
-        });
-
-        let handle = PrefetchChannelHandle {
-            result_rx,
-            depth: 8,
-            span_tx,
-            worker_handle,
-        };
-
-        result_tx
-            .send(Ok(PrefetchResult {
-                blocks: vec![],
-                fetch_elapsed: Duration::from_millis(10),
-                effective_end: 1000,
-            }))
-            .await
-            .unwrap();
-
-        assert_eq!(handle.pending(), 1);
-        assert_eq!(handle.capacity(), 8);
-    }
-
-    #[tokio::test]
-    async fn prefetch_channel_recv_gets_results_in_order() {
-        let (result_tx, result_rx) = tokio::sync::mpsc::channel(8);
-        let (span_tx, _span_rx) = tokio::sync::watch::channel(10_000u64);
-        let worker_handle = tokio::task::spawn_blocking(|| {
-            Ok(PrefetchWorkerStats {
-                total_fetches: 0,
-                total_blocks: 0,
-                exit_reason: PrefetchExitReason::Completed,
-            })
-        });
-
-        let mut handle = PrefetchChannelHandle {
-            result_rx,
-            depth: 8,
-            span_tx,
-            worker_handle,
-        };
-
-        // Send 5 results with distinct effective_end values
-        for i in 0..5 {
-            result_tx
-                .send(Ok(PrefetchResult {
-                    blocks: vec![],
-                    fetch_elapsed: Duration::from_millis(10),
-                    effective_end: i * 1000,
-                }))
-                .await
-                .unwrap();
-        }
-        drop(result_tx);
-
-        // Receive and verify order
-        for i in 0..5 {
-            let result = handle.recv().await.unwrap();
-            assert_eq!(result.effective_end, i * 1000);
+    fn make_dummy_raw_block() -> RawCkbBlock {
+        RawCkbBlock {
+            block: BlockBuilder::default().build(),
+            cycles: vec![],
         }
     }
 
-    #[tokio::test]
-    async fn prefetch_channel_recv_returns_error_on_worker_exit() {
-        let (result_tx, result_rx) = tokio::sync::mpsc::channel::<Result<PrefetchResult>>(2);
-        let (span_tx, _span_rx) = tokio::sync::watch::channel(10_000u64);
-        let worker_handle = tokio::task::spawn_blocking(|| {
-            Ok(PrefetchWorkerStats {
-                total_fetches: 0,
-                total_blocks: 0,
-                exit_reason: PrefetchExitReason::Completed,
-            })
-        });
-
-        let mut handle = PrefetchChannelHandle {
-            result_rx,
-            depth: 2,
-            span_tx,
-            worker_handle,
-        };
-
-        // Drop sender to simulate worker exit without sending results
-        drop(result_tx);
-
-        let result = handle.recv().await;
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("prefetch worker terminated"));
-    }
-
-    #[tokio::test]
-    async fn prefetch_channel_propagates_fetch_errors() {
-        let (result_tx, result_rx) = tokio::sync::mpsc::channel(2);
-        let (span_tx, _span_rx) = tokio::sync::watch::channel(10_000u64);
-        let worker_handle = tokio::task::spawn_blocking(|| {
-            Ok(PrefetchWorkerStats {
-                total_fetches: 0,
-                total_blocks: 0,
-                exit_reason: PrefetchExitReason::Completed,
-            })
-        });
-
-        let mut handle = PrefetchChannelHandle {
-            result_rx,
-            depth: 2,
-            span_tx,
-            worker_handle,
-        };
-
-        // Send an error through the channel
-        result_tx
-            .send(Err(anyhow!("simulated fetch failure")))
-            .await
-            .unwrap();
-        drop(result_tx);
-
-        let result = handle.recv().await;
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("simulated fetch failure"));
+    #[test]
+    fn block_bytes_for_raw_reads_molecule_size() {
+        let raw = make_dummy_raw_block();
+        let bytes = block_bytes_for_raw(&raw);
+        assert!(bytes > 0, "molecule total_size should be non-zero for a default block, got {bytes}");
     }
 
     #[tokio::test]
     async fn prefetch_channel_close_and_wait_returns_stats() {
-        let (_result_tx, result_rx) = tokio::sync::mpsc::channel::<Result<PrefetchResult>>(2);
-        let (span_tx, _span_rx) = tokio::sync::watch::channel(10_000u64);
+        let (result_tx, result_rx) =
+            tokio::sync::mpsc::channel::<Result<Vec<BufferedBlock>>>(2);
+        drop(result_tx); // simulate worker done
+
         let worker_handle = tokio::task::spawn_blocking(|| {
             Ok(PrefetchWorkerStats {
                 total_fetches: 42,
@@ -317,9 +175,7 @@ mod tests {
         });
 
         let handle = PrefetchChannelHandle {
-            result_rx,
-            depth: 2,
-            span_tx,
+            result_rx: Some(result_rx),
             worker_handle,
         };
 
@@ -327,5 +183,59 @@ mod tests {
         assert_eq!(stats.total_fetches, 42);
         assert_eq!(stats.total_blocks, 420_000);
         assert!(matches!(stats.exit_reason, PrefetchExitReason::Completed));
+    }
+
+    #[tokio::test]
+    async fn prefetch_channel_take_receiver_returns_rx() {
+        let (result_tx, result_rx) =
+            tokio::sync::mpsc::channel::<Result<Vec<BufferedBlock>>>(4);
+
+        let worker_handle = tokio::task::spawn_blocking(|| {
+            Ok(PrefetchWorkerStats {
+                total_fetches: 0,
+                total_blocks: 0,
+                exit_reason: PrefetchExitReason::Completed,
+            })
+        });
+
+        let mut handle = PrefetchChannelHandle {
+            result_rx: Some(result_rx),
+            worker_handle,
+        };
+
+        // Send a chunk so we can verify the receiver is the right one
+        let chunk = vec![BufferedBlock {
+            raw: make_dummy_raw_block(),
+            block_bytes: 100,
+        }];
+        result_tx.send(Ok(chunk)).await.unwrap();
+
+        let mut rx = handle.take_receiver();
+        let received = rx.recv().await.unwrap().unwrap();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].block_bytes, 100);
+    }
+
+    #[test]
+    #[should_panic(expected = "take_receiver called more than once")]
+    fn take_receiver_panics_on_second_call() {
+        let (_result_tx, result_rx) =
+            tokio::sync::mpsc::channel::<Result<Vec<BufferedBlock>>>(2);
+
+        let worker_handle = tokio::task::spawn_blocking(|| {
+            Ok(PrefetchWorkerStats {
+                total_fetches: 0,
+                total_blocks: 0,
+                exit_reason: PrefetchExitReason::Completed,
+            })
+        });
+
+        let mut handle = PrefetchChannelHandle {
+            result_rx: Some(result_rx),
+            worker_handle,
+        };
+
+        let _rx1 = handle.take_receiver();
+        let _rx2 = handle.take_receiver(); // should panic
     }
 }
