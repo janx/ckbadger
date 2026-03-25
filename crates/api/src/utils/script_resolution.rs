@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use ckbadger_store::{
     types::{PositionedCellInfo, ScriptInfo, ScriptVersionInfo},
@@ -292,6 +292,138 @@ pub fn deployment_reference_hashes(info: &ScriptInfo) -> (Option<Vec<u8>>, Optio
     });
 
     (type_ref, data_ref)
+}
+
+/// Minimal cell metadata needed for per-transaction script resolution.
+#[derive(Debug, Clone)]
+pub struct DepCellInfo {
+    pub type_script_hash: Option<Vec<u8>>,
+    pub data_hash: Option<Vec<u8>>,
+}
+
+/// Build a code_hash -> version_hash mapping from a transaction's resolved dep cells.
+///
+/// For type references: type_script_hash -> data_hash (the bytecode version).
+/// For data references: data_hash -> data_hash (identity -- the code_hash IS the version).
+///
+/// First-seen wins for defensive correctness. In valid CKB transactions, each type_script_hash
+/// appears at most once in cell_deps (CKB consensus rejects duplicates).
+pub fn build_dep_cell_mappings(dep_cells: &[DepCellInfo]) -> HashMap<Vec<u8>, Vec<u8>> {
+    let mut mappings: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+
+    for cell in dep_cells {
+        if let (Some(type_hash), Some(data_hash)) = (&cell.type_script_hash, &cell.data_hash) {
+            mappings
+                .entry(type_hash.clone())
+                .or_insert_with(|| data_hash.clone());
+        }
+        if let Some(data_hash) = &cell.data_hash {
+            mappings
+                .entry(data_hash.clone())
+                .or_insert_with(|| data_hash.clone());
+        }
+    }
+
+    mappings
+}
+
+/// Read a cell's metadata from ckbadger's append-only store by outpoint.
+fn read_dep_cell_info(
+    cells_store: &CkbadgerStore,
+    tx_hash: &[u8],
+    output_index: i16,
+) -> Option<DepCellInfo> {
+    let key = ckbadger_store::keys::encode_outpoint(tx_hash, output_index);
+    let info = cells_store.get_cell_by_outpoint_key(&key).ok()??;
+    Some(DepCellInfo {
+        type_script_hash: info.type_script_hash,
+        data_hash: info.data_hash,
+    })
+}
+
+/// Expand a dep_group cell into its constituent outpoints.
+fn expand_dep_group(
+    ckb_store: &ckb_store_reader::CkbChainReader,
+    tx_hash_bytes: &[u8; 32],
+    output_index: u32,
+) -> Vec<(Vec<u8>, i16)> {
+    let data = match ckb_store.get_cell_data(tx_hash_bytes, output_index) {
+        Some(d) => d,
+        None => return vec![],
+    };
+    let result = crate::routes::cells::parse_dep_group(&data, data.len() as i32);
+    let items = match result.items {
+        Some(items) if result.is_dep_group => items,
+        _ => return vec![],
+    };
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let hash =
+                hex::decode(item.tx_hash.strip_prefix("0x").unwrap_or(&item.tx_hash)).ok()?;
+            let index = i16::try_from(item.output_index).ok()?;
+            Some((hash, index))
+        })
+        .collect()
+}
+
+/// Resolve all dep cells for a transaction, building a code_hash -> version_hash mapping.
+///
+/// Returns `None` if the CKB store is unavailable or the transaction is not found.
+/// Individual dep cells that can't be read are silently skipped --
+/// the caller should fall back to global resolution for any code_hash not in the mapping.
+pub fn resolve_dep_cells_for_transaction(
+    state: &crate::AppState,
+    tx_hash_hex: &str,
+) -> Option<HashMap<Vec<u8>, Vec<u8>>> {
+    let ckb_store = state.ckb_store.as_ref()?;
+    let tx_hash_bytes_vec =
+        hex::decode(tx_hash_hex.strip_prefix("0x").unwrap_or(tx_hash_hex)).ok()?;
+    if tx_hash_bytes_vec.len() != 32 {
+        return None;
+    }
+    let mut tx_hash_arr = [0u8; 32];
+    tx_hash_arr.copy_from_slice(&tx_hash_bytes_vec);
+
+    let tx_view = ckb_store.get_transaction(&tx_hash_arr)?;
+    let rpc_tx = ckb_store_reader::convert_transaction_view(&tx_view);
+
+    let mut outpoints: Vec<(Vec<u8>, i16)> = Vec::new();
+
+    for dep in &rpc_tx.cell_deps {
+        let dep_tx_hash = hex::decode(
+            dep.out_point
+                .tx_hash
+                .strip_prefix("0x")
+                .unwrap_or(&dep.out_point.tx_hash),
+        )
+        .ok()?;
+        let dep_index_str = dep
+            .out_point
+            .index
+            .strip_prefix("0x")
+            .unwrap_or(&dep.out_point.index);
+        let dep_index = u32::from_str_radix(dep_index_str, 16).ok()?;
+
+        if dep.dep_type == "dep_group" {
+            if dep_tx_hash.len() == 32 {
+                let mut dep_tx_arr = [0u8; 32];
+                dep_tx_arr.copy_from_slice(&dep_tx_hash);
+                let expanded = expand_dep_group(ckb_store, &dep_tx_arr, dep_index);
+                outpoints.extend(expanded);
+            }
+        } else {
+            let index = i16::try_from(dep_index).ok()?;
+            outpoints.push((dep_tx_hash, index));
+        }
+    }
+
+    let dep_cells: Vec<DepCellInfo> = outpoints
+        .iter()
+        .filter_map(|(tx_hash, idx)| read_dep_cell_info(&state.append_only_store, tx_hash, *idx))
+        .collect();
+
+    Some(build_dep_cell_mappings(&dep_cells))
 }
 
 pub fn resolve_live_type_reference_matches(
@@ -713,6 +845,65 @@ mod tests {
             }
             other => panic!("expected unique live type match resolution, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_build_dep_cell_mappings_type_and_data() {
+        let type_hash = vec![0x9b; 32];
+        let data_hash = vec![0x70; 32];
+
+        let dep_cells = vec![DepCellInfo {
+            type_script_hash: Some(type_hash.clone()),
+            data_hash: Some(data_hash.clone()),
+        }];
+
+        let mappings = build_dep_cell_mappings(&dep_cells);
+        assert_eq!(mappings.get(&type_hash), Some(&data_hash));
+        assert_eq!(mappings.get(&data_hash), Some(&data_hash));
+    }
+
+    #[test]
+    fn test_build_dep_cell_mappings_first_seen_wins() {
+        let type_hash = vec![0x9b; 32];
+        let data_hash_a = vec![0x70; 32];
+        let data_hash_b = vec![0x71; 32];
+
+        let dep_cells = vec![
+            DepCellInfo {
+                type_script_hash: Some(type_hash.clone()),
+                data_hash: Some(data_hash_a.clone()),
+            },
+            DepCellInfo {
+                type_script_hash: Some(type_hash.clone()),
+                data_hash: Some(data_hash_b.clone()),
+            },
+        ];
+
+        let mappings = build_dep_cell_mappings(&dep_cells);
+        assert_eq!(mappings.get(&type_hash), Some(&data_hash_a));
+    }
+
+    #[test]
+    fn test_build_dep_cell_mappings_skips_none_fields() {
+        let dep_cells = vec![
+            DepCellInfo {
+                type_script_hash: None,
+                data_hash: None,
+            },
+            DepCellInfo {
+                type_script_hash: Some(vec![0xAA; 32]),
+                data_hash: None,
+            },
+            DepCellInfo {
+                type_script_hash: None,
+                data_hash: Some(vec![0xBB; 32]),
+            },
+        ];
+
+        let mappings = build_dep_cell_mappings(&dep_cells);
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings.get(&vec![0xBB; 32]), Some(&vec![0xBB; 32]));
+        assert!(!mappings.contains_key(&vec![0xAA; 32]));
     }
 
     #[test]
