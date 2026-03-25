@@ -140,7 +140,6 @@ pub struct App {
     build_cpu_ms_history: VecDeque<f64>,
     fetch_wait_ms_history: VecDeque<f64>,
     flush_wait_ms_history: VecDeque<f64>,
-    density_history: VecDeque<f64>,
     l0_files_history: VecDeque<f64>,
     last_overlap_batch_count: u64,
     /// Previous controller knob values for computing per-batch deltas.
@@ -206,7 +205,6 @@ impl App {
             build_cpu_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             fetch_wait_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             flush_wait_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
-            density_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             l0_files_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             last_overlap_batch_count: 0,
             prev_controller_knobs: None,
@@ -2313,14 +2311,6 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
         BUDGET_FLUSH_WAIT_COLOR,
         "ms",
     ));
-    lines.push(budget_sparkline_line(
-        "Den",
-        &app.density_history,
-        spark_width,
-        CYAN,
-        "cells/block",
-    ));
-
     f.render_widget(Paragraph::new(lines), area);
 }
 
