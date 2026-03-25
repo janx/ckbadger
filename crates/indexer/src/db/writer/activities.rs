@@ -845,17 +845,21 @@ fn resolve_dotbit_account_id(type_args: Option<&[u8]>, cell_data: &[u8]) -> Opti
     }
 
     // Compatibility path for old .bit layouts: account_id in cell data.
+    // Accepts both full cell data (≥52 bytes: 32-byte prefix + 20-byte id)
+    // and a pre-resolved account_id (exactly 20 bytes, from DB lookup for
+    // consumed inputs whose raw cell data is unavailable).
     let min_len = DOTBIT_DATA_HASH_PREFIX_LEN + DOTBIT_TYPE_ARGS_LEN;
-    if cell_data.len() < min_len {
+    let account_id = if cell_data.len() >= min_len {
+        &cell_data[DOTBIT_DATA_HASH_PREFIX_LEN..DOTBIT_DATA_HASH_PREFIX_LEN + DOTBIT_TYPE_ARGS_LEN]
+    } else if cell_data.len() == DOTBIT_TYPE_ARGS_LEN {
+        cell_data
+    } else {
         return None;
-    }
-    let account_id = cell_data
-        [DOTBIT_DATA_HASH_PREFIX_LEN..DOTBIT_DATA_HASH_PREFIX_LEN + DOTBIT_TYPE_ARGS_LEN]
-        .to_vec();
+    };
     if account_id.iter().all(|&b| b == 0) {
         return None;
     }
-    Some(account_id)
+    Some(account_id.to_vec())
 }
 
 /// Emit object ItemDeltas by comparing input vs output ID sets.

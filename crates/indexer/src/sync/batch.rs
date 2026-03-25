@@ -150,6 +150,7 @@ fn build_activity_input_views<'a>(
     batch_cell_infos: &'a HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     dao_withdraw_outpoints: &HashSet<(Vec<u8>, i16)>,
     dao_compensations: &HashMap<(Vec<u8>, i16), i64>,
+    dotbit_ids: &'a HashMap<(Vec<u8>, i16), Vec<u8>>,
 ) -> Result<Vec<crate::db::writer::activities::InputCellView<'a>>> {
     if tx_data.is_cellbase {
         return Ok(Vec::new());
@@ -193,6 +194,15 @@ fn build_activity_input_views<'a>(
             } else {
                 None
             };
+            // For consumed .bit cells, pass the pre-resolved account_id as
+            // data so resolve_dotbit_account_id can use it as fallback when
+            // type_args are empty (old .bit layout).  Raw cell data is
+            // unavailable for inputs; the account_id comes from
+            // CF_DOTBIT_OUTPOINT via the dotbit_map built earlier.
+            let data: &[u8] = dotbit_ids
+                .get(&key)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
 
             Ok(crate::db::writer::activities::InputCellView {
                 lock_script_hash: &info.lock_script_hash,
@@ -206,7 +216,7 @@ fn build_activity_input_views<'a>(
                 type_script_hash: info.type_script_hash.as_deref(),
                 type_args: info.type_args.as_deref(),
                 udt_amount: info.udt_amount,
-                data: &[],
+                data,
                 is_dao_withdraw_request,
                 dao_compensation,
             })
@@ -1936,6 +1946,9 @@ impl Indexer {
         let mut pending_identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate> =
             HashMap::new();
 
+        // Dotbit account IDs resolved during consume, needed later by activity builder.
+        let mut resolved_dotbit_ids: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
+
         // Group C: NFT/Spore processing
         {
             let mut batch_mnft_token_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
@@ -2360,6 +2373,9 @@ impl Indexer {
                         &batch_cell_infos,
                         &dotbit_map,
                     );
+                    if let Some(ref id) = dotbit_account_id {
+                        resolved_dotbit_ids.insert(key.clone(), id.clone());
+                    }
                     if let Some(account_id) = dotbit_account_id.as_ref() {
                         let latest_create_order =
                             batch_dotbit_latest_create_order.get(account_id).copied();
@@ -2512,6 +2528,7 @@ impl Indexer {
                             &batch_cell_infos,
                             &dao_withdraw_outpoints,
                             &dao_compensations,
+                            &resolved_dotbit_ids,
                         )?;
                         let outputs: Vec<crate::db::writer::activities::OutputCellView<'_>> = td
                             .cells
@@ -3624,6 +3641,7 @@ mod tests {
         let empty_batch_info = HashMap::new();
         let empty_dao_outpoints = HashSet::new();
         let empty_dao_comp = HashMap::new();
+        let empty_dotbit = HashMap::new();
         let err = match build_activity_input_views(
             &tx,
             99,
@@ -3631,6 +3649,7 @@ mod tests {
             &empty_batch_info,
             &empty_dao_outpoints,
             &empty_dao_comp,
+            &empty_dotbit,
         ) {
             Ok(_) => panic!("missing input cell info should fail fast"),
             Err(err) => err,
@@ -3672,6 +3691,7 @@ mod tests {
         let empty_cell_info = HashMap::new();
         let empty_dao_outpoints = HashSet::new();
         let empty_dao_comp = HashMap::new();
+        let empty_dotbit = HashMap::new();
         let inputs = build_activity_input_views(
             &tx,
             100,
@@ -3679,6 +3699,7 @@ mod tests {
             &batch_cell_infos,
             &empty_dao_outpoints,
             &empty_dao_comp,
+            &empty_dotbit,
         )
         .expect("input lookup should fall back to same-batch cell cache");
         assert_eq!(inputs.len(), 1);
@@ -3722,6 +3743,7 @@ mod tests {
         dao_compensations.insert((previous_tx_hash.to_vec(), 1i16), 5_00000000i64);
 
         let empty_batch_info = HashMap::new();
+        let empty_dotbit = HashMap::new();
         let inputs = build_activity_input_views(
             &tx,
             200,
@@ -3729,6 +3751,7 @@ mod tests {
             &empty_batch_info,
             &dao_withdraw_outpoints,
             &dao_compensations,
+            &empty_dotbit,
         )
         .unwrap();
         assert_eq!(inputs.len(), 1);
