@@ -2012,7 +2012,7 @@ impl Indexer {
                                 &spore.spore_id,
                                 &parsed.hash,
                                 parsed.number,
-                                checked_usize_to_i32(tx_idx, "tx_idx"),
+                                checked_usize_to_i32(tx_idx, "tx_idx")?,
                                 ts_ms,
                                 true,
                             );
@@ -2027,7 +2027,7 @@ impl Indexer {
                                 &spore.spore_id,
                                 &parsed.hash,
                                 parsed.number,
-                                checked_usize_to_i32(tx_idx, "tx_idx"),
+                                checked_usize_to_i32(tx_idx, "tx_idx")?,
                                 ts_ms,
                                 true,
                             );
@@ -2099,7 +2099,7 @@ impl Indexer {
                             &token.token_id,
                             &parsed.hash,
                             parsed.number,
-                            checked_usize_to_i32(tx_idx, "tx_idx"),
+                            checked_usize_to_i32(tx_idx, "tx_idx")?,
                             ts_ms,
                             true,
                         );
@@ -2147,7 +2147,7 @@ impl Indexer {
                                 consumed_account_ids: HashSet::new(),
                                 block_number: parsed.number,
                                 block_hash: parsed.hash.clone(),
-                                tx_idx: checked_usize_to_i32(tx_idx, "tx_idx"),
+                                tx_idx: checked_usize_to_i32(tx_idx, "tx_idx")?,
                                 timestamp_ms: ts_ms,
                             },
                         );
@@ -2198,7 +2198,7 @@ impl Indexer {
                             parsed.hash.clone(),
                             tx_data.hash.to_vec(),
                             dotbit_consume_order,
-                            checked_usize_to_i32(tx_idx, "tx_idx"),
+                            checked_usize_to_i32(tx_idx, "tx_idx")?,
                             parsed.timestamp.timestamp_millis(),
                             tx_global_index,
                         ));

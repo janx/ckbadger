@@ -135,8 +135,8 @@ pub(crate) fn checked_i32_to_i16(value: i32, label: &str) -> Result<i16> {
     i16::try_from(value).map_err(|_| anyhow!("{} exceeds i16 range: {}", label, value))
 }
 
-pub(crate) fn checked_usize_to_i32(value: usize, label: &str) -> i32 {
-    i32::try_from(value).unwrap_or_else(|_| panic!("{} exceeds i32 range: {}", label, value))
+pub(crate) fn checked_usize_to_i32(value: usize, label: &str) -> Result<i32> {
+    i32::try_from(value).map_err(|_| anyhow!("{} exceeds i32 range: {}", label, value))
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +396,18 @@ mod tests {
     fn test_checked_usize_to_i16_errors_on_overflow() {
         let err = checked_usize_to_i16((i16::MAX as usize) + 1, "output_index").unwrap_err();
         assert!(err.to_string().contains("output_index exceeds i16 range"));
+    }
+
+    #[test]
+    fn test_checked_usize_to_i32_returns_result_on_valid() {
+        assert_eq!(checked_usize_to_i32(123, "test").unwrap(), 123);
+        assert_eq!(checked_usize_to_i32(0, "test").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_checked_usize_to_i32_errors_on_overflow() {
+        let err = checked_usize_to_i32((i32::MAX as usize) + 1, "tx_idx").unwrap_err();
+        assert!(err.to_string().contains("tx_idx exceeds i32 range"));
     }
 
     #[test]
