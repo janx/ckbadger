@@ -40,6 +40,7 @@ use crate::sync::bulk_build::owners::BulkReducer;
 
 pub(crate) mod accounting;
 pub(crate) mod binary_facts;
+pub(crate) mod block_buffer;
 pub(crate) mod facts;
 pub(crate) mod interner;
 pub(crate) mod live_cells;
@@ -49,9 +50,8 @@ pub(crate) mod prefetch;
 pub(crate) mod sampler;
 pub(crate) mod sequencer;
 
-use crate::sync::bottleneck::{BatchSignals, BottleneckController};
+use crate::sync::bottleneck::{self, BatchSignals, BottleneckController};
 
-const BULK_BUILD_MIN_BLOCK_SPAN: u64 = 10_000;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PreparedFinalizeArtifacts {
@@ -119,8 +119,9 @@ impl BulkBuildEngine {
             disk_device,
         );
         let token_info_cache = preload_token_info_cache(indexer.writer.store().as_ref())?;
-        let initial_span: u64 = 100_000;
         let mem_profile = indexer.writer.store().memory_profile();
+        let channel_depth =
+            bottleneck::channel_depth_for_ram(mem_profile.system_ram_bytes) as usize;
         // Max = available cores.  Fetch threads are temporary (std::thread::scope),
         // so no persistent over-subscription.  The controller shrinks this when
         // build-bound to reduce overlap contention.
@@ -128,13 +129,10 @@ impl BulkBuildEngine {
             .map(|n| n.get().max(2) as u32)
             .unwrap_or(4);
         let mut controller = BottleneckController::new(
-            initial_span,
+            100_000_000, // 100 MB initial target
             max_fetch_threads,
             mem_profile.max_background_jobs,
-            mem_profile.system_ram_bytes,
         );
-        let channel_depth = controller.channel_depth() as usize;
-        let mut batch_block_span = controller.batch_span();
         let mut batch_count: u64 = 0;
         // Compute initial handoff_target for the prefetch worker.
         let initial_chain_tip = ckb_store
@@ -152,9 +150,10 @@ impl BulkBuildEngine {
             ckb_store.clone(),
             prefetch_start,
             initial_handoff,
-            initial_span,
             threads_rx,
         );
+        let chunk_rx = prefetch.take_receiver();
+        let mut buffer = block_buffer::BlockBufferHandle::new(chunk_rx);
         // Bounded flush channel: the build loop sends PendingFlush into
         // a channel. A dedicated worker drains it serially, committing
         // each batch to RocksDB. Build only blocks when the channel is
@@ -185,35 +184,45 @@ impl BulkBuildEngine {
                 break;
             }
 
-            // Receive next batch from prefetch pipeline.
+            // Wait for at least one block in the buffer.
             let recv_started = Instant::now();
-            let prefetch_result = match prefetch.recv().await {
-                Ok(result) => result,
-                Err(e) => {
-                    info!(error = %e, "prefetch channel closed, ending bulk build loop");
+            match buffer.ensure_blocks().await {
+                Ok(true) => {}
+                Ok(false) => {
+                    info!("block buffer exhausted, ending bulk build loop");
                     break;
                 }
-            };
+                Err(e) => {
+                    return Err(e.context("prefetch error during bulk build"));
+                }
+            }
+            // Greedily pull any additional ready chunks.
+            buffer.try_fill()?;
             let prefetch_recv_elapsed = recv_started.elapsed();
-            let prefetch_channel_pending = prefetch.pending() as u64;
-            let prefetch_channel_capacity = prefetch.capacity() as u64;
 
-            let (blocks, fetch_elapsed, effective_end) = (
-                prefetch_result.blocks,
-                prefetch_result.fetch_elapsed,
-                prefetch_result.effective_end,
-            );
+            // Determine how many blocks to drain based on bytes budget.
+            let density = buffer.peek_density(100);
+            let drain_count = if density > 0.0 {
+                let raw = (controller.target_batch_bytes() as f64 / density) as u64;
+                raw.clamp(bottleneck::MIN_SPAN, bottleneck::MAX_SPAN) as usize
+            } else {
+                bottleneck::MIN_SPAN as usize
+            };
+            let drained = buffer.drain(drain_count);
+            let batch_block_count = drained.len() as u64;
+            let batch_bytes: u64 = drained.iter().map(|b| b.block_bytes as u64).sum();
+
+            // Extract raw blocks for apply_blocks.
+            let raw_blocks: Vec<_> = drained.into_iter().map(|b| b.raw).collect();
 
             let build_started = Instant::now();
             let (batch_stats, build_timings, pending_flush) =
-                runtime.apply_blocks(&blocks, indexer.config.is_mainnet(), &token_info_cache)?;
+                runtime.apply_blocks(&raw_blocks, indexer.config.is_mainnet(), &token_info_cache)?;
             let build_elapsed = build_started.elapsed();
 
             // Read the most recent flush_ms from the worker (non-blocking).
             prev_flush_ms = flush_channel.last_flush_ms();
-            let critical_stage_ms = (fetch_elapsed.as_secs_f64() * 1000.0)
-                .max(build_elapsed.as_secs_f64() * 1000.0)
-                .max(prev_flush_ms);
+            let critical_stage_ms = (build_elapsed.as_secs_f64() * 1000.0).max(prev_flush_ms);
 
             // Capture row counts before send() moves the data.
             let pending_flush_row_count = (
@@ -235,9 +244,9 @@ impl BulkBuildEngine {
 
             let last_block_number = batch_stats.last_block_number.ok_or_else(|| {
                 anyhow!(
-                    "bulk build batch missing last block number: current_block={} effective_end={}",
+                    "bulk build batch missing last block number: current_block={} batch_block_count={}",
                     current_block,
-                    effective_end
+                    batch_block_count
                 )
             })?;
             let last_block_u64 = u64::try_from(last_block_number).map_err(|_| {
@@ -256,7 +265,7 @@ impl BulkBuildEngine {
             let disk_state = snap.disk_state.clone();
             let mut sample = BatchSample::new(
                 batch_stats.block_count,
-                fetch_elapsed.as_secs_f64() + build_elapsed.as_secs_f64(),
+                build_elapsed.as_secs_f64(),
                 0.0,
                 snap.compaction_pending_mb,
                 snap.l0_files,
@@ -293,7 +302,7 @@ impl BulkBuildEngine {
                 )
             })?;
             sample.build_ms = build_elapsed.as_secs_f64() * 1000.0;
-            sample.fetch_ms = fetch_elapsed.as_secs_f64() * 1000.0;
+            sample.fetch_ms = 0.0; // fetch is decoupled via block buffer
             sample.facts_ms = build_timings.facts_ms;
             sample.resolve_ms = build_timings.resolve_ms;
             sample.reduce_ms = build_timings.reduce_ms;
@@ -309,10 +318,10 @@ impl BulkBuildEngine {
             sample.facts_cell_count = build_timings.facts_breakdown.cell_count;
             sample.flush_ms = prev_flush_ms;
             sample.flush_wait_ms = flush_wait_elapsed.as_secs_f64() * 1000.0;
-            sample.flush_channel_depth = controller.channel_depth();
+            sample.flush_channel_depth = channel_depth as u64;
             sample.flush_channel_pending = flush_channel_pending;
             sample.prefetch_recv_ms = prefetch_recv_elapsed.as_secs_f64() * 1000.0;
-            sample.prefetch_depth = controller.prefetch_ahead();
+            sample.prefetch_depth = channel_depth as u64;
             sample.owner_memory_bytes = runtime.memory_breakdown_bytes();
             sample.live_cell_count = runtime.sequencer.live_count() as u64;
             // Cumulative row counts: tracks rows sent to flush channel.
@@ -346,7 +355,7 @@ impl BulkBuildEngine {
                 build_timings.address_reduce_ms,
                 build_timings.activity_stats_ms,
                 prev_flush_ms,
-                fetch_elapsed.as_secs_f64() * 1000.0,
+                0.0, // fetch_ms: fetch is decoupled via block buffer
                 build_elapsed.as_secs_f64() * 1000.0,
                 owner_mem_total,
                 sample.live_cell_count,
@@ -354,7 +363,7 @@ impl BulkBuildEngine {
                 sample.inputs,
                 cumulative_history_rows as u64,
                 cumulative_sealed_rows as u64,
-                batch_block_span,
+                batch_block_count,
                 batch_count + 1, // batch_count is incremented below
                 tx_density,
                 0.0, // ms_per_block_ema (not tracked by throughput controller)
@@ -368,13 +377,12 @@ impl BulkBuildEngine {
                 build_timings.facts_breakdown.cell_count,
                 flush_wait_elapsed.as_secs_f64() * 1000.0,
                 prefetch_recv_elapsed.as_secs_f64() * 1000.0,
-                prefetch_channel_pending,
-                prefetch_channel_capacity,
+                buffer.available() as u64,
+                channel_depth as u64,
                 flush_channel_pending,
-                controller.channel_depth(),
+                channel_depth as u64,
             );
 
-            let batch_cell_count = sample.cells + sample.inputs;
             indexer.record_bulk_sync_perf_batch_sample(sample);
 
             batch_count += 1;
@@ -385,14 +393,13 @@ impl BulkBuildEngine {
             };
             info!(
                 run_id = %indexer.run_id,
-                end_block = effective_end,
-                blocks = batch_stats.block_count,
+                batch_block_count,
+                batch_bytes,
                 txs = batch_stats.tx_count,
                 current_block = last_block_u64,
                 target_block = chain_tip,
                 remaining_blocks = indexer.progress.blocks_remaining(),
                 progress_pct = format!("{:.1}%", progress_pct),
-                fetch_ms = format!("{:.1}", fetch_elapsed.as_secs_f64() * 1000.0),
                 build_ms = format!("{:.1}", build_elapsed.as_secs_f64() * 1000.0),
                 critical_stage_ms = format!("{:.1}", critical_stage_ms),
                 facts_ms = format!("{:.1}", build_timings.facts_ms),
@@ -410,11 +417,7 @@ impl BulkBuildEngine {
                 build_ms: build_elapsed.as_secs_f64() * 1000.0,
                 flush_wait_ms: flush_wait_elapsed.as_secs_f64() * 1000.0,
                 l0_files: snap.l0_files,
-                cell_count: batch_cell_count,
-                block_count: batch_stats.block_count,
             }) {
-                batch_block_span = output.batch_span;
-                prefetch.update_span(batch_block_span);
                 let _ = threads_tx.send(output.fetch_threads);
 
                 if let Some(new_bg_jobs) = controller.bg_jobs_if_changed() {
@@ -428,16 +431,13 @@ impl BulkBuildEngine {
 
                 tracing::debug!(
                     bottleneck = %output.bottleneck,
-                    batch_span = output.batch_span,
-                    prefetch_ahead = output.prefetch_ahead,
+                    target_batch_bytes = output.target_batch_bytes,
                     fetch_threads = output.fetch_threads,
-                    channel_depth = controller.channel_depth(),
                     bg_jobs = output.bg_jobs,
                     recv_ema = format!("{:.1}", output.recv_ema),
                     build_ema = format!("{:.1}", output.build_ema),
                     wait_ema = format!("{:.1}", output.wait_ema),
                     l0_ema = format!("{:.1}", output.l0_ema),
-                    density_ema = format!("{:.1}", output.density_ema),
                     "Bottleneck controller adjusted"
                 );
 
@@ -447,10 +447,8 @@ impl BulkBuildEngine {
                     output.build_ema,
                     output.wait_ema,
                     output.l0_ema,
-                    output.prefetch_ahead,
                     output.fetch_threads,
                     output.bg_jobs,
-                    output.density_ema,
                 );
             }
 
@@ -472,7 +470,8 @@ impl BulkBuildEngine {
         // publishes to RocksDB so the TUI can display a finalize checklist.
         let finalize_started = Instant::now();
 
-        // Shut down prefetch worker before draining flush channel.
+        // Drop the buffer handle (and its receiver) to signal prefetch to stop.
+        drop(buffer);
         let prefetch_stats = prefetch.close_and_wait().await?;
         info!(
             total_fetches = prefetch_stats.total_fetches,
