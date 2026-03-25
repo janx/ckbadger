@@ -101,6 +101,24 @@ enum CompactOverviewLayout {
     MemoryAndStorage,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ControllerKnobs {
+    batch_span: u64,
+    prefetch_ahead: u64,
+    fetch_threads: u32,
+    bg_jobs: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ControllerDeltas {
+    span_delta: i64,
+    prefetch_delta: i64,
+    threads_delta: i32,
+    bg_delta: i32,
+    /// True if density correction further adjusted span after bottleneck logic.
+    density_corrected: bool,
+}
+
 pub struct App {
     build_version: String,
     db: TuiDb,
@@ -131,6 +149,10 @@ pub struct App {
     density_history: VecDeque<f64>,
     l0_files_history: VecDeque<f64>,
     last_overlap_batch_count: u64,
+    /// Previous controller knob values for computing per-batch deltas.
+    prev_controller_knobs: Option<ControllerKnobs>,
+    /// Most recent per-batch knob deltas (what the controller just adjusted).
+    controller_deltas: Option<ControllerDeltas>,
     show_build_subphases: bool,
     log_entries: VecDeque<LogEntry>,
     log_scroll: usize,
@@ -194,6 +216,8 @@ impl App {
             density_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             l0_files_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             last_overlap_batch_count: 0,
+            prev_controller_knobs: None,
+            controller_deltas: None,
             show_build_subphases: false,
             log_entries,
             log_scroll: 0,
@@ -436,6 +460,32 @@ impl App {
                     &mut self.density_history,
                     bb.controller_density_ema.unwrap_or(0.0),
                 );
+
+                // Compute controller knob deltas.
+                let current_knobs = ControllerKnobs {
+                    batch_span: bb.batch_block_span.unwrap_or(0),
+                    prefetch_ahead: bb.controller_prefetch_ahead.unwrap_or(0),
+                    fetch_threads: bb.controller_fetch_threads.unwrap_or(0),
+                    bg_jobs: bb.controller_bg_jobs.unwrap_or(0),
+                };
+                if let Some(prev) = self.prev_controller_knobs {
+                    self.controller_deltas = Some(ControllerDeltas {
+                        span_delta: current_knobs.batch_span as i64 - prev.batch_span as i64,
+                        prefetch_delta: current_knobs.prefetch_ahead as i64
+                            - prev.prefetch_ahead as i64,
+                        threads_delta: current_knobs.fetch_threads as i32
+                            - prev.fetch_threads as i32,
+                        bg_delta: current_knobs.bg_jobs - prev.bg_jobs,
+                        density_corrected: bb.controller_density_ema.unwrap_or(0.0) > 0.0
+                            && (self.density_history.len() >= 2 && {
+                                let prev_den = self.density_history[self.density_history.len() - 2];
+                                let curr_den = bb.controller_density_ema.unwrap_or(0.0);
+                                prev_den > 0.0 && ((curr_den / prev_den) - 1.0).abs() > 0.05
+                            }),
+                    });
+                }
+                self.prev_controller_knobs = Some(current_knobs);
+
                 self.last_overlap_batch_count = batch_count;
             }
         }
@@ -2089,12 +2139,13 @@ fn io_fetch_write_jitter_line(
 }
 
 /// Build a single budget sparkline line for the diagnostics right column.
-/// Shows ms values with auto-scaled sparkline bars.
+/// Shows values with auto-scaled sparkline bars and a caller-specified unit.
 fn budget_sparkline_line(
     label: &str,
     history: &VecDeque<f64>,
     spark_width: usize,
     color: Color,
+    unit: &str,
 ) -> Line<'static> {
     let sparkline_chars: [char; 8] = [
         '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}', '\u{2587}',
@@ -2136,7 +2187,7 @@ fn budget_sparkline_line(
         spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
     }
 
-    // Stats: current ms + avg ms
+    // Stats: current + avg with unit
     let current = visible.last().copied().unwrap_or(0.0);
     let avg = if visible.is_empty() {
         0.0
@@ -2144,7 +2195,7 @@ fn budget_sparkline_line(
         visible.iter().sum::<f64>() / visible.len() as f64
     };
     spans.push(Span::styled(
-        format!(" {:.0} {:.0}ms", current, avg),
+        format!(" {:.0} {:.0}{}", current, avg, unit),
         Style::default().fg(color),
     ));
 
@@ -2343,24 +2394,28 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
         &app.build_cpu_ms_history,
         spark_width,
         BUDGET_BUILD_COLOR,
+        "ms",
     ));
     lines.push(budget_sparkline_line(
         "FetW",
         &app.fetch_wait_ms_history,
         spark_width,
         BUDGET_FETCH_WAIT_COLOR,
+        "ms",
     ));
     lines.push(budget_sparkline_line(
         "FluW",
         &app.flush_wait_ms_history,
         spark_width,
         BUDGET_FLUSH_WAIT_COLOR,
+        "ms",
     ));
     lines.push(budget_sparkline_line(
         "Den",
         &app.density_history,
         spark_width,
         CYAN,
+        "cells/block",
     ));
 
     f.render_widget(Paragraph::new(lines), area);
@@ -2461,11 +2516,16 @@ fn build_bulk_build_diagnostics(
 
 /// Build the controller observation panel lines for bulk-build diagnostics.
 ///
-/// Three layers:
-/// 1. Signals — EMA-smoothed timing inputs
-/// 2. Judgment — bottleneck classification with time-share percentages
+/// Four layers:
+/// 1. Judgment — bottleneck classification with time-share percentages
+/// 2. Signals — flush-specific health (L0, fill ratio)
 /// 3. Knobs — current controller output values
-fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'static>> {
+/// 4. Actions — per-batch adjustments (deltas with direction arrows)
+fn controller_panel_lines(
+    bb: &BulkBuildProgressData,
+    dense: bool,
+    deltas: Option<&ControllerDeltas>,
+) -> Vec<Line<'static>> {
     let recv_ema = bb.controller_recv_ema.unwrap_or(0.0);
     let build_ema = bb.controller_build_ema.unwrap_or(0.0);
     let wait_ema = bb.controller_wait_ema.unwrap_or(0.0);
@@ -2510,14 +2570,30 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string());
 
-    let density_text = bb
-        .controller_density_ema
-        .map(|v| format!("{v:.1}"))
-        .unwrap_or_else(|| "-".to_string());
+    let imm_ema = bb.controller_imm_ema.unwrap_or(0.0);
 
     if dense {
-        // Compact: 2 lines (fits ~22 char inner width)
-        vec![
+        // Compact: 2-3 lines
+        let mut knob_spans = vec![
+            Span::styled("span ", Style::default().fg(SLATE_500)),
+            Span::styled(span_text, Style::default().fg(FOREGROUND)),
+            Span::styled("  thr ", Style::default().fg(SLATE_500)),
+            Span::styled(threads_text, Style::default().fg(FOREGROUND)),
+            Span::styled("  bg ", Style::default().fg(SLATE_500)),
+            Span::styled(bg_text, Style::default().fg(FOREGROUND)),
+        ];
+        if imm_ema > 1.0 {
+            knob_spans.push(Span::styled("  imm ", Style::default().fg(SLATE_500)));
+            knob_spans.push(Span::styled(
+                format!("{:.0}", imm_ema),
+                Style::default().fg(if imm_ema > 15.0 {
+                    ERROR_RED
+                } else {
+                    FOREGROUND
+                }),
+            ));
+        }
+        let mut lines = vec![
             Line::from(vec![
                 Span::styled(
                     format!("[{}]", bn_label),
@@ -2528,21 +2604,15 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
                     Style::default().fg(TERMINAL_DIM),
                 ),
             ]),
-            Line::from(vec![
-                Span::styled("span ", Style::default().fg(SLATE_500)),
-                Span::styled(span_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  den ", Style::default().fg(SLATE_500)),
-                Span::styled(
-                    format!("{density_text} c/b"),
-                    Style::default().fg(FOREGROUND),
-                ),
-                Span::styled("  thr ", Style::default().fg(SLATE_500)),
-                Span::styled(threads_text, Style::default().fg(FOREGROUND)),
-            ]),
-        ]
+            Line::from(knob_spans),
+        ];
+        if let Some(d) = deltas {
+            lines.push(format_action_line_compact(d));
+        }
+        lines
     } else {
-        // Detail: controller signals + knobs
-        vec![
+        // Detail: signals + knobs + actions
+        let mut lines = vec![
             // Line 1: Bottleneck + time-share (recv, build)
             Line::from(vec![
                 Span::styled(
@@ -2554,7 +2624,7 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
                     Style::default().fg(TERMINAL_DIM),
                 ),
             ]),
-            // Line 2: flush + L0 + fill
+            // Line 2: flush + L0 + fill + imm
             Line::from(vec![
                 Span::styled(
                     format!("flush {:.0}%", flush_pct),
@@ -2577,28 +2647,93 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
                         FOREGROUND
                     }),
                 ),
+                Span::styled("  imm ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format!("{:.0}", imm_ema),
+                    Style::default().fg(if imm_ema > 15.0 {
+                        ERROR_RED
+                    } else {
+                        FOREGROUND
+                    }),
+                ),
             ]),
-            // Line 3: span + density
+            // Line 3: knobs
             Line::from(vec![
                 Span::styled("span ", Style::default().fg(SLATE_500)),
                 Span::styled(span_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  density ", Style::default().fg(SLATE_500)),
-                Span::styled(
-                    format!("{density_text} c/b"),
-                    Style::default().fg(FOREGROUND),
-                ),
-            ]),
-            // Line 4: prefetch + threads + bg_jobs
-            Line::from(vec![
-                Span::styled("prefetch ", Style::default().fg(SLATE_500)),
+                Span::styled("  prefetch ", Style::default().fg(SLATE_500)),
                 Span::styled(prefetch_text, Style::default().fg(FOREGROUND)),
                 Span::styled("  thr ", Style::default().fg(SLATE_500)),
                 Span::styled(threads_text, Style::default().fg(FOREGROUND)),
                 Span::styled("  bg ", Style::default().fg(SLATE_500)),
                 Span::styled(bg_text, Style::default().fg(FOREGROUND)),
             ]),
-        ]
+        ];
+        // Line 4: actions (what changed this batch)
+        if let Some(d) = deltas {
+            lines.push(format_action_line(d));
+        }
+        lines
     }
+}
+
+/// Format a delta value as "+N" / "-N" / "=" with color.
+fn delta_span(label: &str, delta: i64, invert_color: bool) -> Vec<Span<'static>> {
+    let (text, color) = if delta > 0 {
+        (
+            format!("+{}", delta),
+            if invert_color {
+                ERROR_RED
+            } else {
+                TERMINAL_GREEN
+            },
+        )
+    } else if delta < 0 {
+        (
+            format!("{}", delta),
+            if invert_color { TERMINAL_GREEN } else { AMBER },
+        )
+    } else {
+        ("=".to_string(), SLATE_500)
+    };
+    vec![
+        Span::styled(format!("{} ", label), Style::default().fg(SLATE_500)),
+        Span::styled(text, Style::default().fg(color)),
+    ]
+}
+
+/// Format the action line for detail mode.
+/// Shows what the controller adjusted: span/prefetch/thr/bg deltas + density flag.
+fn format_action_line(d: &ControllerDeltas) -> Line<'static> {
+    let mut spans = Vec::new();
+    spans.extend(delta_span("span", d.span_delta / 1000, false));
+    spans.push(Span::styled("k ", Style::default().fg(SLATE_500)));
+    spans.extend(delta_span("pre", d.prefetch_delta, false));
+    spans.push(Span::raw("  "));
+    spans.extend(delta_span("thr", d.threads_delta as i64, false));
+    spans.push(Span::raw("  "));
+    // bg: more jobs = helping flush = green when flush-bound
+    spans.extend(delta_span("bg", d.bg_delta as i64, false));
+    if d.density_corrected {
+        spans.push(Span::styled("  den\u{0394}", Style::default().fg(CYAN)));
+    }
+    Line::from(spans)
+}
+
+/// Format the action line for compact mode (shorter labels).
+fn format_action_line_compact(d: &ControllerDeltas) -> Line<'static> {
+    let mut spans = Vec::new();
+    spans.extend(delta_span("s", d.span_delta / 1000, false));
+    spans.push(Span::styled("k ", Style::default().fg(SLATE_500)));
+    spans.extend(delta_span("p", d.prefetch_delta, false));
+    spans.push(Span::raw(" "));
+    spans.extend(delta_span("t", d.threads_delta as i64, false));
+    spans.push(Span::raw(" "));
+    spans.extend(delta_span("bg", d.bg_delta as i64, false));
+    if d.density_corrected {
+        spans.push(Span::styled(" den\u{0394}", Style::default().fg(CYAN)));
+    }
+    Line::from(spans)
 }
 
 /// Build the left column for normal per-batch bulk-build diagnostics.
@@ -3374,7 +3509,7 @@ fn draw_background_tasks(f: &mut Frame, app: &App, area: Rect) {
         ));
     if let Some(bb) = bb {
         let dense = cols[0].height <= 4;
-        let lines = controller_panel_lines(bb, dense);
+        let lines = controller_panel_lines(bb, dense, app.controller_deltas.as_ref());
         f.render_widget(Paragraph::new(lines).block(ctrl_block), cols[0]);
     } else {
         f.render_widget(
@@ -5538,7 +5673,7 @@ mod tests {
         storage_pressure_wbm_line, storage_runtime_columns, supervisor_services_line,
         sync_bottleneck, system_kv_line, system_store_path_lines, system_workdir_lines,
         trend_delta, trim_for_panel, visible_background_tasks, AdaptiveControlSnapshot, App, Color,
-        CompactOverviewLayout, DiagnosticsViewMode, SyncBottleneck, AMBER, CYAN,
+        CompactOverviewLayout, ControllerDeltas, DiagnosticsViewMode, SyncBottleneck, AMBER, CYAN,
         STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
     use crate::db::{
@@ -6835,13 +6970,31 @@ mod tests {
             prefetch_channel_capacity: Some(4),
             ..Default::default()
         };
-        let lines = controller_panel_lines(&bb, true);
+        // Without deltas: 2 lines (no action line)
+        let lines = controller_panel_lines(&bb, true, None);
         assert_eq!(lines.len(), 2);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
             text.contains("[BUILD]"),
             "should contain bottleneck label, got: {}",
             text
+        );
+
+        // With deltas: 3 lines (action line added)
+        let deltas = ControllerDeltas {
+            span_delta: 5000,
+            prefetch_delta: 1,
+            threads_delta: 0,
+            bg_delta: -1,
+            density_corrected: true,
+        };
+        let lines = controller_panel_lines(&bb, true, Some(&deltas));
+        assert_eq!(lines.len(), 3);
+        let action_text: String = lines[2].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            action_text.contains("den\u{0394}"),
+            "compact action line should show density flag, got: {}",
+            action_text
         );
     }
 
@@ -6860,13 +7013,31 @@ mod tests {
             prefetch_channel_capacity: Some(4),
             ..Default::default()
         };
-        let lines = controller_panel_lines(&bb, false);
-        assert_eq!(lines.len(), 4);
+        // Without deltas: 3 lines
+        let lines = controller_panel_lines(&bb, false, None);
+        assert_eq!(lines.len(), 3);
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
             text.contains("[FLUSH]"),
             "should contain bottleneck label, got: {}",
             text
+        );
+
+        // With deltas: 4 lines
+        let deltas = ControllerDeltas {
+            span_delta: -2000,
+            prefetch_delta: -1,
+            threads_delta: -1,
+            bg_delta: 1,
+            density_corrected: false,
+        };
+        let lines = controller_panel_lines(&bb, false, Some(&deltas));
+        assert_eq!(lines.len(), 4);
+        let action_text: String = lines[3].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            action_text.contains("span ") && action_text.contains("-2"),
+            "action line should show span shrink, got: {}",
+            action_text
         );
     }
 
