@@ -3,7 +3,9 @@ use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::types::{decode_live_cell_marker, LiveCellInfo, PositionedCellInfo};
+use ckbadger_store::types::{
+    decode_live_cell_marker, LiveCellInfo, LockScriptEntry, PositionedCellInfo,
+};
 
 use crate::parser::cell::ParsedCell;
 
@@ -153,6 +155,15 @@ impl BatchWriter {
             cells_batch.put_cell_payload(&raw_key, &info.cell);
             // Live marker -> domain batch
             domain_batch.put_live_cell_marker(&raw_key, info.created_at_block);
+            // Lock script mapping (idempotent, survives cell consumption)
+            domain_batch.put_lock_script(
+                &info.lock_script_hash,
+                &LockScriptEntry {
+                    code_hash: info.lock_code_hash.clone(),
+                    hash_type: info.lock_hash_type,
+                    args: info.lock_args.clone(),
+                },
+            );
             if !skip_cell_indices {
                 domain_batch.put_cell_by_lock(
                     &info.lock_script_hash,

@@ -424,6 +424,14 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_consumed_cells(), raw_key, &value);
     }
 
+    // ---- Lock script mapping ----
+
+    /// Write lock_hash -> script components mapping. Idempotent (same key always maps to same value).
+    pub fn put_lock_script(&mut self, lock_hash: &[u8], entry: &crate::types::LockScriptEntry) {
+        let value = bincode::serialize(entry).expect("serialize LockScriptEntry");
+        self.put_cf(self.store.cf_lock_scripts(), lock_hash, &value);
+    }
+
     // ---- Cell indexes ----
 
     pub fn put_cell_by_lock(

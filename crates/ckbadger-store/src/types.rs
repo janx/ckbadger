@@ -65,6 +65,16 @@ pub struct ConsumedCellInfo {
     pub created_at_block: i64,
 }
 
+/// Persistent lock_hash -> script components mapping.
+/// Written once per unique lock_hash, never deleted.
+/// Survives cell consumption, enabling address resolution for spent locks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LockScriptEntry {
+    pub code_hash: Vec<u8>,
+    pub hash_type: i16,
+    pub args: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsumedCellMeta {
     pub created_at_block: i64,

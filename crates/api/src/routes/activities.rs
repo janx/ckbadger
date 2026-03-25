@@ -21,11 +21,11 @@ use crate::response::{
 use crate::utils::address::{address_to_lock_script_hash, compute_script_hash, script_to_address};
 use crate::AppState;
 
-/// Resolve a lock_hash to a CKB address by looking up any cell with that lock script.
-/// Falls back to hex-encoded lock_hash if no cell is found.
+/// Resolve a lock_hash to a CKB address using the persistent lock script mapping.
+/// Falls back to hex-encoded lock_hash if no mapping exists.
 fn resolve_lock_hash_address(
     store: &CkbadgerStore,
-    ao_store: &CkbadgerStore,
+    _ao_store: &CkbadgerStore,
     network: &str,
     lock_hash: &[u8],
     cache: &mut HashMap<Vec<u8>, String>,
@@ -34,17 +34,11 @@ fn resolve_lock_hash_address(
         return cached.clone();
     }
     let address = store
-        .list_cells_by_lock(lock_hash, 1, None, ao_store)
+        .get_lock_script(lock_hash)
         .ok()
-        .and_then(|cells| cells.into_iter().next())
-        .and_then(|(_, _, info)| {
-            script_to_address(
-                &info.lock_code_hash,
-                info.lock_hash_type,
-                &info.lock_args,
-                network,
-            )
-            .ok()
+        .flatten()
+        .and_then(|entry| {
+            script_to_address(&entry.code_hash, entry.hash_type, &entry.args, network).ok()
         })
         .unwrap_or_else(|| format!("0x{}", hex::encode(lock_hash)));
     cache.insert(lock_hash.to_vec(), address.clone());

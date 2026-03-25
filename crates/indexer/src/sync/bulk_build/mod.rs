@@ -14,16 +14,16 @@ use ckbadger_store::types::{
     decode_live_cell_marker, BulkBuildSessionMarker, CachedBlockHeader,
     CellDistributionTrackerState, ConsumedCellMeta, DailyActivityStats, DailyAddressCohort,
     DailyCellDistribution, DailyHodlWave, DaoDailySnapshot, DaoLatestStatistics, DaoTopDepositors,
-    HodlTrackerState, LiveCellInfo, ObjectStandard, ScriptDailyDelta, SporeTypeIndex, SyncStatus,
-    TokenTransferRecord, TxActions, TxIndexEntry, DID_CKB_SENTINEL_COLLECTION,
-    DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    HodlTrackerState, LiveCellInfo, LockScriptEntry, ObjectStandard, ScriptDailyDelta,
+    SporeTypeIndex, SyncStatus, TokenTransferRecord, TxActions, TxIndexEntry,
+    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS,
     CF_CELLS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE,
     CF_CELL_BY_TYPE_CODE, CF_CONSUMED_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_LIVE_CELLS,
-    CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_ACTIONS, CF_TX_HASH_MAP,
-    CF_TX_INDEX,
+    CF_LOCK_SCRIPTS, CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_ACTIONS,
+    CF_TX_HASH_MAP, CF_TX_INDEX,
 };
 use rayon::prelude::*;
 use rocksdb::IteratorMode;
@@ -414,8 +414,6 @@ impl BulkBuildEngine {
                 build_ms: build_elapsed.as_secs_f64() * 1000.0,
                 flush_wait_ms: flush_wait_elapsed.as_secs_f64() * 1000.0,
                 l0_files: snap.l0_files,
-                actual_blocks: batch_stats.block_count,
-                history_rows: pending_flush_row_count.0,
                 flush_channel_pending,
                 flush_channel_capacity: controller.channel_depth(),
             }) {
@@ -455,9 +453,7 @@ impl BulkBuildEngine {
                     output.prefetch_ahead,
                     output.fetch_threads,
                     output.bg_jobs,
-                    controller.rows_per_block_ema(),
                     output.flush_fill_ema,
-                    controller.max_history_rows(),
                 );
             }
 
@@ -3012,7 +3008,9 @@ fn build_history_rows_for_block(
         }
     }
 
-    // Cell payloads (CF_CELLS) + data_hash index (CF_CELL_BY_DATA_HASH) for this block's cells.
+    // Cell payloads (CF_CELLS) + data_hash index (CF_CELL_BY_DATA_HASH)
+    // + lock script mapping (CF_LOCK_SCRIPTS) for this block's cells.
+    let mut seen_lock_ids = rustc_hash::FxHashSet::default();
     for tx in block_txs {
         for cell in &arena_cells[tx.output_range.clone()] {
             let outpoint_key =
@@ -3023,6 +3021,21 @@ fn build_history_rows_for_block(
                 outpoint_key,
                 bincode_serialize_presized(&cell_facts_to_live_cell_info(cell, interner))?,
             ));
+
+            // Lock script mapping — dedup within block to reduce duplicate writes.
+            if seen_lock_ids.insert(cell.lock_script_hash_id) {
+                let lock_hash = interner.resolve_bytes(cell.lock_script_hash_id).to_vec();
+                let entry = LockScriptEntry {
+                    code_hash: interner.resolve_bytes(cell.lock_code_hash_id).to_vec(),
+                    hash_type: cell.lock_hash_type,
+                    args: interner.resolve_bytes(cell.lock_args_id).to_vec(),
+                };
+                rows.push(materialize::MaterializedRow::new(
+                    CF_LOCK_SCRIPTS,
+                    lock_hash,
+                    bincode_serialize_presized(&entry)?,
+                ));
+            }
 
             if let Some(data_hash) = &cell.data_hash {
                 rows.push(materialize::MaterializedRow::new(

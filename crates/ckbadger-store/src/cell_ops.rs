@@ -10,9 +10,26 @@ use crate::types::{
 };
 
 use crate::bytes_to_hex;
-use crate::types::TokenCellStats;
+use crate::types::{LockScriptEntry, TokenCellStats};
 
 impl CkbadgerStore {
+    /// Look up lock script components by lock_hash.
+    pub fn get_lock_script(&self, lock_hash: &[u8]) -> anyhow::Result<Option<LockScriptEntry>> {
+        match self.get_cf(self.cf_lock_scripts(), lock_hash)? {
+            Some(value) => {
+                let entry = bincode::deserialize::<LockScriptEntry>(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize LockScriptEntry: lock_hash=0x{}, error={}",
+                        bytes_to_hex(lock_hash),
+                        e
+                    )
+                })?;
+                Ok(Some(entry))
+            }
+            None => Ok(None),
+        }
+    }
+
     pub fn get_cell_by_outpoint_key(
         &self,
         outpoint_key: &[u8],

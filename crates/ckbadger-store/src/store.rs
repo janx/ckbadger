@@ -336,6 +336,7 @@ pub const CF_FIBER_CHANNEL_BY_COMMITMENT: &str = "fiber_channel_by_commitment";
 pub const CF_FIBER_CHANNEL_BY_FUNDING_ARGS: &str = "fiber_channel_by_funding_args";
 pub const CF_ADDR_FIBER_CHANNELS: &str = "addr_fiber_channels";
 pub const CF_DOB_DECODED: &str = "dob_decoded";
+pub const CF_LOCK_SCRIPTS: &str = "lock_scripts";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CfWritePolicy {
@@ -357,6 +358,7 @@ const CF_WRITE_POLICY_APPEND_ONLY: &[&str] = &[
     CF_TX_ACTIONS,
     CF_OBJECT_COLLECTION_ACTIVITIES,
     CF_IDENTITY_COLLECTION_ACTIVITIES,
+    CF_LOCK_SCRIPTS,
 ];
 
 const CF_WRITE_POLICY_SEALED_AGGREGATE: &[&str] = &[
@@ -513,6 +515,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
     CF_ADDR_FIBER_CHANNELS,
     CF_DOB_DECODED,
+    CF_LOCK_SCRIPTS,
 ];
 
 /// Column families intended for the domain mutable store.
@@ -577,6 +580,7 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_FIBER_CHANNEL_BY_FUNDING_ARGS,
     CF_ADDR_FIBER_CHANNELS,
     CF_DOB_DECODED,
+    CF_LOCK_SCRIPTS,
 ];
 
 /// Column families for the append-only store (immutable, hash-keyed cell payloads).
@@ -1389,6 +1393,9 @@ impl CkbadgerStore {
     }
     pub fn cf_dob_decoded(&self) -> &ColumnFamily {
         self.cf(CF_DOB_DECODED)
+    }
+    pub fn cf_lock_scripts(&self) -> &ColumnFamily {
+        self.cf(CF_LOCK_SCRIPTS)
     }
 
     // ---- Raw DB operations ----
