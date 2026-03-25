@@ -112,7 +112,13 @@ describe('LatestActivities stream', () => {
           makeParticipant({
             address: 'ckb1qtoken1111111111111111111111111111111111111111111',
             itemDeltas: [
-              { kind: 'token', typeScriptHash: '0xtoken', delta: '1200', symbol: 'SEAL', decimals: 8 },
+              {
+                kind: 'token',
+                typeScriptHash: '0xtoken',
+                delta: '1200',
+                symbol: 'SEAL',
+                decimals: 8,
+              },
             ],
             tags: 1,
           }),
@@ -123,7 +129,8 @@ describe('LatestActivities stream', () => {
     render(<LatestActivities />);
 
     await waitFor(() => {
-      expect(screen.getByText(/SEAL Transfer/)).toBeInTheDocument();
+      // Token symbol shown inline on participant line via InlineItemDelta
+      expect(screen.getByText(/SEAL/)).toBeInTheDocument();
     });
   });
 
@@ -136,7 +143,13 @@ describe('LatestActivities stream', () => {
           makeParticipant({
             address: 'ckb1qtoken1111111111111111111111111111111111111111111',
             itemDeltas: [
-              { kind: 'token', typeScriptHash: '0xtoken', delta: '1200', symbol: 'SEAL', decimals: 8 },
+              {
+                kind: 'token',
+                typeScriptHash: '0xtoken',
+                delta: '1200',
+                symbol: 'SEAL',
+                decimals: 8,
+              },
             ],
             tags: 1,
           }),
@@ -281,7 +294,9 @@ describe('LatestActivities stream', () => {
     render(<LatestActivities />);
 
     await waitFor(() => {
-      expect(screen.getByText(/CKB Transfer/)).toBeInTheDocument();
+      // CKB delta shown on participant line
+      expect(screen.getByText(/-500\.00000000/)).toBeInTheDocument();
+      expect(screen.getByText(/CKB/)).toBeInTheDocument();
     });
   });
 

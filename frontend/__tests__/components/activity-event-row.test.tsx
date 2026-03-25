@@ -68,7 +68,8 @@ describe('ActivityEventGroup', () => {
       />
     );
     expect(screen.getAllByText(/DAO Deposit/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/CKB Transfer/).length).toBeGreaterThan(0);
+    // CKB row is labeled "CKB" (not "CKB Transfer") when L3 events are present
+    expect(screen.getAllByText(/CKB/).length).toBeGreaterThan(0);
   });
 
   it('renders token sub-row with symbol', () => {
@@ -182,7 +183,8 @@ describe('ActivityEventGroup', () => {
     expect(screen.getAllByText(/SEAL Transfer/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Object/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Spore/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/CKB Transfer/).length).toBeGreaterThan(0);
+    // CKB row is labeled "CKB" (not "CKB Transfer") when L2/L3 events are present
+    expect(screen.getAllByText(/CKB/).length).toBeGreaterThan(0);
   });
 
   it('renders DAO Withdraw Complete with compensation', () => {

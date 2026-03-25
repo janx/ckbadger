@@ -2,25 +2,12 @@
 
 import Link from '@/components/ui/link';
 import { TerminalPanel, TerminalPanelContent, TerminalRow } from '@/components/ui/terminal-panel';
-import {
-  CkbDelta,
-  LockCallBadge,
-  LockCallExpr,
-  TypeCallExpr,
-  TYPE_SCRIPT_CALL_LABEL,
-} from '@/components/activity-event-row';
+import { buildGlobalTxEvents, ParticipantLine } from '@/components/activity-event-row';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { startTransition, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type GlobalActivity, type GlobalActivityFilter } from '@/lib/api';
-import { classifyActivity, type ClassifiedActivity } from '@/lib/activity-classify';
-import {
-  getIdentityItemDetailHref,
-  getObjectDetailHref,
-  getTokenDetailHref,
-} from '@/lib/detail-routes';
-import { formatTokenBalance } from '@/lib/format-asset';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-import { cn, formatCkbAmount, formatTimeAgo, truncateHash } from '@/lib/utils';
+import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
 
 const PAGE_SIZE = DEFAULT_PAGE_SIZE;
 const POLL_INTERVAL_MS = 10_000;
@@ -92,16 +79,6 @@ function safeScrollIntoView(element: HTMLDivElement | null, options?: ScrollInto
 
 function itemKey(activity: GlobalActivity): string {
   return activity.txHash;
-}
-
-/** Get the primary address from the first participant. */
-function primaryAddress(activity: GlobalActivity): string {
-  return activity.participants[0]?.address ?? '';
-}
-
-/** Get the primary CKB delta from the first participant. */
-function primaryCkbDelta(activity: GlobalActivity): string {
-  return activity.participants[0]?.ckbDelta ?? '0';
 }
 
 function toActivityDate(timestamp: string): Date {
@@ -196,242 +173,8 @@ async function fetchFreshHeadActivities(
   }
 }
 
-function truncateAddress(addr: string): string {
-  return `${addr.slice(0, 8)}...${addr.slice(-6)}`;
-}
-
-function formatAddress(address: string): string {
-  if (address.startsWith('ckb1') || address.startsWith('ckt1')) {
-    return truncateAddress(address);
-  }
-  return truncateHash(address);
-}
-
 function getDayDividerTestId(label: string): string {
   return `activity-day-divider-${label.toLowerCase().replace(/\s+/g, '-')}`;
-}
-
-interface TypeBadgeInfo {
-  icon: string;
-  label: string;
-  colorClass: string;
-}
-
-function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
-  const { displayType } = classified;
-
-  switch (displayType) {
-    case 'daoDeposit':
-    case 'daoWithdrawRequest':
-    case 'daoWithdrawComplete':
-      return { icon: '\u25C6', label: 'DAO', colorClass: 'text-gold' };
-    case 'token':
-      return { icon: '\u25CE', label: 'Token', colorClass: 'text-token' };
-    case 'object':
-      return { icon: '\u2B21', label: 'Object', colorClass: 'text-lavender' };
-    case 'identity':
-      return { icon: '\u2726', label: 'Identity', colorClass: 'text-aqua' };
-    case 'protocolAction':
-      return { icon: '\u26A1', label: 'Protocol', colorClass: 'text-violet' };
-    case 'typeCall':
-      return { icon: '\u2699', label: 'Script', colorClass: 'text-amber' };
-    case 'ckbTransfer':
-      return { icon: '\u2197', label: 'CKB', colorClass: 'text-jade' };
-    default:
-      return { icon: '\u2197', label: 'Activity', colorClass: 'text-jade' };
-  }
-}
-
-function formatProtocolName(protocol: string): string {
-  if (protocol === 'rgbpp') return 'RGB++';
-  if (protocol === 'utxoswap') return 'UTXOSwap';
-  return protocol.charAt(0).toUpperCase() + protocol.slice(1);
-}
-
-function titleize(value: string): string {
-  return value
-    .split(/[_-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
-}
-
-function getActivityHeadline(classified: ClassifiedActivity): string {
-  const { primaryItemDelta, primaryProtocolAction } = classified;
-
-  switch (classified.displayType) {
-    case 'daoDeposit':
-      return 'DAO Deposit';
-    case 'daoWithdrawRequest':
-      return 'DAO Withdraw Request';
-    case 'daoWithdrawComplete':
-      return 'DAO Withdraw Complete';
-    case 'token': {
-      if (primaryItemDelta && primaryItemDelta.kind === 'token') {
-        return `${primaryItemDelta.symbol ?? truncateHash(primaryItemDelta.typeScriptHash, 8, 6)} Transfer`;
-      }
-      return 'Token Transfer';
-    }
-    case 'object': {
-      if (primaryItemDelta && primaryItemDelta.kind === 'object') {
-        const actionLabel = primaryItemDelta.delta > 0 ? 'Received' : 'Sent';
-        return `Object ${actionLabel}`;
-      }
-      return 'Object Activity';
-    }
-    case 'identity': {
-      if (primaryItemDelta && primaryItemDelta.kind === 'identity') {
-        const actionLabel = primaryItemDelta.delta > 0 ? 'Registered' : 'Released';
-        return `Identity ${actionLabel}`;
-      }
-      return 'Identity Activity';
-    }
-    case 'protocolAction': {
-      if (!primaryProtocolAction) {
-        return 'Protocol Action';
-      }
-      return `${formatProtocolName(primaryProtocolAction.protocol)} \u00B7 ${titleize(primaryProtocolAction.action)}`;
-    }
-    case 'typeCall':
-      return TYPE_SCRIPT_CALL_LABEL;
-    case 'ckbTransfer':
-      return 'CKB Transfer';
-    default:
-      return 'Activity';
-  }
-}
-
-function AddressLink({ address, className }: { address: string; className?: string }) {
-  return (
-    <Link
-      href={`/address/${address}`}
-      className={cn('text-text hover:text-aqua font-mono text-xs transition-colors', className)}
-    >
-      {formatAddress(address)}
-    </Link>
-  );
-}
-
-function renderPrimaryValue(classified: ClassifiedActivity) {
-  const { activity, primaryItemDelta, primaryProtocolAction } = classified;
-  const ckbDelta = primaryCkbDelta(activity);
-
-  switch (classified.displayType) {
-    case 'daoDeposit': {
-      const capacity = (primaryProtocolAction?.metadata?.capacity as string) ?? '0';
-      return (
-        <span className="text-positive font-mono text-xs tabular-nums">
-          +{formatCkbAmount(capacity).full} CKB locked
-        </span>
-      );
-    }
-    case 'daoWithdrawRequest': {
-      const capacity = (primaryProtocolAction?.metadata?.capacity as string) ?? '0';
-      return (
-        <span className="text-gold font-mono text-xs tabular-nums">
-          {formatCkbAmount(capacity).full} CKB
-        </span>
-      );
-    }
-    case 'daoWithdrawComplete': {
-      const capacity = (primaryProtocolAction?.metadata?.capacity as string) ?? '0';
-      return (
-        <span className="text-positive font-mono text-xs tabular-nums">
-          +{formatCkbAmount(capacity).full} CKB
-        </span>
-      );
-    }
-    case 'token': {
-      if (primaryItemDelta?.kind !== 'token') {
-        return <CkbDelta delta={ckbDelta} />;
-      }
-      const delta = BigInt(primaryItemDelta.delta);
-      const prefix = delta > BigInt(0) ? '+' : delta < BigInt(0) ? '-' : '';
-      const balance = formatTokenBalance(
-        primaryItemDelta.delta.startsWith('-')
-          ? primaryItemDelta.delta.slice(1)
-          : primaryItemDelta.delta,
-        primaryItemDelta.decimals ?? 0
-      );
-      const label =
-        primaryItemDelta.symbol ?? truncateHash(primaryItemDelta.typeScriptHash, 8, 6);
-      const colorClass =
-        delta > BigInt(0) ? 'text-positive' : delta < BigInt(0) ? 'text-negative' : 'text-text-dim';
-      return (
-        <Link
-          href={getTokenDetailHref(primaryItemDelta.typeScriptHash)}
-          className={cn('font-mono text-xs tabular-nums hover:underline', colorClass)}
-        >
-          {prefix}
-          {balance} {label}
-        </Link>
-      );
-    }
-    case 'object': {
-      return <CkbDelta delta={ckbDelta} />;
-    }
-    case 'identity': {
-      return <CkbDelta delta={ckbDelta} />;
-    }
-    case 'protocolAction': {
-      if (primaryItemDelta?.kind === 'token') {
-        const delta = BigInt(primaryItemDelta.delta);
-        const prefix = delta > BigInt(0) ? '+' : delta < BigInt(0) ? '-' : '';
-        const balance = formatTokenBalance(
-          primaryItemDelta.delta.startsWith('-')
-            ? primaryItemDelta.delta.slice(1)
-            : primaryItemDelta.delta,
-          primaryItemDelta.decimals ?? 0
-        );
-        const label =
-          primaryItemDelta.symbol ?? truncateHash(primaryItemDelta.typeScriptHash, 8, 6);
-        const colorClass =
-          delta > BigInt(0)
-            ? 'text-positive'
-            : delta < BigInt(0)
-              ? 'text-negative'
-              : 'text-text-dim';
-        return (
-          <Link
-            href={getTokenDetailHref(primaryItemDelta.typeScriptHash)}
-            className={cn('font-mono text-xs tabular-nums hover:underline', colorClass)}
-          >
-            {prefix}
-            {balance} {label}
-          </Link>
-        );
-      }
-
-      const capacity = primaryProtocolAction?.metadata?.capacity;
-      if (typeof capacity === 'string') {
-        return (
-          <span className="text-text font-mono text-xs tabular-nums">
-            {formatCkbAmount(capacity).full} CKB
-          </span>
-        );
-      }
-
-      return <CkbDelta delta={ckbDelta} />;
-    }
-    case 'typeCall':
-      return <CkbDelta delta={ckbDelta} />;
-    case 'ckbTransfer':
-    default:
-      return <CkbDelta delta={ckbDelta} />;
-  }
-}
-
-function MetaChip({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <span
-      className={cn(
-        'border-base-border/50 bg-base-elevated/70 text-text-dim inline-flex items-center rounded-md border px-2 py-1 font-mono text-[10px] leading-none',
-        className
-      )}
-    >
-      {children}
-    </span>
-  );
 }
 
 function getFilterLabel(filter: GlobalActivityFilter): string {
@@ -516,176 +259,9 @@ function ActivityDayDivider({ label }: { label: string }) {
   );
 }
 
-function renderSubjectLine(classified: ClassifiedActivity) {
-  const { activity, primaryProtocolAction, primaryItemDelta, primaryTypeCall, primaryLockCall } =
-    classified;
-  const ckbDelta = primaryCkbDelta(activity);
-
-  switch (classified.displayType) {
-    case 'daoDeposit':
-      return <span className="text-text-dim">NervosDAO position created</span>;
-    case 'daoWithdrawRequest': {
-      const depositBlock = primaryProtocolAction?.metadata?.depositBlock as number | undefined;
-      return depositBlock ? (
-        <>
-          <span className="text-text-dim">deposit block</span>
-          <MetaChip>#{depositBlock.toLocaleString()}</MetaChip>
-        </>
-      ) : (
-        <span className="text-text-dim">NervosDAO withdraw request</span>
-      );
-    }
-    case 'daoWithdrawComplete': {
-      const compensation = primaryProtocolAction?.metadata?.compensation as string | undefined;
-      return compensation ? (
-        <>
-          <span className="text-text-dim">compensation</span>
-          <span className="text-positive font-mono text-xs tabular-nums">
-            +{formatCkbAmount(compensation).full} CKB
-          </span>
-        </>
-      ) : (
-        <span className="text-text-dim">NervosDAO withdrawal completed</span>
-      );
-    }
-    case 'token':
-      return primaryItemDelta?.kind === 'token' ? (
-        <>
-          <Link
-            href={getTokenDetailHref(primaryItemDelta.typeScriptHash)}
-            className="text-token/85 hover:text-token font-mono text-xs transition-colors"
-          >
-            {primaryItemDelta.symbol ?? truncateHash(primaryItemDelta.typeScriptHash, 8, 6)}
-          </Link>
-          {ckbDelta !== '0' && (
-            <>
-              <span className="text-text-dim">ckb</span>
-              <CkbDelta delta={ckbDelta} />
-            </>
-          )}
-        </>
-      ) : null;
-    case 'object':
-      return primaryItemDelta?.kind === 'object' ? (
-        <>
-          <Link
-            href={getObjectDetailHref(primaryItemDelta.objectId)}
-            className="text-lavender/80 hover:text-lavender font-mono text-xs transition-colors"
-          >
-            {truncateHash(primaryItemDelta.objectId, 8, 6)}
-          </Link>
-          {ckbDelta !== '0' && (
-            <>
-              <span className="text-text-dim">ckb</span>
-              <CkbDelta delta={ckbDelta} />
-            </>
-          )}
-        </>
-      ) : null;
-    case 'identity':
-      return primaryItemDelta?.kind === 'identity' ? (
-        <>
-          <Link
-            href={getIdentityItemDetailHref('identity', primaryItemDelta.identityId)}
-            className="text-aqua/80 hover:text-aqua font-mono text-xs transition-colors"
-          >
-            {truncateHash(primaryItemDelta.identityId, 8, 6)}
-          </Link>
-          {ckbDelta !== '0' && (
-            <>
-              <span className="text-text-dim">ckb</span>
-              <CkbDelta delta={ckbDelta} />
-            </>
-          )}
-        </>
-      ) : null;
-    case 'protocolAction': {
-      const pieces: ReactNode[] = [];
-      const btcTxid = primaryProtocolAction?.metadata?.btcTxid;
-      const capacity = primaryProtocolAction?.metadata?.capacity;
-
-      if (primaryItemDelta?.kind === 'token') {
-        const label =
-          primaryItemDelta.symbol ?? truncateHash(primaryItemDelta.typeScriptHash, 8, 6);
-        pieces.push(
-          <Link
-            key="token"
-            href={getTokenDetailHref(primaryItemDelta.typeScriptHash)}
-            className="text-token/85 hover:text-token font-mono text-xs transition-colors"
-          >
-            {label}
-          </Link>
-        );
-      }
-
-      if (typeof capacity === 'string') {
-        pieces.push(
-          <span key="capacity" className="text-text-dim font-mono text-xs tabular-nums">
-            capacity {formatCkbAmount(capacity).full} CKB
-          </span>
-        );
-      }
-
-      if (typeof btcTxid === 'string') {
-        pieces.push(
-          <span key="btc" className="text-text-dim font-mono text-xs">
-            btc {truncateHash(btcTxid, 8, 6)}
-          </span>
-        );
-      }
-
-      if (primaryTypeCall) {
-        pieces.push(
-          <span key="type-call" className="font-mono text-xs">
-            <TypeCallExpr sc={primaryTypeCall} />
-          </span>
-        );
-      } else if (primaryLockCall) {
-        pieces.push(
-          <span key="lock-call" className="font-mono text-xs">
-            <LockCallExpr lc={primaryLockCall} />
-          </span>
-        );
-      }
-
-      return pieces.length > 0 ? pieces : <span className="text-text-dim">Protocol activity</span>;
-    }
-    case 'typeCall':
-      return primaryTypeCall ? (
-        <span className="font-mono text-xs">
-          <TypeCallExpr sc={primaryTypeCall} />
-        </span>
-      ) : primaryLockCall ? (
-        <span className="font-mono text-xs">
-          <LockCallExpr lc={primaryLockCall} />
-        </span>
-      ) : (
-        <span className="text-text-dim">Type script activity</span>
-      );
-    case 'ckbTransfer':
-    default: {
-      const participants = activity.participants;
-      if (participants.length <= 1) {
-        return <span className="text-text-dim">Owner balance change</span>;
-      }
-      if (participants.length === 2) {
-        // Show the other participant (second one)
-        const otherAddr = participants[1].address;
-        return (
-          <>
-            <span className="text-text-dim">with</span>
-            <AddressLink address={otherAddr} className="text-xs" />
-          </>
-        );
-      }
-      return (
-        <span className="text-text-dim font-mono text-xs">
-          {participants.length} participants
-        </span>
-      );
-    }
-  }
-}
+// ---------------------------------------------------------------------------
+// ActivityStreamRow — tx-centric layered view
+// ---------------------------------------------------------------------------
 
 interface ActivityStreamRowProps {
   activity: GlobalActivity;
@@ -693,15 +269,10 @@ interface ActivityStreamRowProps {
 }
 
 function ActivityStreamRow({ activity, isNew = false }: ActivityStreamRowProps) {
-  const classified = classifyActivity(activity);
-  const badge = getTypeBadge(classified);
-  const headline = getActivityHeadline(classified);
+  const txEvents = buildGlobalTxEvents(activity);
   const txHref = `/tx/${activity.txHash}`;
   const blockHref = `/blocks/${activity.blockNumber}`;
-  const addr = primaryAddress(activity);
-  const subjectLine = renderSubjectLine(classified);
-  const metaChipClass =
-    'border-base-border/45 bg-base-elevated/55 text-text-dim hover:text-aqua inline-flex items-center rounded-md border px-2 py-1 font-mono text-[10px] leading-none transition-colors';
+
   const rowAnimation = isNew
     ? {
         animation:
@@ -712,53 +283,48 @@ function ActivityStreamRow({ activity, isNew = false }: ActivityStreamRowProps) 
   return (
     <TerminalRow
       role="article"
-      aria-label={headline}
+      aria-label={`Transaction ${activity.txHash.slice(0, 10)}`}
       className="px-4 py-4 sm:px-5"
       style={rowAnimation}
     >
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start lg:gap-4">
-        <div className="min-w-0 space-y-2.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={cn(
-                'border-base-border/50 bg-base-elevated/70 inline-flex items-center rounded-md border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em]',
-                badge.colorClass
-              )}
-            >
-              {badge.icon} {badge.label}
-            </span>
-            {classified.primaryLockCall && <LockCallBadge lc={classified.primaryLockCall} />}
-          </div>
-
-          <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-            <h2 className="text-text-bright font-mono text-base font-semibold tracking-tight sm:text-[17px]">
-              {headline}
-            </h2>
-          </div>
-
-          {subjectLine && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">{subjectLine}</div>
-          )}
-
-          <div className="flex flex-wrap items-center gap-2 pt-0.5">
-            <span className="text-text-dim font-mono text-[10px] uppercase tracking-[0.18em]">
-              Owner
-            </span>
-            {addr && <AddressLink address={addr} className="text-[11px]" />}
-            <Link href={txHref} className={metaChipClass}>
-              tx {truncateHash(activity.txHash, 8, 6)}
+      <div className="space-y-2.5">
+        {/* TX header: hash · block#   time */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 font-mono text-sm">
+            <Link href={txHref} className="text-text-dim hover:text-aqua transition-colors">
+              <span className="text-text-dim/60 mr-0.5 text-xs">tx</span>
+              {truncateHash(activity.txHash, 10, 8)}
             </Link>
-            <Link href={blockHref} className={metaChipClass}>
+            <span className="text-text-dim">{'\u00B7'}</span>
+            <Link
+              href={blockHref}
+              className="text-text-dim hover:text-text text-xs transition-colors"
+            >
               #{activity.blockNumber.toLocaleString()}
             </Link>
-            <MetaChip>{formatActivityTimeAgo(activity.timestamp)}</MetaChip>
           </div>
+          <span className="text-text-dim shrink-0 font-mono text-[10px]">
+            {formatActivityTimeAgo(activity.timestamp)}
+          </span>
         </div>
 
-        <div className="flex items-start justify-start pt-0.5 lg:justify-end">
-          <div className="border-base-border/40 bg-base-bg/50 min-w-[10.5rem] rounded-lg border px-3 py-2">
-            {renderPrimaryValue(classified)}
+        {/* TX-level events: L3 protocol actions + L2 catch-all type/lock calls */}
+        {txEvents.length > 0 && (
+          <div className="space-y-1 pl-3">
+            {txEvents.map((event, i) => (
+              <div key={i} className="flex items-center justify-between gap-2">
+                {event.badge}
+                {event.value}
+              </div>
+            ))}
           </div>
+        )}
+
+        {/* Per-participant lines: L1 CKB + L2 item deltas */}
+        <div className="space-y-1 pl-3">
+          {activity.participants.map((p) => (
+            <ParticipantLine key={p.address} participant={p} />
+          ))}
         </div>
       </div>
     </TerminalRow>

@@ -232,7 +232,8 @@ describe('ActivitiesStreamExplorer', () => {
         expect.objectContaining({ filter: 'token', limit: DEFAULT_PAGE_SIZE })
       );
     });
-    expect(await screen.findByText(/TKN Transfer/)).toBeInTheDocument();
+    // Token symbol shown inline on participant line
+    expect(await screen.findByText(/TKN/)).toBeInTheDocument();
   });
 
   it('renders an empty state when the selected filter has no activities', async () => {
@@ -275,7 +276,7 @@ describe('ActivitiesStreamExplorer', () => {
     ).toBeInTheDocument();
   });
 
-  it('renders each activity row with separate headline, subject, and owner metadata zones', async () => {
+  it('renders each activity row with tx hash, event rows, and participant lines', async () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
         makeActivity({
@@ -306,20 +307,27 @@ describe('ActivitiesStreamExplorer', () => {
 
     render(<ActivitiesStreamExplorer />);
 
-    const row = await screen.findByRole('article', { name: /script call/i });
-    const heading = within(row).getByRole('heading', { name: 'Script Call (type)' });
+    const row = await screen.findByRole('article');
     const divider = screen.getByTestId('activity-day-divider-today');
     const dividerDot = divider.querySelector('span');
 
     expect(screen.getByText('Today')).toBeInTheDocument();
-    expect(within(row).getByText('Script Call (type)')).toBeInTheDocument();
-    expect(within(row).getByText('.bit Time Index State')).toBeInTheDocument();
-    expect(within(row).getByText('Owner')).toBeInTheDocument();
-    expect(within(row).getByText(/tx 0xscript/i)).toBeInTheDocument();
+    // TX hash shown prominently
+    expect(within(row).getByText(/0xscriptca/)).toBeInTheDocument();
+    // Block number shown
     expect(within(row).getByText('#123,456')).toBeInTheDocument();
+    // Time shown
     expect(within(row).getByText(/ago$/i)).toBeInTheDocument();
+    // Script call event row (badge includes icon prefix)
+    expect(within(row).getByText(/Script Call \(type\)/)).toBeInTheDocument();
+    expect(within(row).getByText('.bit Time Index State')).toBeInTheDocument();
+    // Participant line with address
+    expect(
+      within(row)
+        .getAllByRole('link')
+        .some((link) => link.getAttribute('href')?.startsWith('/address/'))
+    ).toBe(true);
     expect(row.className).toContain('py-4');
-    expect(heading.className).toContain('text-base');
     expect(row.className).not.toContain('grid-cols-[0.625rem_minmax(0,1fr)]');
     expect(within(row).queryByTestId('activity-terminal-marker')).not.toBeInTheDocument();
     expect(divider.className).toContain('gap-2');

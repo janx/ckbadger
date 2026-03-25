@@ -12,6 +12,8 @@ import { formatCkbAmount, truncateHash, cn } from '@/lib/utils';
 import { formatTokenBalance } from '@/lib/format-asset';
 import type {
   Activity,
+  GlobalActivity,
+  ParticipantInfo,
   ItemDelta,
   ActivityTypeCall,
   ActivityLockCall,
@@ -145,7 +147,7 @@ export function LockCallBadge({ lc }: { lc: ActivityLockCall }) {
 // EventParts — badge (left) and value (right) as separate elements
 // ---------------------------------------------------------------------------
 
-interface EventParts {
+export interface EventParts {
   badge: React.ReactNode;
   value: React.ReactNode;
 }
@@ -242,9 +244,7 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
       };
     case 'withdraw_request':
       return {
-        badge: (
-          <span className="text-gold font-mono text-xs">{'\u25C6'} DAO Withdraw Request</span>
-        ),
+        badge: <span className="text-gold font-mono text-xs">{'\u25C6'} DAO Withdraw Request</span>,
         value: (
           <span className="text-gold font-mono text-xs tabular-nums">
             {capacity ? formatCkbAmount(capacity).full : '0'} CKB
@@ -352,9 +352,19 @@ function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {
   };
 }
 
-function getCkbEventParts(delta: string, isCellbase: boolean): EventParts {
+/**
+ * CKB event parts.
+ * - "Coinbase" for cellbase transactions
+ * - "CKB Transfer" when this is the primary action (no L2/L3 events)
+ * - "CKB" when the CKB change is just a position side-effect of L2/L3 (fee + capacity)
+ */
+function getCkbEventParts(
+  delta: string,
+  isCellbase: boolean,
+  isPrimaryAction: boolean
+): EventParts {
   const icon = isCellbase ? '\u2605' : '\u2197';
-  const label = isCellbase ? 'Coinbase' : 'CKB Transfer';
+  const label = isCellbase ? 'Coinbase' : isPrimaryAction ? 'CKB Transfer' : 'CKB';
   const colorClass = isCellbase ? 'text-gold' : 'text-jade';
 
   return {
@@ -408,7 +418,10 @@ export function ActivityEventGroup({
     if (decodedProtocol && protocolNames.has(decodedProtocol)) return;
     events.push(getLockEventParts(lc));
   });
-  events.push(getCkbEventParts(activity.ckbDelta, activity.isCellbase));
+  // CKB is "Transfer" only when there are no L2/L3 events — otherwise it's
+  // just the position side-effect (capacity change + fee).
+  const isPrimaryCkb = events.length === 0;
+  events.push(getCkbEventParts(activity.ckbDelta, activity.isCellbase, isPrimaryCkb));
 
   const txLink = `/tx/${activity.txHash}`;
   const blockLink = `/blocks/${activity.blockNumber}`;
@@ -491,4 +504,125 @@ export function ActivityEventGroup({
       ))}
     </>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Global activity helpers — tx-centric layered view for multi-participant
+// ---------------------------------------------------------------------------
+
+function formatAddress(address: string): string {
+  if (address.startsWith('ckb1') || address.startsWith('ckt1')) {
+    return `${address.slice(0, 8)}...${address.slice(-6)}`;
+  }
+  return truncateHash(address);
+}
+
+/** Inline item delta: compact signed amount + label, for participant summary lines. */
+function InlineItemDelta({ item }: { item: ItemDelta }) {
+  switch (item.kind) {
+    case 'token': {
+      const delta = BigInt(item.delta);
+      const prefix = delta > BigInt(0) ? '+' : delta < BigInt(0) ? '-' : '';
+      const absDelta = item.delta.startsWith('-') ? item.delta.slice(1) : item.delta;
+      const formatted = formatTokenBalance(absDelta, item.decimals ?? 0);
+      const label = item.symbol?.trim() || truncateHash(item.typeScriptHash, 8, 6);
+      const color =
+        delta > BigInt(0) ? 'text-positive' : delta < BigInt(0) ? 'text-negative' : 'text-text-dim';
+      return (
+        <Link
+          href={getTokenDetailHref(item.typeScriptHash)}
+          className={cn('font-mono text-xs tabular-nums hover:underline', color)}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {prefix}
+          {formatted} {label}
+        </Link>
+      );
+    }
+    case 'object': {
+      const prefix = item.delta > 0 ? '+' : '';
+      return (
+        <Link
+          href={getObjectDetailHref(item.objectId)}
+          className="text-lavender/80 hover:text-lavender font-mono text-xs transition-colors"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {prefix}
+          {item.delta} {truncateHash(item.objectId, 8, 6)}
+        </Link>
+      );
+    }
+    case 'identity': {
+      const prefix = item.delta > 0 ? '+' : '';
+      return (
+        <Link
+          href={getIdentityItemDetailHref('identity', item.identityId)}
+          className="text-aqua/80 hover:text-aqua font-mono text-xs transition-colors"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {prefix}
+          {item.delta} {truncateHash(item.identityId, 8, 6)}
+        </Link>
+      );
+    }
+  }
+}
+
+/** Single participant line: address + CKB delta + item deltas (L1 + L2). */
+export function ParticipantLine({ participant }: { participant: ParticipantInfo }) {
+  const showCkb = participant.ckbDelta !== '0';
+  const addr = participant.address;
+  const isCkbAddr = addr.startsWith('ckb1') || addr.startsWith('ckt1');
+
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <Link
+        href={`/address/${addr}`}
+        className={cn(
+          'shrink-0 font-mono text-xs transition-colors',
+          isCkbAddr ? 'text-jade/80 hover:text-jade' : 'text-text-dim hover:text-aqua'
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {formatAddress(addr)}
+      </Link>
+      <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-0.5">
+        {showCkb && <CkbDelta delta={participant.ckbDelta} />}
+        {participant.itemDeltas.map((item, i) => (
+          <InlineItemDelta key={i} item={item} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Build tx-level event rows for a GlobalActivity.
+ * Returns L3 protocol actions + L2 catch-all type/lock calls.
+ * Per-participant data should be rendered separately via ParticipantLine.
+ */
+export function buildGlobalTxEvents(activity: GlobalActivity): EventParts[] {
+  const events: EventParts[] = [];
+
+  // Layer 3: Protocol actions
+  for (const pa of activity.protocolActions) {
+    events.push(getProtocolActionEventParts(pa));
+  }
+
+  // Layer 2 catch-all: Type calls
+  for (const tc of activity.typeCalls) {
+    events.push(getTypeEventParts(tc));
+  }
+
+  // Layer 2 catch-all: Lock calls (skip those already covered by protocol actions)
+  const protocolNames = new Set(
+    activity.protocolActions.map((pa: ActivityProtocolAction) => pa.protocol)
+  );
+  for (const lc of activity.lockCalls) {
+    const decoded = lc.decoded?.protocol as string | undefined;
+    if (decoded && protocolNames.has(decoded)) continue;
+    events.push(getLockEventParts(lc));
+  }
+
+  return events;
 }
