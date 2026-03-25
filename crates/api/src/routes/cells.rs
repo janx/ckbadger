@@ -88,9 +88,9 @@ fn format_script_code_hash_label(code_hash: &[u8]) -> String {
     format!("script:0x{}...{}", prefix, suffix)
 }
 
-struct DepGroupParseResult {
-    is_dep_group: bool,
-    items: Option<Vec<DepGroupItem>>,
+pub(crate) struct DepGroupParseResult {
+    pub(crate) is_dep_group: bool,
+    pub(crate) items: Option<Vec<DepGroupItem>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -132,7 +132,7 @@ pub struct CellDataAnalysis {
     pub heuristic_guesses: Vec<CellDataGuess>,
 }
 
-fn parse_dep_group(data: &[u8], data_size: i32) -> DepGroupParseResult {
+pub(crate) fn parse_dep_group(data: &[u8], data_size: i32) -> DepGroupParseResult {
     let full_size = data_size as usize;
 
     // OutPointVec format: 4 bytes count + N * 36 bytes OutPoints
@@ -1435,7 +1435,7 @@ pub struct CellResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DepGroupItem {
+pub(crate) struct DepGroupItem {
     pub tx_hash: String,
     pub output_index: u32,
 }

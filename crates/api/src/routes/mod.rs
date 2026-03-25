@@ -1,7 +1,7 @@
 pub(crate) mod activities;
 pub mod assets;
 mod blocks;
-mod cells;
+pub(crate) mod cells;
 mod dao;
 mod fiber;
 mod forks;
