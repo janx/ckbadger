@@ -369,9 +369,6 @@ pub struct BulkBuildProgressData {
     /// Controller EMA: cells per block (density).
     #[serde(default)]
     pub controller_density_ema: Option<f64>,
-    /// Controller EMA: immutable memtable count (memory pressure indicator).
-    #[serde(default)]
-    pub controller_imm_ema: Option<f64>,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {
@@ -943,7 +940,6 @@ mod tests {
             controller_bg_jobs: Some(6),
             controller_flush_fill_ema: Some(0.35),
             controller_density_ema: Some(4.7),
-            controller_imm_ema: Some(2.5),
         };
 
         let json = serde_json::to_string(&bb).unwrap();
