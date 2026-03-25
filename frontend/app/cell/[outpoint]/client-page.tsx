@@ -199,8 +199,8 @@ export default function CellDetailPage() {
     return Array.from(hashes);
   }, [cell]);
   const { data: scriptLookup } = useQuery({
-    queryKey: ['scriptLookup', codeHashes],
-    queryFn: () => api.lookupScripts(codeHashes),
+    queryKey: ['scriptLookup', codeHashes, txHash],
+    queryFn: () => api.lookupScripts(codeHashes, txHash),
     enabled: codeHashes.length > 0,
     staleTime: Infinity,
   });
