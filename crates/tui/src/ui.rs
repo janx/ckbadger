@@ -128,6 +128,7 @@ pub struct App {
     build_cpu_ms_history: VecDeque<f64>,
     fetch_wait_ms_history: VecDeque<f64>,
     flush_wait_ms_history: VecDeque<f64>,
+    density_history: VecDeque<f64>,
     l0_files_history: VecDeque<f64>,
     last_overlap_batch_count: u64,
     show_build_subphases: bool,
@@ -190,6 +191,7 @@ impl App {
             build_cpu_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             fetch_wait_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             flush_wait_ms_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
+            density_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             l0_files_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             last_overlap_batch_count: 0,
             show_build_subphases: false,
@@ -430,6 +432,10 @@ impl App {
                 push_history_sample(&mut self.build_cpu_ms_history, build_ms);
                 push_history_sample(&mut self.fetch_wait_ms_history, prefetch_recv_ms);
                 push_history_sample(&mut self.flush_wait_ms_history, flush_wait_ms);
+                push_history_sample(
+                    &mut self.density_history,
+                    bb.controller_density_ema.unwrap_or(0.0),
+                );
                 self.last_overlap_batch_count = batch_count;
             }
         }
@@ -2350,6 +2356,12 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
         spark_width,
         BUDGET_FLUSH_WAIT_COLOR,
     ));
+    lines.push(budget_sparkline_line(
+        "Den",
+        &app.density_history,
+        spark_width,
+        CYAN,
+    ));
 
     f.render_widget(Paragraph::new(lines), area);
 }
@@ -2498,6 +2510,11 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string());
 
+    let density_text = bb
+        .controller_density_ema
+        .map(|v| format!("{v:.1}"))
+        .unwrap_or_else(|| "-".to_string());
+
     if dense {
         // Compact: 2 lines (fits ~22 char inner width)
         vec![
@@ -2514,8 +2531,11 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
             Line::from(vec![
                 Span::styled("span ", Style::default().fg(SLATE_500)),
                 Span::styled(span_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  pre ", Style::default().fg(SLATE_500)),
-                Span::styled(prefetch_text, Style::default().fg(FOREGROUND)),
+                Span::styled("  den ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format!("{density_text} c/b"),
+                    Style::default().fg(FOREGROUND),
+                ),
                 Span::styled("  thr ", Style::default().fg(SLATE_500)),
                 Span::styled(threads_text, Style::default().fg(FOREGROUND)),
             ]),
@@ -2558,18 +2578,23 @@ fn controller_panel_lines(bb: &BulkBuildProgressData, dense: bool) -> Vec<Line<'
                     }),
                 ),
             ]),
-            // Line 3: span + prefetch
+            // Line 3: span + density
             Line::from(vec![
                 Span::styled("span ", Style::default().fg(SLATE_500)),
                 Span::styled(span_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  prefetch ", Style::default().fg(SLATE_500)),
-                Span::styled(prefetch_text, Style::default().fg(FOREGROUND)),
+                Span::styled("  density ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format!("{density_text} c/b"),
+                    Style::default().fg(FOREGROUND),
+                ),
             ]),
-            // Line 5: threads + bg_jobs
+            // Line 4: prefetch + threads + bg_jobs
             Line::from(vec![
-                Span::styled("threads ", Style::default().fg(SLATE_500)),
+                Span::styled("prefetch ", Style::default().fg(SLATE_500)),
+                Span::styled(prefetch_text, Style::default().fg(FOREGROUND)),
+                Span::styled("  thr ", Style::default().fg(SLATE_500)),
                 Span::styled(threads_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  bg_jobs ", Style::default().fg(SLATE_500)),
+                Span::styled("  bg ", Style::default().fg(SLATE_500)),
                 Span::styled(bg_text, Style::default().fg(FOREGROUND)),
             ]),
         ]
@@ -2740,29 +2765,33 @@ fn build_batch_left_column(
         }
     }
 
-    let cells_created = bb
-        .cells_created
-        .map(|v| format!("+{}", format_num_u64(v)))
-        .unwrap_or_else(|| "-".to_string());
-    let cells_consumed = bb
-        .cells_consumed
-        .map(|v| format!("-{}", format_num_u64(v)))
-        .unwrap_or_else(|| "-".to_string());
-    let density_text = bb
-        .tx_density
-        .map(|v| format!("{v:.1}"))
-        .unwrap_or_else(|| "-".to_string());
+    let cells_created = bb.cells_created.unwrap_or(0);
+    let cells_consumed = bb.cells_consumed.unwrap_or(0);
+    let total_cells = cells_created + cells_consumed;
+    let cells_per_sec_text = {
+        let iteration_ms = bb.build_ms.unwrap_or(0.0)
+            + bb.prefetch_recv_ms.unwrap_or(0.0)
+            + bb.flush_wait_ms.unwrap_or(0.0);
+        if iteration_ms > 0.0 && total_cells > 0 {
+            let cps = total_cells as f64 / (iteration_ms / 1000.0);
+            format!("{}k/s", (cps / 1000.0) as u64)
+        } else {
+            "-".to_string()
+        }
+    };
     left.push(Line::from(vec![
         Span::styled("Volume ", Style::default().fg(SLATE_500)),
-        Span::styled("Cells ", Style::default().fg(SLATE_500)),
-        Span::styled(cells_created, Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" ", Style::default()),
-        Span::styled(cells_consumed, Style::default().fg(AMBER)),
-        Span::styled("  Density ", Style::default().fg(SLATE_500)),
         Span::styled(
-            format!("{} tx/blk", density_text),
-            Style::default().fg(FOREGROUND),
+            format!("+{}k", cells_created / 1000),
+            Style::default().fg(TERMINAL_GREEN),
         ),
+        Span::styled(" ", Style::default()),
+        Span::styled(
+            format!("-{}k", cells_consumed / 1000),
+            Style::default().fg(AMBER),
+        ),
+        Span::styled(" cells  ", Style::default().fg(SLATE_500)),
+        Span::styled(cells_per_sec_text, Style::default().fg(FOREGROUND)),
     ]));
 
     left
