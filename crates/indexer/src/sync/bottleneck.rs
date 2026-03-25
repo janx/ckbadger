@@ -23,8 +23,8 @@
 const EMA_ALPHA: f64 = 0.5;
 
 // Batch span bounds (blocks)
-pub(crate) const MIN_SPAN: u64 = 10_000;
-pub(crate) const MAX_SPAN: u64 = 300_000;
+pub(crate) const MIN_SPAN: u64 = 500;
+pub(crate) const MAX_SPAN: u64 = 500_000;
 
 // Channel depth bounds (batches).  Max is computed from system RAM at
 // startup to cap total buffered data.  Each slot holds one batch of raw
