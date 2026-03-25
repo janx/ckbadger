@@ -225,7 +225,7 @@ describe('SporeDetailPage', () => {
       ...mockSpore,
       mediaProfile: {
         tier: 'btc_ckb',
-        hasRenderableImage: true,
+
         issues: [],
         sources: [],
       },
@@ -243,7 +243,7 @@ describe('SporeDetailPage', () => {
       ...mockSpore,
       mediaProfile: {
         tier: 'btc_ckb',
-        hasRenderableImage: true,
+
         issues: [],
         sources: [
           {

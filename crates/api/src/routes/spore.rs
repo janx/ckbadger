@@ -221,7 +221,6 @@ pub struct SporeMediaSourceResponse {
 pub struct SporeMediaProfileResponse {
     pub tier: String,
     pub sources: Vec<SporeMediaSourceResponse>,
-    pub has_renderable_image: bool,
     pub issues: Vec<String>,
 }
 
@@ -323,7 +322,6 @@ fn spore_to_response(
                         dependency_tier: source.dependency_tier.as_str().to_string(),
                     })
                     .collect(),
-                has_renderable_image: media_profile.has_renderable_image,
                 issues: media_profile.issues.clone(),
             }),
         ),

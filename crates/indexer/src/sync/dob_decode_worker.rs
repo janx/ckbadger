@@ -27,7 +27,7 @@ use ckbadger_store::CkbadgerStore;
 use crate::media_store::{sniff_media_type, MediaBlobStore};
 
 use crate::parser::media_source::{
-    extract_uri_sources, parse_dna_hex_from_content_text, resolve_tier, uri_seems_image,
+    extract_uri_sources, parse_dna_hex_from_content_text, resolve_tier,
 };
 use crate::parser::spore::SporeParser;
 use crate::rpc::{parse_hex_to_bytes, CkbRpcClient};
@@ -204,16 +204,9 @@ impl DobDecodeWorker {
             // stale media_profile (list_undecoded_dob_spores would never retry).
             let mut batch_committed: u64 = 0;
             for (spore_id, entry) in &decoded_results {
-                let has_renderable_image = entry
-                    .media
-                    .iter()
-                    .any(|m| m.media_type.starts_with("image/"));
-                if !entry.media_sources.is_empty() || has_renderable_image {
-                    if let Err(e) = self.update_spore_media_profile(
-                        spore_id,
-                        &entry.media_sources,
-                        has_renderable_image,
-                    ) {
+                if !entry.media_sources.is_empty() {
+                    if let Err(e) = self.update_spore_media_profile(spore_id, &entry.media_sources)
+                    {
                         warn!(
                             spore_id = hex::encode(spore_id),
                             error = %e,
@@ -285,7 +278,6 @@ impl DobDecodeWorker {
         &self,
         spore_id: &[u8],
         new_sources: &[SporeMediaSource],
-        has_renderable_image: bool,
     ) -> Result<()> {
         let mut entry = self.store.get_spore(spore_id)?.with_context(|| {
             format!(
@@ -301,9 +293,6 @@ impl DobDecodeWorker {
         {
             let old_tier = media_profile.tier;
             merge_media_sources(media_profile, new_sources);
-            if has_renderable_image {
-                media_profile.has_renderable_image = true;
-            }
             (old_tier, media_profile.tier)
         } else {
             // Not a spore entry — this shouldn't happen since we only decode DOB spores,
@@ -897,11 +886,6 @@ fn merge_media_sources(profile: &mut SporeMediaProfile, new_sources: &[SporeMedi
     if added {
         // Recalculate tier from merged sources
         profile.tier = resolve_tier(&profile.sources);
-
-        // Update has_renderable_image if any new source looks like an image
-        if !profile.has_renderable_image {
-            profile.has_renderable_image = profile.sources.iter().any(|s| uri_seems_image(&s.uri));
-        }
     }
 }
 
@@ -1153,7 +1137,7 @@ mod tests {
                 source_location: "payload_text".to_string(),
                 dependency_tier: ckbadger_store::types::CompositionTier::DecentralizedMixture,
             }],
-            has_renderable_image: false,
+
             issues: vec![],
         };
         let new_sources = vec![
@@ -1180,7 +1164,7 @@ mod tests {
         let mut profile = SporeMediaProfile {
             tier: ckbadger_store::types::CompositionTier::PureCkb,
             sources: vec![],
-            has_renderable_image: false,
+
             issues: vec![],
         };
         let new_sources = vec![SporeMediaSource {
@@ -1194,7 +1178,6 @@ mod tests {
             profile.tier,
             ckbadger_store::types::CompositionTier::CentralizedMixture
         );
-        assert!(profile.has_renderable_image); // .png extension
     }
 
     #[test]
@@ -1237,7 +1220,7 @@ mod tests {
                         source_location: "payload_text".to_string(),
                         dependency_tier: ckbadger_store::types::CompositionTier::PureCkb,
                     }],
-                    has_renderable_image: false,
+
                     issues: vec![],
                 },
             },
@@ -1265,7 +1248,7 @@ mod tests {
         }];
 
         worker
-            .update_spore_media_profile(&spore_id, &new_sources, false)
+            .update_spore_media_profile(&spore_id, &new_sources)
             .unwrap();
 
         let updated_spore = store.get_spore(&spore_id).unwrap().unwrap();
@@ -1284,65 +1267,6 @@ mod tests {
         assert_eq!(updated_agg.btc_ckb_count, 1);
         assert_eq!(updated_agg.live_count, 1);
         assert_eq!(updated_agg.total_count, 1);
-    }
-
-    #[test]
-    fn test_update_spore_media_profile_marks_renderable_without_new_uris() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-        let cache_dir = dir.path().join("decoder-cache");
-        let decoder_cache = Arc::new(DecoderBinaryCache::new(&cache_dir).unwrap());
-        let media_dir = dir.path().join("media");
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let worker = DobDecodeWorker::new(
-            store.clone(),
-            store.clone(),
-            decoder_cache,
-            media_dir,
-            "http://localhost:9999".to_string(),
-            shutdown,
-        );
-
-        let spore_id = [0x77u8; 32];
-        let spore_entry = ckbadger_store::types::ObjectEntry {
-            standard: ckbadger_store::types::ObjectStandard::Spore,
-            collection_id: None,
-            token_id: None,
-            owner_lock_hash: Some(vec![0x33; 32]),
-            name: None,
-            description: None,
-            is_live: true,
-            created_at_block: 42,
-            created_at_tx: vec![0x44; 32],
-            extra: ckbadger_store::types::ObjectExtra::Spore {
-                content_type: "dob/1".to_string(),
-                content_length: 3,
-                media_profile: SporeMediaProfile {
-                    tier: ckbadger_store::types::CompositionTier::PureCkb,
-                    sources: vec![],
-                    has_renderable_image: false,
-                    issues: vec![],
-                },
-            },
-        };
-        store.put_spore_direct(&spore_id, &spore_entry).unwrap();
-
-        worker
-            .update_spore_media_profile(&spore_id, &[], true)
-            .unwrap();
-
-        let updated_spore = store.get_spore(&spore_id).unwrap().unwrap();
-        match updated_spore.extra {
-            ObjectExtra::Spore { media_profile, .. } => {
-                assert!(media_profile.has_renderable_image);
-                assert!(media_profile.sources.is_empty());
-                assert_eq!(
-                    media_profile.tier,
-                    ckbadger_store::types::CompositionTier::PureCkb
-                );
-            }
-            other => panic!("expected spore extra, got {other:?}"),
-        }
     }
 
     #[test]

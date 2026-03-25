@@ -1002,7 +1002,6 @@ mod tests {
                 media_profile: SporeMediaProfile {
                     tier: CompositionTier::PureCkb,
                     sources: Vec::new(),
-                    has_renderable_image: false,
                     issues: Vec::new(),
                 },
             },

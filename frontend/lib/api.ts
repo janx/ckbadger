@@ -994,7 +994,6 @@ interface SporeNft {
         | 'centralized_mixture'
         | 'unknown';
     }>;
-    hasRenderableImage: boolean;
     issues: string[];
   } | null;
 }

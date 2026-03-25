@@ -34,19 +34,10 @@ pub fn analyze_spore_media_profile(
     let mut sources = Vec::new();
     let mut issues = Vec::new();
 
-    let mut has_renderable_image =
-        normalized_type.starts_with("image/") || normalized_type.contains("svg");
-
     // Extract IPFS/Arweave CIDs embedded in content type parameters (e.g. "ipfs/image;ipfs=QmHash")
     // Use original content_type (not lowercased) to preserve case-sensitive CIDs
     if let Some(mut ct_sources) = extract_content_type_external_refs(content_type.trim()) {
-        let ct_has_image = ct_sources
-            .iter()
-            .any(|s| normalized_type.contains("image") || uri_seems_image(&s.uri));
         sources.append(&mut ct_sources);
-        if ct_has_image {
-            has_renderable_image = true;
-        }
     }
 
     if is_text_like_content_type(&normalized_type) {
@@ -54,20 +45,14 @@ pub fn analyze_spore_media_profile(
             Ok(text) => {
                 if normalized_type.starts_with("dob/") {
                     if !skip_dob_decode {
-                        let (mut dob_sources, dob_rendered) =
+                        let (mut dob_sources, _dob_rendered) =
                             extract_dob_media_sources(&text, cluster_description, &mut issues);
                         sources.append(&mut dob_sources);
-                        if dob_rendered {
-                            has_renderable_image = true;
-                        }
                     }
                     // When skipped, DOB media sources will be backfilled
                     // by the background DOB decode worker after sync.
                 } else {
                     extract_uri_sources(&text, "payload_text", &mut sources);
-                    if text.to_ascii_lowercase().contains("<svg") {
-                        has_renderable_image = true;
-                    }
                 }
             }
             Err(err) => {
@@ -87,23 +72,16 @@ pub fn analyze_spore_media_profile(
                     source_location: "payload_cid".to_string(),
                     dependency_tier: CompositionTier::DecentralizedMixture,
                 });
-                if normalized_type.contains("image") {
-                    has_renderable_image = true;
-                }
             }
         }
     }
 
     dedupe_and_limit_sources(&mut sources, MAX_MEDIA_SOURCES);
-    if !has_renderable_image {
-        has_renderable_image = sources.iter().any(|source| uri_seems_image(&source.uri));
-    }
 
     let tier = resolve_tier(&sources);
     SporeMediaProfile {
         tier,
         sources,
-        has_renderable_image,
         issues,
     }
 }
@@ -800,7 +778,6 @@ mod tests {
             false,
         );
         assert_eq!(profile.tier, CompositionTier::BtcCkb);
-        assert!(profile.has_renderable_image);
         assert!(profile.sources.iter().any(|s| s.scheme == "btcfs"));
     }
 
@@ -870,7 +847,6 @@ mod tests {
             false,
         );
         assert_eq!(profile.tier, CompositionTier::DecentralizedMixture);
-        assert!(profile.has_renderable_image);
         assert!(profile.sources.iter().any(|s| s.scheme == "ipfs"
             && s.uri
                 .contains("QmTndjp4f6Z9vnM59AgYGHjep841FVE98EXEeWvWjETmSL")));
@@ -886,7 +862,6 @@ mod tests {
         );
         // Has IPFS source so tier is DecentralizedMixture (even though binary is on-chain)
         assert_eq!(profile.tier, CompositionTier::DecentralizedMixture);
-        assert!(profile.has_renderable_image);
         assert!(profile.sources.iter().any(|s| s.scheme == "ipfs"
             && s.uri
                 .contains("QmcT5YhBVpqHLGUwPkAtfmhsPUUxsXEihQXdFGDfTjUEeE")));

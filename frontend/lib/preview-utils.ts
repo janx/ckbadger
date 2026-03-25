@@ -64,12 +64,12 @@ export function detectPreview(
   contentBytes: Uint8Array | undefined,
   dobMedia: Array<{ mediaType: string; url: string; step: number | null }> | undefined
 ): PreviewKind {
-  // DOB decoded media — find final product (highest step)
+  // DOB decoded media — prefer image media (the renderable artifact)
   if (dobMedia && dobMedia.length > 0) {
-    const sorted = [...dobMedia].sort((a, b) => (b.step ?? 0) - (a.step ?? 0));
-    const primary = sorted[0];
-    if (primary.mediaType.startsWith('image/')) {
-      return { type: 'media-url', url: primary.url, mediaType: primary.mediaType };
+    const imageMedia = dobMedia.filter((m) => m.mediaType.startsWith('image/'));
+    if (imageMedia.length > 0) {
+      const sorted = [...imageMedia].sort((a, b) => (b.step ?? 0) - (a.step ?? 0));
+      return { type: 'media-url', url: sorted[0].url, mediaType: sorted[0].mediaType };
     }
   }
 

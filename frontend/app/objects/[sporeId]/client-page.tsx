@@ -1322,7 +1322,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
             <TerminalPanelContent>
               <div className="space-y-4">
                 {/* On-chain composition */}
-                {(preview || spore.mediaProfile.hasRenderableImage) && (
+                {(preview || spore.mediaProfile.tier !== 'unknown') && (
                   <div>
                     <div className="text-text-dim mb-2 font-mono text-[10px] uppercase tracking-wider">
                       On-Chain
@@ -1419,7 +1419,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                 )}
                 {/* No media at all */}
                 {!preview &&
-                  !spore.mediaProfile.hasRenderableImage &&
+                  spore.mediaProfile.tier === 'unknown' &&
                   !spore.mediaProfile.sources.length && (
                     <div className="text-text-dim text-xs">No media compositions detected.</div>
                   )}

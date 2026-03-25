@@ -371,8 +371,6 @@ pub struct SporeMediaProfile {
     #[serde(default)]
     pub sources: Vec<SporeMediaSource>,
     #[serde(default)]
-    pub has_renderable_image: bool,
-    #[serde(default)]
     pub issues: Vec<String>,
 }
 

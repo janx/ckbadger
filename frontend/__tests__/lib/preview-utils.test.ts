@@ -52,6 +52,27 @@ describe('detectPreview', () => {
       });
     });
 
+    it('picks image media over non-image media at higher step', () => {
+      const media = [
+        { mediaType: 'application/json', url: '/api/v1/spore/objects/0x1/media/json', step: 1 },
+        { mediaType: 'image/svg+xml', url: '/api/v1/spore/objects/0x1/render', step: null },
+      ];
+      const result = detectPreview('dob/1', undefined, media);
+      expect(result).toEqual({
+        type: 'media-url',
+        url: '/api/v1/spore/objects/0x1/render',
+        mediaType: 'image/svg+xml',
+      });
+    });
+
+    it('returns null when dobMedia has no image entries', () => {
+      const media = [
+        { mediaType: 'application/json', url: '/api/v1/spore/objects/0x1/media/json', step: 1 },
+      ];
+      const result = detectPreview('dob/1', undefined, media);
+      expect(result).toBeNull();
+    });
+
     it('returns null when dobMedia is empty array', () => {
       const result = detectPreview('dob/0', undefined, []);
       expect(result).toBeNull();

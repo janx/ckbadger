@@ -360,7 +360,6 @@ export const handlers = [
       mediaProfile: {
         tier: 'pure_ckb',
         sources: [],
-        hasRenderableImage: true,
         issues: [],
       },
     });
