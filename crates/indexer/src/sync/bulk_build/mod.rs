@@ -135,6 +135,7 @@ impl BulkBuildEngine {
             max_fetch_threads,
             mem_profile.max_background_jobs,
             mem_profile.system_ram_bytes,
+            mem_profile.moderate_immutable_memtables,
         );
         let channel_depth = controller.channel_depth() as usize;
         let mut batch_block_span = controller.batch_span();
@@ -417,6 +418,7 @@ impl BulkBuildEngine {
                 flush_channel_capacity: controller.channel_depth(),
                 cell_count: batch_cell_count,
                 block_count: batch_stats.block_count,
+                imm_memtables: snap.imm_memtables,
             }) {
                 batch_block_span = output.batch_span;
                 prefetch.update_span(batch_block_span);
@@ -443,6 +445,7 @@ impl BulkBuildEngine {
                     wait_ema = format!("{:.1}", output.wait_ema),
                     l0_ema = format!("{:.1}", output.l0_ema),
                     density_ema = format!("{:.1}", output.density_ema),
+                    imm_ema = format!("{:.1}", output.imm_ema),
                     "Bottleneck controller adjusted"
                 );
 
@@ -457,6 +460,7 @@ impl BulkBuildEngine {
                     output.bg_jobs,
                     output.flush_fill_ema,
                     output.density_ema,
+                    output.imm_ema,
                 );
             }
 

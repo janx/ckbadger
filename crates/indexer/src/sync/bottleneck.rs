@@ -57,6 +57,14 @@ const FLUSH_L0_THRESHOLD: f64 = 40.0;
 // channel is completely full).
 const FLUSH_CHANNEL_FILL_THRESHOLD: f64 = 0.75;
 
+// Immutable memtable ratio thresholds.  When imm_memtables exceeds
+// moderate_threshold, memtable flushes can't keep up with writes — the
+// process is accumulating memory that will never be reclaimed until
+// flush completes.  This is the leading indicator of OOM: the flush
+// channel may have room (no flush_wait) but RocksDB is silently
+// piling up memtables in process RSS.
+const IMM_MEMTABLE_MODERATE_RATIO: f64 = 0.5;
+
 // Per-step span change safety bounds.  These limit how much batch_span
 // can change in a single iteration, preventing chaotic overshooting.
 // The actual step factor is derived from signal strength (dominance ratio),
@@ -113,6 +121,11 @@ pub(crate) struct BatchSignals {
     pub flush_channel_capacity: u64,
     pub cell_count: u64,
     pub block_count: u64,
+    /// Current number of immutable memtables across all column families.
+    /// This is a leading indicator of memory pressure: high values mean
+    /// RocksDB flushes can't keep up with writes, and process RSS is
+    /// growing uncontrollably.
+    pub imm_memtables: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +141,7 @@ pub(crate) struct ControllerOutput {
     pub l0_ema: f64,
     pub flush_fill_ema: f64,
     pub density_ema: f64,
+    pub imm_ema: f64,
 }
 
 #[derive(Debug)]
@@ -139,6 +153,7 @@ pub(crate) struct BottleneckController {
     l0_ema: f64,
     flush_fill_ema: f64,
     density_ema: f64,
+    imm_ema: f64,
 
     // Current outputs
     batch_span: u64,
@@ -152,6 +167,10 @@ pub(crate) struct BottleneckController {
     min_bg_jobs: i32,
     max_bg_jobs: i32,
 
+    // Immutable memtable threshold from MemoryProfile.  When imm_ema
+    // exceeds this, classify as Flush regardless of timing signals.
+    moderate_imm_threshold: u64,
+
     // State
     batch_count: u64,
     prev_bg_jobs: i32,
@@ -163,6 +182,7 @@ impl BottleneckController {
         max_fetch_threads: u32,
         max_bg_jobs: i32,
         system_ram_bytes: u64,
+        moderate_imm_threshold: u64,
     ) -> Self {
         let max_bg_jobs = max_bg_jobs.max(MIN_BG_JOBS);
         let min_bg_jobs = (max_bg_jobs / 4).max(MIN_BG_JOBS);
@@ -178,6 +198,7 @@ impl BottleneckController {
             l0_ema: 0.0,
             flush_fill_ema: 0.0,
             density_ema: 0.0,
+            imm_ema: 0.0,
 
             batch_span: initial_span.clamp(MIN_SPAN, MAX_SPAN),
             prefetch_ahead: initial_prefetch,
@@ -188,6 +209,7 @@ impl BottleneckController {
             max_fetch_threads,
             min_bg_jobs,
             max_bg_jobs,
+            moderate_imm_threshold,
 
             batch_count: 0,
             prev_bg_jobs: max_bg_jobs,
@@ -218,6 +240,9 @@ impl BottleneckController {
             0.0
         };
         self.flush_fill_ema = ema(self.flush_fill_ema, fill_ratio);
+
+        // Track immutable memtable pressure (0.0 = none, 1.0 = at threshold).
+        self.imm_ema = ema(self.imm_ema, signals.imm_memtables as f64);
 
         // Classify bottleneck.
         let bottleneck = self.classify();
@@ -317,6 +342,7 @@ impl BottleneckController {
             l0_ema: self.l0_ema,
             flush_fill_ema: self.flush_fill_ema,
             density_ema: self.density_ema,
+            imm_ema: self.imm_ema,
         })
     }
 
@@ -329,17 +355,33 @@ impl BottleneckController {
         let flush_pct = self.wait_ema / total;
         let fetch_pct = self.recv_ema / total;
 
+        // Immutable memtable pressure: when imm_ema exceeds the moderate
+        // threshold, RocksDB memtable flushes can't keep up with writes.
+        // This is a *leading* indicator of OOM — the flush channel may
+        // still have room (no flush_wait), but process RSS is growing
+        // because memtable memory cannot be reclaimed until flush I/O
+        // completes.  Classify as Flush to reduce batch_span and yield
+        // disk bandwidth to RocksDB flush/compaction.
+        let imm_stressed = if self.moderate_imm_threshold > 0 {
+            let imm_ratio = self.imm_ema / self.moderate_imm_threshold as f64;
+            imm_ratio > IMM_MEMTABLE_MODERATE_RATIO
+        } else {
+            false
+        };
+
         // Flush stressed when the flush channel shows actual backpressure:
         //  - flush_wait dominates batch time (channel was full, writer blocked)
         //  - flush channel filling up (consumer falling behind producer)
+        //  - immutable memtables accumulating (memory pressure, leading OOM indicator)
         //
         // L0 pileup alone does NOT trigger Flush classification.  High L0
         // with an empty flush channel means RocksDB compaction is slow but
         // the pipeline has no backpressure — suppressing fetch would starve
         // the pipeline for no reason.  Instead, L0 is handled separately
         // via proactive bg_jobs bumping in observe().
-        let flush_stressed =
-            flush_pct > FLUSH_PCT_THRESHOLD || self.flush_fill_ema > FLUSH_CHANNEL_FILL_THRESHOLD;
+        let flush_stressed = flush_pct > FLUSH_PCT_THRESHOLD
+            || self.flush_fill_ema > FLUSH_CHANNEL_FILL_THRESHOLD
+            || imm_stressed;
         if flush_stressed {
             return Bottleneck::Flush;
         }
@@ -417,6 +459,9 @@ mod tests {
 
     const GB: u64 = 1024 * 1024 * 1024;
 
+    /// Default moderate_imm_threshold for tests (matching 32GB profile).
+    const TEST_MODERATE_IMM: u64 = 30;
+
     fn healthy_signals() -> BatchSignals {
         BatchSignals {
             prefetch_recv_ms: 100.0,
@@ -427,19 +472,20 @@ mod tests {
             flush_channel_capacity: 8,
             cell_count: 50_000,
             block_count: 10_000,
+            imm_memtables: 0,
         }
     }
 
     #[test]
     fn first_batch_returns_none() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
         let output = ctrl.observe(&healthy_signals());
         assert!(output.is_none());
     }
 
     #[test]
     fn fetch_starved_grows_prefetch_and_span() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
         let initial_span = ctrl.batch_span;
         let initial_prefetch = ctrl.prefetch_ahead;
 
@@ -456,6 +502,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
 
@@ -466,7 +513,7 @@ mod tests {
 
     #[test]
     fn flush_pressure_shrinks_span_grows_bg_jobs() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
         ctrl.bg_jobs = 4;
         ctrl.prev_bg_jobs = 4;
         let initial_span = ctrl.batch_span;
@@ -484,6 +531,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
 
@@ -494,7 +542,7 @@ mod tests {
 
     #[test]
     fn build_bound_does_not_adjust_span() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
         let initial_span = ctrl.batch_span;
 
         ctrl.observe(&healthy_signals()); // warmup
@@ -510,6 +558,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
 
@@ -523,7 +572,7 @@ mod tests {
 
     #[test]
     fn build_bound_does_not_shrink_prefetch_or_fetch_threads() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
         let initial_prefetch = ctrl.prefetch_ahead;
         let initial_threads = ctrl.fetch_threads;
 
@@ -541,6 +590,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
 
@@ -561,7 +611,7 @@ mod tests {
 
     #[test]
     fn span_bounds_enforced() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -576,6 +626,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
 
@@ -584,7 +635,7 @@ mod tests {
 
     #[test]
     fn bg_jobs_bounds_enforced() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 4, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 4, 32 * GB, TEST_MODERATE_IMM);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -600,6 +651,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
         assert!(ctrl.bg_jobs >= MIN_BG_JOBS);
@@ -616,6 +668,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
         assert!(ctrl.bg_jobs <= 4);
@@ -623,7 +676,7 @@ mod tests {
 
     #[test]
     fn fetch_threads_stable_when_build_bound_grow_when_fetch_bound() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
         let initial = ctrl.fetch_threads;
 
         ctrl.observe(&healthy_signals()); // warmup
@@ -641,6 +694,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
         assert_eq!(
@@ -660,6 +714,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
         assert!(
@@ -683,6 +738,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
         assert!(
@@ -695,7 +751,7 @@ mod tests {
 
     #[test]
     fn l0_alone_does_not_trigger_flush_but_bumps_bg_jobs() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
         ctrl.bg_jobs = 6;
         ctrl.prev_bg_jobs = 6;
 
@@ -715,6 +771,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
 
@@ -732,7 +789,7 @@ mod tests {
 
     #[test]
     fn l0_with_channel_pressure_triggers_flush() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -748,6 +805,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
 
@@ -756,7 +814,7 @@ mod tests {
 
     #[test]
     fn flush_channel_fill_triggers_flush() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -773,6 +831,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
 
@@ -781,7 +840,7 @@ mod tests {
 
     #[test]
     fn empty_flush_channel_does_not_trigger_flush() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -797,6 +856,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
 
@@ -805,7 +865,7 @@ mod tests {
 
     #[test]
     fn bg_jobs_if_changed_tracks_transitions() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
         assert!(ctrl.bg_jobs_if_changed().is_none());
 
         ctrl.bg_jobs = 6;
@@ -815,7 +875,7 @@ mod tests {
 
     #[test]
     fn prefetch_ahead_bounds() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
         // 32 GB → channel_depth = 4, initial prefetch = 4/2 = 2
         assert_eq!(ctrl.max_channel_depth, 4);
         assert_eq!(ctrl.prefetch_ahead, 2);
@@ -834,6 +894,7 @@ mod tests {
                 flush_channel_capacity: 8,
                 cell_count: 50_000,
                 block_count: 10_000,
+                imm_memtables: 0,
             });
         }
         assert_eq!(ctrl.prefetch_ahead, ctrl.max_channel_depth);
@@ -852,7 +913,7 @@ mod tests {
     #[test]
     fn span_step_scales_with_signal_strength() {
         // Mild fetch dominance → small growth step.
-        let mut mild = BottleneckController::new(100_000, 12, 8, 32 * GB);
+        let mut mild = BottleneckController::new(100_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
         mild.observe(&healthy_signals()); // warmup
         mild.observe(&BatchSignals {
             prefetch_recv_ms: 2600.0, // 52% of total → barely Fetch
@@ -863,11 +924,12 @@ mod tests {
             flush_channel_capacity: 8,
             cell_count: 50_000,
             block_count: 10_000,
+            imm_memtables: 0,
         });
         let mild_growth = mild.batch_span as f64 / 100_000.0;
 
         // Extreme fetch dominance → large growth step.
-        let mut extreme = BottleneckController::new(100_000, 12, 8, 32 * GB);
+        let mut extreme = BottleneckController::new(100_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
         extreme.observe(&healthy_signals()); // warmup
         extreme.observe(&BatchSignals {
             prefetch_recv_ms: 9000.0, // 90% of total → severely Fetch
@@ -878,6 +940,7 @@ mod tests {
             flush_channel_capacity: 8,
             cell_count: 50_000,
             block_count: 10_000,
+            imm_memtables: 0,
         });
         let extreme_growth = extreme.batch_span as f64 / 100_000.0;
 
@@ -889,7 +952,7 @@ mod tests {
         );
 
         // Similarly for flush: mild vs extreme shrink.
-        let mut mild_flush = BottleneckController::new(100_000, 12, 8, 32 * GB);
+        let mut mild_flush = BottleneckController::new(100_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
         mild_flush.observe(&healthy_signals()); // warmup
         mild_flush.observe(&BatchSignals {
             prefetch_recv_ms: 100.0,
@@ -900,10 +963,12 @@ mod tests {
             flush_channel_capacity: 8,
             cell_count: 50_000,
             block_count: 10_000,
+            imm_memtables: 0,
         });
         let mild_shrink = mild_flush.batch_span as f64 / 100_000.0;
 
-        let mut extreme_flush = BottleneckController::new(100_000, 12, 8, 32 * GB);
+        let mut extreme_flush =
+            BottleneckController::new(100_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
         extreme_flush.observe(&healthy_signals()); // warmup
         extreme_flush.observe(&BatchSignals {
             prefetch_recv_ms: 100.0,
@@ -914,6 +979,7 @@ mod tests {
             flush_channel_capacity: 8,
             cell_count: 50_000,
             block_count: 10_000,
+            imm_memtables: 0,
         });
         let extreme_shrink = extreme_flush.batch_span as f64 / 100_000.0;
 
@@ -927,7 +993,7 @@ mod tests {
 
     #[test]
     fn density_increase_shrinks_span() {
-        let mut ctrl = BottleneckController::new(100_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(100_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
 
         // Warmup with low density (5 cells/block).
         ctrl.observe(&BatchSignals {
@@ -939,6 +1005,7 @@ mod tests {
             flush_channel_capacity: 8,
             cell_count: 50_000,
             block_count: 10_000,
+            imm_memtables: 0,
         });
 
         // Second batch initializes density_ema, no correction yet.
@@ -951,6 +1018,7 @@ mod tests {
             flush_channel_capacity: 8,
             cell_count: 50_000,
             block_count: 10_000,
+            imm_memtables: 0,
         });
         assert!(output.is_some());
         assert!(
@@ -970,6 +1038,7 @@ mod tests {
             flush_channel_capacity: 8,
             cell_count: 500_000,
             block_count: 10_000,
+            imm_memtables: 0,
         });
         assert!(output.is_some());
         assert!(
@@ -982,7 +1051,7 @@ mod tests {
 
     #[test]
     fn density_decrease_grows_span() {
-        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(50_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
 
         // Warmup with high density (50 cells/block).
         ctrl.observe(&BatchSignals {
@@ -994,6 +1063,7 @@ mod tests {
             flush_channel_capacity: 8,
             cell_count: 500_000,
             block_count: 10_000,
+            imm_memtables: 0,
         });
 
         // Initialize density_ema.
@@ -1006,6 +1076,7 @@ mod tests {
             flush_channel_capacity: 8,
             cell_count: 500_000,
             block_count: 10_000,
+            imm_memtables: 0,
         });
         let span_before = ctrl.batch_span;
 
@@ -1019,6 +1090,7 @@ mod tests {
             flush_channel_capacity: 8,
             cell_count: 50_000,
             block_count: 10_000,
+            imm_memtables: 0,
         });
         assert!(
             ctrl.batch_span > span_before,
@@ -1030,7 +1102,7 @@ mod tests {
 
     #[test]
     fn stable_density_no_span_change() {
-        let mut ctrl = BottleneckController::new(100_000, 12, 8, 32 * GB);
+        let mut ctrl = BottleneckController::new(100_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
 
         // Warmup.
         ctrl.observe(&BatchSignals {
@@ -1042,6 +1114,7 @@ mod tests {
             flush_channel_capacity: 8,
             cell_count: 50_000,
             block_count: 10_000,
+            imm_memtables: 0,
         });
 
         // Initialize density_ema.
@@ -1054,6 +1127,7 @@ mod tests {
             flush_channel_capacity: 8,
             cell_count: 50_000,
             block_count: 10_000,
+            imm_memtables: 0,
         });
         let span_after_init = ctrl.batch_span;
 
@@ -1067,6 +1141,7 @@ mod tests {
             flush_channel_capacity: 8,
             cell_count: 50_000,
             block_count: 10_000,
+            imm_memtables: 0,
         });
         assert_eq!(
             ctrl.batch_span, span_after_init,
@@ -1082,5 +1157,105 @@ mod tests {
         }
         assert_eq!(Bottleneck::from_code(0), None);
         assert_eq!(Bottleneck::from_code(255), None);
+    }
+
+    #[test]
+    fn imm_memtable_pressure_triggers_flush_and_shrinks_span() {
+        let mut ctrl = BottleneckController::new(100_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
+        let initial_span = ctrl.batch_span;
+
+        ctrl.observe(&healthy_signals()); // warmup
+
+        // Simulate the OOM scenario: build-dominated timing (controller
+        // would normally hold span constant), but immutable memtables
+        // accumulating because flushes can't keep up with writes.
+        // moderate threshold = 30, 50% ratio → triggers at imm_ema > 15.
+        for _ in 0..10 {
+            ctrl.observe(&BatchSignals {
+                prefetch_recv_ms: 50.0, // low fetch (not fetch-bound)
+                build_ms: 5000.0,       // build-dominated timing
+                flush_wait_ms: 0.0,     // no flush_wait (channel has room)
+                l0_files: 5,
+                flush_channel_pending: 1, // channel not full
+                flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
+                imm_memtables: 20, // above moderate ratio (20 > 15)
+            });
+        }
+
+        // imm pressure should override build classification → Flush
+        assert_eq!(
+            ctrl.classify(),
+            Bottleneck::Flush,
+            "high imm_memtables should trigger Flush even when timing looks build-bound"
+        );
+        assert!(
+            ctrl.batch_span < initial_span,
+            "batch_span should shrink under imm pressure: {} vs initial {}",
+            ctrl.batch_span,
+            initial_span
+        );
+    }
+
+    #[test]
+    fn low_imm_memtables_does_not_trigger_flush() {
+        let mut ctrl = BottleneckController::new(100_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
+
+        ctrl.observe(&healthy_signals()); // warmup
+
+        // Low imm_memtables (well below moderate ratio) should not
+        // interfere with normal bottleneck classification.
+        for _ in 0..10 {
+            ctrl.observe(&BatchSignals {
+                prefetch_recv_ms: 5000.0,
+                build_ms: 1000.0,
+                flush_wait_ms: 0.0,
+                l0_files: 5,
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
+                imm_memtables: 2, // well below threshold
+            });
+        }
+
+        assert_eq!(
+            ctrl.classify(),
+            Bottleneck::Fetch,
+            "low imm_memtables should not override fetch classification"
+        );
+    }
+
+    #[test]
+    fn severe_imm_memtables_forces_aggressive_span_shrink() {
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB, TEST_MODERATE_IMM);
+
+        ctrl.observe(&healthy_signals()); // warmup
+
+        // Severe imm pressure (above 75% of threshold = 22.5) with
+        // build-dominated timing — without imm signal this would be
+        // Build-classified (span held constant).
+        for _ in 0..10 {
+            ctrl.observe(&BatchSignals {
+                prefetch_recv_ms: 50.0,
+                build_ms: 5000.0,
+                flush_wait_ms: 0.0,
+                l0_files: 5,
+                flush_channel_pending: 1,
+                flush_channel_capacity: 8,
+                cell_count: 50_000,
+                block_count: 10_000,
+                imm_memtables: 25, // severe (25/30 = 83%)
+            });
+        }
+
+        assert_eq!(ctrl.classify(), Bottleneck::Flush);
+        // Span should shrink significantly from 200k.
+        assert!(
+            ctrl.batch_span < 150_000,
+            "severe imm pressure should aggressively shrink span: {}",
+            ctrl.batch_span
+        );
     }
 }
