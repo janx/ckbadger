@@ -1,8 +1,8 @@
-# ckbadger-store Column Families (60 total: 59 domain + 1 append-only)
+# ckbadger-store Column Families (61 total: 60 domain + 1 append-only)
 
 ckbadger runs two logical RocksDB stores (both backed by `ckbadger-store`):
 
-- **Domain store** (`[store].domain_data_path`, 59 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
+- **Domain store** (`[store].domain_data_path`, 60 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 
 The indexer opens both stores read-write; the API opens both in secondary (read-only) mode. Cell reads are cross-store: live/consumed markers in domain, cell payloads in append-only.
@@ -64,8 +64,14 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `stats_object`                   | prefixed keys                                         | object rollups/indexes  | Object/mNFT daily + hourly + indexes                                                      |
 | `script_versions`                | version_hash                                          | ScriptVersionInfo       | Canonical script code version rows keyed by `H(script_code)`                              |
 | `script_versions_by_label`       | label_len + label_key + version_hash                  | empty                   | Label-to-version index for named script family lookups                                    |
+| `script_families`                | family_id (string)                                    | ScriptFamilyInfo        | Script family metadata (groups related script versions)                                   |
+| `script_versions_by_family`      | family_id + version_hash                              | empty                   | Script versions indexed by family                                                         |
+| `script_reference_info`          | reference_hash + hash_type (33B)                      | ScriptReferenceInfo     | Script reference aggregate stats (cell/capacity counts per lock/type)                     |
+| `script_reference_to_version`    | reference_hash + hash_type (33B)                      | version_hash            | Script reference to version mapping                                                       |
+| `script_family_by_name`          | family_name (string)                                  | family_id               | Reverse lookup: family name -> family ID                                                  |
 | `sync_meta`                      | fixed keys                                            | SyncStatus/ReorgEvent   | Sync progress, deep-fork, reorg metadata                                                  |
 | `dob_decoded`                    | spore_id (32B)                                        | DobDecodeResult (JSON)  | Cached CKB-VM DOB decode results (bulk-disabled, populated after sync catches up to tip)  |
+| `lock_scripts`                   | lock_hash (32B)                                       | LockScriptEntry         | Lock script components by hash (survives cell consumption for address resolution)         |
 
 ### Script Modeling Note
 
