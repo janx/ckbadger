@@ -339,6 +339,7 @@ impl BulkBuildEngine {
             // Publish bulk-build metrics to shared atomics for progress monitor -> TUI.
             // Must happen before record_bulk_sync_perf_batch_sample moves sample.
             let owner_mem_total: u64 = sample.owner_memory_bytes.values().sum();
+            indexer.bulk_build_perf.record_batch_bytes(batch_bytes);
             indexer.bulk_build_perf.record_disk_telemetry(
                 disk_state.as_deref(),
                 snap.disk_util_pct,
@@ -449,6 +450,7 @@ impl BulkBuildEngine {
                     output.l0_ema,
                     output.fetch_threads,
                     output.bg_jobs,
+                    output.target_batch_bytes,
                 );
             }
 
