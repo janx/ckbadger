@@ -40,6 +40,7 @@ use crate::sync::bulk_build::owners::BulkReducer;
 
 pub(crate) mod accounting;
 pub(crate) mod binary_facts;
+pub(crate) mod block_buffer;
 pub(crate) mod facts;
 pub(crate) mod interner;
 pub(crate) mod live_cells;
