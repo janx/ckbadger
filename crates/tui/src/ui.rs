@@ -2530,17 +2530,14 @@ fn controller_panel_lines(
     let build_ema = bb.controller_build_ema.unwrap_or(0.0);
     let wait_ema = bb.controller_wait_ema.unwrap_or(0.0);
     let l0_ema = bb.controller_l0_ema.unwrap_or(0.0);
-    let total_ema = recv_ema + build_ema + wait_ema;
+    let iteration_ms = recv_ema + build_ema + wait_ema;
+    let waste = recv_ema + wait_ema;
 
-    // Percentages
-    let (recv_pct, build_pct, flush_pct) = if total_ema > 1.0 {
-        (
-            recv_ema / total_ema * 100.0,
-            build_ema / total_ema * 100.0,
-            wait_ema / total_ema * 100.0,
-        )
+    // Waste composition (for I/O classification display)
+    let (recv_waste_pct, wait_waste_pct) = if waste > 1.0 {
+        (recv_ema / waste * 100.0, wait_ema / waste * 100.0)
     } else {
-        (0.0, 0.0, 0.0)
+        (0.0, 0.0)
     };
 
     // Bottleneck label + color
@@ -2570,29 +2567,17 @@ fn controller_panel_lines(
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string());
 
-    let imm_ema = bb.controller_imm_ema.unwrap_or(0.0);
+    // Iteration vs target text (shared by both modes)
+    let iter_color = if iteration_ms > 4000.0 {
+        ERROR_RED
+    } else if iteration_ms > 3000.0 {
+        AMBER
+    } else {
+        FOREGROUND
+    };
 
     if dense {
         // Compact: 2-3 lines
-        let mut knob_spans = vec![
-            Span::styled("span ", Style::default().fg(SLATE_500)),
-            Span::styled(span_text, Style::default().fg(FOREGROUND)),
-            Span::styled("  thr ", Style::default().fg(SLATE_500)),
-            Span::styled(threads_text, Style::default().fg(FOREGROUND)),
-            Span::styled("  bg ", Style::default().fg(SLATE_500)),
-            Span::styled(bg_text, Style::default().fg(FOREGROUND)),
-        ];
-        if imm_ema > 1.0 {
-            knob_spans.push(Span::styled("  imm ", Style::default().fg(SLATE_500)));
-            knob_spans.push(Span::styled(
-                format!("{:.0}", imm_ema),
-                Style::default().fg(if imm_ema > 15.0 {
-                    ERROR_RED
-                } else {
-                    FOREGROUND
-                }),
-            ));
-        }
         let mut lines = vec![
             Line::from(vec![
                 Span::styled(
@@ -2600,61 +2585,52 @@ fn controller_panel_lines(
                     Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!(" r{:.0}% b{:.0}% f{:.0}%", recv_pct, build_pct, flush_pct),
-                    Style::default().fg(TERMINAL_DIM),
+                    format!(" {:.1}s/3s", iteration_ms / 1000.0),
+                    Style::default().fg(iter_color),
                 ),
             ]),
-            Line::from(knob_spans),
+            Line::from(vec![
+                Span::styled("span ", Style::default().fg(SLATE_500)),
+                Span::styled(span_text, Style::default().fg(FOREGROUND)),
+                Span::styled("  thr ", Style::default().fg(SLATE_500)),
+                Span::styled(threads_text, Style::default().fg(FOREGROUND)),
+                Span::styled("  bg ", Style::default().fg(SLATE_500)),
+                Span::styled(bg_text, Style::default().fg(FOREGROUND)),
+            ]),
         ];
         if let Some(d) = deltas {
             lines.push(format_action_line_compact(d));
         }
         lines
     } else {
-        // Detail: signals + knobs + actions
+        // Detail: span signal + waste signal + knobs + actions
         let mut lines = vec![
-            // Line 1: Bottleneck + time-share (recv, build)
+            // Line 1: classification + iteration vs target (span signal)
             Line::from(vec![
                 Span::styled(
                     format!("[{}]", bn_label),
                     Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("  recv {:.0}%  build {:.0}%", recv_pct, build_pct),
-                    Style::default().fg(TERMINAL_DIM),
+                    format!("  iter {:.1}s/3s", iteration_ms / 1000.0),
+                    Style::default().fg(iter_color),
                 ),
             ]),
-            // Line 2: flush + L0 + fill + imm
+            // Line 2: waste composition (I/O signal) + L0
             Line::from(vec![
+                Span::styled("waste ", Style::default().fg(SLATE_500)),
                 Span::styled(
-                    format!("flush {:.0}%", flush_pct),
-                    Style::default().fg(TERMINAL_DIM),
+                    format!("recv {:.0}%", recv_waste_pct),
+                    Style::default().fg(AMBER),
+                ),
+                Span::styled(
+                    format!("  wait {:.0}%", wait_waste_pct),
+                    Style::default().fg(ERROR_RED),
                 ),
                 Span::styled("  L0 ", Style::default().fg(SLATE_500)),
                 Span::styled(
                     format!("{:.0}", l0_ema),
                     Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
-                ),
-                Span::styled("  fill ", Style::default().fg(SLATE_500)),
-                Span::styled(
-                    format!(
-                        "{:.0}%",
-                        bb.controller_flush_fill_ema.unwrap_or(0.0) * 100.0
-                    ),
-                    Style::default().fg(if bb.controller_flush_fill_ema.unwrap_or(0.0) > 0.75 {
-                        ERROR_RED
-                    } else {
-                        FOREGROUND
-                    }),
-                ),
-                Span::styled("  imm ", Style::default().fg(SLATE_500)),
-                Span::styled(
-                    format!("{:.0}", imm_ema),
-                    Style::default().fg(if imm_ema > 15.0 {
-                        ERROR_RED
-                    } else {
-                        FOREGROUND
-                    }),
                 ),
             ]),
             // Line 3: knobs

@@ -363,9 +363,6 @@ pub struct BulkBuildProgressData {
     /// Controller output: RocksDB background jobs.
     #[serde(default)]
     pub controller_bg_jobs: Option<i32>,
-    /// Controller EMA: flush channel fill ratio (0.0-1.0).
-    #[serde(default)]
-    pub controller_flush_fill_ema: Option<f64>,
     /// Controller EMA: cells per block (density).
     #[serde(default)]
     pub controller_density_ema: Option<f64>,
@@ -938,7 +935,6 @@ mod tests {
             controller_prefetch_ahead: Some(4),
             controller_fetch_threads: Some(8),
             controller_bg_jobs: Some(6),
-            controller_flush_fill_ema: Some(0.35),
             controller_density_ema: Some(4.7),
         };
 
@@ -963,7 +959,6 @@ mod tests {
         assert_eq!(parsed.controller_prefetch_ahead, Some(4));
         assert_eq!(parsed.controller_fetch_threads, Some(8));
         assert_eq!(parsed.controller_bg_jobs, Some(6));
-        assert_eq!(parsed.controller_flush_fill_ema, Some(0.35));
     }
 
     #[test]

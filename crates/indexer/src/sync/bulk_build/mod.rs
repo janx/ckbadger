@@ -415,8 +415,6 @@ impl BulkBuildEngine {
                 build_ms: build_elapsed.as_secs_f64() * 1000.0,
                 flush_wait_ms: flush_wait_elapsed.as_secs_f64() * 1000.0,
                 l0_files: snap.l0_files,
-                flush_channel_pending,
-                flush_channel_capacity: controller.channel_depth(),
                 cell_count: batch_cell_count,
                 block_count: batch_stats.block_count,
             }) {
@@ -457,7 +455,6 @@ impl BulkBuildEngine {
                     output.prefetch_ahead,
                     output.fetch_threads,
                     output.bg_jobs,
-                    output.flush_fill_ema,
                     output.density_ema,
                 );
             }
