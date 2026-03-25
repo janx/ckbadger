@@ -216,9 +216,9 @@ mod tests {
         assert_eq!(received[0].block_bytes, 100);
     }
 
-    #[test]
+    #[tokio::test]
     #[should_panic(expected = "take_receiver called more than once")]
-    fn take_receiver_panics_on_second_call() {
+    async fn take_receiver_panics_on_second_call() {
         let (_result_tx, result_rx) =
             tokio::sync::mpsc::channel::<Result<Vec<BufferedBlock>>>(2);
 

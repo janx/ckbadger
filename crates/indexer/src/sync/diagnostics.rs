@@ -305,7 +305,7 @@ pub(crate) struct BulkBuildPerfStats {
     cumulative_history_rows: AtomicU64,
     cumulative_sealed_rows: AtomicU64,
     // Batch sizing
-    batch_block_span: AtomicU64,
+    batch_block_count: AtomicU64,
     batch_count: AtomicU64,
     // tx_density stored as f64 bits
     tx_density_bits: AtomicU64,
@@ -343,10 +343,8 @@ pub(crate) struct BulkBuildPerfStats {
     controller_build_ema_bits: AtomicU64,
     controller_wait_ema_bits: AtomicU64,
     controller_l0_ema_bits: AtomicU64,
-    controller_prefetch_ahead: AtomicU64,
     controller_fetch_threads: AtomicU64,
     controller_bg_jobs: AtomicU64,
-    controller_density_ema_bits: AtomicU64,
 }
 
 impl BulkBuildPerfStats {
@@ -368,7 +366,7 @@ impl BulkBuildPerfStats {
         cells_consumed: u64,
         cumulative_history_rows: u64,
         cumulative_sealed_rows: u64,
-        batch_block_span: u64,
+        batch_block_count: u64,
         batch_count: u64,
         tx_density: f64,
         ms_per_block_ema: f64,
@@ -415,8 +413,8 @@ impl BulkBuildPerfStats {
             .store(cumulative_history_rows, Ordering::Relaxed);
         self.cumulative_sealed_rows
             .store(cumulative_sealed_rows, Ordering::Relaxed);
-        self.batch_block_span
-            .store(batch_block_span, Ordering::Relaxed);
+        self.batch_block_count
+            .store(batch_block_count, Ordering::Relaxed);
         self.batch_count.store(batch_count, Ordering::Relaxed);
         self.tx_density_bits
             .store(tx_density.to_bits(), Ordering::Relaxed);
@@ -486,10 +484,8 @@ impl BulkBuildPerfStats {
         build_ema: f64,
         wait_ema: f64,
         l0_ema: f64,
-        prefetch_ahead: u64,
         fetch_threads: u32,
         bg_jobs: i32,
-        density_ema: f64,
     ) {
         self.controller_bottleneck_code
             .store(bottleneck_code, Ordering::Relaxed);
@@ -501,14 +497,10 @@ impl BulkBuildPerfStats {
             .store(wait_ema.to_bits(), Ordering::Relaxed);
         self.controller_l0_ema_bits
             .store(l0_ema.to_bits(), Ordering::Relaxed);
-        self.controller_prefetch_ahead
-            .store(prefetch_ahead, Ordering::Relaxed);
         self.controller_fetch_threads
             .store(fetch_threads as u64, Ordering::Relaxed);
         self.controller_bg_jobs
             .store(bg_jobs as u64, Ordering::Relaxed);
-        self.controller_density_ema_bits
-            .store(density_ema.to_bits(), Ordering::Relaxed);
     }
 
     pub(crate) fn snapshot(&self) -> Option<BulkBuildProgressData> {
@@ -576,7 +568,7 @@ impl BulkBuildPerfStats {
             cells_consumed: Some(self.cells_consumed.load(Ordering::Relaxed)),
             cumulative_history_rows: Some(self.cumulative_history_rows.load(Ordering::Relaxed)),
             cumulative_sealed_rows: Some(self.cumulative_sealed_rows.load(Ordering::Relaxed)),
-            batch_block_span: Some(self.batch_block_span.load(Ordering::Relaxed)),
+            batch_block_count: Some(self.batch_block_count.load(Ordering::Relaxed)),
             batch_count: Some(batch_count),
             tx_density: Some(f64::from_bits(self.tx_density_bits.load(Ordering::Relaxed))),
             finalize_phase,
@@ -629,14 +621,10 @@ impl BulkBuildPerfStats {
             controller_l0_ema: Some(f64::from_bits(
                 self.controller_l0_ema_bits.load(Ordering::Relaxed),
             )),
-            controller_prefetch_ahead: Some(self.controller_prefetch_ahead.load(Ordering::Relaxed)),
             controller_fetch_threads: Some(
                 self.controller_fetch_threads.load(Ordering::Relaxed) as u32
             ),
             controller_bg_jobs: Some(self.controller_bg_jobs.load(Ordering::Relaxed) as i32),
-            controller_density_ema: Some(f64::from_bits(
-                self.controller_density_ema_bits.load(Ordering::Relaxed),
-            )),
         })
     }
 
@@ -1113,7 +1101,7 @@ mod tests {
             3_000,         // cells_consumed
             45_230,        // cumulative_history_rows
             12_890,        // cumulative_sealed_rows
-            8_500,         // batch_block_span
+            8_500,         // batch_block_count
             1,             // batch_count
             4.7,           // tx_density
             0.042,         // ms_per_block_ema
@@ -1142,7 +1130,7 @@ mod tests {
         assert_eq!(snap.live_cell_count, Some(12_345_678));
         assert_eq!(snap.cells_created, Some(5_000));
         assert_eq!(snap.cells_consumed, Some(3_000));
-        assert_eq!(snap.batch_block_span, Some(8_500));
+        assert_eq!(snap.batch_block_count, Some(8_500));
         assert_eq!(snap.batch_count, Some(1));
         assert!((snap.tx_density.unwrap() - 4.7).abs() < f64::EPSILON);
         assert!((snap.ms_per_block_ema.unwrap() - 0.042).abs() < f64::EPSILON);
@@ -1211,7 +1199,7 @@ mod tests {
             50.0, 200.0, 3000.0, // flush, fetch, build
             1000, 500, 100, 80, // owner_mem, live_cells, created, consumed
             1000, 500, // cumulative_history, cumulative_sealed
-            5000, 1, // batch_block_span, batch_count
+            5000, 1, // batch_block_count, batch_count
             2.5, 0.8, 3100.0,
             1500.0, // tx_density, ms_per_block_ema, controllable, target_iteration
             8.0, 2.0, 40.0, // facts_par_iter, facts_merge, facts_serial_equiv
@@ -1249,7 +1237,7 @@ mod tests {
             50.0, 200.0, 3000.0, // flush, fetch, build
             1000, 500, 100, 80, // owner_mem, live_cells, created, consumed
             1000, 500, // cumulative_history, cumulative_sealed
-            5000, 1, // batch_block_span, batch_count
+            5000, 1, // batch_block_count, batch_count
             2.5, 0.8, 3100.0,
             1500.0, // tx_density, ms_per_block_ema, controllable, target_iteration
             8.0, 2.0, 40.0, // facts_par_iter, facts_merge, facts_serial_equiv
@@ -1298,7 +1286,7 @@ mod tests {
             50.0, 200.0, 3000.0, // flush, fetch, build
             1000, 500, 100, 80, // owner_mem, live_cells, created, consumed
             1000, 500, // cumulative_history, cumulative_sealed
-            5000, 1, // batch_block_span, batch_count
+            5000, 1, // batch_block_count, batch_count
             2.5, 0.8, 3100.0,
             1500.0, // tx_density, ms_per_block_ema, controllable, target_iteration
             8.0, 2.0, 40.0, // facts_par_iter, facts_merge, facts_serial_equiv
@@ -1330,7 +1318,7 @@ mod tests {
             50.0, 200.0, 3000.0, // flush, fetch, build
             1000, 500, 100, 80, // owner_mem, live_cells, created, consumed
             1000, 500, // cumulative_history, cumulative_sealed
-            5000, 1, // batch_block_span, batch_count
+            5000, 1, // batch_block_count, batch_count
             2.5, 0.8, 3100.0,
             1500.0, // tx_density, ms_per_block_ema, controllable, target_iteration
             8.0, 2.0, 40.0, // facts_par_iter, facts_merge, facts_serial_equiv

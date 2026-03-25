@@ -254,9 +254,9 @@ pub struct BulkBuildProgressData {
     /// Cumulative sealed aggregate rows flushed to RocksDB.
     #[serde(default)]
     pub cumulative_sealed_rows: Option<u64>,
-    /// Current adaptive batch block span.
+    /// Number of blocks in the most recent batch.
     #[serde(default)]
-    pub batch_block_span: Option<u64>,
+    pub batch_block_count: Option<u64>,
     /// Total batches completed in this bulk-build session.
     #[serde(default)]
     pub batch_count: Option<u64>,
@@ -330,18 +330,12 @@ pub struct BulkBuildProgressData {
     /// Controller EMA: RocksDB L0 file count.
     #[serde(default)]
     pub controller_l0_ema: Option<f64>,
-    /// Controller output: prefetch ahead depth (batches).
-    #[serde(default)]
-    pub controller_prefetch_ahead: Option<u64>,
     /// Controller output: fetch thread count.
     #[serde(default)]
     pub controller_fetch_threads: Option<u32>,
     /// Controller output: RocksDB background jobs.
     #[serde(default)]
     pub controller_bg_jobs: Option<i32>,
-    /// Controller EMA: cells per block (density).
-    #[serde(default)]
-    pub controller_density_ema: Option<f64>,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {
@@ -840,7 +834,7 @@ mod tests {
             cells_consumed: Some(3_000),
             cumulative_history_rows: Some(45_230),
             cumulative_sealed_rows: Some(12_890),
-            batch_block_span: Some(8_500),
+            batch_block_count: Some(8_500),
             batch_count: Some(156),
             tx_density: Some(4.7),
             finalize_phase: None,
@@ -865,10 +859,8 @@ mod tests {
             controller_build_ema: Some(120.5),
             controller_wait_ema: Some(42.0),
             controller_l0_ema: Some(3.7),
-            controller_prefetch_ahead: Some(4),
             controller_fetch_threads: Some(8),
             controller_bg_jobs: Some(6),
-            controller_density_ema: Some(4.7),
         };
 
         let json = serde_json::to_string(&bb).unwrap();
@@ -889,7 +881,6 @@ mod tests {
         assert_eq!(parsed.controller_build_ema, Some(120.5));
         assert_eq!(parsed.controller_wait_ema, Some(42.0));
         assert_eq!(parsed.controller_l0_ema, Some(3.7));
-        assert_eq!(parsed.controller_prefetch_ahead, Some(4));
         assert_eq!(parsed.controller_fetch_threads, Some(8));
         assert_eq!(parsed.controller_bg_jobs, Some(6));
     }

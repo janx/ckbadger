@@ -103,20 +103,14 @@ enum CompactOverviewLayout {
 
 #[derive(Debug, Clone, Copy)]
 struct ControllerKnobs {
-    batch_span: u64,
-    prefetch_ahead: u64,
     fetch_threads: u32,
     bg_jobs: i32,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct ControllerDeltas {
-    span_delta: i64,
-    prefetch_delta: i64,
     threads_delta: i32,
     bg_delta: i32,
-    /// True if density correction further adjusted span after bottleneck logic.
-    density_corrected: bool,
 }
 
 pub struct App {
@@ -454,32 +448,16 @@ impl App {
                 push_history_sample(&mut self.build_cpu_ms_history, build_ms);
                 push_history_sample(&mut self.fetch_wait_ms_history, prefetch_recv_ms);
                 push_history_sample(&mut self.flush_wait_ms_history, flush_wait_ms);
-                push_history_sample(
-                    &mut self.density_history,
-                    bb.controller_density_ema.unwrap_or(0.0),
-                );
-
                 // Compute controller knob deltas.
                 let current_knobs = ControllerKnobs {
-                    batch_span: bb.batch_block_span.unwrap_or(0),
-                    prefetch_ahead: bb.controller_prefetch_ahead.unwrap_or(0),
                     fetch_threads: bb.controller_fetch_threads.unwrap_or(0),
                     bg_jobs: bb.controller_bg_jobs.unwrap_or(0),
                 };
                 if let Some(prev) = self.prev_controller_knobs {
                     self.controller_deltas = Some(ControllerDeltas {
-                        span_delta: current_knobs.batch_span as i64 - prev.batch_span as i64,
-                        prefetch_delta: current_knobs.prefetch_ahead as i64
-                            - prev.prefetch_ahead as i64,
                         threads_delta: current_knobs.fetch_threads as i32
                             - prev.fetch_threads as i32,
                         bg_delta: current_knobs.bg_jobs - prev.bg_jobs,
-                        density_corrected: bb.controller_density_ema.unwrap_or(0.0) > 0.0
-                            && (self.density_history.len() >= 2 && {
-                                let prev_den = self.density_history[self.density_history.len() - 2];
-                                let curr_den = bb.controller_density_ema.unwrap_or(0.0);
-                                prev_den > 0.0 && ((curr_den / prev_den) - 1.0).abs() > 0.05
-                            }),
                     });
                 }
                 self.prev_controller_knobs = Some(current_knobs);
@@ -2474,15 +2452,16 @@ fn controller_panel_lines(
     };
 
     // Knob values
-    let span_text = bb
-        .batch_block_span
-        .map(|v| format!("{}k", v / 1000))
+    let blocks_text = bb
+        .batch_block_count
+        .map(|v| {
+            if v >= 1000 {
+                format!("{}k", v / 1000)
+            } else {
+                v.to_string()
+            }
+        })
         .unwrap_or_else(|| "-".to_string());
-    let prefetch_text = match (bb.controller_prefetch_ahead, bb.prefetch_channel_capacity) {
-        (Some(ahead), Some(cap)) => format!("{}/{}", ahead, cap),
-        (Some(ahead), None) => format!("{}", ahead),
-        _ => "-".to_string(),
-    };
     let threads_text = bb
         .controller_fetch_threads
         .map(|v| v.to_string())
@@ -2515,8 +2494,8 @@ fn controller_panel_lines(
                 ),
             ]),
             Line::from(vec![
-                Span::styled("span ", Style::default().fg(SLATE_500)),
-                Span::styled(span_text, Style::default().fg(FOREGROUND)),
+                Span::styled("blk ", Style::default().fg(SLATE_500)),
+                Span::styled(blocks_text, Style::default().fg(FOREGROUND)),
                 Span::styled("  thr ", Style::default().fg(SLATE_500)),
                 Span::styled(threads_text, Style::default().fg(FOREGROUND)),
                 Span::styled("  bg ", Style::default().fg(SLATE_500)),
@@ -2560,10 +2539,8 @@ fn controller_panel_lines(
             ]),
             // Line 3: knobs
             Line::from(vec![
-                Span::styled("span ", Style::default().fg(SLATE_500)),
-                Span::styled(span_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  prefetch ", Style::default().fg(SLATE_500)),
-                Span::styled(prefetch_text, Style::default().fg(FOREGROUND)),
+                Span::styled("blk ", Style::default().fg(SLATE_500)),
+                Span::styled(blocks_text, Style::default().fg(FOREGROUND)),
                 Span::styled("  thr ", Style::default().fg(SLATE_500)),
                 Span::styled(threads_text, Style::default().fg(FOREGROUND)),
                 Span::styled("  bg ", Style::default().fg(SLATE_500)),
@@ -2604,36 +2581,22 @@ fn delta_span(label: &str, delta: i64, invert_color: bool) -> Vec<Span<'static>>
 }
 
 /// Format the action line for detail mode.
-/// Shows what the controller adjusted: span/prefetch/thr/bg deltas + density flag.
+/// Shows what the controller adjusted: thr/bg deltas.
 fn format_action_line(d: &ControllerDeltas) -> Line<'static> {
     let mut spans = Vec::new();
-    spans.extend(delta_span("span", d.span_delta / 1000, false));
-    spans.push(Span::styled("k ", Style::default().fg(SLATE_500)));
-    spans.extend(delta_span("pre", d.prefetch_delta, false));
-    spans.push(Span::raw("  "));
     spans.extend(delta_span("thr", d.threads_delta as i64, false));
     spans.push(Span::raw("  "));
     // bg: more jobs = helping flush = green when flush-bound
     spans.extend(delta_span("bg", d.bg_delta as i64, false));
-    if d.density_corrected {
-        spans.push(Span::styled("  den\u{0394}", Style::default().fg(CYAN)));
-    }
     Line::from(spans)
 }
 
 /// Format the action line for compact mode (shorter labels).
 fn format_action_line_compact(d: &ControllerDeltas) -> Line<'static> {
     let mut spans = Vec::new();
-    spans.extend(delta_span("s", d.span_delta / 1000, false));
-    spans.push(Span::styled("k ", Style::default().fg(SLATE_500)));
-    spans.extend(delta_span("p", d.prefetch_delta, false));
-    spans.push(Span::raw(" "));
     spans.extend(delta_span("t", d.threads_delta as i64, false));
     spans.push(Span::raw(" "));
     spans.extend(delta_span("bg", d.bg_delta as i64, false));
-    if d.density_corrected {
-        spans.push(Span::styled(" den\u{0394}", Style::default().fg(CYAN)));
-    }
     Line::from(spans)
 }
 
@@ -2647,9 +2610,15 @@ fn build_batch_left_column(
         .batch_count
         .map(format_num_u64)
         .unwrap_or_else(|| "-".to_string());
-    let span_text = bb
-        .batch_block_span
-        .map(|v| format!("{}k", v / 1000))
+    let blocks_text = bb
+        .batch_block_count
+        .map(|v| {
+            if v >= 1000 {
+                format!("{}k", v / 1000)
+            } else {
+                v.to_string()
+            }
+        })
         .unwrap_or_else(|| "-".to_string());
 
     let stages: [(&str, Option<f64>, Color); 6] = [
@@ -2678,8 +2647,8 @@ fn build_batch_left_column(
         ),
         Span::styled("  Batch #", Style::default().fg(SLATE_500)),
         Span::styled(batch_count_text, Style::default().fg(FOREGROUND)),
-        Span::styled("  Span ", Style::default().fg(SLATE_500)),
-        Span::styled(span_text, Style::default().fg(FOREGROUND)),
+        Span::styled("  Blk ", Style::default().fg(SLATE_500)),
+        Span::styled(blocks_text, Style::default().fg(FOREGROUND)),
     ])];
 
     for (name, ms_opt, color) in &stages {
@@ -2783,8 +2752,14 @@ fn build_batch_left_column(
                 .map(|c| format!("{}k", c / 1000))
                 .unwrap_or_else(|| "-".to_string());
             let blocks_text = bb
-                .batch_block_span
-                .map(|b| format!("{}k", b / 1000))
+                .batch_block_count
+                .map(|b| {
+                    if b >= 1000 {
+                        format!("{}k", b / 1000)
+                    } else {
+                        b.to_string()
+                    }
+                })
                 .unwrap_or_else(|| "-".to_string());
             left.push(Line::from(vec![
                 Span::styled("  volume   ", Style::default().fg(SLATE_500)),
@@ -6636,10 +6611,9 @@ mod tests {
             controller_build_ema: Some(3000.0),
             controller_wait_ema: Some(200.0),
             controller_l0_ema: Some(12.0),
-            controller_prefetch_ahead: Some(3),
             controller_fetch_threads: Some(8),
             controller_bg_jobs: Some(4),
-            batch_block_span: Some(50_000),
+            batch_block_count: Some(50_000),
             prefetch_channel_capacity: Some(4),
             ..Default::default()
         };
@@ -6655,20 +6629,11 @@ mod tests {
 
         // With deltas: 3 lines (action line added)
         let deltas = ControllerDeltas {
-            span_delta: 5000,
-            prefetch_delta: 1,
             threads_delta: 0,
             bg_delta: -1,
-            density_corrected: true,
         };
         let lines = controller_panel_lines(&bb, true, Some(&deltas));
         assert_eq!(lines.len(), 3);
-        let action_text: String = lines[2].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(
-            action_text.contains("den\u{0394}"),
-            "compact action line should show density flag, got: {}",
-            action_text
-        );
     }
 
     #[test]
@@ -6679,10 +6644,9 @@ mod tests {
             controller_build_ema: Some(2000.0),
             controller_wait_ema: Some(3000.0),
             controller_l0_ema: Some(55.0),
-            controller_prefetch_ahead: Some(1),
             controller_fetch_threads: Some(4),
             controller_bg_jobs: Some(8),
-            batch_block_span: Some(20_000),
+            batch_block_count: Some(20_000),
             prefetch_channel_capacity: Some(4),
             ..Default::default()
         };
@@ -6698,18 +6662,15 @@ mod tests {
 
         // With deltas: 4 lines
         let deltas = ControllerDeltas {
-            span_delta: -2000,
-            prefetch_delta: -1,
             threads_delta: -1,
             bg_delta: 1,
-            density_corrected: false,
         };
         let lines = controller_panel_lines(&bb, false, Some(&deltas));
         assert_eq!(lines.len(), 4);
         let action_text: String = lines[3].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            action_text.contains("span ") && action_text.contains("-2"),
-            "action line should show span shrink, got: {}",
+            action_text.contains("thr "),
+            "action line should show thread change, got: {}",
             action_text
         );
     }

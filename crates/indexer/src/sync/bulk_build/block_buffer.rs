@@ -1,11 +1,15 @@
 //! Streaming block buffer for the bulk-build pipeline.
 //!
 //! The prefetch side sends fixed-size chunks of [`BufferedBlock`] via an mpsc channel.
+//! Each chunk is `Result<Vec<BufferedBlock>>` — errors from the prefetch worker are
+//! propagated to the build loop.
+//!
 //! The build loop receives them through [`BlockBufferHandle`], which keeps a local
 //! `VecDeque` so the build loop can peek ahead and drain by a bytes budget.
 
 use std::collections::VecDeque;
 
+use anyhow::Result;
 use tokio::sync::mpsc::Receiver;
 
 use super::binary_facts::RawCkbBlock;
@@ -33,13 +37,13 @@ pub(crate) struct BufferedBlock {
 /// available, [`try_fill`] to greedily drain any additional ready chunks, and
 /// [`drain`] to take a batch for processing.
 pub(crate) struct BlockBufferHandle {
-    chunk_rx: Receiver<Vec<BufferedBlock>>,
+    chunk_rx: Receiver<Result<Vec<BufferedBlock>>>,
     local: VecDeque<BufferedBlock>,
     local_bytes: usize,
 }
 
 impl BlockBufferHandle {
-    pub(crate) fn new(chunk_rx: Receiver<Vec<BufferedBlock>>) -> Self {
+    pub(crate) fn new(chunk_rx: Receiver<Result<Vec<BufferedBlock>>>) -> Self {
         Self {
             chunk_rx,
             local: VecDeque::new(),
@@ -47,40 +51,41 @@ impl BlockBufferHandle {
         }
     }
 
+    /// Absorb a chunk of blocks into the local buffer.
+    fn absorb(&mut self, chunk: Vec<BufferedBlock>) {
+        for block in chunk {
+            self.local_bytes += block.block_bytes;
+            self.local.push_back(block);
+        }
+    }
+
     /// Wait until at least one block is available in the local buffer.
     ///
-    /// Returns `true` if a block is available, `false` if the channel is closed
-    /// and the local buffer is empty (end of stream).
-    pub(crate) async fn ensure_blocks(&mut self) -> bool {
+    /// Returns `Ok(true)` if a block is available, `Ok(false)` if the channel
+    /// is closed and the local buffer is empty (end of stream), or `Err` if
+    /// the prefetch worker encountered an error.
+    pub(crate) async fn ensure_blocks(&mut self) -> Result<bool> {
         if !self.local.is_empty() {
-            return true;
+            return Ok(true);
         }
         match self.chunk_rx.recv().await {
-            Some(chunk) => {
-                for block in chunk {
-                    self.local_bytes += block.block_bytes;
-                    self.local.push_back(block);
-                }
-                true
+            Some(result) => {
+                let chunk = result?;
+                self.absorb(chunk);
+                Ok(true)
             }
-            None => false,
+            None => Ok(false),
         }
     }
 
     /// Non-blocking: drain all immediately-available chunks from the channel
-    /// into the local buffer.
-    pub(crate) fn try_fill(&mut self) {
-        loop {
-            match self.chunk_rx.try_recv() {
-                Ok(chunk) => {
-                    for block in chunk {
-                        self.local_bytes += block.block_bytes;
-                        self.local.push_back(block);
-                    }
-                }
-                Err(_) => break,
-            }
+    /// into the local buffer.  Returns `Err` if a prefetch error is encountered.
+    pub(crate) fn try_fill(&mut self) -> Result<()> {
+        while let Ok(result) = self.chunk_rx.try_recv() {
+            let chunk = result?;
+            self.absorb(chunk);
         }
+        Ok(())
     }
 
     /// Average bytes-per-block across the first `n` blocks in the local buffer.
@@ -146,7 +151,7 @@ mod tests {
 
     #[test]
     fn peek_bytes_per_block_averages_correctly() {
-        let (tx, rx) = mpsc::channel(8);
+        let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
         drop(tx); // channel closed immediately; we only populate local manually
 
         let mut handle = BlockBufferHandle::new(rx);
@@ -160,7 +165,7 @@ mod tests {
 
     #[tokio::test]
     async fn buffer_handle_ensure_and_drain() {
-        let (tx, rx) = mpsc::channel(8);
+        let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
 
         // Send two chunks: 3 blocks then 2 blocks.
         let chunk1: Vec<BufferedBlock> = vec![
@@ -172,8 +177,8 @@ mod tests {
             make_buffered_block(500),
             make_buffered_block(1500),
         ];
-        tx.send(chunk1).await.unwrap();
-        tx.send(chunk2).await.unwrap();
+        tx.send(Ok(chunk1)).await.unwrap();
+        tx.send(Ok(chunk2)).await.unwrap();
         drop(tx);
 
         let mut handle = BlockBufferHandle::new(rx);
@@ -183,13 +188,13 @@ mod tests {
         assert_eq!(handle.local_bytes(), 0);
 
         // ensure_blocks waits for the first chunk.
-        let ok = handle.ensure_blocks().await;
+        let ok = handle.ensure_blocks().await.unwrap();
         assert!(ok, "ensure_blocks should return true when data available");
         assert_eq!(handle.available(), 3);
         assert_eq!(handle.local_bytes(), 6000);
 
         // try_fill should pull the second chunk.
-        handle.try_fill();
+        handle.try_fill().unwrap();
         assert_eq!(handle.available(), 5);
         assert_eq!(handle.local_bytes(), 8000);
 
@@ -212,7 +217,23 @@ mod tests {
         assert_eq!(handle.local_bytes(), 0);
 
         // Channel is closed and local is empty: end of stream.
-        let eos = handle.ensure_blocks().await;
+        let eos = handle.ensure_blocks().await.unwrap();
         assert!(!eos, "ensure_blocks should return false at end of stream");
+    }
+
+    #[tokio::test]
+    async fn ensure_blocks_propagates_prefetch_error() {
+        let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+
+        tx.send(Err(anyhow::anyhow!("fetch failed"))).await.unwrap();
+        drop(tx);
+
+        let mut handle = BlockBufferHandle::new(rx);
+        let result = handle.ensure_blocks().await;
+        assert!(result.is_err(), "ensure_blocks should propagate prefetch errors");
+        assert!(
+            result.unwrap_err().to_string().contains("fetch failed"),
+            "error message should be preserved"
+        );
     }
 }
