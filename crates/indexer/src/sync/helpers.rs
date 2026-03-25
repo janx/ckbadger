@@ -224,16 +224,22 @@ pub(crate) fn atomic_checked_sub_u64(counter: &AtomicU64, value: u64) {
 // Hex parsing
 // ---------------------------------------------------------------------------
 
-pub(crate) fn parse_prefixed_hex_u32(field: &str) -> u32 {
-    u32::from_str_radix(&field[2..], 16).unwrap_or_else(|e| panic!("hex parse '{}': {}", field, e))
+pub(crate) fn parse_prefixed_hex_u32(field: &str) -> Result<u32> {
+    let hex_str = field
+        .strip_prefix("0x")
+        .ok_or_else(|| anyhow!("hex field missing '0x' prefix: '{}'", field))?;
+    u32::from_str_radix(hex_str, 16).map_err(|e| anyhow!("invalid hex u32 '{}': {}", field, e))
 }
 
-pub(crate) fn parse_prefixed_hex_u64(field: &str) -> u64 {
-    u64::from_str_radix(&field[2..], 16).unwrap_or_else(|e| panic!("hex parse '{}': {}", field, e))
+pub(crate) fn parse_prefixed_hex_u64(field: &str) -> Result<u64> {
+    let hex_str = field
+        .strip_prefix("0x")
+        .ok_or_else(|| anyhow!("hex field missing '0x' prefix: '{}'", field))?;
+    u64::from_str_radix(hex_str, 16).map_err(|e| anyhow!("invalid hex u64 '{}': {}", field, e))
 }
 
 pub(crate) fn parse_outpoint_index_i16(field: &str, label: &str) -> Result<i16> {
-    let value = parse_prefixed_hex_u32(field);
+    let value = parse_prefixed_hex_u32(field)?;
     i16::try_from(value).map_err(|_| anyhow::anyhow!("{} exceeds i16 range: {}", label, value))
 }
 
@@ -341,16 +347,49 @@ mod tests {
 
     #[test]
     fn test_parse_prefixed_hex_u32_parses_valid_hex() {
-        assert_eq!(parse_prefixed_hex_u32("0x0"), 0);
-        assert_eq!(parse_prefixed_hex_u32("0xff"), 255);
-        assert_eq!(parse_prefixed_hex_u32("0xffffffff"), u32::MAX);
+        assert_eq!(parse_prefixed_hex_u32("0x0").unwrap(), 0);
+        assert_eq!(parse_prefixed_hex_u32("0xff").unwrap(), 255);
+        assert_eq!(parse_prefixed_hex_u32("0xffffffff").unwrap(), u32::MAX);
     }
 
     #[test]
     fn test_parse_prefixed_hex_u64_parses_valid_hex() {
-        assert_eq!(parse_prefixed_hex_u64("0x0"), 0);
-        assert_eq!(parse_prefixed_hex_u64("0xff"), 255);
-        assert_eq!(parse_prefixed_hex_u64("0xffffffffffffffff"), u64::MAX);
+        assert_eq!(parse_prefixed_hex_u64("0x0").unwrap(), 0);
+        assert_eq!(parse_prefixed_hex_u64("0xff").unwrap(), 255);
+        assert_eq!(
+            parse_prefixed_hex_u64("0xffffffffffffffff").unwrap(),
+            u64::MAX
+        );
+    }
+
+    #[test]
+    fn test_parse_prefixed_hex_u32_errors_on_empty_string() {
+        assert!(parse_prefixed_hex_u32("").is_err());
+    }
+
+    #[test]
+    fn test_parse_prefixed_hex_u32_errors_on_missing_prefix() {
+        assert!(parse_prefixed_hex_u32("ff").is_err());
+    }
+
+    #[test]
+    fn test_parse_prefixed_hex_u64_errors_on_empty_string() {
+        assert!(parse_prefixed_hex_u64("").is_err());
+    }
+
+    #[test]
+    fn test_parse_prefixed_hex_u64_errors_on_missing_prefix() {
+        assert!(parse_prefixed_hex_u64("ff").is_err());
+    }
+
+    #[test]
+    fn test_parse_prefixed_hex_u32_errors_on_invalid_hex() {
+        assert!(parse_prefixed_hex_u32("0xzz").is_err());
+    }
+
+    #[test]
+    fn test_parse_prefixed_hex_u64_errors_on_overflow() {
+        assert!(parse_prefixed_hex_u64("0x10000000000000000").is_err());
     }
 
     #[test]

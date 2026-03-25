@@ -524,7 +524,16 @@ fn parse_bulk_tx_cycles(
             cycles.len()
         )
     })?;
-    let parsed_cycles = parse_prefixed_hex_u64(raw_cycles);
+    let parsed_cycles = parse_prefixed_hex_u64(raw_cycles).map_err(|e| {
+        anyhow!(
+            "invalid cycles hex in bulk facts: block={} tx=0x{} tx_position={} raw='{}' error={}",
+            block_number,
+            hex::encode(tx_hash),
+            tx_position,
+            raw_cycles,
+            e
+        )
+    })?;
     let cycles_i64 = i64::try_from(parsed_cycles).map_err(|_| {
         anyhow!(
             "bulk facts cycles exceed i64 range: block={} tx=0x{} tx_position={} cycles={}",

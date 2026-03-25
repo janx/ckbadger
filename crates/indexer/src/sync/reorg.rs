@@ -535,18 +535,34 @@ impl Indexer {
             let proposal_id = hex::encode(proposal_bytes);
 
             if let Some(entry) = all_mempool_txs.get(&proposal_id) {
-                let fee = parse_prefixed_hex_u64(&entry.fee);
-                let size = parse_prefixed_hex_u64(&entry.size);
-                let cycles = parse_prefixed_hex_u64(&entry.cycles);
-                cached_proposals.push(CachedProposal::new_with_details(
-                    proposal_id,
-                    String::new(),
-                    *block_number,
-                    *idx,
-                    fee,
-                    size,
-                    cycles,
-                ));
+                if let (Ok(fee), Ok(size), Ok(cycles)) = (
+                    parse_prefixed_hex_u64(&entry.fee),
+                    parse_prefixed_hex_u64(&entry.size),
+                    parse_prefixed_hex_u64(&entry.cycles),
+                ) {
+                    cached_proposals.push(CachedProposal::new_with_details(
+                        proposal_id,
+                        String::new(),
+                        *block_number,
+                        *idx,
+                        fee,
+                        size,
+                        cycles,
+                    ));
+                } else {
+                    warn!(
+                        proposal_id = %proposal_id,
+                        fee = %entry.fee,
+                        size = %entry.size,
+                        cycles = %entry.cycles,
+                        "Malformed mempool entry fields, falling back to minimal proposal"
+                    );
+                    cached_proposals.push(CachedProposal::new_minimal(
+                        proposal_id,
+                        *block_number,
+                        *idx,
+                    ));
+                }
             } else {
                 cached_proposals.push(CachedProposal::new_minimal(
                     proposal_id,
