@@ -230,8 +230,8 @@ export default function TransactionDetailPage() {
     return Array.from(hashes);
   }, [tx]);
   const { data: scriptLookup } = useQuery({
-    queryKey: ['scriptLookup', codeHashes],
-    queryFn: () => api.lookupScripts(codeHashes),
+    queryKey: ['scriptLookup', codeHashes, hash],
+    queryFn: () => api.lookupScripts(codeHashes, hash),
     enabled: codeHashes.length > 0,
     staleTime: Infinity,
   });

@@ -2536,12 +2536,14 @@ export const api = {
     return fetchApi(`/scripts/charts/capacity-history?${query}`);
   },
 
-  lookupScripts: async (codeHashes: string[]): Promise<ScriptLookupResponse> => {
+  lookupScripts: async (codeHashes: string[], txHash?: string): Promise<ScriptLookupResponse> => {
     if (codeHashes.length === 0) return {};
+    const body: Record<string, unknown> = { codeHashes };
+    if (txHash) body.txHash = txHash;
     return fetchJson(`${API_BASE}/scripts/lookup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ codeHashes }),
+      body: JSON.stringify(body),
     });
   },
 
