@@ -1336,15 +1336,6 @@ impl Indexer {
                 }
             }
         }
-        if !batch_proposals.is_empty() {
-            tokio::spawn(Self::run_proposal_cache_batch(
-                self.rpc.clone(),
-                self.cache_invalidator.clone(),
-                batch_proposals,
-                last_proposal_block,
-            ));
-        }
-
         let precompute_ms = t_precompute.elapsed().as_secs_f64() * 1000.0;
 
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
@@ -3007,6 +2998,18 @@ impl Indexer {
                 &prefetched_address_balances,
                 &mut data_batch,
             )?;
+            // Merge script reference rollup writes into the same atomic batch,
+            // eliminating the crash window between data_batch.commit() and a
+            // separate post-commit refresh.
+            self.writer
+                .materialize_script_versions_and_families(&[], &mut data_batch)
+                .with_context(|| {
+                    format!(
+                        "script reference rollup materialize failed for blocks {}-{}",
+                        first_block, last_block
+                    )
+                })?;
+
             debug!(
                 phase = "domain_atomic_commit",
                 batch_start = first_block,
@@ -3038,14 +3041,6 @@ impl Indexer {
                     first_block, last_block
                 )
             })?;
-            self.writer
-                .refresh_script_reference_rollups()
-                .with_context(|| {
-                    format!(
-                        "script reference rollup refresh failed after commit for blocks {}-{}",
-                        first_block, last_block
-                    )
-                })?;
             let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
             write_commit_ms += commit_ms;
             if commit_ms >= BULK_PHASE_COMMIT_SLOW_WARN_MS {
@@ -3075,6 +3070,17 @@ impl Indexer {
                 let mut tracker = self.cell_dist_tracker.lock().unwrap();
                 *tracker = prepared_cell_dist_tracker;
             }
+        }
+
+        // Spawn proposal cache AFTER batch commit to avoid writing proposals
+        // for a batch that failed to commit.
+        if !batch_proposals.is_empty() {
+            tokio::spawn(Self::run_proposal_cache_batch(
+                self.rpc.clone(),
+                self.cache_invalidator.clone(),
+                batch_proposals,
+                last_proposal_block,
+            ));
         }
 
         // In-memory cache notification only — the DB sync_status update was

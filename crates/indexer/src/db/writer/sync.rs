@@ -290,12 +290,10 @@ impl BatchWriter {
             );
         }
 
-        // Always re-derive script version/family rollups on startup.
-        // Closes a crash-window gap: if the process crashed between
-        // data_batch.commit() and refresh_script_reference_rollups(), the
-        // rollup CFs (script_reference_to_version, script_versions,
-        // script_families) may be stale.  Re-derivation is idempotent and
-        // fast (reads CF_SCRIPT_REFERENCE_INFO, writes ≤3 CFs).
+        // Re-derive script version/family rollups on startup.  Rollups are
+        // now written atomically inside data_batch.commit(), so this covers
+        // only legacy DB state from before that change.  Idempotent and fast
+        // (reads CF_SCRIPT_REFERENCE_INFO, writes ≤3 CFs).
         self.refresh_script_reference_rollups()?;
 
         // Align persistent sync tip to the startup tip to avoid stale sync_status metadata.
