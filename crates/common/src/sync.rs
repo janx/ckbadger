@@ -336,6 +336,12 @@ pub struct BulkBuildProgressData {
     /// Controller output: RocksDB background jobs.
     #[serde(default)]
     pub controller_bg_jobs: Option<i32>,
+    /// Controller output: target batch size in bytes.
+    #[serde(default)]
+    pub target_batch_bytes: Option<u64>,
+    /// Actual bytes processed in the most recent batch.
+    #[serde(default)]
+    pub batch_bytes: Option<u64>,
 }
 
 pub fn format_duration_smart(total_secs: f64) -> String {
