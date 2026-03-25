@@ -131,6 +131,7 @@ impl BulkBuildEngine {
             100_000_000, // 100 MB initial target
             max_fetch_threads,
             mem_profile.max_background_jobs,
+            mem_profile.system_ram_bytes,
         );
         let mut batch_count: u64 = 0;
         // Compute initial handoff_target for the prefetch worker.

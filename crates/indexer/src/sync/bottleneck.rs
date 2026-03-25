@@ -28,7 +28,7 @@ const EMA_ALPHA: f64 = 0.5;
 
 // Batch bytes bounds
 const MIN_BATCH_BYTES: u64 = 1_000_000; // 1 MB
-const MAX_BATCH_BYTES: u64 = 2_000_000_000; // 2 GB
+const ABSOLUTE_MAX_BATCH_BYTES: u64 = 8_000_000_000; // 8 GB ceiling
 
 // Block count bounds (used by the build loop for clamping drain count)
 pub(crate) const MIN_SPAN: u64 = 500;
@@ -143,6 +143,7 @@ pub(crate) struct BottleneckController {
     bg_jobs: i32,
 
     // Bounds
+    max_batch_bytes: u64,
     max_fetch_threads: u32,
     min_bg_jobs: i32,
     max_bg_jobs: i32,
@@ -153,20 +154,29 @@ pub(crate) struct BottleneckController {
 }
 
 impl BottleneckController {
-    pub(crate) fn new(initial_target_bytes: u64, max_fetch_threads: u32, max_bg_jobs: i32) -> Self {
+    pub(crate) fn new(
+        initial_target_bytes: u64,
+        max_fetch_threads: u32,
+        max_bg_jobs: i32,
+        system_ram_bytes: u64,
+    ) -> Self {
         let max_bg_jobs = max_bg_jobs.max(MIN_BG_JOBS);
         let min_bg_jobs = (max_bg_jobs / 4).max(MIN_BG_JOBS);
         let max_fetch_threads = max_fetch_threads.max(MIN_FETCH_THREADS);
+        // RAM/16: 8GB→512MB, 16GB→1GB, 32GB→2GB, 64GB→4GB
+        let max_batch_bytes =
+            (system_ram_bytes / 16).clamp(MIN_BATCH_BYTES, ABSOLUTE_MAX_BATCH_BYTES);
         Self {
             recv_ema: 0.0,
             build_ema: 0.0,
             wait_ema: 0.0,
             l0_ema: 0.0,
 
-            target_batch_bytes: initial_target_bytes.clamp(MIN_BATCH_BYTES, MAX_BATCH_BYTES),
+            target_batch_bytes: initial_target_bytes.clamp(MIN_BATCH_BYTES, max_batch_bytes),
             fetch_threads: max_fetch_threads,
             bg_jobs: max_bg_jobs,
 
+            max_batch_bytes,
             max_fetch_threads,
             min_bg_jobs,
             max_bg_jobs,
@@ -203,7 +213,7 @@ impl BottleneckController {
             let ratio = TARGET_ITERATION_MS / self.build_ema;
             let factor = ratio.clamp(BYTES_STEP_MIN, BYTES_STEP_MAX);
             self.target_batch_bytes = ((self.target_batch_bytes as f64 * factor) as u64)
-                .clamp(MIN_BATCH_BYTES, MAX_BATCH_BYTES);
+                .clamp(MIN_BATCH_BYTES, self.max_batch_bytes);
         }
 
         // ── I/O resource adjustment: waste classification ──
@@ -344,14 +354,14 @@ mod tests {
 
     #[test]
     fn first_batch_returns_none() {
-        let mut ctrl = BottleneckController::new(100_000_000, 12, 8);
+        let mut ctrl = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
         let output = ctrl.observe(&healthy_signals());
         assert!(output.is_none());
     }
 
     #[test]
     fn fetch_starved_grows_fetch_threads() {
-        let mut ctrl = BottleneckController::new(100_000_000, 12, 8);
+        let mut ctrl = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
         let initial_threads = ctrl.fetch_threads;
 
         ctrl.observe(&healthy_signals()); // warmup
@@ -394,7 +404,7 @@ mod tests {
 
     #[test]
     fn flush_pressure_grows_bg_jobs() {
-        let mut ctrl = BottleneckController::new(100_000_000, 12, 8);
+        let mut ctrl = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
         ctrl.bg_jobs = 4;
         ctrl.prev_bg_jobs = 4;
 
@@ -415,7 +425,7 @@ mod tests {
 
     #[test]
     fn high_build_shrinks_target_bytes() {
-        let mut ctrl = BottleneckController::new(100_000_000, 12, 8);
+        let mut ctrl = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
         let initial_bytes = ctrl.target_batch_bytes;
 
         ctrl.observe(&healthy_signals()); // warmup
@@ -440,7 +450,7 @@ mod tests {
 
     #[test]
     fn low_build_grows_target_bytes() {
-        let mut ctrl = BottleneckController::new(100_000_000, 12, 8);
+        let mut ctrl = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
         let initial_bytes = ctrl.target_batch_bytes;
 
         ctrl.observe(&healthy_signals()); // warmup
@@ -468,8 +478,8 @@ mod tests {
         // Two controllers: same build_ms, different flush_wait_ms.
         // target_batch_bytes should converge to same value since sizing
         // only looks at build_ms.
-        let mut no_flush = BottleneckController::new(100_000_000, 12, 8);
-        let mut with_flush = BottleneckController::new(100_000_000, 12, 8);
+        let mut no_flush = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
+        let mut with_flush = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
 
         no_flush.observe(&healthy_signals()); // warmup
         with_flush.observe(&healthy_signals()); // warmup
@@ -499,8 +509,8 @@ mod tests {
     #[test]
     fn recv_wait_does_not_affect_target_bytes() {
         // Two controllers: same build_ms, different recv_wait_ms.
-        let mut no_recv = BottleneckController::new(100_000_000, 12, 8);
-        let mut with_recv = BottleneckController::new(100_000_000, 12, 8);
+        let mut no_recv = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
+        let mut with_recv = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
 
         no_recv.observe(&healthy_signals()); // warmup
         with_recv.observe(&healthy_signals()); // warmup
@@ -529,7 +539,7 @@ mod tests {
 
     #[test]
     fn build_bound_does_not_shrink_fetch_threads() {
-        let mut ctrl = BottleneckController::new(100_000_000, 12, 8);
+        let mut ctrl = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
         let initial_threads = ctrl.fetch_threads;
 
         ctrl.observe(&healthy_signals()); // warmup
@@ -555,7 +565,7 @@ mod tests {
 
     #[test]
     fn bg_jobs_bounds_enforced() {
-        let mut ctrl = BottleneckController::new(100_000_000, 12, 4);
+        let mut ctrl = BottleneckController::new(100_000_000, 12, 4, 32 * GB);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -584,7 +594,7 @@ mod tests {
 
     #[test]
     fn l0_alone_does_not_trigger_flush_but_bumps_bg_jobs() {
-        let mut ctrl = BottleneckController::new(100_000_000, 12, 8);
+        let mut ctrl = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
         ctrl.bg_jobs = 6;
         ctrl.prev_bg_jobs = 6;
 
@@ -616,7 +626,7 @@ mod tests {
 
     #[test]
     fn flush_wait_dominates_waste_triggers_flush() {
-        let mut ctrl = BottleneckController::new(100_000_000, 12, 8);
+        let mut ctrl = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -635,7 +645,7 @@ mod tests {
 
     #[test]
     fn bg_jobs_if_changed_tracks_transitions() {
-        let mut ctrl = BottleneckController::new(100_000_000, 12, 8);
+        let mut ctrl = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
         assert!(ctrl.bg_jobs_if_changed().is_none());
 
         ctrl.bg_jobs = 6;
@@ -645,7 +655,7 @@ mod tests {
 
     #[test]
     fn target_bytes_bounds_enforced() {
-        let mut ctrl = BottleneckController::new(100_000_000, 12, 8);
+        let mut ctrl = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
 
         ctrl.observe(&healthy_signals()); // warmup
 
@@ -687,7 +697,7 @@ mod tests {
 
     #[test]
     fn fetch_threads_stable_when_build_bound_grow_when_fetch_bound() {
-        let mut ctrl = BottleneckController::new(100_000_000, 12, 8);
+        let mut ctrl = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
         let initial = ctrl.fetch_threads;
 
         ctrl.observe(&healthy_signals()); // warmup
@@ -738,6 +748,29 @@ mod tests {
             "fetch-bound should grow fetch_threads: {} vs after_flush {}",
             ctrl.fetch_threads,
             after_flush
+        );
+    }
+
+    #[test]
+    fn max_batch_bytes_scales_with_ram() {
+        // 8 GB → max 512 MB
+        let ctrl_8 = BottleneckController::new(100_000_000, 12, 8, 8 * GB);
+        assert_eq!(ctrl_8.max_batch_bytes, 512 * 1024 * 1024);
+
+        // 32 GB → max 2 GB
+        let ctrl_32 = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
+        assert_eq!(ctrl_32.max_batch_bytes, 2 * GB);
+
+        // 128 GB → 128*1024^3/16 = 8 GiB, capped at ABSOLUTE_MAX (8_000_000_000)
+        let ctrl_128 = BottleneckController::new(100_000_000, 12, 8, 128 * GB);
+        assert_eq!(ctrl_128.max_batch_bytes, ABSOLUTE_MAX_BATCH_BYTES);
+
+        // initial_target clamped to max_batch_bytes
+        let ctrl_small = BottleneckController::new(2_000_000_000, 12, 8, 8 * GB);
+        assert_eq!(
+            ctrl_small.target_batch_bytes,
+            512 * 1024 * 1024,
+            "initial target should be clamped to RAM-derived max"
         );
     }
 }
