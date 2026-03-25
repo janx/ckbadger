@@ -103,12 +103,14 @@ enum CompactOverviewLayout {
 
 #[derive(Debug, Clone, Copy)]
 struct ControllerKnobs {
+    target_batch_bytes: u64,
     fetch_threads: u32,
     bg_jobs: i32,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct ControllerDeltas {
+    budget_delta_pct: f64,
     threads_delta: i32,
     bg_delta: i32,
 }
@@ -448,11 +450,21 @@ impl App {
                 push_history_sample(&mut self.flush_wait_ms_history, flush_wait_ms);
                 // Compute controller knob deltas.
                 let current_knobs = ControllerKnobs {
+                    target_batch_bytes: bb.target_batch_bytes.unwrap_or(0),
                     fetch_threads: bb.controller_fetch_threads.unwrap_or(0),
                     bg_jobs: bb.controller_bg_jobs.unwrap_or(0),
                 };
                 if let Some(prev) = self.prev_controller_knobs {
+                    let budget_delta_pct = if prev.target_batch_bytes > 0 {
+                        (current_knobs.target_batch_bytes as f64
+                            - prev.target_batch_bytes as f64)
+                            / prev.target_batch_bytes as f64
+                            * 100.0
+                    } else {
+                        0.0
+                    };
                     self.controller_deltas = Some(ControllerDeltas {
+                        budget_delta_pct,
                         threads_delta: current_knobs.fetch_threads as i32
                             - prev.fetch_threads as i32,
                         bg_delta: current_knobs.bg_jobs - prev.bg_jobs,
@@ -2409,11 +2421,9 @@ fn build_bulk_build_diagnostics(
 
 /// Build the controller observation panel lines for bulk-build diagnostics.
 ///
-/// Four layers:
-/// 1. Judgment — bottleneck classification with time-share percentages
-/// 2. Signals — flush-specific health (L0, fill ratio)
-/// 3. Knobs — current controller output values
-/// 4. Actions — per-batch adjustments (deltas with direction arrows)
+/// Two orthogonal sections:
+/// 1. Sizing — build EMA vs 3s target (THE sizing signal) + budget in MB
+/// 2. I/O — bottleneck classification + waste breakdown + knobs with inline deltas
 fn controller_panel_lines(
     bb: &BulkBuildProgressData,
     dense: bool,
@@ -2423,8 +2433,8 @@ fn controller_panel_lines(
     let build_ema = bb.controller_build_ema.unwrap_or(0.0);
     let wait_ema = bb.controller_wait_ema.unwrap_or(0.0);
     let l0_ema = bb.controller_l0_ema.unwrap_or(0.0);
-    let iteration_ms = recv_ema + build_ema + wait_ema;
     let waste = recv_ema + wait_ema;
+    let target_bytes = bb.target_batch_bytes.unwrap_or(0);
 
     // Waste composition (for I/O classification display)
     let (recv_waste_pct, wait_waste_pct) = if waste > 1.0 {
@@ -2461,91 +2471,217 @@ fn controller_panel_lines(
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string());
 
-    // Iteration vs target text (shared by both modes)
-    let iter_color = if iteration_ms > 4000.0 {
+    // Build EMA bar: fill_pct = build_ema / 3000.0, color by timing
+    let fill_pct = (build_ema / 3000.0 * 100.0).min(100.0);
+    let build_color = if build_ema > 4000.0 {
         ERROR_RED
-    } else if iteration_ms > 3000.0 {
+    } else if build_ema > 3000.0 {
         AMBER
     } else {
-        FOREGROUND
+        TERMINAL_GREEN
     };
 
+    // 10-char fill bar
+    let filled = ((fill_pct / 100.0 * 10.0).round() as usize).min(10);
+    let empty = 10 - filled;
+    let bar_str = format!(
+        "{}{}",
+        "\u{2588}".repeat(filled),
+        "\u{2591}".repeat(empty),
+    );
+
+    // Budget text: target_bytes in MB
+    let budget_mb = target_bytes / 1_000_000;
+    let budget_delta_text = deltas.map(|d| {
+        let pct = d.budget_delta_pct;
+        if pct.abs() < 0.5 {
+            ("(=)".to_string(), SLATE_500)
+        } else if pct > 0.0 {
+            (format!("(+{:.0}%)", pct), TERMINAL_GREEN)
+        } else {
+            (format!("({:.0}%)", pct), AMBER)
+        }
+    });
+
+    // Threads/bg deltas for inline display
+    let threads_delta_text = deltas.map(|d| {
+        if d.threads_delta == 0 {
+            ("(=)".to_string(), SLATE_500)
+        } else if d.threads_delta > 0 {
+            (format!("(+{})", d.threads_delta), TERMINAL_GREEN)
+        } else {
+            (format!("({})", d.threads_delta), AMBER)
+        }
+    });
+    let bg_delta_text = deltas.map(|d| {
+        if d.bg_delta == 0 {
+            ("(=)".to_string(), SLATE_500)
+        } else if d.bg_delta > 0 {
+            (format!("(+{})", d.bg_delta), TERMINAL_GREEN)
+        } else {
+            (format!("({})", d.bg_delta), AMBER)
+        }
+    });
+
     if dense {
-        // Compact: 2-3 lines
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled(
-                    format!("[{}]", bn_label),
-                    Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(" {:.1}s/3s", iteration_ms / 1000.0),
-                    Style::default().fg(iter_color),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("blk ", Style::default().fg(SLATE_500)),
-                Span::styled(blocks_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  thr ", Style::default().fg(SLATE_500)),
-                Span::styled(threads_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  bg ", Style::default().fg(SLATE_500)),
-                Span::styled(bg_text, Style::default().fg(FOREGROUND)),
-            ]),
+        // Compact: 2 lines
+        // Line 1: build EMA + budget
+        let mut spans1 = vec![
+            Span::styled(
+                format!("build {:.1}s/3s {:.0}%", build_ema / 1000.0, fill_pct),
+                Style::default().fg(build_color),
+            ),
         ];
-        if let Some(d) = deltas {
-            lines.push(format_action_line_compact(d));
+        if target_bytes > 0 {
+            spans1.push(Span::styled(
+                format!("  {}MB", budget_mb),
+                Style::default().fg(FOREGROUND),
+            ));
+            if let Some((ref txt, col)) = budget_delta_text {
+                spans1.push(Span::styled(
+                    format!(" {}", txt),
+                    Style::default().fg(col),
+                ));
+            }
         }
-        lines
+
+        // Line 2: bottleneck badge + knobs + L0
+        let mut spans2 = vec![
+            Span::styled(
+                format!("[{}]", bn_label),
+                Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" thr ", Style::default().fg(SLATE_500)),
+            Span::styled(threads_text, Style::default().fg(FOREGROUND)),
+            Span::styled(" bg ", Style::default().fg(SLATE_500)),
+            Span::styled(bg_text, Style::default().fg(FOREGROUND)),
+        ];
+        if let Some((ref txt, col)) = bg_delta_text {
+            spans2.push(Span::styled(
+                format!(" {}", txt),
+                Style::default().fg(col),
+            ));
+        }
+        spans2.push(Span::styled("  L0 ", Style::default().fg(SLATE_500)));
+        spans2.push(Span::styled(
+            format!("{:.0}", l0_ema),
+            Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
+        ));
+
+        vec![Line::from(spans1), Line::from(spans2)]
     } else {
-        // Detail: span signal + waste signal + knobs + actions
-        let mut lines = vec![
-            // Line 1: classification + iteration vs target (span signal)
-            Line::from(vec![
-                Span::styled(
-                    format!("[{}]", bn_label),
-                    Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("  iter {:.1}s/3s", iteration_ms / 1000.0),
-                    Style::default().fg(iter_color),
-                ),
-            ]),
-            // Line 2: waste composition (I/O signal) + L0
-            Line::from(vec![
-                Span::styled("waste ", Style::default().fg(SLATE_500)),
-                Span::styled(
-                    format!("recv {:.0}%", recv_waste_pct),
-                    Style::default().fg(AMBER),
-                ),
-                Span::styled(
-                    format!("  wait {:.0}%", wait_waste_pct),
-                    Style::default().fg(ERROR_RED),
-                ),
-                Span::styled("  L0 ", Style::default().fg(SLATE_500)),
-                Span::styled(
-                    format!("{:.0}", l0_ema),
-                    Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
-                ),
-            ]),
-            // Line 3: knobs
-            Line::from(vec![
-                Span::styled("blk ", Style::default().fg(SLATE_500)),
-                Span::styled(blocks_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  thr ", Style::default().fg(SLATE_500)),
-                Span::styled(threads_text, Style::default().fg(FOREGROUND)),
-                Span::styled("  bg ", Style::default().fg(SLATE_500)),
-                Span::styled(bg_text, Style::default().fg(FOREGROUND)),
-            ]),
-        ];
-        // Line 4: actions (what changed this batch)
-        if let Some(d) = deltas {
-            lines.push(format_action_line(d));
+        // Detail: 5 lines
+        // Line 1: sizing header
+        let line1 = Line::from(vec![
+            Span::styled(
+                "\u{2500}\u{2500} sizing \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+                Style::default().fg(SLATE_500),
+            ),
+        ]);
+
+        // Line 2: build bar with EMA vs target
+        let line2 = Line::from(vec![
+            Span::styled("build ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                format!("{:.1}s/3s", build_ema / 1000.0),
+                Style::default().fg(build_color),
+            ),
+            Span::styled("  ", Style::default()),
+            Span::styled(bar_str, Style::default().fg(build_color)),
+            Span::styled(
+                format!("  {:.0}%", fill_pct),
+                Style::default().fg(build_color),
+            ),
+        ]);
+
+        // Line 3: budget line
+        let mut budget_spans = Vec::new();
+        if target_bytes > 0 {
+            budget_spans.push(Span::styled("budget ", Style::default().fg(SLATE_500)));
+            budget_spans.push(Span::styled(
+                format!("{}MB", budget_mb),
+                Style::default().fg(FOREGROUND),
+            ));
+            if let Some((ref txt, col)) = budget_delta_text {
+                budget_spans.push(Span::styled(
+                    format!(" {}", txt),
+                    Style::default().fg(col),
+                ));
+            }
+            budget_spans.push(Span::styled(
+                format!("  {} blk", blocks_text),
+                Style::default().fg(FOREGROUND),
+            ));
+        } else {
+            budget_spans.push(Span::styled("budget ", Style::default().fg(SLATE_500)));
+            budget_spans.push(Span::styled("-", Style::default().fg(SLATE_500)));
+            budget_spans.push(Span::styled(
+                format!("  {} blk", blocks_text),
+                Style::default().fg(FOREGROUND),
+            ));
         }
-        lines
+        let line3 = Line::from(budget_spans);
+
+        // Line 4: I/O header + bottleneck badge + waste (collapsed into one line)
+        let waste_secs = waste / 1000.0;
+        let mut line4_spans = vec![
+            Span::styled(
+                "\u{2500}\u{2500} i/o \u{2500}\u{2500} ",
+                Style::default().fg(SLATE_500),
+            ),
+            Span::styled(
+                format!("[{}]", bn_label),
+                Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" waste {:.1}s", waste_secs),
+                Style::default().fg(SLATE_500),
+            ),
+        ];
+        if waste > 1.0 {
+            line4_spans.push(Span::styled(
+                format!("  recv {:.0}%", recv_waste_pct),
+                Style::default().fg(AMBER),
+            ));
+            line4_spans.push(Span::styled(
+                format!("  flush {:.0}%", wait_waste_pct),
+                Style::default().fg(ERROR_RED),
+            ));
+        }
+        let line4_final = Line::from(line4_spans);
+
+        // Line 5: knobs with inline deltas + L0
+        let mut knob_spans = vec![
+            Span::styled("thr ", Style::default().fg(SLATE_500)),
+            Span::styled(threads_text, Style::default().fg(FOREGROUND)),
+        ];
+        if let Some((ref txt, col)) = threads_delta_text {
+            knob_spans.push(Span::styled(
+                format!(" {}", txt),
+                Style::default().fg(col),
+            ));
+        }
+        knob_spans.push(Span::styled("  bg ", Style::default().fg(SLATE_500)));
+        knob_spans.push(Span::styled(bg_text, Style::default().fg(FOREGROUND)));
+        if let Some((ref txt, col)) = bg_delta_text {
+            knob_spans.push(Span::styled(
+                format!(" {}", txt),
+                Style::default().fg(col),
+            ));
+        }
+        knob_spans.push(Span::styled("  L0 ", Style::default().fg(SLATE_500)));
+        knob_spans.push(Span::styled(
+            format!("{:.0}", l0_ema),
+            Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
+        ));
+        let line5 = Line::from(knob_spans);
+
+        vec![line1, line2, line3, line4_final, line5]
     }
 }
 
 /// Format a delta value as "+N" / "-N" / "=" with color.
+#[allow(dead_code)]
 fn delta_span(label: &str, delta: i64, invert_color: bool) -> Vec<Span<'static>> {
     let (text, color) = if delta > 0 {
         (
@@ -2570,25 +2706,6 @@ fn delta_span(label: &str, delta: i64, invert_color: bool) -> Vec<Span<'static>>
     ]
 }
 
-/// Format the action line for detail mode.
-/// Shows what the controller adjusted: thr/bg deltas.
-fn format_action_line(d: &ControllerDeltas) -> Line<'static> {
-    let mut spans = Vec::new();
-    spans.extend(delta_span("thr", d.threads_delta as i64, false));
-    spans.push(Span::raw("  "));
-    // bg: more jobs = helping flush = green when flush-bound
-    spans.extend(delta_span("bg", d.bg_delta as i64, false));
-    Line::from(spans)
-}
-
-/// Format the action line for compact mode (shorter labels).
-fn format_action_line_compact(d: &ControllerDeltas) -> Line<'static> {
-    let mut spans = Vec::new();
-    spans.extend(delta_span("t", d.threads_delta as i64, false));
-    spans.push(Span::raw(" "));
-    spans.extend(delta_span("bg", d.bg_delta as i64, false));
-    Line::from(spans)
-}
 
 /// Build the left column for normal per-batch bulk-build diagnostics.
 fn build_batch_left_column(
@@ -6598,32 +6715,53 @@ mod tests {
         let bb = BulkBuildProgressData {
             controller_bottleneck: Some(2), // Build
             controller_recv_ema: Some(100.0),
-            controller_build_ema: Some(3000.0),
+            controller_build_ema: Some(2100.0),
             controller_wait_ema: Some(200.0),
             controller_l0_ema: Some(12.0),
             controller_fetch_threads: Some(8),
             controller_bg_jobs: Some(4),
             batch_block_count: Some(50_000),
+            target_batch_bytes: Some(85_000_000),
             prefetch_channel_capacity: Some(4),
             ..Default::default()
         };
-        // Without deltas: 2 lines (no action line)
+        // Compact: always 2 lines (no variable action line)
         let lines = controller_panel_lines(&bb, true, None);
-        assert_eq!(lines.len(), 2);
-        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(lines.len(), 2, "compact mode should produce 2 lines");
+
+        // Line 1: build EMA summary + budget
+        let text0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text.contains("[BUILD]"),
-            "should contain bottleneck label, got: {}",
-            text
+            text0.contains("build") && text0.contains("s/3s"),
+            "line 1 should contain build EMA, got: {}",
+            text0
+        );
+        assert!(
+            text0.contains("85MB"),
+            "line 1 should contain budget in MB, got: {}",
+            text0
         );
 
-        // With deltas: 3 lines (action line added)
+        // Line 2: bottleneck badge + knobs
+        let text1: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text1.contains("[BUILD]"),
+            "line 2 should contain bottleneck label, got: {}",
+            text1
+        );
+
+        // With deltas: still 2 lines (deltas are inline)
         let deltas = ControllerDeltas {
+            budget_delta_pct: 8.0,
             threads_delta: 0,
             bg_delta: -1,
         };
         let lines = controller_panel_lines(&bb, true, Some(&deltas));
-        assert_eq!(lines.len(), 3);
+        assert_eq!(
+            lines.len(),
+            2,
+            "compact mode with deltas should still produce 2 lines"
+        );
     }
 
     #[test]
@@ -6637,31 +6775,71 @@ mod tests {
             controller_fetch_threads: Some(4),
             controller_bg_jobs: Some(8),
             batch_block_count: Some(20_000),
+            target_batch_bytes: Some(120_000_000),
             prefetch_channel_capacity: Some(4),
             ..Default::default()
         };
-        // Without deltas: 3 lines
+        // Detail: always 5 lines
         let lines = controller_panel_lines(&bb, false, None);
-        assert_eq!(lines.len(), 3);
-        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(lines.len(), 5, "detail mode should produce 5 lines");
+
+        // Line 1: sizing header
+        let text0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text.contains("[FLUSH]"),
-            "should contain bottleneck label, got: {}",
-            text
+            text0.contains("sizing"),
+            "line 1 should be sizing header, got: {}",
+            text0
         );
 
-        // With deltas: 4 lines
+        // Line 2: build bar
+        let text1: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text1.contains("build") && text1.contains("s/3s"),
+            "line 2 should contain build EMA, got: {}",
+            text1
+        );
+
+        // Line 3: budget
+        let text2: String = lines[2].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text2.contains("budget") && text2.contains("120MB"),
+            "line 3 should contain budget, got: {}",
+            text2
+        );
+
+        // Line 4: I/O header + bottleneck badge
+        let text3: String = lines[3].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text3.contains("i/o") && text3.contains("[FLUSH]"),
+            "line 4 should contain i/o header and bottleneck label, got: {}",
+            text3
+        );
+
+        // Line 5: knobs with L0
+        let text4: String = lines[4].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text4.contains("thr") && text4.contains("bg") && text4.contains("L0"),
+            "line 5 should contain knobs and L0, got: {}",
+            text4
+        );
+
+        // With deltas: still 5 lines (deltas are inline)
         let deltas = ControllerDeltas {
+            budget_delta_pct: -5.0,
             threads_delta: -1,
             bg_delta: 1,
         };
         let lines = controller_panel_lines(&bb, false, Some(&deltas));
-        assert_eq!(lines.len(), 4);
-        let action_text: String = lines[3].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(
+            lines.len(),
+            5,
+            "detail mode with deltas should still produce 5 lines"
+        );
+        let knobs_text: String = lines[4].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            action_text.contains("thr "),
-            "action line should show thread change, got: {}",
-            action_text
+            knobs_text.contains("thr") && knobs_text.contains("("),
+            "knobs line should show inline deltas, got: {}",
+            knobs_text
         );
     }
 
