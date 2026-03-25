@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use ckbadger_indexer::media_store::MediaBlobStore;
+use ckbadger_indexer::parser::{build_dob1_svg, extract_dob1_pattern};
 
 use super::assets::{
     count_nft_collection_activities_cached, list_canonical_nft_collection_activities_page,
@@ -48,6 +49,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/spore/objects/{spore_id}", get(get_spore))
         .route("/spore/objects/{spore_id}/decode", get(decode_spore))
         .route("/spore/objects/{spore_id}/media/{hash}", get(serve_media))
+        .route("/spore/objects/{spore_id}/render", get(render_spore_svg))
         .route(
             "/spore/objects/{spore_id}/charts/capacity-history",
             get(get_spore_capacity_chart),
@@ -1141,16 +1143,16 @@ async fn decode_spore(
     let spore_id_hex = format!("0x{}", hex::encode(&id));
 
     match decoded {
-        Some(entry) => {
-            let traits = entry
+        Some(decoded_entry) => {
+            let traits: Vec<DobTraitResponse> = decoded_entry
                 .traits
-                .into_iter()
+                .iter()
                 .map(|t| DobTraitResponse {
-                    name: t.name,
-                    value: t.value,
+                    name: t.name.clone(),
+                    value: t.value.clone(),
                 })
                 .collect();
-            let media: Vec<DecodedMediaResponse> = entry
+            let mut media: Vec<DecodedMediaResponse> = decoded_entry
                 .media
                 .iter()
                 .map(|m| DecodedMediaResponse {
@@ -1162,6 +1164,41 @@ async fn decode_spore(
                     url: format!("/spore/objects/{}/media/{}", spore_id_hex, m.hash),
                 })
                 .collect();
+
+            // If no stored media is an image, try DOB1 pattern-based SVG rendering.
+            // The render endpoint builds SVG on-the-fly from cluster patterns + traits.
+            let has_image_media = media.iter().any(|m| m.media_type.starts_with("image/"));
+            if !has_image_media && !decoded_entry.traits.is_empty() {
+                // Check if cluster has DOB1 patterns (lightweight: just parse JSON + check pattern array)
+                if let Some(cluster_id) = entry.collection_id.as_deref() {
+                    let store = state.store.clone();
+                    let cid = cluster_id.to_vec();
+                    let has_patterns = tokio::task::spawn_blocking(move || {
+                        store
+                            .get_spore(&cid)
+                            .ok()
+                            .flatten()
+                            .and_then(|c| c.description)
+                            .and_then(|desc| serde_json::from_str::<serde_json::Value>(&desc).ok())
+                            .map(|meta| !extract_dob1_pattern(&meta).is_empty())
+                            .unwrap_or(false)
+                    })
+                    .await
+                    .unwrap_or(false);
+
+                    if has_patterns {
+                        media.push(DecodedMediaResponse {
+                            media_type: "image/svg+xml".to_string(),
+                            role: Some("render".to_string()),
+                            size: 0,
+                            hash: String::new(),
+                            step: None,
+                            url: format!("/spore/objects/{}/render", spore_id_hex),
+                        });
+                    }
+                }
+            }
+
             ok(SporeDobDecodeResponse {
                 status: "decoded".to_string(),
                 spore_id: spore_id_hex,
@@ -1279,6 +1316,86 @@ async fn serve_media(
 
     Ok(builder
         .body(axum::body::Body::from(blob))
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .into_response())
+}
+
+/// Render DOB1 SVG on-the-fly from cluster patterns + decoded traits.
+///
+/// `GET /spore/objects/{spore_id}/render`
+///
+/// Builds SVG from the cluster's DOB1 pattern metadata and the spore's
+/// decoded trait values. Returns `image/svg+xml` with security headers.
+async fn render_spore_svg(
+    State(state): State<Arc<AppState>>,
+    Path(spore_id): Path<String>,
+) -> Result<Response, (StatusCode, axum::Json<ApiError>)> {
+    let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
+        .map_err(|_| ApiError::bad_request("Invalid spore ID hex"))?;
+
+    // Load spore entry to get collection_id
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let spore_entry = tokio::task::spawn_blocking(move || store.get_spore(&id_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Spore not found"))?;
+
+    let cluster_id = spore_entry
+        .collection_id
+        .as_deref()
+        .ok_or_else(|| {
+            ApiError::not_found("Spore has no collection — cannot resolve DOB1 patterns")
+        })?
+        .to_vec();
+
+    // Load decoded traits
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let decoded = tokio::task::spawn_blocking(move || store.get_dob_decoded(&id_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Spore has not been decoded yet"))?;
+
+    // Load cluster entry to get description (DOB metadata)
+    let store = state.store.clone();
+    let cluster_entry = tokio::task::spawn_blocking(move || store.get_spore(&cluster_id))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Cluster not found"))?;
+
+    let description = cluster_entry
+        .description
+        .as_deref()
+        .ok_or_else(|| ApiError::not_found("Cluster has no description"))?;
+
+    let metadata: serde_json::Value = serde_json::from_str(description)
+        .map_err(|_| ApiError::not_found("Cluster description is not valid JSON"))?;
+
+    // Build trait map for SVG rendering
+    let trait_map: std::collections::HashMap<String, String> = decoded
+        .traits
+        .iter()
+        .map(|t| (t.name.clone(), t.value.clone()))
+        .collect();
+
+    let patterns = extract_dob1_pattern(&metadata);
+    let svg = build_dob1_svg(&patterns, &trait_map)
+        .ok_or_else(|| ApiError::not_found("No DOB1 SVG can be rendered for this spore"))?;
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "image/svg+xml")
+        .header(header::CACHE_CONTROL, "public, max-age=86400")
+        .header(
+            header::CONTENT_SECURITY_POLICY,
+            "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+        )
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(axum::body::Body::from(svg))
         .map_err(|e| ApiError::internal(e.to_string()))?
         .into_response())
 }

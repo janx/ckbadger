@@ -16,12 +16,12 @@ struct Dob0PatternElement {
 }
 
 #[derive(Debug, Clone)]
-struct Dob1PatternElement {
-    image_name: String,
-    svg_fields: String,
-    trait_name: String,
-    pattern_type: String,
-    trait_args: Option<Value>,
+pub struct Dob1PatternElement {
+    pub image_name: String,
+    pub svg_fields: String,
+    pub trait_name: String,
+    pub pattern_type: String,
+    pub trait_args: Option<Value>,
 }
 
 pub fn analyze_spore_media_profile(
@@ -580,7 +580,7 @@ fn extract_dob0_pattern(metadata: &Value) -> Vec<Dob0PatternElement> {
     Vec::new()
 }
 
-fn extract_dob1_pattern(metadata: &Value) -> Vec<Dob1PatternElement> {
+pub fn extract_dob1_pattern(metadata: &Value) -> Vec<Dob1PatternElement> {
     let dob = if let Some(v) = metadata.get("dob").and_then(|v| v.as_object()) {
         v
     } else {
@@ -732,7 +732,7 @@ fn resolve_dob1_snippet(
     wildcard
 }
 
-fn build_dob1_svg(
+pub fn build_dob1_svg(
     patterns: &[Dob1PatternElement],
     traits: &HashMap<String, String>,
 ) -> Option<String> {
