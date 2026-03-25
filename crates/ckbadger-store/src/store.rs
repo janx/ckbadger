@@ -268,9 +268,10 @@ fn detect_system_resources(runtime_config: StoreRuntimeConfig) -> (u64, usize) {
             })
     };
 
-    let cpus = std::thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(8);
+    // Physical cores — not logical (SMT/HT) — because all consumers
+    // (RocksDB bg_jobs, subcompactions, fetch threads) are I/O-bound
+    // and do not benefit from hyperthreads sharing execution resources.
+    let cpus = num_cpus::get_physical().max(1);
 
     (ram, cpus)
 }
@@ -651,9 +652,9 @@ pub struct CkbadgerStore {
     /// Mutex because `set_capacity()` requires `&mut` (rare mode-transition calls only).
     block_cache: Mutex<rocksdb::Cache>,
     /// Global memtable memory budget — controls WHEN flushes happen across all CFs.
-    /// With `atomic_flush=true` and many CFs, per-CF triggers cause unpredictable I/O storms.
-    /// WBM replaces that with a single threshold: flush oldest CF when total memtable
-    /// memory exceeds the budget, giving the indexer predictable flush behavior.
+    /// With many CFs, per-CF triggers cause unpredictable I/O storms. WBM replaces
+    /// that with a single threshold: flush oldest CF when total memtable memory
+    /// exceeds the budget, giving the indexer predictable flush behavior.
     write_buffer_manager: WriteBufferManager,
     bulk_sync_mode: AtomicBool,
     is_secondary: bool,
@@ -1121,13 +1122,17 @@ impl CkbadgerStore {
         opts.set_use_direct_io_for_flush_and_compaction(true);
 
         // Atomic flush: when any CF's memtable triggers a flush, ALL CFs flush
-        // together. This prevents cross-CF data inconsistency when using
-        // commit_no_wal() during bulk sync — without it, a crash can leave
-        // live_cells deletes flushed to SST while consumed_cells puts are lost
-        // in memtable, creating unrecoverable "cell black holes".
-        // Note: atomic_flush is incompatible with enable_pipelined_write, but
-        // pipelined_write only helps pipeline WAL+memtable inserts — irrelevant
-        // during bulk sync where WAL is disabled (commit_no_wal).
+        // together.  Required during live sync (WAL enabled) to prevent
+        // cross-CF data inconsistency on crash — without it, a crash can
+        // leave live_cells deletes flushed to SST while consumed_cells puts
+        // are lost in memtable, creating unrecoverable "cell black holes".
+        //
+        // Toggled OFF during bulk sync by set_bulk_sync_compaction_options():
+        // with 61 CFs, atomic flush serializes all CF memtable→L0 flushes
+        // into a single background job (30-60+ seconds), blocking all other
+        // flushes and causing unbounded imm_memtable growth.  Bulk sync
+        // does not need atomic flush because crash → fail-fast → rebuild
+        // from genesis (partial flush state is discarded).
         opts.set_atomic_flush(true);
 
         // Unordered write: skip write-group leader serialization overhead.
@@ -1141,10 +1146,9 @@ impl CkbadgerStore {
         opts.set_block_based_table_factory(&block_opts);
 
         // Global WriteBufferManager: controls total memtable memory across all CFs.
-        // With atomic_flush and many CFs, per-CF memtable limits cause unpredictable
-        // I/O storms when a random hot CF triggers a flush of ALL CFs. WBM replaces
-        // that with a global budget — flush only happens when total memtable usage
-        // crosses the threshold, giving predictable, batched flush behavior.
+        // With many CFs, per-CF memtable limits cause unpredictable flush storms.
+        // WBM replaces that with a global budget — flush only happens when total
+        // memtable usage crosses the threshold, giving predictable flush behavior.
         // allow_stall=true: stall writes when memtable memory exceeds budget rather
         // than OOM; the adaptive batch controller will detect stalls and reduce batch size.
         let write_buffer_manager =
@@ -1751,6 +1755,14 @@ impl CkbadgerStore {
         let file_base_str = p.bulk_target_file_size_base.to_string();
         let hot_cf_buffer_str = p.write_buffer_hot_cf_bytes.to_string();
 
+        // Disable atomic flush: with 61 CFs it serializes all memtable→L0
+        // flushes into a single 30-60s background job, causing imm_memtable
+        // pileup and OOM.  Bulk sync doesn't need it — crash → fail-fast →
+        // rebuild from genesis.
+        if let Err(e) = self.db.set_options(&[("atomic_flush", "false")]) {
+            warn!("Failed to disable atomic_flush for bulk sync: {}", e);
+        }
+
         self.write_buffer_manager
             .set_buffer_size(p.wbm_bulk_sync_bytes);
 
@@ -1850,12 +1862,20 @@ impl CkbadgerStore {
 
         // Flush all memtables to SST BEFORE reducing WBM budget.
         // This ensures all commit_no_wal() data from bulk sync is durable.
+        // Done while atomic_flush is still OFF so each CF flushes independently
+        // (fast), rather than serializing all 61 CFs into one mega-flush.
         if let Err(e) = self.flush_all_memtables() {
             error!(
                 error = %e,
                 "Failed to flush memtables during bulk-to-normal transition; \
                  unflushed commit_no_wal data is at risk on crash"
             );
+        }
+
+        // Re-enable atomic flush for live sync crash safety (WAL + atomic flush
+        // ensures cross-CF consistency on crash recovery).
+        if let Err(e) = self.db.set_options(&[("atomic_flush", "true")]) {
+            warn!("Failed to re-enable atomic_flush for live sync: {}", e);
         }
 
         let p = &self.memory_profile;
@@ -1899,8 +1919,7 @@ impl CkbadgerStore {
     /// Flush all column family memtables to SST files.
     ///
     /// Required after bulk sync (commit_no_wal) to make memtable data durable.
-    /// With atomic_flush=true, flushing any single CF triggers all CFs to flush
-    /// together, but we iterate all CFs to ensure every memtable is captured.
+    /// Iterates all CFs to ensure every memtable is captured.
     pub fn flush_all_memtables(&self) -> anyhow::Result<()> {
         let started = std::time::Instant::now();
 
