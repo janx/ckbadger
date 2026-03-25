@@ -1165,15 +1165,18 @@ async fn decode_spore(
                 })
                 .collect();
 
-            // If no stored media is an image, try DOB1 pattern-based SVG rendering.
-            // The render endpoint builds SVG on-the-fly from cluster patterns + traits.
+            // If no stored media is an image, check for renderable SVG:
+            // 1. Inline SVG in trait values (some decoders emit SVG as a trait)
+            // 2. DOB1 pattern-based SVG (cluster defines SVG templates)
+            // The render endpoint builds/extracts SVG on-the-fly.
             let has_image_media = media.iter().any(|m| m.media_type.starts_with("image/"));
             if !has_image_media && !decoded_entry.traits.is_empty() {
-                // Check if cluster has DOB1 patterns (lightweight: just parse JSON + check pattern array)
-                if let Some(cluster_id) = entry.collection_id.as_deref() {
+                let has_svg = if traits_contain_svg(&decoded_entry.traits) {
+                    true
+                } else if let Some(cluster_id) = entry.collection_id.as_deref() {
                     let store = state.store.clone();
                     let cid = cluster_id.to_vec();
-                    let has_patterns = tokio::task::spawn_blocking(move || {
+                    tokio::task::spawn_blocking(move || {
                         store
                             .get_spore(&cid)
                             .ok()
@@ -1184,18 +1187,20 @@ async fn decode_spore(
                             .unwrap_or(false)
                     })
                     .await
-                    .unwrap_or(false);
+                    .unwrap_or(false)
+                } else {
+                    false
+                };
 
-                    if has_patterns {
-                        media.push(DecodedMediaResponse {
-                            media_type: "image/svg+xml".to_string(),
-                            role: Some("render".to_string()),
-                            size: 0,
-                            hash: String::new(),
-                            step: None,
-                            url: format!("/spore/objects/{}/render", spore_id_hex),
-                        });
-                    }
+                if has_svg {
+                    media.push(DecodedMediaResponse {
+                        media_type: "image/svg+xml".to_string(),
+                        role: Some("render".to_string()),
+                        size: 0,
+                        hash: String::new(),
+                        step: None,
+                        url: format!("/spore/objects/{}/render", spore_id_hex),
+                    });
                 }
             }
 
@@ -1320,12 +1325,15 @@ async fn serve_media(
         .into_response())
 }
 
-/// Render DOB1 SVG on-the-fly from cluster patterns + decoded traits.
+/// Render DOB SVG on-the-fly from decoded traits or cluster patterns.
 ///
 /// `GET /spore/objects/{spore_id}/render`
 ///
-/// Builds SVG from the cluster's DOB1 pattern metadata and the spore's
-/// decoded trait values. Returns `image/svg+xml` with security headers.
+/// Two SVG sources (tried in order):
+/// 1. Inline SVG in decoded trait values (some decoders emit SVG as a trait)
+/// 2. SVG built from cluster DOB1 pattern templates + decoded trait values
+///
+/// Returns `image/svg+xml` with security headers.
 async fn render_spore_svg(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
@@ -1333,7 +1341,21 @@ async fn render_spore_svg(
     let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
         .map_err(|_| ApiError::bad_request("Invalid spore ID hex"))?;
 
-    // Load spore entry to get collection_id
+    // Load decoded traits
+    let store = state.store.clone();
+    let id_c = id.clone();
+    let decoded = tokio::task::spawn_blocking(move || store.get_dob_decoded(&id_c))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Spore has not been decoded yet"))?;
+
+    // Source 1: extract inline SVG from trait values (fast path — no cluster load needed)
+    if let Some(svg) = extract_svg_from_traits(&decoded.traits) {
+        return Ok(svg_response(svg));
+    }
+
+    // Source 2: build SVG from DOB1 pattern templates + decoded trait values
     let store = state.store.clone();
     let id_c = id.clone();
     let spore_entry = tokio::task::spawn_blocking(move || store.get_spore(&id_c))
@@ -1345,21 +1367,9 @@ async fn render_spore_svg(
     let cluster_id = spore_entry
         .collection_id
         .as_deref()
-        .ok_or_else(|| {
-            ApiError::not_found("Spore has no collection — cannot resolve DOB1 patterns")
-        })?
+        .ok_or_else(|| ApiError::not_found("Spore has no collection"))?
         .to_vec();
 
-    // Load decoded traits
-    let store = state.store.clone();
-    let id_c = id.clone();
-    let decoded = tokio::task::spawn_blocking(move || store.get_dob_decoded(&id_c))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found("Spore has not been decoded yet"))?;
-
-    // Load cluster entry to get description (DOB metadata)
     let store = state.store.clone();
     let cluster_entry = tokio::task::spawn_blocking(move || store.get_spore(&cluster_id))
         .await
@@ -1367,15 +1377,12 @@ async fn render_spore_svg(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Cluster not found"))?;
 
-    let description = cluster_entry
+    let metadata: serde_json::Value = cluster_entry
         .description
         .as_deref()
-        .ok_or_else(|| ApiError::not_found("Cluster has no description"))?;
+        .and_then(|d| serde_json::from_str(d).ok())
+        .ok_or_else(|| ApiError::not_found("Cluster has no valid JSON description"))?;
 
-    let metadata: serde_json::Value = serde_json::from_str(description)
-        .map_err(|_| ApiError::not_found("Cluster description is not valid JSON"))?;
-
-    // Build trait map for SVG rendering
     let trait_map: std::collections::HashMap<String, String> = decoded
         .traits
         .iter()
@@ -1384,9 +1391,13 @@ async fn render_spore_svg(
 
     let patterns = extract_dob1_pattern(&metadata);
     let svg = build_dob1_svg(&patterns, &trait_map)
-        .ok_or_else(|| ApiError::not_found("No DOB1 SVG can be rendered for this spore"))?;
+        .ok_or_else(|| ApiError::not_found("No SVG can be rendered for this spore"))?;
 
-    Ok(Response::builder()
+    Ok(svg_response(svg))
+}
+
+fn svg_response(svg: String) -> Response {
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "image/svg+xml")
         .header(header::CACHE_CONTROL, "public, max-age=86400")
@@ -1396,8 +1407,30 @@ async fn render_spore_svg(
         )
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .body(axum::body::Body::from(svg))
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .into_response())
+        .expect("valid response")
+        .into_response()
+}
+
+/// Extract SVG markup from decoded trait values.
+///
+/// Some DOB decoders emit SVG directly as a trait value (e.g. a trait named
+/// "IMAGE" whose value is `<svg ...>...</svg>`). This function finds the first
+/// trait value that looks like SVG and returns it.
+fn extract_svg_from_traits(traits: &[ckbadger_store::types::DobDecodedTrait]) -> Option<String> {
+    for t in traits {
+        let trimmed = t.value.trim();
+        if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("<svg") {
+            return Some(t.value.clone());
+        }
+    }
+    None
+}
+
+/// Check whether decoded traits contain inline SVG markup.
+fn traits_contain_svg(traits: &[ckbadger_store::types::DobDecodedTrait]) -> bool {
+    traits
+        .iter()
+        .any(|t| t.value.trim().len() >= 4 && t.value.trim()[..4].eq_ignore_ascii_case("<svg"))
 }
 
 async fn get_cluster_capacity_chart(
