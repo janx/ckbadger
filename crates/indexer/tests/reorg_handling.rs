@@ -1,7 +1,10 @@
 //! Integration tests for chain reorganization (rollback) handling via ckbadger-store.
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{AddressBalance, ParticipantDelta, ScriptInfo, TokenInfo, TxActions};
+use ckbadger_store::types::{
+    AddressBalance, FiberChannel, FiberChannelState, ParticipantDelta, ScriptInfo,
+    ScriptReferenceInfo, TokenInfo, TxActions,
+};
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{
     CachedBlockHeader, DeepForkInfo, LiveCellInfo, PositionedCellInfo, RollbackResult, TxIndexEntry,
@@ -664,4 +667,452 @@ fn test_rollback_updates_derived_cfs_inline() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Fiber channel rollback
+// ---------------------------------------------------------------------------
+
+/// Helper: create a FiberChannel for testing.
+fn make_fiber_channel(
+    funding_tx_hash: &[u8],
+    output_index: u32,
+    state: FiberChannelState,
+    capacity: u64,
+    open_block: i64,
+    participants: Vec<Vec<u8>>,
+    funding_lock_args: Vec<u8>,
+) -> FiberChannel {
+    FiberChannel {
+        funding_tx_hash: funding_tx_hash.to_vec(),
+        funding_output_index: output_index,
+        state,
+        capacity,
+        udt_type_hash: None,
+        udt_amount: None,
+        open_block,
+        open_timestamp: open_block * 1000,
+        close_tx_hash: None,
+        close_block: None,
+        close_timestamp: None,
+        commitment_tx_hash: None,
+        commitment_output_index: None,
+        delay_epoch: None,
+        settlement_tx_hash: None,
+        settlement_block: None,
+        settlement_timestamp: None,
+        participants,
+        funding_lock_args,
+    }
+}
+
+#[test]
+fn test_rollback_deletes_fiber_channels_opened_after_fork_point() {
+    let root = tempfile::tempdir().unwrap();
+    let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+    let append = CkbadgerStore::open_append_only(root.path().join("append-only")).unwrap();
+
+    // Write block headers 1..6 so rollback knows the chain height
+    let mut batch = StoreBatch::new(&domain);
+    for b in 1..=6i64 {
+        batch.put_block_header(b, &make_header(b));
+    }
+
+    let participant_a = vec![0xA0; 32];
+    let participant_b = vec![0xB0; 32];
+
+    // Channel A: opened at block 3 (survives rollback to 4)
+    let funding_tx_a = vec![0x01; 32];
+    let channel_id_a = ckbadger_store::keys::encode_fiber_channel_id(&funding_tx_a, 0);
+    let channel_a = make_fiber_channel(
+        &funding_tx_a,
+        0,
+        FiberChannelState::Open,
+        300_00000000,
+        3,
+        vec![participant_a.clone()],
+        vec![0xFA; 20],
+    );
+
+    // Channel B: opened at block 5 (should be deleted on rollback to 4)
+    let funding_tx_b = vec![0x02; 32];
+    let channel_id_b = ckbadger_store::keys::encode_fiber_channel_id(&funding_tx_b, 0);
+    let channel_b = make_fiber_channel(
+        &funding_tx_b,
+        0,
+        FiberChannelState::Open,
+        500_00000000,
+        5,
+        vec![participant_b.clone()],
+        vec![0xFB; 20],
+    );
+
+    batch.put_fiber_channel(&channel_id_a, &channel_a);
+    batch.put_addr_fiber_channel(&participant_a, &channel_id_a);
+    batch.put_fiber_channel_by_funding_args(&channel_a.funding_lock_args, &channel_id_a);
+
+    batch.put_fiber_channel(&channel_id_b, &channel_b);
+    batch.put_addr_fiber_channel(&participant_b, &channel_id_b);
+    batch.put_fiber_channel_by_funding_args(&channel_b.funding_lock_args, &channel_id_b);
+    batch.commit().unwrap();
+
+    // Sanity: both channels exist
+    assert!(domain.get_fiber_channel(&channel_id_a).unwrap().is_some());
+    assert!(domain.get_fiber_channel(&channel_id_b).unwrap().is_some());
+
+    // Rollback to block 4
+    domain
+        .rollback_to_block_with_append_only_store(4, Some(&append))
+        .unwrap();
+
+    // Channel A (opened at 3) survives
+    let ch_a = domain.get_fiber_channel(&channel_id_a).unwrap();
+    assert!(
+        ch_a.is_some(),
+        "channel opened before fork point should survive"
+    );
+    assert_eq!(ch_a.unwrap().state, FiberChannelState::Open);
+
+    // Channel B (opened at 5) is deleted
+    let ch_b = domain.get_fiber_channel(&channel_id_b).unwrap();
+    assert!(
+        ch_b.is_none(),
+        "channel opened after fork point should be deleted"
+    );
+
+    // addr_fiber_channel index for participant_b should be gone
+    let addr_channels_b = domain.list_addr_fiber_channels(&participant_b, 10).unwrap();
+    assert!(
+        addr_channels_b.is_empty(),
+        "addr_fiber_channel index for deleted channel should be cleaned up"
+    );
+
+    // addr_fiber_channel for participant_a still exists
+    let addr_channels_a = domain.list_addr_fiber_channels(&participant_a, 10).unwrap();
+    assert_eq!(
+        addr_channels_a.len(),
+        1,
+        "surviving channel's addr index should remain"
+    );
+}
+
+#[test]
+fn test_rollback_resets_fiber_channel_closed_after_fork_point_to_open() {
+    let root = tempfile::tempdir().unwrap();
+    let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+    let append = CkbadgerStore::open_append_only(root.path().join("append-only")).unwrap();
+
+    let participant = vec![0xA0; 32];
+
+    // Write block headers so rollback knows chain height
+    let mut batch = StoreBatch::new(&domain);
+    for b in 1..=6i64 {
+        batch.put_block_header(b, &make_header(b));
+    }
+
+    // Channel opened at block 2, cooperatively closed at block 5
+    let funding_tx = vec![0x03; 32];
+    let channel_id = ckbadger_store::keys::encode_fiber_channel_id(&funding_tx, 0);
+    let mut channel = make_fiber_channel(
+        &funding_tx,
+        0,
+        FiberChannelState::CooperativelyClosed,
+        400_00000000,
+        2,
+        vec![participant.clone()],
+        vec![0xFC; 20],
+    );
+    channel.close_tx_hash = Some(vec![0xCC; 32]);
+    channel.close_block = Some(5);
+    channel.close_timestamp = Some(5000);
+    channel.commitment_tx_hash = Some(vec![0xDD; 32]);
+    channel.commitment_output_index = Some(0);
+
+    batch.put_fiber_channel(&channel_id, &channel);
+    batch.put_addr_fiber_channel(&participant, &channel_id);
+    // Write commitment index
+    batch
+        .put_fiber_channel_by_commitment(channel.commitment_tx_hash.as_ref().unwrap(), &channel_id);
+    batch.commit().unwrap();
+
+    // Rollback to block 4 — channel was opened at 2, closed at 5
+    domain
+        .rollback_to_block_with_append_only_store(4, Some(&append))
+        .unwrap();
+
+    // Channel should be reset to Open with close/commitment fields cleared
+    let ch = domain
+        .get_fiber_channel(&channel_id)
+        .unwrap()
+        .expect("channel should survive");
+    assert_eq!(
+        ch.state,
+        FiberChannelState::Open,
+        "state should be reset to Open"
+    );
+    assert!(
+        ch.close_tx_hash.is_none(),
+        "close_tx_hash should be cleared"
+    );
+    assert!(ch.close_block.is_none(), "close_block should be cleared");
+    assert!(
+        ch.close_timestamp.is_none(),
+        "close_timestamp should be cleared"
+    );
+    assert!(
+        ch.commitment_tx_hash.is_none(),
+        "commitment_tx_hash should be cleared"
+    );
+    assert!(
+        ch.commitment_output_index.is_none(),
+        "commitment_output_index should be cleared"
+    );
+    assert!(
+        ch.settlement_tx_hash.is_none(),
+        "settlement_tx_hash should be cleared"
+    );
+
+    // Original fields preserved
+    assert_eq!(ch.open_block, 2);
+    assert_eq!(ch.capacity, 400_00000000);
+
+    // Commitment index should be cleaned up
+    let commitment_lookup = domain
+        .get_fiber_channel_id_by_commitment(&[0xDD; 32])
+        .unwrap();
+    assert!(
+        commitment_lookup.is_none(),
+        "commitment index should be deleted for reset channel"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Script reference info rollback
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_rollback_adjusts_script_reference_info_deltas() {
+    let (domain, append) = setup_split_stores();
+
+    let lock_hash = vec![0x11; 32];
+    let lock_code_hash = vec![0xAA; 32];
+
+    // Insert blocks 1..5 with cells using lock_code_hash
+    for b in 1..=5 {
+        insert_full_block(&domain, Some(&append), b, &lock_hash);
+    }
+    populate_derived_cfs(&domain, &lock_hash, 5);
+
+    // Pre-populate script_reference_info for the lock code_hash.
+    // hash_type=1, is_type=false (lock side).
+    // Simulate 5 cells using this script as lock: 5 total, 5 live.
+    let cap_per_cell: i128 = 10_000_000_000;
+    let sri = ScriptReferenceInfo {
+        reference_hash: lock_code_hash.clone(),
+        hash_type: 1,
+        lock_cells_count: 5,
+        lock_live_cells_count: 5,
+        lock_capacity_sum: 5 * cap_per_cell,
+        lock_owned_capacity_sum: 5 * cap_per_cell,
+        lock_used_capacity_sum: 0,
+        lock_owned_knowledge_sum: 0,
+        type_cells_count: 0,
+        type_live_cells_count: 0,
+        type_capacity_sum: 0,
+        type_owned_capacity_sum: 0,
+        type_used_capacity_sum: 0,
+        type_owned_knowledge_sum: 0,
+    };
+    let mut batch = StoreBatch::new(&domain);
+    batch.put_script_reference_info(1, &lock_code_hash, &sri);
+    batch.commit().unwrap();
+
+    // Rollback to block 2 — removes blocks 3,4,5 (3 cells)
+    let result = domain
+        .rollback_to_block_with_append_only_store(2, Some(&append))
+        .unwrap();
+    assert_eq!(result.cells_removed, 3, "3 cells in blocks 3-5");
+
+    // Script reference info should have deltas applied:
+    // 3 cells removed from lock side
+    let updated = domain
+        .get_script_reference_info(1, &lock_code_hash)
+        .unwrap()
+        .expect("reference info should still exist");
+
+    assert_eq!(
+        updated.lock_cells_count,
+        5 - 3,
+        "lock_cells_count: 5 - 3 removed = 2"
+    );
+    assert_eq!(
+        updated.lock_live_cells_count,
+        5 - 3,
+        "lock_live_cells_count: 5 - 3 removed = 2"
+    );
+    assert_eq!(
+        updated.lock_owned_capacity_sum,
+        2 * cap_per_cell,
+        "lock_owned_capacity_sum: 2 surviving cells"
+    );
+    // Type side untouched
+    assert_eq!(updated.type_cells_count, 0);
+    assert_eq!(updated.type_live_cells_count, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Multi-participant activity rollback
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_rollback_deletes_multi_participant_activities() {
+    let root = tempfile::tempdir().unwrap();
+    let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+    let append = CkbadgerStore::open_append_only(root.path().join("append-only")).unwrap();
+
+    let lock_a = vec![0xA0; 32];
+    let lock_b = vec![0xB0; 32];
+
+    // Write block headers and activities directly (no cells needed for this test)
+    let mut batch = StoreBatch::new(&domain);
+    for b in 1..=5i64 {
+        batch.put_block_header(b, &make_header(b));
+    }
+    batch.commit().unwrap();
+
+    // Create activities: block 2 has single-participant, blocks 3 and 4 have
+    // multi-participant activities (both lock_a and lock_b).
+    let mut batch = StoreBatch::new(&domain);
+
+    // Block 2, tx 0: single participant (lock_a only) — should survive rollback to 2
+    let mut tx_hash_2 = vec![0u8; 32];
+    tx_hash_2[0] = 0x20;
+    let actions_2 = TxActions {
+        tx_hash: tx_hash_2.clone(),
+        block_hash: make_header(2).hash,
+        block_number: 2,
+        tx_index: 0,
+        timestamp: 2000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![ParticipantDelta {
+            lock_hash: lock_a.clone(),
+            ckb_delta: -5_000_000_000,
+            used_delta: 0,
+            item_deltas: vec![],
+            tags: 0,
+        }],
+    };
+    batch.put_tx_actions(&actions_2);
+    batch.put_addr_tx(&lock_a, 2, 0, &tx_hash_2);
+
+    // Block 3, tx 0: two participants — should be deleted on rollback to 2
+    let mut tx_hash_3 = vec![0u8; 32];
+    tx_hash_3[0] = 0x30;
+    let actions_3 = TxActions {
+        tx_hash: tx_hash_3.clone(),
+        block_hash: make_header(3).hash,
+        block_number: 3,
+        tx_index: 0,
+        timestamp: 3000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![
+            ParticipantDelta {
+                lock_hash: lock_a.clone(),
+                ckb_delta: -10_000_000_000,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+            },
+            ParticipantDelta {
+                lock_hash: lock_b.clone(),
+                ckb_delta: 10_000_000_000,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+            },
+        ],
+    };
+    batch.put_tx_actions(&actions_3);
+    batch.put_addr_tx(&lock_a, 3, 0, &tx_hash_3);
+    batch.put_addr_tx(&lock_b, 3, 0, &tx_hash_3);
+
+    // Block 4, tx 1: another multi-participant — should also be deleted
+    let mut tx_hash_4 = vec![0u8; 32];
+    tx_hash_4[0] = 0x40;
+    let actions_4 = TxActions {
+        tx_hash: tx_hash_4.clone(),
+        block_hash: make_header(4).hash,
+        block_number: 4,
+        tx_index: 1,
+        timestamp: 4000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![
+            ParticipantDelta {
+                lock_hash: lock_a.clone(),
+                ckb_delta: 5_000_000_000,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+            },
+            ParticipantDelta {
+                lock_hash: lock_b.clone(),
+                ckb_delta: -5_000_000_000,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+            },
+        ],
+    };
+    batch.put_tx_actions(&actions_4);
+    batch.put_addr_tx(&lock_a, 4, 1, &tx_hash_4);
+    batch.put_addr_tx(&lock_b, 4, 1, &tx_hash_4);
+
+    batch.commit().unwrap();
+
+    // Sanity: global activity list has 3 entries
+    let all = domain.list_tx_actions_recent(10, None).unwrap();
+    assert_eq!(all.len(), 3, "3 TxActions written");
+
+    // Sanity: lock_a appears in all 3, lock_b in 2
+    let acts_a = domain.list_activities(&lock_a, 10, None, None).unwrap();
+    assert_eq!(acts_a.len(), 3, "lock_a participates in all 3");
+    let acts_b = domain.list_activities(&lock_b, 10, None, None).unwrap();
+    assert_eq!(acts_b.len(), 2, "lock_b participates in blocks 3 and 4");
+
+    // Rollback to block 2 — removes blocks 3,4,5
+    domain
+        .rollback_to_block_with_append_only_store(2, Some(&append))
+        .unwrap();
+
+    // Global list: only block 2 activity survives
+    let remaining = domain.list_tx_actions_recent(10, None).unwrap();
+    assert_eq!(remaining.len(), 1, "only block 2 activity survives");
+    assert_eq!(remaining[0].block_number, 2);
+    assert_eq!(remaining[0].participants.len(), 1);
+
+    // Per-address: lock_a has 1 activity (block 2)
+    let acts_a_after = domain.list_activities(&lock_a, 10, None, None).unwrap();
+    assert_eq!(
+        acts_a_after.len(),
+        1,
+        "lock_a: only block 2 activity survives"
+    );
+    assert_eq!(acts_a_after[0].block_number, 2);
+
+    // Per-address: lock_b has 0 activities (both were in blocks 3 and 4)
+    let acts_b_after = domain.list_activities(&lock_b, 10, None, None).unwrap();
+    assert_eq!(
+        acts_b_after.len(),
+        0,
+        "lock_b: all activities were in rolled-back blocks"
+    );
 }
