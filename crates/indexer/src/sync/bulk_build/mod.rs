@@ -126,10 +126,12 @@ impl BulkBuildEngine {
             )
         })?;
         let mem_profile = indexer.writer.store().memory_profile();
-        // Fetch is I/O-bound (CKB RocksDB reads via std::thread::scope).
-        // cpu_count is physical cores (from num_cpus::get_physical).
-        // Reserve 1 for the flush worker so fetch + flush = physical cores.
-        let max_fetch_threads = mem_profile.cpu_count.saturating_sub(1).max(2) as u32;
+        // Max = available cores.  Fetch threads are temporary (std::thread::scope),
+        // so no persistent over-subscription.  The controller shrinks this when
+        // build-bound to reduce overlap contention.
+        let max_fetch_threads = std::thread::available_parallelism()
+            .map(|n| n.get().max(2) as u32)
+            .unwrap_or(4);
         let mut controller = BottleneckController::new(
             configured_batch_size,
             max_fetch_threads,
