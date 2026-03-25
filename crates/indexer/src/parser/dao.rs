@@ -44,11 +44,12 @@ pub struct ParsedDaoWithdrawRequest {
 
 pub struct DaoParser;
 
-fn checked_usize_to_i32(value: usize, context: &str) -> i32 {
-    i32::try_from(value).unwrap_or_else(|_| {
-        panic!(
+fn checked_usize_to_i32(value: usize, context: &str) -> anyhow::Result<i32> {
+    i32::try_from(value).map_err(|_| {
+        anyhow::anyhow!(
             "DAO index exceeds i32 range while parsing {}: {}",
-            context, value
+            context,
+            value
         )
     })
 }
@@ -121,76 +122,84 @@ impl DaoParser {
     pub fn parse_deposits_from_cells(
         tx_hash: &[u8],
         cells: &[super::cell::ParsedCell],
-    ) -> Vec<ParsedDaoDeposit> {
+    ) -> anyhow::Result<Vec<ParsedDaoDeposit>> {
         let dao_hash = &*DAO_CODE_HASH_BYTES;
         cells
             .iter()
             .enumerate()
-            .filter_map(|(idx, cell)| {
-                let type_code_hash = cell.type_code_hash.as_ref()?;
+            .map(|(idx, cell)| -> anyhow::Result<Option<ParsedDaoDeposit>> {
+                let type_code_hash = match cell.type_code_hash.as_ref() {
+                    Some(v) => v,
+                    None => return Ok(None),
+                };
                 if type_code_hash != dao_hash {
-                    return None;
+                    return Ok(None);
                 }
                 // hash_type must be "type" (value 1) to match is_dao_cell() behavior
                 if cell.type_hash_type != Some(1) {
-                    return None;
+                    return Ok(None);
                 }
                 if cell.data_size != 8 {
-                    return None;
+                    return Ok(None);
                 }
                 if cell.data != [0u8; 8] {
-                    return None;
+                    return Ok(None);
                 }
-                Some(ParsedDaoDeposit {
+                Ok(Some(ParsedDaoDeposit {
                     tx_hash: tx_hash.to_vec(),
-                    output_index: checked_usize_to_i32(idx, "deposit output index"),
+                    output_index: checked_usize_to_i32(idx, "deposit output index")?,
                     lock_script_hash: cell.lock_script_hash.clone(),
                     capacity: cell.capacity,
-                })
+                }))
             })
-            .collect()
+            .filter_map(|r| r.transpose())
+            .collect::<anyhow::Result<Vec<_>>>()
     }
 
     pub fn parse_withdraw_requests(
         tx: &TransactionView,
         tx_hash: &[u8],
         input_cells: &[(Vec<u8>, i32, CellOutput, String)],
-    ) -> Vec<ParsedDaoWithdrawRequest> {
+    ) -> anyhow::Result<Vec<ParsedDaoWithdrawRequest>> {
         super::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
             .enumerate()
-            .filter_map(|(idx, (output, data_hex))| {
-                let dao_cell = Self::parse_dao_cell(output, data_hex)?;
+            .map(|(idx, (output, data_hex))| -> anyhow::Result<Option<ParsedDaoWithdrawRequest>> {
+                let dao_cell = match Self::parse_dao_cell(output, data_hex) {
+                    Some(c) => c,
+                    None => return Ok(None),
+                };
                 if dao_cell.state != DaoState::WithdrawRequest {
-                    return None;
+                    return Ok(None);
                 }
 
                 let deposit_block_number = dao_cell.deposit_block_number
-                    .unwrap_or_else(|| panic!(
+                    .ok_or_else(|| anyhow::anyhow!(
                         "DAO WithdrawRequest at output index {} has no deposit_block_number, tx_hash=0x{}",
                         idx, hex::encode(tx_hash)
-                    ));
+                    ))?;
 
                 let (orig_tx, orig_idx, _, _) = input_cells.get(idx)
-                    .unwrap_or_else(|| panic!(
+                    .ok_or_else(|| anyhow::anyhow!(
                         "DAO WithdrawRequest at output index {} has no corresponding input cell \
                          (input_cells.len()={}), tx_hash=0x{}",
                         idx, input_cells.len(), hex::encode(tx_hash)
-                    ));
+                    ))?;
 
-                Some(ParsedDaoWithdrawRequest {
+                Ok(Some(ParsedDaoWithdrawRequest {
                     tx_hash: tx_hash.to_vec(),
-                    output_index: checked_usize_to_i32(idx, "withdraw request output index"),
+                    output_index: checked_usize_to_i32(idx, "withdraw request output index")?,
                     lock_script_hash: dao_cell.lock_script_hash,
                     capacity: dao_cell.capacity,
                     deposit_block_number,
                     original_tx_hash: orig_tx.clone(),
                     original_output_index: *orig_idx,
-                })
+                }))
             })
-            .collect()
+            .filter_map(|r| r.transpose())
+            .collect::<anyhow::Result<Vec<_>>>()
     }
 
     pub fn extract_ar_from_dao_field(dao: &[u8]) -> Option<u64> {
@@ -283,13 +292,14 @@ mod tests {
 
     #[test]
     fn test_checked_usize_to_i32_accepts_valid_value() {
-        assert_eq!(checked_usize_to_i32(123, "test"), 123);
+        assert_eq!(checked_usize_to_i32(123, "test").unwrap(), 123);
     }
 
     #[test]
-    #[should_panic(expected = "DAO index exceeds i32 range while parsing deposit output index")]
-    fn test_checked_usize_to_i32_panics_on_overflow() {
-        let _ = checked_usize_to_i32((i32::MAX as usize) + 1, "deposit output index");
+    fn test_checked_usize_to_i32_errors_on_overflow() {
+        let err =
+            checked_usize_to_i32((i32::MAX as usize) + 1, "deposit output index").unwrap_err();
+        assert!(err.to_string().contains("exceeds i32 range"));
     }
 
     #[test]
@@ -389,7 +399,7 @@ mod tests {
             data: vec![0; 8],
         }];
 
-        let deposits = DaoParser::parse_deposits_from_cells(&[0; 32], &cells);
+        let deposits = DaoParser::parse_deposits_from_cells(&[0; 32], &cells).unwrap();
         assert_eq!(deposits.len(), 1);
         assert_eq!(deposits[0].capacity, 100_00000000);
     }
@@ -415,13 +425,12 @@ mod tests {
             data: block_num.to_le_bytes().to_vec(),
         }];
 
-        let deposits = DaoParser::parse_deposits_from_cells(&[0; 32], &cells);
+        let deposits = DaoParser::parse_deposits_from_cells(&[0; 32], &cells).unwrap();
         assert_eq!(deposits.len(), 0);
     }
 
     #[test]
-    #[should_panic(expected = "no corresponding input cell")]
-    fn test_parse_withdraw_requests_panics_on_missing_input() {
+    fn test_parse_withdraw_requests_errors_on_missing_input() {
         let dao_code_hash = DAO_CODE_HASH.to_string();
         let lock = crate::rpc::Script {
             code_hash: "0x".to_string() + &"11".repeat(32),
@@ -463,9 +472,10 @@ mod tests {
             "0x00".to_string(),
         )];
 
-        // Should panic: output[0] matches input[0], but output[1] has
+        // Should error: output[0] matches input[0], but output[1] has
         // no corresponding input — this is an invariant violation.
-        let _ = DaoParser::parse_withdraw_requests(&tx, &[0xCC; 32], &input_cells);
+        let err = DaoParser::parse_withdraw_requests(&tx, &[0xCC; 32], &input_cells).unwrap_err();
+        assert!(err.to_string().contains("no corresponding input cell"));
     }
 
     #[test]
@@ -508,7 +518,7 @@ mod tests {
             "0x00".to_string(),
         )];
 
-        let parsed = DaoParser::parse_withdraw_requests(&tx, &[0xCC; 32], &input_cells);
+        let parsed = DaoParser::parse_withdraw_requests(&tx, &[0xCC; 32], &input_cells).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].original_tx_hash, vec![0xAB; 32]);
         assert_eq!(parsed[0].original_output_index, 0);

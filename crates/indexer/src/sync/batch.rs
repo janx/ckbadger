@@ -1557,7 +1557,7 @@ impl Indexer {
                 let ar = extract_ar_i64_from_dao(&parsed.dao, parsed.number)?;
                 for tx_data in tx_slice {
                     let dao_deposits =
-                        DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells);
+                        DaoParser::parse_deposits_from_cells(&tx_data.hash, &tx_data.cells)?;
                     for deposit in dao_deposits {
                         all_dao_deposits.push((deposit, parsed.number, parsed.timestamp, ar));
                     }
