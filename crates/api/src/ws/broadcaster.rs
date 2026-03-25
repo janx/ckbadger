@@ -46,6 +46,7 @@ pub(crate) fn adjust_for_broadcast_gap(
 
 pub async fn start_block_broadcaster(
     store: Arc<CkbadgerStore>,
+    append_only_store: Arc<CkbadgerStore>,
     ws_manager: Arc<WsManager>,
     ckb_rpc_url: String,
     ckb_network: String,
@@ -176,7 +177,7 @@ pub async fn start_block_broadcaster(
             }
 
             // Broadcast latest activities after new blocks
-            broadcast_latest_activities(&store, &ws_manager, &ckb_network);
+            broadcast_latest_activities(&store, &append_only_store, &ws_manager, &ckb_network);
         }
     }
 }
@@ -252,21 +253,25 @@ fn broadcast_block_transactions(
 
 fn broadcast_latest_activities(
     store: &CkbadgerStore,
+    ao_store: &CkbadgerStore,
     ws_manager: &Arc<WsManager>,
     ckb_network: &str,
 ) {
     match store.get_latest_activities() {
         Ok(items) if !items.is_empty() => {
             let mut script_info_cache = HashMap::new();
+            let mut address_cache = HashMap::new();
             let activities: Vec<serde_json::Value> = items
                 .iter()
                 .take(8)
                 .filter_map(|actions| {
                     match build_global_activity_response(
                         store,
+                        ao_store,
                         ckb_network,
                         actions,
                         &mut script_info_cache,
+                        &mut address_cache,
                     ) {
                         Ok(activity) => match serde_json::to_value(activity) {
                             Ok(value) => Some(value),

@@ -2238,6 +2238,19 @@ impl CkbadgerStore {
                 sri.type_owned_capacity_sum += own_d;
                 sri.type_used_capacity_sum += used_d;
                 sri.type_owned_knowledge_sum += know_d;
+                if sri.type_live_cells_count < 0
+                    || sri.type_owned_capacity_sum < 0
+                    || sri.type_owned_knowledge_sum < 0
+                {
+                    anyhow::bail!(
+                        "script_reference_info type underflow during rollback: code_hash=0x{}, hash_type={}, live={}, own_cap={}, own_know={}",
+                        bytes_to_hex(code_hash),
+                        hash_type,
+                        sri.type_live_cells_count,
+                        sri.type_owned_capacity_sum,
+                        sri.type_owned_knowledge_sum
+                    );
+                }
             } else {
                 sri.lock_cells_count += cells_d;
                 sri.lock_live_cells_count += live_d;
@@ -2245,6 +2258,19 @@ impl CkbadgerStore {
                 sri.lock_owned_capacity_sum += own_d;
                 sri.lock_used_capacity_sum += used_d;
                 sri.lock_owned_knowledge_sum += know_d;
+                if sri.lock_live_cells_count < 0
+                    || sri.lock_owned_capacity_sum < 0
+                    || sri.lock_owned_knowledge_sum < 0
+                {
+                    anyhow::bail!(
+                        "script_reference_info lock underflow during rollback: code_hash=0x{}, hash_type={}, live={}, own_cap={}, own_know={}",
+                        bytes_to_hex(code_hash),
+                        hash_type,
+                        sri.lock_live_cells_count,
+                        sri.lock_owned_capacity_sum,
+                        sri.lock_owned_knowledge_sum
+                    );
+                }
             }
             batch.put_cf(
                 self.cf_script_reference_info(),

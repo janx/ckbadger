@@ -18,8 +18,38 @@ use crate::response::{
     default_limit, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
     CursorPaginatedResponse,
 };
-use crate::utils::address::{address_to_lock_script_hash, compute_script_hash};
+use crate::utils::address::{address_to_lock_script_hash, compute_script_hash, script_to_address};
 use crate::AppState;
+
+/// Resolve a lock_hash to a CKB address by looking up any cell with that lock script.
+/// Falls back to hex-encoded lock_hash if no cell is found.
+fn resolve_lock_hash_address(
+    store: &CkbadgerStore,
+    ao_store: &CkbadgerStore,
+    network: &str,
+    lock_hash: &[u8],
+    cache: &mut HashMap<Vec<u8>, String>,
+) -> String {
+    if let Some(cached) = cache.get(lock_hash) {
+        return cached.clone();
+    }
+    let address = store
+        .list_cells_by_lock(lock_hash, 1, None, ao_store)
+        .ok()
+        .and_then(|cells| cells.into_iter().next())
+        .and_then(|(_, _, info)| {
+            script_to_address(
+                &info.lock_code_hash,
+                info.lock_hash_type,
+                &info.lock_args,
+                network,
+            )
+            .ok()
+        })
+        .unwrap_or_else(|| format!("0x{}", hex::encode(lock_hash)));
+    cache.insert(lock_hash.to_vec(), address.clone());
+    address
+}
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -483,13 +513,16 @@ fn convert_protocol_action(
 }
 
 /// Build an address-scoped activity response from a TxActions for a specific participant.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn build_activity_response(
     store: &CkbadgerStore,
+    ao_store: &CkbadgerStore,
+    network: &str,
     actions: &TxActions,
     participant: &ParticipantDelta,
     script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
     token_cache: &mut HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>>,
+    address_cache: &mut HashMap<Vec<u8>, String>,
 ) -> anyhow::Result<ActivityResponse> {
     let item_deltas = participant
         .item_deltas
@@ -501,7 +534,7 @@ pub(crate) fn build_activity_response(
         .participants
         .iter()
         .filter(|p| p.lock_hash != participant.lock_hash)
-        .map(|p| format!("0x{}", hex::encode(&p.lock_hash)))
+        .map(|p| resolve_lock_hash_address(store, ao_store, network, &p.lock_hash, address_cache))
         .collect();
 
     Ok(ActivityResponse {
@@ -529,9 +562,11 @@ pub(crate) fn build_activity_response(
 #[allow(clippy::type_complexity)]
 pub(crate) fn build_global_activity_response(
     store: &CkbadgerStore,
-    _network: &str,
+    ao_store: &CkbadgerStore,
+    network: &str,
     actions: &TxActions,
     script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    address_cache: &mut HashMap<Vec<u8>, String>,
 ) -> anyhow::Result<GlobalActivityResponse> {
     let mut token_cache: HashMap<Vec<u8>, Option<(Option<String>, Option<u8>)>> = HashMap::new();
 
@@ -539,7 +574,8 @@ pub(crate) fn build_global_activity_response(
         .participants
         .iter()
         .map(|p| {
-            let address = format!("0x{}", hex::encode(&p.lock_hash));
+            let address =
+                resolve_lock_hash_address(store, ao_store, network, &p.lock_hash, address_cache);
             let item_deltas = p
                 .item_deltas
                 .iter()
@@ -578,11 +614,19 @@ fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
     if let Some(value) = filter {
         if !matches!(
             value,
-            "all" | "ckb" | "token" | "nft" | "object" | "dao" | "type_call" | "lock_call"
+            "all"
+                | "ckb"
+                | "token"
+                | "nft"
+                | "object"
+                | "identity"
+                | "dao"
+                | "type_call"
+                | "lock_call"
         ) && !value.starts_with("protocol:")
         {
             return Err(ApiError::bad_request(format!(
-                "invalid activity filter '{}'; expected one of: all, ckb, token, nft, dao, type_call, lock_call, protocol:<name>",
+                "invalid activity filter '{}'; expected one of: all, ckb, token, nft, object, identity, dao, type_call, lock_call, protocol:<name>",
                 value
             )));
         }
@@ -691,6 +735,11 @@ fn matches_global_activity_filter(actions: &TxActions, filter: Option<&str>) -> 
     use ckbadger_store::types::*;
 
     fn classify_global_bucket(actions: &TxActions) -> &'static str {
+        // DAO operations are emitted as protocol actions with protocol="dao";
+        // check before the generic protocol bucket so filter=dao still works.
+        if actions.protocol_actions.iter().any(|a| a.protocol == "dao") {
+            return "dao";
+        }
         if !actions.protocol_actions.is_empty() {
             return "protocol";
         }
@@ -806,6 +855,8 @@ async fn get_address_activities(
 
     let filter = params.filter.clone();
     let store = state.store.clone();
+    let ao_store = state.append_only_store.clone();
+    let network = state.ckb_network.clone();
     let lock_hash_clone = lock_hash.clone();
     let (next_cursor, activities) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let results = list_canonical_activities_page(
@@ -828,6 +879,7 @@ async fn get_address_activities(
 
         let mut script_info_cache = HashMap::new();
         let mut token_cache = HashMap::new();
+        let mut address_cache = HashMap::new();
         let activities: Vec<ActivityResponse> = page
             .iter()
             .filter_map(|actions| {
@@ -837,10 +889,13 @@ async fn get_address_activities(
                     .find(|p| p.lock_hash == lock_hash_clone)?;
                 Some(build_activity_response(
                     store.as_ref(),
+                    ao_store.as_ref(),
+                    &network,
                     actions,
                     participant,
                     &mut script_info_cache,
                     &mut token_cache,
+                    &mut address_cache,
                 ))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -874,6 +929,7 @@ async fn get_global_activities(
     };
 
     let store = state.store.clone();
+    let ao_store = state.append_only_store.clone();
     let network = state.ckb_network.clone();
     let filter = params.filter.clone();
     let (next_cursor, activities) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
@@ -894,14 +950,17 @@ async fn get_global_activities(
         };
 
         let mut script_info_cache = HashMap::new();
+        let mut address_cache = HashMap::new();
         let activities = page
             .iter()
             .map(|actions| {
                 build_global_activity_response(
                     store.as_ref(),
+                    ao_store.as_ref(),
                     &network,
                     actions,
                     &mut script_info_cache,
+                    &mut address_cache,
                 )
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -925,6 +984,7 @@ async fn get_latest_activities(
 ) -> ApiResult<Vec<GlobalActivityResponse>> {
     let limit = params.limit.clamp(1, 64);
     let store = state.store.clone();
+    let ao_store = state.append_only_store.clone();
     let network = state.ckb_network.clone();
     let activities = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let items = store.get_latest_activities()?;
@@ -932,6 +992,7 @@ async fn get_latest_activities(
         // Filter to canonical entries only:
         // verify tx location matches (block_num, tx_idx) — no block_hash comparison.
         let mut script_info_cache = HashMap::new();
+        let mut address_cache = HashMap::new();
         let activities: Vec<GlobalActivityResponse> = items
             .iter()
             .filter(|actions| {
@@ -947,9 +1008,11 @@ async fn get_latest_activities(
             .map(|actions| {
                 build_global_activity_response(
                     store.as_ref(),
+                    ao_store.as_ref(),
                     &network,
                     actions,
                     &mut script_info_cache,
+                    &mut address_cache,
                 )
             })
             .collect::<anyhow::Result<Vec<_>>>()?;

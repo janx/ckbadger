@@ -163,6 +163,7 @@ pub async fn create_router(config: AppConfig) -> Router {
     tracing::info!("In-memory cache initialized");
 
     let broadcaster_store = config.store.clone();
+    let broadcaster_ao_store = config.append_only_store.clone();
     let broadcaster_rpc_url = config.ckb_rpc_url.clone();
 
     let cycles_client = CyclesClient::disabled();
@@ -230,6 +231,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         tokio::spawn(async move {
             ws::start_block_broadcaster(
                 broadcaster_store,
+                broadcaster_ao_store,
                 broadcaster_ws,
                 broadcaster_rpc_url,
                 broadcaster_network,
