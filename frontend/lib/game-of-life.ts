@@ -70,8 +70,8 @@ export function stepGrid(grid: number[][]): number[][] {
   const cols = grid[0].length;
   const next: number[][] = Array.from({ length: rows }, () => Array(cols).fill(0));
 
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
+  for (let r = 1; r < rows - 1; r++) {
+    for (let c = 1; c < cols - 1; c++) {
       let liveNeighbors = 0;
       let jadeCount = 0;
       let goldCount = 0;
@@ -118,7 +118,7 @@ export function stepGrid(grid: number[][]): number[][] {
  * Uses byte[16], falling back to byte[0] for short hashes.
  */
 export function getShapeIndex(bytes: number[]): number {
-  const byte = bytes.length > 16 ? bytes[16] : bytes[0];
+  const byte = bytes.length > 16 ? bytes[16] : (bytes[0] ?? 0);
   return byte & 0x07;
 }
 
@@ -127,7 +127,7 @@ export function getShapeIndex(bytes: number[]): number {
  * Range: 300ms to 600ms. Uses byte[17], falling back to byte[1].
  */
 export function getInterval(bytes: number[]): number {
-  const byte = bytes.length > 17 ? bytes[17] : bytes[1];
+  const byte = bytes.length > 17 ? bytes[17] : (bytes[1] ?? 0);
   return 300 + Math.floor((byte / 255) * 300);
 }
 
