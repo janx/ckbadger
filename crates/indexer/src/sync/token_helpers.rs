@@ -423,6 +423,84 @@ pub(crate) fn collect_unique_cell_total_supply_by_type_args(
     totals
 }
 
+/// Collect full token info from all Unique Cell outputs in the given cells.
+/// Returns a map from Unique Cell type_args (20 bytes) to parsed token info.
+#[allow(dead_code)]
+pub(crate) fn collect_unique_cell_token_info(
+    cells: &[crate::parser::cell::ParsedCell],
+) -> HashMap<Vec<u8>, UniqueTokenInfo> {
+    let mut infos = HashMap::new();
+    for cell in cells {
+        let Some(type_args) = cell.type_args.as_ref() else {
+            continue;
+        };
+        if type_args.len() != UNIQUE_TYPE_ARGS_LEN {
+            continue;
+        }
+        let Some(info) = parse_unique_cell_token_info(&cell.data) else {
+            continue;
+        };
+        infos.insert(type_args.clone(), info);
+    }
+    infos
+}
+
+/// Resolve Unique Cell token info to xUDT token type_hashes.
+/// For each xUDT output cell with extension scripts pointing to a Unique Cell,
+/// maps the xUDT's type_script_hash to the Unique Cell's token info.
+#[allow(dead_code)]
+pub(crate) fn collect_token_onchain_info(
+    all_tx_data: &[TxData],
+) -> HashMap<Vec<u8>, UniqueTokenInfo> {
+    let mut result = HashMap::new();
+
+    for tx_data in all_tx_data {
+        let unique_infos = collect_unique_cell_token_info(&tx_data.cells);
+        if unique_infos.is_empty() {
+            continue;
+        }
+
+        for cell in &tx_data.cells {
+            let Some(type_code_hash) = cell.type_code_hash.as_ref() else {
+                continue;
+            };
+            let Some(type_hash_type) = cell.type_hash_type else {
+                continue;
+            };
+            if !matches!(
+                crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type),
+                Some(crate::parser::udt::UdtStandard::Xudt)
+            ) {
+                continue;
+            }
+
+            let Some(type_args) = cell.type_args.as_ref() else {
+                continue;
+            };
+            let Some(token_type_hash) = cell.type_script_hash.as_ref() else {
+                continue;
+            };
+
+            let Some(extension_scripts) =
+                extract_xudt_extension_scripts(type_args, &tx_data.witnesses)
+            else {
+                continue;
+            };
+
+            for extension in extension_scripts {
+                if extension.args.len() != UNIQUE_TYPE_ARGS_LEN {
+                    continue;
+                }
+                if let Some(info) = unique_infos.get(&extension.args) {
+                    result.insert(token_type_hash.clone(), info.clone());
+                }
+            }
+        }
+    }
+
+    result
+}
+
 pub(crate) fn observe_max_supply(
     observations: &mut HashMap<Vec<u8>, i128>,
     tx_hash: &[u8; 32],
@@ -1209,5 +1287,44 @@ mod tests {
         data.push(2);
         data.extend_from_slice(b"OK");
         assert!(parse_unique_cell_token_info(&data).is_none());
+    }
+
+    // -- collect_token_onchain_info tests --------------------------------------
+
+    #[test]
+    fn test_collect_token_onchain_info_resolves_unique_cell_to_xudt() {
+        let unique_type_args = vec![0xAB; UNIQUE_TYPE_ARGS_LEN];
+        let token_type_hash = [0x91; 32];
+        let script_vec = encode_script_vec_with_unique_args(&unique_type_args);
+        let type_args = build_xudt_type_args_with_extension_in_args([0x01; 32], &script_vec);
+
+        let unique_cell = dummy_unique_token_info_cell(unique_type_args, 42_000);
+        let xudt_cell = dummy_xudt_cell(token_type_hash, type_args);
+        let tx = dummy_tx_data(
+            [0xF0; 32],
+            false,
+            vec![],
+            vec![unique_cell, xudt_cell],
+            vec![],
+            vec![],
+        );
+
+        let infos = collect_token_onchain_info(&[tx]);
+        let info = infos.get(token_type_hash.as_slice()).unwrap();
+        assert_eq!(info.name, "Token");
+        assert_eq!(info.symbol, "TKN");
+        assert_eq!(info.decimal, 8);
+        assert_eq!(info.total_supply, Some(42_000));
+    }
+
+    #[test]
+    fn test_collect_token_onchain_info_empty_when_no_unique_cell() {
+        let token_type_hash = [0x92; 32];
+        let type_args = vec![0x01; 36]; // just owner_lock_hash + flags, no extensions
+        let xudt_cell = dummy_xudt_cell(token_type_hash, type_args);
+        let tx = dummy_tx_data([0xF1; 32], false, vec![], vec![xudt_cell], vec![], vec![]);
+
+        let infos = collect_token_onchain_info(&[tx]);
+        assert!(infos.is_empty());
     }
 }
