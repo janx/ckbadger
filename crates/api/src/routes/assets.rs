@@ -23,7 +23,8 @@ use crate::response::{
 };
 use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, parse_chart_date_range,
-    resolve_collection_standard, resolve_nft_collection_name,
+    resolve_collection_standard, resolve_nft_collection_composition_tier_override,
+    resolve_nft_collection_name,
 };
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN};
 use crate::AppState;
@@ -336,6 +337,8 @@ pub struct MnftItemDetailResponse {
     pub class: MnftClassSummaryResponse,
     pub issuer: MnftIssuerSummaryResponse,
     pub lifecycle: Vec<MnftLifecycleEventResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub composition: Option<CollectionCompositionResponse>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -686,6 +689,83 @@ fn format_ratio_4(numerator: i64, denominator: i64) -> String {
     let whole = scaled / 10_000;
     let frac = (scaled % 10_000).abs();
     format!("{whole}.{frac:04}")
+}
+
+fn resolve_composition_tier(
+    btc_ckb: i64,
+    pure_ckb: i64,
+    decentralized_mixture: i64,
+    centralized_mixture: i64,
+    unknown: i64,
+) -> String {
+    if centralized_mixture > 0 {
+        return "centralized_mixture".to_string();
+    }
+    if decentralized_mixture > 0 {
+        return "decentralized_mixture".to_string();
+    }
+    let total_onchain = btc_ckb + pure_ckb;
+    if total_onchain > 0 && unknown == 0 {
+        if btc_ckb > 0 {
+            return "btc_ckb".to_string();
+        }
+        return "pure_ckb".to_string();
+    }
+    "unknown".to_string()
+}
+
+fn collection_composition_from_aggregate(
+    agg: &MnftCollectionAggregate,
+    standard: &str,
+) -> CollectionCompositionResponse {
+    let has_tier_counts = agg.pure_ckb_count > 0
+        || agg.btc_ckb_count > 0
+        || agg.decentralized_mixture_count > 0
+        || agg.centralized_mixture_count > 0;
+
+    if has_tier_counts {
+        let total_onchain = agg.btc_ckb_count + agg.pure_ckb_count;
+        let total = agg.btc_ckb_count
+            + agg.pure_ckb_count
+            + agg.decentralized_mixture_count
+            + agg.centralized_mixture_count
+            + agg.unknown_count;
+        CollectionCompositionResponse {
+            tier: resolve_composition_tier(
+                agg.btc_ckb_count,
+                agg.pure_ckb_count,
+                agg.decentralized_mixture_count,
+                agg.centralized_mixture_count,
+                agg.unknown_count,
+            ),
+            onchain_count: total_onchain,
+            pure_ckb_count: agg.pure_ckb_count,
+            decentralized_mixture_count: agg.decentralized_mixture_count,
+            centralized_mixture_count: agg.centralized_mixture_count,
+            unknown_count: agg.unknown_count,
+            onchain_ratio: format_ratio_4(total_onchain, total),
+        }
+    } else {
+        // No per-item tier counts available — use standard-level override
+        // (e.g. dotbit / did:ckb are known pure_ckb).
+        let tier = resolve_nft_collection_composition_tier_override(standard)
+            .unwrap_or("unknown")
+            .to_string();
+        let onchain_count = if matches!(tier.as_str(), "btc_ckb" | "pure_ckb") {
+            agg.live_count
+        } else {
+            0
+        };
+        CollectionCompositionResponse {
+            tier,
+            onchain_count,
+            pure_ckb_count: 0,
+            decentralized_mixture_count: 0,
+            centralized_mixture_count: 0,
+            unknown_count: if onchain_count > 0 { 0 } else { agg.live_count },
+            onchain_ratio: format_ratio_4(onchain_count, agg.live_count),
+        }
+    }
 }
 
 fn asset_display_name(entry: &CachedAssetEntry) -> String {
@@ -1426,6 +1506,13 @@ async fn get_object_item_detail(
         });
     }
 
+    // Fetch collection composition from class aggregate.
+    let composition = state
+        .store
+        .get_mnft_collection_aggregate(&class_id)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map(|agg| collection_composition_from_aggregate(&agg, "m-nft"));
+
     ok(MnftItemDetailResponse {
         nft_id: format!("0x{}", hex::encode(&object_id_bytes)),
         standard: "m-nft".to_string(),
@@ -1461,6 +1548,7 @@ async fn get_object_item_detail(
             info_hex: issuer_info.map(|v| format!("0x{}", hex::encode(v))),
         },
         lifecycle,
+        composition,
     })
 }
 
@@ -1703,15 +1791,7 @@ async fn get_object_collection(
     let raw_standard = agg.standard.asset_standard().to_string();
     let standard = resolve_collection_standard(&collection_id_bytes, &raw_standard);
     let name = resolve_nft_collection_name(&standard, agg.name.as_deref());
-    let composition = CollectionCompositionResponse {
-        tier: "unknown".to_string(),
-        onchain_count: 0,
-        pure_ckb_count: 0,
-        decentralized_mixture_count: 0,
-        centralized_mixture_count: 0,
-        unknown_count: agg.live_count,
-        onchain_ratio: format_ratio_4(0, agg.live_count),
-    };
+    let composition = collection_composition_from_aggregate(&agg, &standard);
 
     if agg.holders_count < 0 {
         return Err(ApiError::internal(format!(

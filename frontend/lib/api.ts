@@ -1142,6 +1142,15 @@ interface MnftItemDetail {
   class: MnftClassSummary;
   issuer: MnftIssuerSummary;
   lifecycle: MnftLifecycleEvent[];
+  composition?: {
+    tier: 'btc_ckb' | 'pure_ckb' | 'decentralized_mixture' | 'centralized_mixture' | 'unknown';
+    onchainCount: number;
+    pureCkbCount: number;
+    decentralizedMixtureCount: number;
+    centralizedMixtureCount: number;
+    unknownCount: number;
+    onchainRatio: string;
+  };
 }
 
 interface MnftItemActivity {
