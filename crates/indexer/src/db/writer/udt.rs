@@ -628,9 +628,7 @@ mod tests {
         let date = 20240115u32;
 
         let key = ckbadger_store::keys::encode_token_daily_key(&type_hash, date);
-        store
-            .put_stats_key(&key, b"not-a-valid-postcard-token-delta")
-            .unwrap();
+        store.put_stats_key(&key, &[0xFF]).unwrap();
 
         let mut changes = HashMap::new();
         changes.insert((type_hash, date), (1i128, 1i128));

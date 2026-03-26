@@ -578,9 +578,7 @@ mod tests {
         let (_dir, store) = test_store();
         let cluster_id = [0x44u8; 32];
         let key = keys::encode_cluster_daily_key(&cluster_id, 20260219);
-        store
-            .put_cf(store.cf_stats_spore(), &key, b"invalid-cluster-daily")
-            .unwrap();
+        store.put_cf(store.cf_stats_spore(), &key, &[0xFF]).unwrap();
 
         let err = store.list_cluster_daily_deltas(&cluster_id).unwrap_err();
         assert!(err.to_string().contains(
@@ -593,9 +591,7 @@ mod tests {
         let (_dir, store) = test_store();
         let spore_id = [0x55u8; 32];
         let key = keys::encode_spore_daily_key(&spore_id, 20260219);
-        store
-            .put_cf(store.cf_stats_spore(), &key, b"invalid-spore-daily")
-            .unwrap();
+        store.put_cf(store.cf_stats_spore(), &key, &[0xFF]).unwrap();
 
         let err = store.list_spore_daily_deltas(&spore_id).unwrap_err();
         assert!(err.to_string().contains(

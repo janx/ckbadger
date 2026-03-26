@@ -1149,9 +1149,7 @@ mod tests {
         let (_dir, store) = test_store();
         let type_hash = [0x06u8; 32];
         let key = keys::encode_token_daily_key(&type_hash, 20240115);
-        store
-            .put_cf(store.cf_stats_token(), &key, b"invalid-token-daily")
-            .unwrap();
+        store.put_cf(store.cf_stats_token(), &key, &[0xFF]).unwrap();
 
         let err = store.list_token_daily_deltas(&type_hash).unwrap_err();
         assert!(err.to_string().contains(

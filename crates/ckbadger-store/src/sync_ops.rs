@@ -604,7 +604,7 @@ mod tests {
             .put_cf(
                 store.cf_sync_meta(),
                 sync_meta_keys::REORG_LATEST_EVENT,
-                b"invalid-payload",
+                &[0xFF],
             )
             .unwrap();
 
