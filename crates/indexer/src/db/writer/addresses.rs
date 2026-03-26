@@ -546,7 +546,7 @@ impl BatchWriter {
         let mut map = HashMap::with_capacity(lock_hashes.len());
         for (res, lock_hash) in results.into_iter().zip(lock_hashes.iter()) {
             let existing: Option<AddressBalance> = match res {
-                Ok(Some(value)) => Some(postcard::from_bytes(&value).map_err(|e| {
+                Ok(Some(value)) => Some(bincode::deserialize(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize address balance: lock_hash=0x{}, error={}",
                         hex::encode(lock_hash),
@@ -692,7 +692,7 @@ impl BatchWriter {
         let mut map = HashMap::with_capacity(code_hashes.len());
         for (res, code_hash) in results.into_iter().zip(code_hashes.iter()) {
             let existing: Option<ckbadger_store::types::ScriptInfo> = match res {
-                Ok(Some(value)) => Some(postcard::from_bytes(&value).map_err(|e| {
+                Ok(Some(value)) => Some(bincode::deserialize(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize script info: code_hash=0x{}, error={}",
                         hex::encode(code_hash),
@@ -943,7 +943,7 @@ impl BatchWriter {
             .zip(results.into_iter())
         {
             let existing: Option<ScriptReferenceInfo> = match res {
-                Ok(Some(value)) => Some(postcard::from_bytes(&value).map_err(|e| {
+                Ok(Some(value)) => Some(bincode::deserialize(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize script reference info: key=0x{}, hash_type={}, reference_hash=0x{}, error={}",
                         hex::encode(key),
@@ -1343,7 +1343,7 @@ impl BatchWriter {
             keyed_changes.into_iter().zip(existing_results.into_iter())
         {
             let mut existing: ScriptDailyDelta = match existing_res {
-                Ok(Some(value)) => postcard::from_bytes(&value).map_err(|e| {
+                Ok(Some(value)) => bincode::deserialize(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize script daily delta: key=0x{}, error={}",
                         hex::encode(&key),
@@ -1384,7 +1384,7 @@ impl BatchWriter {
             if existing.owned_capacity_delta == 0 && existing.owned_knowledge_delta == 0 {
                 batch.delete_stats(&key);
             } else {
-                let value = postcard::to_allocvec(&existing)?;
+                let value = bincode::serialize(&existing)?;
                 batch.put_stats(&key, &value);
             }
         }

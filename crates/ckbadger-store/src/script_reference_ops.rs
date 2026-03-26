@@ -15,7 +15,7 @@ impl CkbadgerStore {
         let key = keys::encode_script_reference_key(hash_type, reference_hash);
         match self.get_cf(self.cf_script_reference_info(), &key)? {
             Some(value) => {
-                let info = postcard::from_bytes(&value).map_err(|e| {
+                let info = bincode::deserialize(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize script reference info: key=0x{}, error={}",
                         bytes_to_hex(&key),
@@ -49,7 +49,7 @@ impl CkbadgerStore {
             );
         }
         let key = keys::encode_script_reference_key(hash_type, reference_hash);
-        let value = postcard::to_allocvec(info)?;
+        let value = bincode::serialize(info)?;
         self.put_cf(self.cf_script_reference_info(), &key, &value)
     }
 
@@ -98,7 +98,7 @@ impl CkbadgerStore {
                 )
             })?;
             let (hash_type, reference_hash) = keys::decode_script_reference_key(&key);
-            let info: ScriptReferenceInfo = postcard::from_bytes(&value).map_err(|e| {
+            let info: ScriptReferenceInfo = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize script reference info in list_script_reference_infos: key=0x{}, error={}",
                     bytes_to_hex(&key),

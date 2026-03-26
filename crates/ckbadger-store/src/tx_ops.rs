@@ -23,7 +23,7 @@ impl CkbadgerStore {
             &keys::encode_tx_idx(tx_idx),
         ]);
         match self.get_cf(self.cf_tx_index(), &key)? {
-            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
@@ -121,7 +121,7 @@ impl CkbadgerStore {
             let out_idx = present_indices[batch_idx];
             match value_result {
                 Ok(Some(value)) => {
-                    let entry = postcard::from_bytes::<TxIndexEntry>(&value).map_err(|e| {
+                    let entry = bincode::deserialize::<TxIndexEntry>(&value).map_err(|e| {
                         anyhow!(
                             "failed to deserialize tx index in get_txs_by_hash_batch: tx_hash=0x{}, error={}",
                             bytes_to_hex(&tx_hashes[out_idx]),
@@ -225,7 +225,7 @@ impl CkbadgerStore {
             &keys::encode_block_num(block_num),
             &keys::encode_tx_idx(tx_idx),
         ]);
-        let value = postcard::to_allocvec(&entry).with_context(|| {
+        let value = bincode::serialize(&entry).with_context(|| {
             format!(
                 "failed to serialize tx index entry {}:{}",
                 block_num, tx_idx
@@ -256,7 +256,7 @@ impl CkbadgerStore {
             }
             if key.len() == 12 {
                 let tx_idx = keys::decode_tx_idx(&key[8..12]);
-                let entry: TxIndexEntry = postcard::from_bytes(&value)?;
+                let entry: TxIndexEntry = bincode::deserialize(&value)?;
                 results.push((tx_idx, entry));
             }
         }
@@ -291,7 +291,7 @@ impl CkbadgerStore {
                 if tx_idx >= before_tx_idx {
                     break;
                 }
-                let entry: TxIndexEntry = postcard::from_bytes(&value)?;
+                let entry: TxIndexEntry = bincode::deserialize(&value)?;
                 all.push((tx_idx, entry));
             }
         }
@@ -327,7 +327,7 @@ impl CkbadgerStore {
                 if tx_idx <= after_tx_idx {
                     continue;
                 }
-                let entry: TxIndexEntry = postcard::from_bytes(&value)?;
+                let entry: TxIndexEntry = bincode::deserialize(&value)?;
                 results.push((tx_idx, entry));
                 if results.len() >= limit {
                     break;

@@ -65,7 +65,7 @@ fn repair_cutoff_date_stats(
             let (rb_cap, rb_used_created, rb_used_consumed, rb_data_created, rb_data_consumed) =
                 cap_delta.copied().unwrap_or_default();
 
-            let mut s: DailyStats = postcard::from_bytes(value).map_err(|e| {
+            let mut s: DailyStats = bincode::deserialize(value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize daily stats for rollback repair: date={}, {}",
                     date_str,
@@ -89,7 +89,7 @@ fn repair_cutoff_date_stats(
                 keys::encode_stats_key(keys::STATS_PREFIX_DAILY, prev_date_str.as_bytes());
             let (prev_live, prev_dead, prev_all, _prev_data) = store
                 .get_stats_key(&prev_key)?
-                .map(|v| postcard::from_bytes::<DailyStats>(&v))
+                .map(|v| bincode::deserialize::<DailyStats>(&v))
                 .transpose()
                 .map_err(|e| anyhow::anyhow!("bad prev-day stats in repair: {}", e))?
                 .map(|p| {
@@ -109,7 +109,7 @@ fn repair_cutoff_date_stats(
             s.total_data_size -= rb_data_created - rb_data_consumed;
 
             let cf = store.stats_cf_by_prefix(prefix)?;
-            let encoded = postcard::to_allocvec(&s)
+            let encoded = bincode::serialize(&s)
                 .map_err(|e| anyhow::anyhow!("serialize daily stats repair: {}", e))?;
             batch.put_cf(cf, key, &encoded);
             Ok(true)
@@ -129,7 +129,7 @@ fn repair_cutoff_date_stats(
                 None => return Ok(false),
             };
             let (rb_blocks, rb_txs, rb_created, rb_consumed) = delta;
-            let mut s: HourlyStats = postcard::from_bytes(value).map_err(|e| {
+            let mut s: HourlyStats = bincode::deserialize(value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize hourly stats for rollback repair: hour={}, {}",
                     hour_str,
@@ -144,7 +144,7 @@ fn repair_cutoff_date_stats(
             // capacity deltas (not tracked per-hour; leave unchanged for hourly)
 
             let cf = store.stats_cf_by_prefix(prefix)?;
-            let encoded = postcard::to_allocvec(&s)
+            let encoded = bincode::serialize(&s)
                 .map_err(|e| anyhow::anyhow!("serialize hourly stats repair: {}", e))?;
             batch.put_cf(cf, key, &encoded);
             Ok(true)
@@ -490,7 +490,7 @@ fn load_tx_contexts_from_undo_log(
         if block_num <= rollback_to {
             continue;
         }
-        let entry: UndoLogEntry = postcard::from_bytes(&value).map_err(|e| {
+        let entry: UndoLogEntry = bincode::deserialize(&value).map_err(|e| {
             anyhow::anyhow!(
                 "failed to decode undo log entry while loading tx contexts: key=0x{}, error={}",
                 bytes_to_hex(&key),
@@ -961,7 +961,7 @@ impl CkbadgerStore {
                 );
             }
             let block_num = keys::decode_block_num(&key);
-            let header: CachedBlockHeader = postcard::from_bytes(&value).map_err(|e| {
+            let header: CachedBlockHeader = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize block header during rollback cleanup: block_num={}, key=0x{}, error={}",
                     block_num,
@@ -1026,7 +1026,7 @@ impl CkbadgerStore {
                     continue;
                 }
                 let tx_idx = keys::decode_tx_idx(&key[8..12]);
-                let tx_index: TxIndexEntry = postcard::from_bytes(&value).map_err(|e| {
+                let tx_index: TxIndexEntry = bincode::deserialize(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize tx_index during rollback cleanup: block_num={}, tx_idx={}, key=0x{}, error={}",
                         block_num,
@@ -1585,7 +1585,7 @@ impl CkbadgerStore {
                     e
                 )
             })?;
-            let mut entry: DaoDepositCacheEntry = postcard::from_bytes(&value).map_err(|e| {
+            let mut entry: DaoDepositCacheEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize dao_deposit during rollback: outpoint=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -1609,7 +1609,7 @@ impl CkbadgerStore {
                     )
                 })?;
             if changed {
-                let encoded = postcard::to_allocvec(&entry).map_err(|e| {
+                let encoded = bincode::serialize(&entry).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to serialize repaired dao_deposit during rollback: outpoint=0x{}, error={}",
                         bytes_to_hex(&key),
@@ -1946,7 +1946,7 @@ impl CkbadgerStore {
                 if key.len() != keys::FIBER_CHANNEL_KEY_SIZE {
                     continue;
                 }
-                let channel: FiberChannel = match postcard::from_bytes(&value) {
+                let channel: FiberChannel = match bincode::deserialize(&value) {
                     Ok(ch) => ch,
                     Err(e) => {
                         info!(
@@ -2000,8 +2000,7 @@ impl CkbadgerStore {
                     reset_channel.settlement_block = None;
                     reset_channel.settlement_timestamp = None;
 
-                    let value =
-                        postcard::to_allocvec(&reset_channel).expect("serialize FiberChannel");
+                    let value = bincode::serialize(&reset_channel).expect("serialize FiberChannel");
                     batch.put_cf(self.cf_fiber_channels(), &key, &value);
                     fiber_removed += 1; // count as modified
                 }
@@ -2148,7 +2147,7 @@ impl CkbadgerStore {
             batch.put_cf(
                 self.cf_addr_balance(),
                 lock_hash,
-                postcard::to_allocvec(&ab).expect("serialize AddressBalance"),
+                bincode::serialize(&ab).expect("serialize AddressBalance"),
             );
             addr_balances_updated += 1;
         }
@@ -2203,7 +2202,7 @@ impl CkbadgerStore {
             batch.put_cf(
                 self.cf_script_info(),
                 code_hash,
-                postcard::to_allocvec(&si).expect("serialize ScriptInfo"),
+                bincode::serialize(&si).expect("serialize ScriptInfo"),
             );
             script_infos_updated += 1;
         }
@@ -2276,7 +2275,7 @@ impl CkbadgerStore {
             batch.put_cf(
                 self.cf_script_reference_info(),
                 key,
-                postcard::to_allocvec(&sri).expect("serialize ScriptReferenceInfo"),
+                bincode::serialize(&sri).expect("serialize ScriptReferenceInfo"),
             );
             script_refs_updated += 1;
         }
@@ -2366,7 +2365,7 @@ impl CkbadgerStore {
                 batch.put_cf(
                     self.cf_tokens(),
                     type_hash.as_slice(),
-                    postcard::to_allocvec(&ti).expect("serialize TokenInfo"),
+                    bincode::serialize(&ti).expect("serialize TokenInfo"),
                 );
                 // Also update CF_STATS_TOKEN total transfers count
                 if transfers_removed != 0 {
@@ -2452,7 +2451,7 @@ impl CkbadgerStore {
                 )
             })?;
             let spore_id = key.to_vec();
-            let entry: ObjectEntry = postcard::from_bytes(&value).map_err(|e| {
+            let entry: ObjectEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize spore_data entry during rollback repair: spore_id=0x{}, error={}",
                     bytes_to_hex(&spore_id),
@@ -2582,7 +2581,7 @@ impl CkbadgerStore {
                 )
             })?;
             let nft_id = key.to_vec();
-            let entry: ObjectEntry = postcard::from_bytes(&value).map_err(|e| {
+            let entry: ObjectEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize nft_data entry during rollback repair: nft_id=0x{}, error={}",
                     bytes_to_hex(&nft_id),
@@ -2720,7 +2719,7 @@ impl CkbadgerStore {
                 )
             })?;
             let identity_id = key.to_vec();
-            let entry: IdentityEntry = postcard::from_bytes(&value).map_err(|e| {
+            let entry: IdentityEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize identity_data entry during rollback repair: identity_id=0x{}, error={}",
                     bytes_to_hex(&identity_id),
@@ -2838,7 +2837,7 @@ impl CkbadgerStore {
         }
         for (cluster_id, agg) in &mut cluster_aggs {
             agg.owner_count = cluster_owner_totals.get(cluster_id).copied().unwrap_or(0);
-            let encoded = postcard::to_allocvec(agg).map_err(|e| {
+            let encoded = bincode::serialize(agg).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to serialize cluster aggregate during rollback repair: cluster_id=0x{}, error={}",
                     bytes_to_hex(cluster_id),
@@ -2874,7 +2873,7 @@ impl CkbadgerStore {
         for (collection_id, agg) in &mut nft_collection_aggs {
             agg.holders_count = nft_owner_totals.get(collection_id).copied().unwrap_or(0);
             agg.activities_count = nft_activity_totals.get(collection_id).copied().unwrap_or(0);
-            let encoded = postcard::to_allocvec(agg).map_err(|e| {
+            let encoded = bincode::serialize(agg).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to serialize nft collection aggregate during rollback repair: collection_id=0x{}, error={}",
                     bytes_to_hex(collection_id),
@@ -2916,7 +2915,7 @@ impl CkbadgerStore {
                 .get(collection_id)
                 .copied()
                 .unwrap_or(0);
-            let encoded = postcard::to_allocvec(agg).map_err(|e| {
+            let encoded = bincode::serialize(agg).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to serialize identity collection aggregate during rollback repair: collection_id=0x{}, error={}",
                     bytes_to_hex(collection_id),
@@ -2936,7 +2935,7 @@ impl CkbadgerStore {
                 .get_identity_collection_aggregate(collection_id)?
                 .unwrap_or_default();
             agg.activities_count = *total;
-            let encoded = postcard::to_allocvec(&agg).map_err(|e| {
+            let encoded = bincode::serialize(&agg).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to serialize identity collection aggregate during rollback repair: collection_id=0x{}, error={}",
                     bytes_to_hex(collection_id),
@@ -2973,7 +2972,7 @@ impl CkbadgerStore {
                 rollback_to,
                 holder_count_delta,
             )? {
-                let encoded = postcard::to_allocvec(&state).map_err(|e| {
+                let encoded = bincode::serialize(&state).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to serialize repaired HODL tracker state during rollback cleanup: {}",
                         e
@@ -3008,7 +3007,7 @@ impl CkbadgerStore {
                 &cell_dist_count_deltas,
                 &cell_dist_capacity_deltas,
             )? {
-                let encoded = postcard::to_allocvec(&state).map_err(|e| {
+                let encoded = bincode::serialize(&state).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to serialize repaired cell_dist tracker state during rollback cleanup: {}",
                         e
@@ -5606,7 +5605,7 @@ mod tests {
             .put_cf(
                 store.cf_stats_chain(),
                 &daily_key,
-                &postcard::to_allocvec(&daily_stats).unwrap(),
+                &bincode::serialize(&daily_stats).unwrap(),
             )
             .unwrap();
 
@@ -5620,7 +5619,7 @@ mod tests {
             repaired_raw.is_some(),
             "cutoff-day daily stats must be preserved (repaired), not deleted"
         );
-        let repaired: DailyStats = postcard::from_bytes(&repaired_raw.unwrap()).unwrap();
+        let repaired: DailyStats = bincode::deserialize(&repaired_raw.unwrap()).unwrap();
         // Rolled back: 2 blocks, 4 txs (2 cb + 2 non-cb), 8 cells_created (2*4), 4 cells_consumed (2*2)
         assert_eq!(repaired.blocks_count, 3); // 5 - 2
         assert_eq!(repaired.transactions_count, 6); // 10 - 4

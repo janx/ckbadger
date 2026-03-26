@@ -43,7 +43,7 @@ impl BulkReducer for FiberOwner {
             rows.push(MaterializedRow::new(
                 CF_FIBER_CHANNELS,
                 channel_id.clone(),
-                postcard::to_allocvec(channel)?,
+                bincode::serialize(channel)?,
             ));
         }
 

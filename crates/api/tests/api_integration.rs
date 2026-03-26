@@ -465,7 +465,7 @@ async fn test_forks_uses_persisted_reorg_detected_at_timestamp() {
         .put_cf(
             store.cf_sync_meta(),
             ckbadger_store::keys::sync_meta_keys::REORG_LATEST_EVENT,
-            &postcard::to_allocvec(&event).unwrap(),
+            &bincode::serialize(&event).unwrap(),
         )
         .unwrap();
 
@@ -893,7 +893,7 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
         ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
         b"20260310",
     );
-    let snapshot_value = postcard::to_allocvec(&snapshot).unwrap();
+    let snapshot_value = bincode::serialize(&snapshot).unwrap();
     core_store
         .put_cf(core_store.cf_stats_dao(), &snapshot_key, &snapshot_value)
         .unwrap();
@@ -1769,7 +1769,7 @@ async fn test_dao_stats_uses_precomputed_latest_stats_when_tip_matches() {
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
         b"latest",
     );
-    let value = postcard::to_allocvec(&latest).unwrap();
+    let value = bincode::serialize(&latest).unwrap();
     store.put_stats_key(&key, &value).unwrap();
 
     let app = create_router(test_config(store)).await;
@@ -1831,7 +1831,7 @@ async fn test_dao_stats_ignores_stale_precomputed_latest_stats() {
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
         b"latest",
     );
-    let value = postcard::to_allocvec(&stale).unwrap();
+    let value = bincode::serialize(&stale).unwrap();
     store.put_stats_key(&key, &value).unwrap();
 
     let app = create_router(test_config(store)).await;
@@ -2189,7 +2189,7 @@ async fn test_total_deposit_chart_recomputes_after_initial_empty_response() {
         ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
         b"20240115",
     );
-    let value = postcard::to_allocvec(&snapshot).unwrap();
+    let value = bincode::serialize(&snapshot).unwrap();
     store.put_cf(store.cf_stats_dao(), &key, &value).unwrap();
 
     let second_request = Request::builder()

@@ -12,7 +12,7 @@ impl CkbadgerStore {
             self.cf_sync_meta(),
             sync_meta_keys::BULK_BUILD_SESSION_IN_PROGRESS,
         )? {
-            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
@@ -23,7 +23,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<()> {
         match marker {
             Some(marker) => {
-                let value = postcard::to_allocvec(marker)?;
+                let value = bincode::serialize(marker)?;
                 self.put_cf(
                     self.cf_sync_meta(),
                     sync_meta_keys::BULK_BUILD_SESSION_IN_PROGRESS,
@@ -43,13 +43,13 @@ impl CkbadgerStore {
 
     pub fn get_sync_status(&self) -> anyhow::Result<SyncStatus> {
         match self.get_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_STATUS)? {
-            Some(value) => Ok(postcard::from_bytes(&value)?),
+            Some(value) => Ok(bincode::deserialize(&value)?),
             None => Ok(SyncStatus::default()),
         }
     }
 
     pub fn set_sync_status(&self, status: &SyncStatus) -> anyhow::Result<()> {
-        let value = postcard::to_allocvec(status)?;
+        let value = bincode::serialize(status)?;
         self.put_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_STATUS, &value)
     }
 
@@ -64,13 +64,13 @@ impl CkbadgerStore {
 
     pub fn get_runtime_status(&self) -> anyhow::Result<RuntimeStatus> {
         match self.get_cf(self.cf_sync_meta(), sync_meta_keys::RUNTIME_STATUS)? {
-            Some(value) => Ok(postcard::from_bytes::<RuntimeStatus>(&value)?),
+            Some(value) => Ok(bincode::deserialize::<RuntimeStatus>(&value)?),
             None => Ok(RuntimeStatus::default()),
         }
     }
 
     pub fn set_runtime_status(&self, status: &RuntimeStatus) -> anyhow::Result<()> {
-        let value = postcard::to_allocvec(status)?;
+        let value = bincode::serialize(status)?;
         self.put_cf(self.cf_sync_meta(), sync_meta_keys::RUNTIME_STATUS, &value)
     }
 
@@ -341,7 +341,7 @@ impl CkbadgerStore {
 
     pub fn get_latest_reorg_event(&self) -> anyhow::Result<Option<ReorgEvent>> {
         if let Some(value) = self.get_cf(self.cf_sync_meta(), sync_meta_keys::REORG_LATEST_EVENT)? {
-            let event: ReorgEvent = postcard::from_bytes(&value).map_err(|e| {
+            let event: ReorgEvent = bincode::deserialize(&value).map_err(|e| {
                 anyhow!(
                     "failed to deserialize latest reorg event marker in sync_meta: key={}, error={}",
                     std::str::from_utf8(sync_meta_keys::REORG_LATEST_EVENT).unwrap_or("reorg_latest_event"),
@@ -580,14 +580,14 @@ mod tests {
             .put_cf(
                 store.cf_sync_meta(),
                 b"reorg:bad-ts:1",
-                &postcard::to_allocvec(&latest_event).unwrap(),
+                &bincode::serialize(&latest_event).unwrap(),
             )
             .unwrap();
         store
             .put_cf(
                 store.cf_sync_meta(),
                 sync_meta_keys::REORG_LATEST_EVENT,
-                &postcard::to_allocvec(&latest_event).unwrap(),
+                &bincode::serialize(&latest_event).unwrap(),
             )
             .unwrap();
 

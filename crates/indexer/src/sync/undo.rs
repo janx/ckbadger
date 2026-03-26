@@ -418,7 +418,7 @@ mod tests {
             rocksdb::IteratorMode::Start,
         );
         let (_key, value) = iter.next().unwrap().unwrap();
-        let entry: ckbadger_store::types::UndoLogEntry = postcard::from_bytes(&value).unwrap();
+        let entry: ckbadger_store::types::UndoLogEntry = bincode::deserialize(&value).unwrap();
         let ckbadger_store::types::UndoLogEntry::TxContext(ctx) = entry else {
             panic!("undo entry should be tx context");
         };

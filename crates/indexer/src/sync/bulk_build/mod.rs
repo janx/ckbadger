@@ -880,7 +880,7 @@ impl ActivityStatsAccumulator {
 
     /// Accumulate activity stats directly from in-memory TxActions.
     /// Replaces the old `apply_history_rows` which deserialized bundles
-    /// from postcard MaterializedRows — a serialize→deserialize roundtrip
+    /// from bincode MaterializedRows — a serialize→deserialize roundtrip
     /// costing ~410ms/batch at steady state.
     ///
     /// Chrono cache: all txs in the same block share one timestamp, so we
@@ -949,7 +949,7 @@ impl ActivityStatsAccumulator {
             rows.push(materialize::MaterializedRow::new(
                 CF_STATS_CHAIN,
                 keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes()),
-                postcard::to_allocvec(&stats)?,
+                bincode::serialize(&stats)?,
             ));
         }
 
@@ -967,7 +967,7 @@ impl ActivityStatsAccumulator {
             rows.push(materialize::MaterializedRow::new(
                 CF_STATS_CHAIN,
                 keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour.as_bytes()),
-                postcard::to_allocvec(&stats)?,
+                bincode::serialize(&stats)?,
             ));
         }
 
@@ -1222,7 +1222,7 @@ impl ChainStatsAccumulator {
                     keys::stats_prefix::DAILY,
                     date.format("%Y%m%d").to_string().as_bytes(),
                 ),
-                postcard::to_allocvec(&stats)?,
+                bincode::serialize(&stats)?,
             ));
         }
 
@@ -1268,7 +1268,7 @@ impl ChainStatsAccumulator {
                     keys::stats_prefix::DAILY_BLOCK,
                     date.format("%Y%m%d").to_string().as_bytes(),
                 ),
-                postcard::to_allocvec(&stats)?,
+                bincode::serialize(&stats)?,
             ));
         }
 
@@ -1527,7 +1527,7 @@ impl BulkBuildRuntimeState {
                                                     keys::stats_prefix::CELL_DISTRIBUTION,
                                                     date_str.as_bytes(),
                                                 ),
-                                                postcard::to_allocvec(&snapshot)?,
+                                                bincode::serialize(&snapshot)?,
                                             ),
                                         );
                                         cell_dist_sealed_rows.push(
@@ -1537,7 +1537,7 @@ impl BulkBuildRuntimeState {
                                                     keys::stats_prefix::ADDR_COHORT,
                                                     date_str.as_bytes(),
                                                 ),
-                                                postcard::to_allocvec(&cohort)?,
+                                                bincode::serialize(&cohort)?,
                                             ),
                                         );
                                     }
@@ -1761,8 +1761,8 @@ impl BulkBuildRuntimeState {
                                 if let Some((snapshot_date, snapshot)) = cell_dist_tracker.maybe_snapshot(block_date) {
                                     let date_str = snapshot_date.format("%Y%m%d").to_string();
                                     let cohort = cell_dist_tracker.cohort_snapshot();
-                                    cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::CELL_DISTRIBUTION, date_str.as_bytes()), postcard::to_allocvec(&snapshot)?));
-                                    cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::ADDR_COHORT, date_str.as_bytes()), postcard::to_allocvec(&cohort)?));
+                                    cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::CELL_DISTRIBUTION, date_str.as_bytes()), bincode::serialize(&snapshot)?));
+                                    cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::ADDR_COHORT, date_str.as_bytes()), bincode::serialize(&cohort)?));
                                 }
                             }
                             Ok(cell_dist_sealed_rows)
@@ -1917,7 +1917,7 @@ fn apply_hodl_tracker_batch_standalone(
             sealed_rows.push(materialize::MaterializedRow::new(
                 CF_STATS_HODL,
                 keys::encode_stats_key(keys::stats_prefix::HODL_WAVE, date_str.as_bytes()),
-                postcard::to_allocvec(&snapshot)?,
+                bincode::serialize(&snapshot)?,
             ));
         }
     }
@@ -2424,7 +2424,7 @@ fn collect_script_daily_deltas_snapshot(
         }
 
         let (code_hash, is_type, date) = keys::decode_script_daily_key(&key);
-        let delta: ScriptDailyDelta = postcard::from_bytes(&value).map_err(|e| {
+        let delta: ScriptDailyDelta = bincode::deserialize(&value).map_err(|e| {
             anyhow!(
                 "failed to deserialize script daily delta in bulk artifact snapshot helper: code_hash=0x{}, is_type={}, date={}, error={}",
                 hex::encode(&code_hash),
@@ -2519,11 +2519,21 @@ fn build_history_rows(
     })
 }
 
-/// Serialize a value to a new `Vec<u8>` using postcard.
+/// Serialize into a pre-allocated Vec, avoiding realloc overhead of `bincode::serialize`
+/// which starts with a small buffer and grows. Pre-computes exact size first.
 ///
-/// Used in the hot `par_iter` path of `build_history_rows_for_block`.
-fn postcard_serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
-    postcard::to_allocvec(value).map_err(|e| anyhow!("postcard serialize failed: {}", e))
+/// Trade-off: traverses the value twice (once for size, once for serialization).
+/// Net positive for larger structs where avoiding multiple Vec reallocations
+/// outweighs the sizing pass. Used in the hot `par_iter` path of
+/// `build_history_rows_for_block` where the allocation saving is amplified
+/// across rayon threads.
+fn bincode_serialize_presized<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
+    let size = bincode::serialized_size(value)
+        .map_err(|e| anyhow!("bincode size estimation failed: {}", e))?;
+    let mut buf = Vec::with_capacity(size as usize);
+    bincode::serialize_into(&mut buf, value)
+        .map_err(|e| anyhow!("bincode serialize_into failed: {}", e))?;
+    Ok(buf)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2563,7 +2573,7 @@ fn build_history_rows_for_block(
     rows.push(materialize::MaterializedRow::new(
         CF_BLOCK_HEADERS,
         keys::encode_block_num(block.number).to_vec(),
-        postcard_serialize(&header)?,
+        bincode_serialize_presized(&header)?,
     ));
     rows.push(materialize::MaterializedRow::new(
         CF_BLOCK_HASH_INDEX,
@@ -2613,7 +2623,7 @@ fn build_history_rows_for_block(
         rows.push(materialize::MaterializedRow::new(
             CF_TX_INDEX,
             tx_location.to_vec(),
-            postcard_serialize(&entry)?,
+            bincode_serialize_presized(&entry)?,
         ));
         rows.push(materialize::MaterializedRow::new(
             CF_TX_HASH_MAP,
@@ -2653,7 +2663,7 @@ fn build_history_rows_for_block(
                     resolved_input_outpoint_index_i16(input)?,
                 )
                 .to_vec(),
-                postcard_serialize(&ConsumedCellMeta {
+                bincode_serialize_presized(&ConsumedCellMeta {
                     created_at_block: input.created_at_block,
                     consumed_at_block: tx.block_number,
                     consumed_by_tx: Some(tx.hash.to_vec()),
@@ -2698,7 +2708,7 @@ fn build_history_rows_for_block(
                         tx.block_number,
                         *idx,
                     ),
-                    postcard_serialize(&record)?,
+                    bincode_serialize_presized(&record)?,
                 ));
                 *idx = idx.checked_add(1).ok_or_else(|| {
                     anyhow!(
@@ -2847,7 +2857,7 @@ fn build_history_rows_for_block(
                         tx_actions.tx_index,
                         &tx_actions.tx_hash,
                     ),
-                    postcard_serialize(&tx_actions)?,
+                    bincode_serialize_presized(&tx_actions)?,
                 ));
             }
             tx_actions_list.push(tx_actions);
@@ -2975,7 +2985,7 @@ fn build_history_rows_for_block(
                         &tx.tx_hash,
                     )
                     .to_vec(),
-                    postcard_serialize(&entry)?,
+                    bincode_serialize_presized(&entry)?,
                 ));
                 let delta = identity_activity_count_deltas
                     .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
@@ -3010,7 +3020,7 @@ fn build_history_rows_for_block(
                     &resolved_entry.entry.tx_hash,
                 )
                 .to_vec(),
-                postcard_serialize(&resolved_entry.entry)?,
+                bincode_serialize_presized(&resolved_entry.entry)?,
             ));
         }
 
@@ -3034,7 +3044,7 @@ fn build_history_rows_for_block(
                     &resolved_entry.entry.tx_hash,
                 )
                 .to_vec(),
-                postcard_serialize(&resolved_entry.entry)?,
+                bincode_serialize_presized(&resolved_entry.entry)?,
             ));
         }
     }
@@ -3056,7 +3066,7 @@ fn build_history_rows_for_block(
             rows.push(materialize::MaterializedRow::new(
                 CF_CELLS,
                 outpoint_key,
-                postcard_serialize(&cell_facts_to_live_cell_info(cell, interner))?,
+                bincode_serialize_presized(&cell_facts_to_live_cell_info(cell, interner))?,
             ));
 
             // Lock script mapping — dedup within block, cross-batch dedup in merge.
@@ -3072,7 +3082,7 @@ fn build_history_rows_for_block(
                     materialize::MaterializedRow::new(
                         CF_LOCK_SCRIPTS,
                         lock_hash,
-                        postcard_serialize(&entry)?,
+                        bincode_serialize_presized(&entry)?,
                     ),
                 ));
             }
@@ -3227,7 +3237,7 @@ fn build_object_collection_activity_rows(
                     &tx.tx_hash,
                 )
                 .to_vec(),
-                postcard::to_allocvec(&entry)?,
+                bincode::serialize(&entry)?,
             ));
             let delta = identity_activity_count_deltas
                 .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
@@ -3262,7 +3272,7 @@ fn build_object_collection_activity_rows(
                 &resolved_entry.entry.tx_hash,
             )
             .to_vec(),
-            postcard::to_allocvec(&resolved_entry.entry)?,
+            bincode::serialize(&resolved_entry.entry)?,
         ));
     }
 
@@ -3286,7 +3296,7 @@ fn build_object_collection_activity_rows(
                 &resolved_entry.entry.tx_hash,
             )
             .to_vec(),
-            postcard::to_allocvec(&resolved_entry.entry)?,
+            bincode::serialize(&resolved_entry.entry)?,
         ));
     }
 
@@ -3307,7 +3317,7 @@ fn preload_token_info_cache(
     for item in iter {
         let (key, value) =
             item.map_err(|e| anyhow!("failed to iterate CF_TOKENS for token info preload: {}", e))?;
-        let info: ckbadger_store::types::TokenInfo = postcard::from_bytes(&value).map_err(|e| {
+        let info: ckbadger_store::types::TokenInfo = bincode::deserialize(&value).map_err(|e| {
             anyhow!(
                 "failed to deserialize token info during preload: key=0x{} error={}",
                 hex::encode(&key),
@@ -3724,7 +3734,7 @@ fn collect_history_snapshot(
             );
         }
         let block_number = keys::decode_block_num(&key);
-        let header: CachedBlockHeader = postcard::from_bytes(&value).map_err(|e| {
+        let header: CachedBlockHeader = bincode::deserialize(&value).map_err(|e| {
             anyhow!(
                 "failed to deserialize CachedBlockHeader in bulk artifact snapshot helper: block_number={} error={}",
                 block_number,
@@ -3769,7 +3779,7 @@ fn collect_history_snapshot(
     let activity_iter = domain_store.iterator_cf(domain_store.cf_tx_actions(), IteratorMode::Start);
     for item in activity_iter {
         let (key, value) = item?;
-        let actions: TxActions = postcard::from_bytes(&value).map_err(|e| {
+        let actions: TxActions = bincode::deserialize(&value).map_err(|e| {
             anyhow!(
                 "failed to deserialize TxActions in bulk artifact snapshot helper: key=0x{} error={}",
                 hex::encode(&key),
@@ -3823,7 +3833,7 @@ fn collect_hodl_stats_snapshot(
             break;
         }
         let date = String::from_utf8_lossy(&key[1..]).to_string();
-        let wave: DailyHodlWave = postcard::from_bytes(&value).map_err(|e| {
+        let wave: DailyHodlWave = bincode::deserialize(&value).map_err(|e| {
             anyhow!(
                 "failed to deserialize DailyHodlWave in bulk artifact snapshot helper: key=0x{} error={}",
                 hex::encode(&key),
@@ -3844,7 +3854,7 @@ fn collect_hodl_stats_snapshot(
             break;
         }
         let date = String::from_utf8_lossy(&key[1..]).to_string();
-        let snapshot: DailyCellDistribution = postcard::from_bytes(&value).map_err(|e| {
+        let snapshot: DailyCellDistribution = bincode::deserialize(&value).map_err(|e| {
             anyhow!(
                 "failed to deserialize DailyCellDistribution in bulk artifact snapshot helper: key=0x{} error={}",
                 hex::encode(&key),
@@ -3865,7 +3875,7 @@ fn collect_hodl_stats_snapshot(
             break;
         }
         let date = String::from_utf8_lossy(&key[1..]).to_string();
-        let snapshot: DailyAddressCohort = postcard::from_bytes(&value).map_err(|e| {
+        let snapshot: DailyAddressCohort = bincode::deserialize(&value).map_err(|e| {
             anyhow!(
                 "failed to deserialize DailyAddressCohort in bulk artifact snapshot helper: key=0x{} error={}",
                 hex::encode(&key),
@@ -3900,7 +3910,7 @@ fn collect_cell_snapshot(
     let cell_iter = append_store.iterator_cf(append_store.cf_cells(), IteratorMode::Start);
     for item in cell_iter {
         let (key, value) = item?;
-        let cell: LiveCellInfo = postcard::from_bytes(&value).map_err(|e| {
+        let cell: LiveCellInfo = bincode::deserialize(&value).map_err(|e| {
             anyhow!(
                 "failed to deserialize LiveCellInfo in bulk artifact snapshot helper: outpoint=0x{} error={}",
                 hex::encode(&key),
@@ -3929,7 +3939,7 @@ fn collect_cell_snapshot(
         domain_store.iterator_cf(domain_store.cf_consumed_cells(), IteratorMode::Start);
     for item in consumed_iter {
         let (key, value) = item?;
-        let consumed: ConsumedCellMeta = postcard::from_bytes(&value).map_err(|e| {
+        let consumed: ConsumedCellMeta = bincode::deserialize(&value).map_err(|e| {
             anyhow!(
                 "failed to deserialize ConsumedCellMeta in bulk artifact snapshot helper: outpoint=0x{} error={}",
                 hex::encode(&key),
@@ -3993,7 +4003,7 @@ fn collect_core_owner_state_snapshot(
     let addr_iter = domain_store.iterator_cf(domain_store.cf_addr_balance(), IteratorMode::Start);
     for item in addr_iter {
         let (key, value) = item?;
-        let balance: AddressBalance = postcard::from_bytes(&value).map_err(|e| {
+        let balance: AddressBalance = bincode::deserialize(&value).map_err(|e| {
             anyhow!(
                 "failed to deserialize AddressBalance in core owner snapshot helper: lock_hash=0x{}, error={}",
                 hex::encode(&key),
@@ -4235,7 +4245,7 @@ fn collect_core_owner_state_snapshot(
             continue;
         }
         let type_hash = key[1..33].to_vec();
-        let index: SporeTypeIndex = postcard::from_bytes(&value).map_err(|e| {
+        let index: SporeTypeIndex = bincode::deserialize(&value).map_err(|e| {
             anyhow!(
                 "failed to deserialize SporeTypeIndex in core owner snapshot helper: type_hash=0x{}, error={}",
                 hex::encode(&type_hash),
@@ -4902,7 +4912,7 @@ mod tests {
             .map(|row| {
                 (
                     row.key,
-                    postcard::from_bytes(&row.value).expect("deserialize token transfer"),
+                    bincode::deserialize(&row.value).expect("deserialize token transfer"),
                 )
             })
             .collect();
@@ -5063,7 +5073,7 @@ mod tests {
         assert_eq!(activity_rows.len(), 1);
         let split_key = keys::encode_tx_actions_key(14_000_888, 1, &split_tx_hash);
         let split_actions: TxActions =
-            postcard::from_bytes(&activity_rows[0].value).expect("deserialize TxActions");
+            bincode::deserialize(&activity_rows[0].value).expect("deserialize TxActions");
         assert_eq!(activity_rows[0].key, split_key);
         assert_eq!(split_actions.tx_hash, split_tx_hash);
         assert!(!split_actions.is_cellbase);
@@ -5120,7 +5130,7 @@ mod tests {
         let cellbase_in_list = result.tx_actions_list.iter().any(|a| a.is_cellbase);
         let cellbase_in_rows = tx_action_rows.iter().any(|r| {
             let actions: ckbadger_store::types::TxActions =
-                postcard::from_bytes(&r.value).expect("deserialize tx_actions");
+                bincode::deserialize(&r.value).expect("deserialize tx_actions");
             actions.is_cellbase
         });
 
@@ -5212,7 +5222,7 @@ mod tests {
             .iter()
             .filter(|row| row.cf_name == CF_TX_ACTIONS)
             .map(|row| {
-                postcard::from_bytes::<TxActions>(&row.value).expect("deserialize TxActions")
+                bincode::deserialize::<TxActions>(&row.value).expect("deserialize TxActions")
             })
             .find(|actions| !actions.is_cellbase)
             .expect("non-cellbase TxActions");
@@ -5300,7 +5310,7 @@ mod tests {
                 .map(|row| {
                     (
                         row.key.clone(),
-                        postcard::from_bytes(&row.value)
+                        bincode::deserialize(&row.value)
                             .expect("deserialize object collection activity"),
                     )
                 })
@@ -5312,7 +5322,7 @@ mod tests {
                 .map(|row| {
                     (
                         row.key.clone(),
-                        postcard::from_bytes(&row.value)
+                        bincode::deserialize(&row.value)
                             .expect("deserialize identity collection activity"),
                     )
                 })
@@ -5511,7 +5521,7 @@ mod tests {
             .map(|row| {
                 (
                     row.key.clone(),
-                    postcard::from_bytes(&row.value)
+                    bincode::deserialize(&row.value)
                         .expect("deserialize identity collection activity"),
                 )
             })
@@ -5725,7 +5735,7 @@ mod tests {
             .map(|row| {
                 (
                     row.key.clone(),
-                    postcard::from_bytes(&row.value)
+                    bincode::deserialize(&row.value)
                         .expect("deserialize object collection activity"),
                 )
             })
@@ -5965,7 +5975,8 @@ mod tests {
     }
 
     #[test]
-    fn test_postcard_serialize_roundtrip_block_header() {
+    fn test_bincode_serialize_presized_matches_standard() {
+        // Verify presized produces identical output to standard bincode::serialize.
         let header = CachedBlockHeader {
             hash: vec![0xaa; 32],
             timestamp: 1710000000000,
@@ -5975,15 +5986,13 @@ mod tests {
             dao: vec![0x00; 32],
             transactions_count: 42,
         };
-        let bytes = postcard_serialize(&header).unwrap();
-        let decoded: CachedBlockHeader = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(decoded.hash, header.hash);
-        assert_eq!(decoded.timestamp, header.timestamp);
-        assert_eq!(decoded.transactions_count, header.transactions_count);
+        let standard = bincode::serialize(&header).unwrap();
+        let presized = bincode_serialize_presized(&header).unwrap();
+        assert_eq!(standard, presized);
     }
 
     #[test]
-    fn test_postcard_serialize_roundtrip_small_struct() {
+    fn test_bincode_serialize_presized_small_struct() {
         let entry = TxIndexEntry {
             is_cellbase: false,
             timestamp: 1710000000000,
@@ -5993,16 +6002,13 @@ mod tests {
             tx_size: 512,
             cycles: Some(1_000_000),
         };
-        let bytes = postcard_serialize(&entry).unwrap();
-        let decoded: TxIndexEntry = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(decoded.timestamp, entry.timestamp);
-        assert_eq!(decoded.inputs_count, entry.inputs_count);
-        assert_eq!(decoded.fee, entry.fee);
-        assert_eq!(decoded.cycles, entry.cycles);
+        let standard = bincode::serialize(&entry).unwrap();
+        let presized = bincode_serialize_presized(&entry).unwrap();
+        assert_eq!(standard, presized);
     }
 
     #[test]
-    fn test_postcard_serialize_roundtrip_empty_vec_field() {
+    fn test_bincode_serialize_presized_empty_vec_field() {
         let header = CachedBlockHeader {
             hash: vec![],
             timestamp: 0,
@@ -6012,11 +6018,9 @@ mod tests {
             dao: vec![],
             transactions_count: 0,
         };
-        let bytes = postcard_serialize(&header).unwrap();
-        let decoded: CachedBlockHeader = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(decoded.hash, header.hash);
-        assert_eq!(decoded.dao, header.dao);
-        assert_eq!(decoded.transactions_count, 0);
+        let standard = bincode::serialize(&header).unwrap();
+        let presized = bincode_serialize_presized(&header).unwrap();
+        assert_eq!(standard, presized);
     }
 
     #[test]
@@ -6422,7 +6426,7 @@ mod tests {
 
         // Deserialize day 1
         let stats1: ckbadger_store::types::DailyStats =
-            postcard::from_bytes(&daily_rows[0].value).unwrap();
+            bincode::deserialize(&daily_rows[0].value).unwrap();
         assert_eq!(stats1.total_live_cells, 3); // 5-2
         assert_eq!(stats1.total_dead_cells, 2);
         assert_eq!(stats1.total_all_cells, 5);
@@ -6430,7 +6434,7 @@ mod tests {
 
         // Deserialize day 2 (cumulative from day 1)
         let stats2: ckbadger_store::types::DailyStats =
-            postcard::from_bytes(&daily_rows[1].value).unwrap();
+            bincode::deserialize(&daily_rows[1].value).unwrap();
         assert_eq!(stats2.total_live_cells, 5); // 3 + (3-1) = 5
         assert_eq!(stats2.total_dead_cells, 3); // 2 + 1
         assert_eq!(stats2.total_all_cells, 8); // 5 + 3

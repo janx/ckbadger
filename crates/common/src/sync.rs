@@ -1001,7 +1001,7 @@ mod tests {
     }
 
     #[test]
-    fn test_background_task_entry_postcard_roundtrip_includes_kind_and_watcher_fields() {
+    fn test_background_task_entry_bincode_roundtrip_includes_kind_and_watcher_fields() {
         let entry = BackgroundTaskEntry {
             name: "dob_decode".to_string(),
             kind: BackgroundTaskKind::Watcher,
@@ -1017,8 +1017,8 @@ mod tests {
             last_trigger_reason: Some("new_block".to_string()),
             error: None,
         };
-        let bytes = postcard::to_allocvec(&entry).unwrap();
-        let decoded: BackgroundTaskEntry = postcard::from_bytes(&bytes).unwrap();
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: BackgroundTaskEntry = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.name, "dob_decode");
         assert_eq!(decoded.kind, BackgroundTaskKind::Watcher);
         assert_eq!(decoded.state, BackgroundTaskState::Running);
@@ -1070,8 +1070,8 @@ mod tests {
     #[test]
     fn test_background_task_kind_all_variants_serialize() {
         for kind in [BackgroundTaskKind::Job, BackgroundTaskKind::Watcher] {
-            let bytes = postcard::to_allocvec(&kind).unwrap();
-            let decoded: BackgroundTaskKind = postcard::from_bytes(&bytes).unwrap();
+            let bytes = bincode::serialize(&kind).unwrap();
+            let decoded: BackgroundTaskKind = bincode::deserialize(&bytes).unwrap();
             assert_eq!(decoded, kind);
         }
     }
@@ -1084,8 +1084,8 @@ mod tests {
             BackgroundTaskState::Completed,
             BackgroundTaskState::Failed,
         ] {
-            let bytes = postcard::to_allocvec(&state).unwrap();
-            let decoded: BackgroundTaskState = postcard::from_bytes(&bytes).unwrap();
+            let bytes = bincode::serialize(&state).unwrap();
+            let decoded: BackgroundTaskState = bincode::deserialize(&bytes).unwrap();
             assert_eq!(decoded, state);
         }
     }

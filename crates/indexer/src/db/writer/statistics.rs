@@ -22,7 +22,7 @@ fn checked_add_i128(current: i128, delta: i128, metric: &str) -> Result<i128> {
 }
 
 fn deserialize_stats<T: serde::de::DeserializeOwned>(raw: &[u8], metric: &str) -> Result<T> {
-    postcard::from_bytes(raw).map_err(|e| {
+    bincode::deserialize(raw).map_err(|e| {
         anyhow!(
             "failed to deserialize {} from stats CF (len={}): {}",
             metric,
@@ -211,7 +211,7 @@ impl BatchWriter {
             },
         };
 
-        let value = postcard::to_allocvec(&stats)?;
+        let value = bincode::serialize(&stats)?;
         batch.put_stats(&key, &value);
         Ok(())
     }
@@ -394,7 +394,7 @@ impl BatchWriter {
             }
         };
 
-        let value = postcard::to_allocvec(&stats)?;
+        let value = bincode::serialize(&stats)?;
         batch.put_stats(&key, &value);
         Ok(stats)
     }
@@ -431,7 +431,7 @@ impl BatchWriter {
             },
         };
 
-        let value = postcard::to_allocvec(&stats)?;
+        let value = bincode::serialize(&stats)?;
         batch.put_stats(&key, &value);
         Ok(())
     }
@@ -465,7 +465,7 @@ impl BatchWriter {
             },
         };
 
-        let value = postcard::to_allocvec(&stats)?;
+        let value = bincode::serialize(&stats)?;
         batch.put_stats(&key, &value);
         Ok(())
     }
@@ -516,7 +516,7 @@ impl BatchWriter {
             }
         };
 
-        let value = postcard::to_allocvec(&stats)?;
+        let value = bincode::serialize(&stats)?;
         batch.put_stats(&key, &value);
         Ok(())
     }
@@ -625,7 +625,7 @@ impl BatchWriter {
             unclaimed_compensation: dao_snapshot.unclaimed_compensation,
         };
 
-        let value = postcard::to_allocvec(&snapshot)?;
+        let value = bincode::serialize(&snapshot)?;
         batch.put_stats(&key, &value);
         Ok(())
     }
@@ -685,7 +685,7 @@ impl BatchWriter {
             }
         };
         let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes());
-        let value = postcard::to_allocvec(&merged)?;
+        let value = bincode::serialize(&merged)?;
         batch.put_stats(&key, &value);
         Ok(())
     }
@@ -739,7 +739,7 @@ impl BatchWriter {
             }
         };
         let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour_key.as_bytes());
-        let value = postcard::to_allocvec(&merged)?;
+        let value = bincode::serialize(&merged)?;
         batch.put_stats(&key, &value);
         Ok(())
     }
@@ -791,7 +791,7 @@ impl BatchWriter {
         for item in iter {
             let (key, value) = item
                 .map_err(|e| anyhow!("failed to iterate dao_deposits while aggregating: {}", e))?;
-            let entry: DaoDepositCacheEntry = postcard::from_bytes(&value).map_err(|e| {
+            let entry: DaoDepositCacheEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow!(
                     "failed to deserialize dao_deposit while aggregating: outpoint=0x{}, error={}",
                     hex::encode(&key),
@@ -1048,7 +1048,7 @@ impl BatchWriter {
         let mut dao_batch = StoreBatch::new(&self.store);
 
         let key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_LATEST_STATS, b"latest");
-        let value = postcard::to_allocvec(&latest)?;
+        let value = bincode::serialize(&latest)?;
         dao_batch.put_stats(&key, &value);
 
         // Build and store top depositors
@@ -1081,7 +1081,7 @@ impl BatchWriter {
                 depositors,
             };
             let top_key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_TOP_DEPOSITORS, b"latest");
-            let top_value = postcard::to_allocvec(&top)?;
+            let top_value = bincode::serialize(&top)?;
             dao_batch.put_stats(&top_key, &top_value);
         }
 
@@ -1091,7 +1091,7 @@ impl BatchWriter {
             let date_key = today_snapshot.date.replace('-', "");
             let snap_key =
                 keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, date_key.as_bytes());
-            let snap_value = postcard::to_allocvec(&today_snapshot)?;
+            let snap_value = bincode::serialize(&today_snapshot)?;
             dao_batch.put_stats(&snap_key, &snap_value);
         }
 
@@ -1357,7 +1357,7 @@ mod tests {
             cum_treasury: 30_00000000,
             unclaimed_compensation: 0,
         };
-        let snapshot_val = postcard::to_allocvec(&snapshot).unwrap();
+        let snapshot_val = bincode::serialize(&snapshot).unwrap();
         seed.put_stats(&snapshot_key, &snapshot_val);
         seed.commit().unwrap();
 
@@ -1497,7 +1497,7 @@ mod tests {
             day1.format("%Y%m%d").to_string().as_bytes(),
         );
         let d1: DailyStats =
-            postcard::from_bytes(&store.get_stats_key(&key1).unwrap().unwrap()).unwrap();
+            bincode::deserialize(&store.get_stats_key(&key1).unwrap().unwrap()).unwrap();
         assert_eq!(d1.total_live_cells, 7); // 10 - 3
         assert_eq!(d1.total_dead_cells, 3);
         assert_eq!(d1.total_all_cells, 10);
@@ -1518,7 +1518,7 @@ mod tests {
             day2.format("%Y%m%d").to_string().as_bytes(),
         );
         let d2: DailyStats =
-            postcard::from_bytes(&store.get_stats_key(&key2).unwrap().unwrap()).unwrap();
+            bincode::deserialize(&store.get_stats_key(&key2).unwrap().unwrap()).unwrap();
         assert_eq!(d2.total_live_cells, 7 + 3); // prev 7 + (5 - 2)
         assert_eq!(d2.total_dead_cells, 3 + 2); // prev 3 + 2
         assert_eq!(d2.total_all_cells, 10 + 5); // prev 10 + 5
@@ -1585,7 +1585,7 @@ mod tests {
             day2.format("%Y%m%d").to_string().as_bytes(),
         );
         let persisted: DailyStats =
-            postcard::from_bytes(&store.get_stats_key(&key2).unwrap().unwrap()).unwrap();
+            bincode::deserialize(&store.get_stats_key(&key2).unwrap().unwrap()).unwrap();
         assert_eq!(persisted.total_live_cells, d2.total_live_cells);
         assert_eq!(persisted.total_all_cells, d2.total_all_cells);
     }

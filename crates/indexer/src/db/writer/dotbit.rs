@@ -423,7 +423,7 @@ impl BatchWriter {
         undo_seq: &mut HashMap<i64, u64>,
     ) {
         let previous_value = previous_entry.map(|entry| {
-            postcard::to_allocvec(entry).expect("serialize previous dotbit identity entry for undo")
+            bincode::serialize(entry).expect("serialize previous dotbit identity entry for undo")
         });
         self.record_dotbit_domain_undo(
             batch,
@@ -445,7 +445,7 @@ impl BatchWriter {
         undo_seq: &mut HashMap<i64, u64>,
     ) {
         let previous_value = existed.then(|| {
-            postcard::to_allocvec(previous_agg)
+            bincode::serialize(previous_agg)
                 .expect("serialize previous dotbit identity aggregate for undo")
         });
         self.record_dotbit_domain_undo(

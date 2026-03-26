@@ -275,7 +275,7 @@ impl BatchWriter {
                 .store
                 .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
             {
-                let entry: DaoDepositCacheEntry = postcard::from_bytes(&value).map_err(|e| {
+                let entry: DaoDepositCacheEntry = bincode::deserialize(&value).map_err(|e| {
                     anyhow!(
                         "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
                         hex::encode(tx_hash),
@@ -304,7 +304,7 @@ impl BatchWriter {
                     .get_cf(self.store.cf_dao_deposits(), &deposit_outpoint_key)?
                 {
                     let entry: DaoDepositCacheEntry =
-                        postcard::from_bytes(&value).map_err(|e| {
+                        bincode::deserialize(&value).map_err(|e| {
                             let (orig_tx, orig_idx) = keys::decode_outpoint(&deposit_outpoint_key);
                             anyhow!(
                                 "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
@@ -363,7 +363,7 @@ impl BatchWriter {
                         .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
                     {
                         Some(
-                            postcard::from_bytes::<DaoDepositCacheEntry>(&value).map_err(|e| {
+                            bincode::deserialize::<DaoDepositCacheEntry>(&value).map_err(|e| {
                                 anyhow!(
                                     "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
                                     hex::encode(tx_hash),
@@ -414,7 +414,7 @@ impl BatchWriter {
                         .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
                     {
                         Some(
-                            postcard::from_bytes::<DaoDepositCacheEntry>(&value).map_err(|e| {
+                            bincode::deserialize::<DaoDepositCacheEntry>(&value).map_err(|e| {
                                 anyhow!(
                                     "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
                                     hex::encode(original_tx_hash),
@@ -485,7 +485,7 @@ impl BatchWriter {
                         .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
                     {
                         Some(
-                            postcard::from_bytes::<DaoDepositCacheEntry>(&value).map_err(|e| {
+                            bincode::deserialize::<DaoDepositCacheEntry>(&value).map_err(|e| {
                                 anyhow!(
                                     "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
                                     hex::encode(original_tx_hash),
@@ -1050,7 +1050,7 @@ mod tests {
             .get_cf(store.cf_dao_deposits(), &outpoint_key)
             .unwrap()
             .expect("deposit should have been written");
-        let entry: DaoDepositCacheEntry = postcard::from_bytes(&stored).unwrap();
+        let entry: DaoDepositCacheEntry = bincode::deserialize(&stored).unwrap();
         assert_eq!(
             entry.status, 1,
             "deposit should be updated to status=1 (withdraw requested)"
@@ -1194,7 +1194,7 @@ mod tests {
             .get_cf(store.cf_dao_deposits(), &outpoint_key)
             .unwrap()
             .unwrap();
-        let entry: DaoDepositCacheEntry = postcard::from_bytes(&stored).unwrap();
+        let entry: DaoDepositCacheEntry = bincode::deserialize(&stored).unwrap();
         assert_eq!(entry.status, 1);
         assert_eq!(entry.withdraw_request_output_index, Some(0));
 
@@ -1262,7 +1262,7 @@ mod tests {
             .unwrap();
         batch.commit().unwrap();
 
-        let stored: DaoDepositCacheEntry = postcard::from_bytes(
+        let stored: DaoDepositCacheEntry = bincode::deserialize(
             &store
                 .get_cf(store.cf_dao_deposits(), &outpoint)
                 .unwrap()
@@ -1338,7 +1338,7 @@ mod tests {
             .unwrap();
         batch.commit().unwrap();
 
-        let stored: DaoDepositCacheEntry = postcard::from_bytes(
+        let stored: DaoDepositCacheEntry = bincode::deserialize(
             &store
                 .get_cf(store.cf_dao_deposits(), &outpoint)
                 .unwrap()

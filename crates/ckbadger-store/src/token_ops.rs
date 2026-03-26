@@ -26,7 +26,7 @@ pub struct TokenDailyValidationError {
 impl CkbadgerStore {
     pub fn get_token(&self, type_hash: &[u8]) -> anyhow::Result<Option<TokenInfo>> {
         match self.get_cf(self.cf_tokens(), type_hash)? {
-            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
@@ -46,7 +46,7 @@ impl CkbadgerStore {
         let mut result = Vec::with_capacity(type_hashes.len());
         for (hash, value_result) in type_hashes.iter().zip(values) {
             let info = match value_result {
-                Ok(Some(value)) => Some(postcard::from_bytes::<TokenInfo>(&value).map_err(
+                Ok(Some(value)) => Some(bincode::deserialize::<TokenInfo>(&value).map_err(
                     |e| {
                         anyhow::anyhow!(
                             "failed to deserialize token info in get_tokens_batch: type_hash=0x{}, error={}",
@@ -70,7 +70,7 @@ impl CkbadgerStore {
     }
 
     pub fn put_token_direct(&self, type_hash: &[u8], info: &TokenInfo) -> anyhow::Result<()> {
-        let value = postcard::to_allocvec(info)?;
+        let value = bincode::serialize(info)?;
         self.put_cf(self.cf_tokens(), type_hash, &value)
     }
 
@@ -82,7 +82,7 @@ impl CkbadgerStore {
         for item in iter {
             let (key, value) = item
                 .map_err(|e| anyhow::anyhow!("failed to iterate tokens in list_tokens: {}", e))?;
-            let info: TokenInfo = postcard::from_bytes(&value).map_err(|e| {
+            let info: TokenInfo = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize token info in list_tokens: type_hash=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -167,7 +167,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<TokenDailyDelta>> {
         let key = keys::encode_token_daily_key(type_hash, date_yyyymmdd);
         match self.get_cf(self.cf_stats_token(), &key)? {
-            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
@@ -179,7 +179,7 @@ impl CkbadgerStore {
         delta: &TokenDailyDelta,
     ) -> anyhow::Result<()> {
         let key = keys::encode_token_daily_key(type_hash, date_yyyymmdd);
-        let value = postcard::to_allocvec(delta)?;
+        let value = bincode::serialize(delta)?;
         self.put_cf(self.cf_stats_token(), &key, &value)
     }
 
@@ -224,7 +224,7 @@ impl CkbadgerStore {
                     break;
                 }
             }
-            let delta: TokenDailyDelta = postcard::from_bytes(&value).map_err(|e| {
+            let delta: TokenDailyDelta = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize token daily delta in list_token_daily_deltas_in_range: type_hash=0x{}, date={}, error={}",
                     bytes_to_hex(type_hash),
@@ -276,7 +276,7 @@ impl CkbadgerStore {
             }
 
             let (type_hash, date_yyyymmdd) = keys::decode_token_daily_key(&key);
-            let delta: TokenDailyDelta = postcard::from_bytes(&value).map_err(|e| {
+            let delta: TokenDailyDelta = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize token daily delta while validating: type_hash=0x{}, date={}, error={}",
                     bytes_to_hex(&type_hash),
@@ -557,7 +557,7 @@ impl CkbadgerStore {
                     continue;
                 }
                 let (block_num, tx_idx) = keys::decode_token_transfer_key(&key);
-                let record: TokenTransferRecord = postcard::from_bytes(&value)?;
+                let record: TokenTransferRecord = bincode::deserialize(&value)?;
                 results.push((block_num, tx_idx, record));
                 if results.len() >= limit {
                     break;
@@ -630,7 +630,7 @@ impl CkbadgerStore {
             }
 
             let (block_num, tx_idx) = keys::decode_token_transfer_key(&key);
-            let record: TokenTransferRecord = postcard::from_bytes(&value)?;
+            let record: TokenTransferRecord = bincode::deserialize(&value)?;
 
             if let Some(ref prev_tx_hash) = current_tx_hash {
                 if record.tx_hash != *prev_tx_hash {

@@ -36,7 +36,7 @@ impl BatchWriter {
             depth: depth_i32,
         };
         let event_key = next_reorg_event_key();
-        let event_bytes = postcard::to_allocvec(&event)?;
+        let event_bytes = bincode::serialize(&event)?;
         let mut status = self.store.get_sync_status()?;
         status.deep_fork_detected = true;
         status.deep_fork_info = Some(DeepForkInfo {
@@ -47,7 +47,7 @@ impl BatchWriter {
             depth: depth_i32,
             fork_point,
         });
-        let status_bytes = postcard::to_allocvec(&status)?;
+        let status_bytes = bincode::serialize(&status)?;
 
         let mut batch = StoreBatch::new(self.store.as_ref());
         batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
@@ -92,11 +92,11 @@ impl BatchWriter {
             depth,
         };
         let event_key = next_reorg_event_key();
-        let event_bytes = postcard::to_allocvec(&event)?;
+        let event_bytes = bincode::serialize(&event)?;
         let mut status = self.store.get_sync_status()?;
         status.deep_fork_detected = false;
         status.deep_fork_info = None;
-        let status_bytes = postcard::to_allocvec(&status)?;
+        let status_bytes = bincode::serialize(&status)?;
         let mut batch = StoreBatch::new(self.store.as_ref());
         batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
         batch.put_sync_meta(sync_meta_keys::REORG_LATEST_EVENT, &event_bytes);
@@ -196,7 +196,7 @@ mod tests {
             .unwrap()
             .expect("latest reorg marker should exist");
         let latest_event: ckbadger_store::types::ReorgEvent =
-            postcard::from_bytes(&latest).unwrap();
+            bincode::deserialize(&latest).unwrap();
         assert_eq!(latest_event.rollback_to, 100);
         assert_eq!(latest_event.depth, 20);
 

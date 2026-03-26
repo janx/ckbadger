@@ -80,7 +80,7 @@ impl BulkReducer for ObjectOwner {
             MaterializedRow::new(
                 CF_STATS_MNFT,
                 keys::encode_nft_type_index_key(type_hash).to_vec(),
-                postcard::to_allocvec(index).expect("object type index serialization must succeed"),
+                bincode::serialize(index).expect("object type index serialization must succeed"),
             )
         }));
         sealed_rows.extend(self.mnft_hourly_transfers.iter().map(|(key, count)| {
@@ -107,7 +107,7 @@ impl BulkReducer for ObjectOwner {
                     MaterializedRow::new(
                         CF_STATS_MNFT,
                         keys::encode_nft_daily_key(collection_id, *date).to_vec(),
-                        postcard::to_allocvec(&MnftDailyDelta {
+                        bincode::serialize(&MnftDailyDelta {
                             owned_capacity_delta: *cap_delta,
                             owned_knowledge_delta: *know_delta,
                         })
@@ -123,7 +123,7 @@ impl BulkReducer for ObjectOwner {
                     MaterializedRow::new(
                         CF_STATS_SPORE,
                         keys::encode_spore_daily_key(spore_id, *date).to_vec(),
-                        postcard::to_allocvec(&SporeDailyDelta {
+                        bincode::serialize(&SporeDailyDelta {
                             owned_capacity_delta: *cap_delta,
                             owned_knowledge_delta: *know_delta,
                         })
@@ -139,7 +139,7 @@ impl BulkReducer for ObjectOwner {
                     MaterializedRow::new(
                         CF_STATS_SPORE,
                         keys::encode_cluster_daily_key(cluster_id, *date).to_vec(),
-                        postcard::to_allocvec(&ClusterDailyDelta {
+                        bincode::serialize(&ClusterDailyDelta {
                             owned_capacity_delta: *cap_delta,
                             owned_knowledge_delta: *know_delta,
                         })
@@ -251,7 +251,7 @@ impl BulkReducer for ObjectOwner {
             final_rows.push(MaterializedRow::new(
                 CF_SPORE_DATA,
                 id.clone(),
-                postcard::to_allocvec(entry)?,
+                bincode::serialize(entry)?,
             ));
         }
         for key in &self.spore_by_cluster {
@@ -265,7 +265,7 @@ impl BulkReducer for ObjectOwner {
             final_rows.push(MaterializedRow::new(
                 CF_MNFT_DATA,
                 id.clone(),
-                postcard::to_allocvec(entry)?,
+                bincode::serialize(entry)?,
             ));
         }
         for key in &self.mnft_by_collection {
@@ -279,7 +279,7 @@ impl BulkReducer for ObjectOwner {
             final_rows.push(MaterializedRow::new(
                 CF_IDENTITY_DATA,
                 id.clone(),
-                postcard::to_allocvec(entry)?,
+                bincode::serialize(entry)?,
             ));
         }
         for key in &self.identity_by_collection {
@@ -293,28 +293,28 @@ impl BulkReducer for ObjectOwner {
             final_rows.push(MaterializedRow::new(
                 CF_IDENTITY_AGG,
                 DID_CKB_SENTINEL_COLLECTION.to_vec(),
-                postcard::to_allocvec(agg)?,
+                bincode::serialize(agg)?,
             ));
         }
         if let Some(agg) = &self.dotbit_agg {
             final_rows.push(MaterializedRow::new(
                 CF_IDENTITY_AGG,
                 DOTBIT_SENTINEL_COLLECTION.to_vec(),
-                postcard::to_allocvec(agg)?,
+                bincode::serialize(agg)?,
             ));
         }
         for (cluster_id, agg) in &self.cluster_aggs {
             final_rows.push(MaterializedRow::new(
                 CF_CLUSTER_AGG,
                 cluster_id.clone(),
-                postcard::to_allocvec(agg)?,
+                bincode::serialize(agg)?,
             ));
         }
         for (class_id, agg) in &self.object_collection_aggs {
             final_rows.push(MaterializedRow::new(
                 CF_MNFT_COLLECTION_AGG,
                 class_id.clone(),
-                postcard::to_allocvec(agg)?,
+                bincode::serialize(agg)?,
             ));
         }
         for (lock_hash, count) in &self.did_owner_counts {
@@ -918,7 +918,7 @@ impl ObjectOwner {
         };
         self.stats_spore_rows.insert(
             keys::encode_spore_type_index_key(&type_script_hash).to_vec(),
-            postcard::to_allocvec(&index)?,
+            bincode::serialize(&index)?,
         );
         Ok(())
     }
@@ -2352,7 +2352,7 @@ pub(crate) fn materialize_object_state_for_test(
                 continue;
             }
             let type_hash = key[1..33].to_vec();
-            let index: SporeTypeIndex = postcard::from_bytes(&value).map_err(|e| {
+            let index: SporeTypeIndex = bincode::deserialize(&value).map_err(|e| {
                 anyhow!(
                     "failed to deserialize SporeTypeIndex in object snapshot helper: type_hash=0x{}, error={}",
                     hex::encode(&type_hash),
@@ -2387,7 +2387,7 @@ pub(crate) fn materialize_object_state_for_test(
                     }
                     let type_hash = key[1..33].to_vec();
                     let index: MnftTypeIndex =
-                        postcard::from_bytes(&value).map_err(|e| {
+                        bincode::deserialize(&value).map_err(|e| {
                             anyhow!(
                                 "failed to deserialize MnftTypeIndex in object snapshot helper: type_hash=0x{}, error={}",
                                 hex::encode(&type_hash),

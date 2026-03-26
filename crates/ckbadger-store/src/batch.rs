@@ -264,7 +264,7 @@ impl<'a> StoreBatch<'a> {
     /// separate batches: `put_cell_payload` on append-only batch +
     /// `put_live_cell_marker` on domain batch.
     pub fn put_cell_raw_key(&mut self, raw_key: &[u8], info: &LiveCellInfo, created_at_block: i64) {
-        let value = postcard::to_allocvec(info).expect("serialize LiveCellInfo");
+        let value = bincode::serialize(info).expect("serialize LiveCellInfo");
         // Canonical cell payload is append-only in `cells`; live_cells is a marker set.
         self.put_cf(self.store.cf_cells(), raw_key, &value);
         self.put_live_cell_marker(raw_key, created_at_block);
@@ -274,7 +274,7 @@ impl<'a> StoreBatch<'a> {
 
     /// Write cell payload to CF_CELLS. Call on append-only store batch.
     pub fn put_cell_payload(&mut self, raw_key: &[u8], info: &LiveCellInfo) {
-        let value = postcard::to_allocvec(info).expect("serialize LiveCellInfo");
+        let value = bincode::serialize(info).expect("serialize LiveCellInfo");
         self.put_cf(self.store.cf_cells(), raw_key, &value);
     }
 
@@ -375,14 +375,14 @@ impl<'a> StoreBatch<'a> {
         consumed_by_tx: Option<&[u8]>,
     ) {
         // Ensure canonical payload exists even when callers only write consumed entries.
-        let cell_value = postcard::to_allocvec(info).expect("serialize LiveCellInfo");
+        let cell_value = bincode::serialize(info).expect("serialize LiveCellInfo");
         self.put_cf(self.store.cf_cells(), raw_key, &cell_value);
         let consumed = ConsumedCellMeta {
             created_at_block,
             consumed_at_block,
             consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
         };
-        let value = postcard::to_allocvec(&consumed).expect("serialize ConsumedCellMeta");
+        let value = bincode::serialize(&consumed).expect("serialize ConsumedCellMeta");
         self.put_cf(self.store.cf_consumed_cells(), raw_key, &value);
     }
 
@@ -420,7 +420,7 @@ impl<'a> StoreBatch<'a> {
             consumed_at_block,
             consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
         };
-        let value = postcard::to_allocvec(&consumed).expect("serialize ConsumedCellMeta");
+        let value = bincode::serialize(&consumed).expect("serialize ConsumedCellMeta");
         self.put_cf(self.store.cf_consumed_cells(), raw_key, &value);
     }
 
@@ -428,7 +428,7 @@ impl<'a> StoreBatch<'a> {
 
     /// Write lock_hash -> script components mapping. Idempotent (same key always maps to same value).
     pub fn put_lock_script(&mut self, lock_hash: &[u8], entry: &crate::types::LockScriptEntry) {
-        let value = postcard::to_allocvec(entry).expect("serialize LockScriptEntry");
+        let value = bincode::serialize(entry).expect("serialize LockScriptEntry");
         self.put_cf(self.store.cf_lock_scripts(), lock_hash, &value);
     }
 
@@ -582,7 +582,7 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_block_header(&mut self, block_number: i64, header: &CachedBlockHeader) {
         let key = keys::encode_block_num(block_number);
-        let value = postcard::to_allocvec(header).expect("serialize CachedBlockHeader");
+        let value = bincode::serialize(header).expect("serialize CachedBlockHeader");
         self.put_cf(self.store.cf_block_headers(), key, &value);
 
         // Also update hash -> number index
@@ -600,7 +600,7 @@ impl<'a> StoreBatch<'a> {
             &keys::encode_block_num(block_num),
             &keys::encode_tx_idx(tx_idx),
         ]);
-        let value = postcard::to_allocvec(entry).expect("serialize TxIndexEntry");
+        let value = bincode::serialize(entry).expect("serialize TxIndexEntry");
         self.put_cf(self.store.cf_tx_index(), &key, &value);
     }
 
@@ -615,7 +615,7 @@ impl<'a> StoreBatch<'a> {
     // ---- Address balance ----
 
     pub fn put_addr_balance(&mut self, lock_hash: &[u8], balance: &AddressBalance) {
-        let value = postcard::to_allocvec(balance).expect("serialize AddressBalance");
+        let value = bincode::serialize(balance).expect("serialize AddressBalance");
         self.put_cf(self.store.cf_addr_balance(), lock_hash, &value);
     }
 
@@ -626,7 +626,7 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_reorg_undo_log_by_block(&mut self, block_num: i64, seq: u64, entry: &UndoLogEntry) {
         let key = keys::encode_reorg_undo_log_key(block_num, seq);
-        let value = postcard::to_allocvec(entry).expect("serialize UndoLogEntry");
+        let value = bincode::serialize(entry).expect("serialize UndoLogEntry");
         self.put_cf(self.store.cf_reorg_undo_log_by_block(), key, &value);
     }
 
@@ -682,7 +682,7 @@ impl<'a> StoreBatch<'a> {
                     )
                 })
                 .map(|existing| {
-                    postcard::from_bytes(&existing).unwrap_or_else(|e| {
+                    bincode::deserialize(&existing).unwrap_or_else(|e| {
                         panic!(
                             "failed to deserialize existing dao_deposit before overwrite: outpoint=0x{}, error={}",
                             bytes_to_hex(outpoint_key),
@@ -696,7 +696,7 @@ impl<'a> StoreBatch<'a> {
             self.delete_dao_secondary_indexes(outpoint_key, &existing_entry);
         }
 
-        let value = postcard::to_allocvec(entry).expect("serialize DaoDepositCacheEntry");
+        let value = bincode::serialize(entry).expect("serialize DaoDepositCacheEntry");
         self.put_cf(self.store.cf_dao_deposits(), outpoint_key, &value);
         self.put_dao_secondary_indexes(outpoint_key, entry);
         self.pending_dao_deposits
@@ -720,7 +720,7 @@ impl<'a> StoreBatch<'a> {
     // ---- Tokens ----
 
     pub fn put_token(&mut self, type_hash: &[u8], info: &TokenInfo) {
-        let value = postcard::to_allocvec(info).expect("serialize TokenInfo");
+        let value = bincode::serialize(info).expect("serialize TokenInfo");
         self.put_cf(self.store.cf_tokens(), type_hash, &value);
     }
 
@@ -781,13 +781,13 @@ impl<'a> StoreBatch<'a> {
         delta: &MnftDailyDelta,
     ) {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
-        let value = postcard::to_allocvec(delta).expect("serialize MnftDailyDelta");
+        let value = bincode::serialize(delta).expect("serialize MnftDailyDelta");
         self.put_cf(self.store.cf_stats_mnft(), key, &value);
     }
 
     pub fn put_mnft_type_index(&mut self, type_script_hash: &[u8], index: &MnftTypeIndex) {
         let key = keys::encode_nft_type_index_key(type_script_hash);
-        let value = postcard::to_allocvec(index).expect("serialize MnftTypeIndex");
+        let value = bincode::serialize(index).expect("serialize MnftTypeIndex");
         self.put_cf(self.store.cf_stats_mnft(), key, &value);
     }
 
@@ -798,7 +798,7 @@ impl<'a> StoreBatch<'a> {
         delta: &ClusterDailyDelta,
     ) {
         let key = keys::encode_cluster_daily_key(cluster_id, date_yyyymmdd);
-        let value = postcard::to_allocvec(delta).expect("serialize ClusterDailyDelta");
+        let value = bincode::serialize(delta).expect("serialize ClusterDailyDelta");
         self.put_cf(self.store.cf_stats_spore(), key, &value);
     }
 
@@ -809,13 +809,13 @@ impl<'a> StoreBatch<'a> {
         delta: &SporeDailyDelta,
     ) {
         let key = keys::encode_spore_daily_key(spore_id, date_yyyymmdd);
-        let value = postcard::to_allocvec(delta).expect("serialize SporeDailyDelta");
+        let value = bincode::serialize(delta).expect("serialize SporeDailyDelta");
         self.put_cf(self.store.cf_stats_spore(), key, &value);
     }
 
     pub fn put_spore_type_index(&mut self, type_script_hash: &[u8], index: &SporeTypeIndex) {
         let key = keys::encode_spore_type_index_key(type_script_hash);
-        let value = postcard::to_allocvec(index).expect("serialize SporeTypeIndex");
+        let value = bincode::serialize(index).expect("serialize SporeTypeIndex");
         self.put_cf(self.store.cf_stats_spore(), key, &value);
     }
 
@@ -890,14 +890,14 @@ impl<'a> StoreBatch<'a> {
         record: &TokenTransferRecord,
     ) {
         let key = keys::encode_token_transfer_key(type_hash, block_num, tx_idx);
-        let value = postcard::to_allocvec(record).expect("serialize TokenTransferRecord");
+        let value = bincode::serialize(record).expect("serialize TokenTransferRecord");
         self.put_cf(self.store.cf_token_transfers(), key, &value);
     }
 
     // ---- Spore/Object ----
 
     pub fn put_spore(&mut self, id: &[u8], entry: &ObjectEntry) {
-        let value = postcard::to_allocvec(entry).expect("serialize ObjectEntry");
+        let value = bincode::serialize(entry).expect("serialize ObjectEntry");
         self.put_cf(self.store.cf_spore_data(), id, &value);
     }
 
@@ -912,7 +912,7 @@ impl<'a> StoreBatch<'a> {
     }
 
     pub fn put_mnft(&mut self, id: &[u8], entry: &ObjectEntry) {
-        let value = postcard::to_allocvec(entry).expect("serialize ObjectEntry");
+        let value = bincode::serialize(entry).expect("serialize ObjectEntry");
         self.put_cf(self.store.cf_mnft_data(), id, &value);
     }
 
@@ -924,7 +924,7 @@ impl<'a> StoreBatch<'a> {
     // ---- DOB decoded cache ----
 
     pub fn put_dob_decoded(&mut self, spore_id: &[u8], entry: &crate::types::DobDecodedEntry) {
-        let value = postcard::to_allocvec(entry).expect("serialize DobDecodedEntry");
+        let value = bincode::serialize(entry).expect("serialize DobDecodedEntry");
         self.put_cf(self.store.cf_dob_decoded(), spore_id, &value);
     }
 
@@ -935,7 +935,7 @@ impl<'a> StoreBatch<'a> {
     // ---- Identity ----
 
     pub fn put_identity(&mut self, id: &[u8], entry: &IdentityEntry) {
-        let value = postcard::to_allocvec(entry).expect("serialize IdentityEntry");
+        let value = bincode::serialize(entry).expect("serialize IdentityEntry");
         self.put_cf(self.store.cf_identity_data(), id, &value);
     }
 
@@ -957,7 +957,7 @@ impl<'a> StoreBatch<'a> {
     // ---- Cluster aggregates ----
 
     pub fn put_cluster_aggregate(&mut self, cluster_id: &[u8], agg: &ClusterAggregate) {
-        let value = postcard::to_allocvec(agg).expect("serialize ClusterAggregate");
+        let value = bincode::serialize(agg).expect("serialize ClusterAggregate");
         self.put_cf(self.store.cf_cluster_agg(), cluster_id, &value);
     }
 
@@ -978,7 +978,7 @@ impl<'a> StoreBatch<'a> {
         collection_id: &[u8],
         agg: &MnftCollectionAggregate,
     ) {
-        let value = postcard::to_allocvec(agg).expect("serialize MnftCollectionAggregate");
+        let value = bincode::serialize(agg).expect("serialize MnftCollectionAggregate");
         self.put_cf(self.store.cf_mnft_collection_agg(), collection_id, &value);
     }
 
@@ -1004,7 +1004,7 @@ impl<'a> StoreBatch<'a> {
         collection_id: &[u8],
         agg: &IdentityCollectionAggregate,
     ) {
-        let value = postcard::to_allocvec(agg).expect("serialize IdentityCollectionAggregate");
+        let value = bincode::serialize(agg).expect("serialize IdentityCollectionAggregate");
         self.put_cf(self.store.cf_identity_agg(), collection_id, &value);
     }
 
@@ -1013,7 +1013,7 @@ impl<'a> StoreBatch<'a> {
     pub fn put_tx_actions(&mut self, actions: &TxActions) {
         let key =
             keys::encode_tx_actions_key(actions.block_number, actions.tx_index, &actions.tx_hash);
-        let value = postcard::to_allocvec(actions).expect("serialize TxActions");
+        let value = bincode::serialize(actions).expect("serialize TxActions");
         self.put_cf(self.store.cf_tx_actions(), key, &value);
     }
 
@@ -1033,7 +1033,7 @@ impl<'a> StoreBatch<'a> {
             &entry.block_hash,
             &entry.tx_hash,
         );
-        let value = postcard::to_allocvec(entry).expect("serialize ObjectCollectionActivityEntry");
+        let value = bincode::serialize(entry).expect("serialize ObjectCollectionActivityEntry");
         self.put_cf(self.store.cf_object_collection_activities(), key, &value);
     }
 
@@ -1053,7 +1053,7 @@ impl<'a> StoreBatch<'a> {
             &entry.block_hash,
             &entry.tx_hash,
         );
-        let value = postcard::to_allocvec(entry).expect("serialize identity collection activity");
+        let value = bincode::serialize(entry).expect("serialize identity collection activity");
         self.put_cf(self.store.cf_identity_collection_activities(), key, &value);
     }
 
@@ -1084,12 +1084,12 @@ impl<'a> StoreBatch<'a> {
     }
 
     pub fn put_script_info(&mut self, code_hash: &[u8], info: &ScriptInfo) {
-        let value = postcard::to_allocvec(info).expect("serialize ScriptInfo");
+        let value = bincode::serialize(info).expect("serialize ScriptInfo");
         self.put_cf(self.store.cf_script_info(), code_hash, &value);
     }
 
     pub fn put_script_version(&mut self, version_hash: &[u8], info: &ScriptVersionInfo) {
-        let value = postcard::to_allocvec(info).expect("serialize ScriptVersionInfo");
+        let value = bincode::serialize(info).expect("serialize ScriptVersionInfo");
         self.put_cf(self.store.cf_script_versions(), version_hash, &value);
     }
 
@@ -1110,7 +1110,7 @@ impl<'a> StoreBatch<'a> {
             family_id,
             info.family_id
         );
-        let value = postcard::to_allocvec(info).expect("serialize ScriptFamilyInfo");
+        let value = bincode::serialize(info).expect("serialize ScriptFamilyInfo");
         self.put_cf(
             self.store.cf_script_families(),
             family_id.as_bytes(),
@@ -1147,7 +1147,7 @@ impl<'a> StoreBatch<'a> {
             crate::bytes_to_hex(&info.reference_hash)
         );
         let key = keys::encode_script_reference_key(hash_type, reference_hash);
-        let value = postcard::to_allocvec(info).expect("serialize ScriptReferenceInfo");
+        let value = bincode::serialize(info).expect("serialize ScriptReferenceInfo");
         self.put_cf(self.store.cf_script_reference_info(), key, &value);
     }
 
@@ -1198,7 +1198,7 @@ impl<'a> StoreBatch<'a> {
     // ---- Fiber Channels ----
 
     pub fn put_fiber_channel(&mut self, channel_id: &[u8], channel: &FiberChannel) {
-        let value = postcard::to_allocvec(channel).expect("serialize FiberChannel");
+        let value = bincode::serialize(channel).expect("serialize FiberChannel");
         self.put_cf(self.store.cf_fiber_channels(), channel_id, &value);
     }
 
@@ -1251,12 +1251,12 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_hodl_wave(&mut self, date: &str, wave: &DailyHodlWave) {
         let key = keys::encode_stats_key(keys::stats_prefix::HODL_WAVE, date.as_bytes());
-        let value = postcard::to_allocvec(wave).expect("failed to serialize hodl wave");
+        let value = bincode::serialize(wave).expect("failed to serialize hodl wave");
         self.put_cf(self.store.cf_stats_hodl(), &key, &value);
     }
 
     pub fn put_hodl_tracker_state(&mut self, state: &HodlTrackerState) {
-        let value = postcard::to_allocvec(state).expect("failed to serialize hodl tracker state");
+        let value = bincode::serialize(state).expect("failed to serialize hodl tracker state");
         self.put_cf(
             self.store.cf_sync_meta(),
             keys::sync_meta_keys::HODL_TRACKER,
@@ -1266,19 +1266,18 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_cell_distribution(&mut self, date: &str, snapshot: &DailyCellDistribution) {
         let key = keys::encode_stats_key(keys::stats_prefix::CELL_DISTRIBUTION, date.as_bytes());
-        let value = postcard::to_allocvec(snapshot).expect("failed to serialize cell distribution");
+        let value = bincode::serialize(snapshot).expect("failed to serialize cell distribution");
         self.put_cf(self.store.cf_stats_hodl(), &key, &value);
     }
 
     pub fn put_address_cohort(&mut self, date: &str, snapshot: &DailyAddressCohort) {
         let key = keys::encode_stats_key(keys::stats_prefix::ADDR_COHORT, date.as_bytes());
-        let value = postcard::to_allocvec(snapshot).expect("failed to serialize address cohort");
+        let value = bincode::serialize(snapshot).expect("failed to serialize address cohort");
         self.put_cf(self.store.cf_stats_hodl(), &key, &value);
     }
 
     pub fn put_cell_dist_tracker_state(&mut self, state: &CellDistributionTrackerState) {
-        let value =
-            postcard::to_allocvec(state).expect("failed to serialize cell dist tracker state");
+        let value = bincode::serialize(state).expect("failed to serialize cell dist tracker state");
         self.put_cf(
             self.store.cf_sync_meta(),
             keys::sync_meta_keys::CELL_DIST_TRACKER,
@@ -1327,7 +1326,7 @@ mod tests {
         let val = store.get_cf(cf, &key).unwrap();
         assert!(val.is_some());
 
-        let decoded: CachedBlockHeader = postcard::from_bytes(&val.unwrap()).unwrap();
+        let decoded: CachedBlockHeader = bincode::deserialize(&val.unwrap()).unwrap();
         assert_eq!(decoded.timestamp, 1000);
         assert_eq!(decoded.transactions_count, 5);
     }
@@ -1416,7 +1415,7 @@ mod tests {
             .get_cf(store.cf_consumed_cells(), &outpoint_key)
             .unwrap()
             .unwrap();
-        let decoded: ConsumedCellMeta = postcard::from_bytes(&meta).unwrap();
+        let decoded: ConsumedCellMeta = bincode::deserialize(&meta).unwrap();
         assert_eq!(decoded.created_at_block, 1);
         assert_eq!(decoded.consumed_at_block, 22);
         assert_eq!(decoded.consumed_by_tx, Some(vec![0x44; 32]));
@@ -1442,7 +1441,7 @@ mod tests {
             .get_cf(store.cf_reorg_undo_log_by_block(), &key)
             .unwrap()
             .unwrap();
-        let decoded: UndoLogEntry = postcard::from_bytes(&value).unwrap();
+        let decoded: UndoLogEntry = bincode::deserialize(&value).unwrap();
         assert_eq!(decoded, entry);
     }
 
@@ -1762,7 +1761,7 @@ mod tests {
 
         let key = keys::encode_outpoint(&[0xB1; 32], 0);
         let stored = store.get_cf(store.cf_cells(), &key).unwrap().unwrap();
-        let payload: LiveCellInfo = postcard::from_bytes(&stored).unwrap();
+        let payload: LiveCellInfo = bincode::deserialize(&stored).unwrap();
         assert_eq!(payload, info);
     }
 
@@ -1926,14 +1925,14 @@ mod tests {
             .get_cf(store.cf_consumed_cells(), &raw_key)
             .unwrap()
             .unwrap();
-        let meta: ConsumedCellMeta = postcard::from_bytes(&meta_bytes).unwrap();
+        let meta: ConsumedCellMeta = bincode::deserialize(&meta_bytes).unwrap();
         assert_eq!(meta.created_at_block, 5);
         assert_eq!(meta.consumed_at_block, 10);
         assert_eq!(meta.consumed_by_tx, Some(consumed_by.to_vec()));
 
         // Verify canonical cell payload is still present in CF_CELLS
         let cell_bytes = store.get_cf(store.cf_cells(), &raw_key).unwrap().unwrap();
-        let cell: LiveCellInfo = postcard::from_bytes(&cell_bytes).unwrap();
+        let cell: LiveCellInfo = bincode::deserialize(&cell_bytes).unwrap();
         assert_eq!(cell.capacity, 20000);
         assert_eq!(cell.lock_script_hash, info.lock_script_hash);
     }
@@ -2118,7 +2117,7 @@ mod tests {
             .get_cf(store.cf_block_headers(), &key)
             .unwrap()
             .unwrap();
-        let decoded: CachedBlockHeader = postcard::from_bytes(&val).unwrap();
+        let decoded: CachedBlockHeader = bincode::deserialize(&val).unwrap();
         assert_eq!(decoded.timestamp, 9999);
 
         // Verify tx hash map

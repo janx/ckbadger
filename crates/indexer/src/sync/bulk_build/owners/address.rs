@@ -149,7 +149,7 @@ impl BulkReducer for AddressOwner {
                 Ok(MaterializedRow::new(
                     CF_ADDR_BALANCE,
                     lock_hash.clone(),
-                    postcard::to_allocvec(balance)?,
+                    bincode::serialize(balance)?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -340,7 +340,7 @@ pub(crate) fn materialize_address_balances_for_test(
         let mut snapshot = HashMap::new();
         for item in iter {
             let (key, value) = item?;
-            let balance: AddressBalance = postcard::from_bytes(&value)?;
+            let balance: AddressBalance = bincode::deserialize(&value)?;
             snapshot.insert(key.to_vec(), balance);
         }
         snapshot

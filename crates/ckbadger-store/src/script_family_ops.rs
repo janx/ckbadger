@@ -7,7 +7,7 @@ impl CkbadgerStore {
     pub fn get_script_family(&self, family_id: &str) -> anyhow::Result<Option<ScriptFamilyInfo>> {
         match self.get_cf(self.cf_script_families(), family_id.as_bytes())? {
             Some(value) => {
-                let info = postcard::from_bytes(&value).map_err(|e| {
+                let info = bincode::deserialize(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize script family: family_id={}, error={}",
                         family_id,
@@ -32,7 +32,7 @@ impl CkbadgerStore {
                 info.family_id
             );
         }
-        let value = postcard::to_allocvec(info)?;
+        let value = bincode::serialize(info)?;
         self.put_cf(self.cf_script_families(), family_id.as_bytes(), &value)
     }
 
@@ -115,7 +115,7 @@ impl CkbadgerStore {
                     e
                 )
             })?;
-            let info: ScriptFamilyInfo = postcard::from_bytes(&value).map_err(|e| {
+            let info: ScriptFamilyInfo = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize script family in list_script_families: family_id={}, error={}",
                     family_id,

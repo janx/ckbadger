@@ -11,7 +11,7 @@ use crate::bytes_to_hex;
 impl CkbadgerStore {
     pub fn get_identity(&self, id: &[u8]) -> anyhow::Result<Option<IdentityEntry>> {
         match self.get_cf(self.cf_identity_data(), id)? {
-            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
@@ -25,7 +25,7 @@ impl CkbadgerStore {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!("failed to iterate identity_data in list_identities: {}", e)
             })?;
-            let entry: IdentityEntry = postcard::from_bytes(&value).map_err(|e| {
+            let entry: IdentityEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize identity entry in list_identities: identity_id=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -45,7 +45,7 @@ impl CkbadgerStore {
         collection_id: &[u8],
     ) -> anyhow::Result<Option<IdentityCollectionAggregate>> {
         match self.get_cf(self.cf_identity_agg(), collection_id)? {
-            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
@@ -65,7 +65,7 @@ impl CkbadgerStore {
                 )
             })?;
             let agg: IdentityCollectionAggregate =
-                postcard::from_bytes(&value).map_err(|e| {
+                bincode::deserialize(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize identity collection aggregate in list_identity_collection_aggregates: collection_id=0x{}, error={}",
                         bytes_to_hex(&key),
@@ -251,7 +251,7 @@ impl CkbadgerStore {
 
             let (_, block_num, tx_idx, block_hash_from_key, tx_hash_from_key) =
                 keys::decode_nft_collection_activity_key(&key);
-            let entry: ObjectCollectionActivityEntry = postcard::from_bytes(&value)?;
+            let entry: ObjectCollectionActivityEntry = bincode::deserialize(&value)?;
             if entry.tx_hash != tx_hash_from_key {
                 anyhow::bail!(
                     "identity_collection_activities key/value tx_hash mismatch in list_identity_collection_activities: collection_id=0x{}, block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
