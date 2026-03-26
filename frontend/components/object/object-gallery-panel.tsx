@@ -1,6 +1,5 @@
 'use client';
 
-import { useMemo } from 'react';
 import Link from '@/components/ui/link';
 import {
   TerminalPanel,
@@ -12,6 +11,7 @@ import { Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { formatNumber } from '@/lib/utils';
+import { CellLife, CellLifePlaceholder } from '@/components/object/cell-life';
 
 export const GALLERY_PAGE_SIZE = 18;
 import type {
@@ -20,91 +20,6 @@ import type {
   ItemStatusFilter,
   CursorPaginatedResponse,
 } from '@/lib/api';
-
-/* ---------- Cell Glyph ---------- */
-
-/**
- * CKB-native hash visualization: 3 concentric arcs representing
- * a CKB cell's layered structure.
- *
- *   Outer arc  = Lock script  (ownership / protection)
- *   Middle arc = Type script  (rules / structure)
- *   Inner arc  = Data         (stored content)
- *   Center dot = Cell nucleus (identity core)
- *
- * Each arc's hue, sweep angle, and rotation are derived from the hash,
- * making every cell visually unique — like viewing a living cell
- * cross-section under a microscope.
- */
-function CellGlyph({ hash, size = 36 }: { hash: string; size?: number }) {
-  const glyph = useMemo(() => {
-    const clean = hash.replace('0x', '').toLowerCase();
-    const byte = (i: number) => parseInt(clean.slice(i * 2, i * 2 + 2) || '0', 16);
-
-    // 3 hues from different parts of the hash, spread apart for contrast
-    const hue1 = ((byte(0) << 8) | byte(1)) % 360;
-    const hue2 = (hue1 + 50 + (byte(2) % 180)) % 360;
-    const hue3 = (hue1 + 140 + (byte(3) % 80)) % 360;
-
-    // Arc sweep: 35%-90% of circumference (enough variation, never a full ring)
-    const sweep = (b: number) => 0.35 + (b / 255) * 0.55;
-    // Rotation: 0-360°
-    const rot = (b: number) => (b / 255) * 360;
-
-    return {
-      arcs: [
-        { r: 14, hue: hue1, sweep: sweep(byte(4)), rotation: rot(byte(5)), width: 2.5 },
-        { r: 10, hue: hue2, sweep: sweep(byte(6)), rotation: rot(byte(7)), width: 2.5 },
-        { r: 6, hue: hue3, sweep: sweep(byte(8)), rotation: rot(byte(9)), width: 2 },
-      ],
-      dotHue: hue1,
-      dotR: 1.8 + (byte(10) % 3) * 0.4,
-    };
-  }, [hash]);
-
-  const cx = size / 2;
-  const cy = size / 2;
-  const s = size / 36; // scale for non-default sizes
-
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox={`0 0 ${size} ${size}`}
-      className="shrink-0"
-      aria-hidden
-    >
-      {/* Dark background */}
-      <circle cx={cx} cy={cy} r={cx - 0.5} fill="hsl(0, 0%, 7%)" />
-
-      {/* Concentric arcs: lock → type → data */}
-      {glyph.arcs.map((arc, i) => {
-        const r = arc.r * s;
-        const circ = 2 * Math.PI * r;
-        const dash = circ * arc.sweep;
-        const gap = circ - dash;
-        return (
-          <circle
-            key={i}
-            cx={cx}
-            cy={cy}
-            r={r}
-            fill="none"
-            stroke={`hsl(${arc.hue}, 55%, 50%)`}
-            strokeWidth={arc.width * s}
-            strokeLinecap="round"
-            strokeDasharray={`${dash} ${gap}`}
-            strokeDashoffset={-circ * (arc.rotation / 360)}
-            opacity={0.85}
-          />
-        );
-      })}
-
-      {/* Cell nucleus */}
-      <circle cx={cx} cy={cy} r={glyph.dotR * s} fill={`hsl(${glyph.dotHue}, 60%, 58%)`} />
-    </svg>
-  );
-}
 
 /* ---------- Token index extraction ---------- */
 
@@ -178,7 +93,7 @@ function ObjectCard({ item }: { item: CollectionItem }) {
       <div className="flex min-w-0 flex-1 gap-3 p-3">
         {/* Identicon */}
         <CardLink className="shrink-0 self-start">
-          <CellGlyph hash={item.nftId} size={36} />
+          <CellLifePlaceholder size={36} />
         </CardLink>
 
         {/* Content */}
@@ -253,7 +168,15 @@ function SporeObjectCard({ spore, resolvedOwnerAddress }: SporeObjectCardProps) 
       <div className="flex min-w-0 flex-1 gap-3 p-3">
         {/* Identicon */}
         <Link href={href} className="shrink-0 self-start">
-          <CellGlyph hash={spore.sporeId} size={36} />
+          {spore.mediaProfile?.tier === 'pure_ckb' || spore.mediaProfile?.tier === 'btc_ckb' ? (
+            <CellLife
+              hash={spore.sporeId}
+              size={36}
+              isDualChain={spore.mediaProfile.tier === 'btc_ckb'}
+            />
+          ) : (
+            <CellLifePlaceholder size={36} />
+          )}
         </Link>
 
         {/* Content */}
