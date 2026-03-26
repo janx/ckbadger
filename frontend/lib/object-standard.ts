@@ -140,7 +140,7 @@ export function buildMediaCompositionView(
     standard: info.standard,
     parsingMethod: info.parsingMethod,
     decodedItems: buildDecodedItems(info.standard, dobMedia),
-    rawPayload: dobMedia.length === 0 ? textPayload : null,
+    rawPayload: dobMedia.length === 0 && !info.supportsDobDecode ? textPayload : null,
     offChainSources: mediaProfile.sources,
     issues: mediaProfile.issues,
   };

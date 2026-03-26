@@ -1027,10 +1027,12 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     sporePayload: payload,
     clusterId,
     className,
+    hideRawText,
   }: {
     sporePayload: SporePayload;
     clusterId?: string | null;
     className?: string;
+    hideRawText?: boolean;
   }) => (
     <TerminalPanel className={className}>
       <TerminalPanelHeader indicator="active">Spore Content</TerminalPanelHeader>
@@ -1067,7 +1069,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               </div>
             </div>
           )}
-          {payload.textContent && (
+          {payload.textContent && !hideRawText && (
             <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
               <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
                 Content (Text)
@@ -1239,6 +1241,118 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
           </TerminalPanelContent>
         </TerminalPanel>
 
+        {/* Spore Content + DOB Details (side-by-side when no preview) */}
+        {!preview && sporePayload && hasDecodedTraits ? (
+          <div className="mb-6 grid gap-6 lg:grid-cols-2">
+            <SporeContentPanel
+              sporePayload={sporePayload}
+              clusterId={spore.clusterId}
+              hideRawText={!!dobContent}
+            />
+            <TerminalPanel>
+              <TerminalPanelHeader indicator="active">
+                {previewContentType.toUpperCase()} Details
+              </TerminalPanelHeader>
+              <TerminalPanelContent>
+                {dobContent?.dnaHex && (
+                  <div className="border-info/30 bg-info/10 mb-3 rounded border px-3 py-2">
+                    <div className="text-info font-mono text-[10px] uppercase tracking-wider">
+                      DNA
+                    </div>
+                    <div className="text-info-dim mt-1 break-all font-mono text-xs">
+                      {dobContent.dnaHex}
+                    </div>
+                  </div>
+                )}
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {displayableTraits.map((trait) => (
+                    <div
+                      key={`${trait.name}-${trait.value}`}
+                      className="border-base-border bg-base-surface/50 rounded border p-2.5"
+                    >
+                      <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                        {trait.name}
+                      </div>
+                      <pre className="text-text-bright mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">
+                        {trait.value}
+                      </pre>
+                    </div>
+                  ))}
+                </div>
+                {dobContent?.issues && dobContent.issues.length > 0 && (
+                  <div className="border-warning/30 bg-warning/5 mt-3 rounded border px-3 py-2">
+                    <div className="text-warning font-mono text-[10px] uppercase tracking-wider">
+                      Decode Issues
+                    </div>
+                    {dobContent.issues.map((issue, i) => (
+                      <div key={i} className="text-warning/80 mt-1 font-mono text-xs">
+                        {issue}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </TerminalPanelContent>
+            </TerminalPanel>
+          </div>
+        ) : (
+          <>
+            {sporePayload && (
+              <SporeContentPanel
+                sporePayload={sporePayload}
+                clusterId={spore.clusterId}
+                className="mb-6"
+                hideRawText={!!dobContent}
+              />
+            )}
+            {!preview && hasDecodedTraits && (
+              <TerminalPanel className="mb-6">
+                <TerminalPanelHeader indicator="active">
+                  {previewContentType.toUpperCase()} Details
+                </TerminalPanelHeader>
+                <TerminalPanelContent>
+                  {dobContent?.dnaHex && (
+                    <div className="border-info/30 bg-info/10 mb-3 rounded border px-3 py-2">
+                      <div className="text-info font-mono text-[10px] uppercase tracking-wider">
+                        DNA
+                      </div>
+                      <div className="text-info-dim mt-1 break-all font-mono text-xs">
+                        {dobContent.dnaHex}
+                      </div>
+                    </div>
+                  )}
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {displayableTraits.map((trait) => (
+                      <div
+                        key={`${trait.name}-${trait.value}`}
+                        className="border-base-border bg-base-surface/50 rounded border p-2.5"
+                      >
+                        <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                          {trait.name}
+                        </div>
+                        <pre className="text-text-bright mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">
+                          {trait.value}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                  {dobContent?.issues && dobContent.issues.length > 0 && (
+                    <div className="border-warning/30 bg-warning/5 mt-3 rounded border px-3 py-2">
+                      <div className="text-warning font-mono text-[10px] uppercase tracking-wider">
+                        Decode Issues
+                      </div>
+                      {dobContent.issues.map((issue, i) => (
+                        <div key={i} className="text-warning/80 mt-1 font-mono text-xs">
+                          {issue}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </TerminalPanelContent>
+              </TerminalPanel>
+            )}
+          </>
+        )}
+
         {/* Media Preview */}
         {preview && (
           <div className={`mb-6 grid gap-6 ${hasDecodedTraits ? 'lg:grid-cols-2' : ''}`}>
@@ -1281,54 +1395,33 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                       </div>
                     ))}
                   </div>
+                  {dobContent?.issues && dobContent.issues.length > 0 && (
+                    <div className="border-warning/30 bg-warning/5 mt-3 rounded border px-3 py-2">
+                      <div className="text-warning font-mono text-[10px] uppercase tracking-wider">
+                        Decode Issues
+                      </div>
+                      {dobContent.issues.map((issue, i) => (
+                        <div key={i} className="text-warning/80 mt-1 font-mono text-xs">
+                          {issue}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </TerminalPanelContent>
               </TerminalPanel>
             )}
           </div>
         )}
 
-        {/* DOB Details standalone (no preview available) */}
-        {!preview && hasDecodedTraits && (
-          <TerminalPanel className="mb-6">
-            <TerminalPanelHeader indicator="active">
-              {previewContentType.toUpperCase()} Details
-            </TerminalPanelHeader>
-            <TerminalPanelContent>
-              {dobContent?.dnaHex && (
-                <div className="border-info/30 bg-info/10 mb-3 rounded border px-3 py-2">
-                  <div className="text-info font-mono text-[10px] uppercase tracking-wider">
-                    DNA
-                  </div>
-                  <div className="text-info-dim mt-1 break-all font-mono text-xs">
-                    {dobContent.dnaHex}
-                  </div>
-                </div>
-              )}
-              <div className="grid gap-2 sm:grid-cols-2">
-                {displayableTraits.map((trait) => (
-                  <div
-                    key={`${trait.name}-${trait.value}`}
-                    className="border-base-border bg-base-surface/50 rounded border p-2.5"
-                  >
-                    <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                      {trait.name}
-                    </div>
-                    <pre className="text-text-bright mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">
-                      {trait.value}
-                    </pre>
-                  </div>
-                ))}
-              </div>
-            </TerminalPanelContent>
-          </TerminalPanel>
-        )}
-
-        {/* Spore Content */}
-        {sporePayload && (
-          <SporeContentPanel
-            sporePayload={sporePayload}
-            clusterId={spore.clusterId}
-            className="mb-6"
+        {/* Media Compositions */}
+        {spore.mediaProfile && (
+          <MediaCompositionsPanel
+            view={buildMediaCompositionView(
+              previewContentType,
+              spore.mediaProfile,
+              dobContent?.media ?? [],
+              sporePayload?.textContent ?? null
+            )}
           />
         )}
 
@@ -1419,18 +1512,6 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               </div>
             </TerminalPanelContent>
           </TerminalPanel>
-        )}
-
-        {/* Media Compositions */}
-        {spore.mediaProfile && (
-          <MediaCompositionsPanel
-            view={buildMediaCompositionView(
-              previewContentType,
-              spore.mediaProfile,
-              dobContent?.media ?? [],
-              sporePayload?.textContent ?? null
-            )}
-          />
         )}
       </main>
     </div>
