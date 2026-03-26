@@ -8,9 +8,9 @@
 //      build < target → grow bytes.  build > target → shrink bytes.
 //
 //      The target itself floats with flush pressure:
-//        flush idle  (pressure ≈ 0)   → target grows toward 5000 ms
-//        flush moderate (pressure 0.5) → target stable
-//        flush heavy (pressure ≥ 1)   → target shrinks toward 500 ms
+//        flush idle  (pressure ≈ 0)   → target rises to 3000 ms
+//        flush moderate (pressure 0.5) → target at baseline 2000 ms
+//        flush heavy (pressure ≥ 1)   → target drops to 1000 ms
 //      This couples batch sizing to downstream write capacity: when the
 //      DB can absorb writes easily, larger batches yield higher throughput;
 //      when the DB is stressed, smaller batches reduce write pressure
@@ -65,28 +65,24 @@ const FLUSH_PCT_THRESHOLD: f64 = 0.4;
 // catch up — without suppressing the pipeline (no Flush classification).
 const FLUSH_L0_THRESHOLD: f64 = 40.0;
 
-// Initial target build wall-clock time (ms).  The actual target accumulates
-// from the previous value based on flush pressure, clamped to
-// [TARGET_MS_MIN, TARGET_MS_MAX]:
-//   flush idle  → scale > 1.0, target grows toward TARGET_MS_MAX
-//   flush heavy → scale < 1.0, target shrinks toward TARGET_MS_MIN
-// This keeps batch sizing responsive to downstream write capacity.
+// Base target build wall-clock time (ms).  The actual target floats
+// dynamically based on flush pressure:
+//   flush idle  → target rises to BASE * CEILING (more throughput headroom)
+//   flush heavy → target drops  to BASE * FLOOR  (smaller batches, less flush pressure)
+// This keeps batch sizing responsive to downstream write capacity instead
+// of capping throughput at a fixed iteration time.
 const TARGET_BASE_MS: f64 = 2000.0;
 
 // Dynamic target scale bounds.
 //   pressure = wait_ema / build_ema  (0 = flush instant, 1 = flush equals build)
 //   scale    = (CEILING - pressure).clamp(FLOOR, CEILING)
-//   target   = (prev_target * scale).clamp(500, 5000)
+//   target   = BASE * scale
 //
-//   pressure 0   → scale 1.5 → target grows toward 5000 ms
-//   pressure 0.5 → scale 1.0 → target stable
-//   pressure 1.0 → scale 0.5 → target shrinks toward 500 ms
+//   pressure 0   → scale 1.5 → 3000 ms  (flush idle, maximize throughput)
+//   pressure 0.5 → scale 1.0 → 2000 ms  (moderate, original baseline)
+//   pressure 1.0 → scale 0.5 → 1000 ms  (flush overwhelmed, shrink batches)
 const TARGET_SCALE_CEILING: f64 = 1.5;
 const TARGET_SCALE_FLOOR: f64 = 0.5;
-
-// Accumulated target_ms clamp bounds.
-const TARGET_MS_MIN: f64 = 500.0;
-const TARGET_MS_MAX: f64 = 5000.0;
 
 // Per-step bytes change safety bounds.  These limit how much
 // target_batch_bytes can change in a single iteration, preventing
@@ -164,7 +160,6 @@ pub(crate) struct BottleneckController {
 
     // Current outputs
     target_batch_bytes: u64,
-    target_ms: f64,
     fetch_threads: u32,
     bg_jobs: i32,
 
@@ -199,7 +194,6 @@ impl BottleneckController {
             l0_ema: 0.0,
 
             target_batch_bytes: initial_target_bytes.clamp(MIN_BATCH_BYTES, max_batch_bytes),
-            target_ms: TARGET_BASE_MS,
             fetch_threads: max_fetch_threads,
             bg_jobs: max_bg_jobs,
 
@@ -296,21 +290,20 @@ impl BottleneckController {
     ///
     /// pressure = wait_ema / build_ema (how much flush costs relative to build)
     /// scale    = (CEILING - pressure).clamp(FLOOR, CEILING)
-    /// target   = (prev_target * scale).clamp(500, 5000)
+    /// target   = BASE * scale
     ///
-    /// The target accumulates from its previous value.  When flush is idle
-    /// (pressure ≈ 0), it grows toward 5000 ms for higher throughput.
-    /// When flush is stressed (pressure ≈ 1), it shrinks toward 500 ms
-    /// to reduce write pressure.
-    fn dynamic_target_ms(&mut self) -> f64 {
+    /// When flush is idle (pressure ≈ 0), target rises to 3000 ms, allowing
+    /// larger batches and higher throughput.  When flush is stressed
+    /// (pressure ≈ 1), target drops to 1000 ms, producing smaller batches
+    /// that reduce write pressure.
+    fn dynamic_target_ms(&self) -> f64 {
         if self.build_ema < 1.0 {
-            return self.target_ms;
+            return TARGET_BASE_MS;
         }
         let pressure = self.wait_ema / self.build_ema;
         let scale =
             (TARGET_SCALE_CEILING - pressure).clamp(TARGET_SCALE_FLOOR, TARGET_SCALE_CEILING);
-        self.target_ms = (self.target_ms * scale).clamp(TARGET_MS_MIN, TARGET_MS_MAX);
-        self.target_ms
+        TARGET_BASE_MS * scale
     }
 
     /// Classify which I/O resource is the dominant source of waste.
@@ -573,17 +566,19 @@ mod tests {
             });
         }
 
+        let target = ctrl.dynamic_target_ms();
         assert!(
-            ctrl.target_ms > TARGET_BASE_MS,
+            target > TARGET_BASE_MS,
             "flush-idle target should exceed base {}: got {}",
             TARGET_BASE_MS,
-            ctrl.target_ms,
+            target,
         );
+        let expected_ceiling = TARGET_BASE_MS * TARGET_SCALE_CEILING;
         assert!(
-            (ctrl.target_ms - TARGET_MS_MAX).abs() < 1.0,
-            "flush-idle target should converge to max {}: got {}",
-            TARGET_MS_MAX,
-            ctrl.target_ms,
+            (target - expected_ceiling).abs() < 1.0,
+            "flush-idle target should converge to ceiling {}: got {}",
+            expected_ceiling,
+            target,
         );
     }
 
