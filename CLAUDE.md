@@ -172,7 +172,7 @@ Three-stage pipeline: **Fetcher** (RPC I/O) -> **Parser** (CPU + DB prefetch) ->
 | `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat as bulk sync |
 | `poll_interval_ms`    | `1000`  | Live sync new-block poll interval (ms)  |
 
-Bulk-build mode uses a `BottleneckController` (`crates/indexer/src/sync/bottleneck.rs`) with two independent dimensions: span governed by iteration wall-clock vs 3s target, I/O resources governed by waste classification (recv wait vs flush wait). Channel depths (prefetch + flush) are derived from system RAM.
+Bulk-build mode uses a `BottleneckController` (`crates/indexer/src/sync/bottleneck.rs`) with two dimensions coupled through flush pressure: batch size governed by build_ms vs a dynamic target (1000–3000 ms, floats with flush pressure), I/O resources governed by waste classification (recv wait vs flush wait). Channel depths (prefetch + flush) are derived from system RAM.
 
 Sync progress and memory stats are stored in RocksDB (`get_sync_tip()`/`get_sync_status()`/`get_sync_progress()`/`get_memory_stats()`).
 
@@ -349,9 +349,3 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 
 **Rust**: axum 0.8, rocksdb, tokio 1.42, serde, ckb-types/ckb-hash 0.119, anyhow/thiserror
 **Frontend**: vite 5, react 19, react-router-dom 7, @tanstack/react-query 5, zustand 5, tailwindcss 3.4
-
-## gstack
-
-**Web browsing**: Use the `/browse` skill from gstack for all web browsing. Never use `mcp__claude-in-chrome__*` tools.
-
-**Available skills**: `/office-hours`, `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`, `/design-consultation`, `/review`, `/ship`, `/browse`, `/qa`, `/qa-only`, `/design-review`, `/setup-browser-cookies`, `/retro`, `/investigate`, `/document-release`, `/codex`, `/careful`, `/freeze`, `/guard`, `/unfreeze`, `/gstack-upgrade`

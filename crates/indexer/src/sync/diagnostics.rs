@@ -345,6 +345,7 @@ pub(crate) struct BulkBuildPerfStats {
     controller_l0_ema_bits: AtomicU64,
     controller_fetch_threads: AtomicU64,
     controller_bg_jobs: AtomicU64,
+    controller_target_ms_bits: AtomicU64,
     controller_target_batch_bytes: AtomicU64,
     batch_bytes: AtomicU64,
 }
@@ -488,6 +489,7 @@ impl BulkBuildPerfStats {
         l0_ema: f64,
         fetch_threads: u32,
         bg_jobs: i32,
+        target_ms: f64,
         target_batch_bytes: u64,
     ) {
         self.controller_bottleneck_code
@@ -504,6 +506,8 @@ impl BulkBuildPerfStats {
             .store(fetch_threads as u64, Ordering::Relaxed);
         self.controller_bg_jobs
             .store(bg_jobs as u64, Ordering::Relaxed);
+        self.controller_target_ms_bits
+            .store(target_ms.to_bits(), Ordering::Relaxed);
         self.controller_target_batch_bytes
             .store(target_batch_bytes, Ordering::Relaxed);
     }
@@ -634,6 +638,9 @@ impl BulkBuildPerfStats {
                 self.controller_fetch_threads.load(Ordering::Relaxed) as u32
             ),
             controller_bg_jobs: Some(self.controller_bg_jobs.load(Ordering::Relaxed) as i32),
+            controller_target_ms: Some(f64::from_bits(
+                self.controller_target_ms_bits.load(Ordering::Relaxed),
+            )),
             target_batch_bytes: Some(self.controller_target_batch_bytes.load(Ordering::Relaxed))
                 .filter(|&v| v > 0),
             batch_bytes: Some(self.batch_bytes.load(Ordering::Relaxed)).filter(|&v| v > 0),

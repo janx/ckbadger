@@ -434,6 +434,7 @@ impl BulkBuildEngine {
                 tracing::debug!(
                     bottleneck = %output.bottleneck,
                     target_batch_bytes = output.target_batch_bytes,
+                    target_ms = format!("{:.0}", output.target_ms),
                     fetch_threads = output.fetch_threads,
                     bg_jobs = output.bg_jobs,
                     recv_ema = format!("{:.1}", output.recv_ema),
@@ -451,6 +452,7 @@ impl BulkBuildEngine {
                     output.l0_ema,
                     output.fetch_threads,
                     output.bg_jobs,
+                    output.target_ms,
                     output.target_batch_bytes,
                 );
             }

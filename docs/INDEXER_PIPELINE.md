@@ -377,7 +377,7 @@ for the full design rationale.
 4. **Inter-batch pipelining**: prefetch worker reads batch N+1 from CKB RocksDB while batch N is being built; fetch uses `std::thread::scope` (not rayon) so blocking RocksDB reads don't starve CPU-bound build work
 5. **RocksDB flush overlap**: materialized rows are sent to a flush channel; a dedicated worker commits them to RocksDB concurrently with the next batch's build
 6. **Parallel block parsing**: `rayon::par_iter` parses blocks within a batch, merges output ranges for global cell indices post-merge
-7. **Bottleneck-driven resource control**: a single `BottleneckController` measures per-batch timing (fetch wait, build CPU, flush wait) and dynamically adjusts `batch_span`, `prefetch_ahead`, `fetch_threads`, and `bg_jobs` toward the current bottleneck stage
+7. **Bottleneck-driven resource control**: a single `BottleneckController` measures per-batch timing (fetch wait, build CPU, flush wait) and adjusts resources across two coupled dimensions: batch size (via a dynamic target that floats 1000–3000 ms based on flush pressure) and I/O allocation (`fetch_threads`, `bg_jobs` via waste classification)
 
 ### Bulk-Build Write Classes
 
@@ -424,18 +424,28 @@ The decoder crate (`crates/dob-decoder/`) handles CKB-VM execution, binary cachi
 
 ### Bulk-Build Performance Infrastructure
 
-- **BottleneckController**: unified resource controller that classifies the current bottleneck
-  (fetch / build / flush) from per-batch timing EMAs and adjusts four knobs each batch.
+- **BottleneckController**: unified resource controller with two coupled dimensions.
   Located in `crates/indexer/src/sync/bottleneck.rs`.
 
-  | Knob             | Range              | Fetch-bound | Build-bound | Flush-bound |
-  | ---------------- | ------------------ | ----------- | ----------- | ----------- |
-  | `batch_span`     | [10K, 100K] blocks | grow        | grow        | shrink      |
-  | `prefetch_ahead` | [1, depth] batches | +1          | -1          | -1          |
-  | `fetch_threads`  | [2, cores]         | +25%        | -25%        | -25%        |
-  | `bg_jobs`        | [N/4, N]           | -1          | hold        | +1          |
+  **Dimension 1 — Batch size**: `target_batch_bytes` adjusts so `build_ms` converges to a
+  dynamic target that floats with flush pressure (`pressure = wait_ema / build_ema`):
+
+  | Flush state | Pressure | Dynamic target | Effect                         |
+  | ----------- | -------- | -------------- | ------------------------------ |
+  | Idle        | ≈ 0      | 3000 ms        | Larger batches, max throughput |
+  | Moderate    | 0.5      | 2000 ms        | Baseline                       |
+  | Overwhelmed | ≥ 1.0    | 1000 ms        | Smaller batches, less IO load  |
+
+  **Dimension 2 — I/O resources**: waste classification (recv wait vs flush wait) shifts
+  `fetch_threads` and `bg_jobs`:
+
+  | Knob            | Range      | Fetch-bound | Build-bound    | Flush-bound |
+  | --------------- | ---------- | ----------- | -------------- | ----------- |
+  | `fetch_threads` | [2, cores] | +25%        | hold           | -25%        |
+  | `bg_jobs`       | [N/4, N]   | -1          | -1 (low waste) | +1          |
 
   Channel depth (prefetch + flush) is derived from system RAM (16GB→2, 32GB→4, 64GB+→8, max 8).
+  L0 files > 40 proactively bumps `bg_jobs` without triggering Flush classification.
 
 - **BackgroundSampler**: periodic background thread that samples RocksDB stats and system metrics
   (via cross-platform POSIX APIs) on a configurable interval, decoupling stat collection from the

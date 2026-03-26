@@ -2420,8 +2420,8 @@ fn build_bulk_build_diagnostics(
 
 /// Build the controller observation panel lines for bulk-build diagnostics.
 ///
-/// Two orthogonal sections:
-/// 1. Sizing — build EMA vs 2s target (THE sizing signal) + budget in MB
+/// Two coupled sections:
+/// 1. Sizing — build EMA vs dynamic target (floats 1–3s with flush pressure) + budget in MB
 /// 2. I/O — bottleneck classification + waste breakdown + knobs with inline deltas
 fn controller_panel_lines(
     bb: &BulkBuildProgressData,
@@ -2432,6 +2432,7 @@ fn controller_panel_lines(
     let build_ema = bb.controller_build_ema.unwrap_or(0.0);
     let wait_ema = bb.controller_wait_ema.unwrap_or(0.0);
     let l0_ema = bb.controller_l0_ema.unwrap_or(0.0);
+    let target_ms = bb.controller_target_ms.unwrap_or(2000.0);
     let waste = recv_ema + wait_ema;
     let target_bytes = bb.target_batch_bytes.unwrap_or(0);
 
@@ -2470,11 +2471,11 @@ fn controller_panel_lines(
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string());
 
-    // Build EMA bar: fill_pct = build_ema / 2000.0, color by timing
-    let fill_pct = (build_ema / 2000.0 * 100.0).min(100.0);
-    let build_color = if build_ema > 3000.0 {
+    // Build EMA bar: fill_pct = build_ema / target_ms, color by timing
+    let fill_pct = (build_ema / target_ms * 100.0).min(100.0);
+    let build_color = if build_ema > target_ms * 1.5 {
         ERROR_RED
-    } else if build_ema > 2000.0 {
+    } else if build_ema > target_ms {
         AMBER
     } else {
         TERMINAL_GREEN
@@ -2522,7 +2523,12 @@ fn controller_panel_lines(
         // Compact: 2 lines
         // Line 1: build EMA + budget
         let mut spans1 = vec![Span::styled(
-            format!("build {:.1}s/2s {:.0}%", build_ema / 1000.0, fill_pct),
+            format!(
+                "build {:.1}s/{:.1}s {:.0}%",
+                build_ema / 1000.0,
+                target_ms / 1000.0,
+                fill_pct
+            ),
             Style::default().fg(build_color),
         )];
         if target_bytes > 0 {
@@ -2566,11 +2572,11 @@ fn controller_panel_lines(
             ),
         ]);
 
-        // Line 2: build bar with EMA vs target
+        // Line 2: build bar with EMA vs dynamic target
         let line2 = Line::from(vec![
             Span::styled("build ", Style::default().fg(SLATE_500)),
             Span::styled(
-                format!("{:.1}s/2s", build_ema / 1000.0),
+                format!("{:.1}s/{:.1}s", build_ema / 1000.0, target_ms / 1000.0),
                 Style::default().fg(build_color),
             ),
             Span::styled("  ", Style::default()),

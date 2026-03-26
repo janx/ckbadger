@@ -336,6 +336,9 @@ pub struct BulkBuildProgressData {
     /// Controller output: RocksDB background jobs.
     #[serde(default)]
     pub controller_bg_jobs: Option<i32>,
+    /// Controller output: dynamic target iteration time (ms).
+    #[serde(default)]
+    pub controller_target_ms: Option<f64>,
     /// Controller output: target batch size in bytes.
     #[serde(default)]
     pub target_batch_bytes: Option<u64>,
@@ -867,6 +870,7 @@ mod tests {
             controller_l0_ema: Some(3.7),
             controller_fetch_threads: Some(8),
             controller_bg_jobs: Some(6),
+            controller_target_ms: Some(2800.0),
             target_batch_bytes: Some(100_000_000),
             batch_bytes: Some(85_000_000),
         };
@@ -891,6 +895,7 @@ mod tests {
         assert_eq!(parsed.controller_l0_ema, Some(3.7));
         assert_eq!(parsed.controller_fetch_threads, Some(8));
         assert_eq!(parsed.controller_bg_jobs, Some(6));
+        assert_eq!(parsed.controller_target_ms, Some(2800.0));
         assert_eq!(parsed.target_batch_bytes, Some(100_000_000));
         assert_eq!(parsed.batch_bytes, Some(85_000_000));
     }
