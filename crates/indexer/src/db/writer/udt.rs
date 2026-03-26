@@ -268,19 +268,16 @@ impl BatchWriter {
     ) -> Result<()> {
         if transfers.is_empty() {
             // Even if this batch has no transfer deltas, a transaction can still expose
-            // supply-info cells that reveal token hard caps.
-            for type_hash in max_supply_observations.keys() {
+            // supply-info cells that reveal token hard caps or on-chain token metadata.
+            // Merge both key sets so a type_hash appearing in both maps is read from DB
+            // exactly once — preventing loop 2 from overwriting loop 1's changes.
+            let mut all_keys: std::collections::HashSet<&Vec<u8>> =
+                std::collections::HashSet::new();
+            all_keys.extend(max_supply_observations.keys());
+            all_keys.extend(onchain_token_info.keys());
+            for type_hash in all_keys {
                 if let Some(mut info) = self.store.get_token(type_hash)? {
-                    let before = info.max_supply;
                     Self::apply_observed_max_supply(type_hash, &mut info, max_supply_observations);
-                    if info.max_supply != before {
-                        batch.put_token(type_hash, &info);
-                    }
-                }
-            }
-            // Apply on-chain token info for tokens not touched by transfers
-            for type_hash in onchain_token_info.keys() {
-                if let Some(mut info) = self.store.get_token(type_hash)? {
                     apply_onchain_token_info(type_hash, &mut info, onchain_token_info);
                     batch.put_token(type_hash, &info);
                 }
