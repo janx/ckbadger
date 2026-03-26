@@ -1,19 +1,23 @@
-# CKBadger> An Opinionated Local-first CKB-native Explorer
+# CKBadger> A Local-first CKB-native Explorer
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![CKB](https://img.shields.io/badge/CKB-Nervos-green.svg)](https://www.nervos.org/)
 
+Opinionated software for web5 believers - carbon and silicon alike.
+
 ## Principles
 
 - **CKB Native** — Make CKB concepts tangible. Let CKB be felt. The chain is the single source of truth.
-- **Local First** — The only requirement is a CKB node and the willingness to run your own stack.
-- **Agent Friendly** — Clear guides, specs, and tailored API responses for agents. Built by agents.
+- **Local First** — All you need is a CKB node and the will to run your own stack.
+- **Agent Friendly** — Agents are first-class users. Built by agents, for agents.
 
 ## Web5: The Local-First Web
 
-Who says the web must consist of centralized services that every user connects to?
+Web5 inherits from Web2 and Web3 to overthrow both. It wields Web2 technologies but rejects the Web2 paradigm. It stands on blockchains but builds off-chain, local-first. Web5 is [web2+web3](https://www.nervos.org/knowledge-base/web5-extra-decentralized), web5 is not [web2+web3](https://talk.nervos.org/t/my-web5-your-web5/9506).
 
-Web5 is the local-first web — a network of equally connected nodes, each running its own stack: CKB node, Fiber node, CKBadger, and whatever else the owner needs. No single point of failure. No single point of control. CKBadger is one piece of that stack.
+The web does not have to be centralized services that every user connects to.
+
+Web5 is the local-first web. It is a network of equally connected nodes, each running its own stack: CKB node, Fiber node, CKBadger, and whatever else you choose to run. No single point of failure. No single point of control. CKBadger is the eyes of that stack.
 
 ### Unix Aesthetics Through Radical Simplicity
 
@@ -21,19 +25,21 @@ Take local-first to its logical extreme and you arrive at a design with Unix aes
 
 CKBadger is built around files and executable binaries. It optimizes for writes — building data indexes — not reads, the opposite of typical web services. It's a website that runs locally. A piece of software that shows you web pages. A local web application serving you, not others.
 
-It runs side-by-side with your CKB node. Index building is extremely fast, so local experiments stay cheap: if the DB breaks, rebuild it instead of nursing a 24-hour sync artifact. As long as you have a CKB node, you never fear data loss or inconsistency.
+It runs side-by-side with your CKB node. Index building is extremely fast, so local experiments stay cheap: if the DB breaks, rebuild it instead of nursing a 24-hour sync artifact. As long as you have a CKB node, you can always rebuild.
 
 CKB + local-first cuts away accidental complexity and preserves only the essential.
 
 ### From Isolated Nodes to a Local-First Network
 
-Local-first software is nothing new. But local-first applications have always been solitary programs running on isolated personal machines. CKB changes this. By providing a trustless consensus layer and a peer-to-peer network, CKB connects isolated local-first software into a local-first _network_ — enabling local-first social networks, local-first payments, local-first identity, and everything else that used to require a centralized intermediary.
+Local-first software is nothing new. But local-first applications have always been solitary - programs running on isolated personal machines.
+
+CKB changes this. A trustless common knowledge base and a peer-to-peer network connects isolated local-first software into a local-first network. Local-first social networks. Local-first payments. Local-first identity. Everything that used to require a centralized intermediary - without one.
 
 ### The AI Era Is the Local-First Era
 
 Web 2.0 centralized services won because they required zero client-side setup — just open a browser and go. The tradeoff was giving up ownership, privacy, and performance.
 
-In the AI era, agents handle setup for you. The friction that kept local-first impractical is gone. Suddenly we can have everything: ownership, privacy, performance, _and_ ease of use.
+In the AI era, agents handle setup for you. The friction that kept local-first impractical is gone. [We can have everything](https://talk.nervos.org/t/web5-own-data-not-tokens/9505): ownership, privacy, performance, _and_ ease of use.
 
 This is the era local-first architecture was waiting for. This is the era Fiber and Web5 were waiting for.
 
@@ -53,6 +59,8 @@ Just try it and feel.
 - If you can run a CKB node, you can run CKBadger.
 - If you don't know how to run CKB — no worries, agents can do that for you.
 
+Note. only tested on Linux so far, probabaly will run on Macos, not compatible with Windows.
+
 ### Build and Run
 
 1. Clone this repository
@@ -60,6 +68,8 @@ Just try it and feel.
 3. `./target/release/ckbadger -h`
 
 TODO: build release binaries for download-and-run.
+
+TODO: test compatibility with macos and windows.
 
 ### Usage
 
@@ -89,7 +99,9 @@ ckbadger purge --confirm  # Delete derived data, keep config + perf history
 
 All subcommands accept `-C <path>` to specify work directory (default: current directory).
 
-`ckbadger tui` is pretty fun — watching the stats while CKBadger bulk-syncs is one of my favourite entertainments.
+`ckbadger tui` is pretty fun — watching the stats while CKBadger bulk-syncs is one of my favourite entertainments, see if you can identify the bottlenecks on your machine.
+
+For a fresh db, `ckbadger run` will kick off bulk-sync mode, read data from the local ckb node and build indexes. It takes only ~23mins on average in my dev environment (AMD Ryzen AI 9 HX 370, 96GB mem, btrfs+LUKS on SSD), it's IO-bound here because of LUKS encryption.
 
 ### Work Directory Structure
 
