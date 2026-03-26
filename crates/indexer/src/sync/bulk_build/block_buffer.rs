@@ -88,16 +88,15 @@ impl BlockBufferHandle {
         Ok(true)
     }
 
-    /// Average bytes-per-block across the first `n` blocks in the local buffer.
+    /// Average bytes-per-block across all blocks in the local buffer (O(1)).
     ///
-    /// Returns `0.0` if `n == 0` or the buffer is empty.
-    pub(crate) fn peek_density(&self, n: usize) -> f64 {
-        if n == 0 || self.local.is_empty() {
+    /// Uses the running `local_bytes` total — no iteration needed.
+    /// Returns `0.0` if the buffer is empty.
+    pub(crate) fn density(&self) -> f64 {
+        if self.local.is_empty() {
             return 0.0;
         }
-        let count = n.min(self.local.len());
-        let total_bytes: usize = self.local.iter().take(count).map(|b| b.block_bytes).sum();
-        total_bytes as f64 / count as f64
+        self.local_bytes as f64 / self.local.len() as f64
     }
 
     /// Number of blocks currently in the local buffer.
@@ -145,17 +144,27 @@ mod tests {
     }
 
     #[test]
-    fn peek_bytes_per_block_averages_correctly() {
+    fn density_averages_correctly() {
         let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
-        drop(tx); // channel closed immediately; we only populate local manually
+        drop(tx);
 
         let mut handle = BlockBufferHandle::new(rx);
         handle.local.push_back(make_buffered_block(1000));
         handle.local.push_back(make_buffered_block(3000));
         handle.local_bytes = 4000;
 
-        let avg = handle.peek_density(2);
-        assert_eq!(avg, 2000.0, "average of 1000 and 3000 should be 2000");
+        assert_eq!(
+            handle.density(),
+            2000.0,
+            "average of 1000 and 3000 should be 2000"
+        );
+    }
+
+    #[test]
+    fn density_empty_buffer_returns_zero() {
+        let (_tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+        let handle = BlockBufferHandle::new(rx);
+        assert_eq!(handle.density(), 0.0);
     }
 
     #[tokio::test]
@@ -181,9 +190,9 @@ mod tests {
         assert_eq!(handle.available(), 5);
         assert_eq!(handle.local_bytes, 8000);
 
-        // peek_density over first 3 blocks: (1000+2000+3000)/3 = 2000.
-        let density = handle.peek_density(3);
-        assert_eq!(density, 2000.0);
+        // density over all 5 blocks: (1000+2000+3000+500+1500)/5 = 1600.
+        let density = handle.density();
+        assert_eq!(density, 1600.0);
 
         // drain 2 blocks.
         let drained = handle.drain(2);

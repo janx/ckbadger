@@ -199,7 +199,7 @@ impl BulkBuildEngine {
             let prefetch_recv_elapsed = recv_started.elapsed();
 
             // Determine how many blocks to drain based on bytes budget.
-            let density = buffer.peek_density(100);
+            let density = buffer.density();
             let drain_count = if density > 0.0 {
                 let raw = (controller.target_batch_bytes() as f64 / density) as u64;
                 raw.clamp(bottleneck::MIN_SPAN, bottleneck::MAX_SPAN) as usize
