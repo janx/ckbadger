@@ -6,7 +6,7 @@
 
 ## Goal
 
-Design a hash visualization for all pure CKB and BTC+CKB collection gallery items. The visualization uses Conway's Game of Life seeded by hash bytes, with the only semantic encoding being chain attribute (CKB vs BTC+CKB) via color. All other visual properties — cell shape, seed pattern, evolution speed — are derived from the hash itself.
+Design a hash visualization for pure CKB and BTC+CKB collection gallery items only. Objects with other storage tiers (`decentralized_mixture`, `centralized_mixture`, `unknown`) or without `mediaProfile` do not get the Game of Life visualization — they show a static question mark placeholder instead. The visualization uses Conway's Game of Life seeded by hash bytes, with the only semantic encoding being chain attribute (CKB vs BTC+CKB) via color. All other visual properties — cell shape, seed pattern, evolution speed — are derived from the hash itself.
 
 ## Concept: CKB Cell = Life Cell
 
@@ -28,7 +28,7 @@ Only one semantic dimension. Everything else is hash-derived identity.
 
 | Visual | Source | Description |
 |--------|--------|-------------|
-| **Color** (semantic) | `mediaProfile.tier` | Pure CKB = jade green (#2edba3). BTC+CKB = dual-color: gold (#f2c55c) for BTC-origin cells + jade for CKB-origin cells. For non-Spore items (mNFT, DID, Dotbit) that lack `mediaProfile`, always pure CKB. |
+| **Color** (semantic) | `mediaProfile.tier` | `pure_ckb` = jade green (#2edba3). `btc_ckb` = dual-color: gold (#f2c55c) for BTC-origin cells + jade for CKB-origin cells. All other tiers and objects without `mediaProfile` → no Game of Life, show `?` placeholder instead. |
 | Cell shape | `hash[16] & 0x07` | 8 shapes: circle, square, diamond, triangle, hexagon, cross, star, rounded-square |
 | Seed pattern | all hash bytes | Bit-walks all bytes with modular wrap: `byteIdx = floor(bitIndex/8) % bytes.length`. Each bit → one inner cell alive/dead. Effective inner grid = `(gridSize-2)²` cells. |
 | Evolution speed | `hash[17]` | Formula: `300 + floor(byte / 255 * 300)` → range 300–600ms |
@@ -132,20 +132,33 @@ Grid size selection: caller passes explicit `gridSize` and `size`. No auto-selec
 ## Component Interface
 
 ```tsx
+// Game of Life visualization — only for pure_ckb and btc_ckb tiers
 interface CellLifeProps {
   hash: string;           // 0x-prefixed hex hash (32 bytes)
   size?: number;           // canvas size in px (default: 56)
   gridSize?: number;       // grid dimension (default: 8)
   isDualChain?: boolean;   // true = BTC+CKB dual-color mode
 }
+
+// Placeholder for all other objects — static question mark
+interface CellLifePlaceholderProps {
+  size?: number;           // matches CellLife sizing (default: 56)
+}
 ```
 
-The component:
+**Eligibility rule**: render `CellLife` only when `mediaProfile?.tier` is `'pure_ckb'` or `'btc_ckb'`. All other cases (other tiers, missing mediaProfile, non-Spore items) render `CellLifePlaceholder` — a static `?` mark in a dim bordered box matching the same dimensions.
+
+`CellLife` component:
 - Parses hash → bytes (handles any length, wraps via modulo)
 - Derives shape index, seed, interval from bytes
 - Creates canvas, starts animation loop via `requestAnimationFrame`
 - Cleans up on unmount (cancels `requestAnimationFrame` via stored ID)
 - Respects `prefers-reduced-motion`: renders generation 0 as static image
+
+`CellLifePlaceholder` component:
+- Static `?` centered in a `size × size` container
+- Background `#0f0f0f`, border `#222840`, text color `#343c50`
+- No animation, no canvas
 
 ## Replaces
 
@@ -164,4 +177,4 @@ The existing `CellGlyph` component (concentric arcs SVG in `object-gallery-panel
 | `frontend/components/object/cell-life.tsx` | New component |
 | `frontend/components/object/object-gallery-panel.tsx` | Replace CellGlyph with CellLife |
 | `frontend/app/clusters/[clusterId]/client-page.tsx` | Pass isDualChain from mediaProfile |
-| `frontend/app/classes/[classId]/client-page.tsx` | Pass isDualChain (always false for mNFT) |
+| `frontend/app/classes/[classId]/client-page.tsx` | No mediaProfile → always renders placeholder `?` |
