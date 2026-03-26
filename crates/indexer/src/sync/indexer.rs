@@ -1258,7 +1258,7 @@ impl Indexer {
             let dob_progress = Arc::clone(&self.progress);
             let dob_threshold = self.config.bulk_sync_threshold;
             let dob_cache_path = self.config.decoder_cache_path.clone();
-            let dob_media_dir = PathBuf::from(&self.config.media_dir);
+            let dob_decode_dir = PathBuf::from(&self.config.dob_decode_dir);
 
             // Initialize DOB task as Waiting before spawning the worker.
             let _ = dob_store.update_background_task("dob_decode", |entry| {
@@ -1295,7 +1295,7 @@ impl Indexer {
                     dob_store,
                     dob_append_only,
                     decoder_cache,
-                    dob_media_dir,
+                    dob_decode_dir,
                     dob_rpc_url,
                     dob_shutdown,
                 );

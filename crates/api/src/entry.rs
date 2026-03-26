@@ -29,7 +29,7 @@ pub struct ApiServiceConfig {
     pub ckb_db_path: String,
     pub store_runtime_config: StoreRuntimeConfig,
     /// Root directory for content-addressed media blobs.
-    pub media_dir: PathBuf,
+    pub dob_decode_dir: PathBuf,
 }
 
 /// Configuration for the standalone frontend server.
@@ -83,7 +83,7 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
         start_background_tasks: true,
         ckb_db_path: config.ckb_db_path,
         ckb_db_cleanup: None,
-        media_dir: config.media_dir,
+        dob_decode_dir: config.dob_decode_dir,
     };
     let app = create_router(app_config).await;
 
@@ -324,7 +324,7 @@ mod tests {
             rate_limit_burst: 200,
             ckb_db_path: "/ckb/data/db".to_string(),
             store_runtime_config: StoreRuntimeConfig::default(),
-            media_dir: PathBuf::from("/data/media"),
+            dob_decode_dir: PathBuf::from("/data/media"),
         };
 
         assert_eq!(config.domain_data_path, "/data/domain");
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(config.rate_limit_burst, 200);
         assert_eq!(config.ckb_db_path, "/ckb/data/db");
         assert_eq!(config.store_runtime_config, StoreRuntimeConfig::default());
-        assert_eq!(config.media_dir, PathBuf::from("/data/media"));
+        assert_eq!(config.dob_decode_dir, PathBuf::from("/data/media"));
     }
 
     #[test]

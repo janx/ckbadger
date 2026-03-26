@@ -1142,34 +1142,52 @@ async fn decode_spore(
 
     match decoded {
         Some(decoded_entry) => {
-            let traits: Vec<DobTraitResponse> = decoded_entry
-                .traits
-                .iter()
-                .map(|t| DobTraitResponse {
-                    name: t.name.clone(),
-                    value: t.value.clone(),
-                })
-                .collect();
+            // Merge traits across all steps: later steps override same-name traits,
+            // earlier steps' unique traits are preserved. Insertion order maintained.
+            let mut traits: Vec<DobTraitResponse> = Vec::new();
+            for step in &decoded_entry.steps {
+                for t in &step.traits {
+                    if let Some(existing) = traits.iter_mut().find(|r| r.name == t.name) {
+                        existing.value = t.value.clone();
+                    } else {
+                        traits.push(DobTraitResponse {
+                            name: t.name.clone(),
+                            value: t.value.clone(),
+                        });
+                    }
+                }
+            }
+
+            // One media entry per step
             let mut media: Vec<DecodedMediaResponse> = decoded_entry
-                .media
+                .steps
                 .iter()
-                .map(|m| DecodedMediaResponse {
-                    media_type: m.media_type.clone(),
-                    role: m.role.clone(),
-                    size: m.size,
-                    hash: m.hash.clone(),
-                    step: m.step,
-                    url: format!("/spore/objects/{}/media/{}", spore_id_hex, m.hash),
+                .map(|step| DecodedMediaResponse {
+                    media_type: step.media_type.clone(),
+                    role: None,
+                    size: step.size,
+                    hash: step.hash.clone(),
+                    step: Some(step.step),
+                    url: format!("/spore/objects/{}/media/{}", spore_id_hex, step.hash),
                 })
                 .collect();
 
-            // If no stored media is an image, check for renderable SVG:
-            // 1. Inline SVG in trait values (some decoders emit SVG as a trait)
-            // 2. DOB1 pattern-based SVG (cluster defines SVG templates)
-            // The render endpoint builds/extracts SVG on-the-fly.
-            let has_image_media = media.iter().any(|m| m.media_type.starts_with("image/"));
-            if !has_image_media && !decoded_entry.traits.is_empty() {
-                let has_svg = if traits_contain_svg(&decoded_entry.traits) {
+            // Check all steps for renderable SVG in trait values or raw output.
+            // If found, add a render URL so the frontend can display it.
+            let has_image_media = decoded_entry
+                .steps
+                .iter()
+                .any(|s| s.media_type.starts_with("image/"));
+            if !has_image_media {
+                let all_traits: Vec<_> = decoded_entry
+                    .steps
+                    .iter()
+                    .flat_map(|s| s.traits.iter())
+                    .collect();
+                let has_svg_in_traits = all_traits.iter().any(|t| {
+                    t.value.trim().len() >= 4 && t.value.trim()[..4].eq_ignore_ascii_case("<svg")
+                });
+                let has_svg = if has_svg_in_traits {
                     true
                 } else if let Some(cluster_id) = entry.collection_id.as_deref() {
                     let store = state.store.clone();
@@ -1257,14 +1275,14 @@ async fn serve_media(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("No decoded data for this spore"))?;
 
-    // 3. Validate that the requested hash exists in the media list
-    let matched_media = decoded_entry
-        .media
+    // 3. Validate that the requested hash exists in a decode step
+    let matched_step = decoded_entry
+        .steps
         .iter()
-        .find(|m| m.hash == hash)
+        .find(|s| s.hash == hash)
         .ok_or_else(|| ApiError::not_found("Media hash not found for this spore"))?;
 
-    let content_type = matched_media.media_type.clone();
+    let content_type = matched_step.media_type.clone();
 
     // 4. Load spore entry to get collection_id for filesystem path
     let store = state.store.clone();
@@ -1278,7 +1296,7 @@ async fn serve_media(
     let collection_id = spore_entry.collection_id.as_deref().unwrap_or(&id);
 
     // 5. Read blob from filesystem
-    let blob_store = MediaBlobStore::new(state.media_dir.clone());
+    let blob_store = MediaBlobStore::new(state.dob_decode_dir.clone());
     let blob_hash = hash.clone();
     let collection_id_owned = collection_id.to_vec();
     let blob =
@@ -1348,8 +1366,12 @@ async fn render_spore_svg(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Spore has not been decoded yet"))?;
 
+    // Collect all traits from all steps
+    let all_traits: Vec<&ckbadger_store::DobDecodedTrait> =
+        decoded.steps.iter().flat_map(|s| s.traits.iter()).collect();
+
     // Source 1: extract inline SVG from trait values (fast path — no cluster load needed)
-    if let Some(svg) = extract_svg_from_traits(&decoded.traits) {
+    if let Some(svg) = extract_svg_from_decoded_traits(&all_traits) {
         return Ok(svg_response(svg));
     }
 
@@ -1381,11 +1403,11 @@ async fn render_spore_svg(
         .and_then(|d| serde_json::from_str(d).ok())
         .ok_or_else(|| ApiError::not_found("Cluster has no valid JSON description"))?;
 
-    let trait_map: std::collections::HashMap<String, String> = decoded
-        .traits
-        .iter()
-        .map(|t| (t.name.clone(), t.value.clone()))
-        .collect();
+    // Merge traits for pattern rendering (later steps override same-name)
+    let mut trait_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for t in &all_traits {
+        trait_map.insert(t.name.clone(), t.value.clone());
+    }
 
     let patterns = extract_dob1_pattern(&metadata);
     let svg = build_dob1_svg(&patterns, &trait_map)
@@ -1409,12 +1431,10 @@ fn svg_response(svg: String) -> Response {
         .into_response()
 }
 
-/// Extract SVG markup from decoded trait values.
-///
-/// Some DOB decoders emit SVG directly as a trait value (e.g. a trait named
-/// "IMAGE" whose value is `<svg ...>...</svg>`). This function finds the first
-/// trait value that looks like SVG and returns it.
-fn extract_svg_from_traits(traits: &[ckbadger_store::types::DobDecodedTrait]) -> Option<String> {
+/// Extract SVG markup from decoded trait values across all steps.
+fn extract_svg_from_decoded_traits(
+    traits: &[&ckbadger_store::types::DobDecodedTrait],
+) -> Option<String> {
     for t in traits {
         let trimmed = t.value.trim();
         if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("<svg") {
@@ -1422,13 +1442,6 @@ fn extract_svg_from_traits(traits: &[ckbadger_store::types::DobDecodedTrait]) ->
         }
     }
     None
-}
-
-/// Check whether decoded traits contain inline SVG markup.
-fn traits_contain_svg(traits: &[ckbadger_store::types::DobDecodedTrait]) -> bool {
-    traits
-        .iter()
-        .any(|t| t.value.trim().len() >= 4 && t.value.trim()[..4].eq_ignore_ascii_case("<svg"))
 }
 
 async fn get_cluster_capacity_chart(

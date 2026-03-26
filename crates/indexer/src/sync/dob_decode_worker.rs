@@ -19,8 +19,8 @@ use ckbadger_dob_decoder::fetch::fetch_decoder_binary;
 use ckbadger_dob_decoder::types::{DecoderRef, DobTrait};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    ClusterAggregate, CompositionTier, DecodedMedia, DobDecodedEntry, DobDecodedTrait, ObjectEntry,
-    ObjectExtra, SporeMediaProfile, SporeMediaSource,
+    ClusterAggregate, CompositionTier, DobDecodedEntry, DobDecodedStep, DobDecodedTrait,
+    ObjectEntry, ObjectExtra, SporeMediaProfile, SporeMediaSource,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -61,7 +61,7 @@ impl DobDecodeWorker {
         store: Arc<CkbadgerStore>,
         append_only_store: Arc<CkbadgerStore>,
         decoder_cache: Arc<DecoderBinaryCache>,
-        media_dir: PathBuf,
+        dob_decode_dir: PathBuf,
         rpc_url: String,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
@@ -71,7 +71,7 @@ impl DobDecodeWorker {
             .timeout(std::time::Duration::from_secs(60))
             .build()
             .expect("failed to build HTTP client");
-        let media_store = Arc::new(MediaBlobStore::new(media_dir));
+        let media_store = Arc::new(MediaBlobStore::new(dob_decode_dir));
         Self {
             store,
             append_only_store,
@@ -181,7 +181,7 @@ impl DobDecodeWorker {
                     Ok(entry) => {
                         debug!(
                             spore_id = hex::encode(&spore_id),
-                            traits = entry.traits.len(),
+                            steps = entry.steps.len(),
                             media_sources = entry.media_sources.len(),
                             "decoded DOB spore"
                         );
@@ -503,36 +503,42 @@ async fn decode_single_spore(
     .await
     .context("CKB-VM spawn_blocking panicked")??;
 
-    // Convert DobTrait -> DobDecodedTrait
-    let traits: Vec<DobDecodedTrait> = decoded
-        .traits
-        .iter()
-        .map(|t| DobDecodedTrait {
-            name: t.name.clone(),
-            value: format_trait_value(&t.value),
-        })
-        .collect();
-
-    // Store raw output as a media blob
-    let raw_bytes = decoded.raw_output.as_bytes();
-    let media_type = sniff_media_type(raw_bytes);
     let coll_id = collection_id.expect("collection_id guaranteed by earlier bail");
-    let hash = ctx.media_store.write(coll_id, raw_bytes)?;
 
-    let media = vec![DecodedMedia {
-        media_type: media_type.to_string(),
-        role: None,
-        size: raw_bytes.len() as u64,
-        hash,
-        step: Some(decoded.output_step),
-    }];
+    // Store each step's raw output as a media blob and record parsed metadata
+    let mut steps = Vec::with_capacity(decoded.step_outputs.len());
+    let mut all_traits = Vec::new();
 
-    // Extract media sources from decoded trait values
-    let media_sources = extract_media_sources_from_traits(&decoded.traits);
+    for step_output in &decoded.step_outputs {
+        let raw_bytes = step_output.raw_output.as_bytes();
+        let media_type = sniff_media_type(raw_bytes);
+        let hash = ctx.media_store.write(coll_id, raw_bytes)?;
+
+        let traits: Vec<DobDecodedTrait> = step_output
+            .traits
+            .iter()
+            .map(|t| DobDecodedTrait {
+                name: t.name.clone(),
+                value: format_trait_value(&t.value),
+            })
+            .collect();
+
+        all_traits.extend(step_output.traits.iter().cloned());
+
+        steps.push(DobDecodedStep {
+            step: step_output.step,
+            media_type: media_type.to_string(),
+            size: raw_bytes.len() as u64,
+            hash,
+            traits,
+        });
+    }
+
+    // Extract media sources from all decoded trait values
+    let media_sources = extract_media_sources_from_traits(&all_traits);
 
     Ok(DobDecodedEntry {
-        traits,
-        media,
+        steps,
         media_sources,
         decoded_at: chrono::Utc::now().timestamp(),
     })
@@ -1186,13 +1192,13 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let cache_dir = dir.path().join("decoder-cache");
         let decoder_cache = Arc::new(DecoderBinaryCache::new(&cache_dir).unwrap());
-        let media_dir = dir.path().join("media");
+        let dob_decode_dir = dir.path().join("media");
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker = DobDecodeWorker::new(
             store.clone(),
             store.clone(),
             decoder_cache,
-            media_dir,
+            dob_decode_dir,
             "http://localhost:9999".to_string(),
             shutdown,
         );
@@ -1389,8 +1395,8 @@ mod tests {
             .mount(&server)
             .await;
 
-        let media_dir = tempfile::tempdir().unwrap();
-        let media_store = Arc::new(MediaBlobStore::new(media_dir.path().join("media")));
+        let dob_decode_dir = tempfile::tempdir().unwrap();
+        let media_store = Arc::new(MediaBlobStore::new(dob_decode_dir.path().join("media")));
 
         let ctx = DecodeContext {
             store,

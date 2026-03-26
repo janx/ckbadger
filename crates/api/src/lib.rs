@@ -72,7 +72,7 @@ pub struct AppState {
     /// Background task status for observability (API-side tasks only).
     pub background_tasks: Arc<RwLock<BackgroundTasksData>>,
     /// Root directory for content-addressed media blobs (decoded DOB outputs).
-    pub media_dir: PathBuf,
+    pub dob_decode_dir: PathBuf,
 }
 
 impl AppState {
@@ -153,7 +153,7 @@ pub struct AppConfig {
     /// Optional guard that keeps a temporary CKB RocksDB fixture alive for the router lifetime.
     pub ckb_db_cleanup: Option<Arc<CleanupPathGuard>>,
     /// Root directory for content-addressed media blobs.
-    pub media_dir: PathBuf,
+    pub dob_decode_dir: PathBuf,
 }
 
 pub async fn create_router(config: AppConfig) -> Router {
@@ -197,7 +197,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         mem_cache,
         asset_cache_warmup_error: Arc::new(RwLock::new(None)),
         background_tasks: Arc::new(RwLock::new(BackgroundTasksData::default())),
-        media_dir: config.media_dir,
+        dob_decode_dir: config.dob_decode_dir,
     });
 
     if let Err(e) = warmup::warmup_assets_cache_once(state.clone()).await {

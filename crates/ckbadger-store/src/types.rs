@@ -346,21 +346,26 @@ pub struct SporeMediaSource {
     pub dependency_tier: CompositionTier,
 }
 
-/// A single media artifact produced by DOB decoding, stored as a content-addressed
-/// filesystem blob. The `hash` field doubles as the blob filename.
+/// One decoder's output in a DOB decode chain.
+///
+/// The raw output is stored as a content-addressed blob in [`MediaBlobStore`].
+/// Parsed metadata (traits, media type) is recorded alongside for quick access
+/// without reading the blob.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DecodedMedia {
-    /// MIME type of the media (e.g. "image/svg+xml").
+pub struct DobDecodedStep {
+    /// 0-indexed position in the decoder chain.
+    pub step: u32,
+    /// MIME type of the raw output (sniffed from bytes).
     pub media_type: String,
-    /// Semantic role (e.g. "render", "thumbnail"), if applicable.
-    pub role: Option<String>,
-    /// Byte size of the blob.
+    /// Byte size of the raw output.
     pub size: u64,
     /// Blake2b content hash (hex-encoded), also the blob filename.
     pub hash: String,
-    /// Decode chain step index that produced this artifact, if applicable.
-    pub step: Option<u32>,
+    /// If the raw output is valid `DobTraitGroup[]` JSON, the parsed traits.
+    /// Empty if the output is not JSON trait data (e.g. SVG, PNG).
+    #[serde(default)]
+    pub traits: Vec<DobDecodedTrait>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -375,14 +380,15 @@ pub struct SporeMediaProfile {
 }
 
 /// Cached DOB decode result from CKB-VM execution.
+///
+/// Each decoder in the chain produces one [`DobDecodedStep`]. The raw output
+/// of each step is stored as-is in [`MediaBlobStore`]; parsed metadata is
+/// recorded here for quick access.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DobDecodedEntry {
-    /// Flattened trait name->value pairs.
-    pub traits: Vec<DobDecodedTrait>,
-    /// Media artifacts produced by decoding, stored as content-addressed blobs.
-    #[serde(default)]
-    pub media: Vec<DecodedMedia>,
-    /// Media sources extracted from decoded trait values.
+    /// Per-decoder step outputs, in chain order.
+    pub steps: Vec<DobDecodedStep>,
+    /// Media sources (URIs) extracted from decoded trait values.
     pub media_sources: Vec<SporeMediaSource>,
     /// Epoch timestamp when this was decoded.
     pub decoded_at: i64,

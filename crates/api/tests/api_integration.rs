@@ -92,7 +92,7 @@ fn test_config_with_ckb_db_path(
         start_background_tasks: false,
         ckb_db_path,
         ckb_db_cleanup,
-        media_dir: std::path::PathBuf::from("/tmp/ckbadger-test-media"),
+        dob_decode_dir: std::path::PathBuf::from("/tmp/ckbadger-test-media"),
     }
 }
 
@@ -114,7 +114,7 @@ fn create_router_without_warmup(config: AppConfig) -> axum::Router {
         mem_cache: InMemoryCache::new(),
         asset_cache_warmup_error: Arc::new(std::sync::RwLock::new(None)),
         background_tasks: Arc::new(std::sync::RwLock::new(Default::default())),
-        media_dir: config.media_dir,
+        dob_decode_dir: config.dob_decode_dir,
     });
 
     axum::Router::new()
@@ -5898,22 +5898,21 @@ async fn test_spore_decode_endpoint_returns_decoded_from_cache() {
     store.put_spore_direct(&spore_id, &spore_entry).unwrap();
 
     let decoded_entry = DobDecodedEntry {
-        traits: vec![
-            DobDecodedTrait {
-                name: "Background".to_string(),
-                value: "red".to_string(),
-            },
-            DobDecodedTrait {
-                name: "Level".to_string(),
-                value: "11".to_string(),
-            },
-        ],
-        media: vec![ckbadger_store::DecodedMedia {
+        steps: vec![ckbadger_store::DobDecodedStep {
+            step: 0,
             media_type: "image/svg+xml".to_string(),
-            role: Some("render".to_string()),
             size: 29,
             hash: "abc123".to_string(),
-            step: None,
+            traits: vec![
+                DobDecodedTrait {
+                    name: "Background".to_string(),
+                    value: "red".to_string(),
+                },
+                DobDecodedTrait {
+                    name: "Level".to_string(),
+                    value: "11".to_string(),
+                },
+            ],
         }],
         media_sources: vec![],
         decoded_at: 1700000000,
@@ -5944,11 +5943,12 @@ async fn test_spore_decode_endpoint_returns_decoded_from_cache() {
     assert_eq!(traits[1]["name"], "Level");
     assert_eq!(traits[1]["value"], "11");
     let media = json["media"].as_array().unwrap();
-    assert_eq!(media.len(), 1);
+    // 1 step output + render URL (SVG detected in media type)
+    assert!(!media.is_empty());
     assert_eq!(media[0]["mediaType"], "image/svg+xml");
-    assert_eq!(media[0]["role"], "render");
     assert_eq!(media[0]["size"], 29);
     assert_eq!(media[0]["hash"], "abc123");
+    assert_eq!(media[0]["step"], 0);
     assert!(json["issues"].as_array().unwrap().is_empty());
 }
 
@@ -9695,7 +9695,7 @@ async fn test_network_stats_includes_api_background_tasks() {
         mem_cache: InMemoryCache::new(),
         asset_cache_warmup_error: Arc::new(std::sync::RwLock::new(None)),
         background_tasks: Arc::new(std::sync::RwLock::new(Default::default())),
-        media_dir: config.media_dir,
+        dob_decode_dir: config.dob_decode_dir,
     });
 
     // Register a watcher-shaped background task.

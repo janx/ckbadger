@@ -46,19 +46,28 @@ pub struct DobTrait {
     pub type_tag: String,
 }
 
-/// Result of decoding a DOB's DNA through the decoder binary.
+/// One decoder step's output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepOutput {
+    /// 0-indexed position in the decoder chain.
+    pub step: u32,
+    /// The raw output bytes (verbatim from decoder).
+    pub raw_output: String,
+    /// Traits parsed from this step's output, if it was valid `DobTraitGroup[]`
+    /// JSON. Empty otherwise.
+    pub traits: Vec<DobTrait>,
+}
+
+/// Result of decoding a DOB's DNA through one or more decoder binaries.
 ///
-/// `raw_output` holds the final decoder step's output verbatim — it may be
-/// JSON trait groups, SVG, HTML, or any other text format a decoder emits.
-/// `traits` are extracted from whichever step produced valid JSON
-/// `DobTraitGroup[]` (may be empty if no step did).
+/// Each decoder in the chain produces a [`StepOutput`]. The raw output of each
+/// step is preserved as-is — the caller decides what to store and how to
+/// interpret the results.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DobDecodedResult {
-    pub traits: Vec<DobTrait>,
-    pub raw_output: String,
-    /// Zero-based index of the decoder step that produced `raw_output`.
-    pub output_step: u32,
+    pub step_outputs: Vec<StepOutput>,
 }
 
 /// Reference to a decoder binary on-chain, identified either by code_hash
@@ -107,15 +116,18 @@ mod tests {
     #[test]
     fn test_dob_decoded_result_camel_case() {
         let result = DobDecodedResult {
-            traits: vec![DobTrait {
-                name: "Color".to_string(),
-                value: Value::String("Red".to_string()),
-                type_tag: "String".to_string(),
+            step_outputs: vec![StepOutput {
+                step: 0,
+                raw_output: r#"[{"name":"test","traits":[]}]"#.to_string(),
+                traits: vec![DobTrait {
+                    name: "Color".to_string(),
+                    value: Value::String("Red".to_string()),
+                    type_tag: "String".to_string(),
+                }],
             }],
-            raw_output: r#"[{"name":"test","traits":[]}]"#.to_string(),
-            output_step: 0,
         };
         let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"stepOutputs\""));
         assert!(json.contains("\"rawOutput\""));
         assert!(json.contains("\"typeTag\""));
     }

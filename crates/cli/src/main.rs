@@ -226,7 +226,7 @@ fn build_indexer_service_config(
         bulk_sync_threshold: config.indexer.bulk_sync_threshold,
         store_runtime_config: store_runtime_config(&config.store),
         decoder_cache_path: store_paths.decoder_cache.to_string_lossy().to_string(),
-        media_dir: work.media_dir.to_string_lossy().to_string(),
+        dob_decode_dir: work.dob_decode_dir.to_string_lossy().to_string(),
     })
 }
 
@@ -279,7 +279,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 rate_limit_burst: config.api.rate_limit_burst,
                 ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
                 store_runtime_config,
-                media_dir: work.media_dir.clone(),
+                dob_decode_dir: work.dob_decode_dir.clone(),
             };
             run_api(api_config).await
         }
@@ -553,10 +553,10 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
     }
 
     // Delete media directory contents (decoded DOB media blobs)
-    if work.media_dir.exists() {
-        remove_dir_contents(&work.media_dir)
-            .with_context(|| format!("failed to purge {}", work.media_dir.display()))?;
-        deleted.push(format!("  {}/", work.media_dir.display()));
+    if work.dob_decode_dir.exists() {
+        remove_dir_contents(&work.dob_decode_dir)
+            .with_context(|| format!("failed to purge {}", work.dob_decode_dir.display()))?;
+        deleted.push(format!("  {}/", work.dob_decode_dir.display()));
     }
 
     // Delete run directory contents
