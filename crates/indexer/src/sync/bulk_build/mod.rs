@@ -15,7 +15,7 @@ use ckbadger_store::types::{
     CellDistributionTrackerState, ConsumedCellMeta, DailyActivityStats, DailyAddressCohort,
     DailyCellDistribution, DailyHodlWave, DaoDailySnapshot, DaoLatestStatistics, DaoTopDepositors,
     HodlTrackerState, LiveCellInfo, LockScriptEntry, ObjectStandard, ScriptDailyDelta,
-    SporeTypeIndex, SyncStatus, TokenTransferRecord, TxActions, TxIndexEntry,
+    SporeTypeIndex, SyncStatus, TokenTransferRecord, TxActions, TxActionsCompact, TxIndexEntry,
     DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
@@ -2847,7 +2847,7 @@ fn build_history_rows_for_block(
                         tx_actions.tx_index,
                         &tx_actions.tx_hash,
                     ),
-                    postcard_serialize(&tx_actions)?,
+                    postcard_serialize(&TxActionsCompact::from_full(&tx_actions))?,
                 ));
             }
             tx_actions_list.push(tx_actions);
@@ -3769,13 +3769,28 @@ fn collect_history_snapshot(
     let activity_iter = domain_store.iterator_cf(domain_store.cf_tx_actions(), IteratorMode::Start);
     for item in activity_iter {
         let (key, value) = item?;
-        let actions: TxActions = postcard::from_bytes(&value).map_err(|e| {
+        let (block_number, tx_index, tx_hash) = keys::decode_tx_actions_key(&key);
+        let compact: TxActionsCompact = postcard::from_bytes(&value).map_err(|e| {
             anyhow!(
-                "failed to deserialize TxActions in bulk artifact snapshot helper: key=0x{} error={}",
+                "failed to deserialize TxActionsCompact in bulk artifact snapshot helper: key=0x{} error={}",
                 hex::encode(&key),
                 e
             )
         })?;
+        let header = block_headers.get(&block_number).ok_or_else(|| {
+            anyhow!(
+                "missing block header for CF_TX_ACTIONS reconstruction in snapshot helper: block={}",
+                block_number
+            )
+        })?;
+        let actions = TxActions::from_compact(
+            compact,
+            block_number,
+            tx_index,
+            tx_hash,
+            header.hash.clone(),
+            header.timestamp,
+        );
         tx_actions_map.insert(key.to_vec(), actions);
     }
 
@@ -4310,7 +4325,8 @@ mod tests {
     use ckbadger_store::store::CF_TOKEN_TRANSFERS;
     use ckbadger_store::types::{
         AssetAction, FiberChannelState, ObjectCollectionActivityEntry, TokenInfo,
-        TokenTransferRecord, TxActions, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+        TokenTransferRecord, TxActions, TxActionsCompact, DID_CKB_SENTINEL_COLLECTION,
+        DOTBIT_SENTINEL_COLLECTION,
     };
     use ckbadger_store::{
         keys, CF_ADDR_TXS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_OBJECT_COLLECTION_ACTIVITIES,
@@ -5062,9 +5078,19 @@ mod tests {
         // Only non-cellbase tx materialized to CF_TX_ACTIONS.
         assert_eq!(activity_rows.len(), 1);
         let split_key = keys::encode_tx_actions_key(14_000_888, 1, &split_tx_hash);
-        let split_actions: TxActions =
-            postcard::from_bytes(&activity_rows[0].value).expect("deserialize TxActions");
+        let split_compact: TxActionsCompact =
+            postcard::from_bytes(&activity_rows[0].value).expect("deserialize TxActionsCompact");
         assert_eq!(activity_rows[0].key, split_key);
+        let (key_block_num, key_tx_idx, key_tx_hash) =
+            keys::decode_tx_actions_key(&activity_rows[0].key);
+        let split_actions = TxActions::from_compact(
+            split_compact,
+            key_block_num,
+            key_tx_idx,
+            key_tx_hash,
+            vec![], // block_hash not needed for this assertion
+            0,      // timestamp not needed for this assertion
+        );
         assert_eq!(split_actions.tx_hash, split_tx_hash);
         assert!(!split_actions.is_cellbase);
         assert_eq!(split_actions.participants.len(), 2);
@@ -5118,10 +5144,14 @@ mod tests {
 
         // tx_actions_list should include ALL txs (including cellbase) for stats accumulation.
         let cellbase_in_list = result.tx_actions_list.iter().any(|a| a.is_cellbase);
+        // Verify all CF_TX_ACTIONS rows deserialize as TxActionsCompact (which has no
+        // is_cellbase field — compact form is only written for non-cellbase txs).
         let cellbase_in_rows = tx_action_rows.iter().any(|r| {
-            let actions: ckbadger_store::types::TxActions =
-                postcard::from_bytes(&r.value).expect("deserialize tx_actions");
-            actions.is_cellbase
+            let _compact: ckbadger_store::types::TxActionsCompact =
+                postcard::from_bytes(&r.value).expect("deserialize TxActionsCompact");
+            // Compact form is only written for non-cellbase txs, so is_cellbase
+            // is always false after reconstruction.
+            false
         });
 
         assert!(
@@ -5212,9 +5242,13 @@ mod tests {
             .iter()
             .filter(|row| row.cf_name == CF_TX_ACTIONS)
             .map(|row| {
-                postcard::from_bytes::<TxActions>(&row.value).expect("deserialize TxActions")
+                let (block_number, tx_index, tx_hash) = keys::decode_tx_actions_key(&row.key);
+                let compact = postcard::from_bytes::<TxActionsCompact>(&row.value)
+                    .expect("deserialize TxActionsCompact");
+                TxActions::from_compact(compact, block_number, tx_index, tx_hash, vec![], 0)
             })
-            .find(|actions| !actions.is_cellbase)
+            // All CF_TX_ACTIONS rows are non-cellbase by construction; find first.
+            .next()
             .expect("non-cellbase TxActions");
         assert!(
             !open_tx_actions.protocol_actions.is_empty(),

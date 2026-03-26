@@ -318,6 +318,19 @@ mod tests {
         };
 
         let mut domain_batch = StoreBatch::new(&domain_store);
+        // Block header is needed for compact TxActions reconstruction on read.
+        domain_batch.put_block_header(
+            42,
+            &ckbadger_store::types::CachedBlockHeader {
+                hash: vec![0xBC; 32],
+                timestamp: 1_700_000_000,
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao: vec![0; 32],
+                transactions_count: 1,
+            },
+        );
         let mut undo_seq_by_block = HashMap::new();
         put_tx_actions(&mut domain_batch, &mut undo_seq_by_block, 42, &actions);
         domain_batch.commit().unwrap();

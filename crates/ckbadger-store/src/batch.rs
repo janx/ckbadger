@@ -1013,7 +1013,8 @@ impl<'a> StoreBatch<'a> {
     pub fn put_tx_actions(&mut self, actions: &TxActions) {
         let key =
             keys::encode_tx_actions_key(actions.block_number, actions.tx_index, &actions.tx_hash);
-        let value = postcard::to_allocvec(actions).expect("serialize TxActions");
+        let compact = TxActionsCompact::from_full(actions);
+        let value = postcard::to_allocvec(&compact).expect("serialize TxActionsCompact");
         self.put_cf(self.store.cf_tx_actions(), key, &value);
     }
 
