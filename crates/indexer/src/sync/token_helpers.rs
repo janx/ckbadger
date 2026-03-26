@@ -45,75 +45,6 @@ pub(crate) const UNIQUE_TYPE_ARGS_LEN: usize = 20;
 const TOKEN_INFO_TAG_TOTAL_SUPPLY: u32 = 1;
 const TOKEN_INFO_TOTAL_SUPPLY_DATA_LEN: usize = 16;
 
-/// Token metadata extracted from an xUDT Unique Cell.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct UniqueTokenInfo {
-    pub decimal: u8,
-    pub name: String,
-    pub symbol: String,
-    pub total_supply: Option<i128>,
-}
-
-/// Parse all fields from a Unique Cell's data:
-/// `[1B decimal][1B name_len][name UTF-8][1B symbol_len][symbol UTF-8][tag-value pairs...]`
-///
-/// Returns `None` if data is malformed or name/symbol are not valid UTF-8 (fail fast).
-pub(crate) fn parse_unique_cell_token_info(data: &[u8]) -> Option<UniqueTokenInfo> {
-    if data.len() < 3 {
-        return None;
-    }
-
-    let mut index = 0usize;
-    let decimal = *data.get(index)?;
-    index += 1;
-
-    let name_len = *data.get(index)? as usize;
-    index += 1;
-    if data.len() < index + name_len + 1 {
-        return None;
-    }
-    let name = std::str::from_utf8(data.get(index..index + name_len)?)
-        .ok()?
-        .to_string();
-    index += name_len;
-
-    let symbol_len = *data.get(index)? as usize;
-    index += 1;
-    if data.len() < index + symbol_len {
-        return None;
-    }
-    let symbol = std::str::from_utf8(data.get(index..index + symbol_len)?)
-        .ok()?
-        .to_string();
-    index += symbol_len;
-
-    let mut total_supply = None;
-    while index + 8 <= data.len() {
-        let tag = u32::from_le_bytes(data[index..index + 4].try_into().ok()?);
-        index += 4;
-        let data_len = u32::from_le_bytes(data[index..index + 4].try_into().ok()?) as usize;
-        index += 4;
-        if data.len() < index + data_len {
-            return None;
-        }
-        let value = &data[index..index + data_len];
-        if tag == TOKEN_INFO_TAG_TOTAL_SUPPLY && data_len == TOKEN_INFO_TOTAL_SUPPLY_DATA_LEN {
-            let raw = u128::from_le_bytes(value.try_into().ok()?);
-            if raw <= i128::MAX as u128 {
-                total_supply = Some(raw as i128);
-            }
-        }
-        index += data_len;
-    }
-
-    Some(UniqueTokenInfo {
-        decimal,
-        name,
-        symbol,
-        total_supply,
-    })
-}
-
 static OMNILOCK_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
 
 // ---------------------------------------------------------------------------
@@ -398,6 +329,76 @@ pub(crate) fn extract_xudt_extension_scripts(
 // ---------------------------------------------------------------------------
 // Token info / supply helpers
 // ---------------------------------------------------------------------------
+
+/// Token metadata extracted from an xUDT Unique Cell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UniqueTokenInfo {
+    pub decimal: u8,
+    pub name: String,
+    pub symbol: String,
+    pub total_supply: Option<i128>,
+}
+
+/// Parse all fields from a Unique Cell's data:
+/// `[1B decimal][1B name_len][name UTF-8][1B symbol_len][symbol UTF-8][tag-value pairs...]`
+///
+/// Returns `None` if data is malformed or name/symbol are not valid UTF-8 (fail fast).
+pub(crate) fn parse_unique_cell_token_info(data: &[u8]) -> Option<UniqueTokenInfo> {
+    if data.len() < 3 {
+        return None;
+    }
+
+    let mut index = 0usize;
+    let decimal = *data.get(index)?;
+    index += 1;
+
+    let name_len = *data.get(index)? as usize;
+    index += 1;
+    if data.len() < index + name_len + 1 {
+        return None;
+    }
+    let name = std::str::from_utf8(data.get(index..index + name_len)?)
+        .ok()?
+        .to_string();
+    index += name_len;
+
+    let symbol_len = *data.get(index)? as usize;
+    index += 1;
+    if data.len() < index + symbol_len {
+        return None;
+    }
+    let symbol = std::str::from_utf8(data.get(index..index + symbol_len)?)
+        .ok()?
+        .to_string();
+    index += symbol_len;
+
+    let mut total_supply = None;
+    while index + 8 <= data.len() {
+        let tag = u32::from_le_bytes(data[index..index + 4].try_into().ok()?);
+        index += 4;
+        let data_len = u32::from_le_bytes(data[index..index + 4].try_into().ok()?) as usize;
+        index += 4;
+        if data.len() < index + data_len {
+            return None;
+        }
+        let value = &data[index..index + data_len];
+        if tag == TOKEN_INFO_TAG_TOTAL_SUPPLY && data_len == TOKEN_INFO_TOTAL_SUPPLY_DATA_LEN {
+            let raw = u128::from_le_bytes(value.try_into().ok()?);
+            if raw <= i128::MAX as u128 {
+                total_supply = Some(raw as i128);
+                break;
+            }
+        }
+        index += data_len;
+    }
+
+    Some(UniqueTokenInfo {
+        decimal,
+        name,
+        symbol,
+        total_supply,
+    })
+}
 
 pub(crate) fn parse_token_info_total_supply(data: &[u8]) -> Option<i128> {
     parse_unique_cell_token_info(data)?.total_supply
@@ -1187,6 +1188,7 @@ mod tests {
     fn test_parse_unique_cell_token_info_empty_name_symbol() {
         let data = vec![0u8, 0u8, 0u8]; // decimal=0, name_len=0, symbol_len=0
         let info = parse_unique_cell_token_info(&data).unwrap();
+        assert_eq!(info.decimal, 0);
         assert_eq!(info.name, "");
         assert_eq!(info.symbol, "");
     }
