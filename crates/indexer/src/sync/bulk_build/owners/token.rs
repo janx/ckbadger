@@ -40,17 +40,20 @@ impl TokenOwner {
         }) + crate::sync::bulk_build::accounting::hash_map_bytes(
             &self.max_supply_observations,
             |k, _| crate::sync::bulk_build::accounting::bytes_vec_bytes(k) + 16,
-        ) + crate::sync::bulk_build::accounting::hash_map_bytes(
-            &self.unique_cell_info,
-            |k, v| {
-                crate::sync::bulk_build::accounting::bytes_vec_bytes(k)
-                    + 1 + v.name.len() as u64 + v.symbol.len() as u64 + 17
-            },
-        ) + crate::sync::bulk_build::accounting::hash_map_bytes(
+        ) + crate::sync::bulk_build::accounting::hash_map_bytes(&self.unique_cell_info, |k, v| {
+            crate::sync::bulk_build::accounting::bytes_vec_bytes(k)
+                + 1
+                + v.name.len() as u64
+                + v.symbol.len() as u64
+                + 17
+        }) + crate::sync::bulk_build::accounting::hash_map_bytes(
             &self.token_onchain_info,
             |k, v| {
                 crate::sync::bulk_build::accounting::bytes_vec_bytes(k)
-                    + 1 + v.name.len() as u64 + v.symbol.len() as u64 + 17
+                    + 1
+                    + v.name.len() as u64
+                    + v.symbol.len() as u64
+                    + 17
             },
         )
     }
