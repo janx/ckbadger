@@ -1009,7 +1009,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
         let key = keys::encode_stats_key(stats_prefix::HODL_WAVE, b"20240115");
-        store.put_cf(store.cf_stats_hodl(), &key, &[0xFF]).unwrap();
+        store
+            .put_cf(store.cf_stats_hodl(), &key, b"invalid-hodl-wave")
+            .unwrap();
 
         let err = store.list_hodl_waves().unwrap_err();
         assert!(err

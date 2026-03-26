@@ -783,7 +783,9 @@ mod tests {
         let (_dir, store) = test_store();
         let collection_id = [0x77u8; 24];
         let key = keys::encode_nft_daily_key(&collection_id, 20260219);
-        store.put_cf(store.cf_stats_mnft(), &key, &[0xFF]).unwrap();
+        store
+            .put_cf(store.cf_stats_mnft(), &key, b"invalid-object-daily")
+            .unwrap();
 
         let err = store.list_mnft_daily_deltas(&collection_id).unwrap_err();
         assert!(err.to_string().contains(
