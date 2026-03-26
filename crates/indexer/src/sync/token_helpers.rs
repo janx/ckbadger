@@ -448,7 +448,6 @@ pub(crate) fn collect_unique_cell_token_info(
 /// Resolve Unique Cell token info to xUDT token type_hashes.
 /// For each xUDT output cell with extension scripts pointing to a Unique Cell,
 /// maps the xUDT's type_script_hash to the Unique Cell's token info.
-#[allow(dead_code)]
 pub(crate) fn collect_token_onchain_info(
     all_tx_data: &[TxData],
 ) -> HashMap<Vec<u8>, UniqueTokenInfo> {

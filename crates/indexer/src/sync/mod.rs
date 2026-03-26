@@ -12,7 +12,7 @@ mod pipeline;
 mod progress;
 mod reorg;
 mod sync_mode;
-mod token_helpers;
+pub(crate) mod token_helpers;
 pub mod types;
 pub(crate) mod undo;
 

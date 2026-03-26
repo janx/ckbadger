@@ -1885,6 +1885,7 @@ impl Indexer {
 
             if !udt_tx_contexts.is_empty() {
                 let max_supply_observations = collect_token_max_supply_observations(&all_tx_data);
+                let onchain_token_info = collect_token_onchain_info(&all_tx_data);
                 let mut all_transfers: Vec<(crate::parser::ParsedUdtTransfer, Vec<u8>, i64)> =
                     Vec::new();
                 for ctx in &udt_tx_contexts {
@@ -1928,6 +1929,7 @@ impl Indexer {
                     self.writer.process_udt_transfers_batch_with_state(
                         &transfer_refs,
                         &max_supply_observations,
+                        &onchain_token_info,
                         &block_timestamps,
                         &mut data_batch,
                         &mut udt_state,

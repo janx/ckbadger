@@ -237,10 +237,12 @@ impl BatchWriter {
 
     /// Process a batch of UDT transfers: upsert tokens and update holder balances.
     /// `block_timestamps` maps block_number → timestamp_ms for hourly bucket computation.
+    #[allow(private_interfaces)]
     pub fn process_udt_transfers_batch(
         &self,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
         max_supply_observations: &HashMap<Vec<u8>, i128>,
+        onchain_token_info: &HashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
         block_timestamps: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
@@ -248,6 +250,7 @@ impl BatchWriter {
         self.process_udt_transfers_batch_with_state(
             transfers,
             max_supply_observations,
+            onchain_token_info,
             block_timestamps,
             batch,
             &mut state,
@@ -258,6 +261,7 @@ impl BatchWriter {
         &self,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
         max_supply_observations: &HashMap<Vec<u8>, i128>,
+        onchain_token_info: &HashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
         block_timestamps: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
         state: &mut UdtBatchState,
@@ -272,6 +276,13 @@ impl BatchWriter {
                     if info.max_supply != before {
                         batch.put_token(type_hash, &info);
                     }
+                }
+            }
+            // Apply on-chain token info for tokens not touched by transfers
+            for type_hash in onchain_token_info.keys() {
+                if let Some(mut info) = self.store.get_token(type_hash)? {
+                    apply_onchain_token_info(type_hash, &mut info, onchain_token_info);
+                    batch.put_token(type_hash, &info);
                 }
             }
             return Ok(());
@@ -365,6 +376,7 @@ impl BatchWriter {
                 },
             };
             Self::apply_observed_max_supply(type_hash, &mut updated, max_supply_observations);
+            apply_onchain_token_info(type_hash, &mut updated, onchain_token_info);
 
             // Embed transfers_count into TokenInfo
             updated.transfers_count = new_total;
@@ -566,6 +578,25 @@ struct TokenUpdate<'a> {
     first_seen_block: i64,
     transfers_count: i64,
     supply_delta: i128,
+}
+
+fn apply_onchain_token_info(
+    type_hash: &[u8],
+    info: &mut TokenInfo,
+    onchain_info: &HashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
+) {
+    let Some(onchain) = onchain_info.get(type_hash) else {
+        return;
+    };
+    // Always write on-chain data. label_import unconditionally overwrites at startup,
+    // so TOML priority is maintained by execution order, not conditional checks.
+    if !onchain.name.is_empty() {
+        info.name = Some(onchain.name.clone());
+    }
+    if !onchain.symbol.is_empty() {
+        info.symbol = Some(onchain.symbol.clone());
+    }
+    info.decimals = Some(onchain.decimal as i32);
 }
 
 #[cfg(test)]
@@ -956,6 +987,7 @@ mod tests {
             .process_udt_transfers_batch(
                 &transfers,
                 &max_supply_observations,
+                &HashMap::new(),
                 &block_timestamps,
                 &mut batch,
             )
@@ -1013,7 +1045,13 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         writer
-            .process_udt_transfers_batch(&transfers, &HashMap::new(), &block_timestamps, &mut batch)
+            .process_udt_transfers_batch(
+                &transfers,
+                &HashMap::new(),
+                &HashMap::new(),
+                &block_timestamps,
+                &mut batch,
+            )
             .unwrap();
         batch.commit().unwrap();
 
@@ -1081,7 +1119,13 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         writer
-            .process_udt_transfers_batch(&transfers, &HashMap::new(), &block_timestamps, &mut batch)
+            .process_udt_transfers_batch(
+                &transfers,
+                &HashMap::new(),
+                &HashMap::new(),
+                &block_timestamps,
+                &mut batch,
+            )
             .unwrap();
         batch.commit().unwrap();
 
@@ -1167,7 +1211,13 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         writer
-            .process_udt_transfers_batch(&transfers, &HashMap::new(), &block_timestamps, &mut batch)
+            .process_udt_transfers_batch(
+                &transfers,
+                &HashMap::new(),
+                &HashMap::new(),
+                &block_timestamps,
+                &mut batch,
+            )
             .unwrap();
         batch.commit().unwrap();
 
@@ -1243,6 +1293,7 @@ mod tests {
             .process_udt_transfers_batch_with_state(
                 &first,
                 &HashMap::new(),
+                &HashMap::new(),
                 &block_timestamps,
                 &mut batch,
                 &mut state,
@@ -1251,6 +1302,7 @@ mod tests {
         writer
             .process_udt_transfers_batch_with_state(
                 &second,
+                &HashMap::new(),
                 &HashMap::new(),
                 &block_timestamps,
                 &mut batch,
@@ -1299,6 +1351,7 @@ mod tests {
             .process_udt_transfers_batch(
                 &transfers,
                 &max_supply_observations,
+                &HashMap::new(),
                 &block_timestamps,
                 &mut batch,
             )
@@ -1364,6 +1417,7 @@ mod tests {
             .process_udt_transfers_batch(
                 &transfers,
                 &max_supply_observations,
+                &HashMap::new(),
                 &block_timestamps,
                 &mut batch,
             )
@@ -1424,6 +1478,7 @@ mod tests {
             .process_udt_transfers_batch(
                 &transfers,
                 &max_supply_observations,
+                &HashMap::new(),
                 &block_timestamps,
                 &mut batch,
             )
@@ -1461,6 +1516,7 @@ mod tests {
             .process_udt_transfers_batch(
                 &transfers,
                 &max_supply_observations,
+                &HashMap::new(),
                 &block_timestamps,
                 &mut batch,
             )
