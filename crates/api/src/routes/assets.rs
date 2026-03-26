@@ -1557,6 +1557,7 @@ pub(super) enum NftLifecycleStandard {
     MnftToken,
     DotBit,
     DidCkb,
+    Spore,
 }
 
 fn collect_nft_item_lifecycle_actions(
@@ -1573,7 +1574,7 @@ fn collect_nft_item_lifecycle_actions(
             .store
             .list_dotbit_account_outpoints_by_account_id(nft_id_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?,
-        NftLifecycleStandard::DidCkb => state
+        NftLifecycleStandard::DidCkb | NftLifecycleStandard::Spore => state
             .store
             .list_spore_outpoints_by_spore_id(nft_id_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?,

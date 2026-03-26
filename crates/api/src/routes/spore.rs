@@ -13,7 +13,10 @@ use ckbadger_indexer::media_store::MediaBlobStore;
 use ckbadger_indexer::parser::{build_dob1_svg, extract_dob1_pattern};
 
 use super::assets::{
-    count_nft_collection_activities_cached, list_canonical_nft_collection_activities_page,
+    build_nft_item_activities_response, count_nft_collection_activities_cached,
+    decode_activity_cursor, decode_item_id, list_canonical_nft_collection_activities_page,
+    normalize_activity_action_filter, MnftItemActivitiesParams, MnftItemActivityResponse,
+    NftLifecycleStandard,
 };
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{
@@ -47,6 +50,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/spore/objects", get(list_spores))
         .route("/spore/objects/{spore_id}", get(get_spore))
+        .route(
+            "/spore/objects/{spore_id}/activities",
+            get(list_spore_item_activities),
+        )
         .route("/spore/objects/{spore_id}/decode", get(decode_spore))
         .route("/spore/objects/{spore_id}/media/{hash}", get(serve_media))
         .route("/spore/objects/{spore_id}/render", get(render_spore_svg))
@@ -1108,6 +1115,38 @@ async fn get_spore(
         }
         None => Err(ApiError::not_found("Spore not found")),
     }
+}
+
+async fn list_spore_item_activities(
+    State(state): State<Arc<AppState>>,
+    Path(spore_id): Path<String>,
+    Query(params): Query<MnftItemActivitiesParams>,
+) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
+    let spore_id_bytes = decode_item_id(&spore_id)?;
+
+    // Verify the spore exists
+    state
+        .store
+        .get_spore(&spore_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Spore not found"))?;
+
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
+    let response = build_nft_item_activities_response(
+        &state,
+        &spore_id_bytes,
+        NftLifecycleStandard::Spore,
+        limit,
+        cursor,
+        action_filter.as_deref(),
+    )?;
+    ok(response)
 }
 
 async fn decode_spore(

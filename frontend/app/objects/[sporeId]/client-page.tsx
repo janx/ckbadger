@@ -9,6 +9,7 @@ import {
   type CollectionActivity,
   type CollectionHolder,
   type ItemStatusFilter,
+  type MnftItemActivity,
 } from '@/lib/api';
 import {
   TerminalPanel,
@@ -270,6 +271,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const collectionItemsPagination = useCursorPagination();
   const collectionHoldersPagination = useCursorPagination();
   const collectionActivitiesPagination = useCursorPagination();
+  const sporeActivitiesPagination = useCursorPagination();
   const { reset: resetCollectionItemsPagination } = collectionItemsPagination;
   const { reset: resetCollectionHoldersPagination } = collectionHoldersPagination;
   const { reset: resetCollectionActivitiesPagination } = collectionActivitiesPagination;
@@ -373,6 +375,16 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     queryFn: () => api.getCell(spore!.txHash, resolvedSporeOutputIndex!),
     enabled: !!spore?.txHash && resolvedSporeOutputIndex !== null && resolvedSporeOutputIndex >= 0,
     retry: false,
+  });
+  const { data: sporeActivities, isLoading: isSporeActivitiesLoading } = useQuery({
+    queryKey: ['spore-item-activities', spore?.sporeId, sporeActivitiesPagination.cursor],
+    queryFn: () =>
+      api.getSporeItemActivities(spore!.sporeId, {
+        limit: DEFAULT_PAGE_SIZE,
+        cursor: sporeActivitiesPagination.cursor,
+      }),
+    enabled: !!spore?.sporeId,
+    placeholderData: keepPreviousData,
   });
   const { data: collectionCapacityChart, isLoading: isCollectionCapacityChartLoading } = useQuery({
     queryKey: ['object-collection-capacity-chart', collectionAssetId, capacityRange],
@@ -1307,6 +1319,44 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
             </TerminalPanelContent>
           </TerminalPanel>
         )}
+
+        {/* Activities */}
+        <TerminalPanel>
+          <TerminalPanelHeader indicator="active">Activities</TerminalPanelHeader>
+          <TerminalPanelContent>
+            {isSporeActivitiesLoading ? (
+              <div className="text-text-dim py-2 text-sm">Loading activities...</div>
+            ) : !sporeActivities?.data?.length ? (
+              <div className="text-text-dim py-2 text-sm">No related activities found.</div>
+            ) : (
+              <div className="space-y-2">
+                {sporeActivities.data.map((activity: MnftItemActivity) => (
+                  <ObjectActivityCard
+                    key={`${activity.blockNumber}-${activity.txIndex}-${activity.txHash}`}
+                    txHash={activity.txHash}
+                    blockNumber={activity.blockNumber}
+                    txIndex={activity.txIndex}
+                    actions={activity.actions}
+                    badgeActions
+                  />
+                ))}
+              </div>
+            )}
+          </TerminalPanelContent>
+          <TerminalPanelFooter>
+            <CursorPagination
+              total={sporeActivities?.total ?? undefined}
+              totalLabel="activities"
+              pageSize={DEFAULT_PAGE_SIZE}
+              page={sporeActivitiesPagination.page}
+              currentCount={sporeActivities?.data?.length ?? 0}
+              hasMore={sporeActivities?.hasMore ?? false}
+              hasPrevious={sporeActivitiesPagination.hasPrevious}
+              onNext={() => sporeActivitiesPagination.goToNext(sporeActivities?.nextCursor)}
+              onPrevious={sporeActivitiesPagination.goToPrevious}
+            />
+          </TerminalPanelFooter>
+        </TerminalPanel>
       </main>
     </div>
   );

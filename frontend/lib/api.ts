@@ -2167,6 +2167,20 @@ export const api = {
     return fetchApi(`/spore/objects/${sporeId}/decode`);
   },
 
+  getSporeItemActivities: (
+    sporeId: string,
+    params: MnftItemActivitiesParams = {}
+  ): Promise<CursorPaginatedResponse<MnftItemActivity>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.action) query.set('action', params.action);
+    const suffix = query.toString();
+    return fetchApi(
+      `/spore/objects/${encodeURIComponent(sporeId)}/activities${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
   getSporeObjectCapacityChart: (
     sporeId: string,
     range: CapacityChartRangeParams = {}
