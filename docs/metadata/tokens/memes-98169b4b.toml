@@ -1,0 +1,9 @@
+name = "The First inscription on Omiga."
+symbol = "MEMES"
+decimals = 8
+standard = "xudt"
+
+[mainnet]
+code_hash = "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95"
+hash_type = "data1"
+args = "0x8a0d5884ef2b7bf7e6c06c32482015b4eb0985f9cc4112c12a20ca36716066c6"
