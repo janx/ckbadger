@@ -814,6 +814,12 @@ fn build_asset_caches_sync(
 }
 
 fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
+    // Scripts cache is independent — warm it up first so the scripts page
+    // is available even when the heavier asset/address/spore caches fail.
+    if let Err(e) = refresh_named_script_cache_sync(state) {
+        tracing::warn!("Scripts cache warmup failed (non-fatal): {}", e);
+    }
+
     let ttl = CacheTtl::ASSETS;
     let (token_assets, nft_assets) = match build_asset_caches_sync(state) {
         Ok(caches) => caches,
@@ -832,7 +838,6 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
     state.clear_asset_cache_warmup_error();
     refresh_address_cache_sync(state)?;
     refresh_spore_cache_sync(state)?;
-    refresh_named_script_cache_sync(state)?;
 
     Ok(())
 }
