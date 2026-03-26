@@ -194,7 +194,7 @@ pub fn resolve_dob_collection_name(
 }
 
 /// Resolve the display-level standard for a collection, overriding for
-/// sentinel identity collections whose `ObjectCollectionAggregate.standard`
+/// sentinel identity collections whose `MnftCollectionAggregate.standard`
 /// cannot represent dotbit/did:ckb (those live in `IdentityStandard`).
 pub fn resolve_collection_standard(collection_id: &[u8], agg_standard: &str) -> String {
     if collection_id == DOTBIT_SENTINEL_COLLECTION {

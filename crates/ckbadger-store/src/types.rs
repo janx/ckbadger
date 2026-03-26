@@ -608,9 +608,9 @@ pub struct ClusterAggregate {
     pub unknown_count: i64,
 }
 
-/// Pre-aggregated Object collection data, maintained inline by the indexer.
+/// Pre-aggregated mNFT collection data, maintained inline by the indexer.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ObjectCollectionAggregate {
+pub struct MnftCollectionAggregate {
     pub name: Option<String>,
     pub standard: ObjectStandard,
     pub total_count: i64,
@@ -866,15 +866,15 @@ pub struct SporeTypeIndex {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ObjectDailyDelta {
-    /// Net live capacity change in shannons for this Object collection on a day.
+pub struct MnftDailyDelta {
+    /// Net live capacity change in shannons for this mNFT collection on a day.
     pub owned_capacity_delta: i128,
-    /// Net live used capacity change in shannons for this Object collection on a day.
+    /// Net live used capacity change in shannons for this mNFT collection on a day.
     pub owned_knowledge_delta: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ObjectTypeIndex {
+pub struct MnftTypeIndex {
     pub collection_id: Vec<u8>,
 }
 
@@ -1609,42 +1609,42 @@ mod tests {
         assert!(index.cluster_id.is_none());
     }
 
-    // ---- ObjectDailyDelta ----
+    // ---- MnftDailyDelta ----
 
     #[test]
     fn test_object_daily_delta_roundtrip() {
-        let delta = ObjectDailyDelta {
+        let delta = MnftDailyDelta {
             owned_capacity_delta: 222_000_000_000,
             owned_knowledge_delta: -33_000_000_000,
         };
         let bytes = bincode::serialize(&delta).unwrap();
-        let decoded: ObjectDailyDelta = bincode::deserialize(&bytes).unwrap();
+        let decoded: MnftDailyDelta = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.owned_capacity_delta, 222_000_000_000);
         assert_eq!(decoded.owned_knowledge_delta, -33_000_000_000);
     }
 
     #[test]
     fn test_object_daily_delta_default() {
-        let delta = ObjectDailyDelta::default();
+        let delta = MnftDailyDelta::default();
         assert_eq!(delta.owned_capacity_delta, 0);
         assert_eq!(delta.owned_knowledge_delta, 0);
     }
 
-    // ---- ObjectTypeIndex ----
+    // ---- MnftTypeIndex ----
 
     #[test]
     fn test_object_type_index_roundtrip() {
-        let index = ObjectTypeIndex {
+        let index = MnftTypeIndex {
             collection_id: vec![0xEE; 24],
         };
         let bytes = bincode::serialize(&index).unwrap();
-        let decoded: ObjectTypeIndex = bincode::deserialize(&bytes).unwrap();
+        let decoded: MnftTypeIndex = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.collection_id, vec![0xEE; 24]);
     }
 
     #[test]
     fn test_object_type_index_default() {
-        let index = ObjectTypeIndex::default();
+        let index = MnftTypeIndex::default();
         assert!(index.collection_id.is_empty());
     }
 

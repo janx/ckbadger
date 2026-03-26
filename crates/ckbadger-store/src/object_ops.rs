@@ -1,30 +1,30 @@
-//! Generic Object operations (cross-standard infrastructure).
+//! Object operations: mNFT-specific ops + cross-standard collection activity queries.
 
 use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::{
-    AssetAction, ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta,
-    ObjectEntry, ObjectTypeIndex,
+    AssetAction, MnftCollectionAggregate, MnftDailyDelta, MnftTypeIndex,
+    ObjectCollectionActivityEntry, ObjectEntry,
 };
 
-pub(crate) type ObjectBatchEntry = (Vec<u8>, Option<ObjectEntry>);
+pub(crate) type MnftBatchEntry = (Vec<u8>, Option<ObjectEntry>);
 
 use crate::bytes_to_hex;
 
 impl CkbadgerStore {
-    pub fn get_object(&self, id: &[u8]) -> anyhow::Result<Option<ObjectEntry>> {
-        match self.get_cf(self.cf_object_data(), id)? {
+    pub fn get_mnft(&self, id: &[u8]) -> anyhow::Result<Option<ObjectEntry>> {
+        match self.get_cf(self.cf_mnft_data(), id)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
 
     /// Batch-fetch multiple object entries by ID in a single RocksDB multi_get.
-    pub fn get_objects_batch(&self, ids: &[Vec<u8>]) -> anyhow::Result<Vec<ObjectBatchEntry>> {
+    pub fn get_mnfts_batch(&self, ids: &[Vec<u8>]) -> anyhow::Result<Vec<MnftBatchEntry>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let cf = self.cf_object_data();
+        let cf = self.cf_mnft_data();
         let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
             ids.iter().map(|id| (cf, id.as_slice())).collect();
         let values = self.multi_get_cf(cf_keys);
@@ -55,8 +55,8 @@ impl CkbadgerStore {
     }
 
     /// List all objects.
-    pub fn list_objects(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, ObjectEntry)>> {
-        let iter = self.iterator_cf(self.cf_object_data(), rocksdb::IteratorMode::Start);
+    pub fn list_mnfts(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, ObjectEntry)>> {
+        let iter = self.iterator_cf(self.cf_mnft_data(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
         for item in iter {
@@ -79,24 +79,21 @@ impl CkbadgerStore {
     }
 
     /// Get pre-aggregated data for an object collection.
-    pub fn get_object_collection_aggregate(
+    pub fn get_mnft_collection_aggregate(
         &self,
         collection_id: &[u8],
-    ) -> anyhow::Result<Option<ObjectCollectionAggregate>> {
-        match self.get_cf(self.cf_object_collection_agg(), collection_id)? {
+    ) -> anyhow::Result<Option<MnftCollectionAggregate>> {
+        match self.get_cf(self.cf_mnft_collection_agg(), collection_id)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
 
     /// List all object collection aggregates. Scans the small `object_collection_agg` CF.
-    pub fn list_object_collection_aggregates(
+    pub fn list_mnft_collection_aggregates(
         &self,
-    ) -> anyhow::Result<Vec<(Vec<u8>, ObjectCollectionAggregate)>> {
-        let iter = self.iterator_cf(
-            self.cf_object_collection_agg(),
-            rocksdb::IteratorMode::Start,
-        );
+    ) -> anyhow::Result<Vec<(Vec<u8>, MnftCollectionAggregate)>> {
+        let iter = self.iterator_cf(self.cf_mnft_collection_agg(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
         for item in iter {
@@ -106,7 +103,7 @@ impl CkbadgerStore {
                     e
                 )
             })?;
-            let agg: ObjectCollectionAggregate = bincode::deserialize(&value).map_err(|e| {
+            let agg: MnftCollectionAggregate = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize object collection aggregate in list_object_collection_aggregates: collection_id=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -119,7 +116,7 @@ impl CkbadgerStore {
     }
 
     /// Get the live object count for a specific owner in a collection.
-    pub fn get_object_collection_owner_count(
+    pub fn get_mnft_collection_owner_count(
         &self,
         collection_id: &[u8],
         lock_hash: &[u8],
@@ -138,7 +135,7 @@ impl CkbadgerStore {
         }
 
         let key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
-        match self.get_cf(self.cf_stats_object(), &key)? {
+        match self.get_cf(self.cf_stats_mnft(), &key)? {
             Some(value) if value.len() == 8 => {
                 Ok(i64::from_le_bytes(value[..8].try_into().unwrap()))
             }
@@ -147,7 +144,7 @@ impl CkbadgerStore {
     }
 
     /// List all owners and live object counts for a collection.
-    pub fn list_object_collection_owner_counts(
+    pub fn list_mnft_collection_owner_counts(
         &self,
         collection_id: &[u8],
     ) -> anyhow::Result<Vec<(Vec<u8>, i64)>> {
@@ -159,7 +156,7 @@ impl CkbadgerStore {
         }
 
         let prefix = keys::encode_nft_collection_owner_prefix(collection_id);
-        let iter = self.prefix_iterator_cf(self.cf_stats_object(), &prefix);
+        let iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix);
         let mut results = Vec::new();
 
         for item in iter {
@@ -196,68 +193,68 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    pub fn get_object_type_index(
+    pub fn get_mnft_type_index(
         &self,
         type_script_hash: &[u8],
-    ) -> anyhow::Result<Option<ObjectTypeIndex>> {
+    ) -> anyhow::Result<Option<MnftTypeIndex>> {
         let key = keys::encode_nft_type_index_key(type_script_hash);
-        match self.get_cf(self.cf_stats_object(), &key)? {
+        match self.get_cf(self.cf_stats_mnft(), &key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
 
-    pub fn put_object_type_index_direct(
+    pub fn put_mnft_type_index_direct(
         &self,
         type_script_hash: &[u8],
-        index: &ObjectTypeIndex,
+        index: &MnftTypeIndex,
     ) -> anyhow::Result<()> {
         let key = keys::encode_nft_type_index_key(type_script_hash);
         let value = bincode::serialize(index)?;
-        self.put_cf(self.cf_stats_object(), &key, &value)
+        self.put_cf(self.cf_stats_mnft(), &key, &value)
     }
 
-    pub fn get_object_daily_delta(
+    pub fn get_mnft_daily_delta(
         &self,
         collection_id: &[u8],
         date_yyyymmdd: u32,
-    ) -> anyhow::Result<Option<ObjectDailyDelta>> {
+    ) -> anyhow::Result<Option<MnftDailyDelta>> {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
-        match self.get_cf(self.cf_stats_object(), &key)? {
+        match self.get_cf(self.cf_stats_mnft(), &key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
 
-    pub fn put_object_daily_delta(
+    pub fn put_mnft_daily_delta(
         &self,
         collection_id: &[u8],
         date_yyyymmdd: u32,
-        delta: &ObjectDailyDelta,
+        delta: &MnftDailyDelta,
     ) -> anyhow::Result<()> {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
         let value = bincode::serialize(delta)?;
-        self.put_cf(self.cf_stats_object(), &key, &value)
+        self.put_cf(self.cf_stats_mnft(), &key, &value)
     }
 
-    pub fn list_object_daily_deltas(
+    pub fn list_mnft_daily_deltas(
         &self,
         collection_id: &[u8],
-    ) -> anyhow::Result<Vec<(u32, ObjectDailyDelta)>> {
-        self.list_object_daily_deltas_in_range(collection_id, None, None)
+    ) -> anyhow::Result<Vec<(u32, MnftDailyDelta)>> {
+        self.list_mnft_daily_deltas_in_range(collection_id, None, None)
     }
 
-    pub fn list_object_daily_deltas_in_range(
+    pub fn list_mnft_daily_deltas_in_range(
         &self,
         collection_id: &[u8],
         from_date_yyyymmdd: Option<u32>,
         to_date_yyyymmdd: Option<u32>,
-    ) -> anyhow::Result<Vec<(u32, ObjectDailyDelta)>> {
+    ) -> anyhow::Result<Vec<(u32, MnftDailyDelta)>> {
         let prefix = keys::encode_nft_daily_prefix(collection_id);
         let start_key =
             keys::encode_nft_daily_key(collection_id, from_date_yyyymmdd.unwrap_or(u32::MIN));
         let iter = self.iterator_cf(
-            self.cf_stats_object(),
+            self.cf_stats_mnft(),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
         let mut results = Vec::new();
@@ -281,7 +278,7 @@ impl CkbadgerStore {
                     break;
                 }
             }
-            let delta: ObjectDailyDelta = bincode::deserialize(&value).map_err(|e| {
+            let delta: MnftDailyDelta = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize object daily delta in list_object_daily_deltas_in_range: collection_id=0x{}, date={}, error={}",
                     bytes_to_hex(collection_id),
@@ -300,7 +297,7 @@ impl CkbadgerStore {
     /// Pagination is keyset-based by `object_id` lexicographic order.
     /// - `cursor = None` starts from the beginning.
     /// - `cursor = Some(id)` starts AFTER that id.
-    pub fn list_object_ids_by_collection(
+    pub fn list_mnft_ids_by_collection(
         &self,
         collection_id: &[u8],
         cursor: Option<&[u8]>,
@@ -315,7 +312,7 @@ impl CkbadgerStore {
         let start_key = keys::encode_nft_by_collection_key(collection_id, start_object_id);
 
         let iter = self.iterator_cf(
-            self.cf_object_by_collection(),
+            self.cf_mnft_by_collection(),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
         let mut results = Vec::new();
@@ -488,7 +485,7 @@ impl CkbadgerStore {
 mod tests {
     use super::*;
     use crate::batch::StoreBatch;
-    use crate::types::{ObjectDailyDelta, ObjectStandard, ObjectTypeIndex};
+    use crate::types::{MnftDailyDelta, MnftTypeIndex, ObjectStandard};
     use tempfile::TempDir;
 
     fn test_store() -> (TempDir, CkbadgerStore) {
@@ -507,17 +504,14 @@ mod tests {
     fn test_get_object_collection_aggregate_missing() {
         let (_dir, store) = test_store();
         let id = [0x01u8; 32];
-        assert!(store
-            .get_object_collection_aggregate(&id)
-            .unwrap()
-            .is_none());
+        assert!(store.get_mnft_collection_aggregate(&id).unwrap().is_none());
     }
 
     #[test]
-    fn test_put_and_get_object_collection_aggregate() {
+    fn test_put_and_get_mnft_collection_aggregate() {
         let (_dir, store) = test_store();
         let id = [0x01u8; 32];
-        let agg = ObjectCollectionAggregate {
+        let agg = MnftCollectionAggregate {
             name: Some("Test mNFT Class".to_string()),
             standard: ObjectStandard::MnftClass,
             total_count: 50,
@@ -528,10 +522,10 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_object_collection_aggregate(&id, &agg);
+        batch.put_mnft_collection_aggregate(&id, &agg);
         batch.commit().unwrap();
 
-        let result = store.get_object_collection_aggregate(&id).unwrap().unwrap();
+        let result = store.get_mnft_collection_aggregate(&id).unwrap().unwrap();
         assert_eq!(result.name.as_deref(), Some("Test mNFT Class"));
         assert_eq!(result.standard, ObjectStandard::MnftClass);
         assert_eq!(result.total_count, 50);
@@ -541,15 +535,15 @@ mod tests {
     }
 
     #[test]
-    fn test_list_object_collection_aggregates() {
+    fn test_list_mnft_collection_aggregates() {
         let (_dir, store) = test_store();
         let id_a = [0x01u8; 32];
         let id_b = [0x02u8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_object_collection_aggregate(
+        batch.put_mnft_collection_aggregate(
             &id_a,
-            &ObjectCollectionAggregate {
+            &MnftCollectionAggregate {
                 name: Some("Class A".to_string()),
                 standard: ObjectStandard::MnftClass,
                 total_count: 10,
@@ -559,9 +553,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        batch.put_object_collection_aggregate(
+        batch.put_mnft_collection_aggregate(
             &id_b,
-            &ObjectCollectionAggregate {
+            &MnftCollectionAggregate {
                 name: Some("Spore Cluster".to_string()),
                 standard: ObjectStandard::SporeCluster,
                 total_count: 100,
@@ -573,13 +567,13 @@ mod tests {
         );
         batch.commit().unwrap();
 
-        let results = store.list_object_collection_aggregates().unwrap();
+        let results = store.list_mnft_collection_aggregates().unwrap();
         assert_eq!(results.len(), 2);
     }
 
     #[test]
     fn test_object_collection_aggregate_default() {
-        let agg = ObjectCollectionAggregate::default();
+        let agg = MnftCollectionAggregate::default();
         assert!(agg.name.is_none());
         assert_eq!(agg.standard, ObjectStandard::Spore);
         assert_eq!(agg.total_count, 0);
@@ -596,21 +590,21 @@ mod tests {
         let owner_b = [0x42u8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_object_collection_owner_count(&collection_id, &owner_a, 2);
-        batch.put_object_collection_owner_count(&collection_id, &owner_b, 1);
+        batch.put_mnft_collection_owner_count(&collection_id, &owner_a, 2);
+        batch.put_mnft_collection_owner_count(&collection_id, &owner_b, 1);
         batch.commit().unwrap();
 
         let count_a = store
-            .get_object_collection_owner_count(&collection_id, &owner_a)
+            .get_mnft_collection_owner_count(&collection_id, &owner_a)
             .unwrap();
         let count_b = store
-            .get_object_collection_owner_count(&collection_id, &owner_b)
+            .get_mnft_collection_owner_count(&collection_id, &owner_b)
             .unwrap();
         assert_eq!(count_a, 2);
         assert_eq!(count_b, 1);
 
         let mut rows = store
-            .list_object_collection_owner_counts(&collection_id)
+            .list_mnft_collection_owner_counts(&collection_id)
             .unwrap();
         rows.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(rows.len(), 2);
@@ -622,13 +616,13 @@ mod tests {
     fn test_object_collection_owner_count_length_validation() {
         let (_dir, store) = test_store();
         let err = store
-            .get_object_collection_owner_count(&[0x11; 33], &[0x22; 32])
+            .get_mnft_collection_owner_count(&[0x11; 33], &[0x22; 32])
             .unwrap_err();
         assert!(err
             .to_string()
             .contains("invalid collection_id length in get_object_collection_owner_count"));
 
-        let err = store.list_object_collection_owner_counts(&[]).unwrap_err();
+        let err = store.list_mnft_collection_owner_counts(&[]).unwrap_err();
         assert!(err
             .to_string()
             .contains("invalid collection_id length in list_object_collection_owner_counts"));
@@ -638,14 +632,10 @@ mod tests {
     fn test_list_objects_fails_on_invalid_payload() {
         let (_dir, store) = test_store();
         store
-            .put_cf(
-                store.cf_object_data(),
-                &[0x11; 32],
-                b"invalid-object-payload",
-            )
+            .put_cf(store.cf_mnft_data(), &[0x11; 32], b"invalid-object-payload")
             .unwrap();
 
-        let err = store.list_objects(10).unwrap_err();
+        let err = store.list_mnfts(10).unwrap_err();
         assert!(err
             .to_string()
             .contains("failed to deserialize object entry in list_objects"));
@@ -676,12 +666,12 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_object(&object_a, &make_entry(&[0xA1; 32]));
-        batch.put_object(&object_b, &make_entry(&[0xA2; 32]));
+        batch.put_mnft(&object_a, &make_entry(&[0xA1; 32]));
+        batch.put_mnft(&object_b, &make_entry(&[0xA2; 32]));
         batch.commit().unwrap();
 
         let fetched = store
-            .get_objects_batch(&[object_a.to_vec(), object_b.to_vec(), vec![0x33; 32]])
+            .get_mnfts_batch(&[object_a.to_vec(), object_b.to_vec(), vec![0x33; 32]])
             .unwrap();
         assert_eq!(fetched.len(), 3);
         assert_eq!(fetched[0].0, object_a.to_vec());
@@ -714,14 +704,10 @@ mod tests {
         let (_dir, store) = test_store();
         let object_id = [0x44u8; 32];
         store
-            .put_cf(
-                store.cf_object_data(),
-                &object_id,
-                b"invalid-object-payload",
-            )
+            .put_cf(store.cf_mnft_data(), &object_id, b"invalid-object-payload")
             .unwrap();
 
-        let err = store.get_objects_batch(&[object_id.to_vec()]).unwrap_err();
+        let err = store.get_mnfts_batch(&[object_id.to_vec()]).unwrap_err();
         assert!(err
             .to_string()
             .contains("failed to deserialize object entry in get_objects_batch"));
@@ -732,13 +718,13 @@ mod tests {
         let (_dir, store) = test_store();
         store
             .put_cf(
-                store.cf_object_collection_agg(),
+                store.cf_mnft_collection_agg(),
                 &[0x22; 32],
                 b"invalid-object-collection-agg",
             )
             .unwrap();
 
-        let err = store.list_object_collection_aggregates().unwrap_err();
+        let err = store.list_mnft_collection_aggregates().unwrap_err();
         assert!(err.to_string().contains(
             "failed to deserialize object collection aggregate in list_object_collection_aggregates"
         ));
@@ -751,42 +737,42 @@ mod tests {
         let collection_id = [0x77u8; 24];
 
         store
-            .put_object_type_index_direct(
+            .put_mnft_type_index_direct(
                 &type_script_hash,
-                &ObjectTypeIndex {
+                &MnftTypeIndex {
                     collection_id: collection_id.to_vec(),
                 },
             )
             .unwrap();
         let loaded_index = store
-            .get_object_type_index(&type_script_hash)
+            .get_mnft_type_index(&type_script_hash)
             .unwrap()
             .unwrap();
         assert_eq!(loaded_index.collection_id, collection_id.to_vec());
 
         store
-            .put_object_daily_delta(
+            .put_mnft_daily_delta(
                 &collection_id,
                 20260219,
-                &ObjectDailyDelta {
+                &MnftDailyDelta {
                     owned_capacity_delta: 500,
                     owned_knowledge_delta: 320,
                 },
             )
             .unwrap();
         let loaded_daily = store
-            .get_object_daily_delta(&collection_id, 20260219)
+            .get_mnft_daily_delta(&collection_id, 20260219)
             .unwrap()
             .unwrap();
         assert_eq!(loaded_daily.owned_capacity_delta, 500);
         assert_eq!(loaded_daily.owned_knowledge_delta, 320);
 
-        let list = store.list_object_daily_deltas(&collection_id).unwrap();
+        let list = store.list_mnft_daily_deltas(&collection_id).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].0, 20260219);
 
         let ranged = store
-            .list_object_daily_deltas_in_range(&collection_id, Some(20260219), Some(20260219))
+            .list_mnft_daily_deltas_in_range(&collection_id, Some(20260219), Some(20260219))
             .unwrap();
         assert_eq!(ranged.len(), 1);
         assert_eq!(ranged[0].0, 20260219);
@@ -798,10 +784,10 @@ mod tests {
         let collection_id = [0x77u8; 24];
         let key = keys::encode_nft_daily_key(&collection_id, 20260219);
         store
-            .put_cf(store.cf_stats_object(), &key, b"invalid-object-daily")
+            .put_cf(store.cf_stats_mnft(), &key, b"invalid-object-daily")
             .unwrap();
 
-        let err = store.list_object_daily_deltas(&collection_id).unwrap_err();
+        let err = store.list_mnft_daily_deltas(&collection_id).unwrap_err();
         assert!(err.to_string().contains(
             "failed to deserialize object daily delta in list_object_daily_deltas_in_range"
         ));
@@ -816,20 +802,20 @@ mod tests {
         let object_c = [0x03u8; 20];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_object_by_collection(&collection_id, &object_b);
-        batch.put_object_by_collection(&collection_id, &object_c);
-        batch.put_object_by_collection(&collection_id, &object_a);
+        batch.put_mnft_by_collection(&collection_id, &object_b);
+        batch.put_mnft_by_collection(&collection_id, &object_c);
+        batch.put_mnft_by_collection(&collection_id, &object_a);
         batch.commit().unwrap();
 
         let first = store
-            .list_object_ids_by_collection(&collection_id, None, 2)
+            .list_mnft_ids_by_collection(&collection_id, None, 2)
             .unwrap();
         assert_eq!(first.len(), 2);
         assert_eq!(first[0], object_a.to_vec());
         assert_eq!(first[1], object_b.to_vec());
 
         let second = store
-            .list_object_ids_by_collection(&collection_id, Some(&first[1]), 2)
+            .list_mnft_ids_by_collection(&collection_id, Some(&first[1]), 2)
             .unwrap();
         assert_eq!(second, vec![object_c.to_vec()]);
     }

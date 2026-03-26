@@ -5,7 +5,7 @@ use axum::{
 };
 use ckbadger_store::{
     types::{
-        ObjectCollectionActivityEntry, ObjectCollectionAggregate, DID_CKB_SENTINEL_COLLECTION,
+        MnftCollectionAggregate, ObjectCollectionActivityEntry, DID_CKB_SENTINEL_COLLECTION,
         DOTBIT_SENTINEL_COLLECTION,
     },
     CkbadgerStore,
@@ -35,18 +35,18 @@ fn is_identity_sentinel(collection_id: &[u8]) -> bool {
 /// Read the collection aggregate from the correct CF (identity vs object).
 ///
 /// Identity sentinel collections store aggregates in `CF_IDENTITY_AGG`;
-/// all other collections use `CF_OBJECT_COLLECTION_AGG`.  The returned
-/// [`ObjectCollectionAggregate`] is a normalised view so callers don't
+/// all other collections use `CF_MNFT_COLLECTION_AGG`.  The returned
+/// [`MnftCollectionAggregate`] is a normalised view so callers don't
 /// need to branch on the collection type.
 fn get_collection_aggregate(
     store: &CkbadgerStore,
     collection_id: &[u8],
-) -> anyhow::Result<Option<ObjectCollectionAggregate>> {
+) -> anyhow::Result<Option<MnftCollectionAggregate>> {
     if is_identity_sentinel(collection_id) {
         let opt = store.get_identity_collection_aggregate(collection_id)?;
         Ok(opt.map(|id_agg| {
             use ckbadger_store::types::ObjectStandard;
-            ObjectCollectionAggregate {
+            MnftCollectionAggregate {
                 name: id_agg.name,
                 // ObjectStandard has no DotBit/DidCkb variants; Spore is a
                 // placeholder.  Display-level standard is resolved by
@@ -63,7 +63,7 @@ fn get_collection_aggregate(
             }
         }))
     } else {
-        store.get_object_collection_aggregate(collection_id)
+        store.get_mnft_collection_aggregate(collection_id)
     }
 }
 
@@ -1277,7 +1277,7 @@ async fn get_object_item_detail(
     let object_id_bytes = decode_item_id(&object_id)?;
     let entry = state
         .store
-        .get_object(&object_id_bytes)
+        .get_mnft(&object_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Object item not found"))?;
 
@@ -1313,7 +1313,7 @@ async fn get_object_item_detail(
     })?;
     let class_entry = state
         .store
-        .get_object(&class_id)
+        .get_mnft(&class_id)
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| {
             ApiError::internal(format!(
@@ -1356,7 +1356,7 @@ async fn get_object_item_detail(
     })?;
     let issuer_entry = state
         .store
-        .get_object(&issuer_id)
+        .get_mnft(&issuer_id)
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| {
             ApiError::internal(format!(
@@ -1642,7 +1642,7 @@ async fn list_mnft_item_activities(
     let object_id_bytes = decode_item_id(&object_id)?;
     let entry = state
         .store
-        .get_object(&object_id_bytes)
+        .get_mnft(&object_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Object item not found"))?;
     if !matches!(
@@ -1682,7 +1682,7 @@ async fn get_object_collection(
 
     let daily = state
         .store
-        .list_object_daily_deltas(&collection_id_bytes)
+        .list_mnft_daily_deltas(&collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let chart = build_capacity_history_chart(
         daily
@@ -1734,7 +1734,7 @@ async fn get_object_collection(
     let (class_detail, issuer_detail, created_at_block, owner_lock_hash) = if standard == "m-nft" {
         match state
             .store
-            .get_object(&collection_id_bytes)
+            .get_mnft(&collection_id_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?
         {
             Some(class_entry)
@@ -1771,7 +1771,7 @@ async fn get_object_collection(
                 let issuer_detail = if !issuer_id.is_empty() {
                     match state
                         .store
-                        .get_object(&issuer_id)
+                        .get_mnft(&issuer_id)
                         .map_err(|e| ApiError::internal(e.to_string()))?
                     {
                         Some(issuer_entry) => {
@@ -1916,7 +1916,7 @@ fn fetch_nft_collection_entries_by_ids(
     nft_ids: &[Vec<u8>],
 ) -> Result<Vec<(Vec<u8>, ckbadger_store::types::ObjectEntry)>, ApiRouteError> {
     let entries = store
-        .get_objects_batch(nft_ids)
+        .get_mnfts_batch(nft_ids)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let mut out = Vec::with_capacity(entries.len());
 
@@ -1960,7 +1960,7 @@ pub(crate) fn list_identity_items_inner(
     cursor_bytes: Option<Vec<u8>>,
     search_lower: Option<&str>,
     status_filter: NftItemStatusFilter,
-    agg: &ObjectCollectionAggregate,
+    agg: &MnftCollectionAggregate,
 ) -> ApiResult<CursorPaginatedResponse<CollectionItemResponse>> {
     let is_dotbit = collection_id_bytes == DOTBIT_SENTINEL_COLLECTION;
 
@@ -2217,7 +2217,7 @@ async fn list_object_collection_items(
         loop {
             let nft_ids = state
                 .store
-                .list_object_ids_by_collection(
+                .list_mnft_ids_by_collection(
                     &collection_id_bytes,
                     scan_cursor.as_deref(),
                     scan_batch_size,
@@ -2256,7 +2256,7 @@ async fn list_object_collection_items(
     } else {
         let nft_ids = state
             .store
-            .list_object_ids_by_collection(
+            .list_mnft_ids_by_collection(
                 &collection_id_bytes,
                 cursor_bytes.as_deref(),
                 (limit + 1) as usize,
@@ -2377,7 +2377,7 @@ fn collect_nft_collection_holder_counts(
     let rows = if is_identity_sentinel(collection_id_bytes) {
         store.list_identity_owner_counts(collection_id_bytes)
     } else {
-        store.list_object_collection_owner_counts(collection_id_bytes)
+        store.list_mnft_collection_owner_counts(collection_id_bytes)
     }
     .map_err(|e| ApiError::internal(e.to_string()))?;
     let mut holder_counts: HashMap<Vec<u8>, i64> = HashMap::with_capacity(rows.len());
@@ -2400,7 +2400,7 @@ fn collect_nft_collection_holder_counts(
 fn list_object_collection_holders_ranked(
     store: &CkbadgerStore,
     collection_id_bytes: &[u8],
-    _agg: &ckbadger_store::types::ObjectCollectionAggregate,
+    _agg: &ckbadger_store::types::MnftCollectionAggregate,
 ) -> Result<Vec<(Vec<u8>, i64)>, ApiRouteError> {
     let mut holders: Vec<(Vec<u8>, i64)> =
         collect_nft_collection_holder_counts(store, collection_id_bytes)?
@@ -2414,7 +2414,7 @@ fn list_object_collection_holders_ranked_cached(
     store: &CkbadgerStore,
     mem_cache: &InMemoryCache,
     collection_id_bytes: &[u8],
-    agg: &ckbadger_store::types::ObjectCollectionAggregate,
+    agg: &ckbadger_store::types::MnftCollectionAggregate,
 ) -> Result<Vec<(Vec<u8>, i64)>, ApiRouteError> {
     let cache_key = format!(
         "assets:nft_collection_holders_ranked:0x{}",
@@ -2586,14 +2586,14 @@ async fn get_object_collection_capacity_chart(
 
     let daily = state
         .store
-        .list_object_daily_deltas_in_range(&collection_id_bytes, from_date, to_date)
+        .list_mnft_daily_deltas_in_range(&collection_id_bytes, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let (initial_capacity, initial_used) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
         let mut base_used: i128 = 0;
         let baseline = state
             .store
-            .list_object_daily_deltas_in_range(
+            .list_mnft_daily_deltas_in_range(
                 &collection_id_bytes,
                 None,
                 Some(from.saturating_sub(1)),
@@ -2867,7 +2867,7 @@ mod tests {
         let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
         let collection_id = [0xBD; 32];
 
-        let aggregate = ckbadger_store::types::ObjectCollectionAggregate {
+        let aggregate = ckbadger_store::types::MnftCollectionAggregate {
             name: Some("sample".to_string()),
             standard: ckbadger_store::types::ObjectStandard::MnftClass,
             total_count: 2,
@@ -2878,9 +2878,9 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&domain);
-        batch.put_object_collection_aggregate(&collection_id, &aggregate);
-        batch.put_object_collection_owner_count(&collection_id, &[0xA1; 32], 1);
-        batch.put_object_collection_owner_count(&collection_id, &[0xA2; 32], 1);
+        batch.put_mnft_collection_aggregate(&collection_id, &aggregate);
+        batch.put_mnft_collection_owner_count(&collection_id, &[0xA1; 32], 1);
+        batch.put_mnft_collection_owner_count(&collection_id, &[0xA2; 32], 1);
         batch.commit().unwrap();
 
         let mem_cache = InMemoryCache::new();
@@ -2903,7 +2903,7 @@ mod tests {
 
         // Add another live NFT for holder A1; cached ranking should remain stale until TTL refresh.
         let mut overwrite_batch = StoreBatch::new(&domain);
-        overwrite_batch.put_object_collection_owner_count(&collection_id, &[0xA1; 32], 2);
+        overwrite_batch.put_mnft_collection_owner_count(&collection_id, &[0xA1; 32], 2);
         overwrite_batch.commit().unwrap();
 
         let cached_after_write = list_object_collection_holders_ranked_cached(

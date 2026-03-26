@@ -9,7 +9,7 @@ use ckbadger_store::types::{
     AssetAction, IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
     ObjectCollectionActivityEntry, UndoLogEntry, UndoLogStoreTarget,
 };
-use ckbadger_store::{CkbadgerStore, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_STATS_OBJECT};
+use ckbadger_store::{CkbadgerStore, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_STATS_MNFT};
 
 use crate::parser::dotbit::ParsedDotbitAccountOutput;
 use crate::sync::types::UndoSeqScope;
@@ -490,7 +490,7 @@ impl BatchWriter {
         self.record_dotbit_domain_undo(
             batch,
             block_number,
-            CF_STATS_OBJECT,
+            CF_STATS_MNFT,
             key,
             previous_value,
             undo_seq,
@@ -776,7 +776,7 @@ impl BatchWriter {
                         hour_bucket
                     )
                 })?;
-                batch.put_object_hourly_transfer(&DOTBIT_SENTINEL_COLLECTION, hour_bucket, next);
+                batch.put_mnft_hourly_transfer(&DOTBIT_SENTINEL_COLLECTION, hour_bucket, next);
                 state.put_hourly_transfer(key, next);
             }
         }
@@ -784,7 +784,7 @@ impl BatchWriter {
             tx_hash,
             account_output.output_index,
         );
-        let fwd_previous = self.store.get_cf(self.store.cf_stats_object(), &fwd_key)?;
+        let fwd_previous = self.store.get_cf(self.store.cf_stats_mnft(), &fwd_key)?;
         self.record_dotbit_stats_object_undo(
             batch,
             block_number,
@@ -802,7 +802,7 @@ impl BatchWriter {
             tx_hash,
             account_output.output_index,
         );
-        let rev_previous = self.store.get_cf(self.store.cf_stats_object(), &rev_key)?;
+        let rev_previous = self.store.get_cf(self.store.cf_stats_mnft(), &rev_key)?;
         self.record_dotbit_stats_object_undo(
             batch,
             block_number,

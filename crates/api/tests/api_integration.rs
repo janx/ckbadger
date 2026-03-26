@@ -22,7 +22,7 @@ use ckbadger_store::types::{
     DailyBlockStats, DailyStats, DaoDailySnapshot, DaoDepositCacheEntry, DeepForkInfo,
     DobDecodedEntry, DobDecodedTrait, EpochStats, HourlyStats, IdentityCollectionAggregate,
     IdentityEntry, IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats,
-    ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry,
+    MnftCollectionAggregate, MnftDailyDelta, ObjectCollectionActivityEntry, ObjectEntry,
     ObjectExtra, ObjectStandard, ProtocolAction, ReorgEvent, ScriptDailyDelta, ScriptFamilyInfo,
     ScriptInfo, ScriptReferenceInfo, ScriptVersionInfo, SporeDailyDelta, SporeMediaProfile,
     TokenDailyDelta, TokenInfo, TxActions, TxIndexEntry, TypeCallEntry,
@@ -2493,9 +2493,9 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
             ..Default::default()
         },
     );
-    batch.put_object_collection_aggregate(
+    batch.put_mnft_collection_aggregate(
         &nft_collection_id,
-        &ObjectCollectionAggregate {
+        &MnftCollectionAggregate {
             name: Some("NFT Collection".to_string()),
             standard: ObjectStandard::MnftClass,
             total_count: 6,
@@ -2518,10 +2518,10 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
         )
         .unwrap();
     store
-        .put_object_daily_delta(
+        .put_mnft_daily_delta(
             &nft_collection_id,
             20240101,
-            &ObjectDailyDelta {
+            &MnftDailyDelta {
                 owned_capacity_delta: 700,
                 owned_knowledge_delta: 600,
             },
@@ -6149,9 +6149,9 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
             ..Default::default()
         },
     );
-    batch.put_object_collection_aggregate(
+    batch.put_mnft_collection_aggregate(
         &dotbit_collection_id,
-        &ObjectCollectionAggregate {
+        &MnftCollectionAggregate {
             name: Some(".bit".to_string()),
             standard: ObjectStandard::default(),
             total_count: 1,
@@ -6284,9 +6284,9 @@ async fn test_assets_list_includes_did_ckb_collection_under_nft_type() {
     let did_collection_id = *b"did_ckb_collection______________";
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_object_collection_aggregate(
+    batch.put_mnft_collection_aggregate(
         &did_collection_id,
-        &ObjectCollectionAggregate {
+        &MnftCollectionAggregate {
             name: Some("did:ckb".to_string()),
             standard: ObjectStandard::default(),
             total_count: 2,
@@ -6567,9 +6567,9 @@ async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
     let collection_id_hex = format!("0x{}", hex::encode(collection_id));
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_object_collection_aggregate(
+    batch.put_mnft_collection_aggregate(
         &collection_id,
-        &ObjectCollectionAggregate {
+        &MnftCollectionAggregate {
             name: Some("Test NFT Collection".to_string()),
             standard: ObjectStandard::MnftToken,
             total_count: 100,
@@ -6582,20 +6582,20 @@ async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
     batch.commit().unwrap();
 
     store
-        .put_object_daily_delta(
+        .put_mnft_daily_delta(
             &collection_id,
             20240115,
-            &ObjectDailyDelta {
+            &MnftDailyDelta {
                 owned_capacity_delta: 100,
                 owned_knowledge_delta: 60,
             },
         )
         .unwrap();
     store
-        .put_object_daily_delta(
+        .put_mnft_daily_delta(
             &collection_id,
             20240117,
-            &ObjectDailyDelta {
+            &MnftDailyDelta {
                 owned_capacity_delta: -20,
                 owned_knowledge_delta: -10,
             },
@@ -6672,10 +6672,10 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
     batch.commit().unwrap();
 
     store
-        .put_object_daily_delta(
+        .put_mnft_daily_delta(
             &collection_id,
             20240115,
-            &ObjectDailyDelta {
+            &MnftDailyDelta {
                 owned_capacity_delta: 100,
                 owned_knowledge_delta: 60,
             },
@@ -6772,7 +6772,7 @@ async fn test_assets_nft_collection_detail_enriches_mnft_class_metadata() {
     let mut batch = StoreBatch::new(store.as_ref());
 
     // Insert issuer ObjectEntry with MnftIssuer extra
-    batch.put_object(
+    batch.put_mnft(
         &issuer_id,
         &ObjectEntry {
             standard: ObjectStandard::MnftIssuer,
@@ -6793,7 +6793,7 @@ async fn test_assets_nft_collection_detail_enriches_mnft_class_metadata() {
     );
 
     // Insert class ObjectEntry with MnftClass extra
-    batch.put_object(
+    batch.put_mnft(
         &class_id,
         &ObjectEntry {
             standard: ObjectStandard::MnftClass,
@@ -6816,10 +6816,10 @@ async fn test_assets_nft_collection_detail_enriches_mnft_class_metadata() {
         },
     );
 
-    // Insert ObjectCollectionAggregate (required for get_object_collection to find it)
-    batch.put_object_collection_aggregate(
+    // Insert MnftCollectionAggregate (required for get_object_collection to find it)
+    batch.put_mnft_collection_aggregate(
         &class_id,
-        &ObjectCollectionAggregate {
+        &MnftCollectionAggregate {
             name: Some("Class-A".to_string()),
             standard: ObjectStandard::MnftClass,
             total_count: 50,
@@ -6921,10 +6921,10 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
     batch.commit().unwrap();
 
     store
-        .put_object_daily_delta(
+        .put_mnft_daily_delta(
             &collection_id,
             20240115,
-            &ObjectDailyDelta {
+            &MnftDailyDelta {
                 owned_capacity_delta: 120,
                 owned_knowledge_delta: 70,
             },
@@ -7107,9 +7107,9 @@ async fn test_assets_nft_list_uses_dotbit_display_name_when_aggregate_name_missi
     let collection_id = b"dotbit_collection_______________".to_vec();
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_object_collection_aggregate(
+    batch.put_mnft_collection_aggregate(
         &collection_id,
-        &ObjectCollectionAggregate {
+        &MnftCollectionAggregate {
             name: None,
             standard: ObjectStandard::default(),
             total_count: 20,
@@ -7468,9 +7468,9 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
     let collection_id_hex = format!("0x{}", hex::encode(class_id));
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_object_collection_aggregate(
+    batch.put_mnft_collection_aggregate(
         &class_id,
-        &ObjectCollectionAggregate {
+        &MnftCollectionAggregate {
             name: Some("Genesis Class".to_string()),
             standard: ObjectStandard::MnftClass,
             total_count: 1,
@@ -7480,7 +7480,7 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
             ..Default::default()
         },
     );
-    batch.put_object(
+    batch.put_mnft(
         &class_id,
         &ObjectEntry {
             standard: ObjectStandard::MnftClass,
@@ -7502,7 +7502,7 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
             },
         },
     );
-    batch.put_object(
+    batch.put_mnft(
         &token_id,
         &ObjectEntry {
             standard: ObjectStandard::MnftToken,
@@ -7522,7 +7522,7 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
             },
         },
     );
-    batch.put_object_by_collection(&class_id, &token_id);
+    batch.put_mnft_by_collection(&class_id, &token_id);
     batch.put_mnft_token_outpoint(&tx_hash, output_index, &token_id);
     batch.put_cell(
         &tx_hash,
@@ -7952,7 +7952,7 @@ async fn test_assets_nft_item_detail_mnft() {
     let output_index = 4i16;
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_object(
+    batch.put_mnft(
         &issuer_id,
         &ObjectEntry {
             standard: ObjectStandard::MnftIssuer,
@@ -7971,7 +7971,7 @@ async fn test_assets_nft_item_detail_mnft() {
             },
         },
     );
-    batch.put_object(
+    batch.put_mnft(
         &class_id,
         &ObjectEntry {
             standard: ObjectStandard::MnftClass,
@@ -7993,7 +7993,7 @@ async fn test_assets_nft_item_detail_mnft() {
             },
         },
     );
-    batch.put_object(
+    batch.put_mnft(
         &token_id,
         &ObjectEntry {
             standard: ObjectStandard::MnftToken,
@@ -8074,7 +8074,7 @@ async fn test_assets_nft_item_activities_mnft() {
     let transfer_tx = vec![0x91; 32];
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_object(
+    batch.put_mnft(
         &token_id,
         &ObjectEntry {
             standard: ObjectStandard::MnftToken,

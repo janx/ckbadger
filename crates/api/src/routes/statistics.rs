@@ -1015,12 +1015,11 @@ async fn get_most_utilized_assets_chart(
         })?;
         let store = state.store.clone();
         let collection_bytes_c = collection_bytes.clone();
-        let deltas = tokio::task::spawn_blocking(move || {
-            store.list_object_daily_deltas(&collection_bytes_c)
-        })
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        let deltas =
+            tokio::task::spawn_blocking(move || store.list_mnft_daily_deltas(&collection_bytes_c))
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map_err(|e| ApiError::internal(e.to_string()))?;
         let (total_cells_capacity, used_cap) = accumulate_capacity_deltas(
             deltas
                 .iter()

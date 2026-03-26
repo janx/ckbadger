@@ -4,13 +4,13 @@ ckbadger indexes two on-chain NFT standards: **Spore** and **m-NFT**. Spore obje
 
 ## Standards
 
-| Standard      | Storage Key      | Content                              | Decode                       |
-| ------------- | ---------------- | ------------------------------------ | ---------------------------- |
-| Spore         | `CF_SPORE_DATA`  | Raw cell data (image, text, DOB DNA) | None for raw; CKB-VM for DOB |
-| Spore Cluster | `CF_SPORE_DATA`  | Cluster name + description (JSON)    | N/A (metadata container)     |
-| m-NFT Token   | `CF_OBJECT_DATA` | Token metadata                       | N/A                          |
-| m-NFT Class   | `CF_OBJECT_DATA` | Class template                       | N/A                          |
-| m-NFT Issuer  | `CF_OBJECT_DATA` | Issuer authority                     | N/A                          |
+| Standard      | Storage Key     | Content                              | Decode                       |
+| ------------- | --------------- | ------------------------------------ | ---------------------------- |
+| Spore         | `CF_SPORE_DATA` | Raw cell data (image, text, DOB DNA) | None for raw; CKB-VM for DOB |
+| Spore Cluster | `CF_SPORE_DATA` | Cluster name + description (JSON)    | N/A (metadata container)     |
+| m-NFT Token   | `CF_MNFT_DATA`  | Token metadata                       | N/A                          |
+| m-NFT Class   | `CF_MNFT_DATA`  | Class template                       | N/A                          |
+| m-NFT Issuer  | `CF_MNFT_DATA`  | Issuer authority                     | N/A                          |
 
 Each object is stored as an `ObjectEntry` with standard-specific data in `ObjectExtra`.
 
@@ -127,14 +127,14 @@ Both forms are preserved. The decode worker stores each step's raw output indepe
 
 ### RocksDB (Domain Store)
 
-| CF                         | Key                       | Value                     | Purpose                       |
-| -------------------------- | ------------------------- | ------------------------- | ----------------------------- |
-| `CF_SPORE_DATA`            | spore_id (32B)            | ObjectEntry (bincode)     | Spore + cluster entries       |
-| `CF_SPORE_BY_CLUSTER`      | cluster_id + spore_id     | empty                     | Index: spores in cluster      |
-| `CF_DOB_DECODED`           | spore_id (32B)            | DobDecodedEntry (bincode) | Cached decode results         |
-| `CF_OBJECT_DATA`           | object_id                 | ObjectEntry (bincode)     | m-NFT entries                 |
-| `CF_OBJECT_BY_COLLECTION`  | collection_id + object_id | empty                     | Index: objects in collection  |
-| `CF_OBJECT_COLLECTION_AGG` | collection_id             | aggregate (bincode)       | Pre-computed collection stats |
+| CF                       | Key                       | Value                     | Purpose                       |
+| ------------------------ | ------------------------- | ------------------------- | ----------------------------- |
+| `CF_SPORE_DATA`          | spore_id (32B)            | ObjectEntry (bincode)     | Spore + cluster entries       |
+| `CF_SPORE_BY_CLUSTER`    | cluster_id + spore_id     | empty                     | Index: spores in cluster      |
+| `CF_DOB_DECODED`         | spore_id (32B)            | DobDecodedEntry (bincode) | Cached decode results         |
+| `CF_MNFT_DATA`           | object_id                 | ObjectEntry (bincode)     | m-NFT entries                 |
+| `CF_MNFT_BY_COLLECTION`  | collection_id + object_id | empty                     | Index: mNFTs in collection    |
+| `CF_MNFT_COLLECTION_AGG` | collection_id             | aggregate (bincode)       | Pre-computed collection stats |
 
 ### Filesystem (DOB Decode Blobs)
 

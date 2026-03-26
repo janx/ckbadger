@@ -12,7 +12,7 @@ use anyhow::{anyhow, Context, Result};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
-use ckbadger_store::types::{LiveCellInfo, ObjectTypeIndex, PositionedCellInfo, SporeTypeIndex};
+use ckbadger_store::types::{LiveCellInfo, MnftTypeIndex, PositionedCellInfo, SporeTypeIndex};
 
 use crate::parser::block::BlockParser;
 use crate::parser::cell::{CellParser, ParsedCell};
@@ -597,7 +597,7 @@ impl Indexer {
             spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
             spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
             cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
-            object_type_index_changes: HashMap<Vec<u8>, ObjectTypeIndex>,
+            object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,
             object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
             parser_perf_sample: ParserBatchPerfSample,
         }
@@ -1327,13 +1327,12 @@ impl Indexer {
                 let mut spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
                 let mut cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> =
                     HashMap::new();
-                let mut object_type_index_changes: HashMap<Vec<u8>, ObjectTypeIndex> =
-                    HashMap::new();
+                let mut object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex> = HashMap::new();
                 let mut object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> =
                     HashMap::new();
                 let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> =
                     HashMap::new();
-                let mut object_type_index_cache: HashMap<Vec<u8>, Option<ObjectTypeIndex>> =
+                let mut object_type_index_cache: HashMap<Vec<u8>, Option<MnftTypeIndex>> =
                     HashMap::new();
 
                 for tx_data in &all_tx_data {
@@ -1581,7 +1580,7 @@ impl Indexer {
                             let collection_id =
                                 classify_nft_collection_id(type_code_hash, type_args);
                             if let Some(collection_id) = collection_id {
-                                let index = ObjectTypeIndex {
+                                let index = MnftTypeIndex {
                                     collection_id: collection_id.clone(),
                                 };
                                 object_type_index_cache
@@ -1819,7 +1818,7 @@ impl Indexer {
                                                     || {
                                                         writer_for_parser
                                                             .store()
-                                                            .get_object_type_index(type_script_hash)
+                                                            .get_mnft_type_index(type_script_hash)
                                                     },
                                                 ) {
                                                     Ok(loaded) => {

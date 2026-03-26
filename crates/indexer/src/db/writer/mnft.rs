@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    CompositionTier, ObjectCollectionAggregate, ObjectEntry, ObjectExtra, ObjectStandard,
-    ObjectTypeIndex,
+    CompositionTier, MnftCollectionAggregate, MnftTypeIndex, ObjectEntry, ObjectExtra,
+    ObjectStandard,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -17,7 +17,7 @@ use super::BatchWriter;
 #[derive(Default)]
 pub(crate) struct MnftBatchState {
     tokens: HashMap<Vec<u8>, Option<ObjectEntry>>,
-    collection_aggs: HashMap<Vec<u8>, Option<ObjectCollectionAggregate>>,
+    collection_aggs: HashMap<Vec<u8>, Option<MnftCollectionAggregate>>,
     collection_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
     hourly_transfers: HashMap<Vec<u8>, i64>,
 }
@@ -27,7 +27,7 @@ impl MnftBatchState {
         if let Some(cached) = self.tokens.get(token_id) {
             return Ok(cached.clone());
         }
-        let loaded = store.get_object(token_id)?;
+        let loaded = store.get_mnft(token_id)?;
         self.tokens.insert(token_id.to_vec(), loaded.clone());
         Ok(loaded)
     }
@@ -40,11 +40,11 @@ impl MnftBatchState {
         &mut self,
         store: &CkbadgerStore,
         collection_id: &[u8],
-    ) -> Result<Option<ObjectCollectionAggregate>> {
+    ) -> Result<Option<MnftCollectionAggregate>> {
         if let Some(cached) = self.collection_aggs.get(collection_id) {
             return Ok(cached.clone());
         }
-        let loaded = store.get_object_collection_aggregate(collection_id)?;
+        let loaded = store.get_mnft_collection_aggregate(collection_id)?;
         self.collection_aggs
             .insert(collection_id.to_vec(), loaded.clone());
         Ok(loaded)
@@ -53,17 +53,17 @@ impl MnftBatchState {
     fn put_collection_aggregate(
         &mut self,
         collection_id: &[u8],
-        agg: ObjectCollectionAggregate,
+        agg: MnftCollectionAggregate,
         batch: &mut StoreBatch,
     ) {
-        batch.put_object_collection_aggregate(collection_id, &agg);
+        batch.put_mnft_collection_aggregate(collection_id, &agg);
         self.collection_aggs
             .insert(collection_id.to_vec(), Some(agg));
     }
 
     pub(crate) fn extend_pending_collection_aggregates(
         &self,
-        target: &mut HashMap<Vec<u8>, ObjectCollectionAggregate>,
+        target: &mut HashMap<Vec<u8>, MnftCollectionAggregate>,
     ) {
         for (collection_id, agg) in &self.collection_aggs {
             if let Some(agg) = agg {
@@ -82,7 +82,7 @@ impl MnftBatchState {
         if let Some(cached) = self.collection_owner_counts.get(&key) {
             return Ok(*cached);
         }
-        let loaded = store.get_object_collection_owner_count(collection_id, lock_hash)?;
+        let loaded = store.get_mnft_collection_owner_count(collection_id, lock_hash)?;
         self.collection_owner_counts.insert(key, loaded);
         Ok(loaded)
     }
@@ -94,7 +94,7 @@ impl MnftBatchState {
         count: i64,
         batch: &mut StoreBatch,
     ) {
-        batch.put_object_collection_owner_count(collection_id, lock_hash, count);
+        batch.put_mnft_collection_owner_count(collection_id, lock_hash, count);
         self.collection_owner_counts
             .insert((collection_id.to_vec(), lock_hash.to_vec()), count);
     }
@@ -105,7 +105,7 @@ impl MnftBatchState {
         lock_hash: &[u8],
         batch: &mut StoreBatch,
     ) {
-        batch.delete_object_collection_owner(collection_id, lock_hash);
+        batch.delete_mnft_collection_owner(collection_id, lock_hash);
         self.collection_owner_counts
             .insert((collection_id.to_vec(), lock_hash.to_vec()), 0);
     }
@@ -151,7 +151,7 @@ impl BatchWriter {
         collection_id: &[u8],
         old_owner: Option<&[u8]>,
         new_owner: Option<&[u8]>,
-        agg: &mut ObjectCollectionAggregate,
+        agg: &mut MnftCollectionAggregate,
         batch: &mut StoreBatch,
         state: &mut MnftBatchState,
     ) -> Result<()> {
@@ -235,7 +235,7 @@ impl BatchWriter {
 
     fn adjust_collection_tier_count(
         collection_id: &[u8],
-        agg: &mut ObjectCollectionAggregate,
+        agg: &mut MnftCollectionAggregate,
         tier: CompositionTier,
         delta: i64,
         context: &str,
@@ -282,7 +282,7 @@ impl BatchWriter {
         block_number: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let existing = self.store.get_object(&issuer.issuer_id)?;
+        let existing = self.store.get_mnft(&issuer.issuer_id)?;
         let entry = ObjectEntry {
             standard: ObjectStandard::MnftIssuer,
             collection_id: None,
@@ -305,7 +305,7 @@ impl BatchWriter {
                 info: issuer.info.clone(),
             },
         };
-        batch.put_object(&issuer.issuer_id, &entry);
+        batch.put_mnft(&issuer.issuer_id, &entry);
         Ok(())
     }
 
@@ -370,7 +370,7 @@ impl BatchWriter {
                 composition_tier: new_tier,
             },
         };
-        batch.put_object(&class.class_id, &entry);
+        batch.put_mnft(&class.class_id, &entry);
         state.put_token(&class.class_id, entry);
 
         // Create/update object collection aggregate
@@ -476,13 +476,13 @@ impl BatchWriter {
                 state: token.state,
             },
         };
-        batch.put_object(&token.token_id, &entry);
+        batch.put_mnft(&token.token_id, &entry);
         state.put_token(&token.token_id, entry);
         let should_upsert_collection_index = !existing
             .as_ref()
             .is_some_and(|e| e.is_live && e.collection_id.as_ref() == Some(&token.class_id));
         if should_upsert_collection_index {
-            batch.put_object_by_collection(&token.class_id, &token.token_id);
+            batch.put_mnft_by_collection(&token.class_id, &token.token_id);
         }
 
         // Resolve storage tier from the parent class
@@ -599,7 +599,7 @@ impl BatchWriter {
                     hex::encode(&token.token_id)
                 )
             })?;
-            batch.put_object_hourly_transfer(&token.class_id, hour_bucket, next);
+            batch.put_mnft_hourly_transfer(&token.class_id, hour_bucket, next);
             state.put_hourly_transfer(key, next);
         }
         batch.put_mnft_token_outpoint(tx_hash, output_index, &token.token_id);
@@ -647,7 +647,7 @@ impl BatchWriter {
             }
             entry.is_live = false;
             entry.owner_lock_hash = None;
-            batch.put_object(token_id, &entry);
+            batch.put_mnft(token_id, &entry);
             state.put_token(token_id, entry);
 
             // Decrement collection's live_count
@@ -727,11 +727,11 @@ impl BatchWriter {
 
     pub fn update_object_type_index_batch(
         &self,
-        changes: &HashMap<Vec<u8>, ObjectTypeIndex>,
+        changes: &HashMap<Vec<u8>, MnftTypeIndex>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         for (type_script_hash, index) in changes {
-            batch.put_object_type_index(type_script_hash, index);
+            batch.put_mnft_type_index(type_script_hash, index);
         }
         Ok(())
     }
@@ -747,7 +747,7 @@ impl BatchWriter {
             }
             let mut current = self
                 .store
-                .get_object_daily_delta(collection_id, *date)?
+                .get_mnft_daily_delta(collection_id, *date)?
                 .unwrap_or_default();
             current.owned_capacity_delta = current
                 .owned_capacity_delta
@@ -777,7 +777,7 @@ impl BatchWriter {
                 let key = keys::encode_nft_daily_key(collection_id, *date);
                 batch.delete_stats(&key);
             } else {
-                batch.put_object_daily_delta(collection_id, *date, &current);
+                batch.put_mnft_daily_delta(collection_id, *date, &current);
             }
         }
         Ok(())
@@ -834,7 +834,7 @@ mod tests {
         let mut index_changes = HashMap::new();
         index_changes.insert(
             type_script_hash.clone(),
-            ObjectTypeIndex {
+            MnftTypeIndex {
                 collection_id: collection_id.clone(),
             },
         );
@@ -851,14 +851,14 @@ mod tests {
 
         let idx = writer
             .store()
-            .get_object_type_index(&type_script_hash)
+            .get_mnft_type_index(&type_script_hash)
             .unwrap()
             .unwrap();
         assert_eq!(idx.collection_id, collection_id);
 
         let daily = writer
             .store()
-            .get_object_daily_delta(&[0x22; 24], date)
+            .get_mnft_daily_delta(&[0x22; 24], date)
             .unwrap()
             .unwrap();
         assert_eq!(daily.owned_capacity_delta, 100);
@@ -874,7 +874,7 @@ mod tests {
 
         let daily = writer
             .store()
-            .get_object_daily_delta(&collection_id, date)
+            .get_mnft_daily_delta(&collection_id, date)
             .unwrap();
         assert!(daily.is_none());
     }
@@ -919,7 +919,7 @@ mod tests {
 
         let collection_ids = writer
             .store()
-            .list_object_ids_by_collection(&class.class_id, None, 10)
+            .list_mnft_ids_by_collection(&class.class_id, None, 10)
             .unwrap();
         assert_eq!(collection_ids, vec![token.token_id]);
     }
@@ -951,7 +951,7 @@ mod tests {
 
         let agg = writer
             .store()
-            .get_object_collection_aggregate(&class.class_id)
+            .get_mnft_collection_aggregate(&class.class_id)
             .unwrap()
             .unwrap();
         assert_eq!(agg.total_count, 2);
@@ -1051,7 +1051,7 @@ mod tests {
 
         let agg = writer
             .store()
-            .get_object_collection_aggregate(&class.class_id)
+            .get_mnft_collection_aggregate(&class.class_id)
             .unwrap()
             .unwrap();
         assert_eq!(agg.total_count, 2);
@@ -1116,7 +1116,7 @@ mod tests {
 
         let agg = writer
             .store()
-            .get_object_collection_aggregate(&class.class_id)
+            .get_mnft_collection_aggregate(&class.class_id)
             .unwrap()
             .unwrap();
         assert_eq!(agg.total_count, 2);
@@ -1146,12 +1146,12 @@ mod tests {
 
         let mut agg = writer
             .store()
-            .get_object_collection_aggregate(&class.class_id)
+            .get_mnft_collection_aggregate(&class.class_id)
             .unwrap()
             .unwrap();
         agg.live_count = 0;
         let mut batch = StoreBatch::new(writer.store());
-        batch.put_object_collection_aggregate(&class.class_id, &agg);
+        batch.put_mnft_collection_aggregate(&class.class_id, &agg);
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());

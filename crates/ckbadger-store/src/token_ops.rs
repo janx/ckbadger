@@ -411,7 +411,7 @@ impl CkbadgerStore {
         let cutoff_hour = current_hour - 24;
 
         let prefix = [keys::STATS_PREFIX_NFT_HOURLY];
-        let iter = self.prefix_iterator_cf(self.cf_stats_object(), &prefix);
+        let iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix);
         let mut result: HashMap<Vec<u8>, i64> = HashMap::new();
 
         for item in iter {
@@ -481,7 +481,7 @@ impl CkbadgerStore {
             );
         }
         let prefix = keys::encode_nft_hourly_prefix(collection_id);
-        let iter = self.prefix_iterator_cf(self.cf_stats_object(), &prefix);
+        let iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix);
         let mut deleted = 0u64;
 
         for item in iter {
@@ -497,7 +497,7 @@ impl CkbadgerStore {
             if key.len() == 41 {
                 let hour = i64::from_be_bytes(key[33..41].try_into().unwrap());
                 if hour < cutoff_hour {
-                    self.delete_cf(self.cf_stats_object(), &key)?;
+                    self.delete_cf(self.cf_stats_mnft(), &key)?;
                     deleted += 1;
                 }
             }
@@ -1266,9 +1266,9 @@ mod tests {
         let current_hour = 510_000i64;
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_object_hourly_transfer(&collection_id, current_hour, 10);
-        batch.put_object_hourly_transfer(&collection_id, current_hour - 24, 20);
-        batch.put_object_hourly_transfer(&collection_id, current_hour - 100, 30);
+        batch.put_mnft_hourly_transfer(&collection_id, current_hour, 10);
+        batch.put_mnft_hourly_transfer(&collection_id, current_hour - 24, 20);
+        batch.put_mnft_hourly_transfer(&collection_id, current_hour - 100, 30);
         batch.commit().unwrap();
 
         let cutoff = current_hour - 48;
@@ -1312,8 +1312,8 @@ mod tests {
         let current_hour = 510_000i64;
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_object_hourly_transfer(&collection_id, current_hour, 10);
-        batch.put_object_hourly_transfer(&collection_id, current_hour - 100, 30);
+        batch.put_mnft_hourly_transfer(&collection_id, current_hour, 10);
+        batch.put_mnft_hourly_transfer(&collection_id, current_hour - 100, 30);
         batch.commit().unwrap();
 
         let cutoff = current_hour - 48;
@@ -1477,9 +1477,9 @@ mod tests {
         let current_hour = now_ms / 3_600_000;
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_object_hourly_transfer(&coll_a, current_hour, 10);
-        batch.put_object_hourly_transfer(&coll_a, current_hour - 5, 20);
-        batch.put_object_hourly_transfer(&coll_b, current_hour - 1, 15);
+        batch.put_mnft_hourly_transfer(&coll_a, current_hour, 10);
+        batch.put_mnft_hourly_transfer(&coll_a, current_hour - 5, 20);
+        batch.put_mnft_hourly_transfer(&coll_b, current_hour - 1, 15);
         batch.commit().unwrap();
 
         let result = store.scan_all_nft_24h_transfers(now_ms).unwrap();
@@ -1496,9 +1496,9 @@ mod tests {
         let current_hour = now_ms / 3_600_000;
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_object_hourly_transfer(&coll_a, current_hour, 10);
-        batch.put_object_hourly_transfer(&coll_a, current_hour - 24, 20); // at cutoff, excluded
-        batch.put_object_hourly_transfer(&coll_a, current_hour - 48, 30); // old, excluded
+        batch.put_mnft_hourly_transfer(&coll_a, current_hour, 10);
+        batch.put_mnft_hourly_transfer(&coll_a, current_hour - 24, 20); // at cutoff, excluded
+        batch.put_mnft_hourly_transfer(&coll_a, current_hour - 48, 30); // old, excluded
         batch.commit().unwrap();
 
         let result = store.scan_all_nft_24h_transfers(now_ms).unwrap();

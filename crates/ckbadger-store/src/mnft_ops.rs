@@ -18,7 +18,7 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_mnft_class_outpoint_key(tx_hash, output_index);
-        match self.get_cf(self.cf_stats_object(), &key)? {
+        match self.get_cf(self.cf_stats_mnft(), &key)? {
             Some(value) if value.is_empty() => anyhow::bail!(
                 "empty mnft class id for outpoint: tx_hash=0x{}, output_index={}",
                 bytes_to_hex(tx_hash),
@@ -35,7 +35,7 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_mnft_token_outpoint_key(tx_hash, output_index);
-        match self.get_cf(self.cf_stats_object(), &key)? {
+        match self.get_cf(self.cf_stats_mnft(), &key)? {
             Some(value) if value.is_empty() => anyhow::bail!(
                 "empty mnft token id for outpoint: tx_hash=0x{}, output_index={}",
                 bytes_to_hex(tx_hash),
@@ -50,7 +50,7 @@ impl CkbadgerStore {
         &self,
         outpoints: &[(&[u8], i16)],
     ) -> anyhow::Result<Vec<MnftOutpointLookup>> {
-        let cf = self.cf_stats_object();
+        let cf = self.cf_stats_mnft();
         let keys: Vec<[u8; keys::MNFT_TOKEN_OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
             .map(|(tx_hash, idx)| keys::encode_mnft_token_outpoint_key(tx_hash, *idx))
@@ -103,7 +103,7 @@ impl CkbadgerStore {
         }
 
         let prefix = [keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT];
-        let iter = self.prefix_iterator_cf(self.cf_stats_object(), &prefix);
+        let iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix);
         let mut resolved: MnftLiveOutpointMap = HashMap::with_capacity(targets.len());
 
         for item in iter {
@@ -164,7 +164,7 @@ impl CkbadgerStore {
         token_id: &[u8],
     ) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
         let prefix = [keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT];
-        let iter = self.prefix_iterator_cf(self.cf_stats_object(), &prefix);
+        let iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix);
         let mut outpoints = Vec::new();
 
         for item in iter {
@@ -245,7 +245,7 @@ mod tests {
         let (_dir, store) = test_store();
         let tx_a = [0xC1u8; 32];
         let key = keys::encode_mnft_token_outpoint_key(&tx_a, 4);
-        store.put_cf(store.cf_stats_object(), &key, b"").unwrap();
+        store.put_cf(store.cf_stats_mnft(), &key, b"").unwrap();
 
         let mnft_outpoints: Vec<(&[u8], i16)> = vec![(&tx_a, 4)];
         let err = store

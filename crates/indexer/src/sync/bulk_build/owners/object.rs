@@ -4,18 +4,16 @@ use rustc_hash::FxHashMap;
 
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::keys;
-use ckbadger_store::store::{
-    CF_IDENTITY_BY_COLLECTION, CF_OBJECT_BY_COLLECTION, CF_STATS_IDENTITY,
-};
+use ckbadger_store::store::{CF_IDENTITY_BY_COLLECTION, CF_MNFT_BY_COLLECTION, CF_STATS_IDENTITY};
 use ckbadger_store::types::{
     ClusterAggregate, ClusterDailyDelta, CompositionTier, IdentityCollectionAggregate,
-    IdentityEntry, IdentityExtra, IdentityStandard, ObjectCollectionAggregate, ObjectDailyDelta,
-    ObjectEntry, ObjectExtra, ObjectStandard, ObjectTypeIndex, SporeDailyDelta, SporeTypeIndex,
+    IdentityEntry, IdentityExtra, IdentityStandard, MnftCollectionAggregate, MnftDailyDelta,
+    MnftTypeIndex, ObjectEntry, ObjectExtra, ObjectStandard, SporeDailyDelta, SporeTypeIndex,
     DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
-    CkbadgerStore, CF_CLUSTER_AGG, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_OBJECT_COLLECTION_AGG,
-    CF_OBJECT_DATA, CF_SPORE_BY_CLUSTER, CF_SPORE_DATA, CF_STATS_OBJECT, CF_STATS_SPORE,
+    CkbadgerStore, CF_CLUSTER_AGG, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_MNFT_COLLECTION_AGG,
+    CF_MNFT_DATA, CF_SPORE_BY_CLUSTER, CF_SPORE_DATA, CF_STATS_MNFT, CF_STATS_SPORE,
 };
 use rocksdb::IteratorMode;
 
@@ -36,7 +34,7 @@ pub(crate) struct ObjectOwner {
     mnft_entries: BTreeMap<Vec<u8>, ObjectEntry>,
     identities: BTreeMap<Vec<u8>, IdentityEntry>,
     cluster_aggs: BTreeMap<Vec<u8>, ClusterAggregate>,
-    object_collection_aggs: BTreeMap<Vec<u8>, ObjectCollectionAggregate>,
+    object_collection_aggs: BTreeMap<Vec<u8>, MnftCollectionAggregate>,
     did_agg: Option<IdentityCollectionAggregate>,
     dotbit_agg: Option<IdentityCollectionAggregate>,
     identity_by_collection: BTreeSet<Vec<u8>>,
@@ -46,7 +44,7 @@ pub(crate) struct ObjectOwner {
     mnft_owner_counts: BTreeMap<(Vec<u8>, Vec<u8>), i64>,
     mnft_class_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
     mnft_token_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
-    mnft_type_indexes: BTreeMap<Vec<u8>, ObjectTypeIndex>,
+    mnft_type_indexes: BTreeMap<Vec<u8>, MnftTypeIndex>,
     mnft_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     did_owner_counts: BTreeMap<Vec<u8>, i64>,
     dotbit_owner_counts: BTreeMap<Vec<u8>, i64>,
@@ -70,36 +68,36 @@ impl BulkReducer for ObjectOwner {
             .collect();
         sealed_rows.extend(
             self.mnft_class_outpoints.iter().map(|(key, value)| {
-                MaterializedRow::new(CF_STATS_OBJECT, key.clone(), value.clone())
+                MaterializedRow::new(CF_STATS_MNFT, key.clone(), value.clone())
             }),
         );
         sealed_rows.extend(
             self.mnft_token_outpoints.iter().map(|(key, value)| {
-                MaterializedRow::new(CF_STATS_OBJECT, key.clone(), value.clone())
+                MaterializedRow::new(CF_STATS_MNFT, key.clone(), value.clone())
             }),
         );
         sealed_rows.extend(self.mnft_type_indexes.iter().map(|(type_hash, index)| {
             MaterializedRow::new(
-                CF_STATS_OBJECT,
+                CF_STATS_MNFT,
                 keys::encode_nft_type_index_key(type_hash).to_vec(),
                 bincode::serialize(index).expect("object type index serialization must succeed"),
             )
         }));
         sealed_rows.extend(self.mnft_hourly_transfers.iter().map(|(key, count)| {
-            MaterializedRow::new(CF_STATS_OBJECT, key.clone(), count.to_le_bytes().to_vec())
+            MaterializedRow::new(CF_STATS_MNFT, key.clone(), count.to_le_bytes().to_vec())
         }));
         sealed_rows.extend(
             self.dotbit_outpoints.iter().map(|(key, value)| {
-                MaterializedRow::new(CF_STATS_OBJECT, key.clone(), value.clone())
+                MaterializedRow::new(CF_STATS_MNFT, key.clone(), value.clone())
             }),
         );
         sealed_rows.extend(
             self.dotbit_outpoints_by_account
                 .iter()
-                .map(|key| MaterializedRow::new(CF_STATS_OBJECT, key.clone(), Vec::new())),
+                .map(|key| MaterializedRow::new(CF_STATS_MNFT, key.clone(), Vec::new())),
         );
         sealed_rows.extend(self.dotbit_hourly_transfers.iter().map(|(key, count)| {
-            MaterializedRow::new(CF_STATS_OBJECT, key.clone(), count.to_le_bytes().to_vec())
+            MaterializedRow::new(CF_STATS_MNFT, key.clone(), count.to_le_bytes().to_vec())
         }));
         sealed_rows.extend(
             self.object_daily_deltas
@@ -107,13 +105,13 @@ impl BulkReducer for ObjectOwner {
                 .filter(|(_, (cap, know))| *cap != 0 || *know != 0)
                 .map(|((collection_id, date), (cap_delta, know_delta))| {
                     MaterializedRow::new(
-                        CF_STATS_OBJECT,
+                        CF_STATS_MNFT,
                         keys::encode_nft_daily_key(collection_id, *date).to_vec(),
-                        bincode::serialize(&ObjectDailyDelta {
+                        bincode::serialize(&MnftDailyDelta {
                             owned_capacity_delta: *cap_delta,
                             owned_knowledge_delta: *know_delta,
                         })
-                        .expect("serialize ObjectDailyDelta"),
+                        .expect("serialize MnftDailyDelta"),
                     )
                 }),
         );
@@ -155,7 +153,7 @@ impl BulkReducer for ObjectOwner {
                 .filter(|(_, count)| **count > 0)
                 .map(|((class_id, lock_hash), count)| {
                     MaterializedRow::new(
-                        CF_STATS_OBJECT,
+                        CF_STATS_MNFT,
                         keys::encode_nft_collection_owner_key(class_id, lock_hash).to_vec(),
                         count.to_le_bytes().to_vec(),
                     )
@@ -265,14 +263,14 @@ impl BulkReducer for ObjectOwner {
         }
         for (id, entry) in &self.mnft_entries {
             final_rows.push(MaterializedRow::new(
-                CF_OBJECT_DATA,
+                CF_MNFT_DATA,
                 id.clone(),
                 bincode::serialize(entry)?,
             ));
         }
         for key in &self.mnft_by_collection {
             final_rows.push(MaterializedRow::new(
-                CF_OBJECT_BY_COLLECTION,
+                CF_MNFT_BY_COLLECTION,
                 key.clone(),
                 Vec::new(),
             ));
@@ -314,7 +312,7 @@ impl BulkReducer for ObjectOwner {
         }
         for (class_id, agg) in &self.object_collection_aggs {
             final_rows.push(MaterializedRow::new(
-                CF_OBJECT_COLLECTION_AGG,
+                CF_MNFT_COLLECTION_AGG,
                 class_id.clone(),
                 bincode::serialize(agg)?,
             ));
@@ -480,7 +478,7 @@ impl ObjectOwner {
                 Some(agg) => agg,
                 None => {
                     // Spore cluster activities share the same activity CF but their
-                    // counts live in ClusterAggregate, not ObjectCollectionAggregate.
+                    // counts live in ClusterAggregate, not MnftCollectionAggregate.
                     // Skip silently if the collection_id belongs to a cluster.
                     if self.cluster_aggs.contains_key(collection_id.as_slice()) {
                         continue;
@@ -1758,7 +1756,7 @@ impl ObjectOwner {
         class_id: &[u8],
         old_owner: Option<&[u8]>,
         new_owner: Option<&[u8]>,
-        agg: &mut ObjectCollectionAggregate,
+        agg: &mut MnftCollectionAggregate,
     ) -> Result<()> {
         if old_owner == new_owner {
             return Ok(());
@@ -1886,7 +1884,7 @@ impl ObjectOwner {
         } else {
             self.mnft_type_indexes.insert(
                 type_hash,
-                ObjectTypeIndex {
+                MnftTypeIndex {
                     collection_id: class_id.to_vec(),
                 },
             );
@@ -2039,7 +2037,7 @@ impl ObjectOwner {
     }
 
     fn adjust_object_collection_tier_count(
-        agg: &mut ObjectCollectionAggregate,
+        agg: &mut MnftCollectionAggregate,
         tier: CompositionTier,
         delta: i64,
         collection_id: &[u8],
@@ -2130,7 +2128,7 @@ pub struct ObjectStateSnapshot {
     pub objects: HashMap<Vec<u8>, ObjectEntry>,
     pub identities: HashMap<Vec<u8>, IdentityEntry>,
     pub cluster_aggs: HashMap<Vec<u8>, ClusterAggregate>,
-    pub object_collection_aggs: HashMap<Vec<u8>, ObjectCollectionAggregate>,
+    pub object_collection_aggs: HashMap<Vec<u8>, MnftCollectionAggregate>,
     pub did_agg: Option<IdentityCollectionAggregate>,
     pub identities_by_collection: HashMap<Vec<u8>, Vec<Vec<u8>>>,
     pub spores_by_cluster: HashMap<Vec<u8>, Vec<Vec<u8>>>,
@@ -2140,7 +2138,7 @@ pub struct ObjectStateSnapshot {
     pub object_owner_counts: HashMap<Vec<u8>, HashMap<Vec<u8>, i64>>,
     pub spore_outpoints: HashMap<Vec<u8>, Vec<(Vec<u8>, i16)>>,
     pub spore_type_indexes: HashMap<Vec<u8>, SporeTypeIndex>,
-    pub object_type_indexes: HashMap<Vec<u8>, ObjectTypeIndex>,
+    pub object_type_indexes: HashMap<Vec<u8>, MnftTypeIndex>,
     pub mnft_class_outpoints: HashMap<Vec<u8>, Vec<(Vec<u8>, i16)>>,
     pub mnft_token_outpoints: HashMap<Vec<u8>, Vec<(Vec<u8>, i16)>>,
     pub object_hourly_transfers: HashMap<Vec<u8>, HashMap<i64, i64>>,
@@ -2183,7 +2181,7 @@ pub(crate) fn materialize_object_state_for_test(
             .into_iter()
             .collect::<HashMap<_, _>>();
         let objects = domain_store
-            .list_objects(usize::MAX)?
+            .list_mnfts(usize::MAX)?
             .into_iter()
             .collect::<HashMap<_, _>>();
         let identities = domain_store
@@ -2195,7 +2193,7 @@ pub(crate) fn materialize_object_state_for_test(
             .into_iter()
             .collect::<HashMap<_, _>>();
         let object_collection_aggs = domain_store
-            .list_object_collection_aggregates()?
+            .list_mnft_collection_aggregates()?
             .into_iter()
             .collect::<HashMap<_, _>>();
         let did_agg =
@@ -2235,14 +2233,14 @@ pub(crate) fn materialize_object_state_for_test(
         let mut object_hourly_transfers = HashMap::new();
         for collection_id in object_collection_aggs.keys() {
             let mut members =
-                domain_store.list_object_ids_by_collection(collection_id, None, usize::MAX)?;
+                domain_store.list_mnft_ids_by_collection(collection_id, None, usize::MAX)?;
             members.sort();
             if !members.is_empty() {
                 objects_by_collection.insert(collection_id.clone(), members);
             }
 
             let owners = domain_store
-                .list_object_collection_owner_counts(collection_id)?
+                .list_mnft_collection_owner_counts(collection_id)?
                 .into_iter()
                 .collect::<HashMap<_, _>>();
             if !owners.is_empty() {
@@ -2250,7 +2248,7 @@ pub(crate) fn materialize_object_state_for_test(
             }
 
             let prefix = keys::encode_nft_hourly_prefix(collection_id);
-            let iter = domain_store.prefix_iterator_cf(domain_store.cf_stats_object(), &prefix);
+            let iter = domain_store.prefix_iterator_cf(domain_store.cf_stats_mnft(), &prefix);
             let mut hourly = HashMap::new();
             for item in iter {
                 let (key, value) = item.map_err(|e| {
@@ -2376,7 +2374,7 @@ pub(crate) fn materialize_object_state_for_test(
         }
 
         let mut stats_object_iter =
-            domain_store.iterator_cf(domain_store.cf_stats_object(), IteratorMode::Start);
+            domain_store.iterator_cf(domain_store.cf_stats_mnft(), IteratorMode::Start);
         for item in &mut stats_object_iter {
             let (key, value) = item?;
             match key.first().copied() {
@@ -2388,10 +2386,10 @@ pub(crate) fn materialize_object_state_for_test(
                         );
                     }
                     let type_hash = key[1..33].to_vec();
-                    let index: ObjectTypeIndex =
+                    let index: MnftTypeIndex =
                         bincode::deserialize(&value).map_err(|e| {
                             anyhow!(
-                                "failed to deserialize ObjectTypeIndex in object snapshot helper: type_hash=0x{}, error={}",
+                                "failed to deserialize MnftTypeIndex in object snapshot helper: type_hash=0x{}, error={}",
                                 hex::encode(&type_hash),
                                 e
                             )
@@ -3055,7 +3053,7 @@ mod tests {
             .expect("materialize object owner");
 
         let issuer_entry = domain_store
-            .get_object(&issuer_id)
+            .get_mnft(&issuer_id)
             .expect("get issuer")
             .expect("issuer entry");
         assert_eq!(issuer_entry.standard, ObjectStandard::MnftIssuer);
@@ -3063,7 +3061,7 @@ mod tests {
         assert_eq!(issuer_entry.owner_lock_hash, Some(vec![0xaa; 32]));
 
         let class_entry = domain_store
-            .get_object(&class_id)
+            .get_mnft(&class_id)
             .expect("get class")
             .expect("class entry");
         assert_eq!(class_entry.standard, ObjectStandard::MnftClass);
@@ -3071,7 +3069,7 @@ mod tests {
         assert_eq!(class_entry.collection_id, Some(issuer_id.to_vec()));
 
         let token_entry = domain_store
-            .get_object(&token_id)
+            .get_mnft(&token_id)
             .expect("get token")
             .expect("token entry");
         assert_eq!(token_entry.standard, ObjectStandard::MnftToken);
@@ -3081,7 +3079,7 @@ mod tests {
         assert_eq!(token_entry.created_at_tx, vec![0x21; 32]);
 
         let class_agg = domain_store
-            .get_object_collection_aggregate(&class_id)
+            .get_mnft_collection_aggregate(&class_id)
             .expect("class agg")
             .expect("class agg exists");
         assert_eq!(class_agg.standard, ObjectStandard::MnftClass);
@@ -3091,25 +3089,25 @@ mod tests {
         assert_eq!(class_agg.holders_count, 0);
 
         let class_members = domain_store
-            .list_object_ids_by_collection(&class_id, None, 10)
+            .list_mnft_ids_by_collection(&class_id, None, 10)
             .expect("class members");
         assert_eq!(class_members, vec![token_id.clone()]);
 
         assert_eq!(
             domain_store
-                .get_object_collection_owner_count(&class_id, &[0xaa; 32])
+                .get_mnft_collection_owner_count(&class_id, &[0xaa; 32])
                 .expect("owner count a"),
             0
         );
         assert_eq!(
             domain_store
-                .get_object_collection_owner_count(&class_id, &[0xbb; 32])
+                .get_mnft_collection_owner_count(&class_id, &[0xbb; 32])
                 .expect("owner count b"),
             0
         );
 
         let type_index = domain_store
-            .get_object_type_index(&[0x73; 32])
+            .get_mnft_type_index(&[0x73; 32])
             .expect("object type index")
             .expect("object type index exists");
         assert_eq!(type_index.collection_id, class_id);

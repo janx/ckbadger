@@ -387,7 +387,7 @@ for the full design rationale.
   `live_cells`, `cell_by_*`, `addr_balance`, `tokens`, `token_holders*`, `dao_*`,
   `script_info`, object/identity/fiber state
 - **Class C** (sealed aggregates): flushed once the time bucket/epoch closes — `stats_chain`,
-  `stats_dao`, `stats_hodl`, `stats_script`, `stats_token`, `stats_spore`, `stats_object`
+  `stats_dao`, `stats_hodl`, `stats_script`, `stats_token`, `stats_spore`, `stats_mnft`
 - **Class D** (bulk-disabled): `reorg_undo_log_by_block`, `pending_proposals`, `dob_decoded` — not
   written during bulk sync; `sync_meta` holds only build metadata and final completion state
 

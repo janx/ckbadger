@@ -137,10 +137,10 @@ fn test_object_entry_insert_retrieve() {
     };
 
     let mut batch = StoreBatch::new(&store);
-    batch.put_object(&object_id, &entry);
+    batch.put_mnft(&object_id, &entry);
     batch.commit().unwrap();
 
-    let results = store.list_objects(10).unwrap();
+    let results = store.list_mnfts(10).unwrap();
     assert_eq!(results.len(), 1);
 
     let (key, retrieved) = &results[0];
@@ -218,15 +218,15 @@ fn test_list_objects_with_limit() {
                 state: 0,
             },
         };
-        batch.put_object(&object_id, &entry);
+        batch.put_mnft(&object_id, &entry);
     }
     batch.commit().unwrap();
 
     // List with limit 2 — should return exactly 2
-    let results = store.list_objects(2).unwrap();
+    let results = store.list_mnfts(2).unwrap();
     assert_eq!(results.len(), 2);
 
     // List with limit 100 — should return all 5
-    let results = store.list_objects(100).unwrap();
+    let results = store.list_mnfts(100).unwrap();
     assert_eq!(results.len(), 5);
 }

@@ -13,7 +13,7 @@ use tracing::{debug, info, warn};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, ObjectTypeIndex,
+    DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, MnftTypeIndex,
     PositionedCellInfo, SporeTypeIndex, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
@@ -406,14 +406,14 @@ fn apply_object_collection_activity_count_deltas_with_pending(
     store: &CkbadgerStore,
     batch: &mut StoreBatch,
     deltas: HashMap<Vec<u8>, i64>,
-    pending_aggregates: &HashMap<Vec<u8>, ckbadger_store::types::ObjectCollectionAggregate>,
+    pending_aggregates: &HashMap<Vec<u8>, ckbadger_store::types::MnftCollectionAggregate>,
     pending_cluster_ids: &HashSet<Vec<u8>>,
 ) -> Result<()> {
     if deltas.is_empty() {
         return Ok(());
     }
 
-    let mut aggregates: HashMap<Vec<u8>, ckbadger_store::types::ObjectCollectionAggregate> =
+    let mut aggregates: HashMap<Vec<u8>, ckbadger_store::types::MnftCollectionAggregate> =
         HashMap::new();
 
     for (collection_id, delta) in deltas {
@@ -426,7 +426,7 @@ fn apply_object_collection_activity_count_deltas_with_pending(
             let loaded = if let Some(pending) = pending_aggregates.get(&collection_id) {
                 Some(pending.clone())
             } else {
-                store.get_object_collection_aggregate(&collection_id)?
+                store.get_mnft_collection_aggregate(&collection_id)?
             };
             match loaded {
                 Some(loaded) => aggregates.entry(collection_id.clone()).or_insert(loaded),
@@ -466,7 +466,7 @@ fn apply_object_collection_activity_count_deltas_with_pending(
     }
 
     for (collection_id, agg) in aggregates {
-        batch.put_object_collection_aggregate(&collection_id, &agg);
+        batch.put_mnft_collection_aggregate(&collection_id, &agg);
     }
     Ok(())
 }
@@ -1113,7 +1113,7 @@ impl Indexer {
         spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
         spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
         cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
-        object_type_index_changes: HashMap<Vec<u8>, ObjectTypeIndex>,
+        object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,
         object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
         chain_tip: u64,
     ) -> Result<BatchWriteMetrics> {
@@ -3488,9 +3488,9 @@ mod tests {
         let cluster_id = vec![0x22; 32];
 
         let mut seed = StoreBatch::new(&store);
-        seed.put_object_collection_aggregate(
+        seed.put_mnft_collection_aggregate(
             &object_collection_id,
-            &ckbadger_store::types::ObjectCollectionAggregate {
+            &ckbadger_store::types::MnftCollectionAggregate {
                 standard: ckbadger_store::types::ObjectStandard::MnftClass,
                 activities_count: 3,
                 ..Default::default()
@@ -3521,7 +3521,7 @@ mod tests {
         batch.commit().unwrap();
 
         let agg = store
-            .get_object_collection_aggregate(&object_collection_id)
+            .get_mnft_collection_aggregate(&object_collection_id)
             .unwrap()
             .unwrap();
         assert_eq!(agg.activities_count, 5);
@@ -3532,14 +3532,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let collection_id = vec![0x33; 32];
-        let pending_agg = ckbadger_store::types::ObjectCollectionAggregate {
+        let pending_agg = ckbadger_store::types::MnftCollectionAggregate {
             standard: ckbadger_store::types::ObjectStandard::MnftClass,
             name: Some("fresh collection".to_string()),
             ..Default::default()
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_object_collection_aggregate(&collection_id, &pending_agg);
+        batch.put_mnft_collection_aggregate(&collection_id, &pending_agg);
 
         let mut pending = HashMap::new();
         pending.insert(collection_id.clone(), pending_agg);
@@ -3558,7 +3558,7 @@ mod tests {
         batch.commit().unwrap();
 
         let agg = store
-            .get_object_collection_aggregate(&collection_id)
+            .get_mnft_collection_aggregate(&collection_id)
             .unwrap()
             .unwrap();
         assert_eq!(agg.activities_count, 1);
@@ -3599,7 +3599,7 @@ mod tests {
         let cluster = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
         assert_eq!(cluster.name.as_deref(), Some("fresh cluster"));
         assert!(store
-            .get_object_collection_aggregate(&cluster_id)
+            .get_mnft_collection_aggregate(&cluster_id)
             .unwrap()
             .is_none());
     }

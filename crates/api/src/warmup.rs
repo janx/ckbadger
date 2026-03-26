@@ -647,7 +647,7 @@ fn build_asset_caches_sync(
     }
 
     // NFT collections from pre-aggregated nft_collection_agg CF
-    let nft_aggs = state.store.list_object_collection_aggregates()?;
+    let nft_aggs = state.store.list_mnft_collection_aggregates()?;
     let nft_transfers_24h_map = state.store.scan_all_nft_24h_transfers(now_ms)?;
     nft_assets.reserve(nft_aggs.len());
 
@@ -693,7 +693,7 @@ fn build_asset_caches_sync(
             0
         };
         let onchain_ratio = format_ratio_4(onchain_count, agg.live_count);
-        let nft_daily = state.store.list_object_daily_deltas(collection_id_bytes)?;
+        let nft_daily = state.store.list_mnft_daily_deltas(collection_id_bytes)?;
         let (owned_capacity, owned_knowledge) = accumulate_owned_capacity(
             nft_daily
                 .into_iter()
@@ -761,7 +761,7 @@ fn build_asset_caches_sync(
             0
         };
         let onchain_ratio = format_ratio_4(onchain_count, agg.live_count);
-        let id_daily = state.store.list_object_daily_deltas(collection_id_bytes)?;
+        let id_daily = state.store.list_mnft_daily_deltas(collection_id_bytes)?;
         let (owned_capacity, owned_knowledge) = accumulate_owned_capacity(
             id_daily
                 .into_iter()

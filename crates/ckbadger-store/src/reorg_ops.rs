@@ -1686,7 +1686,7 @@ impl CkbadgerStore {
                 self.cf_stats_script(),
                 self.cf_stats_token(),
                 self.cf_stats_spore(),
-                self.cf_stats_object(),
+                self.cf_stats_mnft(),
             ];
             for cf in stats_cfs {
                 let iter = self.iterator_cf(cf, IteratorMode::Start);
@@ -2409,8 +2409,8 @@ impl CkbadgerStore {
         let secondary_cfs = [
             self.cf_spore_by_cluster(),
             self.cf_cluster_agg(),
-            self.cf_object_by_collection(),
-            self.cf_object_collection_agg(),
+            self.cf_mnft_by_collection(),
+            self.cf_mnft_collection_agg(),
             self.cf_identity_agg(),
         ];
         for cf in secondary_cfs {
@@ -2432,14 +2432,14 @@ impl CkbadgerStore {
         {
             let start = [keys::STATS_PREFIX_NFT_COLLECTION_OWNER];
             let end = [keys::STATS_PREFIX_NFT_COLLECTION_OWNER + 1];
-            batch.delete_range_cf(self.cf_stats_object(), start, end);
+            batch.delete_range_cf(self.cf_stats_mnft(), start, end);
         }
 
         info!("rollback: cleared secondary index/aggregate CFs via delete_range");
 
         let mut cluster_aggs: HashMap<Vec<u8>, ClusterAggregate> = HashMap::new();
         let mut cluster_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
-        let mut nft_collection_aggs: HashMap<Vec<u8>, ObjectCollectionAggregate> = HashMap::new();
+        let mut nft_collection_aggs: HashMap<Vec<u8>, MnftCollectionAggregate> = HashMap::new();
         let mut nft_collection_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
 
         let iter = self.iterator_cf(self.cf_spore_data(), IteratorMode::Start);
@@ -2572,7 +2572,7 @@ impl CkbadgerStore {
             );
         }
 
-        let iter = self.iterator_cf(self.cf_object_data(), IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_mnft_data(), IteratorMode::Start);
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
@@ -2590,7 +2590,7 @@ impl CkbadgerStore {
             })?;
 
             if entry.created_at_block > rollback_to {
-                batch.delete_cf(self.cf_object_data(), &key);
+                batch.delete_cf(self.cf_mnft_data(), &key);
                 nft_deleted += 1;
                 stage.tick(
                     spore_deleted
@@ -2606,7 +2606,7 @@ impl CkbadgerStore {
             match entry.standard {
                 ObjectStandard::MnftClass => {
                     let agg = nft_collection_aggs.entry(nft_id).or_insert_with(|| {
-                        ObjectCollectionAggregate {
+                        MnftCollectionAggregate {
                             standard: ObjectStandard::MnftClass,
                             ..Default::default()
                         }
@@ -2619,11 +2619,11 @@ impl CkbadgerStore {
                 ObjectStandard::MnftToken => {
                     if let Some(collection_id) = entry.collection_id.as_ref() {
                         let idx_key = keys::encode_nft_by_collection_key(collection_id, &nft_id);
-                        batch.put_cf(self.cf_object_by_collection(), idx_key, []);
+                        batch.put_cf(self.cf_mnft_by_collection(), idx_key, []);
                         secondary_keys_written += 1;
                         // Resolve storage tier from class entry before taking mutable borrow on agg
                         let token_tier = self
-                            .get_object(collection_id)
+                            .get_mnft(collection_id)
                             .ok()
                             .flatten()
                             .map(|class_entry| match &class_entry.extra {
@@ -2635,7 +2635,7 @@ impl CkbadgerStore {
                             .unwrap_or(CompositionTier::Unknown);
                         let agg = nft_collection_aggs
                             .entry(collection_id.clone())
-                            .or_insert_with(|| ObjectCollectionAggregate {
+                            .or_insert_with(|| MnftCollectionAggregate {
                                 standard: ObjectStandard::MnftClass,
                                 ..Default::default()
                             });
@@ -2733,7 +2733,7 @@ impl CkbadgerStore {
                 if entry.standard == IdentityStandard::DotBit && identity_id.len() >= 20 {
                     let by_id_prefix =
                         keys::encode_dotbit_outpoint_by_account_id_prefix(&identity_id);
-                    let by_id_iter = self.prefix_iterator_cf(self.cf_stats_object(), &by_id_prefix);
+                    let by_id_iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &by_id_prefix);
                     for by_id_item in by_id_iter {
                         let (by_id_key, _) = by_id_item.map_err(|e| {
                             anyhow::anyhow!(
@@ -2749,8 +2749,8 @@ impl CkbadgerStore {
                             keys::decode_dotbit_outpoint_by_account_id_key(&by_id_key);
                         let fwd_key =
                             keys::encode_dotbit_account_outpoint_key(&tx_hash, output_index);
-                        batch.delete_cf(self.cf_stats_object(), fwd_key);
-                        batch.delete_cf(self.cf_stats_object(), &by_id_key);
+                        batch.delete_cf(self.cf_stats_mnft(), fwd_key);
+                        batch.delete_cf(self.cf_stats_mnft(), &by_id_key);
                     }
                 }
                 secondary_keys_deleted += 1;
@@ -2852,7 +2852,7 @@ impl CkbadgerStore {
         for ((collection_id, lock_hash), count) in &nft_collection_owner_counts {
             let owner_key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
             batch.put_cf(
-                self.cf_stats_object(),
+                self.cf_stats_mnft(),
                 owner_key,
                 count.to_le_bytes().as_slice(),
             );
@@ -2880,7 +2880,7 @@ impl CkbadgerStore {
                     e
                 )
             })?;
-            batch.put_cf(self.cf_object_collection_agg(), collection_id, &encoded);
+            batch.put_cf(self.cf_mnft_collection_agg(), collection_id, &encoded);
             aggregate_rows_written += 1;
         }
 
@@ -3091,7 +3091,7 @@ mod tests {
     use crate::types::{
         AddressBalance, AssetAction, CachedBlockHeader, CellDistributionTrackerState,
         CompositionTier, DaoDepositCacheEntry, HodlTrackerState, LiveCellInfo,
-        ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectEntry, ObjectExtra,
+        MnftCollectionAggregate, ObjectCollectionActivityEntry, ObjectEntry, ObjectExtra,
         ObjectStandard, ParticipantDelta, ScriptInfo, SporeMediaProfile, SyncStatus, TokenInfo,
         TxActions, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
@@ -3541,7 +3541,7 @@ mod tests {
         let mut domain_batch = StoreBatch::new(&domain);
         domain_batch.put_block_header(0, &header0);
         domain_batch.put_block_header(1, &header1);
-        domain_batch.put_object(
+        domain_batch.put_mnft(
             &nft_id,
             &ObjectEntry {
                 standard: ObjectStandard::MnftToken,
@@ -3561,9 +3561,9 @@ mod tests {
                 },
             },
         );
-        domain_batch.put_object_collection_aggregate(
+        domain_batch.put_mnft_collection_aggregate(
             &class_id,
-            &ObjectCollectionAggregate {
+            &MnftCollectionAggregate {
                 name: Some("stale".to_string()),
                 standard: ObjectStandard::MnftClass,
                 total_count: 99,
@@ -3602,7 +3602,7 @@ mod tests {
         domain.rollback_to_block(0).unwrap();
 
         let rebuilt = domain
-            .get_object_collection_aggregate(&class_id)
+            .get_mnft_collection_aggregate(&class_id)
             .unwrap()
             .unwrap();
         assert_eq!(rebuilt.total_count, 1);
@@ -3642,7 +3642,7 @@ mod tests {
         let mut batch = StoreBatch::new(&domain);
         batch.put_block_header(0, &header0);
         batch.put_block_header(1, &header1);
-        batch.put_object(
+        batch.put_mnft(
             &nft_id,
             &ObjectEntry {
                 standard: ObjectStandard::MnftToken,
@@ -3693,7 +3693,7 @@ mod tests {
         domain.rollback_to_block(0).unwrap();
 
         let rebuilt = domain
-            .get_object_collection_aggregate(&class_id)
+            .get_mnft_collection_aggregate(&class_id)
             .unwrap()
             .unwrap();
         // Only the block-0 activity should remain.
@@ -5076,7 +5076,7 @@ mod tests {
                 },
             },
         );
-        batch.put_object(
+        batch.put_mnft(
             &nft_keep_id,
             &ObjectEntry {
                 standard: ObjectStandard::MnftToken,
@@ -5096,7 +5096,7 @@ mod tests {
                 },
             },
         );
-        batch.put_object(
+        batch.put_mnft(
             &nft_drop_id,
             &ObjectEntry {
                 standard: ObjectStandard::MnftToken,
@@ -5127,10 +5127,10 @@ mod tests {
                 ..Default::default()
             },
         );
-        batch.put_object_by_collection(&class_id, &[0xEE; 32]);
-        batch.put_object_collection_aggregate(
+        batch.put_mnft_by_collection(&class_id, &[0xEE; 32]);
+        batch.put_mnft_collection_aggregate(
             &class_id,
-            &ObjectCollectionAggregate {
+            &MnftCollectionAggregate {
                 name: Some("stale".to_string()),
                 standard: ObjectStandard::MnftClass,
                 total_count: 99,
@@ -5146,15 +5146,15 @@ mod tests {
 
         assert!(store.get_spore(&spore_keep_id).unwrap().is_some());
         assert!(store.get_spore(&spore_drop_id).unwrap().is_none());
-        assert!(store.get_object(&nft_keep_id).unwrap().is_some());
-        assert!(store.get_object(&nft_drop_id).unwrap().is_none());
+        assert!(store.get_mnft(&nft_keep_id).unwrap().is_some());
+        assert!(store.get_mnft(&nft_drop_id).unwrap().is_none());
 
         let spores_in_cluster = store.list_spores_by_cluster(&cluster_id, 10).unwrap();
         assert_eq!(spores_in_cluster.len(), 1);
         assert_eq!(spores_in_cluster[0].0, spore_keep_id);
 
         let class_tokens = store
-            .list_object_ids_by_collection(&class_id, None, 10)
+            .list_mnft_ids_by_collection(&class_id, None, 10)
             .unwrap();
         assert_eq!(class_tokens.len(), 1);
         assert_eq!(class_tokens[0], nft_keep_id);
@@ -5166,7 +5166,7 @@ mod tests {
         assert_eq!(cluster_agg.pure_ckb_count, 1);
 
         let class_agg = store
-            .get_object_collection_aggregate(&class_id)
+            .get_mnft_collection_aggregate(&class_id)
             .unwrap()
             .unwrap();
         assert_eq!(class_agg.total_count, 1);

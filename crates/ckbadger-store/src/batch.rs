@@ -769,31 +769,26 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_stats_spore(), key, count.to_le_bytes());
     }
 
-    pub fn put_object_hourly_transfer(
-        &mut self,
-        collection_id: &[u8],
-        hour_bucket: i64,
-        count: i64,
-    ) {
+    pub fn put_mnft_hourly_transfer(&mut self, collection_id: &[u8], hour_bucket: i64, count: i64) {
         let key = keys::encode_nft_hourly_key(collection_id, hour_bucket);
-        self.put_cf(self.store.cf_stats_object(), key, count.to_le_bytes());
+        self.put_cf(self.store.cf_stats_mnft(), key, count.to_le_bytes());
     }
 
-    pub fn put_object_daily_delta(
+    pub fn put_mnft_daily_delta(
         &mut self,
         collection_id: &[u8],
         date_yyyymmdd: u32,
-        delta: &ObjectDailyDelta,
+        delta: &MnftDailyDelta,
     ) {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
-        let value = bincode::serialize(delta).expect("serialize ObjectDailyDelta");
-        self.put_cf(self.store.cf_stats_object(), key, &value);
+        let value = bincode::serialize(delta).expect("serialize MnftDailyDelta");
+        self.put_cf(self.store.cf_stats_mnft(), key, &value);
     }
 
-    pub fn put_object_type_index(&mut self, type_script_hash: &[u8], index: &ObjectTypeIndex) {
+    pub fn put_mnft_type_index(&mut self, type_script_hash: &[u8], index: &MnftTypeIndex) {
         let key = keys::encode_nft_type_index_key(type_script_hash);
-        let value = bincode::serialize(index).expect("serialize ObjectTypeIndex");
-        self.put_cf(self.store.cf_stats_object(), key, &value);
+        let value = bincode::serialize(index).expect("serialize MnftTypeIndex");
+        self.put_cf(self.store.cf_stats_mnft(), key, &value);
     }
 
     pub fn put_cluster_daily_delta(
@@ -834,12 +829,12 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_mnft_class_outpoint(&mut self, tx_hash: &[u8], output_index: i16, class_id: &[u8]) {
         let key = keys::encode_mnft_class_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_object(), key, class_id);
+        self.put_cf(self.store.cf_stats_mnft(), key, class_id);
     }
 
     pub fn put_mnft_token_outpoint(&mut self, tx_hash: &[u8], output_index: i16, token_id: &[u8]) {
         let key = keys::encode_mnft_token_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_object(), key, token_id);
+        self.put_cf(self.store.cf_stats_mnft(), key, token_id);
     }
 
     pub fn put_dotbit_account_outpoint(
@@ -849,7 +844,7 @@ impl<'a> StoreBatch<'a> {
         account_id: &[u8],
     ) {
         let key = keys::encode_dotbit_account_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_object(), key, account_id);
+        self.put_cf(self.store.cf_stats_mnft(), key, account_id);
     }
 
     pub fn put_dotbit_outpoint_by_account_id(
@@ -859,7 +854,7 @@ impl<'a> StoreBatch<'a> {
         output_index: i16,
     ) {
         let key = keys::encode_dotbit_outpoint_by_account_id_key(account_id, tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_object(), key, []);
+        self.put_cf(self.store.cf_stats_mnft(), key, []);
     }
 
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {
@@ -916,14 +911,14 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_spore_by_cluster(), key);
     }
 
-    pub fn put_object(&mut self, id: &[u8], entry: &ObjectEntry) {
+    pub fn put_mnft(&mut self, id: &[u8], entry: &ObjectEntry) {
         let value = bincode::serialize(entry).expect("serialize ObjectEntry");
-        self.put_cf(self.store.cf_object_data(), id, &value);
+        self.put_cf(self.store.cf_mnft_data(), id, &value);
     }
 
-    pub fn put_object_by_collection(&mut self, collection_id: &[u8], object_id: &[u8]) {
+    pub fn put_mnft_by_collection(&mut self, collection_id: &[u8], object_id: &[u8]) {
         let key = keys::encode_nft_by_collection_key(collection_id, object_id);
-        self.put_cf(self.store.cf_object_by_collection(), key, []);
+        self.put_cf(self.store.cf_mnft_by_collection(), key, []);
     }
 
     // ---- DOB decoded cache ----
@@ -976,30 +971,30 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_stats_spore(), key);
     }
 
-    // ---- Object collection aggregates ----
+    // ---- mNFT collection aggregates ----
 
-    pub fn put_object_collection_aggregate(
+    pub fn put_mnft_collection_aggregate(
         &mut self,
         collection_id: &[u8],
-        agg: &ObjectCollectionAggregate,
+        agg: &MnftCollectionAggregate,
     ) {
-        let value = bincode::serialize(agg).expect("serialize ObjectCollectionAggregate");
-        self.put_cf(self.store.cf_object_collection_agg(), collection_id, &value);
+        let value = bincode::serialize(agg).expect("serialize MnftCollectionAggregate");
+        self.put_cf(self.store.cf_mnft_collection_agg(), collection_id, &value);
     }
 
-    pub fn put_object_collection_owner_count(
+    pub fn put_mnft_collection_owner_count(
         &mut self,
         collection_id: &[u8],
         lock_hash: &[u8],
         count: i64,
     ) {
         let key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
-        self.put_cf(self.store.cf_stats_object(), key, count.to_le_bytes());
+        self.put_cf(self.store.cf_stats_mnft(), key, count.to_le_bytes());
     }
 
-    pub fn delete_object_collection_owner(&mut self, collection_id: &[u8], lock_hash: &[u8]) {
+    pub fn delete_mnft_collection_owner(&mut self, collection_id: &[u8], lock_hash: &[u8]) {
         let key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
-        self.delete_cf(self.store.cf_stats_object(), key);
+        self.delete_cf(self.store.cf_stats_mnft(), key);
     }
 
     // ---- Identity collection aggregates ----

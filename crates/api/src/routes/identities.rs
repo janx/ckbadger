@@ -95,7 +95,7 @@ async fn get_identity_collection(
     let store2 = state.store.clone();
     let collection_id_bytes_c2 = collection_id_bytes.clone();
     let (owned_capacity, owned_knowledge) = tokio::task::spawn_blocking(move || {
-        let daily = store2.list_object_daily_deltas(&collection_id_bytes_c2)?;
+        let daily = store2.list_mnft_daily_deltas(&collection_id_bytes_c2)?;
         accumulate_owned_capacity(
             daily
                 .into_iter()
@@ -372,8 +372,8 @@ async fn list_identity_collection_items(
     .map_err(|e| ApiError::internal(e.to_string()))?
     .ok_or_else(|| ApiError::not_found("Identity collection not found"))?;
 
-    // Convert to ObjectCollectionAggregate for the shared inner function
-    let obj_agg = ckbadger_store::types::ObjectCollectionAggregate {
+    // Convert to MnftCollectionAggregate for the shared inner function
+    let obj_agg = ckbadger_store::types::MnftCollectionAggregate {
         name: agg.name,
         standard: match agg.standard {
             ckbadger_store::types::IdentityStandard::DotBit => {

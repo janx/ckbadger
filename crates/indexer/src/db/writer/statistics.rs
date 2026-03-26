@@ -762,7 +762,7 @@ impl BatchWriter {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let cutoff_hour = now_ms / 3_600_000 - 48; // Keep 48h, discard older
 
-        let collections = self.store.list_object_collection_aggregates()?;
+        let collections = self.store.list_mnft_collection_aggregates()?;
         let mut total_deleted = 0u64;
         for (collection_id, agg) in collections {
             if agg.standard == ObjectStandard::MnftClass {
@@ -1391,23 +1391,23 @@ mod tests {
         let spore_collection = vec![0x20; 32];
 
         let mut seed = StoreBatch::new(&store);
-        seed.put_object_collection_aggregate(
+        seed.put_mnft_collection_aggregate(
             &mnft_collection,
-            &ObjectCollectionAggregate {
+            &MnftCollectionAggregate {
                 standard: ObjectStandard::MnftClass,
                 ..Default::default()
             },
         );
-        seed.put_object_collection_aggregate(
+        seed.put_mnft_collection_aggregate(
             &spore_collection,
-            &ObjectCollectionAggregate {
+            &MnftCollectionAggregate {
                 standard: ObjectStandard::SporeCluster,
                 ..Default::default()
             },
         );
-        seed.put_object_hourly_transfer(&mnft_collection, old_hour, 9);
-        seed.put_object_hourly_transfer(&mnft_collection, current_hour, 3);
-        seed.put_object_hourly_transfer(&spore_collection, old_hour, 7);
+        seed.put_mnft_hourly_transfer(&mnft_collection, old_hour, 9);
+        seed.put_mnft_hourly_transfer(&mnft_collection, current_hour, 3);
+        seed.put_mnft_hourly_transfer(&spore_collection, old_hour, 7);
         seed.commit().unwrap();
 
         let deleted = writer.refresh_mnft_24h_transfers().unwrap();
