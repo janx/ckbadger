@@ -2599,6 +2599,13 @@ impl Indexer {
                         }
                     }
 
+                    // Skip cellbase from CF_TX_ACTIONS — matches bulk build behavior.
+                    // API filters them at read time (activity_ops.rs), and activity stats
+                    // accumulation uses the in-memory tx_actions_list above.
+                    if tx_actions.is_cellbase {
+                        continue;
+                    }
+
                     put_tx_actions(
                         &mut activity_batch,
                         &mut append_undo_seq_by_block,
