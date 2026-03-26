@@ -992,8 +992,6 @@ fn bulk_build_materializes_consumed_cells_and_live_cell_indexes_from_single_pass
 #[test]
 fn bulk_build_materializes_tx_actions_from_single_pass() {
     let block = same_block_create_then_consume_fixture();
-    let create_tx_hash =
-        hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
     let consume_tx_hash =
         hex::decode(&block.block.transactions[1].hash[2..]).expect("consume tx hash");
     let lock_hash = ScriptParser::compute_script_hash(&fixture_lock_script());
@@ -1001,18 +999,11 @@ fn bulk_build_materializes_tx_actions_from_single_pass() {
     let snapshot =
         materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
 
-    assert_eq!(snapshot.tx_actions_map.len(), 2);
+    // Only non-cellbase txs are materialized to CF_TX_ACTIONS.
+    // Cellbase (tx index 0) is excluded — the API filters them at read time.
+    assert_eq!(snapshot.tx_actions_map.len(), 1);
 
-    let create_key = keys::encode_tx_actions_key(14_000_321, 0, &create_tx_hash);
     let consume_key = keys::encode_tx_actions_key(14_000_321, 1, &consume_tx_hash);
-
-    let create_actions = snapshot
-        .tx_actions_map
-        .get(&create_key)
-        .expect("cellbase tx actions");
-    assert!(create_actions.is_cellbase);
-    assert_eq!(create_actions.participants.len(), 1);
-    assert_eq!(create_actions.participants[0].lock_hash, lock_hash);
 
     let consume_actions = snapshot
         .tx_actions_map

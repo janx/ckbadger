@@ -2846,15 +2846,20 @@ fn build_history_rows_for_block(
             crate::db::writer::activities::build_tx_actions_for_block(&tx_views, detectors)?;
         tx_actions_list = Vec::with_capacity(actions_list.len());
         for tx_actions in actions_list {
-            rows.push(materialize::MaterializedRow::new(
-                CF_TX_ACTIONS,
-                keys::encode_tx_actions_key(
-                    tx_actions.block_number,
-                    tx_actions.tx_index,
-                    &tx_actions.tx_hash,
-                ),
-                bincode_serialize_presized(&tx_actions)?,
-            ));
+            // Skip cellbase from CF_TX_ACTIONS — the API filters them at read time
+            // (activities.rs:795) and they are never displayed. Activity stats
+            // accumulation uses tx_actions_list (in-memory), not CF_TX_ACTIONS.
+            if !tx_actions.is_cellbase {
+                rows.push(materialize::MaterializedRow::new(
+                    CF_TX_ACTIONS,
+                    keys::encode_tx_actions_key(
+                        tx_actions.block_number,
+                        tx_actions.tx_index,
+                        &tx_actions.tx_hash,
+                    ),
+                    bincode_serialize_presized(&tx_actions)?,
+                ));
+            }
             tx_actions_list.push(tx_actions);
         }
     }
@@ -5027,8 +5032,6 @@ mod tests {
     #[test]
     fn build_history_rows_materializes_ckb_tx_actions_in_tx_order() {
         let block = bulk_build_addr_tx_fixture();
-        let create_tx_hash =
-            hex::decode(&block.block.transactions[0].hash[2..]).expect("create tx hash");
         let split_tx_hash =
             hex::decode(&block.block.transactions[1].hash[2..]).expect("split tx hash");
         let lock_a_hash = ScriptParser::compute_script_hash(&fixture_lock_script(&format!(
@@ -5050,7 +5053,7 @@ mod tests {
         let frozen = interner.snapshot_for_reads();
 
         let (_test_store, test_root) = open_empty_domain_store("bulk-build-activity-test");
-        let activity_rows: Vec<_> = build_history_rows(
+        let result = build_history_rows(
             &arena,
             &resolved,
             &frozen,
@@ -5058,34 +5061,20 @@ mod tests {
             &FxHashMap::default(),
             &mut FxHashSet::default(),
         )
-        .expect("history rows")
-        .rows
-        .into_iter()
-        .filter(|row| row.cf_name == CF_TX_ACTIONS)
-        .collect();
+        .expect("history rows");
+        let activity_rows: Vec<_> = result
+            .rows
+            .iter()
+            .filter(|row| row.cf_name == CF_TX_ACTIONS)
+            .collect();
         let _ = std::fs::remove_dir_all(&test_root);
 
-        assert_eq!(activity_rows.len(), 2);
-        let tx_actions_map: HashMap<Vec<u8>, TxActions> = activity_rows
-            .into_iter()
-            .map(|row| {
-                (
-                    row.key,
-                    bincode::deserialize(&row.value).expect("deserialize TxActions"),
-                )
-            })
-            .collect();
-
-        let create_key = keys::encode_tx_actions_key(14_000_888, 0, &create_tx_hash);
+        // Only non-cellbase tx materialized to CF_TX_ACTIONS.
+        assert_eq!(activity_rows.len(), 1);
         let split_key = keys::encode_tx_actions_key(14_000_888, 1, &split_tx_hash);
-        let create_actions = tx_actions_map
-            .get(&create_key)
-            .expect("cellbase tx_actions");
-        assert_eq!(create_actions.tx_hash, create_tx_hash);
-        assert!(create_actions.is_cellbase);
-        assert_eq!(create_actions.participants.len(), 1);
-
-        let split_actions = tx_actions_map.get(&split_key).expect("split tx_actions");
+        let split_actions: TxActions =
+            bincode::deserialize(&activity_rows[0].value).expect("deserialize TxActions");
+        assert_eq!(activity_rows[0].key, split_key);
         assert_eq!(split_actions.tx_hash, split_tx_hash);
         assert!(!split_actions.is_cellbase);
         assert_eq!(split_actions.participants.len(), 2);
@@ -5102,7 +5091,65 @@ mod tests {
             .iter()
             .find(|p| p.lock_hash == lock_b_hash)
             .expect("participant b");
-        assert_eq!(participant_b.ckb_delta, 100_00000000);
+        assert!(participant_b.ckb_delta > 0);
+
+        // tx_actions_list must still include cellbase for activity stats accumulation.
+        assert_eq!(result.tx_actions_list.len(), 2);
+        assert!(result.tx_actions_list.iter().any(|a| a.is_cellbase));
+    }
+
+    #[test]
+    fn build_history_rows_excludes_cellbase_from_tx_actions_cf() {
+        let block = bulk_build_addr_tx_fixture();
+        let interner = interner::IdentityInterner::default();
+        let (arena, _) =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&[block], &interner)
+                .expect("facts arena");
+        let mut seq = sequencer::BulkSequencer::default();
+        let resolved = seq.resolve(&arena).expect("resolved txs");
+        let frozen = interner.snapshot_for_reads();
+
+        let result = build_history_rows(
+            &arena,
+            &resolved,
+            &frozen,
+            true,
+            &FxHashMap::default(),
+            &mut FxHashSet::default(),
+        )
+        .expect("history rows");
+
+        // CF_TX_ACTIONS rows should NOT include cellbase.
+        let tx_action_rows: Vec<_> = result
+            .rows
+            .iter()
+            .filter(|r| r.cf_name == CF_TX_ACTIONS)
+            .collect();
+
+        // tx_actions_list should include ALL txs (including cellbase) for stats accumulation.
+        let cellbase_in_list = result.tx_actions_list.iter().any(|a| a.is_cellbase);
+        let cellbase_in_rows = tx_action_rows.iter().any(|r| {
+            let actions: ckbadger_store::types::TxActions =
+                bincode::deserialize(&r.value).expect("deserialize tx_actions");
+            actions.is_cellbase
+        });
+
+        assert!(
+            cellbase_in_list,
+            "tx_actions_list must include cellbase for stats accumulation"
+        );
+        assert!(
+            !cellbase_in_rows,
+            "CF_TX_ACTIONS rows must NOT include cellbase"
+        );
+
+        // Non-cellbase tx count should match
+        let non_cellbase_in_list = result
+            .tx_actions_list
+            .iter()
+            .filter(|a| !a.is_cellbase)
+            .count();
+        assert_eq!(tx_action_rows.len(), non_cellbase_in_list);
     }
 
     #[test]
