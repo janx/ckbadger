@@ -65,7 +65,7 @@ fn test_insert_cell_visible_in_live_cells() {
     let raw = store.get_cf(store.cf_cells(), &key).unwrap();
     assert!(raw.is_some(), "cell payload should be present in cells CF");
 
-    let decoded: LiveCellInfo = bincode::deserialize(&raw.unwrap()).unwrap();
+    let decoded: LiveCellInfo = postcard::from_bytes(&raw.unwrap()).unwrap();
     assert_eq!(decoded.capacity, 100_00000000);
     assert_eq!(decoded.lock_script_hash, vec![0xAAu8; 32]);
     assert_eq!(decoded.data_size, 256);

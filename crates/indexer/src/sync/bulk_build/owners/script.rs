@@ -336,7 +336,7 @@ impl BulkReducer for ScriptOwner {
                     MaterializedRow::new(
                         CF_STATS_SCRIPT,
                         keys::encode_script_daily_key(code_hash, *is_type, *date).to_vec(),
-                        bincode::serialize(delta)
+                        postcard::to_allocvec(delta)
                             .expect("script daily delta serialization must succeed"),
                     ),
                 )
@@ -386,7 +386,7 @@ impl BulkReducer for ScriptOwner {
                 Ok(MaterializedRow::new(
                     CF_SCRIPT_INFO,
                     code_hash.clone(),
-                    bincode::serialize(&info)?,
+                    postcard::to_allocvec(&info)?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -405,7 +405,7 @@ impl BulkReducer for ScriptOwner {
                 Ok(MaterializedRow::new(
                     CF_SCRIPT_REFERENCE_INFO,
                     keys::encode_script_reference_key(*hash_type, reference_hash).to_vec(),
-                    bincode::serialize(info)?,
+                    postcard::to_allocvec(info)?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -449,7 +449,7 @@ impl BulkReducer for ScriptOwner {
                 Ok(MaterializedRow::new(
                     ckbadger_store::CF_SCRIPT_VERSIONS,
                     version_hash,
-                    bincode::serialize(&info)?,
+                    postcard::to_allocvec(&info)?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -463,7 +463,7 @@ impl BulkReducer for ScriptOwner {
                     Ok(MaterializedRow::new(
                         ckbadger_store::CF_SCRIPT_FAMILIES,
                         family_id.into_bytes(),
-                        bincode::serialize(&info)?,
+                        postcard::to_allocvec(&info)?,
                     ))
                 },
             )

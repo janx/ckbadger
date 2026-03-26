@@ -165,7 +165,7 @@ impl BulkReducer for TokenOwner {
                 rows.push(MaterializedRow::new(
                     CF_STATS_TOKEN,
                     keys::encode_token_daily_key(type_hash, *date).to_vec(),
-                    bincode::serialize(delta)?,
+                    postcard::to_allocvec(delta)?,
                 ));
             }
         }
@@ -227,7 +227,7 @@ impl BulkReducer for TokenOwner {
             rows.push(MaterializedRow::new(
                 CF_TOKENS,
                 type_hash.clone(),
-                bincode::serialize(&info)?,
+                postcard::to_allocvec(&info)?,
             ));
 
             let mut holders: Vec<(&Vec<u8>, &i128)> = token

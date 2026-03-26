@@ -105,11 +105,11 @@ pub struct ItemDelta {
 
 **Item kind constants:**
 
-| Constant              | Value | Meaning                          |
-| --------------------- | ----- | -------------------------------- |
-| `ITEM_KIND_TOKEN`     | 0     | Fungible token (sUDT, xUDT)     |
-| `ITEM_KIND_OBJECT`    | 1     | Non-fungible object (Spore, mNFT)|
-| `ITEM_KIND_IDENTITY`  | 2     | Identity (.bit, did:ckb)         |
+| Constant             | Value | Meaning                           |
+| -------------------- | ----- | --------------------------------- |
+| `ITEM_KIND_TOKEN`    | 0     | Fungible token (sUDT, xUDT)       |
+| `ITEM_KIND_OBJECT`   | 1     | Non-fungible object (Spore, mNFT) |
+| `ITEM_KIND_IDENTITY` | 2     | Identity (.bit, did:ckb)          |
 
 **Key design decisions:**
 
@@ -361,11 +361,11 @@ All activity storage is in the **domain store** (mutable, supports delete on rol
 
 | CF                                  | Key Size  | Value                           | Purpose                       |
 | ----------------------------------- | --------- | ------------------------------- | ----------------------------- |
-| `CF_TX_ACTIONS`                     | 44 bytes  | `TxActions` (bincode)           | Per-tx actions record         |
+| `CF_TX_ACTIONS`                     | 44 bytes  | `TxActions` (postcard)          | Per-tx actions record         |
 | `CF_ADDR_TXS`                       | 76 bytes  | empty                           | Address → tx index            |
 | `CF_OBJECT_COLLECTION_ACTIVITIES`   | 108 bytes | `ObjectCollectionActivityEntry` | Spore/mNFT collection feeds   |
 | `CF_IDENTITY_COLLECTION_ACTIVITIES` | 108 bytes | `ObjectCollectionActivityEntry` | .bit/did:ckb collection feeds |
-| `CF_STATS_CHAIN` (prefixed)         | variable  | `DailyActivityStats` (bincode)  | Hourly/daily aggregation      |
+| `CF_STATS_CHAIN` (prefixed)         | variable  | `DailyActivityStats` (postcard) | Hourly/daily aggregation      |
 
 **Note**: `CF_TX_ACTIONS` uses the RocksDB string `"activities"` (same physical column family name as the old `CF_ACTIVITIES`). The Rust constant was renamed for clarity.
 
@@ -414,7 +414,7 @@ collection_id(32B padded) + block_num_desc(8B) + tx_idx_desc(4B) + block_hash(32
 
 ### Value Encoding
 
-All values use `bincode::serialize()` — compact binary, fast to serialize/deserialize.
+All values use `postcard::to_allocvec()` — compact varint-encoded binary, fast to serialize/deserialize.
 
 ### Query Operations
 
@@ -447,17 +447,17 @@ pub fn matches_activity_filter(
 
 Filter matching uses the **per-participant tags bitmask** for O(1) classification. The function finds the participant matching `lock_hash` and checks their tags:
 
-| Filter               | Condition                                                                |
-| -------------------- | ------------------------------------------------------------------------ |
+| Filter               | Condition                                                                     |
+| -------------------- | ----------------------------------------------------------------------------- |
 | `"ckb"`              | Tags has none of TOKEN, OBJECT, IDENTITY, DAO, PROTOCOL, TYPE_CALL, LOCK_CALL |
-| `"token"`            | `tags & TAG_TOKEN != 0`                                                  |
-| `"nft"` / `"object"` | `tags & TAG_OBJECT != 0`                                                |
-| `"identity"`         | `tags & TAG_IDENTITY != 0`                                              |
-| `"dao"`              | `tags & TAG_DAO != 0`                                                   |
-| `"type_call"`        | `tags & TAG_TYPE_CALL != 0`                                             |
-| `"lock_call"`        | `tags & TAG_LOCK_CALL != 0`                                             |
-| `"protocol:*"`       | `tags & TAG_PROTOCOL != 0` AND protocol_actions matches protocol name    |
-| `None` / `"all"`     | Always matches                                                           |
+| `"token"`            | `tags & TAG_TOKEN != 0`                                                       |
+| `"nft"` / `"object"` | `tags & TAG_OBJECT != 0`                                                      |
+| `"identity"`         | `tags & TAG_IDENTITY != 0`                                                    |
+| `"dao"`              | `tags & TAG_DAO != 0`                                                         |
+| `"type_call"`        | `tags & TAG_TYPE_CALL != 0`                                                   |
+| `"lock_call"`        | `tags & TAG_LOCK_CALL != 0`                                                   |
+| `"protocol:*"`       | `tags & TAG_PROTOCOL != 0` AND protocol_actions matches protocol name         |
+| `None` / `"all"`     | Always matches                                                                |
 
 ---
 
@@ -662,8 +662,8 @@ interface Activity {
   typeCalls: ActivityTypeCall[];
   lockCalls: ActivityLockCall[];
   protocolActions: ActivityProtocolAction[];
-  participants: string[];       // CKB addresses of other participants
-  tags: number;                 // Bitmask
+  participants: string[]; // CKB addresses of other participants
+  tags: number; // Bitmask
 }
 
 interface ParticipantInfo {
@@ -881,28 +881,28 @@ The `docs/script-name-overrides.json` `protocols` field retains code_hash groupi
 
 ### Core Data Structures
 
-| File                                 | Content                                                                                             |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| File                                 | Content                                                                                                                      |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | `crates/ckbadger-store/src/types.rs` | TxActions, ParticipantDelta, ItemDelta, TypeCallEntry, LockCallEntry, ProtocolAction, DailyActivityStats, tag/kind constants |
 
 ### Activity Builder
 
-| File                                                | Content                                                                                                           |
-| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| File                                                | Content                                                                                                                 |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `crates/indexer/src/db/writer/activities.rs`        | build_tx_actions_for_block(), CodeHashes, classify_input/output, emit_object/identity_changes, DAO protocol action emit |
-| `crates/indexer/src/db/writer/rgbpp_detector.rs`    | RgbppDetector: ProtocolDetector impl (leap_to_ckb, leap_to_btc, transfer, btc_time_locked, receive)               |
-| `crates/indexer/src/db/writer/fiber_detector.rs`    | FiberDetector: ProtocolDetector impl (open, close, force_close, settlement)                                       |
-| `crates/indexer/src/db/writer/stablepp_detector.rs` | StableppDetector: ProtocolDetector impl (open_vault, borrow, repay, close_vault, adjust, liquidation, redemption) |
-| `crates/indexer/src/build.rs`                       | Compile-time extraction of xudt_compatible code_hashes                                                            |
+| `crates/indexer/src/db/writer/rgbpp_detector.rs`    | RgbppDetector: ProtocolDetector impl (leap_to_ckb, leap_to_btc, transfer, btc_time_locked, receive)                     |
+| `crates/indexer/src/db/writer/fiber_detector.rs`    | FiberDetector: ProtocolDetector impl (open, close, force_close, settlement)                                             |
+| `crates/indexer/src/db/writer/stablepp_detector.rs` | StableppDetector: ProtocolDetector impl (open_vault, borrow, repay, close_vault, adjust, liquidation, redemption)       |
+| `crates/indexer/src/build.rs`                       | Compile-time extraction of xudt_compatible code_hashes                                                                  |
 
 ### Storage
 
-| File                                        | Content                                                          |
-| ------------------------------------------- | ---------------------------------------------------------------- |
+| File                                        | Content                                                               |
+| ------------------------------------------- | --------------------------------------------------------------------- |
 | `crates/ckbadger-store/src/activity_ops.rs` | list_activities(), get_latest_activities(), matches_activity_filter() |
-| `crates/ckbadger-store/src/keys.rs`         | Key encoding/decoding for CF_TX_ACTIONS (44B), CF_ADDR_TXS (76B) |
-| `crates/ckbadger-store/src/batch.rs`        | put_tx_actions(), put_addr_tx()                                  |
-| `crates/ckbadger-store/src/reorg_ops.rs`    | Activity rollback (stages 8b-8e)                                 |
+| `crates/ckbadger-store/src/keys.rs`         | Key encoding/decoding for CF_TX_ACTIONS (44B), CF_ADDR_TXS (76B)      |
+| `crates/ckbadger-store/src/batch.rs`        | put_tx_actions(), put_addr_tx()                                       |
+| `crates/ckbadger-store/src/reorg_ops.rs`    | Activity rollback (stages 8b-8e)                                      |
 
 ### API
 
@@ -912,25 +912,25 @@ The `docs/script-name-overrides.json` `protocols` field retains code_hash groupi
 
 ### Statistics
 
-| File                                         | Content                                                                        |
-| -------------------------------------------- | ------------------------------------------------------------------------------ |
-| `crates/indexer/src/db/writer/statistics.rs` | accumulate_tx_actions_stats(), update_daily/hourly_activity_stats()             |
+| File                                         | Content                                                             |
+| -------------------------------------------- | ------------------------------------------------------------------- |
+| `crates/indexer/src/db/writer/statistics.rs` | accumulate_tx_actions_stats(), update_daily/hourly_activity_stats() |
 
 ### Frontend
 
-| File                                         | Content                                                                                    |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| File                                         | Content                                                                                                                |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `frontend/lib/api.ts`                        | ItemDelta, ActivityTypeCall, ActivityLockCall, ActivityProtocolAction, Activity, GlobalActivity, ParticipantInfo types |
-| `frontend/lib/activity-classify.ts`          | classifyActivity(), ClassifiedActivity, ActivityType                                       |
-| `frontend/components/latest-activities.tsx`  | Homepage stream: StreamItem* components                                                    |
-| `frontend/components/activity-event-row.tsx` | Address page: ActivityEventGroup, TypeCallExpr, LockCallExpr, LockCallBadge                |
+| `frontend/lib/activity-classify.ts`          | classifyActivity(), ClassifiedActivity, ActivityType                                                                   |
+| `frontend/components/latest-activities.tsx`  | Homepage stream: StreamItem\* components                                                                               |
+| `frontend/components/activity-event-row.tsx` | Address page: ActivityEventGroup, TypeCallExpr, LockCallExpr, LockCallBadge                                            |
 
 ### Pipeline Integration
 
-| File                               | Content                                                  |
-| ---------------------------------- | -------------------------------------------------------- |
-| `crates/indexer/src/sync/batch.rs` | Bulk sync and live sync activity writing                 |
-| `crates/indexer/src/sync/undo.rs`  | put_tx_actions/put_addr_tx undo wrappers                 |
+| File                               | Content                                  |
+| ---------------------------------- | ---------------------------------------- |
+| `crates/indexer/src/sync/batch.rs` | Bulk sync and live sync activity writing |
+| `crates/indexer/src/sync/undo.rs`  | put_tx_actions/put_addr_tx undo wrappers |
 
 ### Documentation
 

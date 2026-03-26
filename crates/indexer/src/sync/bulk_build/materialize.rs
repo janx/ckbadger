@@ -286,12 +286,12 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
             MaterializedRow::new(
                 CF_CELLS,
                 outpoint_key.to_vec(),
-                bincode::serialize(&cell_info)?,
+                postcard::to_allocvec(&cell_info)?,
             ),
             MaterializedRow::new(
                 CF_BLOCK_HEADERS,
                 keys::encode_block_num(42).to_vec(),
-                bincode::serialize(&block_header)?,
+                postcard::to_allocvec(&block_header)?,
             ),
         ])?;
         materializer.materialize_final_snapshot(&[MaterializedRow::new(
@@ -488,12 +488,12 @@ mod tests {
             MaterializedRow::new(
                 CF_CELLS,
                 outpoint_key.to_vec(),
-                bincode::serialize(&cell_info).unwrap(),
+                postcard::to_allocvec(&cell_info).unwrap(),
             ),
             MaterializedRow::new(
                 CF_BLOCK_HEADERS,
                 keys::encode_block_num(100).to_vec(),
-                bincode::serialize(&block_header).unwrap(),
+                postcard::to_allocvec(&block_header).unwrap(),
             ),
         ];
 
@@ -632,12 +632,12 @@ mod tests {
                     MaterializedRow::new(
                         CF_CELLS,
                         outpoint_key.to_vec(),
-                        bincode::serialize(&cell_info).unwrap(),
+                        postcard::to_allocvec(&cell_info).unwrap(),
                     ),
                     MaterializedRow::new(
                         CF_BLOCK_HEADERS,
                         header_key.to_vec(),
-                        bincode::serialize(&block_header).unwrap(),
+                        postcard::to_allocvec(&block_header).unwrap(),
                     ),
                 ],
                 sealed_rows: vec![],
@@ -707,7 +707,7 @@ mod tests {
             udt_amount: None,
             data_hash: None,
         };
-        let cell_bytes = bincode::serialize(&cell_info).unwrap();
+        let cell_bytes = postcard::to_allocvec(&cell_info).unwrap();
 
         for i in 0u8..10 {
             let outpoint_key = keys::encode_outpoint(&[i; 32], 0);

@@ -365,7 +365,7 @@ fn refresh_address_cache_sync(state: &AppState) -> anyhow::Result<()> {
     for item in iter {
         let (key, value) =
             item.map_err(|e| anyhow::anyhow!("failed to iterate addr_balance in warmup: {}", e))?;
-        let balance: AddressBalance = bincode::deserialize(&value).map_err(|e| {
+        let balance: AddressBalance = postcard::from_bytes(&value).map_err(|e| {
             anyhow::anyhow!(
                 "failed to deserialize address balance in warmup: lock_hash=0x{}, error={}",
                 hex::encode(&key),

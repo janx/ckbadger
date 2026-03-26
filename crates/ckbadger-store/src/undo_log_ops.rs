@@ -108,7 +108,7 @@ impl CkbadgerStore {
             if block_num <= rollback_to {
                 continue;
             }
-            let entry: UndoLogEntry = bincode::deserialize(&value).map_err(|e| {
+            let entry: UndoLogEntry = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to decode undo log entry during rollback: key=0x{}, error={}",
                     bytes_to_hex(&key),

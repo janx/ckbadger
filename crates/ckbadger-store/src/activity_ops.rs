@@ -43,7 +43,7 @@ impl CkbadgerStore {
         let key = keys::encode_tx_actions_key(block_num, tx_idx, tx_hash);
         match self.get_cf(self.cf_tx_actions(), &key)? {
             Some(value) => {
-                let actions: TxActions = bincode::deserialize(&value)?;
+                let actions: TxActions = postcard::from_bytes(&value)?;
                 validate_tx_actions_identity(&actions, block_num, tx_idx, tx_hash)?;
                 Ok(Some(actions))
             }
@@ -84,7 +84,7 @@ impl CkbadgerStore {
             }
 
             let (block_num, tx_idx, tx_hash_from_key) = keys::decode_tx_actions_key(&key);
-            let actions: TxActions = bincode::deserialize(&value)?;
+            let actions: TxActions = postcard::from_bytes(&value)?;
             validate_tx_actions_identity(&actions, block_num, tx_idx, &tx_hash_from_key)?;
 
             results.push(actions);
@@ -205,7 +205,7 @@ impl CkbadgerStore {
                         );
                     }
                 };
-                let actions: TxActions = bincode::deserialize(&value).map_err(|e| {
+                let actions: TxActions = postcard::from_bytes(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize tx actions in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, tx_hash=0x{}, error={}",
                         bytes_to_hex(lock_hash),

@@ -17,7 +17,7 @@ use crate::bytes_to_hex;
 impl CkbadgerStore {
     pub fn get_spore(&self, id: &[u8]) -> anyhow::Result<Option<ObjectEntry>> {
         match self.get_cf(self.cf_spore_data(), id)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -34,7 +34,7 @@ impl CkbadgerStore {
         let mut result = Vec::with_capacity(ids.len());
         for (id, value_result) in ids.iter().zip(values) {
             let entry = match value_result {
-                Ok(Some(value)) => Some(bincode::deserialize::<ObjectEntry>(&value).map_err(
+                Ok(Some(value)) => Some(postcard::from_bytes::<ObjectEntry>(&value).map_err(
                     |e| {
                         anyhow::anyhow!(
                             "failed to deserialize spore entry in get_spores_batch: spore_id=0x{}, error={}",
@@ -58,7 +58,7 @@ impl CkbadgerStore {
     }
 
     pub fn put_spore_direct(&self, id: &[u8], entry: &ObjectEntry) -> anyhow::Result<()> {
-        let value = bincode::serialize(entry)?;
+        let value = postcard::to_allocvec(entry)?;
         self.put_cf(self.cf_spore_data(), id, &value)
     }
 
@@ -67,7 +67,7 @@ impl CkbadgerStore {
         spore_id: &[u8],
         entry: &crate::types::DobDecodedEntry,
     ) -> anyhow::Result<()> {
-        let value = bincode::serialize(entry)?;
+        let value = postcard::to_allocvec(entry)?;
         self.put_cf(self.cf_dob_decoded(), spore_id, &value)
     }
 
@@ -80,7 +80,7 @@ impl CkbadgerStore {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!("failed to iterate spore_data in list_spores: {}", e)
             })?;
-            let entry: ObjectEntry = bincode::deserialize(&value).map_err(|e| {
+            let entry: ObjectEntry = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize spore entry in list_spores: spore_id=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -156,7 +156,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<SporeTypeIndex>> {
         let key = keys::encode_spore_type_index_key(type_script_hash);
         match self.get_cf(self.cf_stats_spore(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -167,7 +167,7 @@ impl CkbadgerStore {
         index: &SporeTypeIndex,
     ) -> anyhow::Result<()> {
         let key = keys::encode_spore_type_index_key(type_script_hash);
-        let value = bincode::serialize(index)?;
+        let value = postcard::to_allocvec(index)?;
         self.put_cf(self.cf_stats_spore(), &key, &value)
     }
 
@@ -261,7 +261,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<ClusterDailyDelta>> {
         let key = keys::encode_cluster_daily_key(cluster_id, date_yyyymmdd);
         match self.get_cf(self.cf_stats_spore(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -273,7 +273,7 @@ impl CkbadgerStore {
         delta: &ClusterDailyDelta,
     ) -> anyhow::Result<()> {
         let key = keys::encode_cluster_daily_key(cluster_id, date_yyyymmdd);
-        let value = bincode::serialize(delta)?;
+        let value = postcard::to_allocvec(delta)?;
         self.put_cf(self.cf_stats_spore(), &key, &value)
     }
 
@@ -318,7 +318,7 @@ impl CkbadgerStore {
                     break;
                 }
             }
-            let delta: ClusterDailyDelta = bincode::deserialize(&value).map_err(|e| {
+            let delta: ClusterDailyDelta = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize cluster daily delta in list_cluster_daily_deltas_in_range: cluster_id=0x{}, date={}, error={}",
                     bytes_to_hex(cluster_id),
@@ -339,7 +339,7 @@ impl CkbadgerStore {
         spore_id: &[u8],
     ) -> anyhow::Result<Option<crate::types::DobDecodedEntry>> {
         match self.get_cf(self.cf_dob_decoded(), spore_id)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -376,7 +376,7 @@ impl CkbadgerStore {
                     continue;
                 }
             }
-            let entry: ObjectEntry = bincode::deserialize(&value)?;
+            let entry: ObjectEntry = postcard::from_bytes(&value)?;
             if let ObjectExtra::Spore { content_type, .. } = &entry.extra {
                 if content_type.to_ascii_lowercase().starts_with("dob/")
                     && self.get_cf(self.cf_dob_decoded(), &key)?.is_none()
@@ -402,7 +402,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<SporeDailyDelta>> {
         let key = keys::encode_spore_daily_key(spore_id, date_yyyymmdd);
         match self.get_cf(self.cf_stats_spore(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -414,7 +414,7 @@ impl CkbadgerStore {
         delta: &SporeDailyDelta,
     ) -> anyhow::Result<()> {
         let key = keys::encode_spore_daily_key(spore_id, date_yyyymmdd);
-        let value = bincode::serialize(delta)?;
+        let value = postcard::to_allocvec(delta)?;
         self.put_cf(self.cf_stats_spore(), &key, &value)
     }
 
@@ -459,7 +459,7 @@ impl CkbadgerStore {
                     break;
                 }
             }
-            let delta: SporeDailyDelta = bincode::deserialize(&value).map_err(|e| {
+            let delta: SporeDailyDelta = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize spore daily delta in list_spore_daily_deltas_in_range: spore_id=0x{}, date={}, error={}",
                     bytes_to_hex(spore_id),

@@ -269,7 +269,7 @@ impl BatchWriter {
             let (tx_hash, output_index) = outpoints[outpoint_idx];
             match res {
                 Ok(Some(value)) => {
-                    let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                    let info = postcard::from_bytes::<LiveCellInfo>(&value).map_err(|e| {
                         anyhow!(
                             "failed to decode live cell payload: outpoint=0x{}:{}, error={}",
                             hex::encode(tx_hash),

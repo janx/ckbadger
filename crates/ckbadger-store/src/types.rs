@@ -1,6 +1,6 @@
 //! Value types for all column families.
 //!
-//! All types use `bincode` serialization for compact binary storage.
+//! All types use `postcard` serialization for compact binary storage.
 
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -119,8 +119,8 @@ impl ConsumedCellInfo {
 }
 
 /// Decode consumed cell metadata from the canonical schema.
-pub fn decode_consumed_cell_meta(value: &[u8]) -> Result<ConsumedCellMeta, bincode::Error> {
-    bincode::deserialize::<ConsumedCellMeta>(value)
+pub fn decode_consumed_cell_meta(value: &[u8]) -> Result<ConsumedCellMeta, postcard::Error> {
+    postcard::from_bytes::<ConsumedCellMeta>(value)
 }
 
 /// Decode created_at_block from the live cell marker value (8 bytes LE).
@@ -450,7 +450,7 @@ impl ObjectStandard {
     }
 }
 
-/// Standard-specific data for Object entries, stored inline via bincode.
+/// Standard-specific data for Object entries, stored inline via postcard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ObjectExtra {
     /// Spore item: MIME content type and content byte length.
@@ -505,7 +505,7 @@ pub struct ObjectEntry {
     pub is_live: bool,
     pub created_at_block: i64,
     pub created_at_tx: Vec<u8>,
-    /// Standard-specific payload (bincode-serialized, no JSON).
+    /// Standard-specific payload (postcard-serialized, no JSON).
     pub extra: ObjectExtra,
 }
 
@@ -554,7 +554,7 @@ pub const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection_________
 /// Sentinel collection key for clusterless Spore NFTs (32 bytes).
 pub const SOLE_SPORES_SENTINEL_COLLECTION: [u8; 32] = *b"sole_spores_collection__________";
 
-/// Standard-specific data for Identity entries, stored inline via bincode.
+/// Standard-specific data for Identity entries, stored inline via postcard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IdentityExtra {
     /// .bit account metadata.
@@ -584,7 +584,7 @@ pub struct IdentityEntry {
     pub is_live: bool,
     pub created_at_block: i64,
     pub created_at_tx: Vec<u8>,
-    /// Standard-specific payload (bincode-serialized, no JSON).
+    /// Standard-specific payload (postcard-serialized, no JSON).
     pub extra: IdentityExtra,
 }
 
@@ -1211,9 +1211,9 @@ pub struct LockCallEntry {
 
 /// Stable storage form for protocol metadata.
 ///
-/// `serde_json::Value` can be serialized by bincode but cannot be
-/// deserialized back because its `Deserialize` impl requires
-/// `deserialize_any`, which bincode does not support. Store canonical JSON
+/// `serde_json::Value` cannot be deserialized back by compact binary
+/// serializers because its `Deserialize` impl requires `deserialize_any`,
+/// which neither postcard nor bincode supports. Store canonical JSON
 /// text instead, then parse it at the API/indexer boundary when needed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(transparent)]
@@ -1428,7 +1428,7 @@ mod tests {
             consumed_at_block: consumed.consumed_at_block,
             consumed_by_tx: consumed.consumed_by_tx.clone(),
         };
-        let bytes = bincode::serialize(&meta).unwrap();
+        let bytes = postcard::to_allocvec(&meta).unwrap();
         let decoded = decode_consumed_cell_meta(&bytes).unwrap();
         assert_eq!(decoded.created_at_block, 123);
         assert_eq!(decoded.consumed_at_block, 999);
@@ -1446,14 +1446,14 @@ mod tests {
     fn test_decode_consumed_cell_meta_rejects_legacy_info_schema() {
         let info = sample_live_cell_info();
         let legacy = ConsumedCellInfo::from_live_cell_info_with_consumer(&info, 888, None, 123);
-        let bytes = bincode::serialize(&legacy).unwrap();
+        let bytes = postcard::to_allocvec(&legacy).unwrap();
         assert!(decode_consumed_cell_meta(&bytes).is_err());
     }
 
     #[test]
     fn test_decode_consumed_cell_meta_rejects_live_cell_schema() {
         let info = sample_live_cell_info();
-        let bytes = bincode::serialize(&info).unwrap();
+        let bytes = postcard::to_allocvec(&info).unwrap();
         assert!(decode_consumed_cell_meta(&bytes).is_err());
     }
 
@@ -1465,8 +1465,8 @@ mod tests {
             key: vec![0xAA; 12],
             previous_value: Some(vec![0xBB; 8]),
         };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: UndoLogEntry = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&entry).unwrap();
+        let decoded: UndoLogEntry = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded, entry);
     }
 
@@ -1478,8 +1478,8 @@ mod tests {
             key: b"new_key".to_vec(),
             previous_value: None,
         };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: UndoLogEntry = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&entry).unwrap();
+        let decoded: UndoLogEntry = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded, entry);
     }
 
@@ -1499,8 +1499,8 @@ mod tests {
                 },
             ],
         });
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: UndoLogEntry = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&entry).unwrap();
+        let decoded: UndoLogEntry = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded, entry);
     }
 
@@ -1512,8 +1512,8 @@ mod tests {
             owned_capacity_delta: 123_000_000_000,
             owned_knowledge_delta: -45_000_000_000,
         };
-        let bytes = bincode::serialize(&delta).unwrap();
-        let decoded: ScriptDailyDelta = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&delta).unwrap();
+        let decoded: ScriptDailyDelta = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.owned_capacity_delta, 123_000_000_000);
         assert_eq!(decoded.owned_knowledge_delta, -45_000_000_000);
     }
@@ -1533,8 +1533,8 @@ mod tests {
             owned_capacity_delta: 890_000_000_000,
             owned_knowledge_delta: -120_000_000_000,
         };
-        let bytes = bincode::serialize(&delta).unwrap();
-        let decoded: TokenDailyDelta = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&delta).unwrap();
+        let decoded: TokenDailyDelta = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.owned_capacity_delta, 890_000_000_000);
         assert_eq!(decoded.owned_knowledge_delta, -120_000_000_000);
     }
@@ -1554,8 +1554,8 @@ mod tests {
             owned_capacity_delta: 321_000_000_000,
             owned_knowledge_delta: -90_000_000_000,
         };
-        let bytes = bincode::serialize(&delta).unwrap();
-        let decoded: ClusterDailyDelta = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&delta).unwrap();
+        let decoded: ClusterDailyDelta = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.owned_capacity_delta, 321_000_000_000);
         assert_eq!(decoded.owned_knowledge_delta, -90_000_000_000);
     }
@@ -1575,8 +1575,8 @@ mod tests {
             owned_capacity_delta: 111_000_000_000,
             owned_knowledge_delta: -22_000_000_000,
         };
-        let bytes = bincode::serialize(&delta).unwrap();
-        let decoded: SporeDailyDelta = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&delta).unwrap();
+        let decoded: SporeDailyDelta = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.owned_capacity_delta, 111_000_000_000);
         assert_eq!(decoded.owned_knowledge_delta, -22_000_000_000);
     }
@@ -1596,8 +1596,8 @@ mod tests {
             spore_id: vec![0xAB; 32],
             cluster_id: Some(vec![0xCD; 32]),
         };
-        let bytes = bincode::serialize(&index).unwrap();
-        let decoded: SporeTypeIndex = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&index).unwrap();
+        let decoded: SporeTypeIndex = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.spore_id, vec![0xAB; 32]);
         assert_eq!(decoded.cluster_id, Some(vec![0xCD; 32]));
     }
@@ -1617,8 +1617,8 @@ mod tests {
             owned_capacity_delta: 222_000_000_000,
             owned_knowledge_delta: -33_000_000_000,
         };
-        let bytes = bincode::serialize(&delta).unwrap();
-        let decoded: MnftDailyDelta = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&delta).unwrap();
+        let decoded: MnftDailyDelta = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.owned_capacity_delta, 222_000_000_000);
         assert_eq!(decoded.owned_knowledge_delta, -33_000_000_000);
     }
@@ -1637,8 +1637,8 @@ mod tests {
         let index = MnftTypeIndex {
             collection_id: vec![0xEE; 24],
         };
-        let bytes = bincode::serialize(&index).unwrap();
-        let decoded: MnftTypeIndex = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&index).unwrap();
+        let decoded: MnftTypeIndex = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.collection_id, vec![0xEE; 24]);
     }
 
@@ -1657,8 +1657,8 @@ mod tests {
             kind: ITEM_KIND_TOKEN,
             delta: -999_000_000,
         };
-        let bytes = bincode::serialize(&item).unwrap();
-        let decoded: ItemDelta = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&item).unwrap();
+        let decoded: ItemDelta = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.item_id, vec![0xAA; 32]);
         assert_eq!(decoded.kind, ITEM_KIND_TOKEN);
         assert_eq!(decoded.delta, -999_000_000);
@@ -1684,8 +1684,8 @@ mod tests {
             ],
             tags: TAG_TOKEN | TAG_OBJECT,
         };
-        let bytes = bincode::serialize(&participant).unwrap();
-        let decoded: ParticipantDelta = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&participant).unwrap();
+        let decoded: ParticipantDelta = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.lock_hash, vec![0xBB; 32]);
         assert_eq!(decoded.ckb_delta, -500_00000000);
         assert_eq!(decoded.used_delta, 610_000_000_000);
@@ -1731,8 +1731,8 @@ mod tests {
                 tags: TAG_TOKEN | TAG_PROTOCOL,
             }],
         };
-        let bytes = bincode::serialize(&actions).unwrap();
-        let decoded: TxActions = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&actions).unwrap();
+        let decoded: TxActions = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.tx_hash, vec![0x01; 32]);
         assert_eq!(decoded.block_hash, vec![0xF1; 32]);
         assert_eq!(decoded.block_number, 12345);
@@ -1761,8 +1761,8 @@ mod tests {
             lock_calls: vec![],
             participants: vec![],
         };
-        let bytes = bincode::serialize(&actions).unwrap();
-        let decoded: TxActions = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&actions).unwrap();
+        let decoded: TxActions = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.block_number, 0);
         assert!(decoded.protocol_actions.is_empty());
         assert!(decoded.type_calls.is_empty());
@@ -1790,8 +1790,8 @@ mod tests {
                 tags: TAG_CELLBASE,
             }],
         };
-        let bytes = bincode::serialize(&actions).unwrap();
-        let decoded: TxActions = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&actions).unwrap();
+        let decoded: TxActions = postcard::from_bytes(&bytes).unwrap();
         assert!(decoded.is_cellbase);
         assert_eq!(decoded.participants.len(), 1);
         assert_eq!(decoded.participants[0].tags, TAG_CELLBASE);
@@ -1848,8 +1848,8 @@ mod tests {
                 },
             ],
         };
-        let bytes = bincode::serialize(&actions).unwrap();
-        let decoded: TxActions = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&actions).unwrap();
+        let decoded: TxActions = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.participants.len(), 2);
         assert_eq!(decoded.participants[0].ckb_delta, -200_00000000);
         assert_eq!(decoded.participants[1].ckb_delta, 200_00000000);
@@ -1888,8 +1888,8 @@ mod tests {
             }],
         };
 
-        let bytes = bincode::serialize(&actions).unwrap();
-        let decoded: TxActions = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&actions).unwrap();
+        let decoded: TxActions = postcard::from_bytes(&bytes).unwrap();
         let metadata = decoded.protocol_actions[0].metadata_value().unwrap();
         assert_eq!(metadata["hasIntent"], true);
         assert_eq!(metadata["vaultCount"], 2);
@@ -1991,8 +1991,8 @@ mod tests {
                 media_profile: SporeMediaProfile::default(),
             },
         };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: ObjectEntry = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&entry).unwrap();
+        let decoded: ObjectEntry = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.standard, ObjectStandard::Spore);
         match decoded.extra {
             ObjectExtra::Spore {
@@ -2022,8 +2022,8 @@ mod tests {
             created_at_tx: vec![0xEE; 32],
             extra: ObjectExtra::SporeCluster,
         };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: ObjectEntry = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&entry).unwrap();
+        let decoded: ObjectEntry = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.standard, ObjectStandard::SporeCluster);
         assert_eq!(decoded.name.as_deref(), Some("My Cluster"));
         assert_eq!(decoded.description.as_deref(), Some("A test cluster"));
@@ -2048,8 +2048,8 @@ mod tests {
                 info: Some(vec![0x01, 0x02]),
             },
         };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: ObjectEntry = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&entry).unwrap();
+        let decoded: ObjectEntry = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.standard, ObjectStandard::MnftIssuer);
         assert_eq!(decoded.name.as_deref(), Some("Test Issuer"));
         match decoded.extra {
@@ -2087,8 +2087,8 @@ mod tests {
                 composition_tier: CompositionTier::PureCkb,
             },
         };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: ObjectEntry = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&entry).unwrap();
+        let decoded: ObjectEntry = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.standard, ObjectStandard::MnftClass);
         match decoded.extra {
             ObjectExtra::MnftClass {
@@ -2124,8 +2124,8 @@ mod tests {
                 state: 0x02,
             },
         };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: ObjectEntry = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&entry).unwrap();
+        let decoded: ObjectEntry = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.standard, ObjectStandard::MnftToken);
         match decoded.extra {
             ObjectExtra::MnftToken {
@@ -2160,8 +2160,8 @@ mod tests {
                 status: Some(1),
             },
         };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: IdentityEntry = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&entry).unwrap();
+        let decoded: IdentityEntry = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.standard, IdentityStandard::DotBit);
         assert_eq!(decoded.name.as_deref(), Some("test.bit"));
         match decoded.extra {
@@ -2189,8 +2189,8 @@ mod tests {
             created_at_tx: vec![0x11; 32],
             extra: IdentityExtra::DidCkb,
         };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: IdentityEntry = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&entry).unwrap();
+        let decoded: IdentityEntry = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.standard, IdentityStandard::DidCkb);
         assert_eq!(decoded.name.as_deref(), Some("did:ckb:test"));
         assert!(matches!(decoded.extra, IdentityExtra::DidCkb));
@@ -2211,8 +2211,8 @@ mod tests {
             last_activity_block: 500,
             last_activity_tx: vec![0x02; 32],
         };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: AddressBalance = bincode::deserialize(&bytes).unwrap();
+        let bytes = postcard::to_allocvec(&entry).unwrap();
+        let decoded: AddressBalance = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.balance, 100_000_000_000);
         assert_eq!(decoded.used_capacity, 610_000_000_000);
         assert_eq!(decoded.live_cells_count, 3);

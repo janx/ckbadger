@@ -8,7 +8,7 @@ use crate::bytes_to_hex;
 impl CkbadgerStore {
     pub fn get_addr_balance(&self, lock_hash: &[u8]) -> anyhow::Result<Option<AddressBalance>> {
         match self.get_cf(self.cf_addr_balance(), lock_hash)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -18,7 +18,7 @@ impl CkbadgerStore {
         lock_hash: &[u8],
         balance: &AddressBalance,
     ) -> anyhow::Result<()> {
-        let value = bincode::serialize(balance)?;
+        let value = postcard::to_allocvec(balance)?;
         self.put_cf(self.cf_addr_balance(), lock_hash, &value)
     }
 

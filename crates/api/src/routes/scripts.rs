@@ -2115,7 +2115,7 @@ mod tests {
             data_hash: None,
         };
         let marker = ckbadger_store::types::encode_live_cell_marker(block_num);
-        let payload = bincode::serialize(&cell_info).unwrap();
+        let payload = postcard::to_allocvec(&cell_info).unwrap();
         store
             .put_cf(store.cf_live_cells(), &outpoint_key, &marker)
             .unwrap();
@@ -2178,7 +2178,7 @@ mod tests {
             udt_amount: None,
             data_hash: None,
         };
-        let payload = bincode::serialize(&cell_info).unwrap();
+        let payload = postcard::to_allocvec(&cell_info).unwrap();
         store
             .put_cf(store.cf_cells(), &outpoint_key, &payload)
             .unwrap();

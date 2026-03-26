@@ -22,4 +22,4 @@ tokio = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-bincode = { workspace = true }
+postcard = { workspace = true }

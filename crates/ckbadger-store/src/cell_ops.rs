@@ -17,7 +17,7 @@ impl CkbadgerStore {
     pub fn get_lock_script(&self, lock_hash: &[u8]) -> anyhow::Result<Option<LockScriptEntry>> {
         match self.get_cf(self.cf_lock_scripts(), lock_hash)? {
             Some(value) => {
-                let entry = bincode::deserialize::<LockScriptEntry>(&value).map_err(|e| {
+                let entry = postcard::from_bytes::<LockScriptEntry>(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize LockScriptEntry: lock_hash=0x{}, error={}",
                         bytes_to_hex(lock_hash),
@@ -36,7 +36,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<LiveCellInfo>> {
         match self.get_cf(self.cf_cells(), outpoint_key)? {
             Some(value) => {
-                let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                let info = postcard::from_bytes::<LiveCellInfo>(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize canonical cell payload: outpoint=0x{}, error={}",
                         bytes_to_hex(outpoint_key),
@@ -138,7 +138,7 @@ impl CkbadgerStore {
             let outpoint_key = &keys[outpoint_idx];
             match value_result {
                 Ok(Some(value)) => {
-                    let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                    let info = postcard::from_bytes::<LiveCellInfo>(&value).map_err(|e| {
                         anyhow::anyhow!(
                             "failed to deserialize canonical cell payload in get_cells_batch: outpoint=0x{}, error={}",
                             bytes_to_hex(outpoint_key),
@@ -270,7 +270,7 @@ impl CkbadgerStore {
             let outpoint_key = &keys[outpoint_idx];
             match value_result {
                 Ok(Some(value)) => {
-                    let cell = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                    let cell = postcard::from_bytes::<LiveCellInfo>(&value).map_err(|e| {
                         anyhow::anyhow!(
                             "failed to deserialize canonical cell payload in get_consumed_cells_batch: outpoint=0x{}, error={}",
                             bytes_to_hex(outpoint_key),
@@ -830,7 +830,7 @@ mod tests {
     ) {
         // Write canonical payload + live marker
         let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
-        let value = bincode::serialize(cell).unwrap();
+        let value = postcard::to_allocvec(cell).unwrap();
         store
             .put_cf(store.cf_cells(), &outpoint_key, &value)
             .unwrap();
@@ -1074,13 +1074,13 @@ mod tests {
         let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
         let cell = make_cell(200_00000000, 61_00000000, &[0x01; 32]);
         let legacy = ConsumedCellInfo::from_live_cell_info_with_consumer(&cell, 123, None, 100);
-        let legacy_payload = bincode::serialize(&legacy).unwrap();
+        let legacy_payload = postcard::to_allocvec(&legacy).unwrap();
 
         store
             .put_cf(
                 store.cf_cells(),
                 &outpoint_key,
-                &bincode::serialize(&cell).unwrap(),
+                &postcard::to_allocvec(&cell).unwrap(),
             )
             .unwrap();
         store

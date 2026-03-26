@@ -10,7 +10,7 @@ impl CkbadgerStore {
     pub fn get_block_header(&self, block_number: i64) -> anyhow::Result<Option<CachedBlockHeader>> {
         let key = keys::encode_block_num(block_number);
         match self.get_cf(self.cf_block_headers(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -44,7 +44,7 @@ impl CkbadgerStore {
             })?;
             if key.len() == 8 {
                 let block_num = keys::decode_block_num(&key);
-                let header: CachedBlockHeader = bincode::deserialize(&value)?;
+                let header: CachedBlockHeader = postcard::from_bytes(&value)?;
                 return Ok(Some((block_num, header)));
             }
         }
@@ -74,7 +74,7 @@ impl CkbadgerStore {
             })?;
             if key.len() == 8 {
                 let block_num = keys::decode_block_num(&key);
-                let header: CachedBlockHeader = bincode::deserialize(&value)?;
+                let header: CachedBlockHeader = postcard::from_bytes(&value)?;
                 results.push((block_num, header));
                 if results.len() >= limit {
                     break;
@@ -105,7 +105,7 @@ impl CkbadgerStore {
             match value_result {
                 Ok(Some(value)) => {
                     let header: CachedBlockHeader =
-                        bincode::deserialize(&value).map_err(|e| {
+                        postcard::from_bytes(&value).map_err(|e| {
                             anyhow::anyhow!(
                                 "failed to deserialize block header in get_dao_fields_batch: block_number={}, error={}",
                                 block_numbers[i],
@@ -147,7 +147,7 @@ impl CkbadgerStore {
             match value_result {
                 Ok(Some(value)) => {
                     let header: CachedBlockHeader =
-                        bincode::deserialize(&value).map_err(|e| {
+                        postcard::from_bytes(&value).map_err(|e| {
                             anyhow::anyhow!(
                                 "failed to deserialize block header in get_block_headers_batch: block_number={}, error={}",
                                 block_numbers[i],

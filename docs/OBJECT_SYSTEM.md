@@ -127,14 +127,14 @@ Both forms are preserved. The decode worker stores each step's raw output indepe
 
 ### RocksDB (Domain Store)
 
-| CF                       | Key                       | Value                     | Purpose                       |
-| ------------------------ | ------------------------- | ------------------------- | ----------------------------- |
-| `CF_SPORE_DATA`          | spore_id (32B)            | ObjectEntry (bincode)     | Spore + cluster entries       |
-| `CF_SPORE_BY_CLUSTER`    | cluster_id + spore_id     | empty                     | Index: spores in cluster      |
-| `CF_DOB_DECODED`         | spore_id (32B)            | DobDecodedEntry (bincode) | Cached decode results         |
-| `CF_MNFT_DATA`           | object_id                 | ObjectEntry (bincode)     | m-NFT entries                 |
-| `CF_MNFT_BY_COLLECTION`  | collection_id + object_id | empty                     | Index: mNFTs in collection    |
-| `CF_MNFT_COLLECTION_AGG` | collection_id             | aggregate (bincode)       | Pre-computed collection stats |
+| CF                       | Key                       | Value                      | Purpose                       |
+| ------------------------ | ------------------------- | -------------------------- | ----------------------------- |
+| `CF_SPORE_DATA`          | spore_id (32B)            | ObjectEntry (postcard)     | Spore + cluster entries       |
+| `CF_SPORE_BY_CLUSTER`    | cluster_id + spore_id     | empty                      | Index: spores in cluster      |
+| `CF_DOB_DECODED`         | spore_id (32B)            | DobDecodedEntry (postcard) | Cached decode results         |
+| `CF_MNFT_DATA`           | object_id                 | ObjectEntry (postcard)     | m-NFT entries                 |
+| `CF_MNFT_BY_COLLECTION`  | collection_id + object_id | empty                      | Index: mNFTs in collection    |
+| `CF_MNFT_COLLECTION_AGG` | collection_id             | aggregate (postcard)       | Pre-computed collection stats |
 
 ### Filesystem (DOB Decode Blobs)
 

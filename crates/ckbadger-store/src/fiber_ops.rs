@@ -9,7 +9,7 @@ impl CkbadgerStore {
     pub fn get_fiber_channel(&self, channel_id: &[u8]) -> anyhow::Result<Option<FiberChannel>> {
         match self.get_cf(self.cf_fiber_channels(), channel_id)? {
             Some(value) => {
-                let channel: FiberChannel = bincode::deserialize(&value).map_err(|e| {
+                let channel: FiberChannel = postcard::from_bytes(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize FiberChannel: channel_id=0x{}, error={}",
                         crate::bytes_to_hex(channel_id),
@@ -73,7 +73,7 @@ impl CkbadgerStore {
                 continue;
             }
 
-            let channel: FiberChannel = bincode::deserialize(&value).map_err(|e| {
+            let channel: FiberChannel = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize FiberChannel in list: key=0x{}, error={}",
                     crate::bytes_to_hex(&key),

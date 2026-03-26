@@ -15,7 +15,7 @@ impl CkbadgerStore {
         cluster_id: &[u8],
     ) -> anyhow::Result<Option<ClusterAggregate>> {
         match self.get_cf(self.cf_cluster_agg(), cluster_id)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -40,7 +40,7 @@ impl CkbadgerStore {
         for (cluster_id, value_result) in cluster_ids.iter().zip(values) {
             let aggregate = match value_result {
                 Ok(Some(value)) => {
-                    Some(bincode::deserialize::<ClusterAggregate>(&value).map_err(|e| {
+                    Some(postcard::from_bytes::<ClusterAggregate>(&value).map_err(|e| {
                         anyhow::anyhow!(
                             "failed to deserialize cluster aggregate in get_cluster_aggregates_batch: cluster_id=0x{}, error={}",
                             bytes_to_hex(cluster_id),
@@ -75,7 +75,7 @@ impl CkbadgerStore {
                     e
                 )
             })?;
-            let agg: ClusterAggregate = bincode::deserialize(&value).map_err(|e| {
+            let agg: ClusterAggregate = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize cluster aggregate in list_cluster_aggregates: cluster_id=0x{}, error={}",
                     bytes_to_hex(&key),

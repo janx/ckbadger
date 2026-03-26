@@ -29,10 +29,10 @@ struct LegacyBackgroundTasksData {
 }
 
 fn decode_background_tasks(bytes: &[u8]) -> anyhow::Result<BackgroundTasksData> {
-    match bincode::deserialize::<BackgroundTasksData>(bytes) {
+    match postcard::from_bytes::<BackgroundTasksData>(bytes) {
         Ok(data) => Ok(data),
         Err(current_err) => {
-            let legacy = bincode::deserialize::<LegacyBackgroundTasksData>(bytes).map_err(
+            let legacy = postcard::from_bytes::<LegacyBackgroundTasksData>(bytes).map_err(
                 |legacy_err| {
                     anyhow::anyhow!(
                         "failed to decode background tasks; current schema error: {current_err}; legacy schema error: {legacy_err}"
@@ -76,7 +76,7 @@ impl CkbadgerStore {
 
     /// Write background tasks state (full replace).
     pub fn set_background_tasks(&self, data: &BackgroundTasksData) -> anyhow::Result<()> {
-        let value = bincode::serialize(data)?;
+        let value = postcard::to_allocvec(data)?;
         self.put_cf(
             self.cf_sync_meta(),
             sync_meta_keys::BACKGROUND_TASKS,
@@ -183,7 +183,7 @@ mod tests {
             }],
             updated_at: 1711100001,
         };
-        let bytes = bincode::serialize(&legacy).unwrap();
+        let bytes = postcard::to_allocvec(&legacy).unwrap();
         store
             .put_cf(
                 store.cf_sync_meta(),

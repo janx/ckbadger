@@ -316,7 +316,7 @@ fn pre_compute_dao_compensations(
             store.get_cf(store.cf_dao_deposits(), &outpoint_key)?
         {
             let entry: ckbadger_store::types::DaoDepositCacheEntry =
-                bincode::deserialize(&value).map_err(|e| {
+                postcard::from_bytes(&value).map_err(|e| {
                     anyhow!(
                         "failed to deserialize DAO deposit for compensation pre-compute: outpoint=0x{}:{}, error={}",
                         hex::encode(orig_tx_hash),
@@ -2987,7 +2987,7 @@ impl Indexer {
                 if ema_rate > 0.0 {
                     status.sync_ema_rate = Some(ema_rate);
                 }
-                let status_bytes = bincode::serialize(&status)
+                let status_bytes = postcard::to_allocvec(&status)
                     .with_context(|| "failed to serialize sync_status for atomic batch commit")?;
                 stats_batch.put_sync_meta(
                     ckbadger_store::keys::sync_meta_keys::SYNC_STATUS,

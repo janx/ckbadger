@@ -511,7 +511,7 @@ impl BulkReducer for DaoOwner {
             rows.push(MaterializedRow::new(
                 CF_STATS_DAO,
                 key,
-                bincode::serialize(&snapshot)?,
+                postcard::to_allocvec(&snapshot)?,
             ));
         }
 
@@ -538,7 +538,7 @@ impl BulkReducer for DaoOwner {
             rows.push(MaterializedRow::new(
                 CF_DAO_DEPOSITS,
                 outpoint_key.to_vec(),
-                bincode::serialize(entry)?,
+                postcard::to_allocvec(entry)?,
             ));
             rows.push(MaterializedRow::new(
                 CF_DAO_BY_BLOCK,

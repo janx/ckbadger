@@ -90,7 +90,7 @@ impl BatchWriter {
             keyed_changes.into_iter().zip(existing_results.into_iter())
         {
             let mut existing: TokenDailyDelta = match existing_res {
-                Ok(Some(value)) => bincode::deserialize(&value).map_err(|e| {
+                Ok(Some(value)) => postcard::from_bytes(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize token daily delta: key=0x{}, error={}",
                         hex::encode(&key),
@@ -131,7 +131,7 @@ impl BatchWriter {
             if existing.owned_capacity_delta == 0 && existing.owned_knowledge_delta == 0 {
                 batch.delete_stats(&key);
             } else {
-                let value = bincode::serialize(&existing)?;
+                let value = postcard::to_allocvec(&existing)?;
                 batch.put_stats(&key, &value);
             }
         }
@@ -629,7 +629,7 @@ mod tests {
 
         let key = ckbadger_store::keys::encode_token_daily_key(&type_hash, date);
         store
-            .put_stats_key(&key, b"not-a-valid-bincode-token-delta")
+            .put_stats_key(&key, b"not-a-valid-postcard-token-delta")
             .unwrap();
 
         let mut changes = HashMap::new();

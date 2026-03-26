@@ -70,7 +70,7 @@ impl CkbadgerStore {
         index_key: &[u8],
     ) -> anyhow::Result<DaoDepositCacheEntry> {
         match snapshot.get_cf(self.cf_dao_deposits(), outpoint_key)? {
-            Some(value) => Ok(bincode::deserialize(&value).map_err(|e| {
+            Some(value) => Ok(postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize dao deposit entry while reading {} index: index_key=0x{}, outpoint_key=0x{}, error={}",
                     index_name,
@@ -151,7 +151,7 @@ impl CkbadgerStore {
         outpoint_key: &[u8],
     ) -> anyhow::Result<Option<DaoDepositCacheEntry>> {
         match self.get_cf(self.cf_dao_deposits(), outpoint_key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -165,7 +165,7 @@ impl CkbadgerStore {
             self.delete_dao_secondary_indexes_direct(outpoint_key, &existing)?;
         }
 
-        let value = bincode::serialize(entry)?;
+        let value = postcard::to_allocvec(entry)?;
         self.put_cf(self.cf_dao_deposits(), outpoint_key, &value)?;
         self.put_dao_secondary_indexes_direct(outpoint_key, entry)
     }
@@ -190,7 +190,7 @@ impl CkbadgerStore {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!("failed to iterate dao_deposits in scan_dao_deposits: {}", e)
             })?;
-            let entry: DaoDepositCacheEntry = bincode::deserialize(&value).map_err(|e| {
+            let entry: DaoDepositCacheEntry = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize dao deposit entry in scan_dao_deposits: outpoint_key=0x{}, error={}",
                     bytes_to_hex(&key),

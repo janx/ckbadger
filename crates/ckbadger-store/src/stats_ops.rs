@@ -12,14 +12,14 @@ impl CkbadgerStore {
     pub fn get_daily_stats(&self, date: &str) -> anyhow::Result<Option<DailyStats>> {
         let key = keys::encode_stats_key(stats_prefix::DAILY, date.as_bytes());
         match self.get_cf(self.cf_stats_chain(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
 
     pub fn put_daily_stats(&self, date: &str, stats: &DailyStats) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::DAILY, date.as_bytes());
-        let value = bincode::serialize(stats)?;
+        let value = postcard::to_allocvec(stats)?;
         self.put_cf(self.cf_stats_chain(), &key, &value)
     }
 
@@ -35,7 +35,7 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            let stats: DailyStats = bincode::deserialize(&value).map_err(|e| {
+            let stats: DailyStats = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize daily stats in list_daily_stats: key=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -52,14 +52,14 @@ impl CkbadgerStore {
     pub fn get_hourly_stats(&self, hour: &str) -> anyhow::Result<Option<HourlyStats>> {
         let key = keys::encode_stats_key(stats_prefix::HOURLY, hour.as_bytes());
         match self.get_cf(self.cf_stats_chain(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
 
     pub fn put_hourly_stats(&self, hour: &str, stats: &HourlyStats) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::HOURLY, hour.as_bytes());
-        let value = bincode::serialize(stats)?;
+        let value = postcard::to_allocvec(stats)?;
         self.put_cf(self.cf_stats_chain(), &key, &value)
     }
 
@@ -79,7 +79,7 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            let stats: DailyStats = bincode::deserialize(&value).map_err(|e| {
+            let stats: DailyStats = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize daily stats in list_daily_stats_with_dates: key=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -109,7 +109,7 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            let stats: HourlyStats = bincode::deserialize(&value).map_err(|e| {
+            let stats: HourlyStats = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize hourly stats in list_hourly_stats_with_keys: key=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -127,14 +127,14 @@ impl CkbadgerStore {
     pub fn get_epoch_stats(&self, epoch: i64) -> anyhow::Result<Option<EpochStats>> {
         let key = keys::encode_stats_key(stats_prefix::EPOCH, &epoch.to_be_bytes());
         match self.get_cf(self.cf_stats_chain(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
 
     pub fn put_epoch_stats(&self, epoch: i64, stats: &EpochStats) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::EPOCH, &epoch.to_be_bytes());
-        let value = bincode::serialize(stats)?;
+        let value = postcard::to_allocvec(stats)?;
         self.put_cf(self.cf_stats_chain(), &key, &value)
     }
 
@@ -151,7 +151,7 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            let stats: EpochStats = bincode::deserialize(&value).map_err(|e| {
+            let stats: EpochStats = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize epoch stats in list_epoch_stats: key=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -173,7 +173,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<()> {
         let suffix = [date.as_bytes(), miner_hash].concat();
         let key = keys::encode_stats_key(stats_prefix::MINER, &suffix);
-        let value = bincode::serialize(stats)?;
+        let value = postcard::to_allocvec(stats)?;
         self.put_cf(self.cf_stats_chain(), &key, &value)
     }
 
@@ -190,7 +190,7 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            let stats: MinerStats = bincode::deserialize(&value).map_err(|e| {
+            let stats: MinerStats = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize miner stats in list_miner_stats: key=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -207,14 +207,14 @@ impl CkbadgerStore {
     pub fn get_daily_block_stats(&self, date: &str) -> anyhow::Result<Option<DailyBlockStats>> {
         let key = keys::encode_stats_key(stats_prefix::DAILY_BLOCK, date.as_bytes());
         match self.get_cf(self.cf_stats_chain(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
 
     pub fn put_daily_block_stats(&self, date: &str, stats: &DailyBlockStats) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::DAILY_BLOCK, date.as_bytes());
-        let value = bincode::serialize(stats)?;
+        let value = postcard::to_allocvec(stats)?;
         self.put_cf(self.cf_stats_chain(), &key, &value)
     }
 
@@ -234,7 +234,7 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            let stats: DailyBlockStats = bincode::deserialize(&value).map_err(|e| {
+            let stats: DailyBlockStats = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize daily block stats in list_daily_block_stats: key=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -296,7 +296,7 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            let snapshot: DaoDailySnapshot = bincode::deserialize(&value).map_err(|e| {
+            let snapshot: DaoDailySnapshot = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize dao daily snapshot in list_dao_daily_snapshots: key=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -311,7 +311,7 @@ impl CkbadgerStore {
     pub fn get_dao_daily_snapshot(&self, date: &str) -> anyhow::Result<Option<DaoDailySnapshot>> {
         let key = keys::encode_stats_key(stats_prefix::DAO_DAILY_SNAPSHOT, date.as_bytes());
         match self.get_cf(self.cf_stats_dao(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -337,7 +337,7 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 continue;
             }
-            let snapshot: DaoDailySnapshot = bincode::deserialize(&value).map_err(|e| {
+            let snapshot: DaoDailySnapshot = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize dao daily snapshot in get_latest_dao_daily_snapshot: key=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -353,21 +353,21 @@ impl CkbadgerStore {
     pub fn get_latest_dao_statistics(&self) -> anyhow::Result<Option<DaoLatestStatistics>> {
         let key = keys::encode_stats_key(stats_prefix::DAO_LATEST_STATS, b"latest");
         match self.get_cf(self.cf_stats_dao(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
 
     pub fn put_dao_top_depositors(&self, top: &DaoTopDepositors) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::DAO_TOP_DEPOSITORS, b"latest");
-        let value = bincode::serialize(top)?;
+        let value = postcard::to_allocvec(top)?;
         self.put_cf(self.cf_stats_dao(), &key, &value)
     }
 
     pub fn get_dao_top_depositors(&self) -> anyhow::Result<Option<DaoTopDepositors>> {
         let key = keys::encode_stats_key(stats_prefix::DAO_TOP_DEPOSITORS, b"latest");
         match self.get_cf(self.cf_stats_dao(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -376,14 +376,14 @@ impl CkbadgerStore {
 
     pub fn put_hodl_wave(&self, date: &str, wave: &DailyHodlWave) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::HODL_WAVE, date.as_bytes());
-        let value = bincode::serialize(wave)?;
+        let value = postcard::to_allocvec(wave)?;
         self.put_cf(self.cf_stats_hodl(), &key, &value)
     }
 
     pub fn get_hodl_wave(&self, date: &str) -> anyhow::Result<Option<DailyHodlWave>> {
         let key = keys::encode_stats_key(stats_prefix::HODL_WAVE, date.as_bytes());
         match self.get_cf(self.cf_stats_hodl(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -400,7 +400,7 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            let wave: DailyHodlWave = bincode::deserialize(&value).map_err(|e| {
+            let wave: DailyHodlWave = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize hodl wave in list_hodl_waves: key=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -420,13 +420,13 @@ impl CkbadgerStore {
             self.cf_sync_meta(),
             crate::keys::sync_meta_keys::HODL_TRACKER,
         )? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
 
     pub fn put_hodl_tracker_state(&self, state: &HodlTrackerState) -> anyhow::Result<()> {
-        let value = bincode::serialize(state)?;
+        let value = postcard::to_allocvec(state)?;
         self.put_cf(
             self.cf_sync_meta(),
             crate::keys::sync_meta_keys::HODL_TRACKER,
@@ -442,7 +442,7 @@ impl CkbadgerStore {
         snapshot: &DailyCellDistribution,
     ) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::CELL_DISTRIBUTION, date.as_bytes());
-        let value = bincode::serialize(snapshot)?;
+        let value = postcard::to_allocvec(snapshot)?;
         self.put_cf(self.cf_stats_hodl(), &key, &value)
     }
 
@@ -452,7 +452,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<DailyCellDistribution>> {
         let key = keys::encode_stats_key(stats_prefix::CELL_DISTRIBUTION, date.as_bytes());
         match self.get_cf(self.cf_stats_hodl(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -482,7 +482,7 @@ impl CkbadgerStore {
             }
             let date_str = String::from_utf8_lossy(&key[1..]).to_string();
             let snapshot: DailyCellDistribution =
-                bincode::deserialize(&value).map_err(|e| {
+                postcard::from_bytes(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize cell distribution in get_latest_cell_distribution: key=0x{}, error={}",
                         bytes_to_hex(&key),
@@ -503,14 +503,14 @@ impl CkbadgerStore {
         snapshot: &DailyAddressCohort,
     ) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(stats_prefix::ADDR_COHORT, date.as_bytes());
-        let value = bincode::serialize(snapshot)?;
+        let value = postcard::to_allocvec(snapshot)?;
         self.put_cf(self.cf_stats_hodl(), &key, &value)
     }
 
     pub fn get_address_cohort(&self, date: &str) -> anyhow::Result<Option<DailyAddressCohort>> {
         let key = keys::encode_stats_key(stats_prefix::ADDR_COHORT, date.as_bytes());
         match self.get_cf(self.cf_stats_hodl(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -540,7 +540,7 @@ impl CkbadgerStore {
             }
             let date_str = String::from_utf8_lossy(&key[1..]).to_string();
             let snapshot: DailyAddressCohort =
-                bincode::deserialize(&value).map_err(|e| {
+                postcard::from_bytes(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize address cohort in get_latest_address_cohort: key=0x{}, error={}",
                         bytes_to_hex(&key),
@@ -562,7 +562,7 @@ impl CkbadgerStore {
             self.cf_sync_meta(),
             crate::keys::sync_meta_keys::CELL_DIST_TRACKER,
         )? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -571,7 +571,7 @@ impl CkbadgerStore {
         &self,
         state: &CellDistributionTrackerState,
     ) -> anyhow::Result<()> {
-        let value = bincode::serialize(state)?;
+        let value = postcard::to_allocvec(state)?;
         self.put_cf(
             self.cf_sync_meta(),
             crate::keys::sync_meta_keys::CELL_DIST_TRACKER,
@@ -587,7 +587,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<DailyActivityStats>> {
         let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes());
         match self.get_cf(self.cf_stats_chain(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -598,7 +598,7 @@ impl CkbadgerStore {
         stats: &DailyActivityStats,
     ) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes());
-        let value = bincode::serialize(stats)?;
+        let value = postcard::to_allocvec(stats)?;
         self.put_cf(self.cf_stats_chain(), &key, &value)
     }
 
@@ -623,7 +623,7 @@ impl CkbadgerStore {
                     anyhow::anyhow!("invalid UTF-8 date in daily activity stats key: {}", e)
                 })?
                 .to_string();
-            let stats: DailyActivityStats = bincode::deserialize(&value).map_err(|e| {
+            let stats: DailyActivityStats = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize daily activity stats: date={}, error={}",
                     date_str,
@@ -643,7 +643,7 @@ impl CkbadgerStore {
         stats: &DailyActivityStats,
     ) -> anyhow::Result<()> {
         let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour_key.as_bytes());
-        let value = bincode::serialize(stats)?;
+        let value = postcard::to_allocvec(stats)?;
         self.put_cf(self.cf_stats_chain(), &key, &value)
     }
 
@@ -653,7 +653,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<DailyActivityStats>> {
         let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour_key.as_bytes());
         match self.get_cf(self.cf_stats_chain(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -688,7 +688,7 @@ impl CkbadgerStore {
                     anyhow::anyhow!("invalid UTF-8 hour in hourly activity stats key: {}", e)
                 })?
                 .to_string();
-            let stats: DailyActivityStats = bincode::deserialize(&value).map_err(|e| {
+            let stats: DailyActivityStats = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize hourly activity stats: hour={}, error={}",
                     hour_str,
@@ -710,7 +710,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<ScriptDailyDelta>> {
         let key = keys::encode_script_daily_key(code_hash, is_type, date_yyyymmdd);
         match self.get_cf(self.cf_stats_script(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -723,7 +723,7 @@ impl CkbadgerStore {
         delta: &ScriptDailyDelta,
     ) -> anyhow::Result<()> {
         let key = keys::encode_script_daily_key(code_hash, is_type, date_yyyymmdd);
-        let value = bincode::serialize(delta)?;
+        let value = postcard::to_allocvec(delta)?;
         self.put_cf(self.cf_stats_script(), &key, &value)
     }
 
@@ -773,7 +773,7 @@ impl CkbadgerStore {
                     break;
                 }
             }
-            let delta: ScriptDailyDelta = bincode::deserialize(&value).map_err(|e| {
+            let delta: ScriptDailyDelta = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize script daily delta in list_script_daily_deltas_in_range: code_hash=0x{}, is_type={}, date={}, error={}",
                     bytes_to_hex(code_hash),
@@ -793,7 +793,7 @@ impl CkbadgerStore {
     pub fn get_script_info(&self, code_hash: &[u8]) -> anyhow::Result<Option<ScriptInfo>> {
         match self.get_cf(self.cf_script_info(), code_hash)? {
             Some(value) => {
-                let info = bincode::deserialize(&value).map_err(|e| {
+                let info = postcard::from_bytes(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize script info: code_hash=0x{}, error={}",
                         code_hash
@@ -814,7 +814,7 @@ impl CkbadgerStore {
         code_hash: &[u8],
         info: &ScriptInfo,
     ) -> anyhow::Result<()> {
-        let value = bincode::serialize(info)?;
+        let value = postcard::to_allocvec(info)?;
         self.put_cf(self.cf_script_info(), code_hash, &value)
     }
 
@@ -826,7 +826,7 @@ impl CkbadgerStore {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!("failed to iterate script_info in list_script_infos: {}", e)
             })?;
-            let info: ScriptInfo = bincode::deserialize(&value).map_err(|e| {
+            let info: ScriptInfo = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize script info in list_script_infos: code_hash=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -844,7 +844,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<ScriptVersionInfo>> {
         match self.get_cf(self.cf_script_versions(), version_hash)? {
             Some(value) => {
-                let info = bincode::deserialize(&value).map_err(|e| {
+                let info = postcard::from_bytes(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize script version: version_hash=0x{}, error={}",
                         bytes_to_hex(version_hash),
@@ -862,7 +862,7 @@ impl CkbadgerStore {
         version_hash: &[u8],
         info: &ScriptVersionInfo,
     ) -> anyhow::Result<()> {
-        let value = bincode::serialize(info)?;
+        let value = postcard::to_allocvec(info)?;
         self.put_cf(self.cf_script_versions(), version_hash, &value)
     }
 
@@ -877,7 +877,7 @@ impl CkbadgerStore {
                     e
                 )
             })?;
-            let info: ScriptVersionInfo = bincode::deserialize(&value).map_err(|e| {
+            let info: ScriptVersionInfo = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize script version in list_script_versions: version_hash=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -1162,7 +1162,7 @@ mod tests {
             crate::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
             date_key.as_bytes(),
         );
-        let value = bincode::serialize(snap).unwrap();
+        let value = postcard::to_allocvec(snap).unwrap();
         store.put_cf(store.cf_stats_dao(), &key, &value).unwrap();
     }
 

@@ -14,7 +14,7 @@ use crate::bytes_to_hex;
 impl CkbadgerStore {
     pub fn get_mnft(&self, id: &[u8]) -> anyhow::Result<Option<ObjectEntry>> {
         match self.get_cf(self.cf_mnft_data(), id)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -32,7 +32,7 @@ impl CkbadgerStore {
         for (id, value_result) in ids.iter().zip(values) {
             let entry = match value_result {
                 Ok(Some(value)) => {
-                    Some(bincode::deserialize::<ObjectEntry>(&value).map_err(|e| {
+                    Some(postcard::from_bytes::<ObjectEntry>(&value).map_err(|e| {
                         anyhow::anyhow!(
                             "failed to deserialize object entry in get_objects_batch: object_id=0x{}, error={}",
                             bytes_to_hex(id),
@@ -63,7 +63,7 @@ impl CkbadgerStore {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!("failed to iterate object_data in list_objects: {}", e)
             })?;
-            let entry: ObjectEntry = bincode::deserialize(&value).map_err(|e| {
+            let entry: ObjectEntry = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize object entry in list_objects: object_id=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -84,7 +84,7 @@ impl CkbadgerStore {
         collection_id: &[u8],
     ) -> anyhow::Result<Option<MnftCollectionAggregate>> {
         match self.get_cf(self.cf_mnft_collection_agg(), collection_id)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -103,7 +103,7 @@ impl CkbadgerStore {
                     e
                 )
             })?;
-            let agg: MnftCollectionAggregate = bincode::deserialize(&value).map_err(|e| {
+            let agg: MnftCollectionAggregate = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize object collection aggregate in list_object_collection_aggregates: collection_id=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -199,7 +199,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<MnftTypeIndex>> {
         let key = keys::encode_nft_type_index_key(type_script_hash);
         match self.get_cf(self.cf_stats_mnft(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -210,7 +210,7 @@ impl CkbadgerStore {
         index: &MnftTypeIndex,
     ) -> anyhow::Result<()> {
         let key = keys::encode_nft_type_index_key(type_script_hash);
-        let value = bincode::serialize(index)?;
+        let value = postcard::to_allocvec(index)?;
         self.put_cf(self.cf_stats_mnft(), &key, &value)
     }
 
@@ -221,7 +221,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<MnftDailyDelta>> {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
         match self.get_cf(self.cf_stats_mnft(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => Ok(Some(postcard::from_bytes(&value)?)),
             None => Ok(None),
         }
     }
@@ -233,7 +233,7 @@ impl CkbadgerStore {
         delta: &MnftDailyDelta,
     ) -> anyhow::Result<()> {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
-        let value = bincode::serialize(delta)?;
+        let value = postcard::to_allocvec(delta)?;
         self.put_cf(self.cf_stats_mnft(), &key, &value)
     }
 
@@ -278,7 +278,7 @@ impl CkbadgerStore {
                     break;
                 }
             }
-            let delta: MnftDailyDelta = bincode::deserialize(&value).map_err(|e| {
+            let delta: MnftDailyDelta = postcard::from_bytes(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize object daily delta in list_object_daily_deltas_in_range: collection_id=0x{}, date={}, error={}",
                     bytes_to_hex(collection_id),
@@ -414,7 +414,7 @@ impl CkbadgerStore {
 
             let (_, block_num, tx_idx, block_hash_from_key, tx_hash_from_key) =
                 keys::decode_nft_collection_activity_key(&key);
-            let entry: ObjectCollectionActivityEntry = bincode::deserialize(&value)?;
+            let entry: ObjectCollectionActivityEntry = postcard::from_bytes(&value)?;
             if entry.tx_hash != tx_hash_from_key {
                 anyhow::bail!(
                     "object_collection_activities key/value tx_hash mismatch in list_object_collection_activities: collection_id=0x{}, block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",

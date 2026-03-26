@@ -5,13 +5,9 @@ use std::mem::size_of;
 use serde::Serialize;
 
 pub(crate) fn serialized_bytes<T: Serialize>(value: &T) -> u64 {
-    match bincode::serialized_size(value) {
-        Ok(size) => size,
-        Err(e) => {
-            tracing::warn!("bincode::serialized_size failed in memory accounting: {e}");
-            0
-        }
-    }
+    postcard::to_allocvec(value)
+        .map(|v| v.len() as u64)
+        .unwrap_or(0)
 }
 
 pub(crate) fn bytes_vec_bytes(value: &Vec<u8>) -> u64 {
