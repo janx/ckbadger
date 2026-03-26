@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from '@/components/ui/link';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
@@ -104,18 +104,13 @@ function CompositionTierTooltip({
   return <Tooltip text={text} buttonClassName={buttonClassName} />;
 }
 
-function lifecycleEventColor(event: string): {
-  dot: string;
-  text: string;
-  line: string;
-} {
-  const e = event.toLowerCase();
-  if (e === 'mint')
-    return { dot: 'bg-positive', text: 'text-positive', line: 'border-positive/30' };
-  if (e === 'burned')
-    return { dot: 'bg-negative', text: 'text-negative', line: 'border-negative/30' };
-  if (e === 'live') return { dot: 'bg-info', text: 'text-info', line: 'border-info/30' };
-  return { dot: 'bg-text-dim', text: 'text-text-dim', line: 'border-base-border' };
+function parseHexToBytes(hex: string): Uint8Array {
+  const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
+  const bytes = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
 }
 
 export interface MnftItemDetailPageProps {
@@ -130,6 +125,7 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
     parseActivityCursor(searchParams.get('activity_cursor'))
   );
   const [activityCursorHistory, setActivityCursorHistory] = useState<string[]>([]);
+  const [hoveredByteOffset, setHoveredByteOffset] = useState<number | null>(null);
   const detailQuery = useQuery({
     queryKey: ['mnft-item-detail', nftId],
     queryFn: () => api.getMnftItemDetail(nftId),
@@ -155,6 +151,20 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
     retry: false,
     placeholderData: keepPreviousData,
   });
+  const payloadBytes = useMemo(() => {
+    if (!detail?.characteristicHex) return null;
+    const clean = detail.characteristicHex.startsWith('0x')
+      ? detail.characteristicHex.slice(2)
+      : detail.characteristicHex;
+    if (clean.length === 0) return null;
+    return parseHexToBytes(clean);
+  }, [detail?.characteristicHex]);
+  const payloadHex = useMemo(() => {
+    if (!detail?.characteristicHex) return '';
+    return detail.characteristicHex.startsWith('0x')
+      ? detail.characteristicHex.slice(2)
+      : detail.characteristicHex;
+  }, [detail?.characteristicHex]);
   const goToNextActivityPage = useCallback(
     (nextCursor: string | null | undefined) => {
       if (!nextCursor) return;
@@ -289,23 +299,8 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
               )}
             </div>
 
-            {/* Lock Hash */}
-            {detail.ownerLockHash && (
-              <div className="mt-1.5 flex flex-wrap items-baseline gap-2 font-mono text-sm">
-                <span className="text-text-dim text-xs uppercase tracking-wider">lock hash</span>
-                <Link href={`/address/${detail.ownerLockHash}`} className="hover:underline">
-                  <HexDisplay
-                    value={detail.ownerLockHash}
-                    size="sm"
-                    startChars={14}
-                    endChars={10}
-                  />
-                </Link>
-              </div>
-            )}
-
             {/* Stat cards row */}
-            <div className="border-base-border mt-4 grid grid-cols-2 gap-3 border-t pt-4 sm:grid-cols-3">
+            <div className="border-base-border mt-4 grid grid-cols-2 gap-3 border-t pt-4 sm:grid-cols-4">
               {/* Composition card */}
               {detail.composition?.tier &&
                 (() => {
@@ -332,7 +327,7 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
                   );
                 })()}
 
-              {/* Class */}
+              {/* Class card */}
               <div className="border-base-border rounded border p-3">
                 <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
                   Class
@@ -344,11 +339,25 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
                   {detail.class.name || 'Unnamed'}
                 </Link>
                 <div className="text-text-dim font-mono text-xs">
-                  {formatNumber(detail.class.issued)} / {formatNumber(detail.class.total)} items
+                  {formatNumber(detail.class.issued)} / {formatNumber(detail.class.total)} issued
                 </div>
               </div>
 
-              {/* Created */}
+              {/* Issuer card */}
+              <div className="border-base-border rounded border p-3">
+                <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+                  Issuer
+                </div>
+                <div className="text-text-bright font-mono text-sm font-semibold">
+                  {detail.issuer.name || 'Unnamed'}
+                </div>
+                <div className="text-text-dim font-mono text-xs">
+                  {formatNumber(detail.issuer.classCount)} classes &middot;{' '}
+                  {formatNumber(detail.issuer.setCount)} sets
+                </div>
+              </div>
+
+              {/* Created card */}
               <div className="border-base-border rounded border p-3">
                 <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
                   Created
@@ -361,168 +370,136 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
                 </Link>
               </div>
             </div>
-          </TerminalPanelContent>
-        </TerminalPanel>
 
-        {/* Token Properties */}
-        <TerminalPanel className="mb-6">
-          <TerminalPanelHeader indicator="active">Token Properties</TerminalPanelHeader>
-          <TerminalPanelContent>
-            {/* State + Configure cards */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
-                <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                  State
-                </div>
-                <div className="text-text-bright mt-1 font-mono text-sm">
-                  {decodeTokenState(detail.state)}
-                </div>
-              </div>
-              <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
-                <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                  Configure
-                </div>
-                <div className="text-text-bright mt-1 font-mono text-sm">
-                  {decodeTokenConfigure(detail.configure)}
-                </div>
-              </div>
-            </div>
-
-            {/* Identity IDs */}
-            <div className="mt-4 space-y-2">
-              <div className="flex flex-wrap items-baseline gap-2 font-mono text-sm">
-                <span className="text-text-dim text-xs uppercase tracking-wider">issuer id</span>
-                <HexDisplay value={detail.issuer.issuerId} truncate={false} size="sm" />
-              </div>
-              <div className="flex flex-wrap items-baseline gap-2 font-mono text-sm">
-                <span className="text-text-dim text-xs uppercase tracking-wider">class id</span>
-                <Link href={`/classes/${detail.class.classId}`} className="hover:underline">
-                  <HexDisplay value={detail.class.classId} truncate={false} size="sm" />
-                </Link>
-              </div>
-              <div className="flex flex-wrap items-baseline gap-2 font-mono text-sm">
-                <span className="text-text-dim text-xs uppercase tracking-wider">token id</span>
-                <HexDisplay value={detail.nftId} truncate={false} size="sm" />
-              </div>
-            </div>
-
-            {/* Characteristic */}
-            {detail.characteristicHex && (
-              <div className="border-base-border mt-4 border-t pt-4">
-                <div className="text-text-dim mb-1 font-mono text-[10px] uppercase tracking-wider">
-                  Characteristic
-                </div>
-                <HexDisplay value={detail.characteristicHex} truncate={false} size="sm" />
+            {/* Collection info */}
+            {(detail.class.description || detail.class.renderer) && (
+              <div className="border-base-border mt-3 space-y-1.5 border-t pt-3">
+                {detail.class.description && (
+                  <div className="text-text-dim text-xs leading-relaxed">
+                    {detail.class.description}
+                  </div>
+                )}
+                {detail.class.renderer && (
+                  <div className="text-text-dim font-mono text-xs">
+                    renderer: {detail.class.renderer}
+                  </div>
+                )}
               </div>
             )}
           </TerminalPanelContent>
         </TerminalPanel>
 
-        {/* Issuer & Class */}
+        {/* Properties */}
         <TerminalPanel className="mb-6">
-          <TerminalPanelHeader indicator="active">Issuer & Class</TerminalPanelHeader>
+          <TerminalPanelHeader indicator="active">Properties</TerminalPanelHeader>
           <TerminalPanelContent>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {/* Class card */}
-              <div className="border-base-border bg-base-surface/40 rounded border p-3">
-                <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
-                  Class
-                </div>
-                <Link
-                  href={`/classes/${detail.class.classId}`}
-                  className="text-text-bright font-mono text-sm font-semibold hover:underline"
-                >
-                  {detail.class.name || 'Unnamed Class'}
-                </Link>
-                {detail.class.description && (
-                  <div className="text-text-dim mt-1 text-xs leading-relaxed">
-                    {detail.class.description}
-                  </div>
-                )}
-                {detail.class.renderer && (
-                  <div className="text-text-dim mt-1 font-mono text-xs">
-                    renderer: {detail.class.renderer}
-                  </div>
-                )}
-                <div className="text-text-dim mt-1 font-mono text-xs">
-                  {formatNumber(detail.class.issued)} / {formatNumber(detail.class.total)} issued
-                </div>
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                <span className="text-text-dim text-xs uppercase tracking-wider">state</span>
+                <span className="text-text-bright">{decodeTokenState(detail.state)}</span>
               </div>
-
-              {/* Issuer card */}
-              <div className="border-base-border bg-base-surface/40 rounded border p-3">
-                <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
-                  Issuer
-                </div>
-                <div className="text-text-bright font-mono text-sm font-semibold">
-                  {detail.issuer.name || 'Unnamed Issuer'}
-                </div>
-                <div className="text-text-dim mt-1 font-mono text-xs">
-                  classes: {formatNumber(detail.issuer.classCount)} / sets:{' '}
-                  {formatNumber(detail.issuer.setCount)}
-                </div>
+              <div className="flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                <span className="text-text-dim text-xs uppercase tracking-wider">configure</span>
+                <span className="text-text-bright">{decodeTokenConfigure(detail.configure)}</span>
               </div>
-            </div>
-          </TerminalPanelContent>
-        </TerminalPanel>
-
-        {/* Lifecycle */}
-        <TerminalPanel className="mb-6">
-          <TerminalPanelHeader indicator="active">Lifecycle</TerminalPanelHeader>
-          <TerminalPanelContent>
-            <div className="relative ml-4">
-              {detail.lifecycle.map((event, index) => {
-                const isLast = index === detail.lifecycle.length - 1;
-                const color = lifecycleEventColor(event.event);
-                return (
-                  <div
-                    key={`${event.event}-${index}`}
-                    className={`relative pb-4 pl-6 ${!isLast ? `border-l-2 ${color.line}` : ''}`}
-                  >
-                    {/* Dot */}
-                    <div
-                      className={`absolute -left-[7px] top-0.5 h-3 w-3 rounded-full ${color.dot} ring-base-bg ring-2`}
-                    />
-
-                    {/* Content */}
-                    <div className="flex flex-wrap items-center gap-3">
-                      <span
-                        className={`font-mono text-xs font-semibold uppercase tracking-wider ${color.text}`}
-                      >
-                        {event.event}
-                      </span>
-                      {event.blockNumber !== null && (
-                        <Link
-                          href={`/blocks/${event.blockNumber}`}
-                          className="text-emphasis font-mono text-xs hover:underline"
-                        >
-                          #{formatNumber(event.blockNumber)}
-                        </Link>
-                      )}
-                      {event.txHash !== null && event.outputIndex !== null && (
-                        <Link
-                          href={`/cell/${event.txHash}-${event.outputIndex}`}
-                          className="text-emphasis font-mono text-xs hover:underline"
-                        >
-                          <HexDisplay value={event.txHash} size="sm" />-{event.outputIndex}
-                        </Link>
-                      )}
-                    </div>
-                    {event.note && <div className="text-text-dim mt-1 text-xs">{event.note}</div>}
-                  </div>
-                );
-              })}
-
-              {/* Current state indicator (if live) */}
-              {detail.isLive && (
-                <div className="relative pl-6">
-                  <div className="border-info ring-base-bg absolute -left-[7px] top-0.5 h-3 w-3 rounded-full border-2 bg-transparent ring-2" />
-                  <span className="text-text-dim font-mono text-xs italic">current state</span>
+              {detail.characteristicHex && (
+                <div className="flex flex-wrap items-baseline gap-2 font-mono text-sm">
+                  <span className="text-text-dim text-xs uppercase tracking-wider">
+                    characteristic
+                  </span>
+                  <HexDisplay value={detail.characteristicHex} truncate={false} size="sm" />
                 </div>
               )}
             </div>
           </TerminalPanelContent>
         </TerminalPanel>
+
+        {/* Payload Data hex viewer */}
+        {payloadBytes && payloadBytes.length > 0 && (
+          <TerminalPanel className="mb-6">
+            <TerminalPanelHeader indicator="active">
+              Payload Data ({formatNumber(payloadBytes.length)} bytes)
+            </TerminalPanelHeader>
+            <TerminalPanelContent>
+              <div className="border-base-border bg-base-bg overflow-x-auto rounded-md border p-4 font-mono text-xs">
+                <div className="min-w-max" onMouseLeave={() => setHoveredByteOffset(null)}>
+                  {(() => {
+                    const BYTES_PER_ROW = 16;
+                    const MAX_BYTES = 512;
+                    const totalBytes = payloadBytes.length;
+                    const displayBytes = Math.min(totalBytes, MAX_BYTES);
+                    const rows = [];
+                    for (let r = 0; r < displayBytes; r += BYTES_PER_ROW) {
+                      const end = Math.min(r + BYTES_PER_ROW, displayBytes);
+                      const rowBytes: { hex: string; ascii: string; offset: number }[] = [];
+                      for (let i = r; i < end; i++) {
+                        const h = payloadHex.slice(i * 2, i * 2 + 2);
+                        const code = payloadBytes[i];
+                        const ch = code >= 32 && code <= 126 ? String.fromCharCode(code) : '.';
+                        rowBytes.push({ hex: h, ascii: ch, offset: i });
+                      }
+                      rows.push({ offset: r, bytes: rowBytes });
+                    }
+                    return (
+                      <>
+                        {rows.map((row) => {
+                          const padCount = BYTES_PER_ROW - row.bytes.length;
+                          return (
+                            <div key={row.offset} className="hover:bg-base-elevated/50 flex py-0.5">
+                              <span className="text-text-dim mr-4 select-none">
+                                0x{row.offset.toString(16).padStart(4, '0')}:
+                              </span>
+                              <div className="text-emphasis-dim mr-6 flex gap-1.5">
+                                {row.bytes.map((b) => (
+                                  <span
+                                    key={b.offset}
+                                    className={
+                                      hoveredByteOffset === b.offset
+                                        ? 'bg-emphasis/25 text-emphasis ring-emphasis/70 rounded ring-1'
+                                        : 'bg-base-elevated/70 text-text rounded'
+                                    }
+                                    onMouseEnter={() => setHoveredByteOffset(b.offset)}
+                                  >
+                                    {b.hex}
+                                  </span>
+                                ))}
+                                {Array.from({ length: padCount }).map((_, i) => (
+                                  <span key={`pad-${i}`} className="opacity-0">
+                                    00
+                                  </span>
+                                ))}
+                              </div>
+                              <div className="border-base-border text-text-dim border-l pl-4">
+                                {row.bytes.map((b) => (
+                                  <span
+                                    key={`a-${b.offset}`}
+                                    className={`inline-flex w-2.5 justify-center ${
+                                      hoveredByteOffset === b.offset
+                                        ? 'bg-emphasis/20 text-emphasis rounded-sm'
+                                        : ''
+                                    }`}
+                                    onMouseEnter={() => setHoveredByteOffset(b.offset)}
+                                  >
+                                    {b.ascii}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {totalBytes > MAX_BYTES && (
+                          <div className="text-text-dim mt-2 select-none italic">
+                            ... {(totalBytes - MAX_BYTES).toLocaleString()} more bytes
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            </TerminalPanelContent>
+          </TerminalPanel>
+        )}
 
         {/* Activities */}
         <TerminalPanel>

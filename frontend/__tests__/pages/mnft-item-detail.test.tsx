@@ -110,11 +110,15 @@ describe('MnftItemDetailPage', () => {
       'href',
       '/inventory/objects'
     );
-    expect(screen.getByText('M-NFT')).toBeInTheDocument();
+    // Properties panel: state & configure
     expect(screen.getByText('locked')).toBeInTheDocument();
     expect(screen.getByText('transferable, burnable')).toBeInTheDocument();
+
+    // Issuer & Class panel
     expect(screen.getAllByText('Class A').length).toBeGreaterThan(0);
     expect(screen.getByText('Issuer A')).toBeInTheDocument();
+
+    // Links: created at block, cell outpoint, class
     expect(
       screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/blocks/123')
     ).toBe(true);
@@ -124,6 +128,10 @@ describe('MnftItemDetailPage', () => {
     expect(
       screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/classes/0xclass')
     ).toBe(true);
+
+    // Payload Data hex viewer
+    expect(screen.getByText(/Payload Data/)).toBeInTheDocument();
+    expect(screen.getByText('8 bytes', { exact: false })).toBeInTheDocument();
   });
 
   it('renders not found panel when item is missing', async () => {
