@@ -26,6 +26,10 @@ pub(crate) struct TokenOwner {
     tokens: FxHashMap<Vec<u8>, TokenAccum>,
     /// On-chain max_supply observations collected from omnilock supply info cells.
     max_supply_observations: FxHashMap<Vec<u8>, i128>,
+    /// On-chain token info collected from xUDT Unique Cells (keyed by unique type_args, 20 bytes).
+    unique_cell_info: FxHashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
+    /// Resolved on-chain token info (keyed by token type_hash).
+    token_onchain_info: FxHashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
 }
 
 impl TokenOwner {
@@ -36,6 +40,18 @@ impl TokenOwner {
         }) + crate::sync::bulk_build::accounting::hash_map_bytes(
             &self.max_supply_observations,
             |k, _| crate::sync::bulk_build::accounting::bytes_vec_bytes(k) + 16,
+        ) + crate::sync::bulk_build::accounting::hash_map_bytes(
+            &self.unique_cell_info,
+            |k, v| {
+                crate::sync::bulk_build::accounting::bytes_vec_bytes(k)
+                    + 1 + v.name.len() as u64 + v.symbol.len() as u64 + 17
+            },
+        ) + crate::sync::bulk_build::accounting::hash_map_bytes(
+            &self.token_onchain_info,
+            |k, v| {
+                crate::sync::bulk_build::accounting::bytes_vec_bytes(k)
+                    + 1 + v.name.len() as u64 + v.symbol.len() as u64 + 17
+            },
         )
     }
 
@@ -64,6 +80,62 @@ impl TokenOwner {
         };
         self.max_supply_observations
             .insert(token_type_hash.to_vec(), max_supply);
+    }
+
+    fn observe_unique_cell_from_output(&mut self, cell: &CellFacts, ctx: &ReducerContext<'_>) {
+        let Some(type_args_id) = cell.type_args_id else {
+            return;
+        };
+        let type_args = ctx.resolve_identity(type_args_id);
+        if type_args.len() != crate::sync::token_helpers::UNIQUE_TYPE_ARGS_LEN {
+            return;
+        }
+        let Some(info) = crate::sync::token_helpers::parse_unique_cell_token_info(&cell.data)
+        else {
+            return;
+        };
+        self.unique_cell_info.insert(type_args.to_vec(), info);
+    }
+
+    fn resolve_unique_cell_for_xudt(&mut self, cell: &CellFacts, ctx: &ReducerContext<'_>) {
+        let Some(type_code_hash_id) = cell.type_code_hash_id else {
+            return;
+        };
+        let Some(type_hash_type) = cell.type_hash_type else {
+            return;
+        };
+        let type_code_hash = ctx.resolve_identity(type_code_hash_id);
+        if !matches!(
+            crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type),
+            Some(crate::parser::udt::UdtStandard::Xudt)
+        ) {
+            return;
+        }
+        let Some(type_args_id) = cell.type_args_id else {
+            return;
+        };
+        let type_args = ctx.resolve_identity(type_args_id);
+        let Some(type_hash_id) = cell.type_script_hash_id else {
+            return;
+        };
+        let token_type_hash = ctx.resolve_identity(type_hash_id);
+
+        // Pass empty witnesses — bulk-build has no witnesses, so only extension_in_args (0x1) resolved.
+        let Some(extensions) =
+            crate::sync::token_helpers::extract_xudt_extension_scripts(type_args, &[])
+        else {
+            return;
+        };
+
+        for ext in extensions {
+            if ext.args.len() != crate::sync::token_helpers::UNIQUE_TYPE_ARGS_LEN {
+                continue;
+            }
+            if let Some(info) = self.unique_cell_info.get(&ext.args) {
+                self.token_onchain_info
+                    .insert(token_type_hash.to_vec(), info.clone());
+            }
+        }
     }
 }
 
@@ -109,6 +181,15 @@ impl BulkReducer for TokenOwner {
         // Collect max_supply observations from omnilock supply info output cells
         for cell in tx.cells.iter() {
             self.observe_max_supply_from_output(cell, ctx);
+        }
+
+        // Collect unique cell info from outputs
+        for cell in tx.cells.iter() {
+            self.observe_unique_cell_from_output(cell, ctx);
+        }
+        // Resolve unique cell → token associations
+        for cell in tx.cells.iter() {
+            self.resolve_unique_cell_for_xudt(cell, ctx);
         }
 
         for transfer in UdtParser::build_transfers_from_cells(&parsed_inputs, &parsed_outputs) {
@@ -202,23 +283,36 @@ impl BulkReducer for TokenOwner {
                 info.max_supply = Some(observed);
             }
 
+            // Apply on-chain token info from Unique Cells
+            if let Some(onchain) = self.token_onchain_info.get(type_hash) {
+                if !onchain.name.is_empty() {
+                    info.name = Some(onchain.name.clone());
+                }
+                if !onchain.symbol.is_empty() {
+                    info.symbol = Some(onchain.symbol.clone());
+                }
+                info.decimals = Some(onchain.decimal as i32);
+            }
+
             // Preserve label fields from existing store data (written by label import)
             if let Some(existing) = existing_tokens.get(type_hash) {
-                if info.name.is_none() {
+                // Display fields: store values unconditionally win (includes TOML label data)
+                if existing.name.is_some() {
                     info.name = existing.name.clone();
                 }
-                if info.symbol.is_none() {
+                if existing.symbol.is_some() {
                     info.symbol = existing.symbol.clone();
                 }
-                if info.decimals.is_none() {
+                if existing.decimals.is_some() {
                     info.decimals = existing.decimals;
                 }
-                if info.icon_url.is_none() {
+                if existing.icon_url.is_some() {
                     info.icon_url = existing.icon_url.clone();
                 }
-                if info.description.is_none() {
+                if existing.description.is_some() {
                     info.description = existing.description.clone();
                 }
+                // max_supply: only fill gaps (on-chain observations are canonical)
                 if info.max_supply.is_none() {
                     info.max_supply = existing.max_supply;
                 }

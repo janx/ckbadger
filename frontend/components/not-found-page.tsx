@@ -214,41 +214,56 @@ export function NotFoundPage({ errMessage }: NotFoundPageProps = {}) {
           </span>
         </div>
 
-        {/* Footer blended into 404 */}
-        <div className="text-text-ghost flex flex-wrap items-center justify-center gap-3 font-mono text-[11px]">
-          <span className="select-none">&gt;</span>
-          <span>
+        {/* Footer — matches SiteFooter style */}
+        <div className="flex flex-wrap items-center justify-center gap-3 font-mono text-[11px]">
+          <span className="text-text-ghost select-none">&gt;</span>
+          <span className="text-text">
+            Designed by{' '}
             <a
               href="https://x.com/busyforking"
               target="_blank"
               rel="noreferrer"
-              className="text-text-ghost hover:text-jade transition-colors"
+              className="text-jade hover:text-jade-dim transition-colors"
             >
               @busyforking
             </a>
-            {' + '}
-            <span className="text-text-ghost">Claude</span>
-            {' + '}
-            <span className="text-text-ghost">Codex</span>
+            , coded by <span className="text-aqua">Claude</span>
+            {' and '}
+            <span className="text-aqua">Codex</span>
           </span>
-          <span className="text-base-border">|</span>
-          <span>
+          <span className="text-text-ghost">|</span>
+          <span className="text-text-ghost">
             tip: <span className="text-jade/50 tabular-nums">{blockNumber}</span>
           </span>
-          <span className="text-base-border">|</span>
-          <span>{buildVersion}</span>
-          <span className="text-base-border">|</span>
-          <Link href="/hardforks" className="text-text-ghost hover:text-jade transition-colors">
-            Hardforks
-          </Link>
+          <span className="text-text-ghost">|</span>
           <a
             href="https://github.com/janx/ckbadger"
             target="_blank"
             rel="noreferrer"
-            className="text-text-ghost hover:text-jade transition-colors"
+            className="text-text hover:text-jade transition-colors"
           >
-            Github
+            {buildVersion}
           </a>
+          <span className="live-dot" />
+          <span className="text-text-ghost">|</span>
+          <Link
+            href="/hardforks"
+            className="text-text hover:text-jade border-base-border hover:border-jade/30 rounded border px-1.5 py-0.5 transition-colors"
+          >
+            Hardforks
+          </Link>
+          <a
+            href="https://dashboard.fiber.channel/"
+            target="_blank"
+            rel="noreferrer"
+            className="text-text hover:text-jade border-base-border hover:border-jade/30 rounded border px-1.5 py-0.5 transition-colors"
+          >
+            Fiber Dashboard
+          </a>
+          <span className="text-text-ghost">|</span>
+          <span className="text-text">
+            <span className="text-text-dim">?</span> keys
+          </span>
         </div>
       </div>
     </main>
