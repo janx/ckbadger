@@ -170,7 +170,7 @@ function ImagePreview({ dataUrl }: { dataUrl: string }) {
     <img
       src={dataUrl}
       alt="Spore content preview"
-      className="max-h-80 max-w-full rounded object-contain"
+      className="h-80 w-80 max-w-full rounded object-contain"
       draggable={false}
     />
   );
@@ -185,7 +185,7 @@ function MediaUrlPreview({ url, mediaType }: { url: string; mediaType: string })
       <img
         src={src}
         alt="Spore decoded media preview"
-        className="max-h-80 max-w-full rounded object-contain"
+        className="h-80 w-80 max-w-full rounded object-contain"
         draggable={false}
       />
     );
@@ -196,7 +196,7 @@ function MediaUrlPreview({ url, mediaType }: { url: string; mediaType: string })
       <img
         src={src}
         alt="Spore decoded media preview"
-        className="max-h-80 max-w-full rounded object-contain"
+        className="h-80 w-80 max-w-full rounded object-contain"
         draggable={false}
       />
     );

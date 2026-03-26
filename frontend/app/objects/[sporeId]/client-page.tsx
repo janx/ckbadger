@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
@@ -56,6 +56,13 @@ import { formatActivityTimestamp, formatCompositionTier } from '@/lib/asset-util
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { decodeDobContent, extractSporePayload, type SporePayload } from '@/lib/dob-render';
 import { detectPreview } from '@/lib/preview-utils';
+import {
+  buildMediaCompositionView,
+  classifyObjectStandard,
+  filterDisplayableTraits,
+  type MediaCompositionView,
+  type MediaViewItem,
+} from '@/lib/object-standard';
 import { SporePreview, type PreviewPhysicality } from '@/components/object/spore-preview';
 type CollectionSectionTab = 'activities' | 'objects' | 'holders';
 function isCollectionSectionTab(value: string | null): value is CollectionSectionTab {
@@ -64,6 +71,183 @@ function isCollectionSectionTab(value: string | null): value is CollectionSectio
 function isNotFoundError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('404');
 }
+
+function MediaItemRow({
+  item,
+  isExpanded,
+  onToggle,
+}: {
+  item: MediaViewItem;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="border-base-border bg-base-surface/50 rounded border">
+      <button
+        type="button"
+        className="flex w-full items-baseline gap-2 p-2.5 text-left"
+        onClick={onToggle}
+      >
+        <span className="text-text-dim font-mono text-[10px]">
+          {isExpanded ? '\u25BC' : '\u25B6'}
+        </span>
+        <span className="bg-base-elevated text-text-dim inline-block rounded px-1.5 py-0.5 font-mono text-[10px] uppercase">
+          {item.label}
+        </span>
+        <span className="text-text font-mono text-[10px]">
+          {item.mediaType}
+          {item.size > 0 ? ` \u00B7 ${formatNumber(item.size)} bytes` : ''}
+        </span>
+      </button>
+      {isExpanded && (
+        <div className="border-base-border space-y-1.5 border-t px-2.5 pb-2.5 pt-2">
+          {item.description && (
+            <div className="text-text-dim font-mono text-[10px]">{item.description}</div>
+          )}
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div>
+              <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                Media Type
+              </div>
+              <div className="text-text-bright mt-0.5 font-mono text-[10px]">{item.mediaType}</div>
+            </div>
+            <div>
+              <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                Size
+              </div>
+              <div className="text-text-bright mt-0.5 font-mono text-[10px]">
+                {item.size > 0 ? `${formatNumber(item.size)} bytes` : 'Generated on request'}
+              </div>
+            </div>
+          </div>
+          {item.hash && (
+            <div>
+              <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                Content Hash
+              </div>
+              <div className="text-text-bright mt-0.5 break-all font-mono text-[10px]">
+                {item.hash}
+              </div>
+            </div>
+          )}
+          {item.step != null && (
+            <div>
+              <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                Decode Step
+              </div>
+              <div className="text-text-bright mt-0.5 font-mono text-[10px]">{item.step}</div>
+            </div>
+          )}
+          {item.url && (
+            <div>
+              <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                Endpoint
+              </div>
+              <div className="text-text-bright mt-0.5 break-all font-mono text-[10px]">
+                {item.url}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MediaCompositionsPanel({ view }: { view: MediaCompositionView }) {
+  const [expandedMedia, setExpandedMedia] = useState<Set<string>>(new Set());
+  const toggleMedia = useCallback((key: string) => {
+    setExpandedMedia((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const hasContent =
+    view.decodedItems.length > 0 || !!view.rawPayload || view.offChainSources.length > 0;
+
+  return (
+    <TerminalPanel className="mb-6">
+      <TerminalPanelHeader indicator="active">Media Compositions</TerminalPanelHeader>
+      <TerminalPanelContent>
+        <div className="space-y-4">
+          {view.parsingMethod && (
+            <div className="border-info/20 bg-info/5 rounded border px-2.5 py-1.5">
+              <span className="text-info-dim font-mono text-[10px]">{view.parsingMethod}</span>
+            </div>
+          )}
+          {view.decodedItems.length > 0 && (
+            <div className="space-y-2">
+              {view.decodedItems.map((item) => {
+                const key = item.hash || `${item.label}-${item.step}`;
+                return (
+                  <MediaItemRow
+                    key={key}
+                    item={item}
+                    isExpanded={expandedMedia.has(key)}
+                    onToggle={() => toggleMedia(key)}
+                  />
+                );
+              })}
+            </div>
+          )}
+          {view.rawPayload && (
+            <div>
+              <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                Payload
+              </div>
+              <pre className="text-text mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed">
+                {view.rawPayload.length > 400
+                  ? `${view.rawPayload.slice(0, 400)}...`
+                  : view.rawPayload}
+              </pre>
+            </div>
+          )}
+          {view.offChainSources.length > 0 && (
+            <div>
+              <div className="text-text-dim mb-2 font-mono text-[10px] uppercase tracking-wider">
+                Off-Chain
+              </div>
+              <div className="space-y-2">
+                {view.offChainSources.map((source, index) => (
+                  <div
+                    key={`${source.uri}-${index}`}
+                    className="border-base-border bg-base-surface/40 rounded border p-2.5"
+                  >
+                    <div className="flex items-baseline gap-2">
+                      <span className="bg-base-elevated text-text-dim inline-block rounded px-1.5 py-0.5 font-mono text-[10px] uppercase">
+                        {source.scheme}
+                      </span>
+                      <span className="text-text-dim font-mono text-[10px]">
+                        {source.sourceLocation}
+                      </span>
+                    </div>
+                    <div className="text-text-bright mt-1 break-all font-mono text-xs">
+                      {source.uri}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {!hasContent && (
+            <div className="text-text-dim text-xs">No media compositions detected.</div>
+          )}
+        </div>
+        {!!view.issues.length && (
+          <div className="border-rouge-dim/40 bg-rouge/10 text-rouge-dim mt-3 space-y-1 rounded border p-2 font-mono text-xs">
+            {view.issues.map((issue) => (
+              <div key={issue}>- {issue}</div>
+            ))}
+          </div>
+        )}
+      </TerminalPanelContent>
+    </TerminalPanel>
+  );
+}
+
 export interface SporeDetailPageProps {
   sporeId: string;
 }
@@ -310,6 +494,13 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
       ),
     [spore?.contentType, sporePayload?.contentBytes, dobContent?.media]
   );
+  const objectStandard = classifyObjectStandard(spore?.contentType ?? '');
+  const decodedTraits = dobContent?.traits ?? [];
+  const displayableTraits = useMemo(
+    () => filterDisplayableTraits(objectStandard, decodedTraits),
+    [objectStandard, decodedTraits]
+  );
+  const hasDecodedTraits = displayableTraits.length > 0;
   useEffect(() => {
     if (isMnftCollection && collection) {
       router.replace(`/classes/${collection.collectionId}`);
@@ -818,7 +1009,6 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const resolvedOwnerAddress = spore.ownerAddress || ownerAddressRecord?.address || null;
   const previewContentType = sporePayload?.contentType || spore.contentType;
   const previewBytes = sporePayload?.contentBytes.length ?? spore.contentSize;
-  const hasDecodedTraits = (dobContent?.traits.length ?? 0) > 0;
   const shouldShowPayloadHexPanel = !!sporePayload?.contentHex;
   const sporeOutputIndex =
     resolvedSporeOutputIndex !== null && resolvedSporeOutputIndex >= 0
@@ -1049,70 +1239,18 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
           </TerminalPanelContent>
         </TerminalPanel>
 
-        {/* Side-by-side row: On-Chain Media paired with DOB Details or Spore Content */}
-        {preview && (hasDecodedTraits || sporePayload) && (
-          <div className="mb-6 grid gap-6 lg:grid-cols-2">
+        {/* Media Preview */}
+        {preview && (
+          <div className={`mb-6 grid gap-6 ${hasDecodedTraits ? 'lg:grid-cols-2' : ''}`}>
             <TerminalPanel className={previewStyle.panel}>
               <TerminalPanelHeader indicator="active" className={previewStyle.header}>
-                <span className={previewStyle.headerText || undefined}>On-Chain Media</span>
+                <span className={previewStyle.headerText || undefined}>Preview</span>
               </TerminalPanelHeader>
               <TerminalPanelContent>
                 <SporePreview preview={preview} physicality={previewPhysicality} />
-                <div className="mt-4 space-y-2">
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
-                      <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                        Content Type
-                      </div>
-                      <div className="text-text-bright mt-1 break-all font-mono text-xs">
-                        {previewContentType}
-                      </div>
-                    </div>
-                    <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
-                      <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                        Size
-                      </div>
-                      <div className="text-text-bright mt-1 font-mono text-xs">
-                        {formatNumber(previewBytes)} bytes
-                      </div>
-                    </div>
-                  </div>
-                  {dobContent?.media && dobContent.media.length > 0 && (
-                    <div className="space-y-2">
-                      {dobContent.media.map((m) => (
-                        <div
-                          key={m.hash}
-                          className="border-base-border bg-base-surface/50 rounded border p-2.5"
-                        >
-                          <div className="flex items-baseline gap-2">
-                            <span className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                              {m.role ?? `Step ${m.step ?? 0}`}
-                            </span>
-                            <span className="text-text font-mono text-[10px]">
-                              {m.mediaType} · {formatNumber(m.size)} bytes
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {(!dobContent?.media || dobContent.media.length === 0) &&
-                    sporePayload?.textContent && (
-                      <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
-                        <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                          Payload
-                        </div>
-                        <pre className="text-text-bright mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed">
-                          {sporePayload.textContent.length > 500
-                            ? `${sporePayload.textContent.slice(0, 500)}...`
-                            : sporePayload.textContent}
-                        </pre>
-                      </div>
-                    )}
-                </div>
               </TerminalPanelContent>
             </TerminalPanel>
-            {hasDecodedTraits ? (
+            {hasDecodedTraits && (
               <TerminalPanel>
                 <TerminalPanelHeader indicator="active">
                   {previewContentType.toUpperCase()} Details
@@ -1129,7 +1267,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                     </div>
                   )}
                   <div className="grid gap-2 sm:grid-cols-2">
-                    {dobContent!.traits.map((trait) => (
+                    {displayableTraits.map((trait) => (
                       <div
                         key={`${trait.name}-${trait.value}`}
                         className="border-base-border bg-base-surface/50 rounded border p-2.5"
@@ -1137,48 +1275,16 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                         <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
                           {trait.name}
                         </div>
-                        <div className="text-text-bright mt-1 break-all font-mono text-xs">
+                        <pre className="text-text-bright mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">
                           {trait.value}
-                        </div>
+                        </pre>
                       </div>
                     ))}
                   </div>
                 </TerminalPanelContent>
               </TerminalPanel>
-            ) : (
-              <SporeContentPanel sporePayload={sporePayload!} clusterId={spore.clusterId} />
             )}
           </div>
-        )}
-
-        {/* Preview only (no companion panel) */}
-        {preview && !hasDecodedTraits && !sporePayload && (
-          <TerminalPanel className={`mb-6 ${previewStyle.panel}`}>
-            <TerminalPanelHeader indicator="active" className={previewStyle.header}>
-              <span className={previewStyle.headerText || undefined}>On-Chain Media</span>
-            </TerminalPanelHeader>
-            <TerminalPanelContent>
-              <SporePreview preview={preview} physicality={previewPhysicality} />
-              <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
-                  <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                    Content Type
-                  </div>
-                  <div className="text-text-bright mt-1 break-all font-mono text-xs">
-                    {previewContentType}
-                  </div>
-                </div>
-                <div className="border-base-border bg-base-surface/50 rounded border p-2.5">
-                  <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                    Size
-                  </div>
-                  <div className="text-text-bright mt-1 font-mono text-xs">
-                    {formatNumber(previewBytes)} bytes
-                  </div>
-                </div>
-              </div>
-            </TerminalPanelContent>
-          </TerminalPanel>
         )}
 
         {/* DOB Details standalone (no preview available) */}
@@ -1199,7 +1305,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                 </div>
               )}
               <div className="grid gap-2 sm:grid-cols-2">
-                {dobContent!.traits.map((trait) => (
+                {displayableTraits.map((trait) => (
                   <div
                     key={`${trait.name}-${trait.value}`}
                     className="border-base-border bg-base-surface/50 rounded border p-2.5"
@@ -1207,9 +1313,9 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                     <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
                       {trait.name}
                     </div>
-                    <div className="text-text-bright mt-1 break-all font-mono text-xs">
+                    <pre className="text-text-bright mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">
                       {trait.value}
-                    </div>
+                    </pre>
                   </div>
                 ))}
               </div>
@@ -1217,8 +1323,8 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
           </TerminalPanel>
         )}
 
-        {/* Spore Content standalone (when not already paired in side-by-side with preview) */}
-        {sporePayload && !(preview && !hasDecodedTraits) && (
+        {/* Spore Content */}
+        {sporePayload && (
           <SporeContentPanel
             sporePayload={sporePayload}
             clusterId={spore.clusterId}
@@ -1317,122 +1423,14 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
 
         {/* Media Compositions */}
         {spore.mediaProfile && (
-          <TerminalPanel className="mb-6">
-            <TerminalPanelHeader indicator="active">Media Compositions</TerminalPanelHeader>
-            <TerminalPanelContent>
-              <div className="space-y-4">
-                {/* On-chain composition */}
-                {(preview || spore.mediaProfile.tier !== 'unknown') && (
-                  <div>
-                    <div className="text-text-dim mb-2 font-mono text-[10px] uppercase tracking-wider">
-                      On-Chain
-                    </div>
-                    <div className="border-base-border bg-base-surface/40 space-y-2 rounded border p-2.5">
-                      <div className="grid gap-2 sm:grid-cols-3">
-                        <div>
-                          <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                            Type
-                          </div>
-                          <div className="text-text-bright mt-0.5 font-mono text-xs">
-                            {previewContentType}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                            Size
-                          </div>
-                          <div className="text-text-bright mt-0.5 font-mono text-xs">
-                            {formatNumber(previewBytes)} bytes
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                            Tier
-                          </div>
-                          <div className="text-text-bright mt-0.5 font-mono text-xs">
-                            {formatCompositionTier(spore.mediaProfile.tier)}
-                          </div>
-                        </div>
-                      </div>
-                      {dobContent?.media && dobContent.media.length > 0 && (
-                        <div className="space-y-2">
-                          {dobContent.media.map((m) => (
-                            <div
-                              key={m.hash}
-                              className="border-base-border bg-base-surface/50 rounded border p-2.5"
-                            >
-                              <div className="flex items-baseline gap-2">
-                                <span className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                                  {m.role ?? `Step ${m.step ?? 0}`}
-                                </span>
-                                <span className="text-text font-mono text-[10px]">
-                                  {m.mediaType} · {formatNumber(m.size)} bytes
-                                </span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {(!dobContent?.media || dobContent.media.length === 0) &&
-                        sporePayload?.textContent && (
-                          <div>
-                            <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                              Payload
-                            </div>
-                            <pre className="text-text mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px] leading-relaxed">
-                              {sporePayload.textContent.length > 400
-                                ? `${sporePayload.textContent.slice(0, 400)}...`
-                                : sporePayload.textContent}
-                            </pre>
-                          </div>
-                        )}
-                    </div>
-                  </div>
-                )}
-                {/* Off-chain sources */}
-                {spore.mediaProfile.sources.length > 0 && (
-                  <div>
-                    <div className="text-text-dim mb-2 font-mono text-[10px] uppercase tracking-wider">
-                      Off-Chain
-                    </div>
-                    <div className="space-y-2">
-                      {spore.mediaProfile.sources.map((source, index) => (
-                        <div
-                          key={`${source.uri}-${index}`}
-                          className="border-base-border bg-base-surface/40 rounded border p-2.5"
-                        >
-                          <div className="flex items-baseline gap-2">
-                            <span className="bg-base-elevated text-text-dim inline-block rounded px-1.5 py-0.5 font-mono text-[10px] uppercase">
-                              {source.scheme}
-                            </span>
-                            <span className="text-text-dim font-mono text-[10px]">
-                              {source.sourceLocation}
-                            </span>
-                          </div>
-                          <div className="text-text-bright mt-1 break-all font-mono text-xs">
-                            {source.uri}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {/* No media at all */}
-                {!preview &&
-                  spore.mediaProfile.tier === 'unknown' &&
-                  !spore.mediaProfile.sources.length && (
-                    <div className="text-text-dim text-xs">No media compositions detected.</div>
-                  )}
-              </div>
-              {!!spore.mediaProfile.issues.length && (
-                <div className="border-rouge-dim/40 bg-rouge/10 text-rouge-dim mt-3 space-y-1 rounded border p-2 font-mono text-xs">
-                  {spore.mediaProfile.issues.map((issue) => (
-                    <div key={issue}>- {issue}</div>
-                  ))}
-                </div>
-              )}
-            </TerminalPanelContent>
-          </TerminalPanel>
+          <MediaCompositionsPanel
+            view={buildMediaCompositionView(
+              previewContentType,
+              spore.mediaProfile,
+              dobContent?.media ?? [],
+              sporePayload?.textContent ?? null
+            )}
+          />
         )}
       </main>
     </div>

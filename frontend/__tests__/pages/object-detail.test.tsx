@@ -19,6 +19,7 @@ vi.mock('@/lib/api', () => ({
     getObjectCollectionHolders: vi.fn(),
     getObjectCollectionActivities: vi.fn(),
   },
+  resolveApiBase: vi.fn(() => 'http://localhost:8101/api/v1'),
   isWarmupPendingError: vi.fn(() => false),
 }));
 
@@ -310,6 +311,85 @@ describe('SporeDetailPage', () => {
       expect(screen.getAllByText('Background').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Blue').length).toBeGreaterThan(0);
     });
+  });
+
+  it('does not repeat raw media traits in DOB/1 details', async () => {
+    vi.mocked(api.getSporeObject).mockResolvedValue({
+      ...mockSpore,
+      contentType: 'dob/1',
+    } as any);
+    vi.mocked(api.getSporeObjectDecoded).mockResolvedValue({
+      status: 'decoded',
+      sporeId: mockSpore.sporeId,
+      contentType: 'dob/1',
+      dnaHex: null,
+      traits: [
+        { name: 'CellNumber', value: '3' },
+        { name: 'IMAGE', value: '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>' },
+      ],
+      media: [
+        {
+          mediaType: 'application/json',
+          role: null,
+          size: 14094,
+          hash: 'abc',
+          step: 1,
+          url: '/spore/objects/0x1/media/abc',
+        },
+        {
+          mediaType: 'image/svg+xml',
+          role: 'render',
+          size: 0,
+          hash: '',
+          step: null,
+          url: '/spore/objects/0x1/render',
+        },
+      ],
+      issues: [],
+    } as any);
+
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('DOB/1 Details')).toBeInTheDocument();
+      expect(screen.getByText('CellNumber')).toBeInTheDocument();
+      expect(screen.queryByText('IMAGE')).not.toBeInTheDocument();
+    });
+  });
+
+  it('renders decoded DOB preview with a fixed-size image frame', async () => {
+    vi.mocked(api.getSporeObject).mockResolvedValue({
+      ...mockSpore,
+      contentType: 'dob/1',
+    } as any);
+    vi.mocked(api.getSporeObjectDecoded).mockResolvedValue({
+      status: 'decoded',
+      sporeId: mockSpore.sporeId,
+      contentType: 'dob/1',
+      dnaHex: null,
+      traits: [{ name: 'CellNumber', value: '3' }],
+      media: [
+        {
+          mediaType: 'image/svg+xml',
+          role: 'render',
+          size: 0,
+          hash: '',
+          step: null,
+          url: '/spore/objects/0x1/render',
+        },
+      ],
+      issues: [],
+    } as any);
+
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
+
+    const previewImage = await screen.findByAltText('Spore decoded media preview');
+    expect(previewImage).toHaveAttribute(
+      'src',
+      'http://localhost:8101/api/v1/spore/objects/0x1/render'
+    );
+    expect(previewImage).toHaveClass('h-80');
+    expect(previewImage).toHaveClass('w-80');
   });
 
   it('renders payload hex+ASCII viewer for text spores', async () => {
