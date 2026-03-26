@@ -29,7 +29,14 @@ UDT_TYPE_MAP = {
 
 def fetch_page(page: int, udt_type: str = "xudt") -> dict:
     url = f"{EXPLORER_API}/api/v1/udts?page={page}&page_size={PAGE_SIZE}&type_hash=&udt_type={udt_type}"
-    req = urllib.request.Request(url, headers={"Accept": ACCEPT_HEADER})
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": ACCEPT_HEADER,
+            "Content-Type": ACCEPT_HEADER,
+            "User-Agent": "ckbadger/1.0",
+        },
+    )
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode())
 
