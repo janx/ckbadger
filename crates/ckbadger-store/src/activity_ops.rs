@@ -1,48 +1,39 @@
 //! Activity query operations.
 
-use std::collections::HashMap;
-
 use crate::keys;
 use crate::store::*;
 use crate::types::*;
 
 use crate::bytes_to_hex;
 
-impl CkbadgerStore {
-    /// Reconstruct TxActions from a CF_TX_ACTIONS key-value pair.
-    /// Uses block_header_cache to avoid redundant CF_BLOCK_HEADERS reads.
-    fn reconstruct_tx_actions(
-        &self,
-        key: &[u8],
-        value: &[u8],
-        header_cache: &mut HashMap<i64, (Vec<u8>, i64)>,
-    ) -> anyhow::Result<TxActions> {
-        let (block_number, tx_index, tx_hash) = keys::decode_tx_actions_key(key);
-        let compact: TxActionsCompact = postcard::from_bytes(value)?;
-        let (block_hash, timestamp) = match header_cache.entry(block_number) {
-            std::collections::hash_map::Entry::Occupied(e) => e.get().clone(),
-            std::collections::hash_map::Entry::Vacant(e) => {
-                let header = self.get_block_header(block_number)?.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "missing block header for CF_TX_ACTIONS reconstruction: block={}",
-                        block_number
-                    )
-                })?;
-                let pair = (header.hash.clone(), header.timestamp);
-                e.insert(pair.clone());
-                pair
-            }
-        };
-        Ok(TxActions::from_compact(
-            compact,
-            block_number,
-            tx_index,
-            tx_hash,
-            block_hash,
-            timestamp,
-        ))
+fn validate_tx_actions_identity(
+    actions: &TxActions,
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash_from_key: &[u8],
+) -> anyhow::Result<()> {
+    if actions.block_number != block_num || actions.tx_index != tx_idx {
+        anyhow::bail!(
+            "tx actions key/value location mismatch: key_block_num={}, value_block_num={}, key_tx_idx={}, value_tx_idx={}",
+            block_num,
+            actions.block_number,
+            tx_idx,
+            actions.tx_index
+        );
     }
+    if actions.tx_hash != tx_hash_from_key {
+        anyhow::bail!(
+            "tx actions key/value tx_hash mismatch: block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
+            block_num,
+            tx_idx,
+            bytes_to_hex(tx_hash_from_key),
+            bytes_to_hex(&actions.tx_hash)
+        );
+    }
+    Ok(())
+}
 
+impl CkbadgerStore {
     pub fn get_tx_actions(
         &self,
         block_num: i64,
@@ -52,8 +43,8 @@ impl CkbadgerStore {
         let key = keys::encode_tx_actions_key(block_num, tx_idx, tx_hash);
         match self.get_cf(self.cf_tx_actions(), &key)? {
             Some(value) => {
-                let mut header_cache = HashMap::new();
-                let actions = self.reconstruct_tx_actions(&key, &value, &mut header_cache)?;
+                let actions: TxActions = postcard::from_bytes(&value)?;
+                validate_tx_actions_identity(&actions, block_num, tx_idx, tx_hash)?;
                 Ok(Some(actions))
             }
             None => Ok(None),
@@ -81,7 +72,6 @@ impl CkbadgerStore {
         };
 
         let mut results = Vec::new();
-        let mut header_cache = HashMap::new();
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
@@ -93,7 +83,10 @@ impl CkbadgerStore {
                 continue;
             }
 
-            let actions = self.reconstruct_tx_actions(&key, &value, &mut header_cache)?;
+            let (block_num, tx_idx, tx_hash_from_key) = keys::decode_tx_actions_key(&key);
+            let actions: TxActions = postcard::from_bytes(&value)?;
+            validate_tx_actions_identity(&actions, block_num, tx_idx, &tx_hash_from_key)?;
+
             results.push(actions);
             if results.len() >= limit {
                 break;
@@ -120,8 +113,6 @@ impl CkbadgerStore {
             let mut last_seen = None;
             for actions in actions_list {
                 last_seen = Some((actions.block_number, actions.tx_index));
-                // is_cellbase is always false in compact form, but keep the
-                // guard for safety in case the invariant changes.
                 if actions.is_cellbase {
                     continue;
                 }
@@ -170,7 +161,6 @@ impl CkbadgerStore {
         let mut results = Vec::with_capacity(limit);
         let mut scan_cursor = cursor;
         let activity_cf = self.cf_tx_actions();
-        let mut header_cache = HashMap::new();
 
         loop {
             let rows = self.list_addr_txs_recent(lock_hash, scan_limit, scan_cursor)?;
@@ -191,9 +181,7 @@ impl CkbadgerStore {
             let action_values = self.multi_get_cf(action_refs);
 
             let mut last_seen = None;
-            for (((block_num, tx_idx, tx_hash), value_result), action_key) in
-                rows.iter().zip(action_values).zip(action_keys.iter())
-            {
+            for ((block_num, tx_idx, tx_hash), value_result) in rows.iter().zip(action_values) {
                 last_seen = Some((*block_num, *tx_idx));
                 let value = match value_result {
                     Ok(Some(value)) => value,
@@ -217,18 +205,17 @@ impl CkbadgerStore {
                         );
                     }
                 };
-                let actions = self
-                    .reconstruct_tx_actions(action_key, &value, &mut header_cache)
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "failed to reconstruct tx actions in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, tx_hash=0x{}, error={}",
-                            bytes_to_hex(lock_hash),
-                            block_num,
-                            tx_idx,
-                            bytes_to_hex(tx_hash),
-                            e
-                        )
-                    })?;
+                let actions: TxActions = postcard::from_bytes(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize tx actions in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, tx_hash=0x{}, error={}",
+                        bytes_to_hex(lock_hash),
+                        block_num,
+                        tx_idx,
+                        bytes_to_hex(tx_hash),
+                        e
+                    )
+                })?;
+                validate_tx_actions_identity(&actions, *block_num, *tx_idx, tx_hash)?;
                 if Self::matches_activity_filter(&actions, lock_hash, filter) {
                     results.push(actions);
                     if results.len() >= limit {
@@ -312,18 +299,6 @@ mod tests {
     use crate::batch::StoreBatch;
     use tempfile::TempDir;
 
-    fn make_block_header(block_num: i64) -> CachedBlockHeader {
-        CachedBlockHeader {
-            hash: vec![0xBB; 32],
-            timestamp: 1_700_000_000 + block_num,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        }
-    }
-
     fn make_tx_actions(block_num: i64, tx_idx: i32, tx_hash_byte: u8) -> TxActions {
         TxActions {
             tx_hash: vec![tx_hash_byte; 32],
@@ -352,7 +327,6 @@ mod tests {
 
         let actions = make_tx_actions(100, 0, 0xAA);
         let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(100, &make_block_header(100));
         batch.put_tx_actions(&actions);
         batch.commit().unwrap();
 
@@ -363,9 +337,6 @@ mod tests {
         assert_eq!(got.block_number, 100);
         assert_eq!(got.tx_index, 0);
         assert_eq!(got.tx_hash, vec![0xAA; 32]);
-        assert_eq!(got.block_hash, vec![0xBB; 32]);
-        assert_eq!(got.timestamp, 1_700_000_100);
-        assert!(!got.is_cellbase);
         assert_eq!(got.participants.len(), 1);
         assert_eq!(got.participants[0].ckb_delta, 100);
     }
@@ -376,8 +347,6 @@ mod tests {
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(100, &make_block_header(100));
-        batch.put_block_header(101, &make_block_header(101));
         // Insert 3 txs in ascending order (keys sort ascending by block_num desc + tx_idx desc)
         batch.put_tx_actions(&make_tx_actions(100, 0, 0x01));
         batch.put_tx_actions(&make_tx_actions(100, 1, 0x02));
@@ -394,8 +363,6 @@ mod tests {
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(100, &make_block_header(100));
-        batch.put_block_header(101, &make_block_header(101));
         batch.put_tx_actions(&make_tx_actions(100, 0, 0x01));
         batch.put_tx_actions(&make_tx_actions(100, 1, 0x02));
         batch.put_tx_actions(&make_tx_actions(101, 0, 0x03));
@@ -403,81 +370,6 @@ mod tests {
 
         let results = store.list_tx_actions_recent(2, None).unwrap();
         assert_eq!(results.len(), 2);
-    }
-
-    #[test]
-    fn test_compact_roundtrip_reconstructs_all_fields() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        let actions = TxActions {
-            tx_hash: vec![0xDD; 32],
-            block_hash: vec![0xBB; 32],
-            block_number: 500,
-            tx_index: 2,
-            timestamp: 1_700_000_500,
-            is_cellbase: false,
-            protocol_actions: vec![ProtocolAction::new(
-                "rgbpp",
-                "transfer",
-                serde_json::json!({"amount": 100}),
-            )],
-            type_calls: vec![TypeCallEntry {
-                type_code_hash: vec![0x11; 32],
-                type_hash_type: 1,
-                type_args: vec![0x22; 20],
-            }],
-            lock_calls: vec![LockCallEntry {
-                lock_code_hash: vec![0x33; 32],
-                lock_hash_type: 0,
-                lock_args: vec![0x44; 20],
-            }],
-            participants: vec![ParticipantDelta {
-                lock_hash: vec![0xAA; 32],
-                ckb_delta: -500,
-                used_delta: 100,
-                item_deltas: vec![ItemDelta {
-                    item_id: vec![0x55; 32],
-                    kind: ITEM_KIND_TOKEN,
-                    delta: 1000,
-                }],
-                tags: TAG_TOKEN | TAG_PROTOCOL,
-            }],
-        };
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(500, &make_block_header(500));
-        batch.put_tx_actions(&actions);
-        batch.commit().unwrap();
-
-        let got = store
-            .get_tx_actions(500, 2, &[0xDD; 32])
-            .unwrap()
-            .expect("should find tx actions");
-
-        // Fields from key
-        assert_eq!(got.block_number, 500);
-        assert_eq!(got.tx_index, 2);
-        assert_eq!(got.tx_hash, vec![0xDD; 32]);
-
-        // Fields from block header
-        assert_eq!(got.block_hash, vec![0xBB; 32]);
-        assert_eq!(got.timestamp, 1_700_000_500);
-
-        // Always false for compact
-        assert!(!got.is_cellbase);
-
-        // Preserved fields
-        assert_eq!(got.protocol_actions.len(), 1);
-        assert_eq!(got.protocol_actions[0].protocol, "rgbpp");
-        assert_eq!(got.type_calls.len(), 1);
-        assert_eq!(got.type_calls[0].type_code_hash, vec![0x11; 32]);
-        assert_eq!(got.lock_calls.len(), 1);
-        assert_eq!(got.lock_calls[0].lock_code_hash, vec![0x33; 32]);
-        assert_eq!(got.participants.len(), 1);
-        assert_eq!(got.participants[0].ckb_delta, -500);
-        assert_eq!(got.participants[0].item_deltas.len(), 1);
-        assert_eq!(got.participants[0].tags, TAG_TOKEN | TAG_PROTOCOL);
     }
 
     #[test]

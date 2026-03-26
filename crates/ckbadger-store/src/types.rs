@@ -1195,54 +1195,6 @@ pub struct TxActions {
     pub participants: Vec<ParticipantDelta>,
 }
 
-/// Compact storage form for CF_TX_ACTIONS. Omits fields that are
-/// present in the key (tx_hash, block_number, tx_index) or derivable
-/// from CF_BLOCK_HEADERS (block_hash, timestamp). is_cellbase is
-/// always false (cellbase excluded from writes).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TxActionsCompact {
-    pub protocol_actions: Vec<ProtocolAction>,
-    pub type_calls: Vec<TypeCallEntry>,
-    pub lock_calls: Vec<LockCallEntry>,
-    pub participants: Vec<ParticipantDelta>,
-}
-
-impl TxActionsCompact {
-    pub fn from_full(actions: &TxActions) -> Self {
-        Self {
-            protocol_actions: actions.protocol_actions.clone(),
-            type_calls: actions.type_calls.clone(),
-            lock_calls: actions.lock_calls.clone(),
-            participants: actions.participants.clone(),
-        }
-    }
-}
-
-impl TxActions {
-    /// Reconstruct full TxActions from compact form + key fields + block header.
-    pub fn from_compact(
-        compact: TxActionsCompact,
-        block_number: i64,
-        tx_index: i32,
-        tx_hash: Vec<u8>,
-        block_hash: Vec<u8>,
-        timestamp: i64,
-    ) -> Self {
-        Self {
-            tx_hash,
-            block_hash,
-            block_number,
-            tx_index,
-            timestamp,
-            is_cellbase: false,
-            protocol_actions: compact.protocol_actions,
-            type_calls: compact.type_calls,
-            lock_calls: compact.lock_calls,
-            participants: compact.participants,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypeCallEntry {
     pub type_code_hash: Vec<u8>,
