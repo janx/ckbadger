@@ -1,6 +1,6 @@
 # CKBadger> An Opinionated Local-first CKB-native Explorer
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![CKB](https://img.shields.io/badge/CKB-Nervos-green.svg)](https://www.nervos.org/)
 
 ## Principles
@@ -323,4 +323,4 @@ cd frontend && pnpm lint                 # ESLint
 
 ## License
 
-MIT License — see [LICENSE](./LICENSE).
+This project is licensed under the GNU General Public License v3.0 — see [LICENSE](./LICENSE).
