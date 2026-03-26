@@ -1,20 +1,11 @@
 // Bottleneck-driven resource controller for bulk sync.
 //
-// Two control dimensions, coupled through flush pressure:
+// Two independent control dimensions:
 //
-//   1. BATCH SIZE — governed by build_ms vs a dynamic target.
+//   1. BATCH SIZE — governed by build_ms vs target (absolute time).
 //      The unit is bytes, not blocks.  The build loop decides block count
 //      from `target_batch_bytes / density`.
 //      build < target → grow bytes.  build > target → shrink bytes.
-//
-//      The target itself floats with flush pressure:
-//        flush idle  (pressure ≈ 0)   → target rises to 3000 ms
-//        flush moderate (pressure 0.5) → target at baseline 2000 ms
-//        flush heavy (pressure ≥ 1)   → target drops to 1000 ms
-//      This couples batch sizing to downstream write capacity: when the
-//      DB can absorb writes easily, larger batches yield higher throughput;
-//      when the DB is stressed, smaller batches reduce write pressure
-//      without waiting for channel backpressure.
 //
 //   2. I/O RESOURCES — governed by waste classification (ratio).
 //      Waste = recv_wait + flush_wait (idle time, ideally zero).
@@ -22,10 +13,10 @@
 //      Classification identifies which waste source dominates and shifts
 //      I/O knobs (fetch_threads, bg_jobs) accordingly.
 //
-//   Dimension  │ Signal                     │ Knobs
-//   ───────────│────────────────────────────│────────────────────────────────
-//   Batch size │ build_ms + flush pressure  │ target_batch_bytes
-//   I/O        │ waste composition          │ fetch_threads, bg_jobs
+//   Dimension  │ Signal            │ Knobs
+//   ───────────│───────────────────│────────────────────────────────
+//   Batch size │ build_ms          │ target_batch_bytes
+//   I/O        │ waste composition │ fetch_threads, bg_jobs
 //
 // Key design principle: fetch (CKB RocksDB reads via std::thread::scope)
 // does NOT compete with build (CPU via rayon) for resources.  Therefore
@@ -65,24 +56,13 @@ const FLUSH_PCT_THRESHOLD: f64 = 0.4;
 // catch up — without suppressing the pipeline (no Flush classification).
 const FLUSH_L0_THRESHOLD: f64 = 40.0;
 
-// Base target build wall-clock time (ms).  The actual target floats
-// dynamically based on flush pressure:
-//   flush idle  → target rises to BASE * CEILING (more throughput headroom)
-//   flush heavy → target drops  to BASE * FLOOR  (smaller batches, less flush pressure)
-// This keeps batch sizing responsive to downstream write capacity instead
-// of capping throughput at a fixed iteration time.
-const TARGET_BASE_MS: f64 = 2000.0;
-
-// Dynamic target scale bounds.
-//   pressure = wait_ema / build_ema  (0 = flush instant, 1 = flush equals build)
-//   scale    = (CEILING - pressure).clamp(FLOOR, CEILING)
-//   target   = BASE * scale
-//
-//   pressure 0   → scale 1.5 → 3000 ms  (flush idle, maximize throughput)
-//   pressure 0.5 → scale 1.0 → 2000 ms  (moderate, original baseline)
-//   pressure 1.0 → scale 0.5 → 1000 ms  (flush overwhelmed, shrink batches)
-const TARGET_SCALE_CEILING: f64 = 1.5;
-const TARGET_SCALE_FLOOR: f64 = 0.5;
+// Target build wall-clock time (ms).  target_batch_bytes adjusts to
+// converge build_ms toward this target:
+//   build < target → grow bytes (room for more work per batch)
+//   build > target → shrink bytes (batch too large)
+// This is independent of bottleneck classification — classification
+// only governs I/O resource knobs (fetch_threads, bg_jobs).
+const TARGET_ITERATION_MS: f64 = 2000.0;
 
 // Per-step bytes change safety bounds.  These limit how much
 // target_batch_bytes can change in a single iteration, preventing
@@ -140,7 +120,6 @@ pub(crate) struct BatchSignals {
 #[derive(Debug, Clone)]
 pub(crate) struct ControllerOutput {
     pub target_batch_bytes: u64,
-    pub target_ms: f64,
     pub fetch_threads: u32,
     pub bg_jobs: i32,
     pub bottleneck: Bottleneck,
@@ -224,15 +203,14 @@ impl BottleneckController {
         self.wait_ema = ema(self.wait_ema, signals.flush_wait_ms);
         self.l0_ema = ema(self.l0_ema, signals.l0_files as f64);
 
-        // ── Batch size adjustment: build_ms vs dynamic target ──
+        // ── Batch size adjustment: build_ms vs target ──
         //
-        // The target floats with flush pressure: flush idle → higher target
-        // (bigger batches, more throughput), flush stressed → lower target
-        // (smaller batches, less write pressure).  recv_wait does not
-        // influence batch sizing — fetch starvation is handled by I/O knobs.
-        let target_ms = self.dynamic_target_ms();
+        // Sizing targets build_ms only.  recv_wait and flush_wait are
+        // waste for I/O classification, not batch sizing.  This separates
+        // "how big should each batch be" (CPU cost) from "which I/O
+        // resource is starved" (waste ratio).
         if self.build_ema > 1.0 {
-            let ratio = target_ms / self.build_ema;
+            let ratio = TARGET_ITERATION_MS / self.build_ema;
             let factor = ratio.clamp(BYTES_STEP_MIN, BYTES_STEP_MAX);
             self.target_batch_bytes = ((self.target_batch_bytes as f64 * factor) as u64)
                 .clamp(MIN_BATCH_BYTES, self.max_batch_bytes);
@@ -275,7 +253,6 @@ impl BottleneckController {
 
         Some(ControllerOutput {
             target_batch_bytes: self.target_batch_bytes,
-            target_ms,
             fetch_threads: self.fetch_threads,
             bg_jobs: self.bg_jobs,
             bottleneck,
@@ -284,26 +261,6 @@ impl BottleneckController {
             wait_ema: self.wait_ema,
             l0_ema: self.l0_ema,
         })
-    }
-
-    /// Compute dynamic target iteration time based on flush pressure.
-    ///
-    /// pressure = wait_ema / build_ema (how much flush costs relative to build)
-    /// scale    = (CEILING - pressure).clamp(FLOOR, CEILING)
-    /// target   = BASE * scale
-    ///
-    /// When flush is idle (pressure ≈ 0), target rises to 3000 ms, allowing
-    /// larger batches and higher throughput.  When flush is stressed
-    /// (pressure ≈ 1), target drops to 1000 ms, producing smaller batches
-    /// that reduce write pressure.
-    fn dynamic_target_ms(&self) -> f64 {
-        if self.build_ema < 1.0 {
-            return TARGET_BASE_MS;
-        }
-        let pressure = self.wait_ema / self.build_ema;
-        let scale =
-            (TARGET_SCALE_CEILING - pressure).clamp(TARGET_SCALE_FLOOR, TARGET_SCALE_CEILING);
-        TARGET_BASE_MS * scale
     }
 
     /// Classify which I/O resource is the dominant source of waste.
@@ -517,9 +474,10 @@ mod tests {
     }
 
     #[test]
-    fn flush_pressure_shrinks_target_bytes() {
+    fn flush_wait_does_not_affect_target_bytes() {
         // Two controllers: same build_ms, different flush_wait_ms.
-        // High flush_wait lowers the dynamic target, causing smaller batches.
+        // target_batch_bytes should converge to same value since sizing
+        // only looks at build_ms.
         let mut no_flush = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
         let mut with_flush = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
 
@@ -541,44 +499,10 @@ mod tests {
             });
         }
 
-        assert!(
-            with_flush.target_batch_bytes < no_flush.target_batch_bytes,
-            "flush pressure should shrink target_batch_bytes: with_flush={} should be < no_flush={}",
-            with_flush.target_batch_bytes, no_flush.target_batch_bytes
-        );
-    }
-
-    #[test]
-    fn flush_idle_raises_dynamic_target() {
-        // When flush_wait ≈ 0, the dynamic target should rise above the
-        // base 2000 ms, allowing larger batches and higher throughput.
-        let mut ctrl = BottleneckController::new(100_000_000, 12, 8, 32 * GB);
-
-        ctrl.observe(&healthy_signals()); // warmup
-
-        // Feed signals with zero flush wait to let EMAs converge.
-        for _ in 0..20 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 0.0,
-                build_ms: 2000.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
-        }
-
-        let target = ctrl.dynamic_target_ms();
-        assert!(
-            target > TARGET_BASE_MS,
-            "flush-idle target should exceed base {}: got {}",
-            TARGET_BASE_MS,
-            target,
-        );
-        let expected_ceiling = TARGET_BASE_MS * TARGET_SCALE_CEILING;
-        assert!(
-            (target - expected_ceiling).abs() < 1.0,
-            "flush-idle target should converge to ceiling {}: got {}",
-            expected_ceiling,
-            target,
+        assert_eq!(
+            no_flush.target_batch_bytes, with_flush.target_batch_bytes,
+            "flush_wait should not affect target_batch_bytes: no_flush={} vs with_flush={}",
+            no_flush.target_batch_bytes, with_flush.target_batch_bytes
         );
     }
 
