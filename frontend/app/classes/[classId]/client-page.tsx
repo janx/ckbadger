@@ -10,7 +10,6 @@ import {
   TerminalPanelHeader,
   TerminalPanelContent,
   TerminalPanelFooter,
-  TerminalRow,
 } from '@/components/ui/terminal-panel';
 import { Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
@@ -21,14 +20,15 @@ import { ObjectActivityCard } from '@/components/object/object-activity-card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
+import { ObjectGalleryPanel, GALLERY_PAGE_SIZE } from '@/components/object/object-gallery-panel';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatNumber } from '@/lib/utils';
 import { formatActivityTimestamp, normalizeAssetId } from '@/lib/asset-utils';
 
-type CollectionSectionTab = 'activities' | 'objects' | 'holders';
+type CollectionSectionTab = 'activities' | 'holders';
 
 function isCollectionSectionTab(value: string | null): value is CollectionSectionTab {
-  return value === 'activities' || value === 'objects' || value === 'holders';
+  return value === 'activities' || value === 'holders';
 }
 
 function decodeClassConfigure(configure: number): string {
@@ -82,10 +82,10 @@ export default function MnftClassDetailPage({ classId: routeClassId }: MnftClass
     queryKey: ['mnft-class-items', classId, itemsPagination.cursor],
     queryFn: () =>
       api.getObjectCollectionItems(classId, {
-        limit: DEFAULT_PAGE_SIZE,
+        limit: GALLERY_PAGE_SIZE,
         cursor: itemsPagination.cursor,
       }),
-    enabled: !!collection && activeCollectionTab === 'objects',
+    enabled: !!collection,
     placeholderData: keepPreviousData,
   });
 
@@ -365,7 +365,19 @@ export default function MnftClassDetailPage({ classId: routeClassId }: MnftClass
           </TerminalPanel>
         )}
 
-        {/* Tabs: Activities / Objects / Holders */}
+        {/* Objects Gallery */}
+        <ObjectGalleryPanel
+          className="mb-6"
+          totalCount={collection.totalCount}
+          collectionItems={collectionItems}
+          isLoading={isItemsLoading}
+          page={itemsPagination.page}
+          hasPrevious={itemsPagination.hasPrevious}
+          onNext={() => itemsPagination.goToNext(collectionItems?.nextCursor)}
+          onPrevious={itemsPagination.goToPrevious}
+        />
+
+        {/* Tabs: Activities / Holders */}
         <TerminalPanel>
           <Tabs
             value={activeCollectionTab}
@@ -380,20 +392,13 @@ export default function MnftClassDetailPage({ classId: routeClassId }: MnftClass
                   <TabsTrigger value="activities">
                     Activities ({formatNumber(collection.activitiesCount)})
                   </TabsTrigger>
-                  <TabsTrigger value="objects">
-                    Objects ({formatNumber(collection.totalCount)})
-                  </TabsTrigger>
                   <TabsTrigger value="holders">
                     Holders ({formatNumber(collection.holdersCount)})
                   </TabsTrigger>
                 </TabsList>
               }
             >
-              {activeCollectionTab === 'activities'
-                ? 'Activities'
-                : activeCollectionTab === 'holders'
-                  ? 'Holders'
-                  : 'Objects'}
+              {activeCollectionTab === 'holders' ? 'Holders' : 'Activities'}
             </TerminalPanelHeader>
 
             {/* Activities Tab */}
@@ -437,127 +442,6 @@ export default function MnftClassDetailPage({ classId: routeClassId }: MnftClass
                   onPrevious={activitiesPagination.goToPrevious}
                 />
               </TerminalPanelFooter>
-            </TabsContent>
-
-            {/* Objects Tab — TABLE layout matching cluster page */}
-            <TabsContent value="objects" className="py-0">
-              <TerminalPanelContent padding="none">
-                {isItemsLoading ? (
-                  <div className="text-text-dim py-8 text-center">Loading objects...</div>
-                ) : !collectionItems?.data?.length ? (
-                  <div className="text-text-dim py-8 text-center">
-                    No objects in this collection
-                  </div>
-                ) : (
-                  <>
-                    <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:block">
-                      <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_80px_minmax(0,1.2fr)_110px] items-center gap-3">
-                        <div>Token ID</div>
-                        <div>Name</div>
-                        <div className="text-center">Status</div>
-                        <div className="text-right">Owner</div>
-                        <div className="text-right">Block</div>
-                      </div>
-                    </div>
-                    {collectionItems.data.map((item) => (
-                      <TerminalRow key={item.nftId}>
-                        {/* Desktop layout */}
-                        <div className="hidden md:grid md:grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_80px_minmax(0,1.2fr)_110px] md:items-center md:gap-3">
-                          <div>
-                            <Link href={`/objects/mnft/${item.nftId}`} className="hover:underline">
-                              <HexDisplay value={item.nftId} size="sm" />
-                            </Link>
-                          </div>
-                          <div className="text-text truncate font-mono text-xs">
-                            {item.name || '\u2014'}
-                          </div>
-                          <div className="text-center">
-                            {item.isLive ? (
-                              <Badge variant="green">Live</Badge>
-                            ) : (
-                              <Badge variant="red">Burned</Badge>
-                            )}
-                          </div>
-                          <div className="text-right">
-                            {item.ownerLockHash ? (
-                              <Link
-                                href={`/address/${item.ownerLockHash}`}
-                                className="hover:underline"
-                              >
-                                <HexDisplay
-                                  value={item.ownerLockHash}
-                                  size="sm"
-                                  startChars={10}
-                                  endChars={8}
-                                />
-                              </Link>
-                            ) : (
-                              <span className="text-text-dim font-mono text-xs">{'\u2014'}</span>
-                            )}
-                          </div>
-                          <div className="text-right">
-                            <Link
-                              href={`/blocks/${item.createdAtBlock}`}
-                              className="text-emphasis font-mono text-xs hover:underline"
-                            >
-                              #{formatNumber(item.createdAtBlock)}
-                            </Link>
-                          </div>
-                        </div>
-                        {/* Mobile layout */}
-                        <div className="space-y-2 md:hidden">
-                          <div className="flex items-start justify-between gap-3">
-                            <Link href={`/objects/mnft/${item.nftId}`} className="hover:underline">
-                              <HexDisplay value={item.nftId} size="sm" />
-                            </Link>
-                            {item.isLive ? (
-                              <Badge variant="green">Live</Badge>
-                            ) : (
-                              <Badge variant="red">Burned</Badge>
-                            )}
-                          </div>
-                          {item.name && (
-                            <div className="text-text font-mono text-xs">{item.name}</div>
-                          )}
-                          <div className="flex items-center justify-between gap-3 text-xs">
-                            <span className="text-text-dim font-mono">
-                              Block #{formatNumber(item.createdAtBlock)}
-                            </span>
-                            {item.ownerLockHash && (
-                              <Link
-                                href={`/address/${item.ownerLockHash}`}
-                                className="hover:underline"
-                              >
-                                <HexDisplay
-                                  value={item.ownerLockHash}
-                                  size="sm"
-                                  startChars={8}
-                                  endChars={6}
-                                />
-                              </Link>
-                            )}
-                          </div>
-                        </div>
-                      </TerminalRow>
-                    ))}
-                  </>
-                )}
-              </TerminalPanelContent>
-              {collectionItems && (collectionItems.data?.length ?? 0) > 0 && (
-                <TerminalPanelFooter>
-                  <CursorPagination
-                    total={collection.totalCount}
-                    totalLabel="Objects"
-                    pageSize={DEFAULT_PAGE_SIZE}
-                    page={itemsPagination.page}
-                    currentCount={collectionItems.data?.length ?? 0}
-                    hasMore={collectionItems.hasMore}
-                    hasPrevious={itemsPagination.hasPrevious}
-                    onNext={() => itemsPagination.goToNext(collectionItems.nextCursor)}
-                    onPrevious={itemsPagination.goToPrevious}
-                  />
-                </TerminalPanelFooter>
-              )}
             </TabsContent>
 
             {/* Holders Tab */}

@@ -64,9 +64,10 @@ import {
   type MediaViewItem,
 } from '@/lib/object-standard';
 import { SporePreview, type PreviewPhysicality } from '@/components/object/spore-preview';
-type CollectionSectionTab = 'activities' | 'objects' | 'holders';
+import { ObjectGalleryPanel, GALLERY_PAGE_SIZE } from '@/components/object/object-gallery-panel';
+type CollectionSectionTab = 'activities' | 'holders';
 function isCollectionSectionTab(value: string | null): value is CollectionSectionTab {
-  return value === 'activities' || value === 'objects' || value === 'holders';
+  return value === 'activities' || value === 'holders';
 }
 function isNotFoundError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('404');
@@ -396,7 +397,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     ],
     queryFn: () =>
       api.getObjectCollectionItems(collectionAssetId, {
-        limit: DEFAULT_PAGE_SIZE,
+        limit: GALLERY_PAGE_SIZE,
         cursor: collectionItemsPagination.cursor,
         search: collectionSearchKeyword || undefined,
         status: supportsCollectionFilters ? collectionStatusFilter : undefined,
@@ -649,58 +650,42 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
             totalCapacityLabel="Owned Capacity"
           />
 
+          <ObjectGalleryPanel
+            className="mb-6"
+            totalCount={collection.totalCount}
+            collectionItems={collectionItems}
+            isLoading={isCollectionItemsLoading}
+            isError={isCollectionItemsError}
+            isFetching={isCollectionItemsFetching}
+            page={collectionItemsPagination.page}
+            hasPrevious={collectionItemsPagination.hasPrevious}
+            onNext={() => collectionItemsPagination.goToNext(collectionItems?.nextCursor)}
+            onPrevious={collectionItemsPagination.goToPrevious}
+            supportsFilters={supportsCollectionFilters}
+            statusFilter={collectionStatusFilter}
+            onStatusFilterChange={setCollectionStatusSelection}
+            searchInput={searchInput}
+            onSearchInputChange={setSearchInput}
+            searchLabel={collectionSearchLabel}
+            inactiveStatusLabel={collectionInactiveStatusLabel}
+          />
+
           <TerminalPanel>
             <Tabs value={activeCollectionTab} onValueChange={handleCollectionTabChange}>
               <TerminalPanelHeader
                 indicator="active"
                 actions={
-                  <div className="flex flex-wrap items-center gap-3">
-                    <TabsList className="border-b-0">
-                      <TabsTrigger value="activities">
-                        Activities ({formatNumber(collection.activitiesCount)})
-                      </TabsTrigger>
-                      <TabsTrigger value="objects">
-                        Objects ({formatNumber(collection.totalCount)})
-                      </TabsTrigger>
-                      <TabsTrigger value="holders">
-                        Holders ({formatNumber(collection.holdersCount)})
-                      </TabsTrigger>
-                    </TabsList>
-                    {activeCollectionTab === 'objects' && supportsCollectionFilters && (
-                      <div className="flex items-center gap-2">
-                        <select
-                          value={collectionStatusFilter}
-                          onChange={(event) =>
-                            setCollectionStatusSelection(event.target.value as ItemStatusFilter)
-                          }
-                          aria-label="Status Filter"
-                          className="focus:border-emphasis border-base-border bg-base-surface text-text-bright rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
-                        >
-                          <option value="all">All</option>
-                          <option value="live">Live</option>
-                          <option value="recycled">{collectionInactiveStatusLabel}</option>
-                        </select>
-                        <input
-                          type="text"
-                          value={searchInput}
-                          onChange={(event) => setSearchInput(event.target.value)}
-                          placeholder={collectionSearchLabel}
-                          aria-label={collectionSearchLabel}
-                          className="focus:border-emphasis border-base-border bg-base-surface text-text-bright placeholder:text-text-dim w-44 rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
-                        />
-                        {isCollectionItemsFetching && (
-                          <span className="text-text-dim font-mono text-xs">Searching...</span>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                  <TabsList className="border-b-0">
+                    <TabsTrigger value="activities">
+                      Activities ({formatNumber(collection.activitiesCount)})
+                    </TabsTrigger>
+                    <TabsTrigger value="holders">
+                      Holders ({formatNumber(collection.holdersCount)})
+                    </TabsTrigger>
+                  </TabsList>
                 }
               >
-                {activeCollectionTab === 'activities'
-                  ? 'Activities'
-                  : activeCollectionTab === 'holders'
-                    ? 'Holders'
-                    : 'Objects'}
+                {activeCollectionTab === 'holders' ? 'Holders' : 'Activities'}
               </TerminalPanelHeader>
               <TabsContent value="activities" className="py-0">
                 <TerminalPanelContent>
@@ -743,197 +728,6 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                       collectionActivitiesPagination.goToNext(collectionActivities?.nextCursor)
                     }
                     onPrevious={collectionActivitiesPagination.goToPrevious}
-                  />
-                </TerminalPanelFooter>
-              </TabsContent>
-              <TabsContent value="objects" className="py-0">
-                <TerminalPanelContent>
-                  {isDotbitCollectionView ? (
-                    isCollectionItemsLoading ? (
-                      <div className="text-text-dim py-8 text-center">Loading Objects...</div>
-                    ) : isCollectionItemsError ? (
-                      <div className="text-rouge py-8 text-center">
-                        Failed to load Objects. Please refresh and try again.
-                      </div>
-                    ) : !collectionItems?.data?.length ? (
-                      <div className="text-text-dim py-8 text-center">
-                        No Objects in this collection
-                      </div>
-                    ) : (
-                      <div className="border-base-border bg-base-surface/30 overflow-hidden rounded border">
-                        {collectionItems.data.map((item) => (
-                          <div
-                            key={item.nftId}
-                            className="row-scan hover:bg-base-elevated/40 border-base-border border-b px-3 py-2.5 transition-colors last:border-b-0"
-                          >
-                            <div className="mb-1 flex items-center justify-between gap-3">
-                              <Link
-                                href={`/identities/dotbit/${encodeURIComponent(item.nftId)}`}
-                                className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
-                              >
-                                {item.name || item.nftId}
-                              </Link>
-                              {item.isLive ? (
-                                <Badge variant="green">Live</Badge>
-                              ) : (
-                                <Badge variant="red">Recycled</Badge>
-                              )}
-                            </div>
-                            <div className="text-text-dim flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs">
-                              <span>
-                                ID:{' '}
-                                <span className="text-text">
-                                  <HexDisplay
-                                    value={item.nftId}
-                                    size="sm"
-                                    startChars={10}
-                                    endChars={8}
-                                  />
-                                </span>
-                              </span>
-                              <span>Block #{formatNumber(item.createdAtBlock)}</span>
-                              {item.isLive && (
-                                <span>
-                                  Cell:{' '}
-                                  {item.txHash &&
-                                  item.outputIndex !== null &&
-                                  item.outputIndex !== undefined ? (
-                                    <Link
-                                      href={`/cell/${item.txHash}-${item.outputIndex}`}
-                                      className="text-emphasis hover:underline"
-                                    >
-                                      <HexDisplay
-                                        value={item.txHash}
-                                        size="sm"
-                                        startChars={10}
-                                        endChars={8}
-                                      />
-                                      -{item.outputIndex}
-                                    </Link>
-                                  ) : (
-                                    <span className="text-text-dim">Unavailable</span>
-                                  )}
-                                </span>
-                              )}
-                              {item.ownerLockHash && (
-                                <span>
-                                  Owner:{' '}
-                                  <Link
-                                    href={`/address/${item.ownerLockHash}`}
-                                    className="hover:underline"
-                                  >
-                                    <HexDisplay
-                                      value={item.ownerLockHash}
-                                      size="sm"
-                                      startChars={10}
-                                      endChars={8}
-                                    />
-                                  </Link>
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )
-                  ) : isCollectionItemsLoading || isCollectionItemsFetching ? (
-                    <div className="text-text-dim py-8 text-center">Loading Objects...</div>
-                  ) : isCollectionItemsError ? (
-                    <div className="text-rouge py-8 text-center">
-                      Failed to load Objects. Please refresh and try again.
-                    </div>
-                  ) : !collectionItems?.data?.length ? (
-                    <div className="text-text-dim py-8 text-center">
-                      No Objects in this collection
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {collectionItems.data.map((item) => (
-                        <div
-                          key={item.nftId}
-                          className="border-base-border bg-base-surface/40 flex flex-col gap-2 rounded border p-3"
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            {item.standard.toLowerCase() === 'm-nft' ? (
-                              <Link
-                                href={`/objects/mnft/${item.nftId}`}
-                                className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
-                              >
-                                {item.name || item.nftId}
-                              </Link>
-                            ) : item.standard.toLowerCase() === 'did_ckb' ||
-                              item.standard.toLowerCase() === 'did:ckb' ? (
-                              <Link
-                                href={`/identities/did/${encodeURIComponent(item.nftId)}`}
-                                className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
-                              >
-                                {item.name || item.nftId}
-                              </Link>
-                            ) : (
-                              <div className="text-text-bright font-mono text-sm">
-                                {item.name || item.nftId}
-                              </div>
-                            )}
-                            {item.isLive ? (
-                              <Badge variant="green">Live</Badge>
-                            ) : (
-                              <Badge variant="red">
-                                {item.standard.toLowerCase() === 'did_ckb' ||
-                                item.standard.toLowerCase() === 'did:ckb'
-                                  ? 'Recycled'
-                                  : 'Burned'}
-                              </Badge>
-                            )}
-                          </div>
-                          {item.standard.toLowerCase() === 'm-nft' ? (
-                            <Link href={`/objects/mnft/${item.nftId}`} className="hover:underline">
-                              <HexDisplay value={item.nftId} size="sm" />
-                            </Link>
-                          ) : item.standard.toLowerCase() === 'did_ckb' ||
-                            item.standard.toLowerCase() === 'did:ckb' ? (
-                            <Link
-                              href={`/identities/did/${encodeURIComponent(item.nftId)}`}
-                              className="hover:underline"
-                            >
-                              <HexDisplay value={item.nftId} size="sm" />
-                            </Link>
-                          ) : (
-                            <HexDisplay value={item.nftId} size="sm" />
-                          )}
-                          <div className="text-text-dim font-mono text-xs">
-                            Created at block #{formatNumber(item.createdAtBlock)}
-                          </div>
-                          {item.ownerLockHash && (
-                            <div className="text-text-dim font-mono text-xs">
-                              Owner:{' '}
-                              <Link
-                                href={`/address/${item.ownerLockHash}`}
-                                className="hover:underline"
-                              >
-                                <HexDisplay
-                                  value={item.ownerLockHash}
-                                  size="sm"
-                                  startChars={10}
-                                  endChars={8}
-                                />
-                              </Link>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </TerminalPanelContent>
-                <TerminalPanelFooter>
-                  <CursorPagination
-                    total={collectionItems?.total ?? undefined}
-                    totalLabel="Objects"
-                    pageSize={DEFAULT_PAGE_SIZE}
-                    page={collectionItemsPagination.page}
-                    hasMore={collectionItems?.hasMore ?? false}
-                    hasPrevious={collectionItemsPagination.hasPrevious}
-                    onNext={() => collectionItemsPagination.goToNext(collectionItems?.nextCursor)}
-                    onPrevious={collectionItemsPagination.goToPrevious}
                   />
                 </TerminalPanelFooter>
               </TabsContent>

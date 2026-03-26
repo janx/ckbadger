@@ -10,7 +10,6 @@ import {
   TerminalPanelHeader,
   TerminalPanelContent,
   TerminalPanelFooter,
-  TerminalRow,
 } from '@/components/ui/terminal-panel';
 import { Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
@@ -18,6 +17,11 @@ import { Address } from '@/components/ui/address';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CapacityStatisticsSection } from '@/components/ui/capacity-statistics-section';
 import { ObjectActivityCard } from '@/components/object/object-activity-card';
+import {
+  ObjectGalleryPanel,
+  GALLERY_PAGE_SIZE,
+  type SporeItemEntry,
+} from '@/components/object/object-gallery-panel';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
@@ -28,7 +32,7 @@ import { formatNumber } from '@/lib/utils';
 import { formatActivityTimestamp, formatCompositionTier } from '@/lib/asset-utils';
 type ListContentFilter = 'all' | 'image' | 'video' | 'audio' | 'text' | 'other';
 type ListSort = 'createdDesc' | 'createdAsc' | 'sizeDesc' | 'sizeAsc';
-type CollectionSectionTab = 'activities' | 'objects' | 'holders';
+type CollectionSectionTab = 'activities' | 'holders';
 const LIST_FILTER_VALUES: ListContentFilter[] = ['all', 'image', 'video', 'audio', 'text', 'other'];
 const LIST_SORT_VALUES: ListSort[] = ['createdDesc', 'createdAsc', 'sizeDesc', 'sizeAsc'];
 function isListContentFilter(value: string | null): value is ListContentFilter {
@@ -38,7 +42,7 @@ function isListSort(value: string | null): value is ListSort {
   return !!value && LIST_SORT_VALUES.includes(value as ListSort);
 }
 function isCollectionSectionTab(value: string | null): value is CollectionSectionTab {
-  return value === 'activities' || value === 'objects' || value === 'holders';
+  return value === 'activities' || value === 'holders';
 }
 function safeString(value: unknown, fallback = ''): string {
   if (typeof value !== 'string') {
@@ -51,11 +55,6 @@ function safeNumber(value: unknown, fallback = 0): number {
     return fallback;
   }
   return value;
-}
-function getSortIndicator(direction: 'asc' | 'desc' | null): string {
-  if (direction === 'asc') return '↑';
-  if (direction === 'desc') return '↓';
-  return '↕';
 }
 const COMPOSITION_TIER_DESCRIPTIONS: Record<string, string> = {
   pure_ckb:
@@ -221,7 +220,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     queryKey: ['cluster-spores', clusterId, sporesPagination.cursor],
     queryFn: () =>
       api.getSporesByCluster(clusterId, {
-        limit: DEFAULT_PAGE_SIZE,
+        limit: GALLERY_PAGE_SIZE,
         cursor: sporesPagination.cursor,
       }),
     enabled: !!clusterId,
@@ -269,15 +268,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     enabled: !!cluster?.ownerLockHash && !cluster?.ownerAddress,
     retry: false,
   });
-  const getContentTypeIcon = (contentType: string | null | undefined) => {
-    const normalized = safeString(contentType);
-    if (!normalized) return '📦';
-    if (normalized.startsWith('image/') || normalized.startsWith('ipfs/image')) return '🖼️';
-    if (normalized.startsWith('video/') || normalized.startsWith('ipfs/video')) return '🎬';
-    if (normalized.startsWith('audio/') || normalized.startsWith('ipfs/audio')) return '🎵';
-    if (normalized.startsWith('text/')) return '📄';
-    return '📦';
-  };
   const summarizeContentType = (contentType: string | null | undefined): string => {
     const normalized = safeString(contentType);
     if (!normalized) {
@@ -293,10 +283,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     return primary === 'image' || primary === 'video' || primary === 'audio' || primary === 'text';
   };
   const normalizedQuery = listQuery.trim().toLowerCase();
-  const sizeSortDirection =
-    listSort === 'sizeAsc' ? 'asc' : listSort === 'sizeDesc' ? 'desc' : null;
-  const blockSortDirection =
-    listSort === 'createdAsc' ? 'asc' : listSort === 'createdDesc' ? 'desc' : null;
   useEffect(() => {
     const currentQuery = searchParams.toString();
     const nextParams = new URLSearchParams(currentQuery);
@@ -440,6 +426,14 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     }
     return sporeOwnerAddressByLockHash.get(normalizedOwnerLockHash.toLowerCase()) ?? null;
   };
+  const sporeItemEntries: SporeItemEntry[] = useMemo(
+    () =>
+      filteredAndSortedSpores.map((spore) => ({
+        spore,
+        resolvedOwnerAddress: resolveSporeOwnerAddress(spore.ownerLockHash, spore.ownerAddress),
+      })),
+    [filteredAndSortedSpores, sporeOwnerAddressByLockHash]
+  );
   const creatorAddress = cluster?.ownerAddress || creatorAddressRecord?.address || null;
   const parsedDescription = useMemo(
     () => parseSporeClusterDescription(cluster?.description),
@@ -676,6 +670,70 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
             </TerminalPanelContent>
           </TerminalPanel>
         )}
+        <ObjectGalleryPanel
+          className="mb-6"
+          variant="spore"
+          totalCount={cluster.sporesCount}
+          sporeItems={sporeItemEntries}
+          isLoading={sporesLoading}
+          page={sporesPagination.page}
+          hasPrevious={sporesPagination.hasPrevious}
+          hasMore={sporesData?.hasMore ?? false}
+          onNext={() => sporesPagination.goToNext(sporesData?.nextCursor)}
+          onPrevious={sporesPagination.goToPrevious}
+          actions={
+            <>
+              <label className="sr-only" htmlFor="spore-list-query">
+                Search spores
+              </label>
+              <input
+                id="spore-list-query"
+                aria-label="Search spores"
+                type="text"
+                value={listQuery}
+                onChange={(event) => setListQuery(event.target.value)}
+                placeholder="Search hash / owner / type"
+                className="border-base-border bg-base-surface text-text-bright placeholder:text-text-dim w-full rounded border px-2 py-1 font-mono text-xs sm:w-48"
+              />
+              <label className="sr-only" htmlFor="spore-content-filter">
+                Filter spores by content type
+              </label>
+              <select
+                id="spore-content-filter"
+                aria-label="Filter spores by content type"
+                value={listContentFilter}
+                onChange={(event) =>
+                  setListContentFilter(
+                    event.target.value as 'all' | 'image' | 'video' | 'audio' | 'text' | 'other'
+                  )
+                }
+                className="border-base-border bg-base-surface text-text-bright rounded border px-2 py-1 font-mono text-xs"
+              >
+                <option value="all">All Types</option>
+                <option value="image">Image</option>
+                <option value="video">Video</option>
+                <option value="audio">Audio</option>
+                <option value="text">Text</option>
+                <option value="other">Other</option>
+              </select>
+              <select
+                aria-label="Sort spores"
+                value={listSort}
+                onChange={(event) => setListSort(event.target.value as ListSort)}
+                className="border-base-border bg-base-surface text-text-bright rounded border px-2 py-1 font-mono text-xs"
+              >
+                <option value="createdDesc">Newest</option>
+                <option value="createdAsc">Oldest</option>
+                <option value="sizeDesc">Largest</option>
+                <option value="sizeAsc">Smallest</option>
+              </select>
+              <div className="text-text-dim font-mono text-xs">
+                {filteredAndSortedSpores.length} shown / {formatNumber(cluster.sporesCount)} total
+              </div>
+            </>
+          }
+        />
+
         <TerminalPanel>
           <Tabs
             value={activeCollectionTab}
@@ -688,76 +746,17 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
             <TerminalPanelHeader
               indicator="active"
               actions={
-                <div className="flex w-full flex-wrap items-center justify-between gap-3">
-                  {activeCollectionTab === 'objects' && (
-                    <div
-                      data-testid="spore-list-controls"
-                      className="flex flex-1 flex-wrap items-center gap-2"
-                    >
-                      <label className="sr-only" htmlFor="spore-list-query">
-                        Search spores
-                      </label>
-                      <input
-                        id="spore-list-query"
-                        aria-label="Search spores"
-                        type="text"
-                        value={listQuery}
-                        onChange={(event) => setListQuery(event.target.value)}
-                        placeholder="Search hash / owner / type"
-                        className="border-base-border bg-base-surface text-text-bright placeholder:text-text-dim w-full rounded border px-2 py-1 font-mono text-xs sm:w-48"
-                      />
-                      <label className="sr-only" htmlFor="spore-content-filter">
-                        Filter spores by content type
-                      </label>
-                      <select
-                        id="spore-content-filter"
-                        aria-label="Filter spores by content type"
-                        value={listContentFilter}
-                        onChange={(event) =>
-                          setListContentFilter(
-                            event.target.value as
-                              | 'all'
-                              | 'image'
-                              | 'video'
-                              | 'audio'
-                              | 'text'
-                              | 'other'
-                          )
-                        }
-                        className="border-base-border bg-base-surface text-text-bright rounded border px-2 py-1 font-mono text-xs"
-                      >
-                        <option value="all">All Types</option>
-                        <option value="image">Image</option>
-                        <option value="video">Video</option>
-                        <option value="audio">Audio</option>
-                        <option value="text">Text</option>
-                        <option value="other">Other</option>
-                      </select>
-                      <div className="text-text-dim font-mono text-xs">
-                        {filteredAndSortedSpores.length} shown / {formatNumber(cluster.sporesCount)}{' '}
-                        total
-                      </div>
-                    </div>
-                  )}
-                  <TabsList className="border-b-0">
-                    <TabsTrigger value="activities">
-                      Activities ({formatNumber(cluster.activitiesCount)})
-                    </TabsTrigger>
-                    <TabsTrigger value="objects">
-                      Objects ({formatNumber(cluster.sporesCount)})
-                    </TabsTrigger>
-                    <TabsTrigger value="holders">
-                      Holders ({formatNumber(cluster.holdersCount)})
-                    </TabsTrigger>
-                  </TabsList>
-                </div>
+                <TabsList className="border-b-0">
+                  <TabsTrigger value="activities">
+                    Activities ({formatNumber(cluster.activitiesCount)})
+                  </TabsTrigger>
+                  <TabsTrigger value="holders">
+                    Holders ({formatNumber(cluster.holdersCount)})
+                  </TabsTrigger>
+                </TabsList>
               }
             >
-              {activeCollectionTab === 'activities'
-                ? 'Activities'
-                : activeCollectionTab === 'holders'
-                  ? 'Holders'
-                  : 'Objects'}
+              {activeCollectionTab === 'activities' ? 'Activities' : 'Holders'}
             </TerminalPanelHeader>
             <TabsContent value="activities" className="py-0">
               <TerminalPanelContent>
@@ -799,186 +798,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                   onPrevious={clusterActivitiesPagination.goToPrevious}
                 />
               </TerminalPanelFooter>
-            </TabsContent>
-            <TabsContent value="objects" className="py-0">
-              <TerminalPanelContent padding="none">
-                {sporesLoading ? (
-                  <div className="text-text-dim py-8 text-center">Loading spores...</div>
-                ) : filteredAndSortedSpores.length ? (
-                  <>
-                    <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:block">
-                      <div className="grid grid-cols-[minmax(0,1.8fr)_minmax(0,1fr)_90px_80px_minmax(0,1.2fr)_110px] items-center gap-3">
-                        <div>Spore ID</div>
-                        <div>Content</div>
-                        <div className="text-right">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setListSort((current) =>
-                                current === 'sizeDesc' ? 'sizeAsc' : 'sizeDesc'
-                              )
-                            }
-                            aria-label="Sort spores by size"
-                            className="text-text-dim hover:text-text ml-auto inline-flex items-center gap-1 text-right font-mono text-xs uppercase tracking-wider transition"
-                          >
-                            <span>Size</span>
-                            <span aria-hidden>{getSortIndicator(sizeSortDirection)}</span>
-                          </button>
-                        </div>
-                        <div className="text-center">Status</div>
-                        <div className="text-right">Owner</div>
-                        <div className="text-right">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setListSort((current) =>
-                                current === 'createdDesc' ? 'createdAsc' : 'createdDesc'
-                              )
-                            }
-                            aria-label="Sort spores by block"
-                            className="text-text-dim hover:text-text ml-auto inline-flex items-center gap-1 text-right font-mono text-xs uppercase tracking-wider transition"
-                          >
-                            <span>Block</span>
-                            <span aria-hidden>{getSortIndicator(blockSortDirection)}</span>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                    {filteredAndSortedSpores.map((spore) => {
-                      const sporeId = safeString(spore.sporeId);
-                      const contentType = safeString(spore.contentType, 'unknown');
-                      const contentSize = safeNumber(spore.contentSize);
-                      const createdAtBlock = safeNumber(spore.createdAtBlock);
-                      const ownerLockHash = safeString(spore.ownerLockHash);
-                      const ownerAddress = safeString(spore.ownerAddress);
-                      const resolvedOwnerAddress = resolveSporeOwnerAddress(
-                        ownerLockHash,
-                        ownerAddress
-                      );
-                      const rowKey =
-                        sporeId ||
-                        `${safeString(spore.txHash, 'unknown-tx')}:${safeNumber(spore.outputIndex)}`;
-                      const isLive = spore.isLive !== false;
-                      return (
-                        <TerminalRow key={rowKey}>
-                          <div className="hidden md:grid md:grid-cols-[minmax(0,1.8fr)_minmax(0,1fr)_90px_80px_minmax(0,1.2fr)_110px] md:items-center md:gap-3">
-                            <div className="flex items-center gap-2">
-                              <span className="text-base">{getContentTypeIcon(contentType)}</span>
-                              {sporeId ? (
-                                <Link href={`/objects/${sporeId}`} className="hover:underline">
-                                  <HexDisplay value={sporeId} size="sm" />
-                                </Link>
-                              ) : (
-                                <span className="text-text-dim font-mono text-xs">
-                                  Unknown spore ID
-                                </span>
-                              )}
-                            </div>
-                            <div
-                              className="text-text truncate font-mono text-xs"
-                              title={contentType}
-                            >
-                              {contentType}
-                            </div>
-                            <div className="text-text text-right font-mono text-xs">
-                              {formatNumber(contentSize)} B
-                            </div>
-                            <div className="text-center">
-                              {isLive ? (
-                                <Badge variant="green">Live</Badge>
-                              ) : (
-                                <Badge variant="red">Burned</Badge>
-                              )}
-                            </div>
-                            <div className="text-right">
-                              {resolvedOwnerAddress ? (
-                                <Address address={resolvedOwnerAddress} truncate />
-                              ) : (
-                                <span className="text-text-dim font-mono text-xs">
-                                  Address unavailable
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-right">
-                              <Link
-                                href={`/blocks/${createdAtBlock}`}
-                                className="text-emphasis font-mono text-xs hover:underline"
-                              >
-                                #{formatNumber(createdAtBlock)}
-                              </Link>
-                            </div>
-                          </div>
-                          <div className="space-y-2 md:hidden">
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="flex items-center gap-2">
-                                <span className="text-base">{getContentTypeIcon(contentType)}</span>
-                                {sporeId ? (
-                                  <Link href={`/objects/${sporeId}`} className="hover:underline">
-                                    <HexDisplay value={sporeId} size="sm" />
-                                  </Link>
-                                ) : (
-                                  <span className="text-text-dim font-mono text-xs">
-                                    Unknown spore ID
-                                  </span>
-                                )}
-                              </div>
-                              {isLive ? (
-                                <Badge variant="green">Live</Badge>
-                              ) : (
-                                <Badge variant="red">Burned</Badge>
-                              )}
-                            </div>
-                            <div className="flex items-center justify-between gap-3 text-xs">
-                              <span
-                                className="text-text-dim truncate font-mono"
-                                title={contentType}
-                              >
-                                {contentType}
-                              </span>
-                              <span className="text-text font-mono">
-                                {formatNumber(contentSize)} B
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between gap-3 text-xs">
-                              <span className="text-text-dim font-mono">
-                                Block #{formatNumber(createdAtBlock)}
-                              </span>
-                              {resolvedOwnerAddress ? (
-                                <Address address={resolvedOwnerAddress} truncate />
-                              ) : (
-                                <span className="text-text-dim font-mono text-xs">
-                                  Address unavailable
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </TerminalRow>
-                      );
-                    })}
-                  </>
-                ) : (sporesData?.data?.length ?? 0) > 0 ? (
-                  <div className="text-text-dim py-8 text-center">
-                    No spores match current filters
-                  </div>
-                ) : (
-                  <div className="text-text-dim py-8 text-center">No spores in this collection</div>
-                )}
-              </TerminalPanelContent>
-              {sporesData && filteredAndSortedSpores.length > 0 && (
-                <TerminalPanelFooter>
-                  <CursorPagination
-                    total={cluster.sporesCount}
-                    totalLabel="Spores"
-                    pageSize={DEFAULT_PAGE_SIZE}
-                    page={sporesPagination.page}
-                    currentCount={filteredAndSortedSpores.length}
-                    hasMore={sporesData.hasMore}
-                    hasPrevious={sporesPagination.hasPrevious}
-                    onNext={() => sporesPagination.goToNext(sporesData.nextCursor)}
-                    onPrevious={sporesPagination.goToPrevious}
-                  />
-                </TerminalPanelFooter>
-              )}
             </TabsContent>
             <TabsContent value="holders" className="py-0">
               <TerminalPanelContent>

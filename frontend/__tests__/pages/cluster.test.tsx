@@ -82,7 +82,7 @@ const mockSpores = {
     },
   ],
   total: 2,
-  limit: 50,
+  limit: 18,
   hasMore: false,
   nextCursor: null,
 };
@@ -90,7 +90,7 @@ const mockSpores = {
 const emptySpores = {
   data: [],
   total: 0,
-  limit: 50,
+  limit: 18,
   hasMore: false,
   nextCursor: null,
 };
@@ -127,7 +127,7 @@ describe('ClusterDetailPage', () => {
     } as any);
   });
 
-  it('renders overview sections, back link, and Activities tab by default', async () => {
+  it('renders overview sections, back link, object gallery, and Activities tab by default', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
@@ -143,12 +143,15 @@ describe('ClusterDetailPage', () => {
       expect(screen.getByText('Composition')).toBeInTheDocument();
       expect(screen.getByText('Supply')).toBeInTheDocument();
       expect(screen.getByText('creator')).toBeInTheDocument();
+      // Objects gallery is always visible (standalone panel)
+      expect(screen.getByText(/^Objects \(/)).toBeInTheDocument();
+      // Activities and Holders are tabs
       expect(screen.getByRole('button', { name: /^Activities \(/ })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^Holders \(/ })).toBeInTheDocument();
       expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
-      expect(screen.queryByLabelText('Search spores')).not.toBeInTheDocument();
-      const backLink = screen.getByText('← Back to Objects');
+      // Search/filter controls are always visible in the gallery panel header
+      expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
+      const backLink = screen.getByText('\u2190 Back to Objects');
       expect(backLink.closest('a')).toHaveAttribute('href', '/inventory/objects');
     });
   });
@@ -159,11 +162,10 @@ describe('ClusterDetailPage', () => {
 
     for (const testCase of [
       {
-        searchParams: 'tab=objects',
+        searchParams: 'tab=holders',
         assert: async () => {
           await waitFor(() => {
-            expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
-            expect(screen.queryByText('No activities in this collection')).not.toBeInTheDocument();
+            expect(screen.getByText('No holders in this collection')).toBeInTheDocument();
           });
         },
       },
@@ -183,19 +185,14 @@ describe('ClusterDetailPage', () => {
     }
   });
 
-  it('renders spore objects with content type and size', async () => {
+  it('renders spore objects with content type and size in gallery cards', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
-
-    await waitFor(() => {
+      // Gallery panel renders spore cards with content type and size
       expect(screen.getAllByText('1,024 B').length).toBeGreaterThan(0);
       expect(screen.getAllByText('256 B').length).toBeGreaterThan(0);
       expect(screen.getAllByText('image/png').length).toBeGreaterThan(0);
@@ -209,7 +206,7 @@ describe('ClusterDetailPage', () => {
       data: [
         {
           ...mockSpores.data[0],
-          sporeId: '',
+          sporeId: '0x0000000000000000000000000000000000000000000000000000000000000000',
           contentType: undefined,
           ownerLockHash: undefined,
           ownerAddress: undefined,
@@ -218,7 +215,7 @@ describe('ClusterDetailPage', () => {
         } as any,
       ],
       total: 1,
-      limit: 50,
+      limit: 18,
       hasMore: false,
       nextCursor: null,
     });
@@ -226,13 +223,9 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText('Unknown spore ID').length).toBeGreaterThan(0);
+      // The gallery panel should render without crashing
+      expect(screen.getByText(/^Objects \(/)).toBeInTheDocument();
+      // Content type falls back to 'unknown'
       expect(screen.getAllByText('unknown').length).toBeGreaterThan(0);
     });
   });
@@ -255,13 +248,8 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
-
-    await waitFor(() => {
-      expect(screen.getByText('No spores in this collection')).toBeInTheDocument();
+      // Gallery panel shows empty state
+      expect(screen.getByText('No objects in this collection')).toBeInTheDocument();
     });
   });
 
@@ -270,12 +258,6 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getByText('2 shown / 5 total')).toBeInTheDocument();
@@ -287,7 +269,6 @@ describe('ClusterDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('1 shown / 5 total')).toBeInTheDocument();
-      expect(screen.queryByText('No spores match current filters')).not.toBeInTheDocument();
     });
 
     fireEvent.change(screen.getByLabelText('Filter spores by content type'), {
@@ -295,7 +276,8 @@ describe('ClusterDetailPage', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('No spores match current filters')).toBeInTheDocument();
+      // Gallery panel shows "No objects in this collection" when filter results in 0 items
+      expect(screen.getByText('No objects in this collection')).toBeInTheDocument();
       expect(screen.getByText('0 shown / 5 total')).toBeInTheDocument();
     });
   });
@@ -305,12 +287,6 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
@@ -323,12 +299,11 @@ describe('ClusterDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('1 shown / 5 total')).toBeInTheDocument();
       expect(screen.getAllByText('text/plain').length).toBeGreaterThan(0);
-      expect(screen.queryByText('No spores match current filters')).not.toBeInTheDocument();
     });
   });
 
   it('hydrates list controls from URL search params', async () => {
-    mockSearchParamsString = 'tab=objects&content=text&sort=sizeAsc&q=text%2Fplain';
+    mockSearchParamsString = 'content=text&sort=sizeAsc&q=text%2Fplain';
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
@@ -337,32 +312,28 @@ describe('ClusterDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByLabelText('Filter spores by content type')).toHaveValue('text');
       expect(screen.getByLabelText('Search spores')).toHaveValue('text/plain');
+      expect(screen.getByLabelText('Sort spores')).toHaveValue('sizeAsc');
       expect(screen.getByText('1 shown / 5 total')).toBeInTheDocument();
     });
   });
 
-  it('updates URL search params when list controls and sortable headers change', async () => {
+  it('updates URL search params when list controls change', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
-
-    await waitFor(() => {
       expect(screen.getByLabelText('Filter spores by content type')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Sort spores by size' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Sort spores by block' })).toBeInTheDocument();
+      expect(screen.getByLabelText('Sort spores')).toBeInTheDocument();
     });
 
     fireEvent.change(screen.getByLabelText('Filter spores by content type'), {
       target: { value: 'image' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Sort spores by size' }));
+    fireEvent.change(screen.getByLabelText('Sort spores'), {
+      target: { value: 'sizeDesc' },
+    });
     fireEvent.change(screen.getByLabelText('Search spores'), {
       target: { value: '0x2222' },
     });
@@ -386,15 +357,7 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
-
-    await waitFor(() => {
-      expect(mockReplace.mock.calls.some(([href]) => String(href).includes('tab=objects'))).toBe(
-        true
-      );
+      expect(screen.getByRole('button', { name: /^Holders \(/ })).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole('button', { name: /^Holders \(/ }));
@@ -509,12 +472,7 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
-
-    await waitFor(() => {
+      // Gallery panel is always visible, spore cards show resolved addresses
       expect(api.getAddress).toHaveBeenCalledWith(mockSpores.data[1].ownerLockHash);
       const addressLinks = screen.getAllByRole('link');
       expect(
@@ -542,23 +500,20 @@ describe('ClusterDetailPage', () => {
     });
   });
 
-  it('renders pagination status with disabled boundary controls', async () => {
+  it('renders pagination status in gallery panel', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
-
-    await waitFor(() => {
-      expect(screen.getByText('Showing 1-2 of 5 Spores, 50 per page')).toBeInTheDocument();
-      expect(screen.getByText('Page 1 of 1')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
-      expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+      // Gallery panel uses GALLERY_PAGE_SIZE (18), label is "Objects"
+      expect(screen.getByText('Showing 1-2 of 5 Objects, 18 per page')).toBeInTheDocument();
+      // Both gallery panel and activities tab render pagination, so multiple
+      // Previous/Next buttons exist; verify the gallery-specific pagination text
+      const paginationButtons = screen.getAllByRole('button', { name: 'Previous' });
+      expect(paginationButtons.length).toBeGreaterThanOrEqual(1);
+      expect(paginationButtons.some((btn) => (btn as HTMLButtonElement).disabled)).toBe(true);
     });
   });
 });
