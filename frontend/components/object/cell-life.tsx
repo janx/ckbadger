@@ -46,6 +46,7 @@ export function CellLifePlaceholder({ size = 56 }: CellLifePlaceholderProps) {
         fontFamily: 'monospace',
         fontSize: `${size * 0.4}px`,
         lineHeight: 1,
+        flexShrink: 0,
       }}
     >
       ?
@@ -250,15 +251,6 @@ export function CellLife({ hash, size = 56, gridSize = 8, isDualChain = false }:
 
     function animate(timestamp: number) {
       if (!pausedRef.current) {
-        // Fade dead cells each frame
-        for (let r = 0; r < gridSize; r++) {
-          for (let c = 0; c < gridSize; c++) {
-            if (grid[r][c] === 0 && opacities[r][c] > 0) {
-              opacities[r][c] = Math.max(0, opacities[r][c] - 0.005);
-            }
-          }
-        }
-
         // Tick at the derived interval
         if (timestamp - lastTick >= interval) {
           // Decrease dead cell opacity by 0.12 per tick
