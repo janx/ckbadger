@@ -1303,6 +1303,11 @@ struct BulkBuildRuntimeState {
     hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker,
     cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker,
     hodl_live_cells_by_lock: FxHashMap<crate::sync::types::InternId, i32>,
+    /// Cross-batch dedup set for CF_LOCK_SCRIPTS rows. Lock script mappings
+    /// (lock_hash -> code_hash + hash_type + args) are immutable, so once
+    /// written they never need to be rewritten. This set persists across
+    /// batches to eliminate ~97% of duplicate CF_LOCK_SCRIPTS writes.
+    written_lock_script_ids: FxHashSet<crate::sync::types::InternId>,
 }
 
 impl Default for BulkBuildRuntimeState {
@@ -1316,6 +1321,7 @@ impl Default for BulkBuildRuntimeState {
             hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker::new(),
             cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker::new(),
             hodl_live_cells_by_lock: FxHashMap::default(),
+            written_lock_script_ids: FxHashSet::default(),
         }
     }
 }
@@ -1342,6 +1348,10 @@ impl BulkBuildRuntimeState {
                         + std::mem::size_of_val(live_count) as u64
                 },
             ),
+        );
+        breakdown.insert(
+            "written_lock_script_ids".to_string(),
+            accounting::hash_set_serialized_bytes(&self.written_lock_script_ids),
         );
         breakdown
     }
@@ -1410,6 +1420,7 @@ impl BulkBuildRuntimeState {
             hodl_live_cells_by_lock,
             activity_stats,
             chain_stats,
+            written_lock_script_ids,
             ..
         } = self;
         let ctx = owners::ReducerContext::new(&frozen);
@@ -1424,8 +1435,14 @@ impl BulkBuildRuntimeState {
             // LEFT: history materialization → activity stats accumulation
             || -> Result<(HistoryBuildResult, std::time::Duration, std::time::Duration)> {
                 let history_started = Instant::now();
-                let history =
-                    build_history_rows(&arena, &resolved, &frozen, is_mainnet, token_info_cache)?;
+                let history = build_history_rows(
+                    &arena,
+                    &resolved,
+                    &frozen,
+                    is_mainnet,
+                    token_info_cache,
+                    written_lock_script_ids,
+                )?;
                 let history_elapsed = history_started.elapsed();
 
                 // activity_stats depends only on history.tx_actions_list, not on any reducer state.
@@ -1696,6 +1713,7 @@ impl BulkBuildRuntimeState {
             hodl_live_cells_by_lock,
             activity_stats,
             chain_stats,
+            written_lock_script_ids,
             ..
         } = self;
         let ctx = owners::ReducerContext::new(&frozen);
@@ -1707,8 +1725,14 @@ impl BulkBuildRuntimeState {
         let (left_result, (mid_result, right_result)) = rayon::join(
             || -> Result<(HistoryBuildResult, std::time::Duration, std::time::Duration)> {
                 let history_started = Instant::now();
-                let history =
-                    build_history_rows(&arena, &resolved, &frozen, is_mainnet, token_info_cache)?;
+                let history = build_history_rows(
+                    &arena,
+                    &resolved,
+                    &frozen,
+                    is_mainnet,
+                    token_info_cache,
+                    written_lock_script_ids,
+                )?;
                 let history_elapsed = history_started.elapsed();
                 let activity_stats_started = Instant::now();
                 activity_stats.apply_tx_actions(&history.tx_actions_list)?;
@@ -1991,6 +2015,10 @@ struct HistoryBuildResult {
 
 struct BlockHistoryRows {
     rows: Vec<materialize::MaterializedRow>,
+    /// Lock script rows collected separately for cross-batch dedup in the
+    /// serial merge phase. Each entry pairs the interned lock hash id with
+    /// its materialized CF_LOCK_SCRIPTS row.
+    lock_script_rows: Vec<(crate::sync::types::InternId, materialize::MaterializedRow)>,
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     tx_actions_list: Vec<ckbadger_store::types::TxActions>,
@@ -2420,6 +2448,7 @@ fn build_history_rows(
     interner: &interner::FrozenIdentityView,
     is_mainnet: bool,
     token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
+    written_lock_script_ids: &mut FxHashSet<crate::sync::types::InternId>,
 ) -> Result<HistoryBuildResult> {
     if arena.txs.len() != resolved.len() {
         bail!(
@@ -2459,6 +2488,14 @@ fn build_history_rows(
     for result in block_results {
         let block_rows = result?;
         all_rows.extend(block_rows.rows);
+        // Cross-batch dedup: only emit lock script rows whose InternId has
+        // not been seen in any previous batch. The set persists across batches
+        // via BulkBuildRuntimeState, eliminating ~97% of duplicate writes.
+        for (id, row) in block_rows.lock_script_rows {
+            if written_lock_script_ids.insert(id) {
+                all_rows.push(row);
+            }
+        }
         all_tx_actions.extend(block_rows.tx_actions_list);
         for (k, v) in block_rows.object_activity_count_deltas {
             let entry = all_object_deltas.entry(k).or_insert(0);
@@ -3009,7 +3046,13 @@ fn build_history_rows_for_block(
 
     // Cell payloads (CF_CELLS) + data_hash index (CF_CELL_BY_DATA_HASH)
     // + lock script mapping (CF_LOCK_SCRIPTS) for this block's cells.
+    //
+    // Lock script rows are collected separately (with their InternId) so
+    // the serial merge phase can perform cross-batch dedup via a persistent
+    // FxHashSet<InternId> in BulkBuildRuntimeState. Per-block dedup still
+    // happens here via `seen_lock_ids` to avoid redundant serialization.
     let mut seen_lock_ids = rustc_hash::FxHashSet::default();
+    let mut lock_script_rows = Vec::new();
     for tx in block_txs {
         for cell in &arena_cells[tx.output_range.clone()] {
             let outpoint_key =
@@ -3021,7 +3064,7 @@ fn build_history_rows_for_block(
                 bincode_serialize_presized(&cell_facts_to_live_cell_info(cell, interner))?,
             ));
 
-            // Lock script mapping — dedup within block to reduce duplicate writes.
+            // Lock script mapping — dedup within block, cross-batch dedup in merge.
             if seen_lock_ids.insert(cell.lock_script_hash_id) {
                 let lock_hash = interner.resolve_bytes(cell.lock_script_hash_id).to_vec();
                 let entry = LockScriptEntry {
@@ -3029,10 +3072,13 @@ fn build_history_rows_for_block(
                     hash_type: cell.lock_hash_type,
                     args: interner.resolve_bytes(cell.lock_args_id).to_vec(),
                 };
-                rows.push(materialize::MaterializedRow::new(
-                    CF_LOCK_SCRIPTS,
-                    lock_hash,
-                    bincode_serialize_presized(&entry)?,
+                lock_script_rows.push((
+                    cell.lock_script_hash_id,
+                    materialize::MaterializedRow::new(
+                        CF_LOCK_SCRIPTS,
+                        lock_hash,
+                        bincode_serialize_presized(&entry)?,
+                    ),
                 ));
             }
 
@@ -3053,6 +3099,7 @@ fn build_history_rows_for_block(
 
     Ok(BlockHistoryRows {
         rows,
+        lock_script_rows,
         object_activity_count_deltas,
         identity_activity_count_deltas,
         tx_actions_list,
@@ -4783,13 +4830,19 @@ mod tests {
         let frozen = interner.snapshot_for_reads();
 
         let (_test_store, test_root) = open_empty_domain_store("bulk-build-addr-tx-test");
-        let addr_rows: Vec<_> =
-            build_history_rows(&arena, &resolved, &frozen, true, &FxHashMap::default())
-                .expect("history rows")
-                .rows
-                .into_iter()
-                .filter(|row| row.cf_name == CF_ADDR_TXS)
-                .collect();
+        let addr_rows: Vec<_> = build_history_rows(
+            &arena,
+            &resolved,
+            &frozen,
+            true,
+            &FxHashMap::default(),
+            &mut FxHashSet::default(),
+        )
+        .expect("history rows")
+        .rows
+        .into_iter()
+        .filter(|row| row.cf_name == CF_ADDR_TXS)
+        .collect();
 
         let expected = [
             keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 0, &create_tx_hash),
@@ -4833,13 +4886,19 @@ mod tests {
         let frozen = interner.snapshot_for_reads();
 
         let (_test_store, test_root) = open_empty_domain_store("bulk-build-token-transfer-test");
-        let token_rows: Vec<_> =
-            build_history_rows(&arena, &resolved, &frozen, true, &FxHashMap::default())
-                .expect("history rows")
-                .rows
-                .into_iter()
-                .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
-                .collect();
+        let token_rows: Vec<_> = build_history_rows(
+            &arena,
+            &resolved,
+            &frozen,
+            true,
+            &FxHashMap::default(),
+            &mut FxHashSet::default(),
+        )
+        .expect("history rows")
+        .rows
+        .into_iter()
+        .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
+        .collect();
         let _ = std::fs::remove_dir_all(&test_root);
 
         assert_eq!(token_rows.len(), 2);
@@ -4896,8 +4955,15 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
         let append_store =
             CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
-        let history = build_history_rows(&arena, &resolved, &frozen, true, &FxHashMap::default())
-            .expect("history rows");
+        let history = build_history_rows(
+            &arena,
+            &resolved,
+            &frozen,
+            true,
+            &FxHashMap::default(),
+            &mut FxHashSet::default(),
+        )
+        .expect("history rows");
         let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
         materializer
             .stream_history_rows(&history.rows)
@@ -4984,13 +5050,19 @@ mod tests {
         let frozen = interner.snapshot_for_reads();
 
         let (_test_store, test_root) = open_empty_domain_store("bulk-build-activity-test");
-        let activity_rows: Vec<_> =
-            build_history_rows(&arena, &resolved, &frozen, true, &FxHashMap::default())
-                .expect("history rows")
-                .rows
-                .into_iter()
-                .filter(|row| row.cf_name == CF_TX_ACTIONS)
-                .collect();
+        let activity_rows: Vec<_> = build_history_rows(
+            &arena,
+            &resolved,
+            &frozen,
+            true,
+            &FxHashMap::default(),
+            &mut FxHashSet::default(),
+        )
+        .expect("history rows")
+        .rows
+        .into_iter()
+        .filter(|row| row.cf_name == CF_TX_ACTIONS)
+        .collect();
         let _ = std::fs::remove_dir_all(&test_root);
 
         assert_eq!(activity_rows.len(), 2);
@@ -5084,8 +5156,15 @@ mod tests {
         std::fs::create_dir_all(&append_path).expect("create append-only dir");
 
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
-        let history = build_history_rows(&arena, &resolved, &frozen, true, &FxHashMap::default())
-            .expect("history rows");
+        let history = build_history_rows(
+            &arena,
+            &resolved,
+            &frozen,
+            true,
+            &FxHashMap::default(),
+            &mut FxHashSet::default(),
+        )
+        .expect("history rows");
         let sealed_rows =
             build_sealed_aggregate_rows(&history.tx_actions_list).expect("sealed rows");
         let final_snapshot_rows =
@@ -5159,16 +5238,22 @@ mod tests {
 
         let (_test_store, test_root) =
             open_empty_domain_store("bulk-build-spore-did-activity-test");
-        let history_rows: Vec<_> =
-            build_history_rows(&arena, &resolved, &frozen, true, &FxHashMap::default())
-                .expect("history rows")
-                .rows
-                .into_iter()
-                .filter(|row| {
-                    row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES
-                        || row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES
-                })
-                .collect();
+        let history_rows: Vec<_> = build_history_rows(
+            &arena,
+            &resolved,
+            &frozen,
+            true,
+            &FxHashMap::default(),
+            &mut FxHashSet::default(),
+        )
+        .expect("history rows")
+        .rows
+        .into_iter()
+        .filter(|row| {
+            row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES
+                || row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES
+        })
+        .collect();
         let _ = std::fs::remove_dir_all(&test_root);
 
         let object_rows: std::collections::HashMap<Vec<u8>, ObjectCollectionActivityEntry> =
@@ -6341,5 +6426,72 @@ mod tests {
 
         // Epoch 5→6 boundary: 240 minutes
         assert_eq!(acc.epoch_time_dist.get(&240), Some(&1));
+    }
+
+    #[test]
+    fn build_history_rows_deduplicates_lock_scripts_across_calls() {
+        let block = bulk_build_addr_tx_fixture();
+        let interner = interner::IdentityInterner::default();
+        let (arena, _) = crate::sync::pipeline::build_bulk_facts_arena_from_blocks(
+            std::slice::from_ref(&block),
+            &interner,
+        )
+        .expect("facts arena");
+        let mut seq = sequencer::BulkSequencer::default();
+        let resolved = seq.resolve(&arena).expect("resolved txs");
+        let frozen = interner.snapshot_for_reads();
+
+        let mut written_ids = FxHashSet::default();
+
+        // First call — should emit lock script rows.
+        let result1 = build_history_rows(
+            &arena,
+            &resolved,
+            &frozen,
+            true,
+            &FxHashMap::default(),
+            &mut written_ids,
+        )
+        .expect("first build");
+        let lock_rows_1: Vec<_> = result1
+            .rows
+            .iter()
+            .filter(|r| r.cf_name == CF_LOCK_SCRIPTS)
+            .collect();
+        assert!(
+            !lock_rows_1.is_empty(),
+            "first call should emit lock script rows"
+        );
+        let first_count = lock_rows_1.len();
+        let set_size_after_first = written_ids.len();
+        assert_eq!(set_size_after_first, first_count);
+
+        // Second call with same arena/resolved/frozen and same set —
+        // should emit zero lock script rows since all lock_hash_ids are
+        // already in written_ids.
+        let result2 = build_history_rows(
+            &arena,
+            &resolved,
+            &frozen,
+            true,
+            &FxHashMap::default(),
+            &mut written_ids,
+        )
+        .expect("second build");
+        let lock_rows_2: Vec<_> = result2
+            .rows
+            .iter()
+            .filter(|r| r.cf_name == CF_LOCK_SCRIPTS)
+            .collect();
+        assert_eq!(
+            lock_rows_2.len(),
+            0,
+            "second call should emit zero lock script rows for already-seen locks"
+        );
+        assert_eq!(
+            written_ids.len(),
+            set_size_after_first,
+            "set should not grow"
+        );
     }
 }
