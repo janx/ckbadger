@@ -29,6 +29,125 @@ use ckbadger_tui::entry::{run_tui, TuiServiceConfig};
 const BUILD_VERSION: &str = env!("CKBADGER_BUILD_VERSION");
 
 // ---------------------------------------------------------------------------
+// File descriptor limit management
+// ---------------------------------------------------------------------------
+
+/// Minimum fd limit required to run the indexer (including bulk sync).
+const FD_LIMIT_MIN: u64 = 4096;
+
+/// Target fd limit we attempt to raise to.
+const FD_LIMIT_TARGET: u64 = 65536;
+
+/// Attempt to raise the process fd limit to [`FD_LIMIT_TARGET`].
+///
+/// Strategy:
+/// 1. If the hard limit is `RLIM_INFINITY` or ≥ target → raise soft limit only.
+/// 2. If the hard limit is below target → try raising *both* hard and soft
+///    (works as root on Linux; works for regular users on macOS up to the
+///    kernel maximum `kern.maxfilesperproc`).
+/// 3. If the hard-limit raise is denied → raise soft limit to current hard
+///    limit as a best effort.
+///
+/// Returns the effective soft limit after the raise attempt.
+#[cfg(unix)]
+#[allow(clippy::unnecessary_cast)] // rlim_t is u32 on some platforms, u64 on others
+fn raise_fd_limit() -> Result<u64> {
+    unsafe {
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) != 0 {
+            bail!(
+                "getrlimit(RLIMIT_NOFILE) failed: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+
+        let target = FD_LIMIT_TARGET as libc::rlim_t;
+
+        // Determine the hard-limit ceiling without requiring privilege.
+        let hard_ceiling = if rlim.rlim_max == libc::RLIM_INFINITY {
+            target // unlimited — soft can reach target freely
+        } else {
+            rlim.rlim_max
+        };
+
+        if hard_ceiling < target {
+            // Hard limit is lower than what we need.  Try raising both
+            // (requires CAP_SYS_RESOURCE / root on Linux; often works for
+            // regular users on macOS up to kern.maxfilesperproc).
+            let raised = libc::rlimit {
+                rlim_cur: target,
+                rlim_max: target,
+            };
+            if libc::setrlimit(libc::RLIMIT_NOFILE, &raised) == 0 {
+                return Ok(FD_LIMIT_TARGET);
+            }
+            // Hard-limit raise denied.  Raise soft to current hard ceiling
+            // as a best effort.
+            if hard_ceiling > rlim.rlim_cur {
+                let capped = libc::rlimit {
+                    rlim_cur: hard_ceiling,
+                    rlim_max: rlim.rlim_max,
+                };
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &capped) == 0 {
+                    return Ok(hard_ceiling as u64);
+                }
+            }
+            // Could not change anything.
+            return Ok(rlim.rlim_cur as u64);
+        }
+
+        // Hard limit is already sufficient; raise soft limit only.
+        if (rlim.rlim_cur as u64) < FD_LIMIT_TARGET {
+            let raised = libc::rlimit {
+                rlim_cur: target,
+                rlim_max: rlim.rlim_max,
+            };
+            if libc::setrlimit(libc::RLIMIT_NOFILE, &raised) == 0 {
+                return Ok(FD_LIMIT_TARGET);
+            }
+        }
+        Ok(rlim.rlim_cur as u64)
+    }
+}
+
+#[cfg(not(unix))]
+fn raise_fd_limit() -> Result<u64> {
+    Ok(FD_LIMIT_TARGET) // Windows has no meaningful fd limit
+}
+
+/// Fail fast if `fd_limit` is too low to run the indexer.
+///
+/// The indexer opens many RocksDB SST files during bulk sync (60 column
+/// families × multiple SST levels).  Below [`FD_LIMIT_MIN`] the open will
+/// fail mid-sync, leaving RocksDB in an incomplete state.
+fn check_fd_limit_for_indexer(fd_limit: u64) -> Result<()> {
+    if fd_limit < FD_LIMIT_MIN {
+        bail!(
+            "fd limit {} is too low to run the indexer (need >={}).\n\
+             The indexer opens many RocksDB SST files during bulk sync;\n\
+             a hard limit that cannot be raised will cause a mid-sync crash.\n\n\
+             Fix on macOS:\n\
+               sudo launchctl limit maxfiles {} {}\n\
+               (then reopen the terminal -- launchctl applies to new sessions)\n\n\
+             Fix on Linux (requires root):\n\
+               echo DefaultLimitNOFILE={} >> /etc/systemd/system.conf\n\
+               systemctl daemon-reexec && reboot\n\
+               (or for the current shell only: ulimit -Sn {})",
+            fd_limit,
+            FD_LIMIT_MIN,
+            FD_LIMIT_TARGET,
+            FD_LIMIT_TARGET,
+            FD_LIMIT_TARGET,
+            FD_LIMIT_TARGET
+        );
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // CLI definition
 // ---------------------------------------------------------------------------
 
@@ -244,7 +363,13 @@ async fn cmd_run(workdir: &Path, args: &RunArgs) -> Result<()> {
         bail!("no services selected to run");
     }
 
-    print_startup_info(workdir, &config, &work, &services);
+    let fd_limit = raise_fd_limit()?;
+
+    if services.iter().any(|s| s == "indexer") {
+        check_fd_limit_for_indexer(fd_limit)?;
+    }
+
+    print_startup_info(workdir, &config, &work, &services, fd_limit);
 
     supervisor::run_supervisor(&work, &config, services).await
 }
@@ -261,6 +386,10 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
 
     match args.service {
         InternalService::Indexer => {
+            // Safety net for direct `ckbadger internal indexer` invocation.
+            // When launched via supervisor the parent already raised the limit
+            // and the child inherits it, so this is usually a no-op check.
+            check_fd_limit_for_indexer(raise_fd_limit()?)?;
             let ckb_paths = resolve_ckb_paths(workdir, &config.ckb)?;
             let indexer_config =
                 build_indexer_service_config(workdir, &work, &config, &ckb_paths, BUILD_VERSION)?;
@@ -627,12 +756,14 @@ fn print_startup_info(
     config: &CkbadgerConfig,
     work: &WorkDir,
     services: &[String],
+    fd_limit: u64,
 ) {
     let use_color = std::io::stdout().is_terminal();
     let dim = if use_color { "\x1b[90m" } else { "" };
     let cyan = if use_color { "\x1b[36m" } else { "" };
     let reset = if use_color { "\x1b[0m" } else { "" };
     let bold = if use_color { "\x1b[1m" } else { "" };
+    let yellow = if use_color { "\x1b[33m" } else { "" };
 
     println!();
 
@@ -643,8 +774,13 @@ fn print_startup_info(
     let ram_info = get_total_ram_gb()
         .map(|gb| format!(" · {gb} GB RAM"))
         .unwrap_or_default();
+    let fd_info = if fd_limit < FD_LIMIT_TARGET {
+        format!(" · {yellow}fd limit {fd_limit} (WARNING: below target {FD_LIMIT_TARGET}){reset}")
+    } else {
+        format!(" · fd limit {fd_limit}")
+    };
     println!(
-        "  {dim}System{reset}      {} {} · {cpus} cores{ram_info}",
+        "  {dim}System{reset}      {} {} · {cpus} cores{ram_info}{fd_info}",
         std::env::consts::OS,
         std::env::consts::ARCH
     );
@@ -1295,7 +1431,7 @@ mod tests {
             "frontend-server".to_string(),
         ];
         // Should not panic with any config
-        print_startup_info(root, &config, &work, &services);
+        print_startup_info(root, &config, &work, &services, FD_LIMIT_TARGET);
     }
 
     #[test]
@@ -1305,7 +1441,7 @@ mod tests {
         let config = CkbadgerConfig::default();
         let work = WorkDir::resolve(root);
         let services = vec!["indexer".to_string()];
-        print_startup_info(root, &config, &work, &services);
+        print_startup_info(root, &config, &work, &services, FD_LIMIT_TARGET);
     }
 
     #[test]
@@ -1318,7 +1454,7 @@ mod tests {
         config.store.memory_budget_gb = Some(48);
         let work = WorkDir::resolve(root);
         let services = vec!["api".to_string(), "frontend-server".to_string()];
-        print_startup_info(root, &config, &work, &services);
+        print_startup_info(root, &config, &work, &services, FD_LIMIT_TARGET);
     }
 
     // -- resolve_frontend_dir --
@@ -1380,5 +1516,52 @@ data_dir = "data"
                 .unwrap();
 
         assert_eq!(service.build_version, BUILD_VERSION);
+    }
+
+    // -- fd limit --
+
+    #[test]
+    #[cfg(unix)]
+    fn test_raise_fd_limit_returns_nonzero() {
+        let limit = raise_fd_limit().expect("raise_fd_limit should succeed");
+        assert!(limit > 0, "raise_fd_limit() must return a positive value");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_raise_fd_limit_is_idempotent() {
+        let first = raise_fd_limit().expect("raise_fd_limit should succeed");
+        let second = raise_fd_limit().expect("raise_fd_limit should succeed");
+        assert_eq!(first, second, "raise_fd_limit() must be idempotent");
+    }
+
+    #[test]
+    fn test_check_fd_limit_for_indexer_passes_at_and_above_min() {
+        assert!(check_fd_limit_for_indexer(FD_LIMIT_MIN).is_ok());
+        assert!(check_fd_limit_for_indexer(FD_LIMIT_TARGET).is_ok());
+        assert!(check_fd_limit_for_indexer(u64::MAX).is_ok());
+    }
+
+    #[test]
+    fn test_check_fd_limit_for_indexer_fails_below_min() {
+        let err = check_fd_limit_for_indexer(FD_LIMIT_MIN - 1).unwrap_err();
+        assert!(
+            format!("{err}").contains("too low"),
+            "error should explain the limit is too low: {err}"
+        );
+        assert!(
+            check_fd_limit_for_indexer(256).is_err(),
+            "macOS default limit 256 must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_check_fd_limit_for_indexer_error_includes_fix_instructions() {
+        let err = check_fd_limit_for_indexer(100).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("launchctl") || msg.contains("systemd"),
+            "error should include fix instructions: {msg}"
+        );
     }
 }
