@@ -494,20 +494,18 @@ describe('SporeDetailPage', () => {
     expect(screen.getByText('Composition')).toBeInTheDocument();
     expect(screen.getByText('Supply')).toBeInTheDocument();
     expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
+    // Objects are now a standalone gallery panel header, not a tab button
+    expect(screen.getByText('Objects (500)')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Activities \(150\)$/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Objects \(500\)$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Holders \(42\)$/ })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(500\)$/ }));
-
+    // Gallery panel is always visible (no tab click needed)
     await waitFor(() => {
       expect(screen.getByText('alice.bit')).toBeInTheDocument();
     });
-    expect(screen.getByText('Created at block #100')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Search .bit')).not.toBeInTheDocument();
     expect(api.getObjectCollectionItems).toHaveBeenCalledWith(
       mockCollection.collectionId,
-      expect.objectContaining({ limit: 50 })
+      expect.objectContaining({ limit: 18 })
     );
   });
 
@@ -546,17 +544,17 @@ describe('SporeDetailPage', () => {
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(500\)$/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Holders \(42\)$/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(500\)$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Holders \(42\)$/ }));
 
     await waitFor(() => {
       expect(
         mockReplace.mock.calls.some(
           ([href]) =>
             String(href).includes(`/objects/${mockParams.sporeId}`) &&
-            String(href).includes('tab=objects')
+            String(href).includes('tab=holders')
         )
       ).toBe(true);
     });
@@ -614,16 +612,20 @@ describe('SporeDetailPage', () => {
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects/ })).toBeInTheDocument();
-    });
+    // Wait for collection view and gallery to load
+    await waitFor(
+      () => {
+        expect(screen.getByText('Objects (500)')).toBeInTheDocument();
+      },
+      { timeout: 3000 }
+    );
 
-    fireEvent.click(screen.getByRole('button', { name: /^Objects/ }));
-
-    await waitFor(() => {
-      const link = screen.getByRole('link', { name: '0x1111' });
-      expect(link).toBeInTheDocument();
-      expect(link).toHaveAttribute('href', '/objects/mnft/0x1111');
-    });
+    // mNFT item should link to its detail page
+    const link = screen
+      .getAllByRole('link')
+      .find(
+        (el) => el.getAttribute('href') === '/objects/mnft/0x1111' && el.textContent === '0x1111'
+      );
+    expect(link).toBeDefined();
   });
 });

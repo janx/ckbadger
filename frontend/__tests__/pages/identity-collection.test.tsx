@@ -79,8 +79,9 @@ describe('IdentityCollectionPage', () => {
       expect(screen.getByText('.bit')).toBeInTheDocument();
     });
 
+    // Identities are now a standalone gallery panel header, not a tab button
+    expect(screen.getByText('Identities (500)')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Activities \(150\)$/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Identities \(500\)$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Holders \(42\)$/ })).toBeInTheDocument();
   });
 
@@ -101,16 +102,15 @@ describe('IdentityCollectionPage', () => {
 
     render(<IdentityCollectionPage collectionId={mockCollectionId} />);
 
+    // Gallery panel is always visible (no tab click needed)
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Identities/ })).toBeInTheDocument();
+      expect(screen.getByText('Identities (500)')).toBeInTheDocument();
     });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Identities/ }));
 
     await waitFor(() => {
       expect(api.getIdentityCollectionItems).toHaveBeenCalledWith(
         mockCollectionId,
-        expect.objectContaining({ limit: 50, search: undefined, status: 'all' })
+        expect.objectContaining({ limit: 18, search: undefined, status: 'all' })
       );
     });
 
@@ -121,7 +121,7 @@ describe('IdentityCollectionPage', () => {
     await waitFor(() => {
       expect(api.getIdentityCollectionItems).toHaveBeenCalledWith(
         mockCollectionId,
-        expect.objectContaining({ limit: 50, search: undefined, status: 'live' })
+        expect.objectContaining({ limit: 18, search: undefined, status: 'live' })
       );
     });
 
@@ -132,7 +132,7 @@ describe('IdentityCollectionPage', () => {
     await waitFor(() => {
       expect(api.getIdentityCollectionItems).toHaveBeenCalledWith(
         mockCollectionId,
-        expect.objectContaining({ limit: 50, search: 'alice', status: 'live' })
+        expect.objectContaining({ limit: 18, search: 'alice', status: 'live' })
       );
     });
   });
@@ -161,12 +161,7 @@ describe('IdentityCollectionPage', () => {
 
     render(<IdentityCollectionPage collectionId={mockCollectionId} />);
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Identities/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Identities/ }));
-
+    // Gallery panel is always visible (no tab click needed)
     await waitFor(() => {
       expect(screen.getByText('bob.bit')).toBeInTheDocument();
     });
@@ -198,12 +193,7 @@ describe('IdentityCollectionPage', () => {
 
     render(<IdentityCollectionPage collectionId={mockCollectionId} />);
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Identities/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Identities/ }));
-
+    // Gallery panel is always visible (no tab click needed)
     await waitFor(() => {
       const link = screen.getByRole('link', { name: 'alice.bit' });
       expect(link).toBeInTheDocument();
