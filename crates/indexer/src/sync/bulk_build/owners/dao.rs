@@ -160,20 +160,6 @@ impl BulkReducer for DaoOwner {
                     })?;
                     consumed_request_output_positions.insert(request_output_pos);
 
-                    Self::bump_daily_i128(
-                        &mut self.daily_active_delta,
-                        tx_date,
-                        -(entry.capacity as i128),
-                        "dao daily active delta",
-                    )?;
-                    Self::bump_active_depositor_count(
-                        &mut self.active_deposit_counts_by_lock,
-                        &mut self.daily_unique_depositors_delta,
-                        tx_date,
-                        &entry.lock_script_hash,
-                        -1,
-                        "dao unique active depositor count",
-                    )?;
                     entry.status = 1;
                     entry.withdraw_request_block = Some(tx.block_number);
                     entry.withdraw_request_tx = Some(tx.tx_hash.to_vec());
@@ -314,6 +300,21 @@ impl BulkReducer for DaoOwner {
                         tx_date,
                         1,
                         "dao daily withdrawals delta",
+                    )?;
+                    // Phase-2: CKB leaves the DAO — subtract from active delta
+                    Self::bump_daily_i128(
+                        &mut self.daily_active_delta,
+                        tx_date,
+                        -(entry.capacity as i128),
+                        "dao daily active delta (phase-2 withdrawal)",
+                    )?;
+                    Self::bump_active_depositor_count(
+                        &mut self.active_deposit_counts_by_lock,
+                        &mut self.daily_unique_depositors_delta,
+                        tx_date,
+                        &entry.lock_script_hash,
+                        -1,
+                        "dao unique active depositor count (phase-2 withdrawal)",
                     )?;
                 }
                 status => {
