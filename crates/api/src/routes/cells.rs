@@ -1907,11 +1907,30 @@ async fn list_live_cells(
         .map(|(tx_hash, output_index, info)| cell_info_to_response(tx_hash, *output_index, info))
         .collect();
 
-    ok(CursorPaginatedResponse::without_total(
-        cells,
-        limit as i64,
-        next_cursor,
-    ))
+    // Return pre-computed total when filtering by lock_script_hash only.
+    let total = match (&lock_hash_bytes, &type_hash_bytes, &_type_code_hash_bytes) {
+        (Some(lock_bytes), None, None) => state
+            .store
+            .get_addr_balance(lock_bytes)
+            .ok()
+            .flatten()
+            .map(|ab| ab.live_cells_count as i64),
+        _ => None,
+    };
+
+    match total {
+        Some(t) => ok(CursorPaginatedResponse::new(
+            cells,
+            t,
+            limit as i64,
+            next_cursor,
+        )),
+        None => ok(CursorPaginatedResponse::without_total(
+            cells,
+            limit as i64,
+            next_cursor,
+        )),
+    }
 }
 
 fn parse_hash_type(hash_type: &str) -> Option<u8> {
@@ -2949,8 +2968,17 @@ async fn get_address_transactions(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    ok(CursorPaginatedResponse::without_total(
+    let total = state
+        .store
+        .get_addr_balance(&lock_hash)
+        .ok()
+        .flatten()
+        .map(|ab| ab.txs_count)
+        .unwrap_or(0);
+
+    ok(CursorPaginatedResponse::new(
         txs,
+        total,
         limit as i64,
         next_cursor,
     ))

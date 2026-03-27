@@ -851,6 +851,7 @@ async fn get_address_activities(
     let store = state.store.clone();
     let ao_store = state.append_only_store.clone();
     let network = state.ckb_network.clone();
+    let lock_hash_for_total = lock_hash.clone();
     let lock_hash_clone = lock_hash.clone();
     let (next_cursor, activities) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let results = list_canonical_activities_page(
@@ -900,11 +901,28 @@ async fn get_address_activities(
     .map_err(|e| ApiError::internal(e.to_string()))?
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    ok(CursorPaginatedResponse::without_total(
-        activities,
-        limit as i64,
-        next_cursor,
-    ))
+    // Total is only meaningful without a filter (pre-computed == unfiltered txs_count).
+    if params.filter.is_none() {
+        let total = state
+            .store
+            .get_addr_balance(&lock_hash_for_total)
+            .ok()
+            .flatten()
+            .map(|ab| ab.txs_count)
+            .unwrap_or(0);
+        ok(CursorPaginatedResponse::new(
+            activities,
+            total,
+            limit as i64,
+            next_cursor,
+        ))
+    } else {
+        ok(CursorPaginatedResponse::without_total(
+            activities,
+            limit as i64,
+            next_cursor,
+        ))
+    }
 }
 
 async fn get_global_activities(

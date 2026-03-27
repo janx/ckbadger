@@ -26,7 +26,6 @@ const SECONDARY_ISSUANCE_MAX_DRIFT_CKB: i128 = 10_000;
 const TOP_ASSET_LIMIT: usize = 10;
 const TOP_HOLDER_LIMIT: usize = 10;
 const IDENTITY_HOLDER_SPOT_CHECK_LIMIT: usize = 10;
-const ADDRESS_COUNT_PAGE_LIMIT: usize = 100;
 const ADDRESS_TOKENS_LIMIT: usize = 100;
 
 // ---------------------------------------------------------------------------
@@ -322,95 +321,39 @@ struct AddressCountSnapshot {
     live_cell_total: i64,
 }
 
-fn count_cursor_records<T, F>(
-    ctx: &CheckContext,
-    mut build_path: F,
-    entity: &str,
-) -> anyhow::Result<i64>
-where
-    T: serde::de::DeserializeOwned,
-    F: FnMut(Option<&str>) -> String,
-{
-    let mut cursor: Option<String> = None;
-    let mut seen_cursors = std::collections::HashSet::<String>::new();
-    let mut total = 0i64;
-
-    loop {
-        let path = build_path(cursor.as_deref());
-        let page: CursorPage<T> = api_get(ctx, &path)?;
-        let page_len = i64::try_from(page.data.len()).map_err(|_| {
-            anyhow::anyhow!(
-                "record count exceeds i64 while scanning {} via {}",
-                entity,
-                path
-            )
-        })?;
-        total = total
-            .checked_add(page_len)
-            .ok_or_else(|| anyhow::anyhow!("record count overflow while scanning {}", entity))?;
-
-        let Some(next_cursor) = page.next_cursor else {
-            break;
-        };
-        if !seen_cursors.insert(next_cursor.clone()) {
-            anyhow::bail!("repeated cursor while scanning {}: {}", entity, next_cursor);
-        }
-        cursor = Some(next_cursor);
-    }
-
-    Ok(total)
-}
-
 fn fetch_address_count_snapshot(
     ctx: &CheckContext,
     holder_lock_hash: &str,
 ) -> anyhow::Result<AddressCountSnapshot> {
     let address: AddressDetailApiRecord = api_get(ctx, &format!("addresses/{}", holder_lock_hash))?;
 
-    let tx_total = count_cursor_records::<serde_json::Value, _>(
+    // Read pre-computed totals from endpoint responses (single request each)
+    // instead of paginating through all records.
+    let tx_page: CursorPageWithTotal<serde_json::Value> = api_get(
         ctx,
-        |cursor| match cursor {
-            Some(c) => format!(
-                "addresses/{}/transactions?limit={}&cursor={}",
-                holder_lock_hash, ADDRESS_COUNT_PAGE_LIMIT, c
-            ),
-            None => format!(
-                "addresses/{}/transactions?limit={}",
-                holder_lock_hash, ADDRESS_COUNT_PAGE_LIMIT
-            ),
-        },
-        &format!("address {} transactions", holder_lock_hash),
+        &format!("addresses/{}/transactions?limit=1", holder_lock_hash),
+    )?;
+    let activity_page: CursorPageWithTotal<serde_json::Value> = api_get(
+        ctx,
+        &format!("addresses/{}/activities?limit=1", holder_lock_hash),
+    )?;
+    let live_cell_page: CursorPageWithTotal<serde_json::Value> = api_get(
+        ctx,
+        &format!("cells/live?lock_script_hash={}&limit=1", holder_lock_hash),
     )?;
 
-    let activity_total = count_cursor_records::<serde_json::Value, _>(
-        ctx,
-        |cursor| match cursor {
-            Some(c) => format!(
-                "addresses/{}/activities?limit={}&cursor={}",
-                holder_lock_hash, ADDRESS_COUNT_PAGE_LIMIT, c
-            ),
-            None => format!(
-                "addresses/{}/activities?limit={}",
-                holder_lock_hash, ADDRESS_COUNT_PAGE_LIMIT
-            ),
-        },
-        &format!("address {} activities", holder_lock_hash),
-    )?;
-
-    let live_cell_total = count_cursor_records::<serde_json::Value, _>(
-        ctx,
-        |cursor| match cursor {
-            Some(c) => format!(
-                "cells/live?lock_script_hash={}&limit={}&cursor={}",
-                holder_lock_hash, ADDRESS_COUNT_PAGE_LIMIT, c
-            ),
-            None => format!(
-                "cells/live?lock_script_hash={}&limit={}",
-                holder_lock_hash, ADDRESS_COUNT_PAGE_LIMIT
-            ),
-        },
-        &format!("address {} live cells", holder_lock_hash),
-    )?;
+    let tx_total = tx_page.total.ok_or_else(|| {
+        anyhow::anyhow!(
+            "transactions endpoint missing total for {}",
+            holder_lock_hash
+        )
+    })?;
+    let activity_total = activity_page.total.ok_or_else(|| {
+        anyhow::anyhow!("activities endpoint missing total for {}", holder_lock_hash)
+    })?;
+    let live_cell_total = live_cell_page.total.ok_or_else(|| {
+        anyhow::anyhow!("live cells endpoint missing total for {}", holder_lock_hash)
+    })?;
 
     Ok(AddressCountSnapshot {
         lock_script_hash: address.lock_script_hash,
