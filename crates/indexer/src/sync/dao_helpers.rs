@@ -415,8 +415,8 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
     dao_code_hash: &[u8],
     consumed_dao_map: &DaoConsumedMap,
     same_batch_dao_map: &mut DaoSameBatchMap,
-    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    _input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    _batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     active_deposit_counts_by_lock: &mut HashMap<Vec<u8>, i64>,
     daily_unique_depositors_delta: &mut HashMap<NaiveDate, i64>,
     daily_active_delta: &mut HashMap<NaiveDate, i128>,
@@ -427,48 +427,43 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
     daily_cumulative_depositors_delta: &mut HashMap<NaiveDate, i64>,
 ) -> Result<()> {
     for tx_data in tx_slice {
-        let mut has_withdraw_request_output = false;
-
         for (output_index, cell) in tx_data.cells.iter().enumerate() {
             if let Some(ref type_code_hash) = cell.type_code_hash {
-                if type_code_hash == dao_code_hash && cell.data_size == 8 {
-                    if cell.data.len() == 8 && cell.data.iter().all(|&b| b == 0) {
-                        let output_index_i16 = checked_usize_to_i16(
-                            output_index,
-                            "DAO output index while accumulating daily snapshot deltas",
-                        )
-                        .map_err(|e| anyhow!("{}: tx_hash=0x{}", e, hex::encode(tx_data.hash)))?;
-                        *daily_active_delta.entry(block_date).or_default() += cell.capacity as i128;
-                        *daily_gross_deposit_delta.entry(block_date).or_default() +=
-                            cell.capacity as i128;
-                        *daily_new_deposits_delta.entry(block_date).or_default() += 1;
-                        bump_unique_active_depositors(
-                            active_deposit_counts_by_lock,
-                            daily_unique_depositors_delta,
-                            block_date,
-                            &cell.lock_script_hash,
-                            1,
-                            &tx_data.hash,
-                            output_index_i16,
-                        )?;
-                        // Track all-time cumulative depositors.
-                        let already = ever_deposited_by_lock
-                            .entry(cell.lock_script_hash.clone())
-                            .or_insert(false);
-                        if !*already {
-                            *already = true;
-                            *daily_cumulative_depositors_delta
-                                .entry(block_date)
-                                .or_default() += 1;
-                        }
-                        same_batch_dao_map
-                            .insert((tx_data.hash.to_vec(), output_index_i16), cell.capacity);
-                    } else if let Some(data) = tx_data.outputs_data.get(output_index) {
-                        let data_bytes = crate::rpc::parse_hex_to_bytes(data);
-                        if DaoParser::parse_deposit_block_number(&data_bytes).is_some() {
-                            has_withdraw_request_output = true;
-                        }
+                if type_code_hash == dao_code_hash
+                    && cell.data_size == 8
+                    && cell.data.len() == 8
+                    && cell.data.iter().all(|&b| b == 0)
+                {
+                    let output_index_i16 = checked_usize_to_i16(
+                        output_index,
+                        "DAO output index while accumulating daily snapshot deltas",
+                    )
+                    .map_err(|e| anyhow!("{}: tx_hash=0x{}", e, hex::encode(tx_data.hash)))?;
+                    *daily_active_delta.entry(block_date).or_default() += cell.capacity as i128;
+                    *daily_gross_deposit_delta.entry(block_date).or_default() +=
+                        cell.capacity as i128;
+                    *daily_new_deposits_delta.entry(block_date).or_default() += 1;
+                    bump_unique_active_depositors(
+                        active_deposit_counts_by_lock,
+                        daily_unique_depositors_delta,
+                        block_date,
+                        &cell.lock_script_hash,
+                        1,
+                        &tx_data.hash,
+                        output_index_i16,
+                    )?;
+                    // Track all-time cumulative depositors.
+                    let already = ever_deposited_by_lock
+                        .entry(cell.lock_script_hash.clone())
+                        .or_insert(false);
+                    if !*already {
+                        *already = true;
+                        *daily_cumulative_depositors_delta
+                            .entry(block_date)
+                            .or_default() += 1;
                     }
+                    same_batch_dao_map
+                        .insert((tx_data.hash.to_vec(), output_index_i16), cell.capacity);
                 }
             }
         }
@@ -477,6 +472,9 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
             continue;
         }
 
+        // Phase-2: consuming a status=1 withdraw-request cell means CKB leaves
+        // the DAO.  Subtract capacity from daily_active_delta and decrement the
+        // unique active depositor count here.
         for input in &tx_data.inputs {
             let outpoint = (
                 input.previous_tx_hash.to_vec(),
@@ -485,61 +483,26 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
             if let Some(row) = consumed_dao_map.get(&outpoint) {
                 if row.status == 1 {
                     *daily_withdrawals_delta.entry(block_date).or_default() += 1;
-                }
-            }
-        }
-
-        if !has_withdraw_request_output {
-            continue;
-        }
-
-        // Phase-1 withdrawal always consumes status=0 deposits. Match by consumed
-        // outpoint status, not by capacity, to avoid leaving stale active deposits.
-        for input in &tx_data.inputs {
-            let outpoint = (
-                input.previous_tx_hash.to_vec(),
-                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?,
-            );
-            let mut maybe_cap: Option<i64> = same_batch_dao_map.get(&outpoint).copied();
-            if maybe_cap.is_none() {
-                if let Some(row) = consumed_dao_map.get(&outpoint) {
-                    if row.status == 0 {
-                        maybe_cap = Some(row.capacity_str.parse::<i64>().map_err(|e| {
-                            anyhow!(
-                                "invalid DAO capacity string while accumulating snapshot deltas: value='{}', tx_hash=0x{}, output_index={}, error={}",
-                                row.capacity_str,
-                                hex::encode(input.previous_tx_hash),
-                                input.previous_output_index,
-                                e
-                            )
-                        })?);
-                    }
-                }
-            }
-            if let Some(capacity) = maybe_cap {
-                *daily_active_delta.entry(block_date).or_default() -= capacity as i128;
-                let lock_hash = input_cell_info
-                    .get(&outpoint)
-                    .or_else(|| batch_cell_infos.get(&outpoint))
-                    .map(|info| info.lock_script_hash.as_slice())
-                    .ok_or_else(|| {
+                    // Phase-2: CKB leaves DAO — subtract from active delta.
+                    let capacity: i64 = row.capacity_str.parse().map_err(|e| {
                         anyhow!(
-                            "missing DAO input cell info while updating unique depositor count: block_date={}, tx_hash=0x{}, prev_outpoint=0x{}:{}",
-                            block_date,
+                            "invalid DAO capacity string at phase-2 withdrawal: value='{}', tx_hash=0x{}, error={}",
+                            row.capacity_str,
                             hex::encode(tx_data.hash),
-                            hex::encode(&outpoint.0),
-                            outpoint.1
+                            e
                         )
                     })?;
-                bump_unique_active_depositors(
-                    active_deposit_counts_by_lock,
-                    daily_unique_depositors_delta,
-                    block_date,
-                    lock_hash,
-                    -1,
-                    &tx_data.hash,
-                    outpoint.1,
-                )?;
+                    *daily_active_delta.entry(block_date).or_default() -= capacity as i128;
+                    bump_unique_active_depositors(
+                        active_deposit_counts_by_lock,
+                        daily_unique_depositors_delta,
+                        block_date,
+                        &row.lock_script_hash,
+                        -1,
+                        &tx_data.hash,
+                        outpoint.1,
+                    )?;
+                }
             }
         }
     }
@@ -1261,12 +1224,15 @@ mod tests {
     // -- accumulate_dao_snapshot_deltas_for_txs -----------------------------
 
     #[test]
-    fn test_accumulate_dao_snapshot_deltas_subtracts_phase1_even_when_capacity_differs() {
+    fn test_phase1_does_not_subtract_active_delta() {
+        // Phase-1 (withdraw request) must NOT subtract from daily_active_delta.
+        // CKB remains locked in the DAO until phase-2 (withdraw completion).
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let input_hash_vec = vec![0x11; 32];
         let input_hash: [u8; 32] = input_hash_vec.clone().try_into().unwrap();
 
+        // Phase-1 tx: consumes a status=0 deposit and creates a withdraw-request output.
         let tx = dummy_tx_data(
             [0xAA; 32],
             false,
@@ -1328,19 +1294,26 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(daily_active_delta.get(&block_date), Some(&-10_000_000_000));
+        // Phase-1 must NOT subtract from daily_active_delta — CKB is still locked.
+        assert!(
+            daily_active_delta.is_empty(),
+            "phase-1 must not modify daily_active_delta"
+        );
         assert!(daily_gross_deposit_delta.is_empty());
         assert!(daily_new_deposits_delta.is_empty());
         assert!(daily_withdrawals_delta.is_empty());
     }
 
     #[test]
-    fn test_accumulate_dao_snapshot_deltas_ignores_status1_inputs_for_phase1_subtraction() {
+    fn test_phase2_subtracts_active_delta() {
+        // Phase-2 (withdraw completion) must subtract capacity from daily_active_delta
+        // and increment daily_withdrawals_delta.
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let input_hash_vec = vec![0x22; 32];
         let input_hash: [u8; 32] = input_hash_vec.clone().try_into().unwrap();
 
+        // Phase-2 tx: consumes a status=1 withdraw-request cell (no DAO outputs).
         let tx = dummy_tx_data(
             [0xBB; 32],
             false,
@@ -1349,9 +1322,9 @@ mod tests {
                 previous_output_index: 0,
                 since: 0,
             }],
-            vec![dummy_dao_cell(9_900_000_000, false)],
             vec![],
-            vec!["0x0100000000000000".to_string()],
+            vec![],
+            vec![],
         );
 
         let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
@@ -1360,7 +1333,7 @@ mod tests {
             DaoConsumedRow {
                 tx_hash: vec![],
                 output_index: 0,
-                capacity_str: "123".to_string(),
+                capacity_str: "10000000000".to_string(),
                 deposit_block: 0,
                 status: 1,
                 lock_script_hash: vec![0xAA; 32],
@@ -1371,6 +1344,8 @@ mod tests {
         let input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
         let batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
         let mut active_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
+        // One active deposit for lock 0xAA so the depositor decrement can succeed.
+        active_deposit_counts_by_lock.insert(vec![0xAA; 32], 1);
         let mut daily_unique_depositors_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
@@ -1396,10 +1371,20 @@ mod tests {
         )
         .unwrap();
 
-        assert!(daily_active_delta.is_empty());
+        // Phase-2 must subtract capacity from daily_active_delta.
+        assert_eq!(
+            daily_active_delta.get(&block_date),
+            Some(&-10_000_000_000),
+            "phase-2 must subtract capacity from daily_active_delta"
+        );
+        // Phase-2 must increment daily_withdrawals_delta.
+        assert_eq!(
+            daily_withdrawals_delta.get(&block_date),
+            Some(&1),
+            "phase-2 must increment daily_withdrawals_delta"
+        );
         assert!(daily_gross_deposit_delta.is_empty());
         assert!(daily_new_deposits_delta.is_empty());
-        assert_eq!(daily_withdrawals_delta.get(&block_date), Some(&1));
     }
 
     #[test]
@@ -1439,6 +1424,8 @@ mod tests {
         let input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
         let batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
         let mut active_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
+        // Seed one active deposit for lock 0xAA so the depositor decrement can succeed.
+        active_deposit_counts_by_lock.insert(vec![0xAA; 32], 1);
         let mut daily_unique_depositors_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
@@ -1464,7 +1451,8 @@ mod tests {
         )
         .unwrap();
 
-        assert!(daily_active_delta.is_empty());
+        // Phase-2: capacity must be subtracted from daily_active_delta.
+        assert_eq!(daily_active_delta.get(&block_date), Some(&-123));
         assert!(daily_gross_deposit_delta.is_empty());
         assert!(daily_new_deposits_delta.is_empty());
         assert_eq!(daily_withdrawals_delta.get(&block_date), Some(&1));
@@ -1508,6 +1496,8 @@ mod tests {
         let input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
         let batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
         let mut active_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
+        // Seed one active deposit for lock 0xAA so phase-2 decrement can succeed.
+        active_deposit_counts_by_lock.insert(vec![0xAA; 32], 1);
         let mut daily_unique_depositors_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
@@ -1538,11 +1528,13 @@ mod tests {
 
     #[test]
     fn test_accumulate_dao_snapshot_deltas_errors_on_invalid_capacity_string() {
+        // Phase-2 must fail fast on a bad capacity string — test with status=1.
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let input_hash_vec = vec![0x44; 32];
         let input_hash: [u8; 32] = input_hash_vec.clone().try_into().unwrap();
 
+        // Phase-2 tx: consumes a status=1 cell with an unparseable capacity string.
         let tx = dummy_tx_data(
             [0xDD; 32],
             false,
@@ -1551,9 +1543,9 @@ mod tests {
                 previous_output_index: 0,
                 since: 0,
             }],
-            vec![dummy_dao_cell(9_900_000_000, false)],
             vec![],
-            vec!["0x0100000000000000".to_string()],
+            vec![],
+            vec![],
         );
 
         let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
@@ -1564,7 +1556,7 @@ mod tests {
                 output_index: 0,
                 capacity_str: "bad-capacity".to_string(),
                 deposit_block: 0,
-                status: 0,
+                status: 1,
                 lock_script_hash: vec![0xAA; 32],
             },
         );
@@ -1602,11 +1594,15 @@ mod tests {
 
     #[test]
     fn test_accumulate_dao_snapshot_deltas_tracks_unique_active_depositors() {
+        // Verify that depositor counts increment on deposit and decrement on phase-2,
+        // and that phase-1 does NOT modify depositor counts.
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let deposit_tx_hash = [0x51; 32];
+        let withdraw_req_tx_hash = [0x52; 32];
         let lock_hash = vec![0x77; 32];
 
+        // Step 1: Deposit two cells from the same lock.
         let deposit_tx = dummy_tx_data(
             deposit_tx_hash,
             false,
@@ -1619,8 +1615,9 @@ mod tests {
             vec![],
         );
 
+        // Step 2: Phase-1 — consume the first deposit (status=0), create withdraw-request.
         let phase1_first = dummy_tx_data(
-            [0x52; 32],
+            withdraw_req_tx_hash,
             false,
             vec![crate::parser::transaction::ParsedInput {
                 previous_tx_hash: deposit_tx_hash,
@@ -1632,20 +1629,35 @@ mod tests {
             vec!["0x0100000000000000".to_string()],
         );
 
-        let phase1_second = dummy_tx_data(
+        // Step 3: Phase-2 — consume the first withdraw-request (status=1).
+        let phase2_first = dummy_tx_data(
             [0x53; 32],
             false,
             vec![crate::parser::transaction::ParsedInput {
-                previous_tx_hash: deposit_tx_hash,
-                previous_output_index: 1,
+                previous_tx_hash: withdraw_req_tx_hash,
+                previous_output_index: 0,
                 since: 0,
             }],
-            vec![dummy_dao_cell(19_900_000_000, false)],
             vec![],
-            vec!["0x0100000000000000".to_string()],
+            vec![],
+            vec![],
         );
 
-        let consumed_dao_map: DaoConsumedMap = HashMap::new();
+        // Phase-2 consumed_dao_map: withdraw-request cell has status=1.
+        let mut consumed_dao_map_phase2: DaoConsumedMap = HashMap::new();
+        consumed_dao_map_phase2.insert(
+            (withdraw_req_tx_hash.to_vec(), 0),
+            DaoConsumedRow {
+                tx_hash: vec![],
+                output_index: 0,
+                capacity_str: "10000000000".to_string(),
+                deposit_block: 0,
+                status: 1,
+                lock_script_hash: lock_hash.clone(),
+            },
+        );
+
+        let empty_consumed: DaoConsumedMap = HashMap::new();
         let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
@@ -1664,11 +1676,12 @@ mod tests {
             dummy_positioned_info(200_00000000, 100, lock_hash.clone()),
         );
 
+        // After deposit: 2 active deposits, 1 unique depositor.
         accumulate_dao_snapshot_deltas_for_txs(
             &[deposit_tx],
             block_date,
             &dao_code_hash,
-            &consumed_dao_map,
+            &empty_consumed,
             &mut same_batch_dao_map,
             &input_cell_info,
             &batch_cell_infos,
@@ -1686,11 +1699,12 @@ mod tests {
         assert_eq!(active_deposit_counts_by_lock.get(&lock_hash), Some(&2));
         assert_eq!(daily_unique_depositors_delta.get(&block_date), Some(&1));
 
+        // After phase-1: must NOT change depositor counts — CKB is still in DAO.
         accumulate_dao_snapshot_deltas_for_txs(
             &[phase1_first],
             block_date,
             &dao_code_hash,
-            &consumed_dao_map,
+            &empty_consumed,
             &mut same_batch_dao_map,
             &input_cell_info,
             &batch_cell_infos,
@@ -1705,18 +1719,24 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(active_deposit_counts_by_lock.get(&lock_hash), Some(&1));
+        assert_eq!(
+            active_deposit_counts_by_lock.get(&lock_hash),
+            Some(&2),
+            "phase-1 must not decrement active_deposit_counts_by_lock"
+        );
         assert_eq!(
             daily_unique_depositors_delta.get(&block_date),
             Some(&1),
-            "removing one of multiple active deposits for the same lock must not change unique depositor count"
+            "phase-1 must not decrement unique depositor delta"
         );
 
+        // After phase-2 (first withdrawal completes): depositor count drops to 1
+        // but unique depositor delta stays at 1 (still has one remaining deposit).
         accumulate_dao_snapshot_deltas_for_txs(
-            &[phase1_second],
+            &[phase2_first],
             block_date,
             &dao_code_hash,
-            &consumed_dao_map,
+            &consumed_dao_map_phase2,
             &mut same_batch_dao_map,
             &input_cell_info,
             &batch_cell_infos,
@@ -1731,11 +1751,15 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(active_deposit_counts_by_lock.get(&lock_hash), Some(&0));
+        assert_eq!(
+            active_deposit_counts_by_lock.get(&lock_hash),
+            Some(&1),
+            "phase-2 must decrement active_deposit_counts_by_lock"
+        );
         assert_eq!(
             daily_unique_depositors_delta.get(&block_date),
-            Some(&0),
-            "unique depositor count should return to zero after the final active deposit is withdrawn"
+            Some(&1),
+            "removing one of two active deposits for the same lock must not change unique depositor count"
         );
     }
 
