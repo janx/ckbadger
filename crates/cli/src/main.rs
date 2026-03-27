@@ -50,6 +50,7 @@ const FD_LIMIT_TARGET: u64 = 65536;
 ///
 /// Returns the effective soft limit after the raise attempt.
 #[cfg(unix)]
+#[allow(clippy::unnecessary_cast)] // rlim_t is u32 on some platforms, u64 on others
 fn raise_fd_limit() -> Result<u64> {
     unsafe {
         let mut rlim = libc::rlimit {
