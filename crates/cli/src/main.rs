@@ -132,9 +132,12 @@ fn check_fd_limit_for_indexer(fd_limit: u64) -> Result<()> {
                echo DefaultLimitNOFILE={} >> /etc/systemd/system.conf\n\
                systemctl daemon-reexec && reboot\n\
                (or for the current shell only: ulimit -Sn {})",
-            fd_limit, FD_LIMIT_MIN,
-            FD_LIMIT_TARGET, FD_LIMIT_TARGET,
-            FD_LIMIT_TARGET, FD_LIMIT_TARGET
+            fd_limit,
+            FD_LIMIT_MIN,
+            FD_LIMIT_TARGET,
+            FD_LIMIT_TARGET,
+            FD_LIMIT_TARGET,
+            FD_LIMIT_TARGET
         );
     }
     Ok(())
