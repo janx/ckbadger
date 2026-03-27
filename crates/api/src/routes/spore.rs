@@ -1228,7 +1228,10 @@ async fn decode_spore(
                     .flat_map(|s| s.traits.iter())
                     .collect();
                 let has_svg_in_traits = all_traits.iter().any(|t| {
-                    t.value.trim().len() >= 4 && t.value.trim()[..4].eq_ignore_ascii_case("<svg")
+                    let trimmed = t.value.trim();
+                    trimmed
+                        .get(..4)
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("<svg"))
                 });
                 let has_svg = if has_svg_in_traits {
                     true
@@ -1480,7 +1483,10 @@ fn extract_svg_from_decoded_traits(
 ) -> Option<String> {
     for t in traits {
         let trimmed = t.value.trim();
-        if trimmed.len() >= 4 && trimmed[..4].eq_ignore_ascii_case("<svg") {
+        if trimmed
+            .get(..4)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("<svg"))
+        {
             return Some(t.value.clone());
         }
     }
