@@ -16,11 +16,12 @@ fn build_dao_cache_entry(
     deposit: &ParsedDaoDeposit,
     block_number: i64,
     deposit_ar: i64,
+    deposit_timestamp: i64,
 ) -> DaoDepositCacheEntry {
     DaoDepositCacheEntry {
         capacity: deposit.capacity,
         deposit_block_number: block_number,
-        deposit_timestamp: 0,
+        deposit_timestamp,
         lock_script_hash: deposit.lock_script_hash.clone(),
         deposit_ar,
         status: 0,
@@ -244,8 +245,9 @@ impl BatchWriter {
             return Ok(());
         }
 
-        for (deposit, block_number, _timestamp, ar) in deposits {
-            let entry = build_dao_cache_entry(deposit, *block_number, *ar);
+        for (deposit, block_number, timestamp, ar) in deposits {
+            let entry =
+                build_dao_cache_entry(deposit, *block_number, *ar, timestamp.timestamp_millis());
             let output_index = i16::try_from(deposit.output_index).map_err(|_| {
                 anyhow!(
                     "DAO deposit output_index exceeds i16 range while batching insert: tx_hash=0x{}, output_index={}",
@@ -665,7 +667,7 @@ mod tests {
             lock_script_hash: vec![0x22; 32],
             capacity: 123_456,
         };
-        let entry = build_dao_cache_entry(&deposit, 42, 9876);
+        let entry = build_dao_cache_entry(&deposit, 42, 9876, 0);
 
         assert_eq!(entry.capacity, deposit.capacity);
         assert_eq!(entry.deposit_block_number, 42);

@@ -1625,7 +1625,7 @@ impl Indexer {
                 [u8; 34],
                 ckbadger_store::types::DaoDepositCacheEntry,
             > = HashMap::new();
-            for (deposit, block_number, _ts, ar) in &all_dao_deposits {
+            for (deposit, block_number, ts, ar) in &all_dao_deposits {
                 let deposit_output_index = checked_i32_to_i16(
                     deposit.output_index,
                     "DAO deposit output index while building same-batch map",
@@ -1656,7 +1656,7 @@ impl Indexer {
                     ckbadger_store::types::DaoDepositCacheEntry {
                         capacity: deposit.capacity,
                         deposit_block_number: *block_number,
-                        deposit_timestamp: 0,
+                        deposit_timestamp: ts.timestamp_millis(),
                         lock_script_hash: deposit.lock_script_hash.clone(),
                         deposit_ar: *ar,
                         status: 0,

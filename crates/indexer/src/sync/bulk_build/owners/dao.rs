@@ -340,7 +340,7 @@ impl BulkReducer for DaoOwner {
                 DaoDepositCacheEntry {
                     capacity: output.capacity,
                     deposit_block_number: tx.block_number,
-                    deposit_timestamp: 0,
+                    deposit_timestamp: tx.timestamp_ms,
                     lock_script_hash: output.lock_hash.clone(),
                     deposit_ar: i64::try_from(tx.block_dao_ar).map_err(|_| {
                         anyhow!(
