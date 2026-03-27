@@ -84,6 +84,7 @@ pub(crate) fn parse_block_to_facts(
     })?;
 
     let block_hash: [u8; 32] = header.hash().unpack();
+    let parent_hash: [u8; 32] = header.parent_hash().unpack();
 
     let timestamp_ms_u64: u64 = header.timestamp();
     let timestamp_ms = i64::try_from(timestamp_ms_u64).map_err(|_| {
@@ -452,6 +453,7 @@ pub(crate) fn parse_block_to_facts(
     let block_facts = BlockFacts {
         number: block_number,
         hash: block_hash,
+        parent_hash,
         timestamp_ms,
         epoch_number,
         epoch_index,

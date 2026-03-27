@@ -223,28 +223,26 @@ fn cached_header_to_block_response(
     header_info: Option<ckb_store_reader::BlockHeaderInfo>,
     extra: BlockExtra,
 ) -> BlockResponse {
-    let (parent_hash, nonce, transactions_root, version, compact_target, difficulty) =
-        match header_info {
-            Some(ref info) => {
-                // We don't have compact_target in BlockHeaderInfo, default to "0x0"
-                (
-                    format!("0x{}", hex::encode(info.parent_hash)),
-                    format!("0x{}", hex::encode(info.nonce.to_le_bytes())),
-                    format!("0x{}", hex::encode(info.transactions_root)),
-                    info.version as i32,
-                    "0x0".to_string(),
-                    "0".to_string(),
-                )
-            }
-            None => (
-                "0x".to_string(),
-                "0x0".to_string(),
-                "0x".to_string(),
-                0,
+    let parent_hash = format!("0x{}", hex::encode(&header.parent_hash));
+    let (nonce, transactions_root, version, compact_target, difficulty) = match header_info {
+        Some(ref info) => {
+            // We don't have compact_target in BlockHeaderInfo, default to "0x0"
+            (
+                format!("0x{}", hex::encode(info.nonce.to_le_bytes())),
+                format!("0x{}", hex::encode(info.transactions_root)),
+                info.version as i32,
                 "0x0".to_string(),
                 "0".to_string(),
-            ),
-        };
+            )
+        }
+        None => (
+            "0x0".to_string(),
+            "0x".to_string(),
+            0,
+            "0x0".to_string(),
+            "0".to_string(),
+        ),
+    };
 
     // Format timestamp from millis to RFC3339
     let timestamp = chrono::DateTime::from_timestamp_millis(header.timestamp)

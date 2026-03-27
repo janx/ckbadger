@@ -253,6 +253,7 @@ mod tests {
         hash[..8].copy_from_slice(&block_number.to_le_bytes());
         CachedBlockHeader {
             hash,
+            parent_hash: vec![0u8; 32],
             timestamp: block_number,
             epoch_number: 0,
             epoch_index: 0,

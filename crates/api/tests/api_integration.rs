@@ -227,6 +227,7 @@ fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) {
         321,
         &CachedBlockHeader {
             hash: vec![0x44; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_123_456,
             epoch_number: 1,
             epoch_index: 0,
@@ -365,6 +366,7 @@ async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
         19_000_000,
         &CachedBlockHeader {
             hash: vec![0xaa; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 13_000,
             epoch_index: 100,
@@ -544,6 +546,7 @@ async fn test_tx_stats_reads_from_derived_store() {
         100,
         &CachedBlockHeader {
             hash: vec![0x10; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: now_ms,
             epoch_number: 1,
             epoch_index: 10,
@@ -685,6 +688,7 @@ async fn test_network_stats_reads_derived_statistics() {
         200,
         &CachedBlockHeader {
             hash: vec![0x22; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: now_ms,
             epoch_number: 42,
             epoch_index: 10,
@@ -795,6 +799,7 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
         200,
         &CachedBlockHeader {
             hash: vec![0x22; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: now_ms,
             epoch_number: 42,
             epoch_index: 10,
@@ -1041,6 +1046,7 @@ async fn test_get_block_includes_hardfork_activation() {
         8_775_638,
         &CachedBlockHeader {
             hash: vec![0x11; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 5414,
             epoch_index: 7,
@@ -1102,6 +1108,7 @@ async fn test_blocks_list_includes_hardfork_activation() {
         8_775_639,
         &CachedBlockHeader {
             hash: vec![0x22; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 5414,
             epoch_index: 8,
@@ -1114,6 +1121,7 @@ async fn test_blocks_list_includes_hardfork_activation() {
         8_775_638,
         &CachedBlockHeader {
             hash: vec![0x11; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 5414,
             epoch_index: 7,
@@ -1346,6 +1354,7 @@ async fn test_search_hash_without_0x_returns_ambiguous_block_and_transaction() {
         123,
         &CachedBlockHeader {
             hash: hash.clone(),
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
             epoch_index: 0,
@@ -1736,6 +1745,7 @@ async fn test_dao_stats_uses_precomputed_latest_stats_when_tip_matches() {
         10,
         &CachedBlockHeader {
             hash: vec![0xAA; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -1798,6 +1808,7 @@ async fn test_dao_stats_ignores_stale_precomputed_latest_stats() {
         10,
         &CachedBlockHeader {
             hash: vec![0xBB; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -1860,6 +1871,7 @@ async fn test_dao_stats_cached_response_is_stable_within_ttl() {
         10,
         &CachedBlockHeader {
             hash: vec![0xAA; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -2585,6 +2597,7 @@ async fn test_charts_block_time_distribution_with_data() {
             number,
             &CachedBlockHeader {
                 hash: vec![number as u8; 32],
+                parent_hash: vec![0u8; 32],
                 timestamp: ts_ms,
                 epoch_number: 0,
                 epoch_index: 0,
@@ -3855,6 +3868,7 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
         older_block,
         &CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: older_timestamp,
             epoch_number: 0,
             epoch_index: 0,
@@ -3867,6 +3881,7 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
         newer_earliest_block,
         &CachedBlockHeader {
             hash: vec![0x03; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: newer_earliest_timestamp,
             epoch_number: 0,
             epoch_index: 0,
@@ -3879,6 +3894,7 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
         newer_block,
         &CachedBlockHeader {
             hash: vec![0x04; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: newer_timestamp,
             epoch_number: 0,
             epoch_index: 0,
@@ -4442,6 +4458,7 @@ async fn test_script_capacity_chart_aggregates_deployments() {
         300,
         &CachedBlockHeader {
             hash: vec![0x03; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_705_536_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4527,6 +4544,7 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
         100,
         &CachedBlockHeader {
             hash: vec![0x04; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_705_363_200_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4582,6 +4600,7 @@ async fn test_script_capacity_chart_by_code_hash_extends_to_latest_complete_ckb_
         200,
         &CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_705_536_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -5612,6 +5631,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
         100,
         &CachedBlockHeader {
             hash: vec![0xA1; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_100,
             epoch_number: 0,
             epoch_index: 0,
@@ -5624,6 +5644,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
         200,
         &CachedBlockHeader {
             hash: vec![0xA2; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_200,
             epoch_number: 0,
             epoch_index: 0,
@@ -5636,6 +5657,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
         300,
         &CachedBlockHeader {
             hash: vec![0xA3; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_300,
             epoch_number: 0,
             epoch_index: 0,
@@ -7882,6 +7904,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         100,
         &CachedBlockHeader {
             hash: vec![0xB1; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_100,
             epoch_number: 0,
             epoch_index: 0,
@@ -7894,6 +7917,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         200,
         &CachedBlockHeader {
             hash: vec![0xB2; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_200,
             epoch_number: 0,
             epoch_index: 0,
@@ -7906,6 +7930,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         300,
         &CachedBlockHeader {
             hash: vec![0xB3; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_300,
             epoch_number: 0,
             epoch_index: 0,
@@ -8704,6 +8729,7 @@ async fn test_address_activities_reads_from_store() {
         10,
         &CachedBlockHeader {
             hash: block_hash.clone(),
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -8775,6 +8801,7 @@ async fn test_address_activities_returns_protocol_metadata() {
         88,
         &CachedBlockHeader {
             hash: block_hash,
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_123,
             epoch_number: 0,
             epoch_index: 0,
@@ -8910,6 +8937,7 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
         88,
         &CachedBlockHeader {
             hash: block_hash,
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_888_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -9018,6 +9046,7 @@ async fn test_latest_activities_return_type_calls() {
         99,
         &CachedBlockHeader {
             hash: block_hash,
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_999,
             epoch_number: 0,
             epoch_index: 0,
@@ -9081,6 +9110,7 @@ async fn test_global_activities_basic() {
         200,
         &CachedBlockHeader {
             hash: block_hash,
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_200,
             epoch_number: 0,
             epoch_index: 0,

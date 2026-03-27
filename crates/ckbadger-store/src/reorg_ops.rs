@@ -3327,6 +3327,7 @@ mod tests {
         // Replay cutoff must be 20260305 (CKB UTC+8 boundary), not 20260304 (UTC).
         let replay_start_header = CachedBlockHeader {
             hash: vec![0x42; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_772_646_096_926,
             epoch_number: 0,
             epoch_index: 0,
@@ -3375,6 +3376,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x41; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_001_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3384,6 +3386,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x42; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_002_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3422,6 +3425,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x11; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_001_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3431,6 +3435,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x22; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_002_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3521,6 +3526,7 @@ mod tests {
 
         let header0 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3530,6 +3536,7 @@ mod tests {
         };
         let header1 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3622,6 +3629,7 @@ mod tests {
 
         let header0 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3631,6 +3639,7 @@ mod tests {
         };
         let header1 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3712,6 +3721,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3721,6 +3731,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3789,6 +3800,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3798,6 +3810,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3918,6 +3931,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -3927,6 +3941,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4092,6 +4107,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4101,6 +4117,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4272,6 +4289,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4281,6 +4299,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4324,6 +4343,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4333,6 +4353,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4390,6 +4411,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4399,6 +4421,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4489,6 +4512,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4498,6 +4522,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4620,6 +4645,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4629,6 +4655,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4638,6 +4665,7 @@ mod tests {
         };
         let header3 = CachedBlockHeader {
             hash: vec![0x03; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_020_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4793,6 +4821,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4802,6 +4831,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4886,6 +4916,7 @@ mod tests {
 
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4912,6 +4943,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4921,6 +4953,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4989,6 +5022,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -4998,6 +5032,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -5180,6 +5215,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -5189,6 +5225,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_086_400_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -5289,6 +5326,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -5298,6 +5336,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_086_400_000,
             epoch_number: 0,
             epoch_index: 0,
@@ -5490,6 +5529,7 @@ mod tests {
                 b,
                 &CachedBlockHeader {
                     hash: vec![b as u8; 32],
+                    parent_hash: vec![0u8; 32],
                     timestamp: 1_700_000_000_000 + b * 1000,
                     epoch_number: 0,
                     epoch_index: 0,
@@ -5537,6 +5577,7 @@ mod tests {
                 b,
                 &CachedBlockHeader {
                     hash: vec![b as u8; 32],
+                    parent_hash: vec![0u8; 32],
                     timestamp: base_ts_ms + b * 3_600_000, // 1h apart
                     epoch_number: 0,
                     epoch_index: 0,

@@ -1296,6 +1296,7 @@ mod tests {
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: day1_ts,
             epoch_number: 0,
             epoch_index: 0,
@@ -1305,6 +1306,7 @@ mod tests {
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: day2_ts,
             epoch_number: 0,
             epoch_index: 0,

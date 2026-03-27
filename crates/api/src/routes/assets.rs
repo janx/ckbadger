@@ -2728,6 +2728,7 @@ mod tests {
     fn make_header(hash_byte: u8) -> CachedBlockHeader {
         CachedBlockHeader {
             hash: vec![hash_byte; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
             epoch_index: 0,

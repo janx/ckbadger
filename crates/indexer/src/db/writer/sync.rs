@@ -469,6 +469,7 @@ mod tests {
     fn make_header(hash_byte: u8, ts_ms: i64) -> CachedBlockHeader {
         CachedBlockHeader {
             hash: vec![hash_byte; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: ts_ms,
             epoch_number: 0,
             epoch_index: 0,

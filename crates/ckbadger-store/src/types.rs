@@ -140,6 +140,7 @@ pub fn encode_live_cell_marker(created_at_block: i64) -> [u8; 8] {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedBlockHeader {
     pub hash: Vec<u8>,
+    pub parent_hash: Vec<u8>,
     pub timestamp: i64,
     pub epoch_number: i64,
     pub epoch_index: i32,

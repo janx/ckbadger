@@ -22,6 +22,7 @@ pub(crate) struct FactsArena {
 pub(crate) struct BlockFacts {
     pub(crate) number: i64,
     pub(crate) hash: [u8; 32],
+    pub(crate) parent_hash: [u8; 32],
     pub(crate) timestamp_ms: i64,
     pub(crate) epoch_number: i64,
     pub(crate) epoch_index: i32,

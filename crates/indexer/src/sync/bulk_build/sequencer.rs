@@ -188,6 +188,7 @@ mod tests {
             blocks: vec![BlockFacts {
                 number: 14_000_321,
                 hash: [0x10; 32],
+                parent_hash: [0u8; 32],
                 timestamp_ms: 1_704_067_200_000,
                 epoch_number: 42,
                 epoch_index: 0,

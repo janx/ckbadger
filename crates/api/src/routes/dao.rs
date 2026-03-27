@@ -1317,6 +1317,7 @@ mod tests {
     fn header_at(ms: i64) -> CachedBlockHeader {
         CachedBlockHeader {
             hash: vec![0u8; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: ms,
             epoch_number: 0,
             epoch_index: 0,

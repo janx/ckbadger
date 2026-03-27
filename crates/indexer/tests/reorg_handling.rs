@@ -33,6 +33,7 @@ fn make_header(block_num: i64) -> CachedBlockHeader {
     hash[0..8].copy_from_slice(&block_num.to_le_bytes());
     CachedBlockHeader {
         hash,
+        parent_hash: vec![0u8; 32],
         timestamp: 1_000_000 + block_num * 1000,
         epoch_number: block_num / 1800,
         epoch_index: (block_num % 1800) as i32,

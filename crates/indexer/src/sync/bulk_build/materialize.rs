@@ -274,6 +274,7 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
         };
         let block_header = CachedBlockHeader {
             hash: vec![0x31; 32],
+            parent_hash: vec![0x00; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 42,
             epoch_index: 0,
@@ -476,6 +477,7 @@ mod tests {
         };
         let block_header = CachedBlockHeader {
             hash: vec![0xBB; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 100,
             epoch_index: 0,
@@ -619,6 +621,7 @@ mod tests {
             };
             let block_header = CachedBlockHeader {
                 hash: vec![i; 32],
+                parent_hash: vec![0u8; 32],
                 timestamp: 1_700_000_000_000,
                 epoch_number: i as i64,
                 epoch_index: 0,

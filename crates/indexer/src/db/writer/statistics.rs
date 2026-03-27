@@ -1294,6 +1294,7 @@ mod tests {
             10,
             &CachedBlockHeader {
                 hash: vec![0x11; 32],
+                parent_hash: vec![0u8; 32],
                 timestamp: 1_700_000_000_000,
                 epoch_number: 0,
                 epoch_index: 0,
@@ -1457,6 +1458,7 @@ mod tests {
             0,
             &CachedBlockHeader {
                 hash: vec![0x11; 32],
+                parent_hash: vec![0u8; 32],
                 timestamp: i64::MAX,
                 epoch_number: 0,
                 epoch_index: 0,

@@ -2563,6 +2563,7 @@ fn build_history_rows_for_block(
     // Block header + hash index (2 rows per block).
     let header = CachedBlockHeader {
         hash: block.hash.to_vec(),
+        parent_hash: block.parent_hash.to_vec(),
         timestamp: block.timestamp_ms,
         epoch_number: block.epoch_number,
         epoch_index: block.epoch_index,
@@ -5979,6 +5980,7 @@ mod tests {
         // Verify presized produces identical output to standard bincode::serialize.
         let header = CachedBlockHeader {
             hash: vec![0xaa; 32],
+            parent_hash: vec![0u8; 32],
             timestamp: 1710000000000,
             epoch_number: 100,
             epoch_index: 5,
@@ -6011,6 +6013,7 @@ mod tests {
     fn test_bincode_serialize_presized_empty_vec_field() {
         let header = CachedBlockHeader {
             hash: vec![],
+            parent_hash: vec![0u8; 32],
             timestamp: 0,
             epoch_number: 0,
             epoch_index: 0,
@@ -6135,6 +6138,7 @@ mod tests {
                 facts::BlockFacts {
                     number: 100,
                     hash: [0x01; 32],
+                    parent_hash: [0u8; 32],
                     timestamp_ms: ts1,
                     epoch_number: 5,
                     epoch_index: 10,
@@ -6148,6 +6152,7 @@ mod tests {
                 facts::BlockFacts {
                     number: 101,
                     hash: [0x02; 32],
+                    parent_hash: [0u8; 32],
                     timestamp_ms: ts2,
                     epoch_number: 5,
                     epoch_index: 11,
