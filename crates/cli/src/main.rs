@@ -835,7 +835,7 @@ mod tests {
     #[test]
     fn test_format_build_version_omits_main_branch_label() {
         assert_eq!(
-            build_version_format::format_build_version("0.1.0", "main", "abcdef123456"),
+            build_version_format::format_build_version("0.1.0", Some("main"), "abcdef123456"),
             "0.1.0@abcdef123456"
         );
     }
@@ -843,7 +843,11 @@ mod tests {
     #[test]
     fn test_format_build_version_includes_non_main_branch_label_verbatim() {
         assert_eq!(
-            build_version_format::format_build_version("0.1.0", "feature/foo", "abcdef123456"),
+            build_version_format::format_build_version(
+                "0.1.0",
+                Some("feature/foo"),
+                "abcdef123456"
+            ),
             "0.1.0+feature/foo@abcdef123456"
         );
     }

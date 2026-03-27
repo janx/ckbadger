@@ -1,0 +1,131 @@
+name: Release
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.1.0). Uses HEAD if empty.'
+        required: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: ckbadger-linux-x86_64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: ckbadger-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: ckbadger-macos-aarch64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Determine ref
+        id: ref
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          GH_REF: ${{ github.ref }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            echo "checkout_ref=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "checkout_ref=$GH_REF" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.checkout_ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+
+      - name: Cache pnpm
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-release-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-release-
+
+      - name: Build frontend
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile && pnpm build
+
+      - name: Build release binary
+        run: cargo build --release -p ckbadger
+
+      - name: Package binary
+        shell: bash
+        run: |
+          cd target/release
+          tar czf "$ARTIFACT.tar.gz" ckbadger
+          shasum -a 256 "$ARTIFACT.tar.gz" > "$ARTIFACT.tar.gz.sha256"
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            target/release/${{ matrix.artifact }}.tar.gz
+            target/release/${{ matrix.artifact }}.tar.gz.sha256
+          retention-days: 7
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.sha256
