@@ -20,6 +20,7 @@ const didCkbConfig: IdentityItemDetailConfig = {
     notFoundMsg: 'did:ckb item not found',
     recycledMsg: 'Recycled did:ckb identity has no live cell.',
     showExpiry: false,
+    showVisualization: true,
   },
 };
 

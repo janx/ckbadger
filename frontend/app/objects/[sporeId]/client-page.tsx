@@ -25,6 +25,7 @@ import { CapacityStatisticsSection } from '@/components/ui/capacity-statistics-s
 import { CapacityUtilization } from '@/components/ui/capacity-utilization';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { CellLife } from '@/components/object/cell-life';
 import { ObjectActivityCard } from '@/components/object/object-activity-card';
 import {
   compositionTierCardStyle,
@@ -913,6 +914,14 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
             <div>
               {/* Name + badge */}
               <div className="flex flex-wrap items-center gap-3">
+                {(spore.mediaProfile?.tier === 'pure_ckb' ||
+                  spore.mediaProfile?.tier === 'btc_ckb') && (
+                  <CellLife
+                    hash={spore.sporeId}
+                    size={48}
+                    isDualChain={spore.mediaProfile.tier === 'btc_ckb'}
+                  />
+                )}
                 <h1 className="text-text-bright font-mono text-2xl font-bold">
                   {cluster?.name
                     ? `${cluster.name} (${truncateHash(spore.sporeId, 6, 4)})`

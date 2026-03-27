@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { Header } from '@/components/layout/header';
 import { IdentityActivityCard } from '@/components/identity/identity-activity-card';
+import { CellLife } from '@/components/object/cell-life';
 import { Address } from '@/components/ui/address';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DataField, DataGrid } from '@/components/ui/data-field';
@@ -51,6 +52,7 @@ export interface IdentityItemDetailConfig {
     notFoundMsg: string;
     recycledMsg: string;
     showExpiry: boolean;
+    showVisualization?: boolean;
   };
 }
 
@@ -186,16 +188,20 @@ export function IdentityItemDetail({ config, identityId: routeIdentityId }: Prop
           </Link>
         </div>
 
-        <PageHeader
-          title={detail.name || labels.defaultTitle}
-          badge={
-            detail.isLive ? (
-              <Badge variant="green">Live</Badge>
-            ) : (
-              <Badge variant="red">Recycled</Badge>
-            )
-          }
-        />
+        <div className="mb-6 flex items-center gap-4">
+          {labels.showVisualization && <CellLife hash={detail.nftId} size={48} />}
+          <PageHeader
+            title={detail.name || labels.defaultTitle}
+            badge={
+              detail.isLive ? (
+                <Badge variant="green">Live</Badge>
+              ) : (
+                <Badge variant="red">Recycled</Badge>
+              )
+            }
+            className="mb-0"
+          />
+        </div>
 
         <div className="space-y-6">
           <TerminalPanel>

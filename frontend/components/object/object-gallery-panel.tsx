@@ -68,10 +68,22 @@ function inactiveStatusLabel(item: CollectionItem): string {
   return 'Burned';
 }
 
-function ObjectCard({ item }: { item: CollectionItem }) {
+function isIdentityStandard(standard: string): boolean {
+  const std = standard.toLowerCase();
+  return std === 'did_ckb' || std === 'did:ckb' || std === 'dotbit';
+}
+
+function ObjectCard({
+  item,
+  ownerAddress,
+}: {
+  item: CollectionItem;
+  ownerAddress?: string | null;
+}) {
   const href = objectDetailHref(item);
   const tokenIndex = extractTokenIndex(item.nftId, item.standard);
   const hasName = !!item.name;
+  const isIdentity = isIdentityStandard(item.standard);
 
   // Primary label: name > token number > truncated hash
   const primaryLabel = hasName ? item.name! : tokenIndex !== null ? `#${tokenIndex}` : null;
@@ -93,37 +105,53 @@ function ObjectCard({ item }: { item: CollectionItem }) {
       <div className="flex min-w-0 flex-1 gap-3 p-3">
         {/* Identicon */}
         <CardLink className="shrink-0 self-start">
-          <CellLifePlaceholder size={36} />
+          {isIdentity ? (
+            <CellLife hash={item.nftId} size={36} />
+          ) : (
+            <CellLifePlaceholder size={36} />
+          )}
         </CardLink>
 
         {/* Content */}
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           {/* Top row: primary label + status */}
           <div className="flex items-center justify-between gap-2">
-            <CardLink className="hover:text-emphasis text-text-bright min-w-0 truncate font-mono text-sm font-semibold hover:underline">
+            <CardLink
+              className={`min-w-0 truncate font-mono text-sm font-semibold hover:underline ${
+                isIdentity
+                  ? 'text-aqua hover:text-interactive-hover'
+                  : 'text-text-bright hover:text-emphasis'
+              }`}
+            >
               {primaryLabel || (
                 <HexDisplay value={item.nftId} size="sm" startChars={8} endChars={6} />
               )}
             </CardLink>
-            {item.isLive ? (
-              <Badge variant="green">Live</Badge>
-            ) : (
-              <Badge variant="red">{inactiveStatusLabel(item)}</Badge>
-            )}
+            {!item.isLive && <Badge variant="red">{inactiveStatusLabel(item)}</Badge>}
           </div>
 
-          {/* Secondary: show name if token number was primary, or compact ID */}
+          {/* Secondary: show name when token number is primary, or hash when name is primary */}
           {tokenIndex !== null && hasName ? (
             <div className="text-text truncate font-mono text-[11px]">{item.name}</div>
-          ) : (
+          ) : hasName ? (
             <div className="text-text-dim font-mono text-[10px]">
               <HexDisplay value={item.nftId} size="sm" startChars={8} endChars={6} />
             </div>
-          )}
+          ) : null}
 
           {/* Footer: owner + block */}
           <div className="mt-auto flex items-end justify-between gap-2 pt-0.5">
-            {item.ownerLockHash ? (
+            {ownerAddress ? (
+              <Link
+                href={`/address/${ownerAddress}`}
+                className="text-text-dim hover:text-text min-w-0 truncate font-mono text-[10px] hover:underline"
+                title={ownerAddress}
+              >
+                {ownerAddress.length > 20
+                  ? `${ownerAddress.slice(0, 10)}...${ownerAddress.slice(-8)}`
+                  : ownerAddress}
+              </Link>
+            ) : item.ownerLockHash ? (
               <Link
                 href={`/address/${item.ownerLockHash}`}
                 className="text-text-dim hover:text-text font-mono text-[10px] hover:underline"
@@ -258,6 +286,8 @@ interface ObjectGalleryPanelBaseProps {
   onPrevious: () => void;
   /** Custom actions rendered in the panel header (e.g. filter controls) */
   actions?: React.ReactNode;
+  /** Override the panel header and pagination label (default: "Objects") */
+  headerLabel?: string;
 }
 
 interface CollectionItemGalleryProps extends ObjectGalleryPanelBaseProps {
@@ -272,6 +302,8 @@ interface CollectionItemGalleryProps extends ObjectGalleryPanelBaseProps {
   onSearchInputChange?: (value: string) => void;
   searchLabel?: string;
   inactiveStatusLabel?: string;
+  /** lockHash → CKB address map for resolving owner display */
+  ownerAddressMap?: Map<string, string>;
 }
 
 interface SporeItemGalleryProps extends ObjectGalleryPanelBaseProps {
@@ -304,6 +336,7 @@ export function ObjectGalleryPanel(props: ObjectGalleryPanelProps) {
     onNext,
     onPrevious,
     actions,
+    headerLabel = 'Objects',
   } = props;
 
   const isSporeVariant = props.variant === 'spore';
@@ -358,7 +391,7 @@ export function ObjectGalleryPanel(props: ObjectGalleryPanelProps) {
           ) : undefined
         }
       >
-        Objects ({formatNumber(totalCount)})
+        {headerLabel} ({formatNumber(totalCount)})
       </TerminalPanelHeader>
 
       <TerminalPanelContent>
@@ -373,10 +406,12 @@ export function ObjectGalleryPanel(props: ObjectGalleryPanelProps) {
           </div>
         ) : isError ? (
           <div className="text-rouge py-8 text-center">
-            Failed to load objects. Please refresh and try again.
+            Failed to load {headerLabel.toLowerCase()}. Please refresh and try again.
           </div>
         ) : !hasData ? (
-          <div className="text-text-dim py-8 text-center">No objects in this collection</div>
+          <div className="text-text-dim py-8 text-center">
+            No {headerLabel.toLowerCase()} in this collection
+          </div>
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {isSporeVariant
@@ -388,7 +423,15 @@ export function ObjectGalleryPanel(props: ObjectGalleryPanelProps) {
                   />
                 ))
               : props.collectionItems!.data.map((item) => (
-                  <ObjectCard key={item.nftId} item={item} />
+                  <ObjectCard
+                    key={item.nftId}
+                    item={item}
+                    ownerAddress={
+                      item.ownerLockHash
+                        ? props.ownerAddressMap?.get(item.ownerLockHash.toLowerCase())
+                        : undefined
+                    }
+                  />
                 ))}
           </div>
         )}
@@ -398,7 +441,7 @@ export function ObjectGalleryPanel(props: ObjectGalleryPanelProps) {
         <TerminalPanelFooter>
           <CursorPagination
             total={total}
-            totalLabel="Objects"
+            totalLabel={headerLabel}
             pageSize={GALLERY_PAGE_SIZE}
             page={page}
             currentCount={itemCount}
