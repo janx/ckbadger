@@ -1558,8 +1558,27 @@ impl Check for ExplorerBlockTimeDistribution {
     }
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let distribution: ChartResponse = api_get(ctx, "charts/block-time-distribution")?;
+
+        // Guard: empty or all-zero distribution
+        let has_nonzero = distribution
+            .data
+            .iter()
+            .any(|p| p.value.parse::<f64>().unwrap_or(0.0) > 0.0);
+        if distribution.data.is_empty() || !has_nonzero {
+            return Ok(CheckResult::fail(1, vec![Finding {
+                entity: "distribution".to_string(),
+                details: vec![format!(
+                    "block-time-distribution chart has no data ({} points, all ratios zero); secondary store may not have replicated block headers yet",
+                    distribution.data.len()
+                )],
+            }]));
+        }
+
         let our_ms = weighted_avg_block_time_ms_from_distribution(&distribution.data)
-            .ok_or_else(|| anyhow::anyhow!("failed to derive avg block time from distribution"))?;
+            .ok_or_else(|| anyhow::anyhow!(
+                "failed to derive avg block time from distribution: {} points, unexpected parse failure",
+                distribution.data.len()
+            ))?;
         let explorer_ms =
             fetch_explorer_statistic_f64(ctx, "average_block_time", "average_block_time")?;
 
@@ -2310,6 +2329,12 @@ mod tests {
             value: "0".to_string(),
             value2: None,
         }];
+        assert_eq!(weighted_avg_block_time_ms_from_distribution(&points), None);
+    }
+
+    #[test]
+    fn test_weighted_avg_block_time_ms_from_distribution_empty_data() {
+        let points: Vec<ChartDataPoint> = vec![];
         assert_eq!(weighted_avg_block_time_ms_from_distribution(&points), None);
     }
 
