@@ -45,7 +45,9 @@ This is the era local-first architecture was waiting for. This is the era Fiber 
 
 ### Design Starting Point
 
-Documents under `docs/prompts/` are manually marinated texts capturing the ideas and principles behind CKBadger. Start there for all design reasoning — data model, API, indexer, UI/UX.
+Documents under `docs/prompts/` are manually marinated texts capturing the ideas and principles behind CKBadger. Start there for all design reasoning.
+
+Whether or not you share the web5/local-first vision, I hope CKBadger inspires you to build great things.
 
 ## Features
 
