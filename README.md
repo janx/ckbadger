@@ -256,7 +256,7 @@ Persistent fix:
                                 ▼
                     ┌──────────────────────┐
                     │      CKB Node        │
-                    │    (external RPC)    │
+                    │   (File read / RPC)  │
                     └──────────────────────┘
 ```
 
