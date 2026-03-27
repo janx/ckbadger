@@ -70,6 +70,7 @@ mod sync;
 mod udt;
 pub(crate) mod utxoswap_detector;
 
+pub use crate::sync::DaoConsumedRow;
 pub(crate) use addresses::collect_script_reference_rollup_state;
 pub use dao::{DaoWithdrawalContext, DaoWithdrawalContextTrait};
 pub use reorg::ReorgResult;

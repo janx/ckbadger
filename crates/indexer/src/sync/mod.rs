@@ -3,6 +3,7 @@ mod batch;
 pub(crate) mod bottleneck;
 pub(crate) mod bulk_build;
 pub(crate) mod dao_helpers;
+pub use dao_helpers::DaoConsumedRow;
 mod diagnostics;
 pub mod dob_decode_worker;
 mod helpers;

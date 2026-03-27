@@ -227,11 +227,11 @@ fn build_activity_input_views<'a>(
 /// Extract outpoints whose DAO status == 1 (withdraw request) from consumed_dao_map.
 /// The returned set lets T_ACT classify inputs without per-input RocksDB reads.
 fn dao_withdraw_outpoints_from_map(
-    consumed_dao_map: &HashMap<(Vec<u8>, i16), (Vec<u8>, i16, String, i64, i16)>,
+    consumed_dao_map: &crate::sync::dao_helpers::DaoConsumedMap,
 ) -> HashSet<(Vec<u8>, i16)> {
     consumed_dao_map
         .iter()
-        .filter(|(_, row)| row.4 == 1) // status == 1 means withdraw request
+        .filter(|(_, row)| row.status == 1) // status == 1 means withdraw request
         .map(|(k, _)| k.clone())
         .collect()
 }
@@ -269,19 +269,19 @@ fn tx_slice_claimed_dao_compensation(
 /// without duplicating the DAO processing logic.
 ///
 /// The `consumed_dao_map` key is the withdraw-request outpoint (tx_hash, output_index)
-/// being consumed in Phase 2. The value tuple is
-/// (original_deposit_tx_hash, original_deposit_output_index, capacity_str, deposit_block, status).
+/// being consumed in Phase 2. The value struct has fields for the original deposit outpoint,
+/// capacity_str, deposit_block, and status.
 /// Only status==1 entries are withdraw completes.
 fn pre_compute_dao_compensations(
     store: &CkbadgerStore,
-    consumed_dao_map: &HashMap<(Vec<u8>, i16), (Vec<u8>, i16, String, i64, i16)>,
+    consumed_dao_map: &crate::sync::dao_helpers::DaoConsumedMap,
 ) -> Result<HashMap<(Vec<u8>, i16), i64>> {
     use crate::db::writer::dao::{calculate_dao_compensation_from_ar, extract_ar_from_dao};
 
     // Filter to status==1 entries only
     let withdraw_entries: Vec<_> = consumed_dao_map
         .iter()
-        .filter(|(_, row)| row.4 == 1)
+        .filter(|(_, row)| row.status == 1)
         .collect();
 
     if withdraw_entries.is_empty() {
@@ -299,9 +299,11 @@ fn pre_compute_dao_compensations(
         i64,             // withdraw_request_block
     )> = Vec::new();
 
-    for (withdraw_key, (orig_tx_hash, orig_output_index, capacity_str, deposit_block, _status)) in
-        &withdraw_entries
-    {
+    for (withdraw_key, row) in &withdraw_entries {
+        let orig_tx_hash = &row.tx_hash;
+        let orig_output_index = row.output_index;
+        let capacity_str = &row.capacity_str;
+        let deposit_block = row.deposit_block;
         let capacity: i64 = capacity_str.parse().map_err(|e| {
             anyhow!(
                 "invalid DAO capacity string in compensation pre-compute: value='{}', error={}",
@@ -311,7 +313,7 @@ fn pre_compute_dao_compensations(
         })?;
 
         // Look up the deposit entry to get withdraw_request_block
-        let outpoint_key = keys::encode_outpoint(orig_tx_hash, *orig_output_index);
+        let outpoint_key = keys::encode_outpoint(orig_tx_hash, orig_output_index);
         let request_block = if let Some(value) =
             store.get_cf(store.cf_dao_deposits(), &outpoint_key)?
         {
@@ -340,9 +342,9 @@ fn pre_compute_dao_compensations(
             );
         };
 
-        blocks_needed.insert(*deposit_block);
+        blocks_needed.insert(deposit_block);
         blocks_needed.insert(request_block);
-        entries_with_request_block.push((withdraw_key, capacity, *deposit_block, request_block));
+        entries_with_request_block.push((withdraw_key, capacity, deposit_block, request_block));
     }
 
     // Batch-fetch DAO header fields for all needed blocks
@@ -1616,10 +1618,8 @@ impl Indexer {
 
             // Build a same-batch deposit map for deposits created in this
             // batch that may also be consumed within the same batch.
-            let mut same_batch_dao_deposits: HashMap<
-                (Vec<u8>, i16),
-                (Vec<u8>, i16, String, i64, i16),
-            > = HashMap::new();
+            let mut same_batch_dao_deposits: crate::sync::dao_helpers::DaoConsumedMap =
+                HashMap::new();
             // Also build pending entries map for process_dao_withdrawals_batch
             let mut pending_dao_entries: HashMap<
                 [u8; 34],
@@ -1640,13 +1640,14 @@ impl Indexer {
                 })?;
                 same_batch_dao_deposits.insert(
                     (deposit.tx_hash.clone(), deposit_output_index),
-                    (
-                        deposit.tx_hash.clone(),
-                        deposit_output_index,
-                        deposit.capacity.to_string(),
-                        *block_number,
-                        0i16, // status = 0 (active)
-                    ),
+                    crate::sync::dao_helpers::DaoConsumedRow {
+                        tx_hash: deposit.tx_hash.clone(),
+                        output_index: deposit_output_index,
+                        capacity_str: deposit.capacity.to_string(),
+                        deposit_block: *block_number,
+                        status: 0, // active
+                        lock_script_hash: deposit.lock_script_hash.clone(),
+                    },
                 );
                 let outpoint_key =
                     ckbadger_store::keys::encode_outpoint(&deposit.tx_hash, deposit_output_index);
@@ -1683,7 +1684,7 @@ impl Indexer {
                         if tx_data.is_cellbase || tx_data.inputs.is_empty() {
                             continue;
                         }
-                        let mut consumed_deposits: Vec<(Vec<u8>, i16, String, i64, i16)> =
+                        let mut consumed_deposits: Vec<crate::sync::dao_helpers::DaoConsumedRow> =
                             Vec::new();
                         for input in &tx_data.inputs {
                             let key = (
