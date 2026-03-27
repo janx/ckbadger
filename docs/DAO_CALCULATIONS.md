@@ -130,44 +130,51 @@ Where:
 
 APC represents the annualized return rate for DAO deposits at the current block height.
 
-### Formula
+### Formula (CKB Explorer-compatible model)
+
+Uses continuous compounding with halving-aware alpha factor:
 
 ```
-APC = (secondary_issuance_per_year / circulating_supply) * 100
+alpha = primary_issuance_per_epoch / secondary_issuance_per_epoch
+sn = secondary_issuance over 1-year deposit window
+C = theoretical cumulative total_issuance at deposit epoch
+
+rate = ln(1 + (alpha + 1) * sn / C) / (alpha + 1)
+APC = rate * 100  (truncated to 4 decimal places)
 ```
 
 Where:
 
-- `secondary_issuance_per_year` = 1.344B CKB (protocol constant)
-- `circulating_supply` = `total_issuance` - `genesis_burnt` - `secondary_burnt`
-- `total_issuance` = dao field bytes 0-7 (C)
-- `genesis_burnt` = 8.4B CKB (never entered circulation)
-- `secondary_burnt` = cumulative burnt from secondary issuance
+- `alpha` depends on the halving period (primary/secondary ratio per epoch)
+- `sn` = secondary issuance over 2190 epochs (1 year)
+- `C` = genesis issuance + cumulative primary + cumulative secondary
+- If the deposit window spans a halving boundary, rates are compounded per segment
 
-### Why Use Circulating Supply (Not Total Issuance)
+### Why This Model
 
-The 8.4B CKB burnt at genesis was issued but never entered circulation. Only the circulating supply (25.2B at genesis) actually participates in the economy and competes for secondary issuance. Using `total_issuance` (33.6B) would underestimate the true return rate.
+This matches the CKB Explorer's `estimated_apc` calculation. The model accounts for:
+
+1. **Primary issuance dilution** via the alpha factor (total issuance grows faster than secondary alone)
+2. **Halving schedule** (primary issuance halves every 4 years, reducing alpha)
+3. **Continuous compounding** (more accurate than simple division)
 
 ### APC Over Time
 
-| Period               | circulating | APC   |
-| -------------------- | ----------- | ----- |
-| Genesis (Year 0)     | ~25.2B      | ~5.3% |
-| Year 4 (1st halving) | ~41B        | ~3.3% |
-| Year 8 (2nd halving) | ~53B        | ~2.5% |
-| Long term            | → ∞         | → 0%  |
+| Period               | alpha  | APC   |
+| -------------------- | ------ | ----- |
+| Genesis (Year 0)     | 3.125  | ~3.7% |
+| Year 4 (1st halving) | 1.5625 | ~2.7% |
+| Year 8 (2nd halving) | 0.7813 | ~2.0% |
+| Long term            | → 0    | → 0%  |
 
-APC decreases over time because:
+APC decreases over time because cumulative `total_issuance` grows while secondary issuance is constant.
 
-- `secondary_issuance` is constant (1.344B/year)
-- `circulating_supply` grows (primary + secondary issuance - burnt)
-
-**Update frequency**: Calculated from latest snapshot on API read path.
+**Update frequency**: Calculated from tip block epoch info on API read path.
 
 **Implementation**:
 
-- API calculation: `crates/api/src/routes/dao.rs::snapshot_estimated_apc()`
-- Writer hook (currently no-op): `crates/indexer/src/db/writer/dao.rs::recalculate_dao_extended_statistics()`
+- Core calculation: `crates/common/src/dao.rs::calculate_estimated_apc()`
+- API wrapper: `crates/api/src/routes/dao.rs::estimated_apc_from_store()`
 
 ## 3. Secondary Issuance Distribution
 
@@ -325,17 +332,15 @@ The 8.4B burnt never enters circulation and shouldn't be counted when calculatin
 
 ### Incorrect APC Formula
 
-**Wrong**: `APC = (AR_current / AR_past)^(1/years) - 1` (comparing two blocks)
+**Wrong**: `APC = secondary_issuance_per_year / circulating_supply * 100` (simple division)
 
-This requires historical data and is complex when sync is incomplete.
+Ignores primary issuance dilution (alpha factor) and doesn't match the CKB Explorer.
 
 **Wrong**: `APC = secondary_issuance_per_year / total_issuance * 100`
 
-Using `total_issuance` includes the 8.4B genesis burnt which never circulates.
+Closer but still doesn't account for the alpha factor or continuous compounding.
 
-**Correct**: `APC = secondary_issuance_per_year / circulating_supply * 100`
-
-This only needs current block data and gives the instantaneous APC rate based on actual circulating supply.
+**Correct**: Use the continuous compounding model with `rate = ln(1 + (alpha+1) * sn / C) / (alpha+1)`. See formula above.
 
 ### Secondary Issuance Attribution
 

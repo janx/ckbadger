@@ -166,6 +166,8 @@ pub struct DaoSnapshotInput {
     pub cum_treasury: i128,
     /// Unclaimed DAO compensation at this point (shannons).
     pub unclaimed_compensation: u128,
+    /// Cumulative count of unique addresses that have ever deposited.
+    pub cumulative_depositors: i64,
 }
 
 const DAO_OCCUPIED_CAPACITY: u128 = 102_00000000;
@@ -623,6 +625,7 @@ impl BatchWriter {
             cum_dao_compensation: dao_snapshot.cum_dao_compensation,
             cum_treasury: dao_snapshot.cum_treasury,
             unclaimed_compensation: dao_snapshot.unclaimed_compensation,
+            cumulative_depositors: dao_snapshot.cumulative_depositors,
         };
 
         let value = bincode::serialize(&snapshot)?;
@@ -986,12 +989,7 @@ impl BatchWriter {
         })?;
 
         let latest_snapshot = self.store.get_latest_dao_daily_snapshot()?;
-        let estimated_apc = latest_snapshot
-            .as_ref()
-            .map(snapshot_estimated_apc)
-            .transpose()?
-            .flatten()
-            .unwrap_or_default();
+        let estimated_apc = estimated_apc_from_header(&header).unwrap_or_default();
         let (mining_reward, deposit_compensation, burnt) = if let Some(s) = latest_snapshot.as_ref()
         {
             if s.cum_miner_secondary < 0 {
@@ -1109,26 +1107,12 @@ fn extract_ar_from_dao_field(dao: &[u8]) -> Option<u64> {
     Some(u64::from_le_bytes(bytes))
 }
 
-fn snapshot_secondary_burnt(snapshot: &DaoDailySnapshot) -> Result<u128> {
-    if snapshot.cum_treasury < 0 {
-        bail!(
-            "negative cum_treasury in dao_daily_snapshots for {}: {}",
-            snapshot.date,
-            snapshot.cum_treasury
-        );
+fn estimated_apc_from_header(header: &CachedBlockHeader) -> Option<String> {
+    if header.epoch_length == 0 {
+        return None;
     }
-    Ok(snapshot.cum_treasury as u128)
-}
-
-fn snapshot_estimated_apc(snapshot: &DaoDailySnapshot) -> Result<Option<String>> {
-    let Ok(total_issuance) = u64::try_from(snapshot.total_issuance) else {
-        return Ok(None);
-    };
-    if total_issuance == 0 {
-        return Ok(None);
-    }
-    let apc = calculate_estimated_apc(total_issuance, snapshot_secondary_burnt(snapshot)?);
-    Ok((apc > 0.0).then(|| format!("{:.2}", apc)))
+    let apc = calculate_estimated_apc(header.epoch_number, header.epoch_index, header.epoch_length);
+    (apc > 0.0).then(|| format!("{:.2}", apc))
 }
 
 fn epochs_to_days(epochs: f64) -> String {
@@ -1357,6 +1341,7 @@ mod tests {
             cum_dao_compensation: 20_00000000,
             cum_treasury: 30_00000000,
             unclaimed_compensation: 0,
+            cumulative_depositors: 0,
         };
         let snapshot_val = bincode::serialize(&snapshot).unwrap();
         seed.put_stats(&snapshot_key, &snapshot_val);

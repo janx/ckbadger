@@ -44,6 +44,7 @@ pub(crate) struct BatchStats {
     pub(crate) dao_daily_new_deposits_delta: HashMap<NaiveDate, i64>,
     pub(crate) dao_daily_withdrawals_delta: HashMap<NaiveDate, i64>,
     pub(crate) dao_daily_unique_depositors_delta: HashMap<NaiveDate, i64>,
+    pub(crate) dao_daily_cumulative_depositors_delta: HashMap<NaiveDate, i64>,
     pub(crate) daily_secondary_non_miner_delta: HashMap<NaiveDate, i128>,
     pub(crate) daily_secondary_miner_delta: HashMap<NaiveDate, i128>,
     /// Set to true after the DAO delta computation code path runs, even if no
@@ -414,6 +415,8 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
     daily_gross_deposit_delta: &mut HashMap<NaiveDate, i128>,
     daily_new_deposits_delta: &mut HashMap<NaiveDate, i64>,
     daily_withdrawals_delta: &mut HashMap<NaiveDate, i64>,
+    ever_deposited_by_lock: &mut HashMap<Vec<u8>, bool>,
+    daily_cumulative_depositors_delta: &mut HashMap<NaiveDate, i64>,
 ) -> Result<()> {
     for tx_data in tx_slice {
         let mut has_withdraw_request_output = false;
@@ -440,6 +443,16 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
                             &tx_data.hash,
                             output_index_i16,
                         )?;
+                        // Track all-time cumulative depositors.
+                        let already = ever_deposited_by_lock
+                            .entry(cell.lock_script_hash.clone())
+                            .or_insert(false);
+                        if !*already {
+                            *already = true;
+                            *daily_cumulative_depositors_delta
+                                .entry(block_date)
+                                .or_default() += 1;
+                        }
                         same_batch_dao_map
                             .insert((tx_data.hash.to_vec(), output_index_i16), cell.capacity);
                     } else if let Some(data) = tx_data.outputs_data.get(output_index) {
@@ -1295,6 +1308,8 @@ mod tests {
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .unwrap();
 
@@ -1351,6 +1366,8 @@ mod tests {
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .unwrap();
 
@@ -1407,6 +1424,8 @@ mod tests {
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .unwrap();
 
@@ -1464,6 +1483,8 @@ mod tests {
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .unwrap();
 
@@ -1520,6 +1541,8 @@ mod tests {
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .unwrap_err();
         assert!(err.to_string().contains("invalid DAO capacity string"));
@@ -1603,6 +1626,8 @@ mod tests {
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .unwrap();
 
@@ -1623,6 +1648,8 @@ mod tests {
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .unwrap();
 
@@ -1647,6 +1674,8 @@ mod tests {
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .unwrap();
 

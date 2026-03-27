@@ -533,29 +533,28 @@ async fn get_deposits_by_address(
 
 const DAO_OCCUPIED_CAPACITY: u128 = 102_00000000;
 
-fn snapshot_secondary_burnt(
-    snapshot: &ckbadger_store::DaoDailySnapshot,
-) -> Result<u128, ApiRouteError> {
-    if snapshot.cum_treasury < 0 {
-        return Err(ApiError::internal(format!(
-            "negative cum_treasury in dao_daily_snapshots for {}: {}",
-            snapshot.date, snapshot.cum_treasury
-        )));
+/// Compute estimated APC from tip block epoch info using the CKB Explorer model.
+fn estimated_apc_from_store(
+    store: &ckbadger_store::CkbadgerStore,
+) -> Result<String, ApiRouteError> {
+    let tip = store
+        .get_sync_tip_block()
+        .map_err(|e: anyhow::Error| ApiError::internal(e.to_string()))?;
+    match tip {
+        Some((_, header)) if header.epoch_length > 0 => {
+            let apc = calculate_estimated_apc(
+                header.epoch_number,
+                header.epoch_index,
+                header.epoch_length,
+            );
+            Ok(if apc > 0.0 {
+                format!("{:.2}", apc)
+            } else {
+                String::new()
+            })
+        }
+        _ => Ok(String::new()),
     }
-    Ok(snapshot.cum_treasury as u128)
-}
-
-fn snapshot_estimated_apc(
-    snapshot: &ckbadger_store::DaoDailySnapshot,
-) -> Result<Option<String>, ApiRouteError> {
-    let Ok(total_issuance) = u64::try_from(snapshot.total_issuance) else {
-        return Ok(None);
-    };
-    if total_issuance == 0 {
-        return Ok(None);
-    }
-    let apc = calculate_estimated_apc(total_issuance, snapshot_secondary_burnt(snapshot)?);
-    Ok((apc > 0.0).then(|| format!("{:.2}", apc)))
 }
 
 fn snapshot_circulating_supply(
@@ -748,18 +747,7 @@ async fn get_address_dao_summary(
             estimated_apc: "".to_string(),
         }
     } else {
-        let store = state.store.clone();
-        let latest_snapshot =
-            tokio::task::spawn_blocking(move || store.get_latest_dao_daily_snapshot())
-                .await
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-        let estimated_apc = latest_snapshot
-            .as_ref()
-            .map(snapshot_estimated_apc)
-            .transpose()?
-            .flatten()
-            .unwrap_or_default();
+        let estimated_apc = estimated_apc_from_store(&state.store)?;
 
         let total_locked_str = total_locked.to_string();
         let total_comp_str = total_comp_earned.to_string();
@@ -819,16 +807,14 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         0.0
     };
 
+    let estimated_apc = estimated_apc_from_store(&state.store)?;
+
     let store = state.store.clone();
     let latest_snapshot =
         tokio::task::spawn_blocking(move || store.get_latest_dao_daily_snapshot())
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
-    let estimated_apc = match latest_snapshot.as_ref() {
-        Some(snapshot) => snapshot_estimated_apc(snapshot)?.unwrap_or_default(),
-        None => String::new(),
-    };
 
     let avg_days = epochs_to_days(avg_epochs);
 
@@ -1094,7 +1080,7 @@ fn build_total_depositors_series(
 
     Ok(snapshots
         .iter()
-        .map(|snapshot| (snapshot.date.clone(), snapshot.depositors_count))
+        .map(|snapshot| (snapshot.date.clone(), snapshot.cumulative_depositors))
         .collect())
 }
 
@@ -1286,23 +1272,8 @@ mod tests {
             cum_dao_compensation: 0,
             cum_treasury,
             unclaimed_compensation: 0,
+            cumulative_depositors: 0,
         }
-    }
-
-    #[test]
-    fn test_snapshot_secondary_burnt_errors_on_negative() {
-        let err = snapshot_secondary_burnt(&snapshot(1, -10)).unwrap_err();
-        assert!(err.1 .0.message.contains("negative cum_treasury"));
-    }
-
-    #[test]
-    fn test_snapshot_secondary_burnt_returns_value() {
-        assert_eq!(snapshot_secondary_burnt(&snapshot(1, 25)).unwrap(), 25);
-    }
-
-    #[test]
-    fn test_snapshot_estimated_apc_requires_total_issuance() {
-        assert!(snapshot_estimated_apc(&snapshot(0, 0)).unwrap().is_none());
     }
 
     #[test]
@@ -1328,28 +1299,29 @@ mod tests {
     }
 
     #[test]
-    fn test_build_total_depositors_series_tracks_deposit_and_withdraw_request_transitions() {
+    fn test_build_total_depositors_series_uses_cumulative_depositors() {
         let snapshots = vec![
             ckbadger_store::DaoDailySnapshot {
                 date: "2026-02-17".to_string(),
-                depositors_count: 1,
+                cumulative_depositors: 10,
                 ..snapshot(1, 0)
             },
             ckbadger_store::DaoDailySnapshot {
                 date: "2026-02-18".to_string(),
-                depositors_count: 2,
+                cumulative_depositors: 12,
                 ..snapshot(1, 0)
             },
             ckbadger_store::DaoDailySnapshot {
                 date: "2026-02-19".to_string(),
-                depositors_count: 1,
+                cumulative_depositors: 13,
                 ..snapshot(1, 0)
             },
         ];
         let series = build_total_depositors_series(&snapshots).unwrap();
-        assert_eq!(series.get("2026-02-17"), Some(&1));
-        assert_eq!(series.get("2026-02-18"), Some(&2));
-        assert_eq!(series.get("2026-02-19"), Some(&1));
+        // Cumulative depositors only grow (all-time unique depositors).
+        assert_eq!(series.get("2026-02-17"), Some(&10));
+        assert_eq!(series.get("2026-02-18"), Some(&12));
+        assert_eq!(series.get("2026-02-19"), Some(&13));
     }
 
     #[test]

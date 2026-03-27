@@ -37,8 +37,11 @@ pub(crate) struct DaoOwner {
     daily_new_deposits_delta: FxHashMap<NaiveDate, i64>,
     daily_withdrawals_delta: FxHashMap<NaiveDate, i64>,
     daily_unique_depositors_delta: FxHashMap<NaiveDate, i64>,
+    daily_cumulative_depositors_delta: FxHashMap<NaiveDate, i64>,
     daily_secondary_non_miner_delta: FxHashMap<NaiveDate, i128>,
     active_deposit_counts_by_lock: FxHashMap<Vec<u8>, i64>,
+    /// Tracks all lock_hashes that have ever created a DAO deposit (never removed).
+    ever_deposited: HashSet<Vec<u8>>,
     claimed_compensation_by_block: FxHashMap<i64, i128>,
     prev_dao_cs: Option<(i128, i128)>,
 }
@@ -393,6 +396,13 @@ impl BulkReducer for DaoOwner {
                 1,
                 "dao unique active depositor count",
             )?;
+            // Track all-time cumulative depositors (only increments, never decrements).
+            if self.ever_deposited.insert(output.lock_hash.clone()) {
+                *self
+                    .daily_cumulative_depositors_delta
+                    .entry(tx_date)
+                    .or_default() += 1;
+            }
         }
 
         Ok(())
@@ -403,6 +413,7 @@ impl BulkReducer for DaoOwner {
         let mut running_total_deposited = 0i128;
         let mut running_total_deposit_count = 0i64;
         let mut running_total_withdrawal_count = 0i64;
+        let mut running_cumulative_depositors = 0i64;
         let mut running_total_depositors = 0i64;
         let mut running_cumulative_deposit_amount = 0i128;
         let mut running_cum_miner = 0i128;
@@ -487,6 +498,14 @@ impl BulkReducer for DaoOwner {
                     .unwrap_or(0),
                 *date,
             )?;
+            running_cumulative_depositors = running_cumulative_depositors
+                .checked_add(
+                    self.daily_cumulative_depositors_delta
+                        .get(date)
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .ok_or_else(|| anyhow!("dao cumulative_depositors overflow on {}", date))?;
 
             let snapshot = DaoDailySnapshot {
                 date: date.format("%Y-%m-%d").to_string(),
@@ -503,6 +522,7 @@ impl BulkReducer for DaoOwner {
                 cum_dao_compensation: running_cum_dao,
                 cum_treasury: running_cum_treasury,
                 unclaimed_compensation: 0,
+                cumulative_depositors: running_cumulative_depositors,
             };
             let key = keys::encode_stats_key(
                 keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,

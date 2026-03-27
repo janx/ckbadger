@@ -2690,6 +2690,7 @@ impl Indexer {
         };
         let mut same_batch_dao_for_stats: HashMap<(Vec<u8>, i16), i64> = HashMap::new();
         let mut active_dao_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
+        let mut ever_deposited_by_lock: HashMap<Vec<u8>, bool> = HashMap::new();
         {
             let mut touched_lock_hashes: HashSet<Vec<u8>> = HashSet::new();
             for tx_data in &all_tx_data {
@@ -2729,9 +2730,11 @@ impl Indexer {
 
             for lock_hash in touched_lock_hashes {
                 let mut active_count = 0i64;
+                let mut has_any_deposit = false;
                 self.writer
                     .store()
                     .scan_dao_deposits_by_lock(&lock_hash, |_, entry| {
+                        has_any_deposit = true;
                         if entry.status == 0 {
                             active_count = active_count.checked_add(1).ok_or_else(|| {
                                 anyhow!(
@@ -2742,7 +2745,8 @@ impl Indexer {
                         }
                         Ok(())
                     })?;
-                active_dao_deposit_counts_by_lock.insert(lock_hash, active_count);
+                active_dao_deposit_counts_by_lock.insert(lock_hash.clone(), active_count);
+                ever_deposited_by_lock.insert(lock_hash, has_any_deposit);
             }
         }
 
@@ -2936,6 +2940,8 @@ impl Indexer {
                 &mut batch_stats.dao_daily_gross_deposit_delta,
                 &mut batch_stats.dao_daily_new_deposits_delta,
                 &mut batch_stats.dao_daily_withdrawals_delta,
+                &mut ever_deposited_by_lock,
+                &mut batch_stats.dao_daily_cumulative_depositors_delta,
             )?;
 
             batch_stats.dao_snapshot_dates.insert(block_date);
@@ -3325,6 +3331,10 @@ impl Indexer {
                     .as_ref()
                     .map(|s| s.depositors_count)
                     .unwrap_or(0);
+                let mut running_cumulative_depositors = latest_snapshot
+                    .as_ref()
+                    .map(|s| s.cumulative_depositors)
+                    .unwrap_or(0);
 
                 for date in snapshot_dates {
                     running_total_deposited +=
@@ -3376,6 +3386,11 @@ impl Indexer {
                         *date,
                     )?;
                     let running_total_compensation = running_cum_dao;
+                    running_cumulative_depositors += stats
+                        .dao_daily_cumulative_depositors_delta
+                        .get(date)
+                        .copied()
+                        .unwrap_or(0);
 
                     let dao_snapshot = crate::db::writer::DaoSnapshotInput {
                         total_deposited: running_total_deposited,
@@ -3391,6 +3406,7 @@ impl Indexer {
                         cum_dao_compensation: running_cum_dao,
                         cum_treasury: running_cum_treasury,
                         unclaimed_compensation: 0,
+                        cumulative_depositors: running_cumulative_depositors,
                     };
                     self.writer
                         .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;

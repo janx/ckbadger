@@ -239,6 +239,10 @@ pub struct DaoDailySnapshot {
     /// Unclaimed DAO compensation at end of day (shannons).
     #[serde(default)]
     pub unclaimed_compensation: u128,
+    /// Cumulative count of unique addresses that have ever deposited into DAO
+    /// (only increments, never decremented on withdrawal).
+    #[serde(default)]
+    pub cumulative_depositors: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
