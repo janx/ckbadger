@@ -78,7 +78,7 @@ fn map_dao_pagination_error(err: anyhow::Error, label: &str) -> ApiRouteError {
 fn resolve_latest_block_and_ar_from_tip(
     tip: Option<(i64, ckbadger_store::CachedBlockHeader)>,
     context: &str,
-) -> Result<(i64, u64), ApiRouteError> {
+) -> Result<(i64, u64, i64), ApiRouteError> {
     let (block_number, header) = tip.ok_or_else(|| {
         ApiError::internal(format!(
             "missing sync tip block while computing DAO {}",
@@ -93,13 +93,13 @@ fn resolve_latest_block_and_ar_from_tip(
             header.dao.len()
         ))
     })?;
-    Ok((block_number, ar))
+    Ok((block_number, ar, header.timestamp))
 }
 
 fn resolve_latest_block_and_ar(
     state: &AppState,
     context: &str,
-) -> Result<(i64, u64), ApiRouteError> {
+) -> Result<(i64, u64, i64), ApiRouteError> {
     let tip = state
         .store
         .get_sync_tip_block()
@@ -187,7 +187,7 @@ struct DaoStatisticsAccumulator {
     unique_depositors: HashSet<Vec<u8>>,
     active_count: i32,
     total_compensation_paid: i128,
-    total_blocks_held: f64,
+    total_ms_held: f64,
     active_filtered_count: usize,
     total_unclaimed: u128,
 }
@@ -197,15 +197,17 @@ fn accumulate_dao_statistics_entry(
     entry: &ckbadger_store::DaoDepositCacheEntry,
     latest_block_number: i64,
     latest_ar: u64,
+    tip_timestamp: i64,
 ) -> anyhow::Result<()> {
     match entry.status {
-        0 => {
+        0 | 1 => {
             acc.total_deposited += entry.capacity as i128;
             acc.unique_depositors.insert(entry.lock_script_hash.clone());
             acc.active_count += 1;
 
             if entry.deposit_block_number <= latest_block_number {
-                acc.total_blocks_held += (latest_block_number - entry.deposit_block_number) as f64;
+                let held_ms = tip_timestamp - entry.deposit_timestamp;
+                acc.total_ms_held += held_ms as f64;
                 acc.active_filtered_count += 1;
 
                 if entry.capacity < 0 {
@@ -225,17 +227,37 @@ fn accumulate_dao_statistics_entry(
                         capacity
                     )
                 })?;
+
+                let effective_ar = if entry.status == 1 {
+                    let ar_i64 = entry.withdraw_request_ar.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "status=1 deposit missing withdraw_request_ar: deposit_block={}, lock_hash=0x{}",
+                            entry.deposit_block_number,
+                            hex::encode(&entry.lock_script_hash)
+                        )
+                    })?;
+                    u64::try_from(ar_i64).map_err(|_| {
+                        anyhow::anyhow!(
+                            "status=1 deposit withdraw_request_ar exceeds u64: deposit_block={}, ar={}",
+                            entry.deposit_block_number,
+                            ar_i64
+                        )
+                    })?
+                } else {
+                    latest_ar
+                };
+
                 let ar_deposit = dao_deposit_ar_as_u64(entry, "statistics")?;
-                if ar_deposit > 0 && latest_ar > ar_deposit {
-                    let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
+                if ar_deposit > 0 && effective_ar > ar_deposit {
+                    let gross = free_capacity * effective_ar as u128 / ar_deposit as u128;
                     let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
                         anyhow::anyhow!(
-                            "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
+                            "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, effective_ar={}",
                             entry.deposit_block_number,
                             hex::encode(&entry.lock_script_hash),
                             free_capacity,
                             ar_deposit,
-                            latest_ar
+                            effective_ar
                         )
                     })?;
                     acc.total_unclaimed += compensation;
@@ -661,7 +683,8 @@ async fn get_address_dao_summary(
         return Err(ApiError::bad_request("Invalid lock script hash"));
     }
 
-    let (latest_block_number, latest_ar) = resolve_latest_block_and_ar(&state, "summary")?;
+    let (latest_block_number, latest_ar, _tip_timestamp) =
+        resolve_latest_block_and_ar(&state, "summary")?;
     let cache_key = dao_address_summary_cache_key(&hash, latest_block_number);
     if let Some(cached) = state.mem_cache.get::<AddressDaoSummaryResponse>(&cache_key) {
         return ok(cached);
@@ -774,7 +797,8 @@ async fn get_address_dao_summary(
 }
 
 async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStatisticsResponse> {
-    let (latest_block_number, latest_ar) = resolve_latest_block_and_ar(&state, "statistics")?;
+    let (latest_block_number, latest_ar, tip_timestamp) =
+        resolve_latest_block_and_ar(&state, "statistics")?;
     if let Some(latest) = state
         .store
         .get_latest_dao_statistics()
@@ -795,17 +819,24 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
     state
         .store
         .scan_dao_deposits(|_, entry| {
-            accumulate_dao_statistics_entry(&mut acc, entry, latest_block_number, latest_ar)
+            accumulate_dao_statistics_entry(
+                &mut acc,
+                entry,
+                latest_block_number,
+                latest_ar,
+                tip_timestamp,
+            )
         })
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let total_depositors = acc.unique_depositors.len() as i32;
 
-    let avg_epochs = if acc.active_filtered_count > 0 {
-        (acc.total_blocks_held / acc.active_filtered_count as f64) / 1800.0
+    let avg_days = if acc.active_filtered_count > 0 {
+        acc.total_ms_held / acc.active_filtered_count as f64 / 86_400_000.0
     } else {
         0.0
     };
+    let avg_days_str = format_days(avg_days);
 
     let estimated_apc = estimated_apc_from_store(&state.store)?;
 
@@ -815,8 +846,6 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let avg_days = epochs_to_days(avg_epochs);
 
     let total_deposited_str = acc.total_deposited.to_string();
     let total_comp_str = acc.total_compensation_paid.to_string();
@@ -859,7 +888,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         total_compensation_paid_ckb: shannon_to_ckb(&total_comp_str),
         unclaimed_compensation: acc.total_unclaimed.to_string(),
         unclaimed_compensation_ckb: shannon_to_ckb(&acc.total_unclaimed.to_string()),
-        average_deposit_days: avg_days,
+        average_deposit_days: avg_days_str,
         estimated_apc,
         mining_reward: mining_reward.clone(),
         mining_reward_ckb: shannon_to_ckb(&mining_reward),
@@ -879,8 +908,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
     ok(response)
 }
 
-fn epochs_to_days(epochs: f64) -> String {
-    let days = epochs * 4.0 / 24.0;
+fn format_days(days: f64) -> String {
     if days >= 1000.0 {
         format!("{:.1}K days+", days / 1000.0)
     } else if days < 1.0 && days > 0.0 {
@@ -1455,14 +1483,19 @@ mod tests {
             compensation: Some(500),
         };
 
-        accumulate_dao_statistics_entry(&mut acc, &active, 100, 200).unwrap();
-        accumulate_dao_statistics_entry(&mut acc, &completed, 100, 200).unwrap();
+        // tip_timestamp = deposit_timestamp(0) + 10 days in ms
+        let tip_ts = 10 * 86_400_000i64;
+        accumulate_dao_statistics_entry(&mut acc, &active, 100, 200, tip_ts).unwrap();
+        accumulate_dao_statistics_entry(&mut acc, &completed, 100, 200, tip_ts).unwrap();
 
         assert_eq!(acc.total_deposited, active.capacity as i128);
         assert_eq!(acc.unique_depositors.len(), 1);
         assert_eq!(acc.active_count, 1);
         assert_eq!(acc.total_compensation_paid, 500);
-        assert_eq!(acc.total_blocks_held, 10.0);
+        assert_eq!(
+            acc.total_ms_held,
+            (tip_ts - active.deposit_timestamp) as f64
+        );
         assert_eq!(acc.active_filtered_count, 1);
         assert_eq!(acc.total_unclaimed, 1_000);
     }
