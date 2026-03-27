@@ -1487,7 +1487,7 @@ mod tests {
                 lock_script_hash: vec![0xAA; 32],
                 total_capacity: 1000_00000000,
                 deposit_count: 3,
-                average_deposit_blocks: 5400.0,
+                average_deposit_ms: 5400.0,
             }],
         };
         store.put_dao_top_depositors(&depositors).unwrap();

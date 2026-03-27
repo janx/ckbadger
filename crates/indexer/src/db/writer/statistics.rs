@@ -1068,7 +1068,7 @@ impl BatchWriter {
                             lock_script_hash: lock_hash,
                             total_capacity,
                             deposit_count,
-                            average_deposit_blocks: avg_blocks,
+                            average_deposit_ms: avg_blocks,
                         }
                     },
                 )
@@ -1194,6 +1194,7 @@ mod tests {
                 &DaoDepositCacheEntry {
                     capacity: 100,
                     deposit_block_number: 10,
+                    deposit_timestamp: 0,
                     lock_script_hash: vec![0xAA; 32],
                     deposit_ar: 1,
                     status: 2,
@@ -1217,6 +1218,7 @@ mod tests {
                 &DaoDepositCacheEntry {
                     capacity: 200,
                     deposit_block_number: 15,
+                    deposit_timestamp: 0,
                     lock_script_hash: vec![0xBB; 32],
                     deposit_ar: 1,
                     status: 0,
@@ -1292,6 +1294,7 @@ mod tests {
             &DaoDepositCacheEntry {
                 capacity: 200_00000000,
                 deposit_block_number: 10,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0x01; 32],
                 deposit_ar: 1,
                 status: 0,
@@ -1310,6 +1313,7 @@ mod tests {
             &DaoDepositCacheEntry {
                 capacity: 300_00000000,
                 deposit_block_number: 9,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0x02; 32],
                 deposit_ar: 1,
                 status: 2,

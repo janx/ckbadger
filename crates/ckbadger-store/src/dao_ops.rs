@@ -715,6 +715,7 @@ mod tests {
         let entry = DaoDepositCacheEntry {
             capacity: 42,
             deposit_block_number: 100,
+            deposit_timestamp: 0,
             lock_script_hash: vec![0xCD; 32],
             deposit_ar: 1,
             status: 0,
@@ -758,6 +759,7 @@ mod tests {
                 &DaoDepositCacheEntry {
                     capacity: 100,
                     deposit_block_number: block,
+                    deposit_timestamp: 0,
                     lock_script_hash: vec![0x11; 32],
                     deposit_ar: 1,
                     status,
@@ -804,6 +806,7 @@ mod tests {
             &DaoDepositCacheEntry {
                 capacity: 100,
                 deposit_block_number: 30,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0x11; 32],
                 deposit_ar: 1,
                 status: 0,
@@ -822,6 +825,7 @@ mod tests {
             &DaoDepositCacheEntry {
                 capacity: 100,
                 deposit_block_number: 20,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0x11; 32],
                 deposit_ar: 1,
                 status: 1,
@@ -862,6 +866,7 @@ mod tests {
             &DaoDepositCacheEntry {
                 capacity: 100,
                 deposit_block_number: 30,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0x11; 32],
                 deposit_ar: 1,
                 status: 0,
@@ -922,6 +927,7 @@ mod tests {
             &DaoDepositCacheEntry {
                 capacity: 1,
                 deposit_block_number: 10,
+                deposit_timestamp: 0,
                 lock_script_hash: lock_a.clone(),
                 deposit_ar: 1,
                 status: 0,
@@ -940,6 +946,7 @@ mod tests {
             &DaoDepositCacheEntry {
                 capacity: 1,
                 deposit_block_number: 20,
+                deposit_timestamp: 0,
                 lock_script_hash: lock_b,
                 deposit_ar: 1,
                 status: 0,
@@ -975,6 +982,7 @@ mod tests {
         let mut entry = DaoDepositCacheEntry {
             capacity: 42,
             deposit_block_number: 100,
+            deposit_timestamp: 0,
             lock_script_hash: vec![0xCD; 32],
             deposit_ar: 1,
             status: 0,
@@ -1017,6 +1025,7 @@ mod tests {
             &DaoDepositCacheEntry {
                 capacity: 1,
                 deposit_block_number: 10,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0x11; 32],
                 deposit_ar: 1,
                 status: 0,
@@ -1035,6 +1044,7 @@ mod tests {
             &DaoDepositCacheEntry {
                 capacity: 1,
                 deposit_block_number: 20,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0x11; 32],
                 deposit_ar: 1,
                 status: 2,
@@ -1068,6 +1078,7 @@ mod tests {
                 &DaoDepositCacheEntry {
                     capacity: 100,
                     deposit_block_number: block,
+                    deposit_timestamp: 0,
                     lock_script_hash: lock.clone(),
                     deposit_ar: 1,
                     status: 0,
@@ -1145,6 +1156,7 @@ mod tests {
                 &DaoDepositCacheEntry {
                     capacity: 100,
                     deposit_block_number: block,
+                    deposit_timestamp: 0,
                     lock_script_hash: vec![0x55; 32],
                     deposit_ar: 1,
                     status: 0,

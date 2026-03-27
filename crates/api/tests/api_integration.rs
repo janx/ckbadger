@@ -1886,6 +1886,7 @@ async fn test_dao_stats_cached_response_is_stable_within_ttl() {
         &DaoDepositCacheEntry {
             capacity: 200_00000000,
             deposit_block_number: 10,
+            deposit_timestamp: 0,
             lock_script_hash: vec![0x01; 32],
             deposit_ar: 1,
             status: 0,
@@ -1918,6 +1919,7 @@ async fn test_dao_stats_cached_response_is_stable_within_ttl() {
         &DaoDepositCacheEntry {
             capacity: 300_00000000,
             deposit_block_number: 10,
+            deposit_timestamp: 0,
             lock_script_hash: vec![0x02; 32],
             deposit_ar: 1,
             status: 0,
@@ -9170,6 +9172,7 @@ async fn test_dao_deposits_cursor_pagination_descending() {
             &DaoDepositCacheEntry {
                 capacity: 100_00000000,
                 deposit_block_number: block_number,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0x22; 32],
                 deposit_ar: 1,
                 status: 0,
@@ -9240,6 +9243,7 @@ async fn test_dao_deposits_cursor_pagination_keeps_same_block_rows() {
             &DaoDepositCacheEntry {
                 capacity: 100_00000000,
                 deposit_block_number: block_number,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0x33; 32],
                 deposit_ar: 1,
                 status: 0,
@@ -9306,6 +9310,7 @@ async fn test_dao_deposits_status_filter_uses_descending_order() {
             &DaoDepositCacheEntry {
                 capacity: 100_00000000,
                 deposit_block_number: block_number,
+                deposit_timestamp: 0,
                 lock_script_hash: lock_hash,
                 deposit_ar: 1,
                 status,
@@ -9354,6 +9359,7 @@ async fn test_dao_deposits_status_cursor_mismatch_returns_bad_request() {
             &DaoDepositCacheEntry {
                 capacity: 100_00000000,
                 deposit_block_number: block_number,
+                deposit_timestamp: 0,
                 lock_script_hash: lock_hash,
                 deposit_ar: 1,
                 status,
@@ -9417,6 +9423,7 @@ async fn test_dao_deposits_by_lock_hash_cursor_pagination() {
             &DaoDepositCacheEntry {
                 capacity: 100_00000000,
                 deposit_block_number: block_number,
+                deposit_timestamp: 0,
                 lock_script_hash: lock_hash,
                 deposit_ar: 1,
                 status: 0,
@@ -9487,6 +9494,7 @@ async fn test_dao_deposits_by_lock_hash_cursor_mismatch_returns_bad_request() {
             &DaoDepositCacheEntry {
                 capacity: 100_00000000,
                 deposit_block_number: block_number,
+                deposit_timestamp: 0,
                 lock_script_hash: lock_hash,
                 deposit_ar: 1,
                 status: 0,

@@ -1655,6 +1655,7 @@ impl Indexer {
                     ckbadger_store::types::DaoDepositCacheEntry {
                         capacity: deposit.capacity,
                         deposit_block_number: *block_number,
+                        deposit_timestamp: 0,
                         lock_script_hash: deposit.lock_script_hash.clone(),
                         deposit_ar: *ar,
                         status: 0,

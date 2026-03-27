@@ -190,6 +190,8 @@ pub struct AddressBalance {
 pub struct DaoDepositCacheEntry {
     pub capacity: i64,
     pub deposit_block_number: i64,
+    #[serde(default)]
+    pub deposit_timestamp: i64,
     pub lock_script_hash: Vec<u8>,
     pub deposit_ar: i64,
     pub status: i16,
@@ -265,7 +267,8 @@ pub struct DaoTopDepositorEntry {
     pub lock_script_hash: Vec<u8>,
     pub total_capacity: i128,
     pub deposit_count: i32,
-    pub average_deposit_blocks: f64,
+    #[serde(alias = "average_deposit_blocks")]
+    pub average_deposit_ms: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

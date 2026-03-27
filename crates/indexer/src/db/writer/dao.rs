@@ -19,6 +19,7 @@ fn build_dao_cache_entry(
     DaoDepositCacheEntry {
         capacity: deposit.capacity,
         deposit_block_number: block_number,
+        deposit_timestamp: 0,
         lock_script_hash: deposit.lock_script_hash.clone(),
         deposit_ar,
         status: 0,
@@ -682,6 +683,7 @@ mod tests {
         let entry = DaoDepositCacheEntry {
             capacity: 999,
             deposit_block_number: 77,
+            deposit_timestamp: 0,
             lock_script_hash: vec![0x33; 32],
             deposit_ar: 123,
             status: 1,
@@ -857,6 +859,7 @@ mod tests {
             DaoDepositCacheEntry {
                 capacity: deposit_capacity,
                 deposit_block_number: deposit_block,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
                 deposit_ar: 10000000000000000,
                 status: 0,
@@ -916,6 +919,7 @@ mod tests {
             DaoDepositCacheEntry {
                 capacity: 100_00000000,
                 deposit_block_number: 100,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
                 deposit_ar: 10,
                 status: 1,
@@ -976,6 +980,7 @@ mod tests {
         let pending_entry = DaoDepositCacheEntry {
             capacity: deposit_capacity,
             deposit_block_number: deposit_block,
+            deposit_timestamp: 0,
             lock_script_hash: vec![0xBB; 32],
             deposit_ar: 10000000000000000,
             status: 0,
@@ -1096,6 +1101,7 @@ mod tests {
             DaoDepositCacheEntry {
                 capacity: 500_00000000,
                 deposit_block_number: 100,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
                 deposit_ar: 10,
                 status: 1,
@@ -1155,6 +1161,7 @@ mod tests {
             DaoDepositCacheEntry {
                 capacity,
                 deposit_block_number: 100,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
                 deposit_ar: 10,
                 status: 0,
@@ -1226,6 +1233,7 @@ mod tests {
             DaoDepositCacheEntry {
                 capacity,
                 deposit_block_number: 100,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0xBB; 32],
                 deposit_ar: 10,
                 status: 0,
@@ -1305,6 +1313,7 @@ mod tests {
             DaoDepositCacheEntry {
                 capacity,
                 deposit_block_number: 5668752,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0x33; 32],
                 deposit_ar: 10,
                 status: 0,

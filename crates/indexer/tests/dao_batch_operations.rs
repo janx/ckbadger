@@ -153,6 +153,7 @@ fn test_dao_deposit_creation() {
     let entry = DaoDepositCacheEntry {
         capacity: 100_000_000_000,
         deposit_block_number: 5000,
+        deposit_timestamp: 0,
         lock_script_hash: vec![0x11; 32],
         deposit_ar: 10_000_000_000,
         status: 0, // deposited
@@ -191,6 +192,7 @@ fn test_dao_withdraw_request() {
     let entry = DaoDepositCacheEntry {
         capacity: 200_000_000_000,
         deposit_block_number: 6000,
+        deposit_timestamp: 0,
         lock_script_hash: vec![0x22; 32],
         deposit_ar: 10_000_000_000,
         status: 0,
@@ -213,6 +215,7 @@ fn test_dao_withdraw_request() {
     let updated_entry = DaoDepositCacheEntry {
         capacity: 200_000_000_000,
         deposit_block_number: 6000,
+        deposit_timestamp: 0,
         lock_script_hash: vec![0x22; 32],
         deposit_ar: 10_000_000_000,
         status: 1, // withdraw_requested
@@ -247,6 +250,7 @@ fn test_dao_put_twice_in_same_batch_keeps_secondary_indexes_consistent() {
     let first_entry = DaoDepositCacheEntry {
         capacity: 210_000_000_000,
         deposit_block_number: 6000,
+        deposit_timestamp: 0,
         lock_script_hash: vec![0x31; 32],
         deposit_ar: 10_000_000_000,
         status: 0,
@@ -262,6 +266,7 @@ fn test_dao_put_twice_in_same_batch_keeps_secondary_indexes_consistent() {
     let second_entry = DaoDepositCacheEntry {
         capacity: 210_000_000_000,
         deposit_block_number: 6001,
+        deposit_timestamp: 0,
         lock_script_hash: vec![0x32; 32],
         deposit_ar: 10_000_000_000,
         status: 1,
@@ -316,6 +321,7 @@ fn test_dao_withdrawal_completion() {
     let entry = DaoDepositCacheEntry {
         capacity: 300_000_000_000,
         deposit_block_number: 8000,
+        deposit_timestamp: 0,
         lock_script_hash: vec![0x33; 32],
         deposit_ar: 10_000_000_000,
         status: 2, // withdrawn
@@ -368,6 +374,7 @@ fn test_list_dao_deposits() {
         let entry = DaoDepositCacheEntry {
             capacity: *capacity,
             deposit_block_number: 1000,
+            deposit_timestamp: 0,
             lock_script_hash: vec![0x44; 32],
             deposit_ar: 10_000_000_000,
             status: *status,
@@ -404,6 +411,7 @@ fn test_list_active_dao_deposits() {
     let active_entry = DaoDepositCacheEntry {
         capacity: 500_000_000_000,
         deposit_block_number: 2000,
+        deposit_timestamp: 0,
         lock_script_hash: vec![0x55; 32],
         deposit_ar: 10_000_000_000,
         status: 0,
@@ -421,6 +429,7 @@ fn test_list_active_dao_deposits() {
     let requested_entry = DaoDepositCacheEntry {
         capacity: 600_000_000_000,
         deposit_block_number: 2500,
+        deposit_timestamp: 0,
         lock_script_hash: vec![0x66; 32],
         deposit_ar: 10_000_000_000,
         status: 1,
@@ -438,6 +447,7 @@ fn test_list_active_dao_deposits() {
     let withdrawn_entry = DaoDepositCacheEntry {
         capacity: 700_000_000_000,
         deposit_block_number: 3000,
+        deposit_timestamp: 0,
         lock_script_hash: vec![0x88; 32],
         deposit_ar: 10_000_000_000,
         status: 2,

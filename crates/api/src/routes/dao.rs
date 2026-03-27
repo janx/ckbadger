@@ -914,8 +914,7 @@ async fn get_top_depositors(
         .enumerate()
         .map(|(i, d)| {
             let capacity_str = d.total_capacity.to_string();
-            let avg_epochs = d.average_deposit_blocks / 1800.0;
-            let avg_days = avg_epochs * 4.0 / 24.0;
+            let avg_days = d.average_deposit_ms / 86_400_000.0;
             DaoTopDepositorResponse {
                 rank: (i + 1) as i32,
                 lock_script_hash: format!("0x{}", hex::encode(&d.lock_script_hash)),
@@ -1377,6 +1376,7 @@ mod tests {
         let entry = DaoDepositCacheEntry {
             capacity: 200_00000000,
             deposit_block_number: 123,
+            deposit_timestamp: 0,
             lock_script_hash: vec![0xAB; 32],
             deposit_ar: -1,
             status: 0,
@@ -1402,6 +1402,7 @@ mod tests {
         let entry = DaoDepositCacheEntry {
             capacity: 200_00000000,
             deposit_block_number: 456,
+            deposit_timestamp: 0,
             lock_script_hash: vec![0xCD; 32],
             deposit_ar: 42,
             status: 0,
@@ -1424,6 +1425,7 @@ mod tests {
         let active = DaoDepositCacheEntry {
             capacity: (DAO_OCCUPIED_CAPACITY + 1_000) as i64,
             deposit_block_number: 90,
+            deposit_timestamp: 0,
             lock_script_hash: vec![0xAB; 32],
             deposit_ar: 100,
             status: 0,
@@ -1439,6 +1441,7 @@ mod tests {
         let completed = DaoDepositCacheEntry {
             capacity: 0,
             deposit_block_number: 80,
+            deposit_timestamp: 0,
             lock_script_hash: vec![0xCD; 32],
             deposit_ar: 100,
             status: 2,

@@ -4697,6 +4697,7 @@ mod tests {
             &DaoDepositCacheEntry {
                 capacity: 100,
                 deposit_block_number: 1,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0xA1; 32],
                 deposit_ar: 1,
                 status: 1,
@@ -4719,6 +4720,7 @@ mod tests {
             &DaoDepositCacheEntry {
                 capacity: 200,
                 deposit_block_number: 1,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0xB1; 32],
                 deposit_ar: 1,
                 status: 2,
@@ -4740,6 +4742,7 @@ mod tests {
             &DaoDepositCacheEntry {
                 capacity: 300,
                 deposit_block_number: 2,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0xC1; 32],
                 deposit_ar: 1,
                 status: 0,
@@ -4852,6 +4855,7 @@ mod tests {
             &DaoDepositCacheEntry {
                 capacity: 123,
                 deposit_block_number: 2,
+                deposit_timestamp: 0,
                 lock_script_hash: vec![0x11; 32],
                 deposit_ar: 1,
                 status: 1,
