@@ -6011,6 +6011,53 @@ async fn test_spore_decode_endpoint_returns_not_found_for_missing_spore() {
 }
 
 #[tokio::test]
+async fn test_get_spore_returns_not_found_for_cluster_entry() {
+    let store = test_store();
+    let cluster_id = [0x44u8; 32];
+    let cluster_id_hex = format!("0x{}", hex::encode(cluster_id));
+
+    store
+        .put_spore_direct(
+            &cluster_id,
+            &ObjectEntry {
+                standard: ObjectStandard::SporeCluster,
+                collection_id: None,
+                token_id: None,
+                owner_lock_hash: Some(vec![0x11; 32]),
+                name: Some("Test Cluster".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 100,
+                created_at_tx: vec![0x22; 32],
+                extra: ObjectExtra::SporeCluster,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    // GET /spore/objects/{cluster_id} should return 404
+    let request = Request::builder()
+        .uri(format!("/api/v1/spore/objects/{}", cluster_id_hex))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // GET /spore/objects/{cluster_id}/activities should also return 404
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/spore/objects/{}/activities",
+            cluster_id_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn test_assets_nft_includes_spore_cluster_name_when_aggregate_name_missing() {
     let store = test_store();
 

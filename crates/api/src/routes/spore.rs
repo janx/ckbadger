@@ -1089,6 +1089,7 @@ async fn get_spore(
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     match entry {
+        Some(entry) if entry.standard.is_cluster() => Err(ApiError::not_found("Spore not found")),
         Some(entry) => {
             let daily = state
                 .store
@@ -1126,12 +1127,15 @@ async fn list_spore_item_activities(
     let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
     let spore_id_bytes = decode_item_id(&spore_id)?;
 
-    // Verify the spore exists
-    state
+    // Verify the spore exists and is not a cluster
+    let entry = state
         .store
         .get_spore(&spore_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("Spore not found"))?;
+    if entry.standard.is_cluster() {
+        return Err(ApiError::not_found("Spore not found"));
+    }
 
     let cursor = params
         .cursor
