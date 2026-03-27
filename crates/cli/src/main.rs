@@ -120,6 +120,12 @@ enum InternalService {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Raise the process fd limit before opening any stores or spawning
+    // subprocesses.  Child processes inherit the raised soft limit, so this
+    // single call covers the indexer subprocess as well.  On macOS the
+    // default soft limit is 256 — far too low for RocksDB bulk sync.
+    raise_fd_limit();
+
     let cli = Cli::parse();
 
     let workdir = cli
@@ -643,11 +649,29 @@ fn print_startup_info(
     let ram_info = get_total_ram_gb()
         .map(|gb| format!(" · {gb} GB RAM"))
         .unwrap_or_default();
+    let fd_limit = get_fd_soft_limit();
+    let (fd_info, fd_warn) = if fd_limit == 0 {
+        (String::new(), None)
+    } else if fd_limit < WARN_FD_LIMIT {
+        let yellow = if use_color { "\x1b[33m" } else { "" };
+        (
+            format!(" · fd limit {fd_limit}"),
+            Some(format!(
+                "  {yellow}WARNING{reset} fd limit {fd_limit} is too low for bulk sync \
+                 (need ≥{MIN_FD_LIMIT}); run: ulimit -n {MIN_FD_LIMIT}"
+            )),
+        )
+    } else {
+        (format!(" · fd limit {fd_limit}"), None)
+    };
     println!(
-        "  {dim}System{reset}      {} {} · {cpus} cores{ram_info}",
+        "  {dim}System{reset}      {} {} · {cpus} cores{ram_info}{fd_info}",
         std::env::consts::OS,
         std::env::consts::ARCH
     );
+    if let Some(warn) = fd_warn {
+        println!("{warn}");
+    }
     println!(
         "  {dim}Network{reset}     {bold}{}{reset}",
         config.ckb.network
@@ -726,6 +750,82 @@ fn get_total_ram_gb() -> Option<u64> {
         } else {
             None
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// File descriptor limit management
+// ---------------------------------------------------------------------------
+
+/// Minimum file-descriptor soft limit recommended for RocksDB bulk sync.
+/// With 60+ column families, RocksDB opens many SST files concurrently.
+/// macOS defaults to 256 — far too low.
+const MIN_FD_LIMIT: u64 = 65536;
+
+/// If the effective soft limit after raise attempt is below this, warn the
+/// user that bulk sync may fail with "Too many open files".
+const WARN_FD_LIMIT: u64 = 8192;
+
+/// Attempt to raise the process soft file-descriptor limit to at least
+/// [`MIN_FD_LIMIT`].  Returns the effective soft limit after the attempt.
+///
+/// Child processes spawned by the supervisor inherit the raised limit, so
+/// calling this once in `main()` covers the indexer subprocess as well.
+/// This is more reliable than `ulimit -n` in the shell because the shell
+/// setting is not re-applied when tokio::process::Command forks.
+fn raise_fd_limit() -> u64 {
+    #[cfg(unix)]
+    {
+        use libc::{getrlimit, rlimit, setrlimit, RLIMIT_NOFILE};
+        unsafe {
+            let mut rl = rlimit { rlim_cur: 0, rlim_max: 0 };
+            if getrlimit(RLIMIT_NOFILE, &mut rl) != 0 {
+                return 0;
+            }
+            if rl.rlim_cur >= MIN_FD_LIMIT {
+                return rl.rlim_cur;
+            }
+            // Raise to MIN_FD_LIMIT if the hard limit allows it,
+            // otherwise raise to the hard limit.
+            let target = if rl.rlim_max == libc::RLIM_INFINITY || rl.rlim_max >= MIN_FD_LIMIT {
+                MIN_FD_LIMIT
+            } else {
+                rl.rlim_max
+            };
+            rl.rlim_cur = target;
+            setrlimit(RLIMIT_NOFILE, &rl);
+            // Re-read to get the actual effective limit after the syscall.
+            let mut rl2 = rlimit { rlim_cur: 0, rlim_max: 0 };
+            if getrlimit(RLIMIT_NOFILE, &mut rl2) == 0 {
+                rl2.rlim_cur
+            } else {
+                target
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}
+
+/// Read the current soft file-descriptor limit without modifying it.
+fn get_fd_soft_limit() -> u64 {
+    #[cfg(unix)]
+    {
+        use libc::{getrlimit, rlimit, RLIMIT_NOFILE};
+        unsafe {
+            let mut rl = rlimit { rlim_cur: 0, rlim_max: 0 };
+            if getrlimit(RLIMIT_NOFILE, &mut rl) == 0 {
+                rl.rlim_cur
+            } else {
+                0
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        0
     }
 }
 
@@ -1376,5 +1476,40 @@ data_dir = "data"
                 .unwrap();
 
         assert_eq!(service.build_version, BUILD_VERSION);
+    }
+
+    // -- fd limit --
+
+    #[test]
+    fn test_raise_fd_limit_returns_nonzero_on_unix() {
+        // After calling raise_fd_limit the effective limit should be a sane
+        // positive number.  We don't assert a specific value because CI
+        // environments may cap hard limits below MIN_FD_LIMIT.
+        #[cfg(unix)]
+        {
+            let limit = raise_fd_limit();
+            assert!(limit > 0, "raise_fd_limit should return > 0 on unix");
+        }
+    }
+
+    #[test]
+    fn test_get_fd_soft_limit_returns_nonzero_on_unix() {
+        #[cfg(unix)]
+        {
+            let limit = get_fd_soft_limit();
+            assert!(limit > 0, "get_fd_soft_limit should return > 0 on unix");
+        }
+    }
+
+    #[test]
+    fn test_raise_fd_limit_is_idempotent() {
+        // Calling raise_fd_limit twice should not error and should not
+        // decrease the limit.
+        #[cfg(unix)]
+        {
+            let first = raise_fd_limit();
+            let second = raise_fd_limit();
+            assert_eq!(first, second);
+        }
     }
 }
