@@ -57,11 +57,16 @@ self.store.scan_dao_deposits_by_status(0, |_, entry| { ... })?;
 for status in [0, 1] {
     self.store.scan_dao_deposits_by_status(status, |_, entry| {
         // ... same accumulation logic ...
-        // AR selection:
+        // AR selection — fail fast if status=1 has no withdraw_request_ar:
         let effective_ar = if entry.status == 1 {
-            entry.withdraw_request_ar
-                .and_then(|ar| u64::try_from(ar).ok())
-                .unwrap_or(tip_ar)
+            let ar_i64 = entry.withdraw_request_ar.ok_or_else(|| {
+                anyhow!("status=1 deposit missing withdraw_request_ar: deposit_block={}, lock_hash=0x{}",
+                    entry.deposit_block_number, hex::encode(&entry.lock_script_hash))
+            })?;
+            u64::try_from(ar_i64).map_err(|_| {
+                anyhow!("status=1 deposit withdraw_request_ar exceeds u64: deposit_block={}, ar={}",
+                    entry.deposit_block_number, ar_i64)
+            })?
         } else {
             tip_ar
         };
@@ -108,34 +113,44 @@ The existing field names `active_deposits` / `active_count` will now include sta
 ```rust
 for input in &tx_data.inputs {
     let outpoint = (...);
-    if let Some((_, _, capacity_str, _, status)) = consumed_dao_map.get(&outpoint) {
-        if *status == 1 {
+    if let Some(row) = consumed_dao_map.get(&outpoint) {
+        if row.status == 1 {
             *daily_withdrawals_delta.entry(block_date).or_default() += 1;
             // NEW: subtract from active delta at phase-2
-            let capacity: i64 = capacity_str.parse()?;
+            let capacity: i64 = row.capacity_str.parse()?;
             *daily_active_delta.entry(block_date).or_default() -= capacity as i128;
-            // NEW: decrement unique depositors
-            if let Some(lock_hash) = /* resolve lock_hash from input_cell_info */ {
-                bump_unique_active_depositors(
-                    active_deposit_counts_by_lock,
-                    daily_unique_depositors_delta,
-                    block_date,
-                    lock_hash,
-                    -1,
-                    &tx_data.hash,
-                    outpoint.1,
-                )?;
-            }
+            // NEW: decrement unique depositors (lock_hash from DaoConsumedRow)
+            bump_unique_active_depositors(
+                active_deposit_counts_by_lock,
+                daily_unique_depositors_delta,
+                block_date,
+                &row.lock_script_hash,
+                -1,
+                &tx_data.hash,
+                outpoint.1,
+            )?;
         }
     }
 }
 ```
 
-Note: resolving the lock_hash for the phase-2 consumed cell requires looking it up from `input_cell_info` or `batch_cell_infos` using the withdraw-request outpoint. The consumed_dao_map entry is keyed by the withdraw-request cell's outpoint, so we need the lock_script_hash from the original deposit. We can get this from the consumed_dao_map entry or by looking up the deposit entry in the store.
+**Approach for lock_hash at phase-2:** Replace the `DaoConsumedRow` type alias (currently a 5-tuple) with a named struct to avoid an unwieldy 6-field tuple:
 
-**Approach for lock_hash at phase-2:** Extend the `consumed_dao_map` type to include `lock_script_hash`. Currently the map value is `(Vec<u8>, i16, String, i64, i16)` — `(tx_hash, output_index, capacity_str, deposit_block, status)`. Add lock_script_hash as a 6th field: `(Vec<u8>, i16, String, i64, i16, Vec<u8>)`.
+```rust
+// crates/indexer/src/sync/dao_helpers.rs
+pub(crate) struct DaoConsumedRow {
+    pub tx_hash: Vec<u8>,
+    pub output_index: i16,
+    pub capacity_str: String,
+    pub deposit_block: i64,
+    pub status: i16,
+    pub lock_script_hash: Vec<u8>,  // NEW
+}
+```
 
-This requires updating `find_consumed_dao_deposits_batch()` in `dao.rs` and the bulk-build equivalent to include `lock_script_hash` in the returned tuple.
+This type change propagates through the `DaoWithdrawalContextTrait` trait (`consumed_deposits()` return type), all its implementors (`DaoWithdrawalContext`, bulk-build contexts), `process_dao_withdrawals_batch()` destructuring, `dao_cache_entry_to_row()`, and `find_consumed_dao_deposits_batch()`. The compiler will catch all call sites that need updating.
+
+The phase-2 subtraction code destructures `lock_script_hash` directly from the consumed row — no conditional needed since `lock_script_hash` is a non-optional field on `DaoDepositCacheEntry`.
 
 **File: `crates/indexer/src/sync/bulk_build/owners/dao.rs`**
 
@@ -181,7 +196,11 @@ let avg_days = total_ms_held / active_filtered_count as f64 / 86_400_000.0;
 
 The `tip_timestamp` comes from the sync tip block header (already available in `refresh_latest_dao_statistics`).
 
-Remove the `epochs_to_days()` function (no longer needed for this purpose).
+**Top depositors:** `DaoTopDepositorEntry.average_deposit_blocks` also uses the block-count-to-days conversion at `dao.rs:917`. Rename to `average_deposit_ms: f64` and accumulate milliseconds in the `depositor_map` in `refresh_latest_dao_statistics()` (lines 928-930) using `(tip_timestamp - entry.deposit_timestamp) as f64` instead of `(tip_block_number - entry.deposit_block_number) as f64`. Update the API formatting at `dao.rs:917` accordingly.
+
+**Deposit insertion:** `build_dao_cache_entry()` at `dao.rs:14` already receives a `_timestamp` argument (currently unused). Use it to populate `deposit_timestamp`. The bulk-build path at `bulk_build/owners/dao.rs:338` also has the block timestamp available.
+
+Remove the `epochs_to_days()` function and its callers — all paths now use timestamp-based days.
 
 **Format change:** The `average_deposit_days` field in `DaoLatestStatistics` remains a formatted string. The formatting logic stays the same, only the input changes from epoch-derived days to timestamp-derived days.
 
@@ -236,12 +255,12 @@ After re-sync, run `ckbadger verify --depth sampling` — the four failing check
 
 | File | Change |
 |---|---|
-| `crates/indexer/src/db/writer/statistics.rs` | Scan status=0+1, timestamp-based avg |
-| `crates/api/src/routes/dao.rs` | Include status=1 in accumulator |
-| `crates/indexer/src/sync/dao_helpers.rs` | Move subtraction to phase-2 |
+| `crates/indexer/src/db/writer/statistics.rs` | Scan status=0+1, timestamp-based avg, top depositors ms |
+| `crates/api/src/routes/dao.rs` | Include status=1 in accumulator, timestamp-based top depositors |
+| `crates/indexer/src/sync/dao_helpers.rs` | Move subtraction to phase-2, `DaoConsumedRow` struct |
 | `crates/indexer/src/sync/bulk_build/owners/dao.rs` | Same phase-2 change for bulk path |
-| `crates/indexer/src/db/writer/dao.rs` | Add lock_hash to consumed_dao_map; populate deposit_timestamp |
-| `crates/ckbadger-store/src/types.rs` | Add `deposit_timestamp` to `DaoDepositCacheEntry` |
+| `crates/indexer/src/db/writer/dao.rs` | `DaoConsumedRow` struct, populate deposit_timestamp, trait update |
+| `crates/ckbadger-store/src/types.rs` | Add `deposit_timestamp` to `DaoDepositCacheEntry`, rename `DaoTopDepositorEntry.average_deposit_blocks` → `average_deposit_ms` |
 | `crates/indexer/src/verify/explorer.rs` | Empty-data guard for block time distribution |
 
 ## Principle Alignment
