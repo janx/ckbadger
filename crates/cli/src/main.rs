@@ -50,14 +50,17 @@ const FD_LIMIT_TARGET: u64 = 65536;
 ///
 /// Returns the effective soft limit after the raise attempt.
 #[cfg(unix)]
-fn raise_fd_limit() -> u64 {
+fn raise_fd_limit() -> Result<u64> {
     unsafe {
         let mut rlim = libc::rlimit {
             rlim_cur: 0,
             rlim_max: 0,
         };
         if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) != 0 {
-            return 0;
+            bail!(
+                "getrlimit(RLIMIT_NOFILE) failed: {}",
+                std::io::Error::last_os_error()
+            );
         }
 
         let target = FD_LIMIT_TARGET as libc::rlim_t;
@@ -78,7 +81,7 @@ fn raise_fd_limit() -> u64 {
                 rlim_max: target,
             };
             if libc::setrlimit(libc::RLIMIT_NOFILE, &raised) == 0 {
-                return FD_LIMIT_TARGET;
+                return Ok(FD_LIMIT_TARGET);
             }
             // Hard-limit raise denied.  Raise soft to current hard ceiling
             // as a best effort.
@@ -88,11 +91,11 @@ fn raise_fd_limit() -> u64 {
                     rlim_max: rlim.rlim_max,
                 };
                 if libc::setrlimit(libc::RLIMIT_NOFILE, &capped) == 0 {
-                    return hard_ceiling as u64;
+                    return Ok(hard_ceiling as u64);
                 }
             }
             // Could not change anything.
-            return rlim.rlim_cur as u64;
+            return Ok(rlim.rlim_cur as u64);
         }
 
         // Hard limit is already sufficient; raise soft limit only.
@@ -102,16 +105,16 @@ fn raise_fd_limit() -> u64 {
                 rlim_max: rlim.rlim_max,
             };
             if libc::setrlimit(libc::RLIMIT_NOFILE, &raised) == 0 {
-                return FD_LIMIT_TARGET;
+                return Ok(FD_LIMIT_TARGET);
             }
         }
-        rlim.rlim_cur as u64
+        Ok(rlim.rlim_cur as u64)
     }
 }
 
 #[cfg(not(unix))]
-fn raise_fd_limit() -> u64 {
-    FD_LIMIT_TARGET // Windows has no meaningful fd limit
+fn raise_fd_limit() -> Result<u64> {
+    Ok(FD_LIMIT_TARGET) // Windows has no meaningful fd limit
 }
 
 /// Fail fast if `fd_limit` is too low to run the indexer.
@@ -359,9 +362,9 @@ async fn cmd_run(workdir: &Path, args: &RunArgs) -> Result<()> {
         bail!("no services selected to run");
     }
 
-    let fd_limit = raise_fd_limit();
+    let fd_limit = raise_fd_limit()?;
 
-    if services.contains(&"indexer".to_string()) {
+    if services.iter().any(|s| s == "indexer") {
         check_fd_limit_for_indexer(fd_limit)?;
     }
 
@@ -385,7 +388,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
             // Safety net for direct `ckbadger internal indexer` invocation.
             // When launched via supervisor the parent already raised the limit
             // and the child inherits it, so this is usually a no-op check.
-            check_fd_limit_for_indexer(raise_fd_limit())?;
+            check_fd_limit_for_indexer(raise_fd_limit()?)?;
             let ckb_paths = resolve_ckb_paths(workdir, &config.ckb)?;
             let indexer_config =
                 build_indexer_service_config(workdir, &work, &config, &ckb_paths, BUILD_VERSION)?;
@@ -770,8 +773,8 @@ fn print_startup_info(
     let ram_info = get_total_ram_gb()
         .map(|gb| format!(" · {gb} GB RAM"))
         .unwrap_or_default();
-    let fd_info = if fd_limit < FD_LIMIT_MIN {
-        format!(" · {yellow}fd limit {fd_limit} (WARNING: below minimum {FD_LIMIT_MIN}){reset}")
+    let fd_info = if fd_limit < FD_LIMIT_TARGET {
+        format!(" · {yellow}fd limit {fd_limit} (WARNING: below target {FD_LIMIT_TARGET}){reset}")
     } else {
         format!(" · fd limit {fd_limit}")
     };
@@ -1519,15 +1522,15 @@ data_dir = "data"
     #[test]
     #[cfg(unix)]
     fn test_raise_fd_limit_returns_nonzero() {
-        let limit = raise_fd_limit();
+        let limit = raise_fd_limit().expect("raise_fd_limit should succeed");
         assert!(limit > 0, "raise_fd_limit() must return a positive value");
     }
 
     #[test]
     #[cfg(unix)]
     fn test_raise_fd_limit_is_idempotent() {
-        let first = raise_fd_limit();
-        let second = raise_fd_limit();
+        let first = raise_fd_limit().expect("raise_fd_limit should succeed");
+        let second = raise_fd_limit().expect("raise_fd_limit should succeed");
         assert_eq!(first, second, "raise_fd_limit() must be idempotent");
     }
 
