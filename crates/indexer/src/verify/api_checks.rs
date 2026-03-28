@@ -119,7 +119,7 @@ struct CursorPageWithTotal<T> {
 struct AddressActivityRecord {
     tx_hash: String,
     block_number: i64,
-    asset_changes: Vec<serde_json::Value>,
+    item_deltas: Vec<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize)]
@@ -495,20 +495,17 @@ fn extract_activity_token_deltas(
 ) -> anyhow::Result<Vec<(String, i128)>> {
     let mut deltas = Vec::new();
 
-    for change in &activity.asset_changes {
-        if change.get("type").and_then(|v| v.as_str()) != Some("token") {
+    for item in &activity.item_deltas {
+        if item.get("kind").and_then(|v| v.as_str()) != Some("token") {
             continue;
         }
 
-        let Some(type_hash) = change.get("typeScriptHash").and_then(|v| v.as_str()) else {
+        let Some(type_hash) = item.get("typeScriptHash").and_then(|v| v.as_str()) else {
             continue;
         };
-        let delta_raw = change
-            .get("delta")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                anyhow::anyhow!("token activity missing delta: tx_hash={}", activity.tx_hash)
-            })?;
+        let delta_raw = item.get("delta").and_then(|v| v.as_str()).ok_or_else(|| {
+            anyhow::anyhow!("token activity missing delta: tx_hash={}", activity.tx_hash)
+        })?;
         let delta = parse_i128_strict(delta_raw, "token activity delta")?;
 
         deltas.push((normalize_hex_key(type_hash), delta));
@@ -2816,25 +2813,32 @@ impl Check for NftAssetCollectionConsistency {
 
         for idx in sample_indices {
             let asset = &assets.data[idx];
-            if asset.asset_type != "nft" {
-                findings.push(Finding {
-                    entity: format!("asset={}", asset.id),
-                    details: vec![format!(
-                        "unexpected asset type '{}' in nft asset list",
-                        asset.asset_type
-                    )],
-                });
-                checked += 1;
-                progress.inc(1);
-                continue;
-            }
+
+            // The ?type=nft filter is a legacy catch-all returning object + identity types.
+            let detail_prefix = match asset.asset_type.as_str() {
+                "object" => "assets/objects",
+                "identity" => "assets/identities",
+                other => {
+                    findings.push(Finding {
+                        entity: format!("asset={}", asset.id),
+                        details: vec![format!(
+                            "unexpected asset type '{}' in nft asset list",
+                            other
+                        )],
+                    });
+                    checked += 1;
+                    progress.inc(1);
+                    continue;
+                }
+            };
+
             if asset.standard.eq_ignore_ascii_case("spore") {
                 progress.inc(1);
                 continue;
             }
 
             let collection_detail: NftCollectionDetailApiRecord =
-                api_get(ctx, &format!("assets/nfts/{}", asset.id))?;
+                api_get(ctx, &format!("{}/{}", detail_prefix, asset.id))?;
             let detail_id = normalize_hex_key(&collection_detail.collection_id);
             let asset_id = normalize_hex_key(&asset.id);
 
@@ -2866,8 +2870,10 @@ impl Check for NftAssetCollectionConsistency {
                 });
             }
 
-            let items: CursorPageWithTotal<serde_json::Value> =
-                api_get(ctx, &format!("assets/nfts/{}/items?limit=1", asset.id))?;
+            let items: CursorPageWithTotal<serde_json::Value> = api_get(
+                ctx,
+                &format!("{}/{}/items?limit=1", detail_prefix, asset.id),
+            )?;
             match items.total {
                 Some(total) if total == collection_detail.total_count => {}
                 Some(total) => findings.push(Finding {
@@ -3015,12 +3021,6 @@ impl Check for AssetTopHoldersAddressConsistency {
 
         for asset in nft_assets.data.iter().take(TOP_ASSET_LIMIT) {
             let mut asset_details = vec![];
-            if asset.asset_type != "nft" {
-                asset_details.push(format!(
-                    "unexpected asset type '{}' in nft list",
-                    asset.asset_type
-                ));
-            }
 
             let (detail_id, detail_holders_count, holders): (
                 String,
@@ -3038,13 +3038,29 @@ impl Check for AssetTopHoldersAddressConsistency {
                 )?;
                 (detail.cluster_id, detail.holders_count, holders_page)
             } else {
+                // ?type=nft returns object + identity types
+                let detail_prefix = match asset.asset_type.as_str() {
+                    "object" => "assets/objects",
+                    "identity" => "assets/identities",
+                    other => {
+                        asset_details
+                            .push(format!("unexpected asset type '{}' in nft list", other));
+                        findings.push(Finding {
+                            entity: format!("nft={} standard={}", asset.id, asset.standard),
+                            details: asset_details,
+                        });
+                        checked += 1;
+                        progress.inc(1);
+                        continue;
+                    }
+                };
                 let detail: NftCollectionDetailApiRecord =
-                    api_get(ctx, &format!("assets/nfts/{}", asset.id))?;
+                    api_get(ctx, &format!("{}/{}", detail_prefix, asset.id))?;
                 let holders_page: CursorPageWithTotal<NftHolderApiRecord> = api_get(
                     ctx,
                     &format!(
-                        "assets/nfts/{}/holders?limit={}",
-                        asset.id, TOP_HOLDER_LIMIT
+                        "{}/{}/holders?limit={}",
+                        detail_prefix, asset.id, TOP_HOLDER_LIMIT
                     ),
                 )?;
                 (detail.collection_id, detail.holders_count, holders_page)
@@ -3550,18 +3566,19 @@ mod tests {
         let activity = AddressActivityRecord {
             tx_hash: "0xabc".to_string(),
             block_number: 123,
-            asset_changes: vec![
+            item_deltas: vec![
                 serde_json::json!({
-                    "type": "token",
+                    "kind": "token",
                     "typeScriptHash": "0xAABB",
                     "delta": "-10"
                 }),
                 serde_json::json!({
-                    "type": "daoDeposit",
-                    "capacity": "1000"
+                    "kind": "object",
+                    "objectId": "0x1234",
+                    "delta": 1
                 }),
                 serde_json::json!({
-                    "type": "token",
+                    "kind": "token",
                     "typeScriptHash": "0xccdd",
                     "delta": "25"
                 }),
@@ -3580,8 +3597,8 @@ mod tests {
         let activity = AddressActivityRecord {
             tx_hash: "0xabc".to_string(),
             block_number: 123,
-            asset_changes: vec![serde_json::json!({
-                "type": "token",
+            item_deltas: vec![serde_json::json!({
+                "kind": "token",
                 "typeScriptHash": "0xAABB"
             })],
         };
@@ -3598,8 +3615,8 @@ mod tests {
         let activity = AddressActivityRecord {
             tx_hash: "0xabc".to_string(),
             block_number: 123,
-            asset_changes: vec![serde_json::json!({
-                "type": "token",
+            item_deltas: vec![serde_json::json!({
+                "kind": "token",
                 "delta": "10"
             })],
         };
