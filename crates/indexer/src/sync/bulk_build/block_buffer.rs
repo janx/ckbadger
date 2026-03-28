@@ -34,10 +34,11 @@ pub(crate) struct BufferedBlock {
 
 /// Async interface wrapping an mpsc receiver of block chunks.
 ///
-/// The build loop calls [`fill_to_budget`] to pull enough blocks for the next
-/// batch, then [`drain`] to take them for processing.  `fill_to_budget` blocks
-/// until at least one chunk arrives, then non-blocking pulls more chunks until
-/// the local buffer has enough bytes — not greedy, not stingy.
+/// The build loop calls [`fill_to_cell_budget`] to pull enough blocks for the
+/// next batch, then [`drain_by_cells`] to take them for processing.
+/// `fill_to_cell_budget` blocks until at least one chunk arrives (to establish
+/// real cell density), then non-blocking pulls more chunks until the local
+/// buffer has enough cells — not greedy, not stingy.
 pub(crate) struct BlockBufferHandle {
     chunk_rx: Receiver<Result<Vec<BufferedBlock>>>,
     local: VecDeque<BufferedBlock>,
@@ -74,6 +75,7 @@ impl BlockBufferHandle {
     ///
     /// Returns `Ok(true)` when blocks are available, `Ok(false)` at end of
     /// stream (channel closed + local empty), or `Err` on prefetch error.
+    #[cfg(test)] // Production callers use fill_to_cell_budget; kept for targeted tests.
     pub(crate) async fn fill_to_budget(&mut self, target_bytes: u64) -> Result<bool> {
         // Ensure at least one chunk is available.
         if self.local.is_empty() {
@@ -82,6 +84,46 @@ impl BlockBufferHandle {
                 None => return Ok(false),
             }
         }
+        // Non-blocking: pull more chunks until budget is met.
+        while (self.local_bytes as u64) < target_bytes {
+            match self.chunk_rx.try_recv() {
+                Ok(result) => self.absorb(result?),
+                Err(_) => break,
+            }
+        }
+        Ok(true)
+    }
+
+    /// Pull enough blocks so the local buffer has approximately `target_cells`
+    /// worth of data, estimated from actual buffer density.
+    ///
+    /// When the buffer is empty, blocks until the first chunk arrives to
+    /// establish real density data, then computes the bytes target from
+    /// `cells / cell_density`.  This avoids the fixed-fallback problem where
+    /// an empty buffer would use an arbitrary byte estimate that under-fills
+    /// relative to the cell target.
+    ///
+    /// Returns `Ok(true)` when blocks are available, `Ok(false)` at end of
+    /// stream (channel closed + local empty), or `Err` on prefetch error.
+    pub(crate) async fn fill_to_cell_budget(&mut self, target_cells: u64) -> Result<bool> {
+        // Ensure at least one chunk so cell_density() has real data.
+        if self.local.is_empty() {
+            match self.chunk_rx.recv().await {
+                Some(result) => self.absorb(result?),
+                None => return Ok(false),
+            }
+        }
+        // Compute bytes target from actual density in the buffer.
+        let target_bytes = {
+            let cpb = self.cell_density();
+            if cpb > 0.0 {
+                (target_cells as f64 / cpb) as u64
+            } else {
+                // All blocks have zero cells — density-based estimate impossible.
+                // The buffer already has one chunk; return what we have.
+                return Ok(true);
+            }
+        };
         // Non-blocking: pull more chunks until budget is met.
         while (self.local_bytes as u64) < target_bytes {
             match self.chunk_rx.try_recv() {
@@ -436,5 +478,98 @@ mod tests {
         let ok = handle.fill_to_budget(1000).await.unwrap();
         assert!(ok);
         assert_eq!(handle.available(), 1); // unchanged
+    }
+
+    #[tokio::test]
+    async fn fill_to_cell_budget_uses_density_from_first_chunk() {
+        let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+
+        // 4 chunks, each 1 block: 1000 bytes, 10 cells.
+        // cell_density = 10/1000 = 0.01 cells/byte.
+        for _ in 0..4 {
+            tx.send(Ok(vec![make_buffered_block_with_cells(1000, 10)]))
+                .await
+                .unwrap();
+        }
+        drop(tx);
+
+        let mut handle = BlockBufferHandle::new(rx);
+
+        // target_cells = 25.  Density = 0.01 → need 2500 bytes → 3 chunks.
+        let ok = handle.fill_to_cell_budget(25).await.unwrap();
+        assert!(ok);
+        assert_eq!(handle.available(), 3);
+        assert_eq!(handle.local_cells, 30);
+        assert_eq!(handle.local_bytes, 3000);
+    }
+
+    #[tokio::test]
+    async fn fill_to_cell_budget_empty_then_drain_then_refill() {
+        let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+
+        // Simulate the problematic scenario: low cell density blocks.
+        // 8 chunks, each 50 blocks: 2800 bytes/block, 5.8 cells/block.
+        // cell_density = 5.8/2800 ≈ 0.00207 cells/byte.
+        for _ in 0..8 {
+            let chunk: Vec<BufferedBlock> = (0..50)
+                .map(|i| make_buffered_block_with_cells(2800, if i % 10 < 6 { 6 } else { 5 }))
+                .collect();
+            tx.send(Ok(chunk)).await.unwrap();
+        }
+        drop(tx);
+
+        let mut handle = BlockBufferHandle::new(rx);
+
+        // First fill: target 620 cells.
+        // Density from first chunk ≈ 0.00207 → need ~299K bytes → ~3 chunks.
+        let ok = handle.fill_to_cell_budget(620).await.unwrap();
+        assert!(ok);
+        // Should have pulled enough chunks to cover 620 cells.
+        assert!(
+            handle.local_cells >= 620,
+            "expected >= 620 cells, got {}",
+            handle.local_cells
+        );
+
+        // Drain all (simulating batch that exhausts buffer).
+        let count = handle.available();
+        let _ = handle.drain(count);
+        assert_eq!(handle.local_cells, 0);
+        assert_eq!(handle.local_bytes, 0);
+
+        // Second fill: buffer is empty again, but fill_to_cell_budget should
+        // seed from the channel and compute correct target — NOT under-fill.
+        let ok = handle.fill_to_cell_budget(620).await.unwrap();
+        assert!(ok);
+        assert!(
+            handle.local_cells >= 620,
+            "after re-fill expected >= 620 cells, got {}",
+            handle.local_cells
+        );
+    }
+
+    #[tokio::test]
+    async fn fill_to_cell_budget_zero_cell_blocks_returns_ok() {
+        let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+
+        // Blocks with zero cells — density cannot be computed.
+        tx.send(Ok(vec![make_buffered_block(5000)])).await.unwrap();
+        drop(tx);
+
+        let mut handle = BlockBufferHandle::new(rx);
+        let ok = handle.fill_to_cell_budget(100).await.unwrap();
+        assert!(ok);
+        // Should have absorbed the one chunk and returned.
+        assert_eq!(handle.available(), 1);
+    }
+
+    #[tokio::test]
+    async fn fill_to_cell_budget_eos_returns_false() {
+        let (_tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+        drop(_tx);
+
+        let mut handle = BlockBufferHandle::new(rx);
+        let eos = handle.fill_to_cell_budget(100).await.unwrap();
+        assert!(!eos, "should return false at end of stream");
     }
 }

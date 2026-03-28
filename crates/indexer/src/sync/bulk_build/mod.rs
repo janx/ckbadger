@@ -184,20 +184,11 @@ impl BulkBuildEngine {
                 break;
             }
 
-            // Fill buffer using actual cell density from buffered blocks.
-            // cell_density() = cells/byte in the buffer.  When positive, we
-            // compute exactly how many bytes are needed for target_cells.
-            // Fallback 100 MB for the very first fill (no density data yet).
-            let fill_bytes_estimate = {
-                let cpb = buffer.cell_density();
-                if cpb > 0.0 {
-                    (controller.target_cells() as f64 / cpb) as u64
-                } else {
-                    100_000_000 // 100 MB fallback for first fill
-                }
-            };
+            // Fill buffer to match cell target.  fill_to_cell_budget seeds the
+            // buffer with one chunk first (if empty) to get real cell density,
+            // then pulls enough chunks for target_cells.
             let recv_started = Instant::now();
-            match buffer.fill_to_budget(fill_bytes_estimate).await {
+            match buffer.fill_to_cell_budget(controller.target_cells()).await {
                 Ok(true) => {}
                 Ok(false) => {
                     info!("block buffer exhausted, ending bulk build loop");
