@@ -6808,16 +6808,16 @@ mod tests {
         let lines = controller_panel_lines(&bb, true, None);
         assert_eq!(lines.len(), 2, "compact mode should produce 2 lines");
 
-        // Line 1: overlap + build + budget
+        // Line 1: wall clock + build + io + budget
         let text0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text0.contains("ovlp") && text0.contains("build"),
-            "line 1 should contain overlap and build, got: {}",
+            text0.contains("wall") && text0.contains("build") && text0.contains("io"),
+            "line 1 should contain wall, build, and io, got: {}",
             text0
         );
         assert!(
-            text0.contains("85K cells"),
-            "line 1 should contain budget in K cells, got: {}",
+            text0.contains("85K"),
+            "line 1 should contain budget, got: {}",
             text0
         );
 
@@ -6870,11 +6870,11 @@ mod tests {
             text0
         );
 
-        // Line 2: overlap bar + build + waste
+        // Line 2: build vs IO + decision
         let text1: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text1.contains("build") && text1.contains("waste"),
-            "line 2 should contain build and waste, got: {}",
+            text1.contains("build") && text1.contains("io"),
+            "line 2 should contain build and io, got: {}",
             text1
         );
 
