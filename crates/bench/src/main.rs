@@ -1,3 +1,8 @@
+#[allow(dead_code)]
+mod metrics;
+#[allow(dead_code)]
+mod registry;
+
 use anyhow::Result;
 use clap::Parser;
 
