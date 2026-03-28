@@ -1,5 +1,7 @@
 mod discovery;
 #[allow(dead_code)]
+mod endpoints;
+#[allow(dead_code)]
 mod metrics;
 #[allow(dead_code)]
 mod registry;
