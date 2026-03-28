@@ -2,23 +2,15 @@
 //
 // Two independent control dimensions:
 //
-//   1. BATCH SIZE — overlap-driven with waste-weighted direction.
-//      The unit is cells, not bytes.  Cell count is a better proxy for
-//      CPU cost because cell density varies ~25x across CKB block ranges.
-//
-//      overlap = build / (build + waste) measures pipeline efficiency.
-//      Single objective: maintain overlap >= OVERLAP_TARGET (90%).
-//
-//      When overlap < target (pipeline inefficient):
-//        Direction determined by waste composition (geometric blend):
-//        - recv-dominated → grow (longer build gives prefetch more time)
-//        - flush-dominated → shrink (less data reduces I/O pressure)
-//        - mixed → geometric mean ≈ hold (opposing forces cancel)
-//
-//      When overlap >= target (pipeline efficient):
-//        Grow proportional to headroom above target to amortize overhead.
-//        CPU-bound (high headroom) → aggressive growth.
-//        IO-bound with buffering (low headroom) → cautious growth.
+//   1. BATCH SIZE — wall-clock band + build/IO overlap.
+//      Primary goal: keep batch wall clock in [1s, 3s].
+//        Below band → grow target_cells to fill time budget.
+//        Above band → shrink target_cells to fit time budget.
+//      Secondary goal (in-band): push toward build ≈ IO.
+//        build > IO → IO has headroom, grow batch (more data
+//        may push IO toward its non-linear knee, increasing
+//        throughput until build ≈ IO or wall clock hits ceiling).
+//        IO ≥ build → physical IO limit reached, hold steady.
 //
 //   2. I/O RESOURCES — governed by waste classification (ratio).
 //      Waste = recv_wait + flush_wait (idle time, ideally zero).
@@ -26,10 +18,11 @@
 //      Classification identifies which waste source dominates and shifts
 //      I/O knobs (fetch_threads, bg_jobs) accordingly.
 //
-//   Dimension  │ Signal                  │ Knobs
-//   ───────────│─────────────────────────│──────────────────────────
-//   Batch size │ overlap + waste shares  │ target_cells
-//   I/O        │ waste composition       │ fetch_threads, bg_jobs
+//   Dimension  │ Signal            │ Knobs
+//   ───────────│───────────────────│──────────────────────────
+//   Batch size │ wall clock, build │ target_cells
+//              │ vs IO             │
+//   I/O        │ waste composition │ fetch_threads, bg_jobs
 //
 // Key design principle: fetch (CKB RocksDB reads via std::thread::scope)
 // does NOT compete with build (CPU via rayon) for resources.  Therefore
@@ -38,10 +31,6 @@
 // filling up.
 
 const EMA_ALPHA: f64 = 0.5;
-
-// No cell count bounds — build_ms feedback is a self-stabilizing loop
-// (high build_ms → shrink cells → lower build_ms → stop shrinking),
-// and max_batch_bytes provides the memory safety ceiling.
 
 // Batch bytes bounds (secondary safety cap — NOT dynamically adjusted)
 const MIN_BATCH_BYTES: u64 = 1_000_000; // 1 MB
