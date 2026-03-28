@@ -2423,6 +2423,10 @@ fn build_bulk_build_diagnostics(
 /// Two orthogonal sections:
 /// 1. Sizing — build EMA vs 2s target (THE sizing signal) + budget in MB
 /// 2. I/O — bottleneck classification + waste breakdown + knobs with inline deltas
+// Target build wall-clock time (ms). Must match TARGET_ITERATION_MS
+// in bottleneck.rs. Used for display formatting only.
+const CONTROLLER_TARGET_MS: f64 = 3000.0;
+
 fn controller_panel_lines(
     bb: &BulkBuildProgressData,
     dense: bool,
@@ -2434,6 +2438,7 @@ fn controller_panel_lines(
     let l0_ema = bb.controller_l0_ema.unwrap_or(0.0);
     let waste = recv_ema + wait_ema;
     let target_cells = bb.target_cells.unwrap_or(0);
+    let target_secs = CONTROLLER_TARGET_MS / 1000.0;
 
     // Waste composition (for I/O classification display)
     let (recv_waste_pct, wait_waste_pct) = if waste > 1.0 {
@@ -2470,11 +2475,11 @@ fn controller_panel_lines(
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string());
 
-    // Build EMA bar: fill_pct = build_ema / 2000.0, color by timing
-    let fill_pct = (build_ema / 2000.0 * 100.0).min(100.0);
-    let build_color = if build_ema > 3000.0 {
+    // Build EMA bar: fill against controller target
+    let fill_pct = (build_ema / CONTROLLER_TARGET_MS * 100.0).min(100.0);
+    let build_color = if build_ema > CONTROLLER_TARGET_MS * 1.5 {
         ERROR_RED
-    } else if build_ema > 2000.0 {
+    } else if build_ema > CONTROLLER_TARGET_MS {
         AMBER
     } else {
         TERMINAL_GREEN
@@ -2498,6 +2503,29 @@ fn controller_panel_lines(
         }
     });
 
+    // Cell density: cells per block
+    let density_text = match (bb.facts_cell_count, bb.batch_block_count) {
+        (Some(cells), Some(blocks)) if blocks > 0 => {
+            format!("{:.1} c/b", cells as f64 / blocks as f64)
+        }
+        _ => String::new(),
+    };
+
+    // Flush channel pressure: pending/capacity
+    let flush_text = match (bb.flush_channel_pending, bb.flush_channel_capacity) {
+        (Some(pending), Some(cap)) if cap > 0 => {
+            let flush_color = if pending >= cap {
+                ERROR_RED
+            } else if pending as f64 >= cap as f64 * 0.75 {
+                AMBER
+            } else {
+                FOREGROUND
+            };
+            Some((format!("{}/{}", pending, cap), flush_color))
+        }
+        _ => None,
+    };
+
     // Threads/bg deltas for inline display
     let threads_delta_text = deltas.map(|d| {
         if d.threads_delta == 0 {
@@ -2520,9 +2548,14 @@ fn controller_panel_lines(
 
     if dense {
         // Compact: 2 lines
-        // Line 1: build EMA + budget
+        // Line 1: build EMA + budget + density
         let mut spans1 = vec![Span::styled(
-            format!("build {:.1}s/2s {:.0}%", build_ema / 1000.0, fill_pct),
+            format!(
+                "build {:.1}s/{:.0}s {:.0}%",
+                build_ema / 1000.0,
+                target_secs,
+                fill_pct
+            ),
             Style::default().fg(build_color),
         )];
         if target_cells > 0 {
@@ -2535,7 +2568,7 @@ fn controller_panel_lines(
             }
         }
 
-        // Line 2: bottleneck badge + knobs + L0
+        // Line 2: bottleneck badge + knobs + L0 + flush
         let mut spans2 = vec![
             Span::styled(
                 format!("[{}]", bn_label),
@@ -2554,23 +2587,25 @@ fn controller_panel_lines(
             format!("{:.0}", l0_ema),
             Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
         ));
+        if let Some((ref txt, col)) = flush_text {
+            spans2.push(Span::styled("  fl ", Style::default().fg(SLATE_500)));
+            spans2.push(Span::styled(txt.clone(), Style::default().fg(col)));
+        }
 
         vec![Line::from(spans1), Line::from(spans2)]
     } else {
-        // Detail: 5 lines
+        // Detail: 6 lines
         // Line 1: sizing header
-        let line1 = Line::from(vec![
-            Span::styled(
-                "\u{2500}\u{2500} sizing \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
-                Style::default().fg(SLATE_500),
-            ),
-        ]);
+        let line1 = Line::from(vec![Span::styled(
+            "\u{2500}\u{2500} sizing \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+            Style::default().fg(SLATE_500),
+        )]);
 
         // Line 2: build bar with EMA vs target
         let line2 = Line::from(vec![
             Span::styled("build ", Style::default().fg(SLATE_500)),
             Span::styled(
-                format!("{:.1}s/2s", build_ema / 1000.0),
+                format!("{:.1}s/{:.0}s", build_ema / 1000.0, target_secs),
                 Style::default().fg(build_color),
             ),
             Span::styled("  ", Style::default()),
@@ -2581,7 +2616,7 @@ fn controller_panel_lines(
             ),
         ]);
 
-        // Line 3: budget line
+        // Line 3: budget + density
         let mut budget_spans = Vec::new();
         if target_cells > 0 {
             budget_spans.push(Span::styled("budget ", Style::default().fg(SLATE_500)));
@@ -2604,9 +2639,15 @@ fn controller_panel_lines(
                 Style::default().fg(FOREGROUND),
             ));
         }
+        if !density_text.is_empty() {
+            budget_spans.push(Span::styled(
+                format!("  {}", density_text),
+                Style::default().fg(SLATE_500),
+            ));
+        }
         let line3 = Line::from(budget_spans);
 
-        // Line 4: I/O header + bottleneck badge + waste (collapsed into one line)
+        // Line 4: I/O header + bottleneck badge + waste
         let waste_secs = waste / 1000.0;
         let mut line4_spans = vec![
             Span::styled(
@@ -2634,7 +2675,7 @@ fn controller_panel_lines(
         }
         let line4_final = Line::from(line4_spans);
 
-        // Line 5: knobs with inline deltas + L0
+        // Line 5: knobs with inline deltas + L0 + flush channel
         let mut knob_spans = vec![
             Span::styled("thr ", Style::default().fg(SLATE_500)),
             Span::styled(threads_text, Style::default().fg(FOREGROUND)),
@@ -2652,6 +2693,10 @@ fn controller_panel_lines(
             format!("{:.0}", l0_ema),
             Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
         ));
+        if let Some((ref txt, col)) = flush_text {
+            knob_spans.push(Span::styled("  flush ", Style::default().fg(SLATE_500)));
+            knob_spans.push(Span::styled(txt.clone(), Style::default().fg(col)));
+        }
         let line5 = Line::from(knob_spans);
 
         vec![line1, line2, line3, line4_final, line5]
@@ -6709,7 +6754,7 @@ mod tests {
         // Line 1: build EMA summary + budget
         let text0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text0.contains("build") && text0.contains("s/2s"),
+            text0.contains("build") && text0.contains("s/3s"),
             "line 1 should contain build EMA, got: {}",
             text0
         );
@@ -6771,7 +6816,7 @@ mod tests {
         // Line 2: build bar
         let text1: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text1.contains("build") && text1.contains("s/2s"),
+            text1.contains("build") && text1.contains("s/3s"),
             "line 2 should contain build EMA, got: {}",
             text1
         );
