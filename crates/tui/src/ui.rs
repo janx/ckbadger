@@ -2440,6 +2440,21 @@ fn controller_panel_lines(
     let target_cells = bb.target_cells.unwrap_or(0);
     let target_secs = CONTROLLER_TARGET_MS / 1000.0;
 
+    // Pipeline overlap: fraction of iteration spent on useful work.
+    let total_ema = build_ema + recv_ema + wait_ema;
+    let overlap_pct = if total_ema > 0.0 {
+        (build_ema / total_ema * 100.0).min(100.0)
+    } else {
+        100.0
+    };
+    let overlap_color = if overlap_pct >= 80.0 {
+        TERMINAL_GREEN
+    } else if overlap_pct >= 50.0 {
+        AMBER
+    } else {
+        ERROR_RED
+    };
+
     // Waste composition (for I/O classification display)
     let (recv_waste_pct, wait_waste_pct) = if waste > 1.0 {
         (recv_ema / waste * 100.0, wait_ema / waste * 100.0)
@@ -2567,6 +2582,10 @@ fn controller_panel_lines(
                 spans1.push(Span::styled(format!(" {}", txt), Style::default().fg(col)));
             }
         }
+        spans1.push(Span::styled(
+            format!("  ovlp {:.0}%", overlap_pct),
+            Style::default().fg(overlap_color),
+        ));
 
         // Line 2: bottleneck badge + knobs + L0 + flush
         let mut spans2 = vec![
@@ -2595,11 +2614,21 @@ fn controller_panel_lines(
         vec![Line::from(spans1), Line::from(spans2)]
     } else {
         // Detail: 6 lines
-        // Line 1: sizing header
-        let line1 = Line::from(vec![Span::styled(
-            "\u{2500}\u{2500} sizing \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
-            Style::default().fg(SLATE_500),
-        )]);
+        // Line 1: sizing header with overlap
+        let line1 = Line::from(vec![
+            Span::styled(
+                "\u{2500}\u{2500} sizing \u{2500}\u{2500}\u{2500} ",
+                Style::default().fg(SLATE_500),
+            ),
+            Span::styled(
+                format!("overlap {:.0}%", overlap_pct),
+                Style::default().fg(overlap_color),
+            ),
+            Span::styled(
+                " \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+                Style::default().fg(SLATE_500),
+            ),
+        ]);
 
         // Line 2: build bar with EMA vs target
         let line2 = Line::from(vec![
