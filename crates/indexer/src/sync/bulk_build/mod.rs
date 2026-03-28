@@ -385,7 +385,7 @@ impl BulkBuildEngine {
                 build_timings.facts_breakdown.cell_count,
                 flush_wait_elapsed.as_secs_f64() * 1000.0,
                 prefetch_recv_elapsed.as_secs_f64() * 1000.0,
-                buffer.available() as u64,
+                buffer.channel_len() as u64,
                 channel_depth as u64,
                 flush_channel_pending,
                 channel_depth as u64,

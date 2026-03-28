@@ -115,8 +115,17 @@ impl BlockBufferHandle {
     }
 
     /// Number of blocks currently in the local buffer.
+    #[allow(dead_code)] // Used by tests
     pub(crate) fn available(&self) -> usize {
         self.local.len()
+    }
+
+    /// Number of chunks currently pending in the underlying mpsc channel.
+    ///
+    /// This reflects how many prefetch chunks the worker has produced but
+    /// have not yet been absorbed into the local buffer.
+    pub(crate) fn channel_len(&self) -> usize {
+        self.chunk_rx.len()
     }
 
     /// Take up to `n` blocks from the front of the local buffer.
