@@ -96,11 +96,22 @@ impl BlockBufferHandle {
     ///
     /// Uses the running `local_bytes` total — no iteration needed.
     /// Returns `0.0` if the buffer is empty.
+    #[allow(dead_code)] // Used by tests; kept as general-purpose density metric
     pub(crate) fn density(&self) -> f64 {
         if self.local.is_empty() {
             return 0.0;
         }
         self.local_bytes as f64 / self.local.len() as f64
+    }
+
+    /// Cells per byte across all blocks in the local buffer (O(1)).
+    ///
+    /// Returns `0.0` if the buffer is empty or has zero bytes.
+    pub(crate) fn cell_density(&self) -> f64 {
+        if self.local_bytes == 0 {
+            return 0.0;
+        }
+        self.local_cells as f64 / self.local_bytes as f64
     }
 
     /// Number of blocks currently in the local buffer.
@@ -210,6 +221,33 @@ mod tests {
         let (_tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
         let handle = BlockBufferHandle::new(rx);
         assert_eq!(handle.density(), 0.0);
+    }
+
+    #[test]
+    fn cell_density_computes_cells_per_byte() {
+        let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+        drop(tx);
+
+        let mut handle = BlockBufferHandle::new(rx);
+        // 2 blocks: 1000 bytes / 50 cells, 3000 bytes / 150 cells
+        // total: 4000 bytes, 200 cells → 0.05 cells/byte
+        let chunk = vec![
+            make_buffered_block_with_cells(1000, 50),
+            make_buffered_block_with_cells(3000, 150),
+        ];
+        handle.absorb(chunk);
+        assert!(
+            (handle.cell_density() - 0.05).abs() < 1e-10,
+            "200 cells / 4000 bytes = 0.05, got {}",
+            handle.cell_density()
+        );
+    }
+
+    #[test]
+    fn cell_density_empty_returns_zero() {
+        let (_tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+        let handle = BlockBufferHandle::new(rx);
+        assert_eq!(handle.cell_density(), 0.0);
     }
 
     #[tokio::test]

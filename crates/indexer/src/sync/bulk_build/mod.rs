@@ -184,14 +184,14 @@ impl BulkBuildEngine {
                 break;
             }
 
-            // Fill buffer — use bytes estimate for prefetch fill heuristic.
-            // drain_by_cells does precise truncation; fill just needs enough data.
+            // Fill buffer using actual cell density from buffered blocks.
+            // cell_density() = cells/byte in the buffer.  When positive, we
+            // compute exactly how many bytes are needed for target_cells.
+            // Fallback 100 MB for the very first fill (no density data yet).
             let fill_bytes_estimate = {
-                let density = buffer.density();
-                if density > 0.0 {
-                    // Rough: assume ~6 cells/block average, scale bytes from cell target.
-                    let blocks_est = controller.target_cells() as f64 / 6.0;
-                    (blocks_est * density) as u64
+                let cpb = buffer.cell_density();
+                if cpb > 0.0 {
+                    (controller.target_cells() as f64 / cpb) as u64
                 } else {
                     100_000_000 // 100 MB fallback for first fill
                 }
