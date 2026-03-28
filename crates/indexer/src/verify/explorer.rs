@@ -2014,7 +2014,7 @@ impl Check for ExplorerTotalDepositorsCount {
     }
 }
 
-/// X27: Compare daily delta of /dao/charts/total-deposit value2 vs explorer daily_dao_depositors_count.
+/// X27: Compare /dao/charts/daily-depositors value vs explorer daily_dao_depositors_count.
 pub struct ExplorerDailyDaoDepositorsCount;
 
 impl Check for ExplorerDailyDaoDepositorsCount {
@@ -2039,38 +2039,29 @@ impl Check for ExplorerDailyDaoDepositorsCount {
             "daily_dao_depositors_count",
             "daily_dao_depositors_count",
         )?;
-        // Our value2 is cumulative total_depositors; compute daily delta.
-        let our_cumulative = fetch_our_chart_value2(ctx, "dao/charts/total-deposit")?;
+        // Use the directly-materialized daily depositor count (unique addresses
+        // that deposited per day, including repeat depositors).
+        let our_data = fetch_our_chart(ctx, "dao/charts/daily-depositors")?;
         let dates = last_30_days();
         let mut findings = vec![];
         let mut checked = 0u64;
 
         for date in &dates {
-            if let (Some(explorer_val), Some(today_val)) =
-                (explorer_data.get(date), our_cumulative.get(date))
+            if let (Some(explorer_val), Some(our_val)) =
+                (explorer_data.get(date), our_data.get(date))
             {
-                // Find the previous day's value for delta
-                if let Ok(d) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-                    let prev_date = (d - chrono::Duration::days(1))
-                        .format("%Y-%m-%d")
-                        .to_string();
-                    if let Some(prev_val) = our_cumulative.get(&prev_date) {
-                        let today: f64 = today_val.parse().unwrap_or(0.0);
-                        let prev: f64 = prev_val.parse().unwrap_or(0.0);
-                        let our_delta = today - prev;
-                        let their_val: f64 = explorer_val.parse().unwrap_or(0.0);
-                        if let Some(f) = compare_tolerance_f64_values(
-                            our_delta,
-                            their_val,
-                            date,
-                            "daily_dao_depositors_count",
-                            0.005,
-                        ) {
-                            findings.push(f);
-                        }
-                        checked += 1;
-                    }
+                let ours: f64 = our_val.parse().unwrap_or(0.0);
+                let theirs: f64 = explorer_val.parse().unwrap_or(0.0);
+                if let Some(f) = compare_tolerance_f64_values(
+                    ours,
+                    theirs,
+                    date,
+                    "daily_dao_depositors_count",
+                    0.005,
+                ) {
+                    findings.push(f);
                 }
+                checked += 1;
             }
             progress.inc(1);
         }

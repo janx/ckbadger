@@ -42,6 +42,8 @@ pub(crate) struct DaoOwner {
     active_deposit_counts_by_lock: FxHashMap<Vec<u8>, i64>,
     /// Tracks all lock_hashes that have ever created a DAO deposit (never removed).
     ever_deposited: HashSet<Vec<u8>>,
+    /// Per-day unique addresses that made deposits (including repeat depositors).
+    daily_depositing_addresses: FxHashMap<NaiveDate, HashSet<Vec<u8>>>,
     claimed_compensation_by_block: FxHashMap<i64, i128>,
     prev_dao_cs: Option<(i128, i128)>,
 }
@@ -405,6 +407,11 @@ impl BulkReducer for DaoOwner {
                     .entry(tx_date)
                     .or_default() += 1;
             }
+            // Track per-day unique depositing addresses (including repeat depositors).
+            self.daily_depositing_addresses
+                .entry(tx_date)
+                .or_default()
+                .insert(output.lock_hash.clone());
         }
 
         Ok(())
@@ -525,6 +532,11 @@ impl BulkReducer for DaoOwner {
                 cum_treasury: running_cum_treasury,
                 unclaimed_compensation: 0,
                 cumulative_depositors: running_cumulative_depositors,
+                daily_depositor_addresses: self
+                    .daily_depositing_addresses
+                    .get(date)
+                    .map(|s| s.len() as i64)
+                    .unwrap_or(0),
             };
             let key = keys::encode_stats_key(
                 keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,

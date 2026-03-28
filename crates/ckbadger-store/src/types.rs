@@ -245,6 +245,10 @@ pub struct DaoDailySnapshot {
     /// (only increments, never decremented on withdrawal).
     #[serde(default)]
     pub cumulative_depositors: i64,
+    /// Number of unique addresses that made DAO deposits on this day
+    /// (includes repeat depositors, not just first-timers).
+    #[serde(default)]
+    pub daily_depositor_addresses: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

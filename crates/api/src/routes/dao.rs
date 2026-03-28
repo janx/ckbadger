@@ -32,6 +32,10 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/dao/charts/total-deposit", get(get_total_deposit_chart))
         .route("/dao/charts/daily-deposit", get(get_daily_deposit_chart))
         .route(
+            "/dao/charts/daily-depositors",
+            get(get_daily_depositors_chart),
+        )
+        .route(
             "/dao/charts/circulation-ratio",
             get(get_circulation_ratio_chart),
         )
@@ -1219,6 +1223,45 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
     ok(response)
 }
 
+async fn get_daily_depositors_chart(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<ChartResponse> {
+    let cache_key = "chart:dao-daily-depositors";
+    if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
+        if chart_response_has_data(&cached) {
+            return ok(cached);
+        }
+        state.cache.delete(cache_key).await;
+    }
+
+    let store = state.store.clone();
+    let snapshots = tokio::task::spawn_blocking(move || store.list_dao_daily_snapshots())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let data: Vec<ChartDataPoint> = snapshots
+        .iter()
+        .map(|s| ChartDataPoint {
+            date: s.date.clone(),
+            value: s.daily_depositor_addresses.to_string(),
+            value2: None,
+        })
+        .collect();
+
+    let response = ChartResponse {
+        data,
+        title: "Daily DAO Depositors".to_string(),
+        y_axis_label: "Addresses".to_string(),
+        y2_axis_label: None,
+    };
+
+    if chart_response_has_data(&response) {
+        state.cache.set(cache_key, &response, CHART_CACHE_TTL).await;
+    }
+    ok(response)
+}
+
 async fn get_circulation_ratio_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
@@ -1300,6 +1343,7 @@ mod tests {
             cum_treasury,
             unclaimed_compensation: 0,
             cumulative_depositors: 0,
+            daily_depositor_addresses: 0,
         }
     }
 

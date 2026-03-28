@@ -894,6 +894,7 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
         cum_treasury: 2_000_000_000_000_000,
         unclaimed_compensation: 0,
         cumulative_depositors: 0,
+        daily_depositor_addresses: 0,
     };
     let snapshot_key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
@@ -2200,6 +2201,7 @@ async fn test_total_deposit_chart_recomputes_after_initial_empty_response() {
         cum_treasury: 0,
         unclaimed_compensation: 0,
         cumulative_depositors: 7,
+        daily_depositor_addresses: 0,
     };
     let key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,

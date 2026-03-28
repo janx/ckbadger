@@ -330,6 +330,40 @@ impl CkbadgerStore {
         Ok(())
     }
 
+    /// Collect unique depositor lock_hashes for deposits at the given block numbers.
+    /// Scans CF_DAO_BY_BLOCK for each block and loads the deposit entry to get lock_hash.
+    pub fn collect_depositor_lock_hashes_for_blocks(
+        &self,
+        block_numbers: &[i64],
+    ) -> anyhow::Result<std::collections::HashSet<Vec<u8>>> {
+        let mut result = std::collections::HashSet::new();
+        let cf = self.cf_dao_by_block();
+        for &block_num in block_numbers {
+            // CF_DAO_BY_BLOCK key = desc_block_num(8) + outpoint(34)
+            let prefix = (i64::MAX - block_num).to_be_bytes();
+            let iter = self.prefix_iterator_cf(cf, &prefix);
+            for item in iter {
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate dao_by_block for block {}: {}",
+                        block_num,
+                        e
+                    )
+                })?;
+                if key.len() != keys::DAO_BY_BLOCK_KEY_SIZE || !key.starts_with(&prefix) {
+                    break;
+                }
+                let outpoint_key = &key[8..];
+                let entry = self.load_dao_entry_for_index(outpoint_key, "dao_by_block", &key)?;
+                // Only count deposits created at this block (not moved here by status update).
+                if entry.deposit_block_number == block_num {
+                    result.insert(entry.lock_script_hash);
+                }
+            }
+        }
+        Ok(result)
+    }
+
     pub fn list_dao_deposits_paginated(
         &self,
         limit: usize,

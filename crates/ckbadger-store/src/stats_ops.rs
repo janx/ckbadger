@@ -1187,6 +1187,7 @@ mod tests {
             cum_treasury: 7_000_000_000_000,
             unclaimed_compensation: 0,
             cumulative_depositors: 0,
+            daily_depositor_addresses: 0,
         };
 
         put_dao_snapshot(&store, "20240115", &snap);
@@ -1223,6 +1224,7 @@ mod tests {
             cum_treasury: 3,
             unclaimed_compensation: 0,
             cumulative_depositors: 0,
+            daily_depositor_addresses: 0,
         };
         put_dao_snapshot(&store, "20240115", &snap);
 
@@ -1293,6 +1295,7 @@ mod tests {
             cum_treasury: 3_500_000_000_000,
             unclaimed_compensation: 0,
             cumulative_depositors: 0,
+            daily_depositor_addresses: 0,
         };
         put_dao_snapshot(&store, "20240114", &day0);
 
@@ -1348,6 +1351,7 @@ mod tests {
                 cum_treasury,
                 unclaimed_compensation: 0,
                 cumulative_depositors: 0,
+                daily_depositor_addresses: 0,
             };
 
             // Update prev for next iteration (the bug fix)

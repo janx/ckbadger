@@ -6,7 +6,7 @@
 
 #![allow(clippy::type_complexity)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, bail, Result};
 use chrono::NaiveDate;
@@ -45,6 +45,10 @@ pub(crate) struct BatchStats {
     pub(crate) dao_daily_withdrawals_delta: HashMap<NaiveDate, i64>,
     pub(crate) dao_daily_unique_depositors_delta: HashMap<NaiveDate, i64>,
     pub(crate) dao_daily_cumulative_depositors_delta: HashMap<NaiveDate, i64>,
+    /// Per-day unique addresses that deposited (including repeat depositors).
+    pub(crate) dao_daily_depositing_addresses: HashMap<NaiveDate, HashSet<Vec<u8>>>,
+    /// Block numbers per date (for counting daily depositors from store).
+    pub(crate) dao_block_numbers_by_date: HashMap<NaiveDate, Vec<i64>>,
     pub(crate) daily_secondary_non_miner_delta: HashMap<NaiveDate, i128>,
     pub(crate) daily_secondary_miner_delta: HashMap<NaiveDate, i128>,
     /// Set to true after the DAO delta computation code path runs, even if no
@@ -425,6 +429,7 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
     daily_withdrawals_delta: &mut HashMap<NaiveDate, i64>,
     ever_deposited_by_lock: &mut HashMap<Vec<u8>, bool>,
     daily_cumulative_depositors_delta: &mut HashMap<NaiveDate, i64>,
+    daily_depositing_addresses: &mut HashMap<NaiveDate, HashSet<Vec<u8>>>,
 ) -> Result<()> {
     for tx_data in tx_slice {
         for (output_index, cell) in tx_data.cells.iter().enumerate() {
@@ -462,6 +467,11 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
                             .entry(block_date)
                             .or_default() += 1;
                     }
+                    // Track per-day unique depositing addresses (including repeats).
+                    daily_depositing_addresses
+                        .entry(block_date)
+                        .or_default()
+                        .insert(cell.lock_script_hash.clone());
                     same_batch_dao_map
                         .insert((tx_data.hash.to_vec(), output_index_i16), cell.capacity);
                 }
@@ -1291,6 +1301,7 @@ mod tests {
             &mut daily_withdrawals_delta,
             &mut HashMap::new(),
             &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .unwrap();
 
@@ -1366,6 +1377,7 @@ mod tests {
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
+            &mut HashMap::new(),
             &mut HashMap::new(),
             &mut HashMap::new(),
         )
@@ -1448,6 +1460,7 @@ mod tests {
             &mut daily_withdrawals_delta,
             &mut HashMap::new(),
             &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .unwrap();
 
@@ -1520,6 +1533,7 @@ mod tests {
             &mut daily_withdrawals_delta,
             &mut HashMap::new(),
             &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .unwrap();
 
@@ -1585,6 +1599,7 @@ mod tests {
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
+            &mut HashMap::new(),
             &mut HashMap::new(),
             &mut HashMap::new(),
         )
@@ -1693,6 +1708,7 @@ mod tests {
             &mut daily_withdrawals_delta,
             &mut HashMap::new(),
             &mut HashMap::new(),
+            &mut HashMap::new(),
         )
         .unwrap();
 
@@ -1714,6 +1730,7 @@ mod tests {
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
+            &mut HashMap::new(),
             &mut HashMap::new(),
             &mut HashMap::new(),
         )
@@ -1746,6 +1763,7 @@ mod tests {
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
+            &mut HashMap::new(),
             &mut HashMap::new(),
             &mut HashMap::new(),
         )

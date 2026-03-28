@@ -2948,9 +2948,15 @@ impl Indexer {
                 &mut batch_stats.dao_daily_withdrawals_delta,
                 &mut ever_deposited_by_lock,
                 &mut batch_stats.dao_daily_cumulative_depositors_delta,
+                &mut batch_stats.dao_daily_depositing_addresses,
             )?;
 
             batch_stats.dao_snapshot_dates.insert(block_date);
+            batch_stats
+                .dao_block_numbers_by_date
+                .entry(block_date)
+                .or_default()
+                .push(parsed.number);
         }
         batch_stats.dao_deltas_computed = true;
         let write_ms = t_write.elapsed().as_secs_f64() * 1000.0;
@@ -3398,6 +3404,50 @@ impl Indexer {
                         .copied()
                         .unwrap_or(0);
 
+                    // Compute unique depositor addresses for this day.
+                    // Merge depositors from previous batches (already in store) with
+                    // current batch depositors to get the full daily unique count.
+                    let daily_depositor_addresses = {
+                        let batch_blocks = stats.dao_block_numbers_by_date.get(date);
+                        // Find earlier blocks on the same date from the store.
+                        let mut all_blocks_on_date: Vec<i64> = Vec::new();
+                        if let Some(blocks) = batch_blocks {
+                            if let Some(&first_batch_block) = blocks.first() {
+                                // Scan backwards for blocks on the same date before this batch
+                                let mut check_block = first_batch_block - 1;
+                                while check_block >= 0 {
+                                    if let Ok(Some(hdr)) =
+                                        self.writer.store().get_block_header(check_block)
+                                    {
+                                        let hdr_date =
+                                            ckbadger_common::block_date_from_ms(hdr.timestamp);
+                                        if hdr_date == *date {
+                                            all_blocks_on_date.push(check_block);
+                                            check_block -= 1;
+                                        } else {
+                                            break;
+                                        }
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        // Get depositors from earlier blocks via store scan
+                        let mut depositors = if all_blocks_on_date.is_empty() {
+                            std::collections::HashSet::new()
+                        } else {
+                            self.writer
+                                .store()
+                                .collect_depositor_lock_hashes_for_blocks(&all_blocks_on_date)?
+                        };
+                        // Merge with current batch depositors
+                        if let Some(batch_set) = stats.dao_daily_depositing_addresses.get(date) {
+                            depositors.extend(batch_set.iter().cloned());
+                        }
+                        depositors.len() as i64
+                    };
+
                     let dao_snapshot = crate::db::writer::DaoSnapshotInput {
                         total_deposited: running_total_deposited,
                         depositors_count: running_total_depositors,
@@ -3413,6 +3463,7 @@ impl Indexer {
                         cum_treasury: running_cum_treasury,
                         unclaimed_compensation: 0,
                         cumulative_depositors: running_cumulative_depositors,
+                        daily_depositor_addresses,
                     };
                     self.writer
                         .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;
