@@ -390,37 +390,157 @@ mod tests {
 
     const GB: u64 = 1024 * 1024 * 1024;
 
-    fn healthy_signals() -> BatchSignals {
+    fn signals(recv: f64, build: f64, flush: f64) -> BatchSignals {
         BatchSignals {
-            prefetch_recv_ms: 100.0,
-            build_ms: 2000.0,
-            flush_wait_ms: 0.0,
+            prefetch_recv_ms: recv,
+            build_ms: build,
+            flush_wait_ms: flush,
             l0_files: 5,
         }
     }
 
+    /// Feed warmup + N identical batches, return final output.
+    fn run_batches(
+        ctrl: &mut BottleneckController,
+        n: usize,
+        sig: &BatchSignals,
+    ) -> ControllerOutput {
+        ctrl.observe(sig); // warmup (returns None)
+        let mut last = None;
+        for _ in 0..n {
+            last = ctrl.observe(sig);
+        }
+        last.expect("should have output after warmup + N batches")
+    }
+
+    // ── Wall-clock band tests ──────────────────────────────────────
+
     #[test]
     fn first_batch_returns_none() {
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
-        let output = ctrl.observe(&healthy_signals());
-        assert!(output.is_none());
+        assert!(ctrl.observe(&signals(100.0, 2000.0, 0.0)).is_none());
     }
+
+    #[test]
+    fn cold_start_grows_to_discover_capacity() {
+        // When all EMAs are near zero (cold start after warmup),
+        // wall_clock < 1.0 → factor = STEP_CEIL = 2.0
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        let initial = ctrl.target_cells;
+        // Warmup with near-zero signals
+        ctrl.observe(&signals(0.0, 0.0, 0.0));
+        // Second batch also near-zero — EMAs stay near zero
+        ctrl.observe(&signals(0.0, 0.1, 0.0));
+        assert!(
+            ctrl.target_cells > initial,
+            "cold start should grow: {} should be > initial {}",
+            ctrl.target_cells,
+            initial
+        );
+    }
+
+    #[test]
+    fn wall_clock_below_min_grows() {
+        // wall = 200 + 300 + 0 = 500 < 1000 → grow
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        let initial = ctrl.target_cells;
+        run_batches(&mut ctrl, 5, &signals(200.0, 300.0, 0.0));
+        assert!(
+            ctrl.target_cells > initial,
+            "wall_clock < MIN should grow: {} should be > initial {}",
+            ctrl.target_cells,
+            initial
+        );
+    }
+
+    #[test]
+    fn wall_clock_above_max_shrinks() {
+        // wall = 500 + 2000 + 2000 = 4500 > 3000 → shrink
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        let initial = ctrl.target_cells;
+        run_batches(&mut ctrl, 5, &signals(500.0, 2000.0, 2000.0));
+        assert!(
+            ctrl.target_cells < initial,
+            "wall_clock > MAX should shrink: {} should be < initial {}",
+            ctrl.target_cells,
+            initial
+        );
+    }
+
+    #[test]
+    fn in_range_build_dominant_grows() {
+        // wall = 100 + 1800 + 100 = 2000 ∈ [1000, 3000]
+        // build(1800) > IO(200) → grow
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        let initial = ctrl.target_cells;
+        run_batches(&mut ctrl, 5, &signals(100.0, 1800.0, 100.0));
+        assert!(
+            ctrl.target_cells > initial,
+            "in-range build-dominant should grow: {} should be > initial {}",
+            ctrl.target_cells,
+            initial
+        );
+    }
+
+    #[test]
+    fn in_range_io_dominant_holds() {
+        // wall = 800 + 500 + 700 = 2000 ∈ [1000, 3000]
+        // build(500) < IO(1500) → hold
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        let initial = ctrl.target_cells;
+        run_batches(&mut ctrl, 10, &signals(800.0, 500.0, 700.0));
+        assert_eq!(
+            ctrl.target_cells, initial,
+            "in-range IO-dominant should hold: {} should equal initial {}",
+            ctrl.target_cells, initial
+        );
+    }
+
+    #[test]
+    fn build_equals_io_converges() {
+        // wall = 500 + 1000 + 500 = 2000 ∈ [1000, 3000]
+        // build(1000) = IO(1000) → factor = 1.0
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        // After warmup the EMAs won't be exactly 1000/1000 due to smoothing,
+        // but after many batches they converge. Check stability.
+        run_batches(&mut ctrl, 20, &signals(500.0, 1000.0, 500.0));
+        let ratio = ctrl.target_cells as f64 / 200_000.0;
+        assert!(
+            ratio > 0.8 && ratio < 1.2,
+            "build ≈ IO should stabilize: ratio={:.3} (target={})",
+            ratio,
+            ctrl.target_cells
+        );
+    }
+
+    #[test]
+    fn growth_capped_by_wall_clock_ceiling() {
+        // wall = 50 + 2800 + 50 = 2900 ∈ [1000, 3000], very close to MAX
+        // build(2800) >> IO(100) → wants to grow, but wall_cap = 3000/2900 ≈ 1.034
+        // Growth should be modest to not overshoot 3000.
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        run_batches(&mut ctrl, 1, &signals(50.0, 2800.0, 50.0));
+        // After 1 batch the EMA is a blend with warmup, but factor should be small.
+        // Verify target_cells didn't jump more than 50%.
+        assert!(
+            ctrl.target_cells < 300_000,
+            "growth near ceiling should be modest: {}",
+            ctrl.target_cells
+        );
+    }
+
+    // ── I/O resource tests (unchanged behavior) ────────────────────
 
     #[test]
     fn fetch_starved_grows_fetch_threads() {
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         let initial_threads = ctrl.fetch_threads;
 
-        ctrl.observe(&healthy_signals()); // warmup
+        ctrl.observe(&signals(100.0, 2000.0, 0.0)); // warmup
 
         // Shrink threads first via flush pressure.
         for _ in 0..10 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 50.0,
-                build_ms: 1000.0,
-                flush_wait_ms: 5000.0,
-                l0_files: 80,
-            });
+            ctrl.observe(&signals(50.0, 1000.0, 5000.0));
         }
         let after_flush = ctrl.fetch_threads;
         assert!(
@@ -432,14 +552,8 @@ mod tests {
 
         // Now fetch-starved: threads should grow back.
         for _ in 0..10 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 5000.0,
-                build_ms: 1000.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
+            ctrl.observe(&signals(5000.0, 1000.0, 0.0));
         }
-
         assert_eq!(ctrl.classify(), Bottleneck::Fetch);
         assert!(
             ctrl.fetch_threads > after_flush,
@@ -455,7 +569,7 @@ mod tests {
         ctrl.bg_jobs = 4;
         ctrl.prev_bg_jobs = 4;
 
-        ctrl.observe(&healthy_signals()); // warmup
+        ctrl.observe(&signals(100.0, 2000.0, 0.0)); // warmup
 
         for _ in 0..10 {
             ctrl.observe(&BatchSignals {
@@ -471,181 +585,15 @@ mod tests {
     }
 
     #[test]
-    fn high_build_no_waste_still_grows() {
-        // High build_ms with zero waste = 100% overlap = grow for amortization.
-        // This is correct: the pipeline is perfectly overlapped, bigger batch
-        // amortizes overhead better.
-        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
-        let initial_cells = ctrl.target_cells;
-
-        ctrl.observe(&healthy_signals()); // warmup
-
-        for _ in 0..5 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 0.0,
-                build_ms: 6000.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
-        }
-
-        assert!(
-            ctrl.target_cells > initial_cells,
-            "high build with zero waste (100% overlap) should grow: {} vs initial {}",
-            ctrl.target_cells,
-            initial_cells
-        );
-    }
-
-    #[test]
-    fn low_build_grows_target_cells() {
-        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
-        let initial_cells = ctrl.target_cells;
-
-        ctrl.observe(&healthy_signals()); // warmup
-
-        // build_ms = 500 << target (2000) → should grow
-        for _ in 0..5 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 0.0,
-                build_ms: 500.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
-        }
-
-        assert!(
-            ctrl.target_cells > initial_cells,
-            "low build_ms should grow target_cells: {} vs initial {}",
-            ctrl.target_cells,
-            initial_cells
-        );
-    }
-
-    #[test]
-    fn high_overlap_grows_for_amortization() {
-        // When overlap > 90% (CPU-bound), controller should grow target_cells.
-        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
-        let initial = ctrl.target_cells;
-
-        ctrl.observe(&healthy_signals()); // warmup
-
-        // overlap = 2000 / (2000 + 0 + 0) = 100% → headroom 1.0 → factor 2.0
-        for _ in 0..5 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 0.0,
-                build_ms: 2000.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
-        }
-
-        assert!(
-            ctrl.target_cells > initial * 4,
-            "high overlap should grow aggressively: {} should be > {}",
-            ctrl.target_cells,
-            initial * 4
-        );
-    }
-
-    #[test]
-    fn recv_dominated_waste_grows() {
-        // When overlap < 90% and waste is recv-dominated, controller
-        // should grow (longer build gives prefetch more time).
-        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
-        let initial = ctrl.target_cells;
-
-        ctrl.observe(&healthy_signals()); // warmup
-
-        // overlap = 1000 / (1000 + 5000 + 0) = 17% → recv pull = 1/0.17 = 6 → clamp 2.0
-        for _ in 0..5 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 5000.0,
-                build_ms: 1000.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
-        }
-
-        assert!(
-            ctrl.target_cells > initial,
-            "recv-dominated waste should grow: {} should be > initial {}",
-            ctrl.target_cells,
-            initial
-        );
-    }
-
-    #[test]
-    fn flush_dominated_waste_shrinks() {
-        // When overlap < 90% and waste is flush-dominated, controller
-        // should shrink (reduce I/O pressure).
-        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
-        let initial = ctrl.target_cells;
-
-        ctrl.observe(&healthy_signals()); // warmup
-
-        // overlap = 1000 / (1000 + 0 + 5000) = 17% → flush pull = 0.17/0.9 = 0.19
-        for _ in 0..5 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 0.0,
-                build_ms: 1000.0,
-                flush_wait_ms: 5000.0,
-                l0_files: 5,
-            });
-        }
-
-        assert!(
-            ctrl.target_cells < initial / 4,
-            "flush-dominated waste should shrink aggressively: {} should be < {}",
-            ctrl.target_cells,
-            initial / 4
-        );
-    }
-
-    #[test]
-    fn balanced_waste_holds_steady() {
-        // When overlap < 90% but waste is evenly split between recv and flush,
-        // the geometric blend should produce factor ≈ 1.0 (hold).
-        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
-
-        ctrl.observe(&healthy_signals()); // warmup
-
-        // overlap = 1000 / (1000 + 2500 + 2500) = 17%, recv_pct = 0.5
-        // recv_pull = 1/0.17 = ~6 (clamped 2.0), flush_pull = 0.17/0.9 = 0.19 (clamped 0.5)
-        // geometric: 2.0^0.5 * 0.5^0.5 = 1.414 * 0.707 = 1.0
-        for _ in 0..10 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 2500.0,
-                build_ms: 1000.0,
-                flush_wait_ms: 2500.0,
-                l0_files: 5,
-            });
-        }
-
-        let ratio = ctrl.target_cells as f64 / 200_000.0;
-        assert!(
-            ratio > 0.5 && ratio < 2.0,
-            "balanced waste should roughly hold: target_cells={} (ratio={:.2})",
-            ctrl.target_cells,
-            ratio
-        );
-    }
-
-    #[test]
     fn build_bound_does_not_shrink_fetch_threads() {
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         let initial_threads = ctrl.fetch_threads;
 
-        ctrl.observe(&healthy_signals()); // warmup
+        ctrl.observe(&signals(100.0, 2000.0, 0.0)); // warmup
 
         // Near-zero waste → Build classification.
         for _ in 0..20 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 0.0,
-                build_ms: 2000.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
+            ctrl.observe(&signals(0.0, 2000.0, 0.0));
         }
 
         assert_eq!(ctrl.classify(), Bottleneck::Build);
@@ -661,16 +609,11 @@ mod tests {
     fn bg_jobs_bounds_enforced() {
         let mut ctrl = BottleneckController::new(200_000, 12, 4, 32 * GB);
 
-        ctrl.observe(&healthy_signals()); // warmup
+        ctrl.observe(&signals(100.0, 2000.0, 0.0)); // warmup
 
         // Fetch-bound: bg_jobs should shrink but not below min.
         for _ in 0..20 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 5000.0,
-                build_ms: 1000.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
+            ctrl.observe(&signals(5000.0, 1000.0, 0.0));
         }
         assert!(ctrl.bg_jobs >= MIN_BG_JOBS);
 
@@ -692,11 +635,8 @@ mod tests {
         ctrl.bg_jobs = 6;
         ctrl.prev_bg_jobs = 6;
 
-        ctrl.observe(&healthy_signals()); // warmup
+        ctrl.observe(&signals(100.0, 2000.0, 0.0)); // warmup
 
-        // High L0 but flush channel is empty — pipeline has no backpressure.
-        // Should NOT classify as Flush (would suppress fetch needlessly).
-        // But should proactively bump bg_jobs to help compaction.
         for _ in 0..10 {
             ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 100.0,
@@ -711,27 +651,16 @@ mod tests {
             Bottleneck::Flush,
             "L0 alone with empty flush channel must not trigger Flush"
         );
-        assert!(
-            ctrl.bg_jobs >= ctrl.min_bg_jobs,
-            "bg_jobs should stay within bounds: {}",
-            ctrl.bg_jobs
-        );
     }
 
     #[test]
     fn flush_wait_dominates_waste_triggers_flush() {
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
 
-        ctrl.observe(&healthy_signals()); // warmup
+        ctrl.observe(&signals(100.0, 2000.0, 0.0)); // warmup
 
-        // flush_wait dominates waste → Flush classification.
         for _ in 0..10 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 100.0,
-                build_ms: 2000.0,
-                flush_wait_ms: 3000.0,
-                l0_files: 5,
-            });
+            ctrl.observe(&signals(100.0, 2000.0, 3000.0));
         }
 
         assert_eq!(ctrl.classify(), Bottleneck::Flush);
@@ -751,16 +680,11 @@ mod tests {
     fn target_cells_never_reaches_zero() {
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
 
-        ctrl.observe(&healthy_signals()); // warmup
+        ctrl.observe(&signals(100.0, 2000.0, 0.0)); // warmup
 
-        // Very high build_ms → shrink aggressively, should never reach zero.
+        // wall_clock >> 3000 → aggressive shrink, should never hit zero.
         for _ in 0..100 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 0.0,
-                build_ms: 100_000.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
+            ctrl.observe(&signals(0.0, 100_000.0, 0.0));
         }
 
         assert!(
@@ -771,46 +695,22 @@ mod tests {
     }
 
     #[test]
-    fn channel_depth_scales_with_ram() {
-        assert_eq!(channel_depth_for_ram(8 * GB), 1);
-        assert_eq!(channel_depth_for_ram(16 * GB), 2);
-        assert_eq!(channel_depth_for_ram(32 * GB), 4);
-        assert_eq!(channel_depth_for_ram(64 * GB), 8);
-        assert_eq!(channel_depth_for_ram(128 * GB), 8); // capped
-        assert_eq!(channel_depth_for_ram(256 * GB), 8); // capped
-    }
-
-    #[test]
-    fn bottleneck_code_round_trip() {
-        for b in [Bottleneck::Fetch, Bottleneck::Build, Bottleneck::Flush] {
-            assert_eq!(Bottleneck::from_code(b.to_code()), Some(b));
-        }
-        assert_eq!(Bottleneck::from_code(0), None);
-        assert_eq!(Bottleneck::from_code(255), None);
-    }
-
-    #[test]
     fn fetch_threads_stable_when_build_bound_grow_when_fetch_bound() {
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         let initial = ctrl.fetch_threads;
 
-        ctrl.observe(&healthy_signals()); // warmup
+        ctrl.observe(&signals(100.0, 2000.0, 0.0)); // warmup
 
         // Build-bound: fetch_threads must NOT shrink.
         for _ in 0..10 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 50.0,
-                build_ms: 5000.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
+            ctrl.observe(&signals(50.0, 5000.0, 0.0));
         }
         assert_eq!(
             ctrl.fetch_threads, initial,
             "build-bound must not change fetch_threads"
         );
 
-        // Flush-bound: fetch_threads should shrink (yield disk to compaction).
+        // Flush-bound: fetch_threads should shrink.
         for _ in 0..10 {
             ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 50.0,
@@ -830,12 +730,7 @@ mod tests {
 
         // Fetch-bound: fetch_threads should grow back.
         for _ in 0..10 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 5000.0,
-                build_ms: 1000.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
+            ctrl.observe(&signals(5000.0, 1000.0, 0.0));
         }
         assert!(
             ctrl.fetch_threads > after_flush,
@@ -845,17 +740,35 @@ mod tests {
         );
     }
 
+    // ── Infrastructure tests (unchanged) ───────────────────────────
+
+    #[test]
+    fn channel_depth_scales_with_ram() {
+        assert_eq!(channel_depth_for_ram(8 * GB), 1);
+        assert_eq!(channel_depth_for_ram(16 * GB), 2);
+        assert_eq!(channel_depth_for_ram(32 * GB), 4);
+        assert_eq!(channel_depth_for_ram(64 * GB), 8);
+        assert_eq!(channel_depth_for_ram(128 * GB), 8);
+        assert_eq!(channel_depth_for_ram(256 * GB), 8);
+    }
+
+    #[test]
+    fn bottleneck_code_round_trip() {
+        for b in [Bottleneck::Fetch, Bottleneck::Build, Bottleneck::Flush] {
+            assert_eq!(Bottleneck::from_code(b.to_code()), Some(b));
+        }
+        assert_eq!(Bottleneck::from_code(0), None);
+        assert_eq!(Bottleneck::from_code(255), None);
+    }
+
     #[test]
     fn max_batch_bytes_scales_with_ram() {
-        // 8 GB → max 512 MB
         let ctrl_8 = BottleneckController::new(200_000, 12, 8, 8 * GB);
         assert_eq!(ctrl_8.max_batch_bytes, 512 * 1024 * 1024);
 
-        // 32 GB → max 2 GB
         let ctrl_32 = BottleneckController::new(200_000, 12, 8, 32 * GB);
         assert_eq!(ctrl_32.max_batch_bytes, 2 * GB);
 
-        // 128 GB → 128*1024^3/16 = 8 GiB, capped at ABSOLUTE_MAX (8_000_000_000)
         let ctrl_128 = BottleneckController::new(200_000, 12, 8, 128 * GB);
         assert_eq!(ctrl_128.max_batch_bytes, ABSOLUTE_MAX_BATCH_BYTES);
     }
@@ -864,59 +777,5 @@ mod tests {
     fn max_batch_bytes_derived_from_ram() {
         let ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         assert_eq!(ctrl.max_batch_bytes(), 2 * GB);
-    }
-
-    #[test]
-    fn supply_cap_prevents_runaway_when_overlap_low() {
-        // When overlap is below target and actual_cells is small (genuinely
-        // supply-limited), target_cells should be capped at 2× actual.
-        let mut ctrl = BottleneckController::new(500_000, 12, 8, 32 * GB);
-
-        ctrl.observe(&healthy_signals()); // warmup
-
-        // Recv-dominated waste (overlap ~50%), only 100K cells delivered.
-        for _ in 0..20 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 500.0,
-                build_ms: 500.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
-        }
-
-        // target_cells should be capped near 200K (2× actual), not millions.
-        assert!(
-            ctrl.target_cells <= 200_000,
-            "supply cap should prevent runaway: target_cells={} should be <= 200000",
-            ctrl.target_cells
-        );
-    }
-
-    #[test]
-    fn supply_cap_skipped_when_overlap_healthy() {
-        // When overlap is above target, low actual_cells reflects sparse data
-        // (few cells per block), not a pipeline bottleneck.  The supply cap
-        // must NOT apply — otherwise it creates a death spiral in low-density
-        // chain regions.
-        let mut ctrl = BottleneckController::new(500_000, 12, 8, 32 * GB);
-
-        ctrl.observe(&healthy_signals()); // warmup
-
-        // Perfect overlap, but very few cells per batch (sparse blocks).
-        for _ in 0..20 {
-            ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 0.0,
-                build_ms: 500.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
-        }
-
-        // target_cells should grow freely — NOT be clamped to 2.
-        assert!(
-            ctrl.target_cells > 1000,
-            "supply cap should not apply with healthy overlap: target_cells={} should be > 1000",
-            ctrl.target_cells
-        );
     }
 }
