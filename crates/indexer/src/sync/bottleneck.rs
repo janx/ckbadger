@@ -129,6 +129,9 @@ pub(crate) struct BatchSignals {
     pub build_ms: f64,
     pub flush_wait_ms: f64,
     pub l0_files: u64,
+    /// Cells actually drained from the buffer (may be less than target_cells
+    /// when supply-limited by prefetch rate or bytes-limited by max_batch_bytes).
+    pub actual_cells: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -247,6 +250,18 @@ impl BottleneckController {
         };
         let factor = factor.clamp(STEP_FLOOR, STEP_CEIL);
         self.target_cells = ((self.target_cells as f64 * factor) as u64).max(1);
+
+        // ── Supply cap: don't let target_cells grow far beyond what the
+        // pipeline can actually deliver.  When actual_cells << target_cells,
+        // the batch is supply-limited (prefetch rate or max_batch_bytes) and
+        // growing target further is pointless.  Cap at 2× actual to keep
+        // headroom for supply recovery without runaway.
+        if signals.actual_cells > 0 {
+            let ceiling = signals.actual_cells.saturating_mul(2);
+            if self.target_cells > ceiling {
+                self.target_cells = ceiling;
+            }
+        }
 
         // ── I/O resource adjustment: waste classification ──
         //
@@ -386,6 +401,7 @@ mod tests {
             build_ms: 2000.0,
             flush_wait_ms: 0.0,
             l0_files: 5,
+            actual_cells: u64::MAX, // unconstrained supply for most tests
         }
     }
 
@@ -410,6 +426,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
+                actual_cells: u64::MAX,
             });
         }
         let after_flush = ctrl.fetch_threads;
@@ -427,6 +444,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
+                actual_cells: u64::MAX,
             });
         }
 
@@ -453,6 +471,7 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 3000.0,
                 l0_files: 60,
+                actual_cells: u64::MAX,
             });
         }
 
@@ -476,6 +495,7 @@ mod tests {
                 build_ms: 6000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
+                actual_cells: u64::MAX,
             });
         }
 
@@ -501,6 +521,7 @@ mod tests {
                 build_ms: 500.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
+                actual_cells: u64::MAX,
             });
         }
 
@@ -527,6 +548,7 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
+                actual_cells: u64::MAX,
             });
         }
 
@@ -554,6 +576,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
+                actual_cells: u64::MAX,
             });
         }
 
@@ -581,6 +604,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 5,
+                actual_cells: u64::MAX,
             });
         }
 
@@ -609,6 +633,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 2500.0,
                 l0_files: 5,
+                actual_cells: u64::MAX,
             });
         }
 
@@ -635,6 +660,7 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
+                actual_cells: u64::MAX,
             });
         }
 
@@ -660,6 +686,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
+                actual_cells: u64::MAX,
             });
         }
         assert!(ctrl.bg_jobs >= MIN_BG_JOBS);
@@ -671,6 +698,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
+                actual_cells: u64::MAX,
             });
         }
         assert!(ctrl.bg_jobs <= 4);
@@ -693,6 +721,7 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 60,
+                actual_cells: u64::MAX,
             });
         }
 
@@ -721,6 +750,7 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 3000.0,
                 l0_files: 5,
+                actual_cells: u64::MAX,
             });
         }
 
@@ -750,6 +780,7 @@ mod tests {
                 build_ms: 100_000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
+                actual_cells: u64::MAX,
             });
         }
 
@@ -793,6 +824,7 @@ mod tests {
                 build_ms: 5000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
+                actual_cells: u64::MAX,
             });
         }
         assert_eq!(
@@ -807,6 +839,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
+                actual_cells: u64::MAX,
             });
         }
         assert!(
@@ -825,6 +858,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
+                actual_cells: u64::MAX,
             });
         }
         assert!(
@@ -854,5 +888,32 @@ mod tests {
     fn max_batch_bytes_derived_from_ram() {
         let ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         assert_eq!(ctrl.max_batch_bytes(), 2 * GB);
+    }
+
+    #[test]
+    fn supply_cap_prevents_runaway() {
+        // When overlap is 100% but actual_cells is small (supply-limited),
+        // target_cells should be capped at 2× actual, not grow to infinity.
+        let mut ctrl = BottleneckController::new(500_000, 12, 8, 32 * GB);
+
+        ctrl.observe(&healthy_signals()); // warmup
+
+        // Perfect overlap, but only 100K cells actually delivered each batch.
+        for _ in 0..20 {
+            ctrl.observe(&BatchSignals {
+                prefetch_recv_ms: 0.0,
+                build_ms: 500.0,
+                flush_wait_ms: 0.0,
+                l0_files: 5,
+                actual_cells: 100_000,
+            });
+        }
+
+        // target_cells should be capped near 200K (2× actual), not millions.
+        assert!(
+            ctrl.target_cells <= 200_000,
+            "supply cap should prevent runaway: target_cells={} should be <= 200000",
+            ctrl.target_cells
+        );
     }
 }

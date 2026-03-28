@@ -214,6 +214,7 @@ impl BulkBuildEngine {
                 buffer.drain_by_cells(controller.target_cells(), controller.max_batch_bytes());
             let batch_block_count = drained.len() as u64;
             let batch_bytes: u64 = drained.iter().map(|b| b.block_bytes as u64).sum();
+            let batch_actual_cells: u64 = drained.iter().map(|b| b.cell_count).sum();
 
             // Extract raw blocks for apply_blocks.
             let raw_blocks: Vec<_> = drained.into_iter().map(|b| b.raw).collect();
@@ -424,6 +425,7 @@ impl BulkBuildEngine {
                 build_ms: build_elapsed.as_secs_f64() * 1000.0,
                 flush_wait_ms: flush_wait_elapsed.as_secs_f64() * 1000.0,
                 l0_files: snap.l0_files,
+                actual_cells: batch_actual_cells,
             }) {
                 let _ = threads_tx.send(output.fetch_threads);
 
