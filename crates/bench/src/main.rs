@@ -1,21 +1,17 @@
 mod discovery;
-#[allow(dead_code)]
 mod endpoints;
-#[allow(dead_code)]
 mod metrics;
-#[allow(dead_code)]
 mod registry;
-#[allow(dead_code)]
 mod report;
-#[allow(dead_code)]
 mod runner;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 
 use crate::discovery::{check_connectivity, print_discovery, run_discovery};
+use crate::registry::RiskTier;
 
 #[derive(Parser)]
 #[command(name = "ckbadger-bench", about = "API performance benchmark")]
@@ -99,77 +95,94 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Print summary and continue (runner will be wired in later)
-    println!(
-        "Discovery complete: {} routes, {} params discovered",
-        discovery.capabilities_route_count,
-        count_discovered_params(&discovery),
+    // Build registry
+    let mut registry = endpoints::register_all();
+    let total_registered = registry.entries.len();
+
+    // Apply filters
+    if let Some(ref module) = cli.module {
+        registry.filter_module(module);
+    }
+    if let Some(ref endpoint) = cli.endpoint {
+        registry.filter_endpoint(endpoint);
+    }
+    if let Some(ref risk_str) = cli.risk {
+        if let Some(tier) = RiskTier::from_str_opt(risk_str) {
+            registry.filter_risk(tier);
+        } else {
+            bail!("Invalid risk tier: {risk_str}. Use: high, medium, low");
+        }
+    }
+
+    registry.sort_by_risk();
+
+    eprintln!(
+        "Running {} of {} endpoints ({} iterations, concurrency {})...\n",
+        registry.entries.len(),
+        total_registered,
+        cli.iterations,
+        cli.concurrency,
     );
-    println!(
-        "Data modules: tokens={} spore={} dao={} fiber={} identities={} assets={} mempool={} forks={}",
-        discovery.availability.has_tokens,
-        discovery.availability.has_spore,
-        discovery.availability.has_dao,
-        discovery.availability.has_fiber,
-        discovery.availability.has_identities,
-        discovery.availability.has_assets,
-        discovery.availability.has_mempool,
-        discovery.availability.has_forks,
+
+    let run_config = runner::RunConfig {
+        iterations: cli.iterations,
+        concurrency: cli.concurrency,
+        warmup: cli.warmup,
+    };
+
+    // Execute benchmarks
+    let mut results = Vec::new();
+    let bench_start = Instant::now();
+
+    for (i, entry) in registry.entries.iter().enumerate() {
+        eprint!(
+            "[{}/{}] {} {} {} ...",
+            i + 1,
+            registry.entries.len(),
+            entry.module,
+            entry.method,
+            entry.path_template,
+        );
+
+        let result =
+            runner::bench_endpoint(&client, entry, &cli.api_url, &discovery.params, &run_config)
+                .await?;
+
+        if result.skipped {
+            eprintln!(" SKIPPED");
+        } else {
+            eprintln!(" p95={:.0}ms", result.metrics.p95_ms);
+        }
+
+        results.push(result);
+    }
+
+    let total_time = bench_start.elapsed();
+    eprintln!("\nBenchmark complete in {:.1}s", total_time.as_secs_f64());
+
+    // Build report
+    let bench_report = report::build_report(
+        &results,
+        &cli.api_url,
+        cli.iterations,
+        cli.concurrency,
+        cli.warmup,
     );
+
+    // Output
+    if cli.json {
+        report::print_json(&bench_report)?;
+    } else {
+        report::print_table(&bench_report);
+    }
+
+    if let Some(ref path) = cli.output {
+        report::save_json(&bench_report, path)?;
+    }
+
+    if let Some(ref baseline_path) = cli.compare {
+        report::compare_reports(&bench_report, baseline_path)?;
+    }
 
     Ok(())
-}
-
-/// Count how many parameter fields have been populated.
-fn count_discovered_params(d: &discovery::Discovery) -> usize {
-    let p = &d.params;
-    let mut count = 0;
-    if p.sync_tip > 0 {
-        count += 1;
-    }
-    if p.latest_block_number > 0 {
-        count += 1;
-    }
-    if !p.latest_block_hash.is_empty() {
-        count += 1;
-    }
-    if p.mid_block_number > 0 {
-        count += 1;
-    }
-    count += p.tx_hashes.len();
-    if p.complex_tx_hash.is_some() {
-        count += 1;
-    }
-    count += p.top_addresses.len();
-    count += p.top_lock_hashes.len();
-    count += p.dao_lock_hashes.len();
-    if p.dao_deposit_outpoint.is_some() {
-        count += 1;
-    }
-    count += p.token_type_hashes.len();
-    count += p.cluster_ids.len();
-    count += p.spore_ids.len();
-    count += p.script_names.len();
-    if p.live_cell_outpoint.is_some() {
-        count += 1;
-    }
-    if p.fiber_channel_id.is_some() {
-        count += 1;
-    }
-    if p.dotbit_item_id.is_some() {
-        count += 1;
-    }
-    if p.identity_collection_id.is_some() {
-        count += 1;
-    }
-    if p.object_collection_id.is_some() {
-        count += 1;
-    }
-    if p.object_item_id.is_some() {
-        count += 1;
-    }
-    if p.fork_id.is_some() {
-        count += 1;
-    }
-    count
 }
