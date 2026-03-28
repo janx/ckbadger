@@ -1207,8 +1207,11 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let circulating_by_date = build_circulating_supply_by_date_map(&snapshots)?;
 
+    // Exclude the current incomplete day to prevent cache divergence with composition chart.
+    let today_key = current_ckb_date_key();
     let data: Vec<ChartDataPoint> = daily_stats
         .into_iter()
+        .filter(|(date_str, _)| date_str.as_str() != today_key)
         .filter_map(|(date_str, stats)| {
             let snapshot_date = format_date_key(&date_str);
             stats.knowledge_size.map(|ks| ChartDataPoint {
@@ -1348,8 +1351,13 @@ async fn get_common_knowledge_composition_chart(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Exclude the current incomplete day to prevent cache divergence with knowledge-size chart.
+    let today_key = current_ckb_date_key();
     let mut knowledge_by_date: BTreeMap<u32, i128> = BTreeMap::new();
     for (date_key, stats) in daily_stats {
+        if date_key.as_str() == today_key {
+            continue;
+        }
         let Some(knowledge) = stats.knowledge_size else {
             continue;
         };
@@ -1722,13 +1730,18 @@ async fn get_block_time_distribution_chart(
 ) -> ApiResult<ChartResponse> {
     let cache_key = "chart:block-time-distribution:v2";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
-        return ok(cached);
+        if block_time_dist_has_data(&cached) {
+            return ok(cached);
+        }
+        state.cache.delete(cache_key).await;
     }
 
     let response =
         build_block_time_distribution_response(state.store.as_ref()).map_err(ApiError::internal)?;
 
-    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    if block_time_dist_has_data(&response) {
+        state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    }
 
     ok(response)
 }
@@ -1764,6 +1777,13 @@ fn build_block_time_distribution_data(
             }
         })
         .collect()
+}
+
+fn block_time_dist_has_data(response: &ChartResponse) -> bool {
+    response
+        .data
+        .iter()
+        .any(|p| p.value.parse::<f64>().is_ok_and(|v| v > 0.0))
 }
 
 pub(crate) fn build_block_time_distribution_response(
@@ -2828,6 +2848,16 @@ fn format_date_key(date_key: &str) -> String {
     } else {
         date_key.to_string()
     }
+}
+
+/// Current CKB day (UTC+8) as "YYYYMMDD" key. Used to exclude incomplete current day from charts.
+fn current_ckb_date_key() -> String {
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
+    Utc::now()
+        .with_timezone(&utc8)
+        .date_naive()
+        .format("%Y%m%d")
+        .to_string()
 }
 
 fn hodl_wave_cache_has_holder_count(response: &StackedAreaChartResponse) -> bool {

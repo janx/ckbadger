@@ -1064,14 +1064,22 @@ async fn warmup_uncle_rate(state: &AppState) -> Result<(), String> {
 async fn warmup_block_time_distribution(state: &AppState) -> Result<(), String> {
     let response = build_block_time_distribution_response(state.store.as_ref())?;
 
-    state
-        .cache
-        .set(
-            "chart:block-time-distribution:v2",
-            &response,
-            CHART_CACHE_TTL,
-        )
-        .await;
+    // Only cache if the distribution has actual data (non-zero ratios).
+    // Secondary store may not have caught up at startup, producing all-zero data.
+    let has_data = response
+        .data
+        .iter()
+        .any(|p| p.value.parse::<f64>().is_ok_and(|v| v > 0.0));
+    if has_data {
+        state
+            .cache
+            .set(
+                "chart:block-time-distribution:v2",
+                &response,
+                CHART_CACHE_TTL,
+            )
+            .await;
+    }
 
     Ok(())
 }

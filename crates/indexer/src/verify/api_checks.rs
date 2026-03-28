@@ -262,7 +262,13 @@ fn api_get<T: serde::de::DeserializeOwned>(ctx: &CheckContext, path: &str) -> an
     let resp = ctx.http.get(&url).send()?;
     let status = resp.status();
     if !status.is_success() {
-        anyhow::bail!("GET {} returned {}", path, status);
+        let body = resp.text().unwrap_or_default();
+        let detail = if body.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", &body[..body.len().min(512)])
+        };
+        anyhow::bail!("GET {} returned {}{}", path, status, detail);
     }
     Ok(resp.json()?)
 }
