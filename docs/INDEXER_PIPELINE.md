@@ -434,7 +434,10 @@ The decoder crate (`crates/dob-decoder/`) handles CKB-VM execution, binary cachi
     flush-dominated → shrink (reduce I/O pressure), mixed → hold
   - When overlap ≥ target: grow proportional to headroom for overhead amortization
     (CPU-bound = aggressive, barely above target = cautious)
+  - Supply cap: `target_cells` capped at 2× actual delivered cells to prevent runaway
+    when prefetch rate is the bottleneck (overlap reads 100% but target is unreachable)
   - `drain_by_cells(target_cells, max_batch_bytes)`: cell count is primary budget, RAM-derived bytes is safety cap
+  - Prefetch fill estimate uses `cell_density()` (actual cells/byte from buffer) for accurate byte budget
   - No artificial cell/block count bounds or fixed build time target
 
   **Dimension 2 — I/O resources** (waste classification):
