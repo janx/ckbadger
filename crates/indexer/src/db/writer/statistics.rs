@@ -910,6 +910,7 @@ impl BatchWriter {
         let tip_timestamp = header.timestamp;
 
         let mut total_deposited: i128 = 0;
+        let mut pending_withdrawal_capacity: i128 = 0;
         let mut unique_depositors: HashSet<Vec<u8>> = HashSet::new();
         let mut active_deposits = 0i32;
         let mut total_compensation_paid: i128 = 0;
@@ -921,6 +922,9 @@ impl BatchWriter {
         for scan_status in [0i16, 1] {
             self.store.scan_dao_deposits_by_status(scan_status, |_, entry| {
                 total_deposited += entry.capacity as i128;
+                if entry.status == 1 {
+                    pending_withdrawal_capacity += entry.capacity as i128;
+                }
                 unique_depositors.insert(entry.lock_script_hash.clone());
                 active_deposits += 1;
 
@@ -1061,6 +1065,7 @@ impl BatchWriter {
             mining_reward,
             deposit_compensation,
             burnt,
+            pending_withdrawal_capacity,
         };
 
         // Batch all DAO stats writes atomically

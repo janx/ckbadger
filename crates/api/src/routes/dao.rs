@@ -188,6 +188,7 @@ fn dao_address_summary_cache_key(lock_hash: &[u8], latest_block_number: i64) -> 
 #[derive(Default)]
 struct DaoStatisticsAccumulator {
     total_deposited: i128,
+    pending_withdrawal_capacity: i128,
     unique_depositors: HashSet<Vec<u8>>,
     active_count: i32,
     total_compensation_paid: i128,
@@ -206,6 +207,9 @@ fn accumulate_dao_statistics_entry(
     match entry.status {
         0 | 1 => {
             acc.total_deposited += entry.capacity as i128;
+            if entry.status == 1 {
+                acc.pending_withdrawal_capacity += entry.capacity as i128;
+            }
             acc.unique_depositors.insert(entry.lock_script_hash.clone());
             acc.active_count += 1;
 
@@ -298,6 +302,8 @@ pub struct DaoStatisticsResponse {
     pub deposit_compensation_ckb: String,
     pub burnt: String,
     pub burnt_ckb: String,
+    pub pending_withdrawal_capacity: String,
+    pub pending_withdrawal_capacity_ckb: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deposit_change_24h: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -670,6 +676,10 @@ fn dao_latest_to_response(
         deposit_compensation_ckb: shannon_to_ckb(&deposit_compensation),
         burnt: burnt.clone(),
         burnt_ckb: shannon_to_ckb(&burnt),
+        pending_withdrawal_capacity: latest.pending_withdrawal_capacity.to_string(),
+        pending_withdrawal_capacity_ckb: shannon_to_ckb(
+            &latest.pending_withdrawal_capacity.to_string(),
+        ),
         deposit_change_24h: deltas.deposit_change,
         depositors_change_24h: deltas.depositors_change,
         claimed_compensation_change_24h: deltas.claimed_compensation_change,
@@ -900,6 +910,10 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         deposit_compensation_ckb: shannon_to_ckb(&deposit_compensation),
         burnt: burnt.clone(),
         burnt_ckb: shannon_to_ckb(&burnt),
+        pending_withdrawal_capacity: acc.pending_withdrawal_capacity.to_string(),
+        pending_withdrawal_capacity_ckb: shannon_to_ckb(
+            &acc.pending_withdrawal_capacity.to_string(),
+        ),
         deposit_change_24h: deltas.deposit_change,
         depositors_change_24h: deltas.depositors_change,
         claimed_compensation_change_24h: deltas.claimed_compensation_change,

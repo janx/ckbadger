@@ -1132,27 +1132,19 @@ async fn get_cell_count_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // The stored values are per-day deltas (cells created/consumed that day).
-    // Compute cumulative running totals to match the official explorer.
-    let mut cum_live: i64 = 0;
-    let mut cum_dead: i64 = 0;
-    let mut cum_all: i64 = 0;
-
+    // The stored values are already cumulative running totals (each day carries
+    // forward the previous day's totals + today's deltas).
     let data: Vec<StackedAreaDataPoint> = daily_stats
         .into_iter()
         .filter_map(|(date_str, stats)| {
-            cum_live += stats.total_live_cells;
-            cum_dead += stats.total_dead_cells;
-            cum_all += stats.total_all_cells;
-
-            if cum_all <= 0 {
+            if stats.total_all_cells <= 0 {
                 return None;
             }
 
             let mut values = std::collections::HashMap::new();
-            values.insert("allCells".to_string(), cum_all.to_string());
-            values.insert("liveCells".to_string(), cum_live.to_string());
-            values.insert("deadCells".to_string(), cum_dead.to_string());
+            values.insert("allCells".to_string(), stats.total_all_cells.to_string());
+            values.insert("liveCells".to_string(), stats.total_live_cells.to_string());
+            values.insert("deadCells".to_string(), stats.total_dead_cells.to_string());
             Some(StackedAreaDataPoint {
                 date: format_date_for_chart(&date_str),
                 values,
@@ -2739,7 +2731,6 @@ async fn get_secondary_issuance_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    const SHANNON: f64 = 100_000_000.0;
     let mut data = Vec::new();
     for snapshot in &snapshots {
         let (cum_miner, cum_dao, cum_treasury) = snapshot_secondary_cumulative(snapshot)?;
@@ -2750,15 +2741,15 @@ async fn get_secondary_issuance_chart(
         let mut values = std::collections::HashMap::new();
         values.insert(
             "compensation".to_string(),
-            format!("{:.0}", cum_dao as f64 / SHANNON),
+            (cum_dao / SHANNONS_PER_CKB).to_string(),
         );
         values.insert(
             "mining".to_string(),
-            format!("{:.0}", cum_miner as f64 / SHANNON),
+            (cum_miner / SHANNONS_PER_CKB).to_string(),
         );
         values.insert(
             "burnt".to_string(),
-            format!("{:.0}", cum_treasury as f64 / SHANNON),
+            (cum_treasury / SHANNONS_PER_CKB).to_string(),
         );
         data.push(StackedAreaDataPoint {
             date: snapshot.date.clone(),

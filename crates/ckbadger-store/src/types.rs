@@ -264,6 +264,9 @@ pub struct DaoLatestStatistics {
     pub mining_reward: i128,
     pub deposit_compensation: i128,
     pub burnt: i128,
+    /// Capacity of status=1 cells (withdraw-request pending completion).
+    #[serde(default)]
+    pub pending_withdrawal_capacity: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -84,6 +84,8 @@ struct OurDaoStatisticsResponse {
     mining_reward: String,
     deposit_compensation: String,
     burnt: String,
+    #[serde(default)]
+    pending_withdrawal_capacity: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,12 +1004,31 @@ impl Check for ExplorerTotalDeposit {
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let explorer_data = fetch_explorer_daily(ctx, "total_dao_deposit", "total_dao_deposit")?;
         let our_data = fetch_our_chart(ctx, "dao/charts/total-deposit")?;
+
+        // Our total_deposited includes pending withdrawals (phase-2 subtraction),
+        // while the explorer subtracts at phase-1.  Subtract the current pending
+        // withdrawal pool so both sides use the same definition.
+        let pending: i128 = api_get::<OurDaoStatisticsResponse>(ctx, "dao/statistics")
+            .ok()
+            .and_then(|s| s.pending_withdrawal_capacity.parse::<i128>().ok())
+            .unwrap_or(0);
+
+        let adjusted: HashMap<String, String> = our_data
+            .into_iter()
+            .filter_map(|(date, val)| {
+                let shannons = parse_ckb_to_shannon(&val)?;
+                let adjusted = shannons - pending;
+                // Convert back to CKB string for the generic comparator
+                Some((date, adjusted.to_string()))
+            })
+            .collect();
+
         Ok(run_exact_i128_explorer_check_with_offset(
-            &our_data,
+            &adjusted,
             &explorer_data,
             progress,
             "total_dao_deposit",
-            parse_ckb_to_shannon,
+            |v| v.parse::<i128>().ok(),
         ))
     }
 }

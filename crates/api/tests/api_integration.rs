@@ -1776,6 +1776,7 @@ async fn test_dao_stats_uses_precomputed_latest_stats_when_tip_matches() {
         mining_reward: 17_00000000,
         deposit_compensation: 19_00000000,
         burnt: 23_00000000,
+        pending_withdrawal_capacity: 5_00000000,
     };
     let key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
@@ -1839,6 +1840,7 @@ async fn test_dao_stats_ignores_stale_precomputed_latest_stats() {
         mining_reward: 0,
         deposit_compensation: 0,
         burnt: 0,
+        pending_withdrawal_capacity: 0,
     };
     let key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
