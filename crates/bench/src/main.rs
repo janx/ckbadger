@@ -4,6 +4,8 @@ mod metrics;
 #[allow(dead_code)]
 mod registry;
 #[allow(dead_code)]
+mod report;
+#[allow(dead_code)]
 mod runner;
 
 use std::time::Duration;

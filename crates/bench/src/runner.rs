@@ -2,12 +2,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
 use crate::metrics::{ComputedMetrics, Sample};
 use crate::registry::{DiscoveredParams, EndpointEntry, Method, ResolvedRequest};
 
 /// Result of benchmarking one endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EndpointResult {
     pub module: String,
     pub method: String,
@@ -18,8 +21,10 @@ pub struct EndpointResult {
     pub risk_tier: String,
     pub samples: Vec<Sample>,
     pub metrics: ComputedMetrics,
+    #[serde(with = "duration_millis")]
     pub wall_clock: Duration,
     pub skipped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub skip_reason: Option<String>,
 }
 
@@ -176,6 +181,21 @@ pub async fn bench_endpoint(
         skipped: false,
         skip_reason: None,
     })
+}
+
+mod duration_millis {
+    use std::time::Duration;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_f64(d.as_secs_f64() * 1000.0)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
+        let ms = f64::deserialize(d)?;
+        Ok(Duration::from_secs_f64(ms / 1000.0))
+    }
 }
 
 #[cfg(test)]
