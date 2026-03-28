@@ -2432,27 +2432,30 @@ fn controller_panel_lines(
     let build_ema = bb.controller_build_ema.unwrap_or(0.0);
     let wait_ema = bb.controller_wait_ema.unwrap_or(0.0);
     let l0_ema = bb.controller_l0_ema.unwrap_or(0.0);
-    let waste = recv_ema + wait_ema;
+    let io_ema = recv_ema + wait_ema;
+    let wall_clock = build_ema + io_ema;
     let target_cells = bb.target_cells.unwrap_or(0);
 
-    // Pipeline overlap: fraction of iteration spent on useful work.
-    let total_ema = build_ema + recv_ema + wait_ema;
-    let overlap_pct = if total_ema > 0.0 {
-        (build_ema / total_ema * 100.0).min(100.0)
-    } else {
-        100.0
-    };
-    let overlap_color = if overlap_pct >= 80.0 {
+    // Wall-clock band color: green if in [1s, 3s], red if outside.
+    let wall_color = if (1000.0..=3000.0).contains(&wall_clock) {
         TERMINAL_GREEN
-    } else if overlap_pct >= 50.0 {
-        AMBER
     } else {
         ERROR_RED
     };
 
-    // Waste composition (for I/O classification display)
-    let (recv_waste_pct, wait_waste_pct) = if waste > 1.0 {
-        (recv_ema / waste * 100.0, wait_ema / waste * 100.0)
+    // Band bar: 10-char visual showing wall clock position within [1s, 3s].
+    let band_position = ((wall_clock - 1000.0) / 2000.0 * 10.0)
+        .round()
+        .clamp(0.0, 10.0) as usize;
+    let band_bar = format!(
+        "[{}{}]",
+        "\u{2588}".repeat(band_position),
+        "\u{2591}".repeat(10 - band_position)
+    );
+
+    // Waste composition (for I/O classification display in detail mode)
+    let (recv_waste_pct, wait_waste_pct) = if io_ema > 1.0 {
+        (recv_ema / io_ema * 100.0, wait_ema / io_ema * 100.0)
     } else {
         (0.0, 0.0)
     };
@@ -2485,12 +2488,7 @@ fn controller_panel_lines(
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string());
 
-    // Overlap bar: fill_pct tracks overlap against 90% target, color by level
-    let filled = ((overlap_pct / 100.0 * 10.0).round() as usize).min(10);
-    let empty = 10 - filled;
-    let bar_str = format!("{}{}", "\u{2588}".repeat(filled), "\u{2591}".repeat(empty));
-
-    // Budget text: target_cells formatted as "XXK cells"
+    // Budget text: target_cells formatted as "XXK"
     let budget_k = target_cells / 1_000;
     let budget_delta_text = deltas.map(|d| {
         let pct = d.budget_delta_pct;
@@ -2500,6 +2498,18 @@ fn controller_panel_lines(
             (format!("(+{:.0}%)", pct), TERMINAL_GREEN)
         } else {
             (format!("({:.0}%)", pct), AMBER)
+        }
+    });
+
+    // Decision label: grow / shrink / hold (derived from budget delta)
+    let decision_text = deltas.map(|d| {
+        let pct = d.budget_delta_pct;
+        if pct > 0.5 {
+            ("\u{2192} grow", TERMINAL_GREEN) // → grow
+        } else if pct < -0.5 {
+            ("\u{2192} shrink", AMBER) // → shrink
+        } else {
+            ("\u{2192} hold", SLATE_500) // → hold
         }
     });
 
@@ -2564,20 +2574,25 @@ fn controller_panel_lines(
 
     if dense {
         // Compact: 2 lines
-        // Line 1: overlap + build + budget
+        // Line 1: wall clock + band bar + build vs io + budget + fill
         let mut spans1 = vec![
             Span::styled(
-                format!("ovlp {:.0}%", overlap_pct),
-                Style::default().fg(overlap_color),
+                format!("wall {:.1}s ", wall_clock / 1000.0),
+                Style::default().fg(wall_color),
+            ),
+            Span::styled(band_bar.clone(), Style::default().fg(wall_color)),
+            Span::styled(
+                format!(" build {:.1}s", build_ema / 1000.0),
+                Style::default().fg(FOREGROUND),
             ),
             Span::styled(
-                format!("  build {:.1}s", build_ema / 1000.0),
-                Style::default().fg(FOREGROUND),
+                format!(" io {:.1}s", io_ema / 1000.0),
+                Style::default().fg(SLATE_500),
             ),
         ];
         if target_cells > 0 {
             spans1.push(Span::styled(
-                format!("  {}K cells", budget_k),
+                format!("  {}K", budget_k),
                 Style::default().fg(FOREGROUND),
             ));
             if let Some((ref txt, col)) = budget_delta_text {
@@ -2616,40 +2631,54 @@ fn controller_panel_lines(
 
         vec![Line::from(spans1), Line::from(spans2)]
     } else {
-        // Detail: 6 lines
-        // Line 1: sizing header with overlap
+        // Detail: 5 lines
+        // Line 1: sizing header with wall clock + band bar
         let line1 = Line::from(vec![
             Span::styled(
                 "\u{2500}\u{2500} sizing \u{2500}\u{2500}\u{2500} ",
                 Style::default().fg(SLATE_500),
             ),
             Span::styled(
-                format!("overlap {:.0}%", overlap_pct),
-                Style::default().fg(overlap_color),
+                format!("wall {:.1}s ", wall_clock / 1000.0),
+                Style::default().fg(wall_color),
             ),
+            Span::styled(band_bar, Style::default().fg(wall_color)),
             Span::styled(
-                " \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+                " \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
                 Style::default().fg(SLATE_500),
             ),
         ]);
 
-        // Line 2: overlap bar + build time
-        let line2 = Line::from(vec![
-            Span::styled(bar_str, Style::default().fg(overlap_color)),
+        // Line 2: build vs IO + waste composition + decision
+        let mut line2_spans = vec![
             Span::styled(
                 format!("  build {:.1}s", build_ema / 1000.0),
                 Style::default().fg(FOREGROUND),
             ),
             Span::styled(
-                format!("  waste {:.1}s", waste / 1000.0),
+                format!("  io {:.1}s", io_ema / 1000.0),
                 Style::default().fg(SLATE_500),
             ),
-        ]);
+        ];
+        if io_ema > 1.0 {
+            line2_spans.push(Span::styled(
+                format!(" (recv {:.0}%", recv_waste_pct),
+                Style::default().fg(AMBER),
+            ));
+            line2_spans.push(Span::styled(
+                format!(" flush {:.0}%)", wait_waste_pct),
+                Style::default().fg(ERROR_RED),
+            ));
+        }
+        if let Some((txt, col)) = decision_text {
+            line2_spans.push(Span::styled(format!("  {}", txt), Style::default().fg(col)));
+        }
+        let line2 = Line::from(line2_spans);
 
-        // Line 3: budget + density
+        // Line 3: budget + density + fill
         let mut budget_spans = Vec::new();
         if target_cells > 0 {
-            budget_spans.push(Span::styled("budget ", Style::default().fg(SLATE_500)));
+            budget_spans.push(Span::styled("  budget ", Style::default().fg(SLATE_500)));
             budget_spans.push(Span::styled(
                 format!("{}K cells", budget_k),
                 Style::default().fg(FOREGROUND),
@@ -2662,7 +2691,7 @@ fn controller_panel_lines(
                 Style::default().fg(FOREGROUND),
             ));
         } else {
-            budget_spans.push(Span::styled("budget ", Style::default().fg(SLATE_500)));
+            budget_spans.push(Span::styled("  budget ", Style::default().fg(SLATE_500)));
             budget_spans.push(Span::styled("-", Style::default().fg(SLATE_500)));
             budget_spans.push(Span::styled(
                 format!("  {} blk", blocks_text),
@@ -2683,9 +2712,8 @@ fn controller_panel_lines(
         }
         let line3 = Line::from(budget_spans);
 
-        // Line 4: I/O header + bottleneck badge + waste
-        let waste_secs = waste / 1000.0;
-        let mut line4_spans = vec![
+        // Line 4: I/O header + bottleneck badge
+        let line4 = Line::from(vec![
             Span::styled(
                 "\u{2500}\u{2500} i/o \u{2500}\u{2500} ",
                 Style::default().fg(SLATE_500),
@@ -2695,25 +2723,14 @@ fn controller_panel_lines(
                 Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!(" waste {:.1}s", waste_secs),
+                " \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
                 Style::default().fg(SLATE_500),
             ),
-        ];
-        if waste > 1.0 {
-            line4_spans.push(Span::styled(
-                format!("  recv {:.0}%", recv_waste_pct),
-                Style::default().fg(AMBER),
-            ));
-            line4_spans.push(Span::styled(
-                format!("  flush {:.0}%", wait_waste_pct),
-                Style::default().fg(ERROR_RED),
-            ));
-        }
-        let line4_final = Line::from(line4_spans);
+        ]);
 
         // Line 5: knobs with inline deltas + L0 + flush channel
         let mut knob_spans = vec![
-            Span::styled("thr ", Style::default().fg(SLATE_500)),
+            Span::styled("  thr ", Style::default().fg(SLATE_500)),
             Span::styled(threads_text, Style::default().fg(FOREGROUND)),
         ];
         if let Some((ref txt, col)) = threads_delta_text {
@@ -2735,7 +2752,7 @@ fn controller_panel_lines(
         }
         let line5 = Line::from(knob_spans);
 
-        vec![line1, line2, line3, line4_final, line5]
+        vec![line1, line2, line3, line4, line5]
     }
 }
 
