@@ -186,13 +186,9 @@ impl CkbadgerStore {
                 let value = match value_result {
                     Ok(Some(value)) => value,
                     Ok(None) => {
-                        anyhow::bail!(
-                            "missing tx actions for addr_txs entry: lock_hash=0x{}, block_num={}, tx_idx={}, tx_hash=0x{}",
-                            bytes_to_hex(lock_hash),
-                            block_num,
-                            tx_idx,
-                            bytes_to_hex(tx_hash)
-                        );
+                        // Cellbase txs are written to CF_ADDR_TXS but intentionally
+                        // excluded from CF_TX_ACTIONS (see batch.rs/bulk_build). Skip.
+                        continue;
                     }
                     Err(e) => {
                         anyhow::bail!(

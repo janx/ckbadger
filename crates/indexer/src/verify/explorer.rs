@@ -337,18 +337,27 @@ fn api_get<T: serde::de::DeserializeOwned>(ctx: &CheckContext, path: &str) -> an
         ctx.api_url.trim_end_matches('/'),
         path.trim_start_matches('/')
     );
-    let resp = ctx.http.get(&url).send()?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().unwrap_or_default();
-        let detail = if body.is_empty() {
-            String::new()
-        } else {
-            format!(": {}", &body[..body.len().min(512)])
-        };
-        anyhow::bail!("GET {} returned {}{}", path, status, detail);
+    let mut backoff_ms = 500;
+    for attempt in 0..5 {
+        let resp = ctx.http.get(&url).send()?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 4 {
+            std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+            backoff_ms *= 2;
+            continue;
+        }
+        if !status.is_success() {
+            let body = resp.text().unwrap_or_default();
+            let detail = if body.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", &body[..body.len().min(512)])
+            };
+            anyhow::bail!("GET {} returned {}{}", path, status, detail);
+        }
+        return Ok(resp.json()?);
     }
-    Ok(resp.json()?)
+    unreachable!()
 }
 
 /// Normalize date string to "YYYY-MM-DD" format.
