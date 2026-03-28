@@ -186,7 +186,7 @@ impl BulkBuildEngine {
 
             // Fill buffer to the controller's bytes budget.
             let recv_started = Instant::now();
-            match buffer.fill_to_budget(controller.target_batch_bytes()).await {
+            match buffer.fill_to_budget(controller.max_batch_bytes()).await {
                 Ok(true) => {}
                 Ok(false) => {
                     info!("block buffer exhausted, ending bulk build loop");
@@ -201,7 +201,7 @@ impl BulkBuildEngine {
             // Determine how many blocks to drain based on bytes budget.
             let density = buffer.density();
             let drain_count = if density > 0.0 {
-                let raw = (controller.target_batch_bytes() as f64 / density) as u64;
+                let raw = (controller.max_batch_bytes() as f64 / density) as u64;
                 raw.clamp(bottleneck::MIN_SPAN, bottleneck::MAX_SPAN) as usize
             } else {
                 bottleneck::MIN_SPAN as usize
@@ -433,7 +433,7 @@ impl BulkBuildEngine {
 
                 tracing::debug!(
                     bottleneck = %output.bottleneck,
-                    target_batch_bytes = output.target_batch_bytes,
+                    target_cells = output.target_cells,
                     fetch_threads = output.fetch_threads,
                     bg_jobs = output.bg_jobs,
                     recv_ema = format!("{:.1}", output.recv_ema),
@@ -451,7 +451,7 @@ impl BulkBuildEngine {
                     output.l0_ema,
                     output.fetch_threads,
                     output.bg_jobs,
-                    output.target_batch_bytes,
+                    output.target_cells,
                 );
             }
 
