@@ -67,7 +67,7 @@ const FLUSH_L0_THRESHOLD: f64 = 40.0;
 //   build > target → shrink cells (batch too large)
 // This is independent of bottleneck classification — classification
 // only governs I/O resource knobs (fetch_threads, bg_jobs).
-const TARGET_ITERATION_MS: f64 = 2000.0;
+const TARGET_ITERATION_MS: f64 = 3000.0;
 
 // Per-step cell count change safety bounds.  These limit how much
 // target_cells can change in a single iteration, preventing
