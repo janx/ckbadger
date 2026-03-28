@@ -427,12 +427,15 @@ The decoder crate (`crates/dob-decoder/`) handles CKB-VM execution, binary cachi
 - **BottleneckController**: unified resource controller with two independent dimensions.
   Located in `crates/indexer/src/sync/bottleneck.rs`.
 
-  **Dimension 1 — Batch sizing** (overlap-scaled cell targeting):
-  - `target_cells` adjusts toward `TARGET_ITERATION_MS` (3s build time)
-  - Growth is scaled by `overlap = build / (build + waste)`: full when CPU-bound, dampened when I/O-bound
-  - Shrink is always at full strength (reduces non-linear I/O risk)
+  **Dimension 1 — Batch sizing** (overlap-driven cell targeting):
+  - Single objective: pipeline overlap (`build / (build + waste)`) ≥ 90%
+  - When overlap < target: waste composition determines direction via geometric blend —
+    recv-dominated waste → grow (longer build gives prefetch more time),
+    flush-dominated → shrink (reduce I/O pressure), mixed → hold
+  - When overlap ≥ target: grow proportional to headroom for overhead amortization
+    (CPU-bound = aggressive, barely above target = cautious)
   - `drain_by_cells(target_cells, max_batch_bytes)`: cell count is primary budget, RAM-derived bytes is safety cap
-  - No artificial cell/block count bounds — build_ms feedback is self-stabilizing
+  - No artificial cell/block count bounds or fixed build time target
 
   **Dimension 2 — I/O resources** (waste classification):
 

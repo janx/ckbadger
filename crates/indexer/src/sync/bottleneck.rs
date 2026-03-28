@@ -2,15 +2,23 @@
 //
 // Two independent control dimensions:
 //
-//   1. BATCH SIZE — overlap-scaled build_ms targeting.
+//   1. BATCH SIZE — overlap-driven with waste-weighted direction.
 //      The unit is cells, not bytes.  Cell count is a better proxy for
 //      CPU cost because cell density varies ~25x across CKB block ranges.
 //
 //      overlap = build / (build + waste) measures pipeline efficiency.
-//      Growth toward TARGET_ITERATION_MS is scaled by overlap:
-//        - overlap ≈ 1 (CPU-bound): full growth to amortize overhead
-//        - overlap ≈ 0 (I/O-bound): growth dampened (sizing can't fix I/O)
-//      Shrink is always at full strength (reduces non-linear I/O risk).
+//      Single objective: maintain overlap >= OVERLAP_TARGET (90%).
+//
+//      When overlap < target (pipeline inefficient):
+//        Direction determined by waste composition (geometric blend):
+//        - recv-dominated → grow (longer build gives prefetch more time)
+//        - flush-dominated → shrink (less data reduces I/O pressure)
+//        - mixed → geometric mean ≈ hold (opposing forces cancel)
+//
+//      When overlap >= target (pipeline efficient):
+//        Grow proportional to headroom above target to amortize overhead.
+//        CPU-bound (high headroom) → aggressive growth.
+//        IO-bound with buffering (low headroom) → cautious growth.
 //
 //   2. I/O RESOURCES — governed by waste classification (ratio).
 //      Waste = recv_wait + flush_wait (idle time, ideally zero).
@@ -18,10 +26,10 @@
 //      Classification identifies which waste source dominates and shifts
 //      I/O knobs (fetch_threads, bg_jobs) accordingly.
 //
-//   Dimension  │ Signal              │ Knobs
-//   ───────────│─────────────────────│────────────────────────────────
-//   Batch size │ build_ms + overlap  │ target_cells
-//   I/O        │ waste composition   │ fetch_threads, bg_jobs
+//   Dimension  │ Signal                  │ Knobs
+//   ───────────│─────────────────────────│──────────────────────────
+//   Batch size │ overlap + waste shares  │ target_cells
+//   I/O        │ waste composition       │ fetch_threads, bg_jobs
 //
 // Key design principle: fetch (CKB RocksDB reads via std::thread::scope)
 // does NOT compete with build (CPU via rayon) for resources.  Therefore
@@ -64,19 +72,17 @@ const FLUSH_PCT_THRESHOLD: f64 = 0.4;
 // catch up — without suppressing the pipeline (no Flush classification).
 const FLUSH_L0_THRESHOLD: f64 = 40.0;
 
-// Target build wall-clock time (ms).  target_cells adjusts to
-// converge build_ms toward this target:
-//   build < target → grow cells (room for more work per batch)
-//   build > target → shrink cells (batch too large)
-// This is independent of bottleneck classification — classification
-// only governs I/O resource knobs (fetch_threads, bg_jobs).
-const TARGET_ITERATION_MS: f64 = 3000.0;
+// Pipeline overlap target.  The controller adjusts target_cells to keep
+// overlap (build / iteration) at or above this level.  When overlap is
+// below target, waste composition determines direction: recv-dominated
+// waste → grow (give prefetch more time), flush-dominated → shrink
+// (reduce I/O pressure).  When overlap is above target, grow to
+// amortize per-batch overhead, proportional to headroom above target.
+const OVERLAP_TARGET: f64 = 0.9;
 
-// Per-step cell count change safety bounds.  These limit how much
-// target_cells can change in a single iteration, preventing
-// chaotic overshooting.
-const CELLS_STEP_MIN: f64 = 0.5;
-const CELLS_STEP_MAX: f64 = 2.0;
+// Per-step safety bounds on target_cells adjustment factor.
+const STEP_FLOOR: f64 = 0.5;
+const STEP_CEIL: f64 = 2.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Bottleneck {
@@ -212,24 +218,34 @@ impl BottleneckController {
         self.wait_ema = ema(self.wait_ema, signals.flush_wait_ms);
         self.l0_ema = ema(self.l0_ema, signals.l0_files as f64);
 
-        // ── Batch size adjustment: overlap-scaled build_ms targeting ──
+        // ── Batch size adjustment: overlap-driven with waste-weighted direction ──
         //
-        // The optimal build_ms balances overhead amortization (grow) against
-        // pipeline overlap (don't grow past what I/O can sustain).
+        // overlap = build / (build + waste).  Measures pipeline efficiency.
         //
-        // overlap = fraction of iteration spent on useful work (0..1).
-        // When overlap is high (CPU-bound): full adjustment toward TARGET.
-        // When overlap is low (I/O-bound): growth dampened, shrink at full
-        // strength.  This prevents runaway growth when I/O-limited while
-        // still allowing overhead amortization.
+        // Scenario 1 (overlap < target): improve overlap.
+        //   recv-dominated waste → grow (longer build gives prefetch more time)
+        //   flush-dominated waste → shrink (less data reduces I/O pressure)
+        //   mixed → geometric blend by waste shares (hold when balanced)
+        //
+        // Scenario 2 (overlap ≥ target): optimize throughput.
+        //   Grow to amortize per-batch overhead, proportional to headroom
+        //   above target.  2a (high headroom = CPU-bound) → aggressive.
+        //   2b (low headroom = barely above target) → cautious.
         let overlap = self.build_ema / (self.build_ema + self.recv_ema + self.wait_ema);
-        let ratio = TARGET_ITERATION_MS / self.build_ema;
-        let factor = if ratio >= 1.0 {
-            1.0 + (ratio - 1.0) * overlap // grow: dampened by overlap
+        let factor = if overlap >= OVERLAP_TARGET {
+            // Scenario 2: overlap good → grow for overhead amortization.
+            let headroom = (overlap - OVERLAP_TARGET) / (1.0 - OVERLAP_TARGET);
+            1.0 + headroom
         } else {
-            ratio // shrink: full strength
+            // Scenario 1: overlap bad → direction depends on waste composition.
+            let waste = self.recv_ema + self.wait_ema;
+            let flush_pct = self.wait_ema / waste;
+            let recv_pct = 1.0 - flush_pct;
+            let recv_pull = (1.0 / overlap).min(STEP_CEIL);
+            let flush_pull = (overlap / OVERLAP_TARGET).max(STEP_FLOOR);
+            recv_pull.powf(recv_pct) * flush_pull.powf(flush_pct)
         };
-        let factor = factor.clamp(CELLS_STEP_MIN, CELLS_STEP_MAX);
+        let factor = factor.clamp(STEP_FLOOR, STEP_CEIL);
         self.target_cells = ((self.target_cells as f64 * factor) as u64).max(1);
 
         // ── I/O resource adjustment: waste classification ──
@@ -445,13 +461,15 @@ mod tests {
     }
 
     #[test]
-    fn high_build_shrinks_target_cells() {
+    fn high_build_no_waste_still_grows() {
+        // High build_ms with zero waste = 100% overlap = grow for amortization.
+        // This is correct: the pipeline is perfectly overlapped, bigger batch
+        // amortizes overhead better.
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         let initial_cells = ctrl.target_cells;
 
         ctrl.observe(&healthy_signals()); // warmup
 
-        // build_ms = 6000 >> target (2000) → should shrink
         for _ in 0..5 {
             ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 0.0,
@@ -462,8 +480,8 @@ mod tests {
         }
 
         assert!(
-            ctrl.target_cells < initial_cells,
-            "high build_ms should shrink target_cells: {} vs initial {}",
+            ctrl.target_cells > initial_cells,
+            "high build with zero waste (100% overlap) should grow: {} vs initial {}",
             ctrl.target_cells,
             initial_cells
         );
@@ -495,23 +513,70 @@ mod tests {
     }
 
     #[test]
-    fn waste_dampens_target_cells_growth() {
-        // Two controllers: same build_ms below target, one with waste.
-        // The one with waste should grow SLOWER (overlap dampens growth).
-        let mut no_waste = BottleneckController::new(200_000, 12, 8, 32 * GB);
-        let mut with_waste = BottleneckController::new(200_000, 12, 8, 32 * GB);
+    fn high_overlap_grows_for_amortization() {
+        // When overlap > 90% (CPU-bound), controller should grow target_cells.
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        let initial = ctrl.target_cells;
 
-        no_waste.observe(&healthy_signals()); // warmup
-        with_waste.observe(&healthy_signals()); // warmup
+        ctrl.observe(&healthy_signals()); // warmup
 
-        for _ in 0..20 {
-            no_waste.observe(&BatchSignals {
+        // overlap = 2000 / (2000 + 0 + 0) = 100% → headroom 1.0 → factor 2.0
+        for _ in 0..5 {
+            ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 0.0,
+                build_ms: 2000.0,
+                flush_wait_ms: 0.0,
+                l0_files: 5,
+            });
+        }
+
+        assert!(
+            ctrl.target_cells > initial * 4,
+            "high overlap should grow aggressively: {} should be > {}",
+            ctrl.target_cells,
+            initial * 4
+        );
+    }
+
+    #[test]
+    fn recv_dominated_waste_grows() {
+        // When overlap < 90% and waste is recv-dominated, controller
+        // should grow (longer build gives prefetch more time).
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        let initial = ctrl.target_cells;
+
+        ctrl.observe(&healthy_signals()); // warmup
+
+        // overlap = 1000 / (1000 + 5000 + 0) = 17% → recv pull = 1/0.17 = 6 → clamp 2.0
+        for _ in 0..5 {
+            ctrl.observe(&BatchSignals {
+                prefetch_recv_ms: 5000.0,
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
             });
-            with_waste.observe(&BatchSignals {
+        }
+
+        assert!(
+            ctrl.target_cells > initial,
+            "recv-dominated waste should grow: {} should be > initial {}",
+            ctrl.target_cells,
+            initial
+        );
+    }
+
+    #[test]
+    fn flush_dominated_waste_shrinks() {
+        // When overlap < 90% and waste is flush-dominated, controller
+        // should shrink (reduce I/O pressure).
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        let initial = ctrl.target_cells;
+
+        ctrl.observe(&healthy_signals()); // warmup
+
+        // overlap = 1000 / (1000 + 0 + 5000) = 17% → flush pull = 0.17/0.9 = 0.19
+        for _ in 0..5 {
+            ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 0.0,
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
@@ -520,42 +585,39 @@ mod tests {
         }
 
         assert!(
-            no_waste.target_cells > with_waste.target_cells,
-            "waste should dampen growth: no_waste={} should be > with_waste={}",
-            no_waste.target_cells,
-            with_waste.target_cells
+            ctrl.target_cells < initial / 4,
+            "flush-dominated waste should shrink aggressively: {} should be < {}",
+            ctrl.target_cells,
+            initial / 4
         );
     }
 
     #[test]
-    fn waste_does_not_dampen_shrink() {
-        // When build_ms > TARGET, shrink should be at full strength
-        // regardless of waste level.
-        let mut no_waste = BottleneckController::new(200_000, 12, 8, 32 * GB);
-        let mut with_waste = BottleneckController::new(200_000, 12, 8, 32 * GB);
+    fn balanced_waste_holds_steady() {
+        // When overlap < 90% but waste is evenly split between recv and flush,
+        // the geometric blend should produce factor ≈ 1.0 (hold).
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
 
-        no_waste.observe(&healthy_signals()); // warmup
-        with_waste.observe(&healthy_signals()); // warmup
+        ctrl.observe(&healthy_signals()); // warmup
 
-        for _ in 0..20 {
-            no_waste.observe(&BatchSignals {
-                prefetch_recv_ms: 0.0,
-                build_ms: 8000.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
-            with_waste.observe(&BatchSignals {
-                prefetch_recv_ms: 0.0,
-                build_ms: 8000.0,
-                flush_wait_ms: 5000.0,
+        // overlap = 1000 / (1000 + 2500 + 2500) = 17%, recv_pct = 0.5
+        // recv_pull = 1/0.17 = ~6 (clamped 2.0), flush_pull = 0.17/0.9 = 0.19 (clamped 0.5)
+        // geometric: 2.0^0.5 * 0.5^0.5 = 1.414 * 0.707 = 1.0
+        for _ in 0..10 {
+            ctrl.observe(&BatchSignals {
+                prefetch_recv_ms: 2500.0,
+                build_ms: 1000.0,
+                flush_wait_ms: 2500.0,
                 l0_files: 5,
             });
         }
 
-        assert_eq!(
-            no_waste.target_cells, with_waste.target_cells,
-            "shrink should be same strength regardless of waste: no_waste={} vs with_waste={}",
-            no_waste.target_cells, with_waste.target_cells
+        let ratio = ctrl.target_cells as f64 / 200_000.0;
+        assert!(
+            ratio > 0.5 && ratio < 2.0,
+            "balanced waste should roughly hold: target_cells={} (ratio={:.2})",
+            ctrl.target_cells,
+            ratio
         );
     }
 

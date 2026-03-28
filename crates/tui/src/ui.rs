@@ -2421,12 +2421,8 @@ fn build_bulk_build_diagnostics(
 /// Build the controller observation panel lines for bulk-build diagnostics.
 ///
 /// Two orthogonal sections:
-/// 1. Sizing — build EMA vs 2s target (THE sizing signal) + budget in MB
+/// 1. Sizing — overlap gauge (THE sizing signal) + budget in cells
 /// 2. I/O — bottleneck classification + waste breakdown + knobs with inline deltas
-// Target build wall-clock time (ms). Must match TARGET_ITERATION_MS
-// in bottleneck.rs. Used for display formatting only.
-const CONTROLLER_TARGET_MS: f64 = 3000.0;
-
 fn controller_panel_lines(
     bb: &BulkBuildProgressData,
     dense: bool,
@@ -2438,7 +2434,6 @@ fn controller_panel_lines(
     let l0_ema = bb.controller_l0_ema.unwrap_or(0.0);
     let waste = recv_ema + wait_ema;
     let target_cells = bb.target_cells.unwrap_or(0);
-    let target_secs = CONTROLLER_TARGET_MS / 1000.0;
 
     // Pipeline overlap: fraction of iteration spent on useful work.
     let total_ema = build_ema + recv_ema + wait_ema;
@@ -2490,20 +2485,10 @@ fn controller_panel_lines(
         .map(|v| v.to_string())
         .unwrap_or_else(|| "-".to_string());
 
-    // Build EMA bar: fill against controller target
-    let fill_pct = (build_ema / CONTROLLER_TARGET_MS * 100.0).min(100.0);
-    let build_color = if build_ema > CONTROLLER_TARGET_MS * 1.5 {
-        ERROR_RED
-    } else if build_ema > CONTROLLER_TARGET_MS {
-        AMBER
-    } else {
-        TERMINAL_GREEN
-    };
-
-    // 10-char fill bar
-    let filled = ((fill_pct / 100.0 * 10.0).round() as usize).min(10);
+    // Overlap bar: fill_pct tracks overlap against 90% target, color by level
+    let filled = ((overlap_pct / 100.0 * 10.0).round() as usize).min(10);
     let empty = 10 - filled;
-    let bar_str = format!("{}{}", "\u{2588}".repeat(filled), "\u{2591}".repeat(empty),);
+    let bar_str = format!("{}{}", "\u{2588}".repeat(filled), "\u{2591}".repeat(empty));
 
     // Budget text: target_cells formatted as "XXK cells"
     let budget_k = target_cells / 1_000;
@@ -2563,16 +2548,17 @@ fn controller_panel_lines(
 
     if dense {
         // Compact: 2 lines
-        // Line 1: build EMA + budget + density
-        let mut spans1 = vec![Span::styled(
-            format!(
-                "build {:.1}s/{:.0}s {:.0}%",
-                build_ema / 1000.0,
-                target_secs,
-                fill_pct
+        // Line 1: overlap + build + budget
+        let mut spans1 = vec![
+            Span::styled(
+                format!("ovlp {:.0}%", overlap_pct),
+                Style::default().fg(overlap_color),
             ),
-            Style::default().fg(build_color),
-        )];
+            Span::styled(
+                format!("  build {:.1}s", build_ema / 1000.0),
+                Style::default().fg(FOREGROUND),
+            ),
+        ];
         if target_cells > 0 {
             spans1.push(Span::styled(
                 format!("  {}K cells", budget_k),
@@ -2582,11 +2568,6 @@ fn controller_panel_lines(
                 spans1.push(Span::styled(format!(" {}", txt), Style::default().fg(col)));
             }
         }
-        spans1.push(Span::styled(
-            format!("  ovlp {:.0}%", overlap_pct),
-            Style::default().fg(overlap_color),
-        ));
-
         // Line 2: bottleneck badge + knobs + L0 + flush
         let mut spans2 = vec![
             Span::styled(
@@ -2630,18 +2611,16 @@ fn controller_panel_lines(
             ),
         ]);
 
-        // Line 2: build bar with EMA vs target
+        // Line 2: overlap bar + build time
         let line2 = Line::from(vec![
-            Span::styled("build ", Style::default().fg(SLATE_500)),
+            Span::styled(bar_str, Style::default().fg(overlap_color)),
             Span::styled(
-                format!("{:.1}s/{:.0}s", build_ema / 1000.0, target_secs),
-                Style::default().fg(build_color),
+                format!("  build {:.1}s", build_ema / 1000.0),
+                Style::default().fg(FOREGROUND),
             ),
-            Span::styled("  ", Style::default()),
-            Span::styled(bar_str, Style::default().fg(build_color)),
             Span::styled(
-                format!("  {:.0}%", fill_pct),
-                Style::default().fg(build_color),
+                format!("  waste {:.1}s", waste / 1000.0),
+                Style::default().fg(SLATE_500),
             ),
         ]);
 
@@ -6780,11 +6759,11 @@ mod tests {
         let lines = controller_panel_lines(&bb, true, None);
         assert_eq!(lines.len(), 2, "compact mode should produce 2 lines");
 
-        // Line 1: build EMA summary + budget
+        // Line 1: overlap + build + budget
         let text0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text0.contains("build") && text0.contains("s/3s"),
-            "line 1 should contain build EMA, got: {}",
+            text0.contains("ovlp") && text0.contains("build"),
+            "line 1 should contain overlap and build, got: {}",
             text0
         );
         assert!(
@@ -6842,11 +6821,11 @@ mod tests {
             text0
         );
 
-        // Line 2: build bar
+        // Line 2: overlap bar + build + waste
         let text1: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text1.contains("build") && text1.contains("s/3s"),
-            "line 2 should contain build EMA, got: {}",
+            text1.contains("build") && text1.contains("waste"),
+            "line 2 should contain build and waste, got: {}",
             text1
         );
 
