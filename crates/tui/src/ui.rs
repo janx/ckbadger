@@ -103,7 +103,7 @@ enum CompactOverviewLayout {
 
 #[derive(Debug, Clone, Copy)]
 struct ControllerKnobs {
-    target_batch_bytes: u64,
+    target_cells: u64,
     fetch_threads: u32,
     bg_jobs: i32,
 }
@@ -450,14 +450,14 @@ impl App {
                 push_history_sample(&mut self.flush_wait_ms_history, flush_wait_ms);
                 // Compute controller knob deltas.
                 let current_knobs = ControllerKnobs {
-                    target_batch_bytes: bb.target_batch_bytes.unwrap_or(0),
+                    target_cells: bb.target_cells.unwrap_or(0),
                     fetch_threads: bb.controller_fetch_threads.unwrap_or(0),
                     bg_jobs: bb.controller_bg_jobs.unwrap_or(0),
                 };
                 if let Some(prev) = self.prev_controller_knobs {
-                    let budget_delta_pct = if prev.target_batch_bytes > 0 {
-                        (current_knobs.target_batch_bytes as f64 - prev.target_batch_bytes as f64)
-                            / prev.target_batch_bytes as f64
+                    let budget_delta_pct = if prev.target_cells > 0 {
+                        (current_knobs.target_cells as f64 - prev.target_cells as f64)
+                            / prev.target_cells as f64
                             * 100.0
                     } else {
                         0.0
@@ -2433,7 +2433,7 @@ fn controller_panel_lines(
     let wait_ema = bb.controller_wait_ema.unwrap_or(0.0);
     let l0_ema = bb.controller_l0_ema.unwrap_or(0.0);
     let waste = recv_ema + wait_ema;
-    let target_bytes = bb.target_batch_bytes.unwrap_or(0);
+    let target_cells = bb.target_cells.unwrap_or(0);
 
     // Waste composition (for I/O classification display)
     let (recv_waste_pct, wait_waste_pct) = if waste > 1.0 {
@@ -2485,8 +2485,8 @@ fn controller_panel_lines(
     let empty = 10 - filled;
     let bar_str = format!("{}{}", "\u{2588}".repeat(filled), "\u{2591}".repeat(empty),);
 
-    // Budget text: target_bytes in MB
-    let budget_mb = target_bytes / 1_000_000;
+    // Budget text: target_cells formatted as "XXK cells"
+    let budget_k = target_cells / 1_000;
     let budget_delta_text = deltas.map(|d| {
         let pct = d.budget_delta_pct;
         if pct.abs() < 0.5 {
@@ -2525,9 +2525,9 @@ fn controller_panel_lines(
             format!("build {:.1}s/2s {:.0}%", build_ema / 1000.0, fill_pct),
             Style::default().fg(build_color),
         )];
-        if target_bytes > 0 {
+        if target_cells > 0 {
             spans1.push(Span::styled(
-                format!("  {}MB", budget_mb),
+                format!("  {}K cells", budget_k),
                 Style::default().fg(FOREGROUND),
             ));
             if let Some((ref txt, col)) = budget_delta_text {
@@ -2583,10 +2583,10 @@ fn controller_panel_lines(
 
         // Line 3: budget line
         let mut budget_spans = Vec::new();
-        if target_bytes > 0 {
+        if target_cells > 0 {
             budget_spans.push(Span::styled("budget ", Style::default().fg(SLATE_500)));
             budget_spans.push(Span::styled(
-                format!("{}MB", budget_mb),
+                format!("{}K cells", budget_k),
                 Style::default().fg(FOREGROUND),
             ));
             if let Some((ref txt, col)) = budget_delta_text {
@@ -6698,7 +6698,7 @@ mod tests {
             controller_fetch_threads: Some(8),
             controller_bg_jobs: Some(4),
             batch_block_count: Some(50_000),
-            target_batch_bytes: Some(85_000_000),
+            target_cells: Some(85_000),
             prefetch_channel_capacity: Some(4),
             ..Default::default()
         };
@@ -6714,8 +6714,8 @@ mod tests {
             text0
         );
         assert!(
-            text0.contains("85MB"),
-            "line 1 should contain budget in MB, got: {}",
+            text0.contains("85K cells"),
+            "line 1 should contain budget in K cells, got: {}",
             text0
         );
 
@@ -6752,7 +6752,7 @@ mod tests {
             controller_fetch_threads: Some(4),
             controller_bg_jobs: Some(8),
             batch_block_count: Some(20_000),
-            target_batch_bytes: Some(120_000_000),
+            target_cells: Some(120_000),
             prefetch_channel_capacity: Some(4),
             ..Default::default()
         };
@@ -6779,7 +6779,7 @@ mod tests {
         // Line 3: budget
         let text2: String = lines[2].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text2.contains("budget") && text2.contains("120MB"),
+            text2.contains("budget") && text2.contains("120K cells"),
             "line 3 should contain budget, got: {}",
             text2
         );
