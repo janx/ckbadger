@@ -511,14 +511,20 @@ fn build_asset_caches_sync(
 ) -> anyhow::Result<(Vec<CachedAssetEntry>, Vec<CachedAssetEntry>)> {
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    // -- Token assets (2 scans: list_tokens + scan_all_token_24h_transfers) --
+    // -- Token assets (list_tokens + scan_all_token_24h_transfers + per-token holder scans) --
     let tokens = state.store.list_tokens()?;
     let transfers_24h_map = state.store.scan_all_token_24h_transfers(now_ms)?;
     let mut token_assets: Vec<CachedAssetEntry> = Vec::with_capacity(tokens.len());
 
     for (hash, info) in &tokens {
+        // Live-scan CF_TOKEN_HOLDERS for the authoritative holder count.
+        // TokenInfo.holders_count is an incremental counter that can drift;
+        // aggregate_token_holder_stats is the single source of truth (same
+        // path used by the token detail endpoint).
+        let (holders_count, _total_supply) = state.store.aggregate_token_holder_stats(hash)?;
+
         // Skip noise tokens: no name/symbol and no holders
-        if info.name.is_none() && info.symbol.is_none() && info.holders_count == 0 {
+        if info.name.is_none() && info.symbol.is_none() && holders_count == 0 {
             continue;
         }
 
@@ -544,7 +550,7 @@ fn build_asset_caches_sync(
             name: info.name.clone(),
             symbol: info.symbol.clone(),
             icon_url: info.icon_url.clone(),
-            holders_count: info.holders_count,
+            holders_count,
             transfers_count: info.transfers_count,
             transfers_24h,
             decimals: info.decimals.map(|d| d as i16),

@@ -9705,7 +9705,7 @@ async fn test_asset_ecosystem_returns_expected_structure() {
                 decimals: Some(8),
                 total_supply: Some(1_000_000),
                 max_supply: None,
-                holders_count: 42,
+                holders_count: 0,
                 first_seen_block: 1,
                 icon_url: None,
                 description: None,
@@ -9713,6 +9713,13 @@ async fn test_asset_ecosystem_returns_expected_structure() {
             },
         )
         .unwrap();
+    // Seed holder entries in CF_TOKEN_HOLDERS so the live scan finds them.
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_token_holder(&[0xAA; 32], &[0x01; 32], 500_000);
+        batch.put_token_holder(&[0xAA; 32], &[0x02; 32], 500_000);
+        batch.commit().unwrap();
+    }
     store
         .put_token_daily_delta(
             &[0xAA; 32],
@@ -9754,7 +9761,7 @@ async fn test_asset_ecosystem_returns_expected_structure() {
     assert_eq!(top_tokens.len(), 1);
     assert_eq!(top_tokens[0]["name"], "TestToken");
     assert_eq!(top_tokens[0]["symbol"], "TT");
-    assert_eq!(top_tokens[0]["holdersCount"], 42);
+    assert_eq!(top_tokens[0]["holdersCount"], 2);
 
     // Verify capacity breakdown has the expected categories
     let breakdown = json["capacityBreakdown"].as_array().unwrap();

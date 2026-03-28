@@ -168,6 +168,7 @@ struct AddressBalanceApiRecord {
 struct NftCollectionDetailApiRecord {
     collection_id: String,
     total_count: i64,
+    #[allow(dead_code)]
     live_count: i64,
     holders_count: i64,
 }
@@ -2860,12 +2861,12 @@ impl Check for NftAssetCollectionConsistency {
                     )],
                 });
             }
-            if collection_detail.live_count != asset.holders_count {
+            if collection_detail.holders_count != asset.holders_count {
                 findings.push(Finding {
                     entity: format!("asset={}", asset.id),
                     details: vec![format!(
-                        "detail liveCount={} != list holdersCount={}",
-                        collection_detail.live_count, asset.holders_count
+                        "detail holdersCount={} != list holdersCount={}",
+                        collection_detail.holders_count, asset.holders_count
                     )],
                 });
             }
