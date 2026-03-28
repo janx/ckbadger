@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help build build-full release check test lint verify
+.PHONY: help build build-full release check test lint verify bench bench-json bench-baseline
 
 help:
 	@echo "Available targets:"
@@ -11,6 +11,9 @@ help:
 	@echo "  make test       Run all tests (Rust + frontend)"
 	@echo "  make lint       Run frontend lint and type-check"
 	@echo "  make verify     Run data integrity verification (requires running API)"
+	@echo "  make bench      Run API performance benchmark (requires running API)"
+	@echo "  make bench-json Run benchmark with JSON output"
+	@echo "  make bench-baseline  Save benchmark baseline to bench-baseline.json"
 
 build:
 	cargo build -p ckbadger
@@ -34,3 +37,12 @@ lint:
 
 verify:
 	cargo run -p ckbadger -- verify --depth fast
+
+bench:
+	cargo run -p ckbadger-bench -- $(BENCH_ARGS)
+
+bench-json:
+	cargo run -p ckbadger-bench -- --json $(BENCH_ARGS)
+
+bench-baseline:
+	cargo run -p ckbadger-bench -- --json --output bench-baseline.json $(BENCH_ARGS)
