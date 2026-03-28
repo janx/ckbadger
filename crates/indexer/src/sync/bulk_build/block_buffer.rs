@@ -25,7 +25,6 @@ use super::binary_facts::RawCkbBlock;
 pub(crate) struct BufferedBlock {
     pub(crate) raw: RawCkbBlock,
     pub(crate) block_bytes: usize,
-    #[allow(dead_code)] // wired in by later cell-based drain task
     pub(crate) cell_count: u64,
 }
 
@@ -43,6 +42,7 @@ pub(crate) struct BlockBufferHandle {
     chunk_rx: Receiver<Result<Vec<BufferedBlock>>>,
     local: VecDeque<BufferedBlock>,
     local_bytes: usize,
+    pub(crate) local_cells: u64,
 }
 
 impl BlockBufferHandle {
@@ -51,6 +51,7 @@ impl BlockBufferHandle {
             chunk_rx,
             local: VecDeque::new(),
             local_bytes: 0,
+            local_cells: 0,
         }
     }
 
@@ -58,6 +59,7 @@ impl BlockBufferHandle {
     fn absorb(&mut self, chunk: Vec<BufferedBlock>) {
         for block in chunk {
             self.local_bytes += block.block_bytes;
+            self.local_cells += block.cell_count;
             self.local.push_back(block);
         }
     }
@@ -113,7 +115,48 @@ impl BlockBufferHandle {
         for _ in 0..count {
             if let Some(block) = self.local.pop_front() {
                 self.local_bytes -= block.block_bytes;
+                self.local_cells -= block.cell_count;
                 result.push(block);
+            }
+        }
+        result
+    }
+
+    /// Drain blocks until the cumulative cell count reaches `target_cells`
+    /// OR cumulative bytes reaches `max_bytes`, whichever comes first.
+    ///
+    /// Always drains at least one block (prevents starvation when a single
+    /// block exceeds both budgets).  Upper-bounded by `MAX_SPAN` blocks
+    /// (see `bottleneck.rs`).  The caller (bottleneck controller) is
+    /// responsible for providing `target_cells` values that naturally
+    /// produce spans >= `MIN_SPAN`.
+    #[allow(dead_code)] // wired in by later build-loop integration task
+    pub(crate) fn drain_by_cells(
+        &mut self,
+        target_cells: u64,
+        max_bytes: u64,
+    ) -> Vec<BufferedBlock> {
+        use crate::sync::bottleneck::MAX_SPAN;
+
+        let max_count = self.local.len().min(MAX_SPAN as usize);
+        let mut result = Vec::with_capacity(max_count.min(256));
+        let mut cum_cells: u64 = 0;
+        let mut cum_bytes: u64 = 0;
+
+        while let Some(block) = self.local.pop_front() {
+            cum_cells += block.cell_count;
+            cum_bytes += block.block_bytes as u64;
+            self.local_bytes -= block.block_bytes;
+            self.local_cells -= block.cell_count;
+            result.push(block);
+
+            // Stop when either budget is met (but always at least one block).
+            if cum_cells >= target_cells || cum_bytes >= max_bytes {
+                break;
+            }
+            // Respect MAX_SPAN.
+            if result.len() >= max_count {
+                break;
             }
         }
         result
@@ -143,6 +186,14 @@ mod tests {
             raw: make_dummy_raw_block(),
             block_bytes: bytes,
             cell_count: 0,
+        }
+    }
+
+    fn make_buffered_block_with_cells(bytes: usize, cells: u64) -> BufferedBlock {
+        BufferedBlock {
+            raw: make_dummy_raw_block(),
+            block_bytes: bytes,
+            cell_count: cells,
         }
     }
 
@@ -246,6 +297,88 @@ mod tests {
         let result = handle.fill_to_budget(1000).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("fetch failed"));
+    }
+
+    #[test]
+    fn drain_by_cells_stops_at_cell_budget() {
+        let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+        drop(tx);
+
+        let mut handle = BlockBufferHandle::new(rx);
+        // 4 blocks: 100 cells each, 1000 bytes each.
+        for _ in 0..4 {
+            let block = make_buffered_block_with_cells(1000, 100);
+            handle.local_cells += block.cell_count;
+            handle.local_bytes += block.block_bytes;
+            handle.local.push_back(block);
+        }
+
+        // Budget: 250 cells, max_bytes very large (not limiting).
+        let drained = handle.drain_by_cells(250, u64::MAX);
+        // Should drain 3 blocks (300 cells >= 250 target), not all 4.
+        assert_eq!(drained.len(), 3);
+        assert_eq!(handle.local_cells, 100);
+        assert_eq!(handle.local_bytes, 1000);
+        assert_eq!(handle.available(), 1);
+    }
+
+    #[test]
+    fn drain_by_cells_stops_at_byte_cap() {
+        let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+        drop(tx);
+
+        let mut handle = BlockBufferHandle::new(rx);
+        // 4 blocks: 10 cells each, 500_000 bytes each.
+        for _ in 0..4 {
+            let block = make_buffered_block_with_cells(500_000, 10);
+            handle.local_cells += block.cell_count;
+            handle.local_bytes += block.block_bytes;
+            handle.local.push_back(block);
+        }
+
+        // Cell budget allows all 4 (40 >= 40), but byte cap limits to 2.
+        let drained = handle.drain_by_cells(40, 1_000_000);
+        assert_eq!(drained.len(), 2);
+        assert_eq!(handle.local_cells, 20);
+        assert_eq!(handle.local_bytes, 1_000_000);
+    }
+
+    #[test]
+    fn drain_by_cells_always_drains_at_least_one() {
+        let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+        drop(tx);
+
+        let mut handle = BlockBufferHandle::new(rx);
+        let block = make_buffered_block_with_cells(1_000_000, 999_999);
+        handle.local_cells += block.cell_count;
+        handle.local_bytes += block.block_bytes;
+        handle.local.push_back(block);
+
+        // Both budgets are 1 — but we always drain at least one block.
+        let drained = handle.drain_by_cells(1, 1);
+        assert_eq!(drained.len(), 1);
+        assert_eq!(handle.local_cells, 0);
+        assert_eq!(handle.local_bytes, 0);
+    }
+
+    #[test]
+    fn local_cells_tracks_absorb_and_drain() {
+        let (tx, rx) = mpsc::channel::<Result<Vec<BufferedBlock>>>(8);
+        drop(tx);
+
+        let mut handle = BlockBufferHandle::new(rx);
+        assert_eq!(handle.local_cells, 0);
+
+        let chunk = vec![
+            make_buffered_block_with_cells(100, 50),
+            make_buffered_block_with_cells(200, 75),
+        ];
+        handle.absorb(chunk);
+        assert_eq!(handle.local_cells, 125);
+
+        let drained = handle.drain(1);
+        assert_eq!(drained.len(), 1);
+        assert_eq!(handle.local_cells, 75);
     }
 
     #[tokio::test]
