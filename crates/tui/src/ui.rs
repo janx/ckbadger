@@ -2139,7 +2139,7 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
 
     // -- Dual-lane timeline --
     if iteration_ms > 0.0 && build_ms > 0.0 {
-        let label_width = 5usize; // "CPU  " or "I/O  "
+        let label_width = 5usize; // "Build" or "I/O  "
         let bar_width = (area.width as usize).saturating_sub(label_width + 12);
 
         if bar_width > 2 {
@@ -2147,14 +2147,18 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
                 ((ms / iteration_ms * bar_width as f64).round() as usize).min(bar_width)
             };
 
-            // Efficiency
-            let eff = (build_ms / iteration_ms * 100.0).min(100.0);
-            let eff_color = if eff >= 90.0 {
+            // Wall clock + dominance indicator
+            let wall_ms = iteration_ms;
+            let io_ms = wait_ms; // prefetch_recv + flush_wait
+            let wall_color = if (1000.0..=3000.0).contains(&wall_ms) {
                 TERMINAL_GREEN
-            } else if eff >= 70.0 {
-                AMBER
             } else {
                 ERROR_RED
+            };
+            let (dom_label, dom_color) = if build_ms > io_ms {
+                ("build>io", TERMINAL_GREEN)
+            } else {
+                ("io>build", AMBER)
             };
 
             // Header
@@ -2164,10 +2168,10 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
                     Style::default().fg(FOREGROUND),
                 ),
                 Span::styled(
-                    format!("{:.0}ms ", iteration_ms),
-                    Style::default().fg(SLATE_500),
+                    format!("wall {:.1}s ", wall_ms / 1000.0),
+                    Style::default().fg(wall_color),
                 ),
-                Span::styled(format!("eff {eff:.0}%"), Style::default().fg(eff_color)),
+                Span::styled(dom_label.to_string(), Style::default().fg(dom_color)),
             ]));
 
             // ── CPU row ──
@@ -2187,7 +2191,7 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
                     (bb.address_reduce_ms.unwrap_or(0.0), CYAN),
                     (bb.activity_stats_ms.unwrap_or(0.0), FOREGROUND),
                 ];
-                let mut spans = vec![Span::styled("CPU  ", Style::default().fg(AMBER))];
+                let mut spans = vec![Span::styled("Build", Style::default().fg(AMBER))];
                 let mut offset = 0.0;
                 for &(dur, color) in sub_phases {
                     let s = col(offset);
@@ -2216,7 +2220,7 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
                 let build_cols = col(build_ms).max(1);
                 let wait_cols = col(iteration_ms).saturating_sub(build_cols);
                 let mut spans = vec![
-                    Span::styled("CPU  ", Style::default().fg(AMBER)),
+                    Span::styled("Build", Style::default().fg(AMBER)),
                     Span::styled("\u{2588}".repeat(build_cols), Style::default().fg(AMBER)),
                 ];
                 if wait_cols > 0 {
