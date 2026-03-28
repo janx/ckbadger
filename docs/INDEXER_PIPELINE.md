@@ -377,7 +377,7 @@ for the full design rationale.
 4. **Inter-batch pipelining**: prefetch worker reads batch N+1 from CKB RocksDB while batch N is being built; fetch uses `std::thread::scope` (not rayon) so blocking RocksDB reads don't starve CPU-bound build work
 5. **RocksDB flush overlap**: materialized rows are sent to a flush channel; a dedicated worker commits them to RocksDB concurrently with the next batch's build
 6. **Parallel block parsing**: `rayon::par_iter` parses blocks within a batch, merges output ranges for global cell indices post-merge
-7. **Bottleneck-driven resource control**: a single `BottleneckController` measures per-batch timing (fetch wait, build CPU, flush wait) and dynamically adjusts `batch_span`, `prefetch_ahead`, `fetch_threads`, and `bg_jobs` toward the current bottleneck stage
+7. **Bottleneck-driven resource control**: a single `BottleneckController` measures per-batch timing (fetch wait, build CPU, flush wait) and dynamically adjusts `target_cells`, `fetch_threads`, and `bg_jobs`. Batch sizing uses overlap-scaled cell targeting: growth toward TARGET (3s) is dampened by pipeline overlap ratio, shrink is at full strength. Drain uses cell count as primary budget with RAM-derived bytes as safety cap
 
 ### Bulk-Build Write Classes
 
@@ -424,17 +424,24 @@ The decoder crate (`crates/dob-decoder/`) handles CKB-VM execution, binary cachi
 
 ### Bulk-Build Performance Infrastructure
 
-- **BottleneckController**: unified resource controller that classifies the current bottleneck
-  (fetch / build / flush) from per-batch timing EMAs and adjusts four knobs each batch.
+- **BottleneckController**: unified resource controller with two independent dimensions.
   Located in `crates/indexer/src/sync/bottleneck.rs`.
 
-  | Knob             | Range              | Fetch-bound | Build-bound | Flush-bound |
-  | ---------------- | ------------------ | ----------- | ----------- | ----------- |
-  | `batch_span`     | [10K, 100K] blocks | grow        | grow        | shrink      |
-  | `prefetch_ahead` | [1, depth] batches | +1          | -1          | -1          |
-  | `fetch_threads`  | [2, cores]         | +25%        | -25%        | -25%        |
-  | `bg_jobs`        | [N/4, N]           | -1          | hold        | +1          |
+  **Dimension 1 — Batch sizing** (overlap-scaled cell targeting):
+  - `target_cells` adjusts toward `TARGET_ITERATION_MS` (3s build time)
+  - Growth is scaled by `overlap = build / (build + waste)`: full when CPU-bound, dampened when I/O-bound
+  - Shrink is always at full strength (reduces non-linear I/O risk)
+  - `drain_by_cells(target_cells, max_batch_bytes)`: cell count is primary budget, RAM-derived bytes is safety cap
+  - No artificial cell/block count bounds — build_ms feedback is self-stabilizing
 
+  **Dimension 2 — I/O resources** (waste classification):
+
+  | Knob            | Range      | Fetch-bound | Build-bound      | Flush-bound |
+  | --------------- | ---------- | ----------- | ---------------- | ----------- |
+  | `fetch_threads` | [2, cores] | +25%        | hold             | -25%        |
+  | `bg_jobs`       | [N/4, N]   | -1          | -1 (if waste<5%) | +1          |
+
+  Proactive L0 compensation: +1 bg_jobs when L0 EMA > 40 without Flush classification.
   Channel depth (prefetch + flush) is derived from system RAM (16GB→2, 32GB→4, 64GB+→8, max 8).
 
 - **BackgroundSampler**: periodic background thread that samples RocksDB stats and system metrics
