@@ -20,8 +20,9 @@ on:
           - full
           - wrk
           - all
-  schedule:
-    - cron: '0 2 * * *'
+  # Disabled: wastes ~1 min/day when PERF_API_URL is not set
+  # schedule:
+  #   - cron: '0 2 * * *'
 
 jobs:
   perf-smoke:
