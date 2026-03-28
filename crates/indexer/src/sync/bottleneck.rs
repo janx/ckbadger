@@ -256,7 +256,12 @@ impl BottleneckController {
         // the batch is supply-limited (prefetch rate or max_batch_bytes) and
         // growing target further is pointless.  Cap at 2× actual to keep
         // headroom for supply recovery without runaway.
-        if signals.actual_cells > 0 {
+        //
+        // Only apply when overlap is BELOW target.  When overlap is healthy,
+        // low actual_cells reflects sparse chain data (few cells per block),
+        // not a pipeline delivery bottleneck.  Capping in that case creates
+        // a death spiral: tiny target → tiny drain → tiny actual → re-cap.
+        if signals.actual_cells > 0 && overlap < OVERLAP_TARGET {
             let ceiling = signals.actual_cells.saturating_mul(2);
             if self.target_cells > ceiling {
                 self.target_cells = ceiling;
@@ -891,17 +896,17 @@ mod tests {
     }
 
     #[test]
-    fn supply_cap_prevents_runaway() {
-        // When overlap is 100% but actual_cells is small (supply-limited),
-        // target_cells should be capped at 2× actual, not grow to infinity.
+    fn supply_cap_prevents_runaway_when_overlap_low() {
+        // When overlap is below target and actual_cells is small (genuinely
+        // supply-limited), target_cells should be capped at 2× actual.
         let mut ctrl = BottleneckController::new(500_000, 12, 8, 32 * GB);
 
         ctrl.observe(&healthy_signals()); // warmup
 
-        // Perfect overlap, but only 100K cells actually delivered each batch.
+        // Recv-dominated waste (overlap ~50%), only 100K cells delivered.
         for _ in 0..20 {
             ctrl.observe(&BatchSignals {
-                prefetch_recv_ms: 0.0,
+                prefetch_recv_ms: 500.0,
                 build_ms: 500.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
@@ -913,6 +918,35 @@ mod tests {
         assert!(
             ctrl.target_cells <= 200_000,
             "supply cap should prevent runaway: target_cells={} should be <= 200000",
+            ctrl.target_cells
+        );
+    }
+
+    #[test]
+    fn supply_cap_skipped_when_overlap_healthy() {
+        // When overlap is above target, low actual_cells reflects sparse data
+        // (few cells per block), not a pipeline bottleneck.  The supply cap
+        // must NOT apply — otherwise it creates a death spiral in low-density
+        // chain regions.
+        let mut ctrl = BottleneckController::new(500_000, 12, 8, 32 * GB);
+
+        ctrl.observe(&healthy_signals()); // warmup
+
+        // Perfect overlap, but very few cells per batch (sparse blocks).
+        for _ in 0..20 {
+            ctrl.observe(&BatchSignals {
+                prefetch_recv_ms: 0.0,
+                build_ms: 500.0,
+                flush_wait_ms: 0.0,
+                l0_files: 5,
+                actual_cells: 1,
+            });
+        }
+
+        // target_cells should grow freely — NOT be clamped to 2.
+        assert!(
+            ctrl.target_cells > 1000,
+            "supply cap should not apply with healthy overlap: target_cells={} should be > 1000",
             ctrl.target_cells
         );
     }
