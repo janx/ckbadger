@@ -2,10 +2,15 @@
 //
 // Two independent control dimensions:
 //
-//   1. BATCH SIZE — governed by build_ms vs target (absolute time).
+//   1. BATCH SIZE — overlap-scaled build_ms targeting.
 //      The unit is cells, not bytes.  Cell count is a better proxy for
 //      CPU cost because cell density varies ~25x across CKB block ranges.
-//      build < target → grow cells.  build > target → shrink cells.
+//
+//      overlap = build / (build + waste) measures pipeline efficiency.
+//      Growth toward TARGET_ITERATION_MS is scaled by overlap:
+//        - overlap ≈ 1 (CPU-bound): full growth to amortize overhead
+//        - overlap ≈ 0 (I/O-bound): growth dampened (sizing can't fix I/O)
+//      Shrink is always at full strength (reduces non-linear I/O risk).
 //
 //   2. I/O RESOURCES — governed by waste classification (ratio).
 //      Waste = recv_wait + flush_wait (idle time, ideally zero).
@@ -13,10 +18,10 @@
 //      Classification identifies which waste source dominates and shifts
 //      I/O knobs (fetch_threads, bg_jobs) accordingly.
 //
-//   Dimension  │ Signal            │ Knobs
-//   ───────────│───────────────────│────────────────────────────────
-//   Batch size │ build_ms          │ target_cells
-//   I/O        │ waste composition │ fetch_threads, bg_jobs
+//   Dimension  │ Signal              │ Knobs
+//   ───────────│─────────────────────│────────────────────────────────
+//   Batch size │ build_ms + overlap  │ target_cells
+//   I/O        │ waste composition   │ fetch_threads, bg_jobs
 //
 // Key design principle: fetch (CKB RocksDB reads via std::thread::scope)
 // does NOT compete with build (CPU via rayon) for resources.  Therefore
@@ -207,17 +212,25 @@ impl BottleneckController {
         self.wait_ema = ema(self.wait_ema, signals.flush_wait_ms);
         self.l0_ema = ema(self.l0_ema, signals.l0_files as f64);
 
-        // ── Batch size adjustment: build_ms vs target ──
+        // ── Batch size adjustment: overlap-scaled build_ms targeting ──
         //
-        // Sizing targets build_ms only.  recv_wait and flush_wait are
-        // waste for I/O classification, not batch sizing.  This separates
-        // "how big should each batch be" (CPU cost) from "which I/O
-        // resource is starved" (waste ratio).
-        if self.build_ema > 1.0 {
-            let ratio = TARGET_ITERATION_MS / self.build_ema;
-            let factor = ratio.clamp(CELLS_STEP_MIN, CELLS_STEP_MAX);
-            self.target_cells = ((self.target_cells as f64 * factor) as u64).max(1);
-        }
+        // The optimal build_ms balances overhead amortization (grow) against
+        // pipeline overlap (don't grow past what I/O can sustain).
+        //
+        // overlap = fraction of iteration spent on useful work (0..1).
+        // When overlap is high (CPU-bound): full adjustment toward TARGET.
+        // When overlap is low (I/O-bound): growth dampened, shrink at full
+        // strength.  This prevents runaway growth when I/O-limited while
+        // still allowing overhead amortization.
+        let overlap = self.build_ema / (self.build_ema + self.recv_ema + self.wait_ema);
+        let ratio = TARGET_ITERATION_MS / self.build_ema;
+        let factor = if ratio >= 1.0 {
+            1.0 + (ratio - 1.0) * overlap // grow: dampened by overlap
+        } else {
+            ratio // shrink: full strength
+        };
+        let factor = factor.clamp(CELLS_STEP_MIN, CELLS_STEP_MAX);
+        self.target_cells = ((self.target_cells as f64 * factor) as u64).max(1);
 
         // ── I/O resource adjustment: waste classification ──
         //
@@ -482,66 +495,67 @@ mod tests {
     }
 
     #[test]
-    fn flush_wait_does_not_affect_target_cells() {
-        // Two controllers: same build_ms, different flush_wait_ms.
-        // target_cells should converge to same value since sizing
-        // only looks at build_ms.
-        let mut no_flush = BottleneckController::new(200_000, 12, 8, 32 * GB);
-        let mut with_flush = BottleneckController::new(200_000, 12, 8, 32 * GB);
+    fn waste_dampens_target_cells_growth() {
+        // Two controllers: same build_ms below target, one with waste.
+        // The one with waste should grow SLOWER (overlap dampens growth).
+        let mut no_waste = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        let mut with_waste = BottleneckController::new(200_000, 12, 8, 32 * GB);
 
-        no_flush.observe(&healthy_signals()); // warmup
-        with_flush.observe(&healthy_signals()); // warmup
+        no_waste.observe(&healthy_signals()); // warmup
+        with_waste.observe(&healthy_signals()); // warmup
 
         for _ in 0..20 {
-            no_flush.observe(&BatchSignals {
+            no_waste.observe(&BatchSignals {
                 prefetch_recv_ms: 0.0,
-                build_ms: 2000.0,
+                build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
             });
-            with_flush.observe(&BatchSignals {
+            with_waste.observe(&BatchSignals {
                 prefetch_recv_ms: 0.0,
-                build_ms: 2000.0,
+                build_ms: 1000.0,
+                flush_wait_ms: 5000.0,
+                l0_files: 5,
+            });
+        }
+
+        assert!(
+            no_waste.target_cells > with_waste.target_cells,
+            "waste should dampen growth: no_waste={} should be > with_waste={}",
+            no_waste.target_cells,
+            with_waste.target_cells
+        );
+    }
+
+    #[test]
+    fn waste_does_not_dampen_shrink() {
+        // When build_ms > TARGET, shrink should be at full strength
+        // regardless of waste level.
+        let mut no_waste = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        let mut with_waste = BottleneckController::new(200_000, 12, 8, 32 * GB);
+
+        no_waste.observe(&healthy_signals()); // warmup
+        with_waste.observe(&healthy_signals()); // warmup
+
+        for _ in 0..20 {
+            no_waste.observe(&BatchSignals {
+                prefetch_recv_ms: 0.0,
+                build_ms: 8000.0,
+                flush_wait_ms: 0.0,
+                l0_files: 5,
+            });
+            with_waste.observe(&BatchSignals {
+                prefetch_recv_ms: 0.0,
+                build_ms: 8000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 5,
             });
         }
 
         assert_eq!(
-            no_flush.target_cells, with_flush.target_cells,
-            "flush_wait should not affect target_cells: no_flush={} vs with_flush={}",
-            no_flush.target_cells, with_flush.target_cells
-        );
-    }
-
-    #[test]
-    fn recv_wait_does_not_affect_target_cells() {
-        // Two controllers: same build_ms, different recv_wait_ms.
-        let mut no_recv = BottleneckController::new(200_000, 12, 8, 32 * GB);
-        let mut with_recv = BottleneckController::new(200_000, 12, 8, 32 * GB);
-
-        no_recv.observe(&healthy_signals()); // warmup
-        with_recv.observe(&healthy_signals()); // warmup
-
-        for _ in 0..20 {
-            no_recv.observe(&BatchSignals {
-                prefetch_recv_ms: 0.0,
-                build_ms: 2000.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
-            with_recv.observe(&BatchSignals {
-                prefetch_recv_ms: 5000.0,
-                build_ms: 2000.0,
-                flush_wait_ms: 0.0,
-                l0_files: 5,
-            });
-        }
-
-        assert_eq!(
-            no_recv.target_cells, with_recv.target_cells,
-            "recv_wait should not affect target_cells: no_recv={} vs with_recv={}",
-            no_recv.target_cells, with_recv.target_cells
+            no_waste.target_cells, with_waste.target_cells,
+            "shrink should be same strength regardless of waste: no_waste={} vs with_waste={}",
+            no_waste.target_cells, with_waste.target_cells
         );
     }
 
