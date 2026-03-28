@@ -2511,6 +2511,22 @@ fn controller_panel_lines(
         _ => String::new(),
     };
 
+    // Fill ratio: actual cells vs target cells (supply cap visibility)
+    let fill_text = match (bb.facts_cell_count, bb.target_cells) {
+        (Some(actual), Some(target)) if target > 0 => {
+            let fill_pct = (actual as f64 / target as f64 * 100.0).min(999.0);
+            let fill_color = if fill_pct >= 80.0 {
+                TERMINAL_GREEN
+            } else if fill_pct >= 50.0 {
+                AMBER
+            } else {
+                ERROR_RED
+            };
+            Some((format!("{:.0}%", fill_pct), fill_color))
+        }
+        _ => None,
+    };
+
     // Flush channel pressure: pending/capacity
     let flush_text = match (bb.flush_channel_pending, bb.flush_channel_capacity) {
         (Some(pending), Some(cap)) if cap > 0 => {
@@ -2567,6 +2583,12 @@ fn controller_panel_lines(
             if let Some((ref txt, col)) = budget_delta_text {
                 spans1.push(Span::styled(format!(" {}", txt), Style::default().fg(col)));
             }
+        }
+        if let Some((ref txt, col)) = fill_text {
+            spans1.push(Span::styled(
+                format!("  fill {}", txt),
+                Style::default().fg(col),
+            ));
         }
         // Line 2: bottleneck badge + knobs + L0 + flush
         let mut spans2 = vec![
@@ -2651,6 +2673,12 @@ fn controller_panel_lines(
             budget_spans.push(Span::styled(
                 format!("  {}", density_text),
                 Style::default().fg(SLATE_500),
+            ));
+        }
+        if let Some((ref txt, col)) = fill_text {
+            budget_spans.push(Span::styled(
+                format!("  fill {}", txt),
+                Style::default().fg(col),
             ));
         }
         let line3 = Line::from(budget_spans);
