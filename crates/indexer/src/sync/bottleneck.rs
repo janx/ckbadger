@@ -35,6 +35,7 @@ const MIN_BATCH_BYTES: u64 = 1_000_000; // 1 MB
 const ABSOLUTE_MAX_BATCH_BYTES: u64 = 8_000_000_000; // 8 GB ceiling
 
 // Block count bounds (used by the build loop for clamping drain count)
+#[allow(dead_code)] // Referenced in drain_by_cells doc comment; kept as documented lower bound
 pub(crate) const MIN_SPAN: u64 = 500;
 pub(crate) const MAX_SPAN: u64 = 500_000;
 
@@ -124,7 +125,6 @@ pub(crate) struct BatchSignals {
 #[derive(Debug, Clone)]
 pub(crate) struct ControllerOutput {
     pub target_cells: u64,
-    #[allow(dead_code)] // Used by build loop after Task 4 wires cell-based drain
     pub max_batch_bytes: u64,
     pub fetch_threads: u32,
     pub bg_jobs: i32,
@@ -294,7 +294,6 @@ impl BottleneckController {
         Bottleneck::Fetch
     }
 
-    #[allow(dead_code)] // Used by build loop after Task 4 wires cell-based drain
     pub(crate) fn target_cells(&self) -> u64 {
         self.target_cells
     }

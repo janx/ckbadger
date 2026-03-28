@@ -109,6 +109,7 @@ impl BlockBufferHandle {
     }
 
     /// Take up to `n` blocks from the front of the local buffer.
+    #[allow(dead_code)] // Used by tests; kept as general-purpose drain alternative
     pub(crate) fn drain(&mut self, n: usize) -> Vec<BufferedBlock> {
         let count = n.min(self.local.len());
         let mut result = Vec::with_capacity(count);
@@ -130,7 +131,6 @@ impl BlockBufferHandle {
     /// (see `bottleneck.rs`).  The caller (bottleneck controller) is
     /// responsible for providing `target_cells` values that naturally
     /// produce spans >= `MIN_SPAN`.
-    #[allow(dead_code)] // wired in by later build-loop integration task
     pub(crate) fn drain_by_cells(
         &mut self,
         target_cells: u64,

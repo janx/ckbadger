@@ -128,7 +128,7 @@ impl BulkBuildEngine {
             .map(|n| n.get().max(2) as u32)
             .unwrap_or(4);
         let mut controller = BottleneckController::new(
-            100_000_000, // 100 MB initial target
+            200_000, // 200K initial cell target
             max_fetch_threads,
             mem_profile.max_background_jobs,
             mem_profile.system_ram_bytes,
@@ -184,9 +184,20 @@ impl BulkBuildEngine {
                 break;
             }
 
-            // Fill buffer to the controller's bytes budget.
+            // Fill buffer — use bytes estimate for prefetch fill heuristic.
+            // drain_by_cells does precise truncation; fill just needs enough data.
+            let fill_bytes_estimate = {
+                let density = buffer.density();
+                if density > 0.0 {
+                    // Rough: assume ~6 cells/block average, scale bytes from cell target.
+                    let blocks_est = controller.target_cells() as f64 / 6.0;
+                    (blocks_est * density) as u64
+                } else {
+                    100_000_000 // 100 MB fallback for first fill
+                }
+            };
             let recv_started = Instant::now();
-            match buffer.fill_to_budget(controller.max_batch_bytes()).await {
+            match buffer.fill_to_budget(fill_bytes_estimate).await {
                 Ok(true) => {}
                 Ok(false) => {
                     info!("block buffer exhausted, ending bulk build loop");
@@ -198,15 +209,9 @@ impl BulkBuildEngine {
             }
             let prefetch_recv_elapsed = recv_started.elapsed();
 
-            // Determine how many blocks to drain based on bytes budget.
-            let density = buffer.density();
-            let drain_count = if density > 0.0 {
-                let raw = (controller.max_batch_bytes() as f64 / density) as u64;
-                raw.clamp(bottleneck::MIN_SPAN, bottleneck::MAX_SPAN) as usize
-            } else {
-                bottleneck::MIN_SPAN as usize
-            };
-            let drained = buffer.drain(drain_count);
+            // Drain by cell count with byte safety cap.
+            let drained =
+                buffer.drain_by_cells(controller.target_cells(), controller.max_batch_bytes());
             let batch_block_count = drained.len() as u64;
             let batch_bytes: u64 = drained.iter().map(|b| b.block_bytes as u64).sum();
 
@@ -434,6 +439,7 @@ impl BulkBuildEngine {
                 tracing::debug!(
                     bottleneck = %output.bottleneck,
                     target_cells = output.target_cells,
+                    max_batch_bytes = output.max_batch_bytes,
                     fetch_threads = output.fetch_threads,
                     bg_jobs = output.bg_jobs,
                     recv_ema = format!("{:.1}", output.recv_ema),
