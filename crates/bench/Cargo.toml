@@ -1,0 +1,18 @@
+[package]
+name = "ckbadger-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ckbadger-bench"
+path = "src/main.rs"
+
+[dependencies]
+reqwest = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }

@@ -11,6 +11,7 @@ members = [
     "crates/ipc",
     "crates/cli",
     "crates/dob-decoder",
+    "crates/bench",
 ]
 
 [workspace.package]
