@@ -3,6 +3,8 @@ mod discovery;
 mod metrics;
 #[allow(dead_code)]
 mod registry;
+#[allow(dead_code)]
+mod runner;
 
 use std::time::Duration;
 
