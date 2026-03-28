@@ -121,6 +121,9 @@ pub(crate) struct BatchSignals {
     pub build_ms: f64,
     pub flush_wait_ms: f64,
     pub l0_files: u64,
+    /// Actual cells consumed by the batch (from drain_by_cells).
+    /// Used to detect supply-limited batches and prevent unbounded target growth.
+    pub actual_cells: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -245,7 +248,14 @@ impl BottleneckController {
             }
         };
         let factor = factor.clamp(STEP_FLOOR, STEP_CEIL);
-        self.target_cells = ((self.target_cells as f64 * factor) as u64).max(1);
+        let raw = ((self.target_cells as f64 * factor) as u64).max(1);
+        // Cap target to 4× actual cells consumed.  Prevents unbounded growth
+        // when supply-limited (actual << target): the controller would keep
+        // growing because timing signals don't change when the batch can't
+        // fill the budget.  When demand-limited (actual ≈ target), the cap
+        // is 4× target — well above the max factor of 2× — so it never binds.
+        let supply_cap = signals.actual_cells.saturating_mul(4).max(1);
+        self.target_cells = raw.min(supply_cap);
 
         // ── I/O resource adjustment: waste classification ──
         //
@@ -385,6 +395,7 @@ mod tests {
             build_ms: build,
             flush_wait_ms: flush,
             l0_files: 5,
+            actual_cells: u64::MAX, // demand-limited (cap never binds)
         }
     }
 
@@ -566,6 +577,7 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 3000.0,
                 l0_files: 60,
+                actual_cells: u64::MAX,
             });
         }
 
@@ -613,6 +625,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
+                actual_cells: u64::MAX,
             });
         }
         assert!(ctrl.bg_jobs <= 4);
@@ -632,6 +645,7 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 60,
+                actual_cells: u64::MAX,
             });
         }
 
@@ -706,6 +720,7 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
+                actual_cells: u64::MAX,
             });
         }
         assert!(
@@ -766,5 +781,85 @@ mod tests {
     fn max_batch_bytes_derived_from_ram() {
         let ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         assert_eq!(ctrl.max_batch_bytes(), 2 * GB);
+    }
+
+    // ── Supply-feedback tests ─────────────────────────────────────────
+
+    #[test]
+    fn supply_limited_caps_target_cells() {
+        // Reproduces the bug: build in-band, zero waste, but prefetch
+        // can only supply 50K cells — target must not grow to u64::MAX.
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+
+        let supply_limited = BatchSignals {
+            prefetch_recv_ms: 0.0,
+            build_ms: 2200.0,
+            flush_wait_ms: 0.0,
+            l0_files: 5,
+            actual_cells: 50_000, // supply-limited: much less than target
+        };
+
+        ctrl.observe(&supply_limited); // warmup
+        for _ in 0..100 {
+            ctrl.observe(&supply_limited);
+        }
+
+        // With 4× supply cap, target should be at most 4 * 50_000 = 200_000.
+        assert!(
+            ctrl.target_cells <= 200_000,
+            "supply-limited target must be capped: {} should be <= 200_000",
+            ctrl.target_cells
+        );
+    }
+
+    #[test]
+    fn supply_limited_recovers_from_diverged_target() {
+        // If target has already diverged (e.g. u64::MAX), one batch with
+        // actual_cells feedback should snap it back.
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        ctrl.target_cells = u64::MAX; // simulate already-diverged state
+
+        let supply_limited = BatchSignals {
+            prefetch_recv_ms: 0.0,
+            build_ms: 2200.0,
+            flush_wait_ms: 0.0,
+            l0_files: 5,
+            actual_cells: 100_000,
+        };
+
+        ctrl.observe(&supply_limited); // warmup
+        ctrl.observe(&supply_limited); // first real batch
+
+        assert!(
+            ctrl.target_cells <= 400_000,
+            "diverged target must snap back: {} should be <= 400_000 (4 × 100K)",
+            ctrl.target_cells
+        );
+    }
+
+    #[test]
+    fn demand_limited_cap_does_not_bind() {
+        // When actual ≈ target (demand-limited), the 4× cap should not
+        // interfere with normal wall-clock / overlap growth.
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+
+        // wall = 500 < 1000 → grow. actual_cells = target so cap = 4× target.
+        // factor ≤ 2.0 < 4.0 → cap never binds.
+        let demand_limited = BatchSignals {
+            prefetch_recv_ms: 200.0,
+            build_ms: 300.0,
+            flush_wait_ms: 0.0,
+            l0_files: 5,
+            actual_cells: 200_000, // matches initial target
+        };
+
+        ctrl.observe(&demand_limited); // warmup
+        ctrl.observe(&demand_limited);
+
+        assert!(
+            ctrl.target_cells > 200_000,
+            "demand-limited should still grow normally: {}",
+            ctrl.target_cells
+        );
     }
 }

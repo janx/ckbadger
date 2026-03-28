@@ -103,7 +103,10 @@ All subcommands accept `-C <path>` to specify work directory (default: current d
 
 `ckbadger tui` is pretty fun — watching the stats while CKBadger bulk-syncs is one of my favourite entertainments, see if you can identify the bottlenecks on your machine.
 
-For a fresh db, `ckbadger run` will kick off bulk-sync mode, read data from the local ckb node and build indexes. It takes only ~23mins on average in my dev environment (AMD Ryzen AI 9 HX 370, 96GB mem, btrfs+LUKS on SSD), it's IO-bound here because of LUKS encryption.
+For a fresh db, `ckbadger run` will kick off bulk-sync mode, read data from the local ckb node and build indexes. The time a full sync will take depends:
+
+- ~23mins on a dev machine, AMD Ryzen AI 9 HX 370, 96GB mem, btrfs+LUKS on NVMe SSD.
+- ~5hrs on an aws ec2 instance, 8 vCPU @ 2.5GHz, 30GB mem, XFS on 640 NVMe EBS.
 
 ### Work Directory Structure
 
