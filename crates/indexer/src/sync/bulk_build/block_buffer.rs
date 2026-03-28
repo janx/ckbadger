@@ -18,13 +18,15 @@ use super::binary_facts::RawCkbBlock;
 // BufferedBlock
 // ---------------------------------------------------------------------------
 
-/// A prefetched CKB block paired with its pre-computed serialized byte size.
+/// A prefetched CKB block paired with pre-computed size metrics.
 ///
-/// `block_bytes` is computed once at prefetch time so the build loop can make
-/// bytes-budget decisions without re-serializing.
+/// `block_bytes` and `cell_count` are computed once at prefetch time so the
+/// build loop can make budget decisions without re-serializing or re-counting.
 pub(crate) struct BufferedBlock {
     pub(crate) raw: RawCkbBlock,
     pub(crate) block_bytes: usize,
+    #[allow(dead_code)] // wired in by later cell-based drain task
+    pub(crate) cell_count: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +142,7 @@ mod tests {
         BufferedBlock {
             raw: make_dummy_raw_block(),
             block_bytes: bytes,
+            cell_count: 0,
         }
     }
 

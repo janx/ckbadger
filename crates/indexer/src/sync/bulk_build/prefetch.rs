@@ -28,6 +28,20 @@ pub(crate) fn block_bytes_for_raw(raw: &RawCkbBlock) -> usize {
     raw.block.data().total_size()
 }
 
+/// Count output cells in a raw CKB block using molecule header access.
+///
+/// Each `tx.outputs().len()` is O(1) — reads the molecule vector header
+/// (item count in first 4 bytes), no deserialization of actual outputs.
+/// Computed once at prefetch time so the build loop can make cell-budget
+/// decisions without parsing.
+pub(crate) fn cell_count_for_raw(raw: &RawCkbBlock) -> u64 {
+    raw.block
+        .transactions()
+        .iter()
+        .map(|tx| tx.outputs().len() as u64)
+        .sum()
+}
+
 #[derive(Debug)]
 pub(crate) enum PrefetchExitReason {
     Completed,
@@ -114,7 +128,12 @@ impl PrefetchChannelHandle {
                         .into_iter()
                         .map(|raw| {
                             let block_bytes = block_bytes_for_raw(&raw);
-                            BufferedBlock { raw, block_bytes }
+                            let cell_count = cell_count_for_raw(&raw);
+                            BufferedBlock {
+                                raw,
+                                block_bytes,
+                                cell_count,
+                            }
                         })
                         .collect();
                     // Update density EMA from actual chunk data.
@@ -233,6 +252,7 @@ mod tests {
         let chunk = vec![BufferedBlock {
             raw: make_dummy_raw_block(),
             block_bytes: 100,
+            cell_count: 0,
         }];
         result_tx.send(Ok(chunk)).await.unwrap();
 
@@ -240,6 +260,37 @@ mod tests {
         let received = rx.recv().await.unwrap().unwrap();
         assert_eq!(received.len(), 1);
         assert_eq!(received[0].block_bytes, 100);
+    }
+
+    #[test]
+    fn cell_count_for_raw_counts_outputs() {
+        use ckb_types::core::TransactionBuilder;
+        use ckb_types::packed::CellOutputBuilder;
+        use ckb_types::prelude::Builder;
+
+        let output = CellOutputBuilder::default().build();
+        let tx1 = TransactionBuilder::default()
+            .outputs(vec![output.clone(); 3])
+            .outputs_data(vec![ckb_types::packed::Bytes::default(); 3])
+            .build();
+        let tx2 = TransactionBuilder::default()
+            .outputs(vec![output; 2])
+            .outputs_data(vec![ckb_types::packed::Bytes::default(); 2])
+            .build();
+        let block = ckb_types::core::BlockBuilder::default()
+            .transactions(vec![tx1, tx2])
+            .build();
+        let raw = RawCkbBlock {
+            block,
+            cycles: vec![],
+        };
+        assert_eq!(cell_count_for_raw(&raw), 5);
+    }
+
+    #[test]
+    fn cell_count_for_raw_empty_block_is_zero() {
+        let raw = make_dummy_raw_block();
+        assert_eq!(cell_count_for_raw(&raw), 0);
     }
 
     #[tokio::test]
