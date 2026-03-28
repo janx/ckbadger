@@ -128,7 +128,7 @@ impl BulkBuildEngine {
             .map(|n| n.get().max(2) as u32)
             .unwrap_or(4);
         let mut controller = BottleneckController::new(
-            200_000, // 200K initial cell target
+            500_000, // 500K initial cell target
             max_fetch_threads,
             mem_profile.max_background_jobs,
             mem_profile.system_ram_bytes,

@@ -127,19 +127,14 @@ impl BlockBufferHandle {
     /// OR cumulative bytes reaches `max_bytes`, whichever comes first.
     ///
     /// Always drains at least one block (prevents starvation when a single
-    /// block exceeds both budgets).  Upper-bounded by `MAX_SPAN` blocks
-    /// (see `bottleneck.rs`).  The caller (bottleneck controller) is
-    /// responsible for providing `target_cells` values that naturally
-    /// produce spans >= `MIN_SPAN`.
+    /// block exceeds both budgets).  No block-count cap — `max_bytes`
+    /// (RAM-derived) is the memory safety ceiling.
     pub(crate) fn drain_by_cells(
         &mut self,
         target_cells: u64,
         max_bytes: u64,
     ) -> Vec<BufferedBlock> {
-        use crate::sync::bottleneck::MAX_SPAN;
-
-        let max_count = self.local.len().min(MAX_SPAN as usize);
-        let mut result = Vec::with_capacity(max_count.min(256));
+        let mut result = Vec::with_capacity(256);
         let mut cum_cells: u64 = 0;
         let mut cum_bytes: u64 = 0;
 
@@ -152,10 +147,6 @@ impl BlockBufferHandle {
 
             // Stop when either budget is met (but always at least one block).
             if cum_cells >= target_cells || cum_bytes >= max_bytes {
-                break;
-            }
-            // Respect MAX_SPAN.
-            if result.len() >= max_count {
                 break;
             }
         }

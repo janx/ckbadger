@@ -26,18 +26,16 @@
 
 const EMA_ALPHA: f64 = 0.5;
 
-// Cell count bounds (primary sizing dimension)
-const MIN_TARGET_CELLS: u64 = 10_000;
-const ABSOLUTE_MAX_TARGET_CELLS: u64 = 5_000_000;
+// No cell count bounds — build_ms feedback is a self-stabilizing loop
+// (high build_ms → shrink cells → lower build_ms → stop shrinking),
+// and max_batch_bytes provides the memory safety ceiling.
 
 // Batch bytes bounds (secondary safety cap — NOT dynamically adjusted)
 const MIN_BATCH_BYTES: u64 = 1_000_000; // 1 MB
 const ABSOLUTE_MAX_BATCH_BYTES: u64 = 8_000_000_000; // 8 GB ceiling
 
-// Block count bounds (used by the build loop for clamping drain count)
-#[allow(dead_code)] // Referenced in drain_by_cells doc comment; kept as documented lower bound
-pub(crate) const MIN_SPAN: u64 = 500;
-pub(crate) const MAX_SPAN: u64 = 500_000;
+// No block-count bounds — drain_by_cells uses target_cells + max_batch_bytes
+// as the two budget dimensions.  Block count is an output, not a control knob.
 
 // Channel depth bounds (batches).  Max is computed from system RAM at
 // startup to cap total buffered data.  Each slot holds one batch of raw
@@ -149,7 +147,6 @@ pub(crate) struct BottleneckController {
     bg_jobs: i32,
 
     // Bounds
-    max_target_cells: u64,
     max_batch_bytes: u64,
     max_fetch_threads: u32,
     min_bg_jobs: i32,
@@ -179,11 +176,10 @@ impl BottleneckController {
             wait_ema: 0.0,
             l0_ema: 0.0,
 
-            target_cells: initial_target_cells.clamp(MIN_TARGET_CELLS, ABSOLUTE_MAX_TARGET_CELLS),
+            target_cells: initial_target_cells.max(1),
             fetch_threads: max_fetch_threads,
             bg_jobs: max_bg_jobs,
 
-            max_target_cells: ABSOLUTE_MAX_TARGET_CELLS,
             max_batch_bytes,
             max_fetch_threads,
             min_bg_jobs,
@@ -220,8 +216,7 @@ impl BottleneckController {
         if self.build_ema > 1.0 {
             let ratio = TARGET_ITERATION_MS / self.build_ema;
             let factor = ratio.clamp(CELLS_STEP_MIN, CELLS_STEP_MAX);
-            self.target_cells = ((self.target_cells as f64 * factor) as u64)
-                .clamp(MIN_TARGET_CELLS, self.max_target_cells);
+            self.target_cells = ((self.target_cells as f64 * factor) as u64).max(1);
         }
 
         // ── I/O resource adjustment: waste classification ──
@@ -667,12 +662,12 @@ mod tests {
     }
 
     #[test]
-    fn target_cells_bounds_enforced() {
+    fn target_cells_never_reaches_zero() {
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
 
         ctrl.observe(&healthy_signals()); // warmup
 
-        // Very high build_ms → shrink aggressively, should hit MIN_TARGET_CELLS
+        // Very high build_ms → shrink aggressively, should never reach zero.
         for _ in 0..100 {
             ctrl.observe(&BatchSignals {
                 prefetch_recv_ms: 0.0,
@@ -683,8 +678,8 @@ mod tests {
         }
 
         assert!(
-            ctrl.target_cells >= MIN_TARGET_CELLS,
-            "target_cells should not go below MIN: {}",
+            ctrl.target_cells >= 1,
+            "target_cells must never be zero: {}",
             ctrl.target_cells
         );
     }
