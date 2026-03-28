@@ -72,13 +72,16 @@ const FLUSH_PCT_THRESHOLD: f64 = 0.4;
 // catch up — without suppressing the pipeline (no Flush classification).
 const FLUSH_L0_THRESHOLD: f64 = 40.0;
 
-// Pipeline overlap target.  The controller adjusts target_cells to keep
-// overlap (build / iteration) at or above this level.  When overlap is
-// below target, waste composition determines direction: recv-dominated
-// waste → grow (give prefetch more time), flush-dominated → shrink
-// (reduce I/O pressure).  When overlap is above target, grow to
-// amortize per-batch overhead, proportional to headroom above target.
-const OVERLAP_TARGET: f64 = 0.9;
+// Batch wall-clock target range (ms).  The controller keeps batch
+// iteration time inside this band.  Below MIN → grow target_cells;
+// above MAX → shrink.  Inside the band → optimize build/IO overlap.
+const WALL_CLOCK_MIN: f64 = 1000.0;
+const WALL_CLOCK_MAX: f64 = 3000.0;
+
+// Overlap growth gain.  When build > IO inside the wall-clock band,
+// target_cells grows by OVERLAP_GAIN × (build − IO) / wall_clock.
+// 0.5 = moderate: converges toward build ≈ IO in ~4–6 batches.
+const OVERLAP_GAIN: f64 = 0.5;
 
 // Per-step safety bounds on target_cells adjustment factor.
 const STEP_FLOOR: f64 = 0.5;
@@ -129,9 +132,6 @@ pub(crate) struct BatchSignals {
     pub build_ms: f64,
     pub flush_wait_ms: f64,
     pub l0_files: u64,
-    /// Cells actually drained from the buffer (may be less than target_cells
-    /// when supply-limited by prefetch rate or bytes-limited by max_batch_bytes).
-    pub actual_cells: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -221,52 +221,42 @@ impl BottleneckController {
         self.wait_ema = ema(self.wait_ema, signals.flush_wait_ms);
         self.l0_ema = ema(self.l0_ema, signals.l0_files as f64);
 
-        // ── Batch size adjustment: overlap-driven with waste-weighted direction ──
+        // ── Batch size: wall-clock band + build/IO overlap ──────────
         //
-        // overlap = build / (build + waste).  Measures pipeline efficiency.
+        // Priority 1 (override): keep wall clock in [WALL_CLOCK_MIN, WALL_CLOCK_MAX].
+        //   Below band → grow to fill time budget.
+        //   Above band → shrink to fit time budget.
         //
-        // Scenario 1 (overlap < target): improve overlap.
-        //   recv-dominated waste → grow (longer build gives prefetch more time)
-        //   flush-dominated waste → shrink (less data reduces I/O pressure)
-        //   mixed → geometric blend by waste shares (hold when balanced)
-        //
-        // Scenario 2 (overlap ≥ target): optimize throughput.
-        //   Grow to amortize per-batch overhead, proportional to headroom
-        //   above target.  2a (high headroom = CPU-bound) → aggressive.
-        //   2b (low headroom = barely above target) → cautious.
-        let overlap = self.build_ema / (self.build_ema + self.recv_ema + self.wait_ema);
-        let factor = if overlap >= OVERLAP_TARGET {
-            // Scenario 2: overlap good → grow for overhead amortization.
-            let headroom = (overlap - OVERLAP_TARGET) / (1.0 - OVERLAP_TARGET);
-            1.0 + headroom
+        // Priority 2 (in-band): optimize build/IO overlap.
+        //   build > IO → IO has headroom, grow toward build ≈ IO.
+        //   IO ≥ build → IO-bound (physical limit), hold steady.
+        let wall_clock = self.recv_ema + self.build_ema + self.wait_ema;
+        let io_ms = self.recv_ema + self.wait_ema;
+
+        let factor = if wall_clock < 1.0 {
+            // Near-zero wall clock (cold start) — grow to discover capacity.
+            STEP_CEIL
+        } else if wall_clock < WALL_CLOCK_MIN {
+            // Below band: batch too small, grow to fill time budget.
+            (WALL_CLOCK_MIN / wall_clock).min(STEP_CEIL)
+        } else if wall_clock > WALL_CLOCK_MAX {
+            // Above band: batch too large, shrink to fit time budget.
+            (WALL_CLOCK_MAX / wall_clock).max(STEP_FLOOR)
         } else {
-            // Scenario 1: overlap bad → direction depends on waste composition.
-            let waste = self.recv_ema + self.wait_ema;
-            let flush_pct = self.wait_ema / waste;
-            let recv_pct = 1.0 - flush_pct;
-            let recv_pull = (1.0 / overlap).min(STEP_CEIL);
-            let flush_pull = (overlap / OVERLAP_TARGET).max(STEP_FLOOR);
-            recv_pull.powf(recv_pct) * flush_pull.powf(flush_pct)
+            // In band: optimize build/IO overlap.
+            if self.build_ema > io_ms {
+                // Build-dominant: IO has headroom, grow toward build ≈ IO.
+                // Growth proportional to IO gap, capped by wall-clock ceiling.
+                let overlap_factor = 1.0 + OVERLAP_GAIN * (self.build_ema - io_ms) / wall_clock;
+                let wall_cap = WALL_CLOCK_MAX / wall_clock;
+                overlap_factor.min(wall_cap)
+            } else {
+                // IO-dominant: at physical limit, hold steady.
+                1.0
+            }
         };
         let factor = factor.clamp(STEP_FLOOR, STEP_CEIL);
         self.target_cells = ((self.target_cells as f64 * factor) as u64).max(1);
-
-        // ── Supply cap: don't let target_cells grow far beyond what the
-        // pipeline can actually deliver.  When actual_cells << target_cells,
-        // the batch is supply-limited (prefetch rate or max_batch_bytes) and
-        // growing target further is pointless.  Cap at 2× actual to keep
-        // headroom for supply recovery without runaway.
-        //
-        // Only apply when overlap is BELOW target.  When overlap is healthy,
-        // low actual_cells reflects sparse chain data (few cells per block),
-        // not a pipeline delivery bottleneck.  Capping in that case creates
-        // a death spiral: tiny target → tiny drain → tiny actual → re-cap.
-        if signals.actual_cells > 0 && overlap < OVERLAP_TARGET {
-            let ceiling = signals.actual_cells.saturating_mul(2);
-            if self.target_cells > ceiling {
-                self.target_cells = ceiling;
-            }
-        }
 
         // ── I/O resource adjustment: waste classification ──
         //
@@ -406,7 +396,6 @@ mod tests {
             build_ms: 2000.0,
             flush_wait_ms: 0.0,
             l0_files: 5,
-            actual_cells: u64::MAX, // unconstrained supply for most tests
         }
     }
 
@@ -431,7 +420,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
-                actual_cells: u64::MAX,
             });
         }
         let after_flush = ctrl.fetch_threads;
@@ -449,7 +437,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_cells: u64::MAX,
             });
         }
 
@@ -476,7 +463,6 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 3000.0,
                 l0_files: 60,
-                actual_cells: u64::MAX,
             });
         }
 
@@ -500,7 +486,6 @@ mod tests {
                 build_ms: 6000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_cells: u64::MAX,
             });
         }
 
@@ -526,7 +511,6 @@ mod tests {
                 build_ms: 500.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_cells: u64::MAX,
             });
         }
 
@@ -553,7 +537,6 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_cells: u64::MAX,
             });
         }
 
@@ -581,7 +564,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_cells: u64::MAX,
             });
         }
 
@@ -609,7 +591,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 5,
-                actual_cells: u64::MAX,
             });
         }
 
@@ -638,7 +619,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 2500.0,
                 l0_files: 5,
-                actual_cells: u64::MAX,
             });
         }
 
@@ -665,7 +645,6 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_cells: u64::MAX,
             });
         }
 
@@ -691,7 +670,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_cells: u64::MAX,
             });
         }
         assert!(ctrl.bg_jobs >= MIN_BG_JOBS);
@@ -703,7 +681,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
-                actual_cells: u64::MAX,
             });
         }
         assert!(ctrl.bg_jobs <= 4);
@@ -726,7 +703,6 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 60,
-                actual_cells: u64::MAX,
             });
         }
 
@@ -755,7 +731,6 @@ mod tests {
                 build_ms: 2000.0,
                 flush_wait_ms: 3000.0,
                 l0_files: 5,
-                actual_cells: u64::MAX,
             });
         }
 
@@ -785,7 +760,6 @@ mod tests {
                 build_ms: 100_000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_cells: u64::MAX,
             });
         }
 
@@ -829,7 +803,6 @@ mod tests {
                 build_ms: 5000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_cells: u64::MAX,
             });
         }
         assert_eq!(
@@ -844,7 +817,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 5000.0,
                 l0_files: 80,
-                actual_cells: u64::MAX,
             });
         }
         assert!(
@@ -863,7 +835,6 @@ mod tests {
                 build_ms: 1000.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_cells: u64::MAX,
             });
         }
         assert!(
@@ -910,7 +881,6 @@ mod tests {
                 build_ms: 500.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_cells: 100_000,
             });
         }
 
@@ -939,7 +909,6 @@ mod tests {
                 build_ms: 500.0,
                 flush_wait_ms: 0.0,
                 l0_files: 5,
-                actual_cells: 1,
             });
         }
 
