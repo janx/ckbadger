@@ -216,10 +216,7 @@ impl CkbadgerStore {
                     let ar_deposit = entry.deposit_ar;
                     if ar_deposit > 0 {
                         let ar_deposit_u128 = ar_deposit as u128;
-                        let gross = free_cap
-                            .checked_mul(ar as u128)
-                            .unwrap_or(u128::MAX)
-                            / ar_deposit_u128;
+                        let gross = free_cap.saturating_mul(ar as u128) / ar_deposit_u128;
                         let comp = gross.saturating_sub(free_cap);
                         total += comp as i128;
                     }
