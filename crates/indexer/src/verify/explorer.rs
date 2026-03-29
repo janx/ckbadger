@@ -84,6 +84,7 @@ struct OurDaoStatisticsResponse {
     mining_reward: String,
     deposit_compensation: String,
     burnt: String,
+    #[allow(dead_code)]
     #[serde(default)]
     pending_withdrawal_capacity: String,
 }
@@ -1005,26 +1006,19 @@ impl Check for ExplorerTotalDeposit {
         let explorer_data = fetch_explorer_daily(ctx, "total_dao_deposit", "total_dao_deposit")?;
         let our_data = fetch_our_chart(ctx, "dao/charts/total-deposit")?;
 
-        // Our total_deposited includes pending withdrawals (phase-2 subtraction),
-        // while the explorer subtracts at phase-1.  Subtract the current pending
-        // withdrawal pool so both sides use the same definition.
-        let pending: i128 = api_get::<OurDaoStatisticsResponse>(ctx, "dao/statistics")
-            .ok()
-            .and_then(|s| s.pending_withdrawal_capacity.parse::<i128>().ok())
-            .unwrap_or(0);
-
-        let adjusted: HashMap<String, String> = our_data
+        // Our snapshot total_deposited subtracts at phase-1 (withdraw
+        // request), matching the CKB explorer convention.  Convert our
+        // CKB-denominated chart values to shannons for direct comparison.
+        let our_shannons: HashMap<String, String> = our_data
             .into_iter()
             .filter_map(|(date, val)| {
                 let shannons = parse_ckb_to_shannon(&val)?;
-                let adjusted = shannons - pending;
-                // Convert back to CKB string for the generic comparator
-                Some((date, adjusted.to_string()))
+                Some((date, shannons.to_string()))
             })
             .collect();
 
         Ok(run_exact_i128_explorer_check_with_offset(
-            &adjusted,
+            &our_shannons,
             &explorer_data,
             progress,
             "total_dao_deposit",
@@ -2095,8 +2089,9 @@ impl Check for ExplorerDailyDaoDepositorsCount {
                     // Wide tolerance: explorer counts addresses going from
                     // non-active to active (new + returning, excluding repeat
                     // depositors).  We count ALL addresses that deposited.
-                    // Our value is always >= explorer's.
-                    1.0,
+                    // Our value is always >= explorer's.  On low-activity
+                    // days the ratio can be high (e.g. 8 vs 3 = 166%).
+                    2.0,
                 ) {
                     findings.push(f);
                 }

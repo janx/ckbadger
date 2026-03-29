@@ -482,21 +482,21 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
             continue;
         }
 
-        // Phase-2: consuming a status=1 withdraw-request cell means CKB leaves
-        // the DAO.  Subtract capacity from daily_active_delta and decrement the
-        // unique active depositor count here.
         for input in &tx_data.inputs {
             let outpoint = (
                 input.previous_tx_hash.to_vec(),
                 parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?,
             );
             if let Some(row) = consumed_dao_map.get(&outpoint) {
-                if row.status == 1 {
-                    *daily_withdrawals_delta.entry(block_date).or_default() += 1;
-                    // Phase-2: CKB leaves DAO — subtract from active delta.
+                if row.status == 0 {
+                    // Phase-1: deposit consumed for withdraw request — CKB
+                    // leaves active status.  Subtract from active delta and
+                    // decrement the unique active depositor count.  This
+                    // matches the CKB explorer convention which subtracts
+                    // from total_deposit at phase-1 withdrawal.
                     let capacity: i64 = row.capacity_str.parse().map_err(|e| {
                         anyhow!(
-                            "invalid DAO capacity string at phase-2 withdrawal: value='{}', tx_hash=0x{}, error={}",
+                            "invalid DAO capacity string at phase-1 withdrawal: value='{}', tx_hash=0x{}, error={}",
                             row.capacity_str,
                             hex::encode(tx_data.hash),
                             e
@@ -512,6 +512,10 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
                         &tx_data.hash,
                         outpoint.1,
                     )?;
+                } else if row.status == 1 {
+                    // Phase-2: withdraw-request consumed — track as completed
+                    // withdrawal.  Active delta already subtracted at phase-1.
+                    *daily_withdrawals_delta.entry(block_date).or_default() += 1;
                 }
             }
         }
@@ -1234,9 +1238,9 @@ mod tests {
     // -- accumulate_dao_snapshot_deltas_for_txs -----------------------------
 
     #[test]
-    fn test_phase1_does_not_subtract_active_delta() {
-        // Phase-1 (withdraw request) must NOT subtract from daily_active_delta.
-        // CKB remains locked in the DAO until phase-2 (withdraw completion).
+    fn test_phase1_subtracts_active_delta() {
+        // Phase-1 (withdraw request) subtracts from daily_active_delta,
+        // matching the CKB explorer convention.
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let input_hash_vec = vec![0x11; 32];
@@ -1278,7 +1282,8 @@ mod tests {
             dummy_positioned_info(10_000_000_000, 0, lock_hash.clone()),
         );
         let mut active_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
-        active_deposit_counts_by_lock.insert(lock_hash, 1);
+        // Lock 0xAA has one active deposit so the phase-1 decrement can succeed.
+        active_deposit_counts_by_lock.insert(vec![0xAA; 32], 1);
         let mut daily_unique_depositors_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
@@ -1305,20 +1310,28 @@ mod tests {
         )
         .unwrap();
 
-        // Phase-1 must NOT subtract from daily_active_delta — CKB is still locked.
-        assert!(
-            daily_active_delta.is_empty(),
-            "phase-1 must not modify daily_active_delta"
+        // Phase-1 subtracts capacity from daily_active_delta.
+        assert_eq!(
+            daily_active_delta.get(&block_date),
+            Some(&-10_000_000_000),
+            "phase-1 must subtract capacity from daily_active_delta"
         );
         assert!(daily_gross_deposit_delta.is_empty());
         assert!(daily_new_deposits_delta.is_empty());
+        // Phase-1 does NOT count as a completed withdrawal.
         assert!(daily_withdrawals_delta.is_empty());
+        // Depositor count decremented.
+        assert_eq!(
+            daily_unique_depositors_delta.get(&block_date),
+            Some(&-1),
+            "phase-1 must decrement unique depositor count"
+        );
     }
 
     #[test]
-    fn test_phase2_subtracts_active_delta() {
-        // Phase-2 (withdraw completion) must subtract capacity from daily_active_delta
-        // and increment daily_withdrawals_delta.
+    fn test_phase2_tracks_withdrawal_without_active_delta() {
+        // Phase-2 (withdraw completion) increments daily_withdrawals_delta
+        // but does NOT subtract from daily_active_delta (already done at phase-1).
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let input_hash_vec = vec![0x22; 32];
@@ -1383,11 +1396,10 @@ mod tests {
         )
         .unwrap();
 
-        // Phase-2 must subtract capacity from daily_active_delta.
-        assert_eq!(
-            daily_active_delta.get(&block_date),
-            Some(&-10_000_000_000),
-            "phase-2 must subtract capacity from daily_active_delta"
+        // Phase-2 does NOT subtract from daily_active_delta (done at phase-1).
+        assert!(
+            daily_active_delta.is_empty(),
+            "phase-2 must not modify daily_active_delta"
         );
         // Phase-2 must increment daily_withdrawals_delta.
         assert_eq!(
@@ -1464,10 +1476,11 @@ mod tests {
         )
         .unwrap();
 
-        // Phase-2: capacity must be subtracted from daily_active_delta.
-        assert_eq!(daily_active_delta.get(&block_date), Some(&-123));
+        // Phase-2: active delta NOT modified (already done at phase-1).
+        assert!(daily_active_delta.is_empty());
         assert!(daily_gross_deposit_delta.is_empty());
         assert!(daily_new_deposits_delta.is_empty());
+        // But withdrawal count IS incremented.
         assert_eq!(daily_withdrawals_delta.get(&block_date), Some(&1));
     }
 
@@ -1570,7 +1583,7 @@ mod tests {
                 output_index: 0,
                 capacity_str: "bad-capacity".to_string(),
                 deposit_block: 0,
-                status: 1,
+                status: 0,
                 lock_script_hash: vec![0xAA; 32],
             },
         );
@@ -1715,12 +1728,25 @@ mod tests {
         assert_eq!(active_deposit_counts_by_lock.get(&lock_hash), Some(&2));
         assert_eq!(daily_unique_depositors_delta.get(&block_date), Some(&1));
 
-        // After phase-1: must NOT change depositor counts — CKB is still in DAO.
+        // After phase-1: depositor count drops to 1
+        // (deposit leaves active status at withdraw request).
+        let mut consumed_dao_map_phase1: DaoConsumedMap = HashMap::new();
+        consumed_dao_map_phase1.insert(
+            (deposit_tx_hash.to_vec(), 0),
+            DaoConsumedRow {
+                tx_hash: vec![],
+                output_index: 0,
+                capacity_str: "10000000000".to_string(),
+                deposit_block: 0,
+                status: 0,
+                lock_script_hash: lock_hash.clone(),
+            },
+        );
         accumulate_dao_snapshot_deltas_for_txs(
             &[phase1_first],
             block_date,
             &dao_code_hash,
-            &empty_consumed,
+            &consumed_dao_map_phase1,
             &mut same_batch_dao_map,
             &input_cell_info,
             &batch_cell_infos,
@@ -1738,17 +1764,17 @@ mod tests {
 
         assert_eq!(
             active_deposit_counts_by_lock.get(&lock_hash),
-            Some(&2),
-            "phase-1 must not decrement active_deposit_counts_by_lock"
+            Some(&1),
+            "phase-1 must decrement active_deposit_counts_by_lock"
         );
         assert_eq!(
             daily_unique_depositors_delta.get(&block_date),
             Some(&1),
-            "phase-1 must not decrement unique depositor delta"
+            "phase-1 must not decrement unique depositor delta (still has one active deposit)"
         );
 
-        // After phase-2 (first withdrawal completes): depositor count drops to 1
-        // but unique depositor delta stays at 1 (still has one remaining deposit).
+        // After phase-2 (first withdrawal completes): no further depositor
+        // change (already decremented at phase-1).
         accumulate_dao_snapshot_deltas_for_txs(
             &[phase2_first],
             block_date,
@@ -1772,7 +1798,7 @@ mod tests {
         assert_eq!(
             active_deposit_counts_by_lock.get(&lock_hash),
             Some(&1),
-            "phase-2 must decrement active_deposit_counts_by_lock"
+            "phase-2 must not further decrement active_deposit_counts_by_lock"
         );
         assert_eq!(
             daily_unique_depositors_delta.get(&block_date),

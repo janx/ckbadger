@@ -193,6 +193,22 @@ impl BulkReducer for DaoOwner {
                             format_outpoint(&origin_outpoint)
                         );
                     }
+                    // Phase-1: deposit leaves active status at withdraw
+                    // request, matching CKB explorer convention.
+                    Self::bump_daily_i128(
+                        &mut self.daily_active_delta,
+                        tx_date,
+                        -(entry.capacity as i128),
+                        "dao daily active delta (phase-1 withdraw request)",
+                    )?;
+                    Self::bump_active_depositor_count(
+                        &mut self.active_deposit_counts_by_lock,
+                        &mut self.daily_unique_depositors_delta,
+                        tx_date,
+                        &entry.lock_script_hash,
+                        -1,
+                        "dao depositor count (phase-1 withdraw request)",
+                    )?;
                 }
                 1 => {
                     if !matches!(input_view.state, DaoCellState::WithdrawRequest { .. }) {
@@ -303,20 +319,18 @@ impl BulkReducer for DaoOwner {
                         1,
                         "dao daily withdrawals delta",
                     )?;
-                    // Phase-2: CKB leaves the DAO — subtract from active delta
-                    Self::bump_daily_i128(
-                        &mut self.daily_active_delta,
-                        tx_date,
-                        -(entry.capacity as i128),
-                        "dao daily active delta (phase-2 withdrawal)",
-                    )?;
+                    // Active delta and depositor count already subtracted at
+                    // phase-1 withdraw request — no double-counting at
+                    // phase-2 completion.  Only the compensations above,
+                    // withdrawal count, and ever-deposited tracking below
+                    // are handled here.
                     Self::bump_active_depositor_count(
                         &mut self.active_deposit_counts_by_lock,
                         &mut self.daily_unique_depositors_delta,
                         tx_date,
                         &entry.lock_script_hash,
-                        -1,
-                        "dao unique active depositor count (phase-2 withdrawal)",
+                        0,
+                        "dao depositor count (phase-2 no-op)",
                     )?;
                 }
                 status => {
