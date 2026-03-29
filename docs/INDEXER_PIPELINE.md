@@ -377,7 +377,7 @@ for the full design rationale.
 4. **Inter-batch pipelining**: prefetch worker reads batch N+1 from CKB RocksDB while batch N is being built; fetch uses `std::thread::scope` (not rayon) so blocking RocksDB reads don't starve CPU-bound build work
 5. **RocksDB flush overlap**: materialized rows are sent to a flush channel; a dedicated worker commits them to RocksDB concurrently with the next batch's build
 6. **Parallel block parsing**: `rayon::par_iter` parses blocks within a batch, merges output ranges for global cell indices post-merge
-7. **Bottleneck-driven resource control**: a single `BottleneckController` measures per-batch timing (fetch wait, build CPU, flush wait) and dynamically adjusts `target_cells`, `fetch_threads`, and `bg_jobs`. Batch sizing uses overlap-scaled cell targeting: growth toward TARGET (3s) is dampened by pipeline overlap ratio, shrink is at full strength. Drain uses cell count as primary budget with RAM-derived bytes as safety cap
+7. **Bottleneck-driven resource control**: a single `BottleneckController` measures per-batch timing (fetch wait, build CPU, flush wait) and dynamically adjusts `target_cells`, `fetch_threads`, and `bg_jobs`. Batch sizing uses a build-time band [2s, 5s]: below band → grow, above band → shrink, in-band with build > IO → grow (IO headroom), in-band with IO ≥ build → hold (physical limit). Supply cap at 4× actual cells prevents divergence when supply-limited. Drain uses cell count as primary budget with RAM-derived bytes as safety cap
 
 ### Bulk-Build Write Classes
 
@@ -427,18 +427,17 @@ The decoder crate (`crates/dob-decoder/`) handles CKB-VM execution, binary cachi
 - **BottleneckController**: unified resource controller with two independent dimensions.
   Located in `crates/indexer/src/sync/bottleneck.rs`.
 
-  **Dimension 1 — Batch sizing** (overlap-driven cell targeting):
-  - Single objective: pipeline overlap (`build / (build + waste)`) ≥ 90%
-  - When overlap < target: waste composition determines direction via geometric blend —
-    recv-dominated waste → grow (longer build gives prefetch more time),
-    flush-dominated → shrink (reduce I/O pressure), mixed → hold
-  - When overlap ≥ target: grow proportional to headroom for overhead amortization
-    (CPU-bound = aggressive, barely above target = cautious)
-  - Supply cap: `target_cells` capped at 2× actual delivered cells to prevent runaway
-    when prefetch rate is the bottleneck (overlap reads 100% but target is unreachable)
+  **Dimension 1 — Batch sizing** (build-time band [2s, 5s]):
+  - Primary objective: keep `build_ema` within [BUILD_TIME_MIN=2s, BUILD_TIME_MAX=5s]
+  - Below band → grow (batch too small regardless of IO)
+  - Above band → shrink (build genuinely too large)
+  - In-band, build > IO → grow (IO has headroom for larger batches)
+  - In-band, IO ≥ build → hold (physical IO limit reached)
+  - IO wait (recv + flush) is excluded from the band check because shrinking batch size cannot reduce IO-bound time
+  - Supply cap: `target_cells` capped at 4× actual delivered cells to prevent runaway
+    when prefetch rate is the bottleneck
   - `drain_by_cells(target_cells, max_batch_bytes)`: cell count is primary budget, RAM-derived bytes is safety cap
   - Prefetch fill estimate uses `cell_density()` (actual cells/byte from buffer) for accurate byte budget
-  - No artificial cell/block count bounds or fixed build time target
 
   **Dimension 2 — I/O resources** (waste classification):
 

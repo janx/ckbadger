@@ -334,34 +334,7 @@ fn explorer_timestamp_to_date(ts_val: i64) -> Option<String> {
 // Helpers: fetch our data from the ckbadger API charts
 // ---------------------------------------------------------------------------
 
-fn api_get<T: serde::de::DeserializeOwned>(ctx: &CheckContext, path: &str) -> anyhow::Result<T> {
-    let url = format!(
-        "{}/{}",
-        ctx.api_url.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    );
-    let mut backoff_ms = 500;
-    for attempt in 0..5 {
-        let resp = ctx.http.get(&url).send()?;
-        let status = resp.status();
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 4 {
-            std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
-            backoff_ms *= 2;
-            continue;
-        }
-        if !status.is_success() {
-            let body = resp.text().unwrap_or_default();
-            let detail = if body.is_empty() {
-                String::new()
-            } else {
-                format!(": {}", &body[..body.len().min(512)])
-            };
-            anyhow::bail!("GET {} returned {}{}", path, status, detail);
-        }
-        return Ok(resp.json()?);
-    }
-    unreachable!()
-}
+// api_get is imported via `use super::checks::*` above.
 
 /// Normalize date string to "YYYY-MM-DD" format.
 /// Handles "YYYYMMDD", "YYYY/MM/DD", and "YYYY-MM-DD" inputs.
@@ -1057,11 +1030,9 @@ impl Check for ExplorerHashRate {
             if let (Some(our_val), Some(explorer_val)) =
                 (our_data.get(date), explorer_data.get(date))
             {
-                // Our daily chart derives from average compact target, while explorer uses
-                // per-block data. Keep a wider tolerance for this derived metric.
                 let ours: f64 = our_val.parse::<f64>().unwrap_or(0.0);
                 if let Some(f) =
-                    compare_tolerance_f64(ours, explorer_val, date, "avg_hash_rate", 0.08)
+                    compare_tolerance_f64(ours, explorer_val, date, "avg_hash_rate", 0.02)
                 {
                     findings.push(f);
                 }
@@ -1110,7 +1081,7 @@ impl Check for ExplorerDifficulty {
             {
                 let ours: f64 = our_val.parse().unwrap_or(0.0);
                 if let Some(f) =
-                    compare_tolerance_f64(ours, explorer_val, date, "avg_difficulty", 0.08)
+                    compare_tolerance_f64(ours, explorer_val, date, "avg_difficulty", 0.02)
                 {
                     findings.push(f);
                 }
@@ -2043,101 +2014,39 @@ impl Check for ExplorerTotalDepositorsCount {
     }
 }
 
-/// X27: Compare /dao/charts/daily-depositors value vs explorer daily_dao_depositors_count.
-pub struct ExplorerDailyDaoDepositorsCount;
-
-impl Check for ExplorerDailyDaoDepositorsCount {
-    fn name(&self) -> &'static str {
-        "explorer_daily_dao_depositors_count"
-    }
-    fn description(&self) -> &'static str {
-        "Daily daily_dao_depositors_count vs explorer"
-    }
-    fn tier(&self) -> CheckTier {
-        CheckTier::Sampling
-    }
-    fn requires_explorer(&self) -> bool {
-        true
-    }
-    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
-        Some(30)
-    }
-    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let explorer_data = fetch_explorer_daily(
-            ctx,
-            "daily_dao_depositors_count",
-            "daily_dao_depositors_count",
-        )?;
-        // Use the directly-materialized daily depositor count (unique addresses
-        // that deposited per day, including repeat depositors).
-        let our_data = fetch_our_chart(ctx, "dao/charts/daily-depositors")?;
-        let dates = last_30_days();
-        let mut findings = vec![];
-        let mut checked = 0u64;
-
-        for date in &dates {
-            if let (Some(explorer_val), Some(our_val)) =
-                (explorer_data.get(date), our_data.get(date))
-            {
-                let ours: f64 = our_val.parse().unwrap_or(0.0);
-                let theirs: f64 = explorer_val.parse().unwrap_or(0.0);
-                if let Some(f) = compare_tolerance_f64_values(
-                    ours,
-                    theirs,
-                    date,
-                    "daily_dao_depositors_count",
-                    // Wide tolerance: explorer counts addresses going from
-                    // non-active to active (new + returning, excluding repeat
-                    // depositors).  We count ALL addresses that deposited.
-                    // Our value is always >= explorer's.  On low-activity
-                    // days the ratio can be high (e.g. 8 vs 3 = 166%).
-                    2.0,
-                ) {
-                    findings.push(f);
-                }
-                checked += 1;
-            }
-            progress.inc(1);
-        }
-
-        if findings.is_empty() {
-            Ok(CheckResult::pass(checked))
-        } else {
-            Ok(CheckResult::fail(checked, findings))
-        }
-    }
-}
+// X27 (ExplorerDailyDaoDepositorsCount) removed: semantic mismatch with explorer
+// is fundamental — explorer counts addresses transitioning from non-active to active,
+// we count all addresses that deposited. A 200% tolerance check provides no signal.
 
 /// Return all explorer comparison checks.
 pub fn explorer_checks() -> Vec<Box<dyn Check>> {
     vec![
-        Box::new(ExplorerTxCount),                 // X1
-        Box::new(ExplorerTotalDeposit),            // X2
-        Box::new(ExplorerHashRate),                // X3
-        Box::new(ExplorerDifficulty),              // X4
-        Box::new(ExplorerKnowledgeSize),           // X5
-        Box::new(ExplorerUncleRate),               // X6
-        Box::new(ExplorerLiveCellCount),           // X7
-        Box::new(ExplorerDeadCellCount),           // X8
-        Box::new(ExplorerDailyDeposit),            // X9
-        Box::new(ExplorerCirculationRatio),        // X10
-        Box::new(ExplorerCirculatingSupply),       // X11
-        Box::new(ExplorerBurnt),                   // X12
-        Box::new(ExplorerDepositCompensation),     // X13
-        Box::new(ExplorerMiningReward),            // X14
-        Box::new(ExplorerTreasuryAmount),          // X15
-        Box::new(ExplorerBlockTimeDistribution),   // X16
-        Box::new(NervosDaoTotalDeposit),           // X17
-        Box::new(NervosDaoDepositorsCount),        // X18
-        Box::new(NervosDaoUnclaimedCompensation),  // X19
-        Box::new(NervosDaoClaimedCompensation),    // X20
-        Box::new(NervosDaoAverageDepositTime),     // X21
-        Box::new(NervosDaoMiningReward),           // X22
-        Box::new(NervosDaoDepositCompensation),    // X23
-        Box::new(NervosDaoTreasuryAmount),         // X24
-        Box::new(NervosDaoEstimatedApc),           // X25
-        Box::new(ExplorerTotalDepositorsCount),    // X26
-        Box::new(ExplorerDailyDaoDepositorsCount), // X27
+        Box::new(ExplorerTxCount),                // X1
+        Box::new(ExplorerTotalDeposit),           // X2
+        Box::new(ExplorerHashRate),               // X3
+        Box::new(ExplorerDifficulty),             // X4
+        Box::new(ExplorerKnowledgeSize),          // X5
+        Box::new(ExplorerUncleRate),              // X6
+        Box::new(ExplorerLiveCellCount),          // X7
+        Box::new(ExplorerDeadCellCount),          // X8
+        Box::new(ExplorerDailyDeposit),           // X9
+        Box::new(ExplorerCirculationRatio),       // X10
+        Box::new(ExplorerCirculatingSupply),      // X11
+        Box::new(ExplorerBurnt),                  // X12
+        Box::new(ExplorerDepositCompensation),    // X13
+        Box::new(ExplorerMiningReward),           // X14
+        Box::new(ExplorerTreasuryAmount),         // X15
+        Box::new(ExplorerBlockTimeDistribution),  // X16
+        Box::new(NervosDaoTotalDeposit),          // X17
+        Box::new(NervosDaoDepositorsCount),       // X18
+        Box::new(NervosDaoUnclaimedCompensation), // X19
+        Box::new(NervosDaoClaimedCompensation),   // X20
+        Box::new(NervosDaoAverageDepositTime),    // X21
+        Box::new(NervosDaoMiningReward),          // X22
+        Box::new(NervosDaoDepositCompensation),   // X23
+        Box::new(NervosDaoTreasuryAmount),        // X24
+        Box::new(NervosDaoEstimatedApc),          // X25
+        Box::new(ExplorerTotalDepositorsCount),   // X26
     ]
 }
 
@@ -2372,7 +2281,7 @@ mod tests {
     #[test]
     fn test_explorer_checks_registered() {
         let checks = explorer_checks();
-        assert_eq!(checks.len(), 27);
+        assert_eq!(checks.len(), 26);
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
         assert_eq!(names.len(), unique.len(), "Duplicate check names found");
@@ -2387,7 +2296,6 @@ mod tests {
         assert!(names.contains(&"nervos_dao_treasury_amount"));
         assert!(names.contains(&"nervos_dao_estimated_apc"));
         assert!(names.contains(&"explorer_total_depositors_count"));
-        assert!(names.contains(&"explorer_daily_dao_depositors_count"));
     }
 
     #[test]

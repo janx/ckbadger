@@ -203,3 +203,37 @@ pub fn execute_check(
         },
     }
 }
+
+/// HTTP GET with exponential-backoff retry on 429 (Too Many Requests).
+/// Shared by api_checks and explorer modules.
+pub(super) fn api_get<T: serde::de::DeserializeOwned>(
+    ctx: &CheckContext,
+    path: &str,
+) -> anyhow::Result<T> {
+    let url = format!(
+        "{}/{}",
+        ctx.api_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
+    let mut backoff_ms = 500;
+    for attempt in 0..5 {
+        let resp = ctx.http.get(&url).send()?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 4 {
+            std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+            backoff_ms *= 2;
+            continue;
+        }
+        if !status.is_success() {
+            let body = resp.text().unwrap_or_default();
+            let detail = if body.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", &body[..body.len().min(512)])
+            };
+            anyhow::bail!("GET {} returned {}{}", path, status, detail);
+        }
+        return Ok(resp.json()?);
+    }
+    unreachable!()
+}

@@ -449,7 +449,7 @@ mod tests {
 
     #[test]
     fn build_below_min_grows() {
-        // build = 300 < 1000 → grow (batch too small)
+        // build = 300 < 2000 (BUILD_TIME_MIN) → grow (batch too small)
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         let initial = ctrl.target_cells;
         run_batches(&mut ctrl, 5, &signals(200.0, 300.0, 0.0));
@@ -883,7 +883,7 @@ mod tests {
         // interfere with normal wall-clock / overlap growth.
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
 
-        // wall = 500 < 1000 → grow. actual_cells = target so cap = 4× target.
+        // build = 300 < 2000 (BUILD_TIME_MIN) → grow. actual_cells = target so cap = 4× target.
         // factor ≤ 2.0 < 4.0 → cap never binds.
         let demand_limited = BatchSignals {
             prefetch_recv_ms: 200.0,

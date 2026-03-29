@@ -931,9 +931,10 @@ impl BatchWriter {
                 if entry.status == 1 {
                     pending_withdrawal_capacity += entry.capacity as i128;
                 } else {
-                    // Only status=0 deposits count toward total_deposited and
-                    // unique_depositors — matching CKB explorer convention which
-                    // subtracts from total_deposit at phase-1 withdrawal.
+                    // Only status=0 deposits count toward total_deposited,
+                    // unique_depositors, depositor_map, and avg deposit time —
+                    // matching CKB explorer convention which subtracts from
+                    // total_deposit at phase-1 withdrawal.
                     total_deposited += entry.capacity as i128;
                     unique_depositors.insert(entry.lock_script_hash.clone());
 
@@ -947,50 +948,72 @@ impl BatchWriter {
                     let held_ms = tip_timestamp - entry.deposit_timestamp;
                     total_ms_held += held_ms as f64;
                     active_filtered_count += 1;
+                }
 
-                    if entry.capacity < 0 {
-                        bail!(
-                            "negative DAO deposit capacity while refreshing latest dao statistics: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                            entry.deposit_block_number,
-                            hex::encode(&entry.lock_script_hash),
-                            entry.capacity
-                        );
-                    }
-                    let capacity = entry.capacity as u128;
-                    let free_capacity =
-                        capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
-                            anyhow!(
-                                "DAO deposit capacity below occupied capacity while refreshing latest dao statistics: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                                entry.deposit_block_number,
-                                hex::encode(&entry.lock_script_hash),
-                                capacity
-                            )
-                        })?;
-                    let ar_deposit = u64::try_from(entry.deposit_ar).map_err(|_| {
+                // Compensation accrues for both status=0 and status=1 deposits
+                // (both are still locked in the DAO contract).
+                if entry.capacity < 0 {
+                    bail!(
+                        "negative DAO deposit capacity while refreshing latest dao statistics: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                        entry.deposit_block_number,
+                        hex::encode(&entry.lock_script_hash),
+                        entry.capacity
+                    );
+                }
+                let capacity = entry.capacity as u128;
+                let free_capacity =
+                    capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
                         anyhow!(
-                            "invalid negative DAO deposit AR while refreshing latest dao statistics: deposit_block={}, lock_script_hash=0x{}, deposit_ar={}",
+                            "DAO deposit capacity below occupied capacity while refreshing latest dao statistics: deposit_block={}, lock_script_hash=0x{}, capacity={}",
                             entry.deposit_block_number,
                             hex::encode(&entry.lock_script_hash),
-                            entry.deposit_ar
+                            capacity
                         )
                     })?;
-                    if ar_deposit > 0 && tip_ar > ar_deposit {
-                        let gross = free_capacity
-                            .checked_mul(tip_ar as u128)
-                            .ok_or_else(|| anyhow!("DAO compensation multiply overflow"))?
-                            / ar_deposit as u128;
-                        let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
-                            anyhow!(
-                                "DAO compensation underflow while refreshing latest dao statistics: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, effective_ar={}",
-                                entry.deposit_block_number,
-                                hex::encode(&entry.lock_script_hash),
-                                free_capacity,
-                                ar_deposit,
-                                tip_ar
-                            )
-                        })?;
-                        unclaimed_compensation += compensation;
-                    }
+                let ar_deposit = u64::try_from(entry.deposit_ar).map_err(|_| {
+                    anyhow!(
+                        "invalid negative DAO deposit AR while refreshing latest dao statistics: deposit_block={}, lock_script_hash=0x{}, deposit_ar={}",
+                        entry.deposit_block_number,
+                        hex::encode(&entry.lock_script_hash),
+                        entry.deposit_ar
+                    )
+                })?;
+                // Per RFC-0023, status=1 compensation is locked at withdraw_request_ar;
+                // status=0 continues to accrue at tip_ar.
+                let effective_ar = if entry.status == 1 {
+                    let ar_i64 = entry.withdraw_request_ar.ok_or_else(|| {
+                        anyhow!(
+                            "status=1 deposit missing withdraw_request_ar: deposit_block={}, lock_hash=0x{}",
+                            entry.deposit_block_number,
+                            hex::encode(&entry.lock_script_hash)
+                        )
+                    })?;
+                    u64::try_from(ar_i64).map_err(|_| {
+                        anyhow!(
+                            "status=1 deposit withdraw_request_ar exceeds u64: deposit_block={}, ar={}",
+                            entry.deposit_block_number,
+                            ar_i64
+                        )
+                    })?
+                } else {
+                    tip_ar
+                };
+                if ar_deposit > 0 && effective_ar > ar_deposit {
+                    let gross = free_capacity
+                        .checked_mul(effective_ar as u128)
+                        .ok_or_else(|| anyhow!("DAO compensation multiply overflow"))?
+                        / ar_deposit as u128;
+                    let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
+                        anyhow!(
+                            "DAO compensation underflow while refreshing latest dao statistics: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, effective_ar={}",
+                            entry.deposit_block_number,
+                            hex::encode(&entry.lock_script_hash),
+                            free_capacity,
+                            ar_deposit,
+                            effective_ar
+                        )
+                    })?;
+                    unclaimed_compensation += compensation;
                 }
 
                 Ok(())
@@ -1514,8 +1537,9 @@ mod tests {
         assert_eq!(latest.total_depositors, 1);
         // compensation_paid from the status=2 deposit
         assert_eq!(latest.total_compensation_paid, 50_00000000);
-        // unclaimed_compensation follows explorer semantics: status=0 only
-        assert_eq!(latest.unclaimed_compensation, 98_00000000);
+        // unclaimed_compensation: status=0 (tip_ar=4) + status=1 (withdraw_request_ar=3)
+        // = 98_00000000 + 99_00000000 = 197_00000000
+        assert_eq!(latest.unclaimed_compensation, 197_00000000);
         // pending_withdrawal_capacity = status=1: 300_00000000
         assert_eq!(latest.pending_withdrawal_capacity, 300_00000000);
         // average_deposit_days follows explorer semantics: only the status=0 deposit
