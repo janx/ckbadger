@@ -157,19 +157,34 @@ fn select_phase1_output_for_deposit<'a>(
             deposit_block_number
         )
     })?;
-    Ok(new_dao_outputs
-        .iter()
-        .enumerate()
-        .filter(
-            |(pos, (_, _, output_lock_hash, cap, output_deposit_block))| {
+
+    let base_candidates = || {
+        new_dao_outputs.iter().enumerate().filter(
+            move |(pos, (_, _, _, cap, output_deposit_block))| {
                 *cap == capacity
                     && *output_deposit_block == deposit_block_u64
-                    && output_lock_hash.as_slice() == lock_script_hash
                     && !consumed_output_indices.contains(pos)
             },
         )
+    };
+
+    // Prefer lock_script_hash match for disambiguation (multiple deposits with
+    // same capacity/deposit_block but different locks).  Fall back to
+    // (capacity, deposit_block) only — the CKB DAO type script does not
+    // enforce lock preservation, so a legitimate withdraw request may change
+    // the lock script.
+    let with_lock = base_candidates()
+        .filter(|(_, (_, _, output_lock_hash, _, _))| {
+            output_lock_hash.as_slice() == lock_script_hash
+        })
         // Use output index as a deterministic tie-breaker when exact metadata repeats.
-        .min_by_key(|(pos, (_, output_index, _, _, _))| (*output_index, *pos)))
+        .min_by_key(|(pos, (_, output_index, _, _, _))| (*output_index, *pos));
+
+    if with_lock.is_some() {
+        return Ok(with_lock);
+    }
+
+    Ok(base_candidates().min_by_key(|(pos, (_, output_index, _, _, _))| (*output_index, *pos)))
 }
 
 fn infer_request_output_index_from_inputs(

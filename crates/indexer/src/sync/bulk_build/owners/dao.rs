@@ -1070,19 +1070,34 @@ fn select_phase1_output_for_deposit<'a>(
         )
     })?;
 
-    Ok(request_outputs
-        .iter()
-        .filter_map(|(pos, output)| match output.state {
-            DaoCellState::WithdrawRequest {
-                deposit_block_number: output_deposit_block,
-            } => (output.capacity == capacity
-                && u64::try_from(output_deposit_block).ok() == Some(deposit_block_u64)
-                && output.lock_hash.as_slice() == lock_script_hash
-                && !consumed_output_positions.contains(pos))
-            .then_some((*pos, *output)),
-            DaoCellState::Deposit => None,
-        })
-        .min_by_key(|(pos, output)| (output.outpoint.index, *pos)))
+    let base_candidates = || {
+        request_outputs
+            .iter()
+            .filter_map(move |(pos, output)| match output.state {
+                DaoCellState::WithdrawRequest {
+                    deposit_block_number: output_deposit_block,
+                } => (output.capacity == capacity
+                    && u64::try_from(output_deposit_block).ok() == Some(deposit_block_u64)
+                    && !consumed_output_positions.contains(pos))
+                .then_some((*pos, *output)),
+                DaoCellState::Deposit => None,
+            })
+    };
+
+    // Prefer lock_script_hash match for disambiguation (multiple deposits with
+    // same capacity/deposit_block but different locks).  Fall back to
+    // (capacity, deposit_block) only — the CKB DAO type script does not
+    // enforce lock preservation, so a legitimate withdraw request may change
+    // the lock script.
+    let with_lock = base_candidates()
+        .filter(|(_, output)| output.lock_hash.as_slice() == lock_script_hash)
+        .min_by_key(|(pos, output)| (output.outpoint.index, *pos));
+
+    if with_lock.is_some() {
+        return Ok(with_lock);
+    }
+
+    Ok(base_candidates().min_by_key(|(pos, output)| (output.outpoint.index, *pos)))
 }
 
 fn infer_request_output_index_from_inputs(
@@ -1462,6 +1477,126 @@ mod tests {
         assert_eq!(entry.withdraw_to_output_index, Some(0));
         assert_eq!(entry.compensation, Some(19_60000000));
         assert!(owner.request_outpoints.is_empty());
+    }
+
+    #[test]
+    fn dao_owner_phase1_matches_when_lock_script_changes() {
+        // Regression: CKB DAO type script does not enforce lock preservation.
+        // A withdraw request may use a different lock than the original deposit.
+        let interner = IdentityInterner::default();
+        let deposit_lock = interner.intern_bytes(vec![0xaa; 32]);
+        let request_lock = interner.intern_bytes(vec![0xbb; 32]); // different lock
+        let dao_code_hash_id =
+            interner.intern_bytes(hex::decode(&DAO_CODE_HASH[2..]).expect("dao code hash"));
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+        let mut owner = DaoOwner::default();
+
+        // Create deposit with deposit_lock
+        let tx0 = ResolvedTxFacts {
+            tx_hash: [0x31; 32],
+            block_number: 5668752,
+            block_hash: [0x04; 32],
+            timestamp_ms: 1_700_000_000_000,
+            block_dao_ar: 10_000,
+            tx_index: 0,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![CellFacts {
+                outpoint: OutPointKey::new([0x31; 32], 0),
+                created_at_block: 5668752,
+                created_by_block_dao_ar: 10_000,
+                capacity: 120_00000000,
+                lock_script_hash_id: deposit_lock,
+                lock_code_hash_id: InternId::new(1),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(2),
+                type_script_hash_id: Some(InternId::new(3)),
+                type_code_hash_id: Some(dao_code_hash_id),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(4)),
+                occupied_capacity: 102_00000000,
+                data_size: 8,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: CellSemanticTag::Dao,
+                dao_state: Some(DaoCellState::Deposit),
+                protocol_facts: None,
+            }]
+            .into(),
+        };
+        owner.apply_tx(&tx0, &ctx).expect("apply deposit");
+
+        // Withdraw request with request_lock (different from deposit_lock)
+        let tx1 = ResolvedTxFacts {
+            tx_hash: [0x32; 32],
+            block_number: 5733774,
+            block_hash: [0x05; 32],
+            timestamp_ms: 1_700_000_000_001,
+            block_dao_ar: 12_000,
+            tx_index: 1,
+            dotbit_action: None,
+            resolved_inputs: vec![ResolvedInputFacts {
+                outpoint: OutPointKey::new([0x31; 32], 0),
+                created_at_block: 5668752,
+                created_by_block_dao_ar: 10_000,
+                capacity: 120_00000000,
+                occupied_capacity: 102_00000000,
+                data_size: 0,
+                data_hash: None,
+                udt_amount: None,
+                lock_script_hash_id: deposit_lock,
+                lock_code_hash_id: InternId::new(1),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(2),
+                type_script_hash_id: Some(InternId::new(3)),
+                type_code_hash_id: Some(dao_code_hash_id),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(4)),
+                semantic_tag: CellSemanticTag::Dao,
+                dao_state: Some(DaoCellState::Deposit),
+                dao_compensation_ars: None,
+                protocol_facts: None,
+            }],
+            cells: vec![CellFacts {
+                outpoint: OutPointKey::new([0x32; 32], 0),
+                created_at_block: 5733774,
+                created_by_block_dao_ar: 12_000,
+                capacity: 120_00000000,
+                lock_script_hash_id: request_lock, // different lock
+                lock_code_hash_id: InternId::new(5),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(6),
+                type_script_hash_id: Some(InternId::new(3)),
+                type_code_hash_id: Some(dao_code_hash_id),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(4)),
+                occupied_capacity: 102_00000000,
+                data_size: 8,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: CellSemanticTag::Dao,
+                dao_state: Some(DaoCellState::WithdrawRequest {
+                    deposit_block_number: 5668752,
+                }),
+                protocol_facts: None,
+            }]
+            .into(),
+        };
+        owner
+            .apply_tx(&tx1, &ctx)
+            .expect("apply withdraw request with changed lock");
+
+        let entry = owner
+            .deposits
+            .get(&OutPointKey::new([0x31; 32], 0))
+            .expect("dao entry");
+        assert_eq!(entry.status, 1);
+        assert_eq!(entry.withdraw_request_block, Some(5733774));
+        assert_eq!(entry.withdraw_request_tx, Some(vec![0x32; 32]));
+        assert_eq!(entry.withdraw_request_output_index, Some(0));
     }
 
     #[test]
