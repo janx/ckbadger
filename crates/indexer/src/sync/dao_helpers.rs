@@ -40,6 +40,7 @@ pub(crate) struct BatchStats {
     pub(crate) daily_block_times: HashMap<NaiveDate, (i64, i32)>,
     pub(crate) daily_dao_fields: HashMap<NaiveDate, Vec<u8>>,
     pub(crate) dao_daily_active_delta: HashMap<NaiveDate, i128>,
+    pub(crate) dao_daily_protocol_delta: HashMap<NaiveDate, i128>,
     pub(crate) dao_daily_gross_deposit_delta: HashMap<NaiveDate, i128>,
     pub(crate) dao_daily_new_deposits_delta: HashMap<NaiveDate, i64>,
     pub(crate) dao_daily_withdrawals_delta: HashMap<NaiveDate, i64>,
@@ -424,6 +425,7 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
     active_deposit_counts_by_lock: &mut HashMap<Vec<u8>, i64>,
     daily_unique_depositors_delta: &mut HashMap<NaiveDate, i64>,
     daily_active_delta: &mut HashMap<NaiveDate, i128>,
+    daily_protocol_delta: &mut HashMap<NaiveDate, i128>,
     daily_gross_deposit_delta: &mut HashMap<NaiveDate, i128>,
     daily_new_deposits_delta: &mut HashMap<NaiveDate, i64>,
     daily_withdrawals_delta: &mut HashMap<NaiveDate, i64>,
@@ -445,6 +447,7 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
                     )
                     .map_err(|e| anyhow!("{}: tx_hash=0x{}", e, hex::encode(tx_data.hash)))?;
                     *daily_active_delta.entry(block_date).or_default() += cell.capacity as i128;
+                    *daily_protocol_delta.entry(block_date).or_default() += cell.capacity as i128;
                     *daily_gross_deposit_delta.entry(block_date).or_default() +=
                         cell.capacity as i128;
                     *daily_new_deposits_delta.entry(block_date).or_default() += 1;
@@ -503,6 +506,7 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
                         )
                     })?;
                     *daily_active_delta.entry(block_date).or_default() -= capacity as i128;
+                    // Protocol delta NOT subtracted — cell still locked in DAO.
                     bump_unique_active_depositors(
                         active_deposit_counts_by_lock,
                         daily_unique_depositors_delta,
@@ -515,7 +519,17 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
                 } else if row.status == 1 {
                     // Phase-2: withdraw-request consumed — track as completed
                     // withdrawal.  Active delta already subtracted at phase-1.
+                    // Protocol delta subtracted now — cell leaves DAO.
                     *daily_withdrawals_delta.entry(block_date).or_default() += 1;
+                    let capacity: i64 = row.capacity_str.parse().map_err(|e| {
+                        anyhow!(
+                            "invalid DAO capacity string at phase-2 withdrawal: value='{}', tx_hash=0x{}, error={}",
+                            row.capacity_str,
+                            hex::encode(tx_data.hash),
+                            e
+                        )
+                    })?;
+                    *daily_protocol_delta.entry(block_date).or_default() -= capacity as i128;
                 }
             }
         }
@@ -1286,6 +1300,7 @@ mod tests {
         active_deposit_counts_by_lock.insert(vec![0xAA; 32], 1);
         let mut daily_unique_depositors_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_protocol_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
         let mut daily_withdrawals_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
@@ -1301,6 +1316,7 @@ mod tests {
             &mut active_deposit_counts_by_lock,
             &mut daily_unique_depositors_delta,
             &mut daily_active_delta,
+            &mut daily_protocol_delta,
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
@@ -1325,6 +1341,11 @@ mod tests {
             daily_unique_depositors_delta.get(&block_date),
             Some(&-1),
             "phase-1 must decrement unique depositor count"
+        );
+        // Phase-1 must NOT subtract from protocol delta (cell still locked in DAO).
+        assert!(
+            daily_protocol_delta.is_empty(),
+            "phase-1 must not modify daily_protocol_delta"
         );
     }
 
@@ -1372,6 +1393,7 @@ mod tests {
         active_deposit_counts_by_lock.insert(vec![0xAA; 32], 1);
         let mut daily_unique_depositors_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_protocol_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
         let mut daily_withdrawals_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
@@ -1387,6 +1409,7 @@ mod tests {
             &mut active_deposit_counts_by_lock,
             &mut daily_unique_depositors_delta,
             &mut daily_active_delta,
+            &mut daily_protocol_delta,
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
@@ -1409,6 +1432,12 @@ mod tests {
         );
         assert!(daily_gross_deposit_delta.is_empty());
         assert!(daily_new_deposits_delta.is_empty());
+        // Phase-2 must subtract from protocol delta (cell leaves DAO).
+        assert_eq!(
+            daily_protocol_delta.get(&block_date),
+            Some(&-10_000_000_000),
+            "phase-2 must subtract capacity from daily_protocol_delta"
+        );
     }
 
     #[test]
@@ -1467,6 +1496,7 @@ mod tests {
             &mut active_deposit_counts_by_lock,
             &mut daily_unique_depositors_delta,
             &mut daily_active_delta,
+            &mut HashMap::new(),
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
@@ -1541,6 +1571,7 @@ mod tests {
             &mut active_deposit_counts_by_lock,
             &mut daily_unique_depositors_delta,
             &mut daily_active_delta,
+            &mut HashMap::new(),
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
@@ -1609,6 +1640,7 @@ mod tests {
             &mut active_deposit_counts_by_lock,
             &mut daily_unique_depositors_delta,
             &mut daily_active_delta,
+            &mut HashMap::new(),
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
@@ -1716,6 +1748,7 @@ mod tests {
             &mut active_deposit_counts_by_lock,
             &mut daily_unique_depositors_delta,
             &mut daily_active_delta,
+            &mut HashMap::new(),
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
@@ -1753,6 +1786,7 @@ mod tests {
             &mut active_deposit_counts_by_lock,
             &mut daily_unique_depositors_delta,
             &mut daily_active_delta,
+            &mut HashMap::new(),
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,
@@ -1786,6 +1820,7 @@ mod tests {
             &mut active_deposit_counts_by_lock,
             &mut daily_unique_depositors_delta,
             &mut daily_active_delta,
+            &mut HashMap::new(),
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
             &mut daily_withdrawals_delta,

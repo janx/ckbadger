@@ -2946,6 +2946,7 @@ impl Indexer {
                 &mut active_dao_deposit_counts_by_lock,
                 &mut batch_stats.dao_daily_unique_depositors_delta,
                 &mut batch_stats.dao_daily_active_delta,
+                &mut batch_stats.dao_daily_protocol_delta,
                 &mut batch_stats.dao_daily_gross_deposit_delta,
                 &mut batch_stats.dao_daily_new_deposits_delta,
                 &mut batch_stats.dao_daily_withdrawals_delta,
