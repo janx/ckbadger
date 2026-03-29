@@ -2885,7 +2885,12 @@ impl Indexer {
             {
                 let entry = batch_stats.daily_block_stats.entry(block_date).or_default();
                 let difficulty_u256 = ckb_compact_to_difficulty(parsed.compact_target as u32);
-                let difficulty_u64: u64 = difficulty_u256.to_string().parse().unwrap_or(u64::MAX);
+                let difficulty_u64: u64 = difficulty_u256.to_string().parse().map_err(|_| {
+                    anyhow!(
+                        "difficulty exceeds u64 range: block={}, date={}, compact_target={:#x}, difficulty={}",
+                        parsed.number, block_date, parsed.compact_target, difficulty_u256
+                    )
+                })?;
                 entry.0 += difficulty_u64 as i128;
                 entry.1 += 1;
                 entry.2 += parsed.uncles_count;

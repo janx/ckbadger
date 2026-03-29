@@ -355,7 +355,7 @@ impl CkbadgerStore {
     }
 }
 
-fn checked_rollback_total(
+pub(crate) fn checked_rollback_total(
     field_name: &str,
     current_total: i64,
     removed_total: i64,

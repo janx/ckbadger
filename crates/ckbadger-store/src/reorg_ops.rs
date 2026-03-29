@@ -7,6 +7,7 @@ use tracing::info;
 
 use crate::keys;
 use crate::store::*;
+use crate::sync_ops::checked_rollback_total;
 use crate::types::*;
 
 /// Cell distribution size bucket — must match the logic in
@@ -3037,19 +3038,9 @@ impl CkbadgerStore {
         stage.tick(cell_dist_tracker_repaired);
         stage.finish(cell_dist_tracker_repaired);
 
-        // Commit all deletes atomically
-        self.write_batch(batch)?;
-
-        info!(
-            elapsed_secs = format!("{:.1}", rollback_started_at.elapsed().as_secs_f64()),
-            blocks_removed,
-            txs_removed,
-            cells_removed,
-            cells_restored,
-            "Rollback cleanup write batch committed"
-        );
-
-        // Keep sync_status tip aligned with the rolled-back chain head.
+        // Compute the updated sync_status BEFORE the batch commit so we can
+        // include it in the same atomic WriteBatch.  This eliminates the crash
+        // window where deletes are committed but totals are still stale.
         let tip_hash = if rollback_to >= 0 {
             let header = self.get_block_header(rollback_to)?.ok_or_else(|| {
                 anyhow::anyhow!(
@@ -3062,15 +3053,55 @@ impl CkbadgerStore {
             Vec::new()
         };
         let tip_number = if rollback_to < 0 { 0 } else { rollback_to };
-        self.rollback_sync_status_tip_and_totals(
-            tip_number,
-            &tip_hash,
-            rollback_total_transactions,
-            rollback_total_cells_created,
-            rollback_total_cells_consumed,
-        )?;
+        {
+            let mut status = sync_status_before;
+            status.tip_block_number = tip_number;
+            status.tip_block_hash = tip_hash;
+            status.total_transactions = checked_rollback_total(
+                "total_transactions",
+                status.total_transactions,
+                rollback_total_transactions,
+                tip_number,
+            )?;
+            status.total_cells_created = checked_rollback_total(
+                "total_cells_created",
+                status.total_cells_created,
+                rollback_total_cells_created,
+                tip_number,
+            )?;
+            status.total_cells_consumed = checked_rollback_total(
+                "total_cells_consumed",
+                status.total_cells_consumed,
+                rollback_total_cells_consumed,
+                tip_number,
+            )?;
+            status.last_synced_at = chrono::Utc::now().timestamp();
+            let status_bytes = bincode::serialize(&status).map_err(|e| {
+                anyhow::anyhow!("failed to serialize sync_status during rollback: {}", e)
+            })?;
+            batch.put_cf(
+                self.cf_sync_meta(),
+                keys::sync_meta_keys::SYNC_STATUS,
+                &status_bytes,
+            );
+        }
+        // Clear the rollback-in-progress marker in the same atomic batch.
+        batch.delete_cf(
+            self.cf_sync_meta(),
+            keys::sync_meta_keys::ROLLBACK_CLEANUP_IN_PROGRESS,
+        );
 
-        self.set_rollback_cleanup_in_progress(false)?;
+        // Commit all deletes, sync_status update, and cleanup marker atomically.
+        self.write_batch(batch)?;
+
+        info!(
+            elapsed_secs = format!("{:.1}", rollback_started_at.elapsed().as_secs_f64()),
+            blocks_removed,
+            txs_removed,
+            cells_removed,
+            cells_restored,
+            "Rollback cleanup write batch committed"
+        );
 
         info!(
             tip_number,

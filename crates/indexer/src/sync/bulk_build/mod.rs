@@ -1117,7 +1117,12 @@ impl ChainStatsAccumulator {
             // --- DailyBlockStats (accumulate difficulty, not compact_target) ---
             let block_entry = self.daily_block_stats.entry(block_date).or_default();
             let difficulty_u256 = ckb_compact_to_difficulty(block.compact_target);
-            let difficulty_u64: u64 = difficulty_u256.to_string().parse().unwrap_or(u64::MAX);
+            let difficulty_u64: u64 = difficulty_u256.to_string().parse().map_err(|_| {
+                anyhow!(
+                    "difficulty exceeds u64 range: block={}, date={}, compact_target={:#x}, difficulty={}",
+                    block.number, block_date, block.compact_target, difficulty_u256
+                )
+            })?;
             block_entry.0 += difficulty_u64 as i128;
             block_entry.1 += 1;
             block_entry.2 += block.uncles_count;

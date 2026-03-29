@@ -266,10 +266,21 @@ impl BatchWriter {
                 } else {
                     start_block
                 };
+            // Revert entity mutations (Spore, mNFT, dotbit) from undo log FIRST
+            // so that the subsequent canonical rollback rebuilds aggregates from
+            // correct entity state.  This matches the normal reorg path ordering
+            // in execute_reorg().
+            self.store
+                .rollback_via_undo_log(append_store, rollback_target)?;
+            // Domain rollback for canonical mutable state (cells, blocks, stats,
+            // aggregates rebuilt from now-correct entity data).
             self.store
                 .rollback_to_block_with_append_only_store(rollback_target, Some(append_store))?;
             // Re-derive script version/family rollups from corrected reference info.
             self.refresh_script_reference_rollups()?;
+            // Re-derive DAO singleton stats (latest stats + top depositors)
+            // which may have been deleted during rollback.
+            self.refresh_latest_dao_statistics()?;
             info!(
                 start_block,
                 rollback_target, next_block, cleanup_reason, "Startup cleanup complete"
@@ -295,6 +306,10 @@ impl BatchWriter {
         // only legacy DB state from before that change.  Idempotent and fast
         // (reads CF_SCRIPT_REFERENCE_INFO, writes ≤3 CFs).
         self.refresh_script_reference_rollups()?;
+        // Re-derive DAO singleton stats unconditionally on startup to ensure
+        // they are consistent even after a crash between batch commit and DAO
+        // refresh.  Idempotent.
+        self.refresh_latest_dao_statistics()?;
 
         // Align persistent sync tip to the startup tip to avoid stale sync_status metadata.
         let (tip_number, tip_hash) = if let Some((num, header)) = self.store.get_sync_tip_block()? {

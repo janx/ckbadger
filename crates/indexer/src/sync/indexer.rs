@@ -1198,21 +1198,8 @@ impl Indexer {
             self.record_flight_event("startup_cleanup_completed", "ok");
         }
         init_result?;
-        if cleanup_needed {
-            info!(
-                run_id = %self.run_id,
-                rollback_to = actual_start,
-                "Startup undo-log rollback phase started"
-            );
-            self.writer
-                .store()
-                .rollback_via_undo_log(self.append_only_store.as_ref(), actual_start)?;
-            info!(
-                run_id = %self.run_id,
-                rollback_to = actual_start,
-                "Startup undo-log rollback phase completed"
-            );
-        }
+        // Undo-log rollback is now handled inside init_sync_start_with_options
+        // before canonical rollback, matching the normal reorg path ordering.
         self.reconcile_hodl_tracker_with_tip(actual_start)?;
         self.reconcile_cell_dist_tracker_with_tip(actual_start)?;
         self.start_bulk_sync_perf_run(bulk_sync_mode)?;

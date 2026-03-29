@@ -37,29 +37,34 @@ pub(crate) fn ensure_bulk_sync_fresh_start(
     sync_tip_hash: &Option<Vec<u8>>,
     append_only_store: &ckbadger_store::CkbadgerStore,
 ) -> Result<()> {
+    let domain_is_fresh = sync_tip_block == 0 && sync_tip_hash.is_none();
+
+    // Dual-store invariant: if domain is fresh, append-only must also be fresh,
+    // regardless of sync mode.  Stale CF_CELLS with an empty domain store would
+    // violate write-once-per-outpoint semantics during re-sync.
+    if domain_is_fresh && append_only_store.has_any_data_in_cells_cf()? {
+        bail!(
+            "dual-store fresh-start invariant violated: domain store is fresh but append-only \
+             store contains existing CF_CELLS data. Both stores must be empty for a fresh start. \
+             Delete both RocksDB directories and restart from genesis"
+        );
+    }
+
     if !bulk_sync_mode {
         return Ok(());
     }
-    if sync_tip_block == 0 && sync_tip_hash.is_none() {
-        // Domain store is fresh; also verify append-only store is empty.
-        // Bulk sync skips per-key existence probes, so stale CF_CELLS data
-        // would be silently overwritten, violating append-only semantics.
-        if append_only_store.has_any_data_in_cells_cf()? {
-            bail!(
-                "bulk sync fail-fast: domain store is fresh but append-only store contains \
-                 existing CF_CELLS data. Both stores must be empty for bulk sync. \
-                 Delete both RocksDB directories and restart from genesis"
-            );
-        }
-        return Ok(());
+
+    // Bulk sync additionally requires a completely fresh domain store.
+    if !domain_is_fresh {
+        bail!(
+            "bulk sync fail-fast: bulk sync only supports fresh-db rebuilds from genesis; \
+             detected existing sync tip state (tip_block={}, tip_hash_present={}). \
+             delete RocksDB and restart from genesis",
+            sync_tip_block,
+            sync_tip_hash.is_some()
+        );
     }
-    bail!(
-        "bulk sync fail-fast: bulk sync only supports fresh-db rebuilds from genesis; \
-         detected existing sync tip state (tip_block={}, tip_hash_present={}). \
-         delete RocksDB and restart from genesis",
-        sync_tip_block,
-        sync_tip_hash.is_some()
-    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -159,6 +164,42 @@ mod tests {
         batch.commit().unwrap();
 
         let err = ensure_bulk_sync_fresh_start(true, 0, &None, &append_store).unwrap_err();
-        assert!(err.to_string().contains("append-only store contains"));
+        assert!(err
+            .to_string()
+            .contains("dual-store fresh-start invariant violated"));
+    }
+
+    #[test]
+    fn test_ensure_fresh_start_rejects_dirty_append_only_in_pipeline_mode() {
+        // Fresh domain + dirty append-only must fail even when not in bulk sync mode.
+        let dir = tempfile::tempdir().unwrap();
+        let append_store =
+            ckbadger_store::CkbadgerStore::open_append_only(dir.path().join("append")).unwrap();
+        let mut batch = ckbadger_store::StoreBatch::new(&append_store);
+        batch.put_cell_payload_by_outpoint(
+            &[0x02; 32],
+            0,
+            &ckbadger_store::LiveCellInfo {
+                capacity: 100,
+                lock_script_hash: vec![0xAA; 32],
+                lock_code_hash: vec![0xBB; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: None,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                data_size: 0,
+                occupied_capacity: 61,
+                udt_amount: None,
+                data_hash: None,
+            },
+        );
+        batch.commit().unwrap();
+
+        let err = ensure_bulk_sync_fresh_start(false, 0, &None, &append_store).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("dual-store fresh-start invariant violated"));
     }
 }
