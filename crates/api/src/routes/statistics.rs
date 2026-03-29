@@ -3396,6 +3396,7 @@ mod tests {
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
+            unmade_dao_interests: 0,
         }
     }
 
