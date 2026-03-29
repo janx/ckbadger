@@ -164,6 +164,8 @@ pub struct DaoSnapshotInput {
     pub cum_dao_compensation: i128,
     /// Cumulative secondary issuance to treasury (shannons).
     pub cum_treasury: i128,
+    /// AR-based compensation sum for active (status-0) deposits (shannons).
+    pub unmade_dao_interests: i128,
     /// Unclaimed DAO compensation at this point (shannons).
     pub unclaimed_compensation: u128,
     /// Cumulative count of unique addresses that have ever deposited.
@@ -629,6 +631,7 @@ impl BatchWriter {
             cum_miner_secondary: dao_snapshot.cum_miner_secondary,
             cum_dao_compensation: dao_snapshot.cum_dao_compensation,
             cum_treasury: dao_snapshot.cum_treasury,
+            unmade_dao_interests: dao_snapshot.unmade_dao_interests,
             unclaimed_compensation: dao_snapshot.unclaimed_compensation,
             cumulative_depositors: dao_snapshot.cumulative_depositors,
             daily_depositor_addresses: dao_snapshot.daily_depositor_addresses,
@@ -1407,6 +1410,7 @@ mod tests {
             cum_dao_compensation: 20_00000000,
             cum_treasury: 30_00000000,
             unclaimed_compensation: 0,
+            unmade_dao_interests: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
@@ -1543,6 +1547,7 @@ mod tests {
             cum_dao_compensation: 20_00000000,
             cum_treasury: 30_00000000,
             unclaimed_compensation: 0,
+            unmade_dao_interests: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,

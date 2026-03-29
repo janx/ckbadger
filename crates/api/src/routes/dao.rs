@@ -3,7 +3,9 @@ use axum::{
     routing::get,
     Router,
 };
-use ckbadger_common::dao::{calculate_dao_compensation_from_ar, calculate_estimated_apc};
+use ckbadger_common::dao::{
+    calculate_dao_compensation_from_ar, calculate_estimated_apc, extract_s_from_dao,
+};
 use ckbadger_store::keys;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -82,7 +84,7 @@ fn map_dao_pagination_error(err: anyhow::Error, label: &str) -> ApiRouteError {
 fn resolve_latest_block_and_ar_from_tip(
     tip: Option<(i64, ckbadger_store::CachedBlockHeader)>,
     context: &str,
-) -> Result<(i64, u64, i64), ApiRouteError> {
+) -> Result<(i64, u64, i64, u64), ApiRouteError> {
     let (block_number, header) = tip.ok_or_else(|| {
         ApiError::internal(format!(
             "missing sync tip block while computing DAO {}",
@@ -97,13 +99,21 @@ fn resolve_latest_block_and_ar_from_tip(
             header.dao.len()
         ))
     })?;
-    Ok((block_number, ar, header.timestamp))
+    let s = extract_s_from_dao(&header.dao).ok_or_else(|| {
+        ApiError::internal(format!(
+            "invalid DAO S field in sync tip block while computing DAO {}: block_number={}, dao_len={}",
+            context,
+            block_number,
+            header.dao.len()
+        ))
+    })?;
+    Ok((block_number, ar, header.timestamp, s))
 }
 
 fn resolve_latest_block_and_ar(
     state: &AppState,
     context: &str,
-) -> Result<(i64, u64, i64), ApiRouteError> {
+) -> Result<(i64, u64, i64, u64), ApiRouteError> {
     let tip = state
         .store
         .get_sync_tip_block()
@@ -195,6 +205,16 @@ struct DaoStatisticsAccumulator {
     total_ms_held: f64,
     active_filtered_count: usize,
     total_unclaimed: u128,
+    /// AR-based compensation for status-0 deposits only (explorer-compatible treasury).
+    unmade_active_compensation: u128,
+    /// Capacity-weighted deposit-days for status-0 deposits.
+    weighted_deposit_days_status0: f64,
+    /// Capacity-weighted deposit-days for status-1 deposits (frozen at phase-1 time).
+    weighted_deposit_days_status1: f64,
+    /// Total capacity of deposits (status 0 + status 1) included in average.
+    avg_total_capacity: i128,
+    /// Status-1 deposits needing block header lookup for weighted average.
+    status1_for_avg: Vec<(i64, i64, i64)>, // (capacity, deposit_timestamp, withdraw_request_block)
 }
 
 fn accumulate_dao_statistics_entry(
@@ -220,7 +240,12 @@ fn accumulate_dao_statistics_entry(
                     let compensation =
                         calculate_dao_compensation_from_ar(entry.capacity, ar_deposit, latest_ar)?;
                     acc.total_unclaimed += compensation as u128;
+                    acc.unmade_active_compensation += compensation as u128;
                 }
+
+                let days_held = held_ms as f64 / 86_400_000.0;
+                acc.weighted_deposit_days_status0 += entry.capacity as f64 * days_held;
+                acc.avg_total_capacity += entry.capacity as i128;
             }
         }
         1 => {
@@ -252,6 +277,15 @@ fn accumulate_dao_statistics_entry(
                         effective_ar,
                     )?;
                     acc.total_unclaimed += compensation as u128;
+                }
+
+                // Collect status-1 deposit info for capacity-weighted average.
+                if let Some(request_block) = entry.withdraw_request_block {
+                    acc.status1_for_avg.push((
+                        entry.capacity,
+                        entry.deposit_timestamp,
+                        request_block,
+                    ));
                 }
             }
         }
@@ -578,17 +612,22 @@ fn snapshot_circulating_supply(
     if total_issuance <= 0 {
         return Ok(None);
     }
-    if snapshot.cum_treasury < 0 {
+    let explorer_treasury = if snapshot.unmade_dao_interests > 0 {
+        snapshot.secondary_pool - snapshot.unmade_dao_interests
+    } else {
+        snapshot.cum_treasury
+    };
+    if explorer_treasury < 0 {
         return Err(ApiError::internal(format!(
-            "negative cum_treasury in dao_daily_snapshots for {}: {}",
-            snapshot.date, snapshot.cum_treasury
+            "negative treasury in dao_daily_snapshots for {}: {}",
+            snapshot.date, explorer_treasury
         )));
     }
-    let circulating = total_issuance - GENESIS_BURNT - snapshot.cum_treasury;
+    let circulating = total_issuance - GENESIS_BURNT - explorer_treasury;
     if circulating < 0 {
         return Err(ApiError::internal(format!(
-            "negative circulating supply for {}: total_issuance={}, burnt={}, cum_treasury={}",
-            snapshot.date, total_issuance, GENESIS_BURNT, snapshot.cum_treasury
+            "negative circulating supply for {}: total_issuance={}, burnt={}, treasury={}",
+            snapshot.date, total_issuance, GENESIS_BURNT, explorer_treasury
         )));
     }
     Ok(Some(circulating))
@@ -678,7 +717,7 @@ async fn get_address_dao_summary(
         return Err(ApiError::bad_request("Invalid lock script hash"));
     }
 
-    let (latest_block_number, latest_ar, _tip_timestamp) =
+    let (latest_block_number, latest_ar, _tip_timestamp, _s) =
         resolve_latest_block_and_ar(&state, "summary")?;
     let cache_key = dao_address_summary_cache_key(&hash, latest_block_number);
     if let Some(cached) = state.mem_cache.get::<AddressDaoSummaryResponse>(&cache_key) {
@@ -789,7 +828,7 @@ async fn get_address_dao_summary(
 }
 
 async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStatisticsResponse> {
-    let (latest_block_number, latest_ar, tip_timestamp) =
+    let (latest_block_number, latest_ar, tip_timestamp, tip_s) =
         resolve_latest_block_and_ar(&state, "statistics")?;
     if let Some(latest) = state
         .store
@@ -823,8 +862,21 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
 
     let total_depositors = acc.unique_depositors.len() as i32;
 
-    let avg_days = if acc.active_filtered_count > 0 {
-        acc.total_ms_held / acc.active_filtered_count as f64 / 86_400_000.0
+    // Resolve status-1 deposit timestamps from block headers.
+    for &(capacity, deposit_ts, request_block) in &acc.status1_for_avg {
+        if let Ok(Some(header)) = state.store.get_block_header(request_block) {
+            let frozen_days = (header.timestamp - deposit_ts) as f64 / 86_400_000.0;
+            if frozen_days >= 0.0 {
+                acc.weighted_deposit_days_status1 += capacity as f64 * frozen_days;
+                acc.avg_total_capacity += capacity as i128;
+            }
+        }
+    }
+
+    // Capacity-weighted average deposit time (matches CKB Explorer).
+    let total_weighted_days = acc.weighted_deposit_days_status0 + acc.weighted_deposit_days_status1;
+    let avg_days = if acc.avg_total_capacity > 0 {
+        total_weighted_days / acc.avg_total_capacity as f64
     } else {
         0.0
     };
@@ -854,16 +906,12 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
                 s.date, s.cum_dao_compensation
             )));
         }
-        if s.cum_treasury < 0 {
-            return Err(ApiError::internal(format!(
-                "negative cum_treasury in dao_daily_snapshots for {}: {}",
-                s.date, s.cum_treasury
-            )));
-        }
+        // Use tip S-field and live unmade computation for explorer-compatible treasury.
+        let treasury_from_s = tip_s as i128 - acc.unmade_active_compensation as i128;
         (
             s.cum_miner_secondary.to_string(),
             s.cum_dao_compensation.to_string(),
-            s.cum_treasury.to_string(),
+            treasury_from_s.max(0).to_string(),
         )
     } else {
         ("0".to_string(), "0".to_string(), "0".to_string())
@@ -1338,6 +1386,7 @@ mod tests {
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
             protocol_deposited: None,
+            unmade_dao_interests: 0,
         }
     }
 
@@ -1536,6 +1585,15 @@ mod tests {
         );
         assert_eq!(acc.active_filtered_count, 1);
         assert_eq!(acc.total_unclaimed, 1_000);
+        // New fields: unmade_active_compensation mirrors total_unclaimed for status-0.
+        assert_eq!(acc.unmade_active_compensation, 1_000);
+        // Capacity-weighted deposit days for the active deposit.
+        let expected_days = tip_ts as f64 / 86_400_000.0;
+        let expected_weighted = active.capacity as f64 * expected_days;
+        assert!((acc.weighted_deposit_days_status0 - expected_weighted).abs() < 0.001);
+        assert_eq!(acc.avg_total_capacity, active.capacity as i128);
+        // No status-1 deposits in this test.
+        assert!(acc.status1_for_avg.is_empty());
     }
 
     #[test]

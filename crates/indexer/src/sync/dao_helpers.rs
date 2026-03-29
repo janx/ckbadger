@@ -60,6 +60,11 @@ pub(crate) struct BatchStats {
     /// DAO transactions were found.  This distinguishes "genuinely zero deltas"
     /// from "deltas never computed" (e.g. stale DB from an older indexer).
     pub(crate) dao_deltas_computed: bool,
+    /// Per-date unmade_dao_interests for status-0 deposits (live-sync path).
+    /// Currently computed directly from the store at snapshot time rather than
+    /// accumulated here, but kept for structural parity with bulk-build.
+    #[allow(dead_code)]
+    pub(crate) daily_unmade_dao_interests: HashMap<NaiveDate, i128>,
 }
 
 #[derive(Clone)]
