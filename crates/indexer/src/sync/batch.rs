@@ -3459,6 +3459,26 @@ impl Indexer {
                         depositors.len() as i64
                     };
 
+                    // Compute unmade DAO interests from all status-0 deposits
+                    // using the AR from the day's last block DAO header.
+                    let unmade_dao_interests =
+                        if let Some(dao_bytes) = stats.daily_dao_fields.get(date) {
+                            if dao_bytes.len() >= 16 {
+                                let ar_bytes: [u8; 8] =
+                                    dao_bytes[8..16].try_into().unwrap_or([0u8; 8]);
+                                let ar = u64::from_le_bytes(ar_bytes);
+                                if ar > 0 {
+                                    self.writer.store().compute_unmade_dao_interests(ar)?
+                                } else {
+                                    0
+                                }
+                            } else {
+                                0
+                            }
+                        } else {
+                            0
+                        };
+
                     let dao_snapshot = crate::db::writer::DaoSnapshotInput {
                         total_deposited: running_total_deposited,
                         depositors_count: running_total_depositors,
@@ -3472,6 +3492,7 @@ impl Indexer {
                         cum_miner_secondary: running_cum_miner,
                         cum_dao_compensation: running_cum_dao,
                         cum_treasury: running_cum_treasury,
+                        unmade_dao_interests,
                         unclaimed_compensation: 0,
                         cumulative_depositors: running_cumulative_depositors,
                         daily_depositor_addresses,

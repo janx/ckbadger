@@ -202,6 +202,34 @@ impl CkbadgerStore {
         Ok(())
     }
 
+    /// Sum AR-based compensation for all status-0 deposits using the given AR.
+    /// Returns the total unmade DAO interests in shannons.
+    pub fn compute_unmade_dao_interests(&self, ar: u64) -> anyhow::Result<i128> {
+        const DAO_OCCUPIED_CAPACITY: i64 = 102_00000000;
+        let mut total: i128 = 0;
+        let occupied = DAO_OCCUPIED_CAPACITY as i128;
+        self.scan_dao_deposits(|_, entry| {
+            if entry.status == 0 {
+                let cap = entry.capacity as i128;
+                if cap > occupied {
+                    let free_cap = (cap - occupied) as u128;
+                    let ar_deposit = entry.deposit_ar;
+                    if ar_deposit > 0 {
+                        let ar_deposit_u128 = ar_deposit as u128;
+                        let gross = free_cap
+                            .checked_mul(ar as u128)
+                            .unwrap_or(u128::MAX)
+                            / ar_deposit_u128;
+                        let comp = gross.saturating_sub(free_cap);
+                        total += comp as i128;
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        Ok(total)
+    }
+
     pub fn scan_dao_deposits_by_status<F>(&self, status: i16, mut visitor: F) -> anyhow::Result<()>
     where
         F: FnMut(&[u8], &DaoDepositCacheEntry) -> anyhow::Result<()>,
