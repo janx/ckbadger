@@ -27,8 +27,6 @@ const TOP_ASSET_LIMIT: usize = 10;
 const TOP_HOLDER_LIMIT: usize = 10;
 const IDENTITY_HOLDER_SPOT_CHECK_LIMIT: usize = 10;
 const ADDRESS_TOKENS_LIMIT: usize = 100;
-const WARMUP_PENDING_RETRY_ATTEMPTS: usize = 30;
-const WARMUP_PENDING_RETRY_DELAY_MS: u64 = 1_000;
 
 // ---------------------------------------------------------------------------
 // Lightweight API response types (deserialized from ckbadger API JSON).
@@ -250,60 +248,6 @@ struct MinerDistributionDataPoint {
 struct MinerDistributionResponse {
     data: Vec<MinerDistributionDataPoint>,
     total_blocks: i64,
-}
-
-// ---------------------------------------------------------------------------
-// Helper: GET a JSON endpoint from our API.
-// ---------------------------------------------------------------------------
-
-fn api_get<T: serde::de::DeserializeOwned>(ctx: &CheckContext, path: &str) -> anyhow::Result<T> {
-    let url = format!(
-        "{}/{}",
-        ctx.api_url.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    );
-    let mut backoff_ms = 500;
-    for attempt in 0..WARMUP_PENDING_RETRY_ATTEMPTS {
-        let resp = ctx.http.get(&url).send()?;
-        let status = resp.status();
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 4 {
-            std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
-            backoff_ms *= 2;
-            continue;
-        }
-        if !status.is_success() {
-            let body = resp.text().unwrap_or_default();
-            if status == reqwest::StatusCode::SERVICE_UNAVAILABLE
-                && is_warmup_pending_body(&body)
-                && attempt + 1 < WARMUP_PENDING_RETRY_ATTEMPTS
-            {
-                std::thread::sleep(std::time::Duration::from_millis(
-                    WARMUP_PENDING_RETRY_DELAY_MS,
-                ));
-                continue;
-            }
-            let detail = if body.is_empty() {
-                String::new()
-            } else {
-                format!(": {}", &body[..body.len().min(512)])
-            };
-            anyhow::bail!("GET {} returned {}{}", path, status, detail);
-        }
-        return Ok(resp.json()?);
-    }
-    unreachable!()
-}
-
-fn is_warmup_pending_body(body: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(|error| error.as_str())
-                .map(str::to_owned)
-        })
-        .is_some_and(|error| error == "warmup_pending")
 }
 
 /// Fetch network stats (used by multiple fast checks).

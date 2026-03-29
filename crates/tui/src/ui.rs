@@ -2733,32 +2733,6 @@ fn controller_panel_lines(
     }
 }
 
-/// Format a delta value as "+N" / "-N" / "=" with color.
-#[allow(dead_code)]
-fn delta_span(label: &str, delta: i64, invert_color: bool) -> Vec<Span<'static>> {
-    let (text, color) = if delta > 0 {
-        (
-            format!("+{}", delta),
-            if invert_color {
-                ERROR_RED
-            } else {
-                TERMINAL_GREEN
-            },
-        )
-    } else if delta < 0 {
-        (
-            format!("{}", delta),
-            if invert_color { TERMINAL_GREEN } else { AMBER },
-        )
-    } else {
-        ("=".to_string(), SLATE_500)
-    };
-    vec![
-        Span::styled(format!("{} ", label), Style::default().fg(SLATE_500)),
-        Span::styled(text, Style::default().fg(color)),
-    ]
-}
-
 /// Build the left column for normal per-batch bulk-build diagnostics.
 fn build_batch_left_column(
     bb: &BulkBuildProgressData,

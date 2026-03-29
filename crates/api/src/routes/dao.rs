@@ -3,7 +3,7 @@ use axum::{
     routing::get,
     Router,
 };
-use ckbadger_common::dao::calculate_estimated_apc;
+use ckbadger_common::dao::{calculate_dao_compensation_from_ar, calculate_estimated_apc};
 use ckbadger_store::keys;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -215,44 +215,45 @@ fn accumulate_dao_statistics_entry(
                 acc.total_ms_held += held_ms as f64;
                 acc.active_filtered_count += 1;
 
-                if entry.capacity < 0 {
-                    anyhow::bail!(
-                        "negative DAO deposit capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                        entry.deposit_block_number,
-                        hex::encode(&entry.lock_script_hash),
-                        entry.capacity
-                    );
-                }
-                let capacity = entry.capacity as u128;
-                let free_capacity = capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "DAO deposit capacity below occupied capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                        entry.deposit_block_number,
-                        hex::encode(&entry.lock_script_hash),
-                        capacity
-                    )
-                })?;
-
                 let ar_deposit = dao_deposit_ar_as_u64(entry, "statistics")?;
                 if ar_deposit > 0 && latest_ar > ar_deposit {
-                    let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
-                    let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
-                            entry.deposit_block_number,
-                            hex::encode(&entry.lock_script_hash),
-                            free_capacity,
-                            ar_deposit,
-                            latest_ar
-                        )
-                    })?;
-                    acc.total_unclaimed += compensation;
+                    let compensation =
+                        calculate_dao_compensation_from_ar(entry.capacity, ar_deposit, latest_ar)?;
+                    acc.total_unclaimed += compensation as u128;
                 }
             }
         }
         1 => {
             acc.pending_withdrawal_capacity += entry.capacity as i128;
             acc.active_count += 1;
+
+            // Compensation accrues for status=1 deposits (still locked in DAO).
+            // Per RFC-0023, compensation is locked at withdraw_request_ar.
+            if entry.deposit_block_number <= latest_block_number {
+                let ar_deposit = dao_deposit_ar_as_u64(entry, "statistics")?;
+                let withdraw_ar = entry.withdraw_request_ar.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "status=1 deposit missing withdraw_request_ar: deposit_block={}, lock_hash=0x{}",
+                        entry.deposit_block_number,
+                        hex::encode(&entry.lock_script_hash)
+                    )
+                })?;
+                let effective_ar = u64::try_from(withdraw_ar).map_err(|_| {
+                    anyhow::anyhow!(
+                        "status=1 deposit withdraw_request_ar exceeds u64: deposit_block={}, ar={}",
+                        entry.deposit_block_number,
+                        withdraw_ar
+                    )
+                })?;
+                if ar_deposit > 0 && effective_ar > ar_deposit {
+                    let compensation = calculate_dao_compensation_from_ar(
+                        entry.capacity,
+                        ar_deposit,
+                        effective_ar,
+                    )?;
+                    acc.total_unclaimed += compensation as u128;
+                }
+            }
         }
         2 => {
             if let Some(comp) = entry.compensation {
@@ -545,8 +546,6 @@ async fn get_deposits_by_address(
     ))
 }
 
-const DAO_OCCUPIED_CAPACITY: u128 = 102_00000000;
-
 /// Compute estimated APC from tip block epoch info using the CKB Explorer model.
 fn estimated_apc_from_store(
     store: &ckbadger_store::CkbadgerStore,
@@ -714,37 +713,34 @@ async fn get_address_dao_summary(
             if (entry.status == 0 || entry.status == 1)
                 && entry.deposit_block_number <= latest_block_number
             {
-                if entry.capacity < 0 {
-                    anyhow::bail!(
-                        "negative DAO deposit capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                        entry.deposit_block_number,
-                        hex::encode(&entry.lock_script_hash),
-                        entry.capacity
-                    );
-                }
-                let capacity = entry.capacity as u128;
-                let free_capacity = capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "DAO deposit capacity below occupied capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                        entry.deposit_block_number,
-                        hex::encode(&entry.lock_script_hash),
-                        capacity
-                    )
-                })?;
                 let ar_deposit = dao_deposit_ar_as_u64(entry, "summary")?;
-                if ar_deposit > 0 && latest_ar > ar_deposit {
-                    let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
-                    let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
+                // Per RFC-0023, status=1 compensation is locked at withdraw_request_ar;
+                // status=0 continues to accrue at tip_ar.
+                let effective_ar = if entry.status == 1 {
+                    let withdraw_ar = entry.withdraw_request_ar.ok_or_else(|| {
                         anyhow::anyhow!(
-                            "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
+                            "status=1 deposit missing withdraw_request_ar: deposit_block={}, lock_hash=0x{}",
                             entry.deposit_block_number,
-                            hex::encode(&entry.lock_script_hash),
-                            free_capacity,
-                            ar_deposit,
-                            latest_ar
+                            hex::encode(&entry.lock_script_hash)
                         )
                     })?;
-                    total_unclaimed += compensation;
+                    u64::try_from(withdraw_ar).map_err(|_| {
+                        anyhow::anyhow!(
+                            "status=1 deposit withdraw_request_ar exceeds u64: deposit_block={}, ar={}",
+                            entry.deposit_block_number,
+                            withdraw_ar
+                        )
+                    })?
+                } else {
+                    latest_ar
+                };
+                if ar_deposit > 0 && effective_ar > ar_deposit {
+                    let compensation = calculate_dao_compensation_from_ar(
+                        entry.capacity,
+                        ar_deposit,
+                        effective_ar,
+                    )?;
+                    total_unclaimed += compensation as u128;
                 }
             }
             Ok(())
@@ -1318,6 +1314,7 @@ async fn get_circulation_ratio_chart(
 mod tests {
     use super::*;
     use crate::cache::InMemoryCache;
+    use ckbadger_common::dao::DAO_OCCUPIED_CAPACITY;
     use ckbadger_store::types::CachedBlockHeader;
     use ckbadger_store::types::DaoDepositCacheEntry;
     use std::time::Duration;
@@ -1542,7 +1539,7 @@ mod tests {
     }
 
     #[test]
-    fn test_accumulate_dao_statistics_entry_excludes_status1_from_explorer_totals() {
+    fn test_accumulate_dao_statistics_entry_status1_uses_withdraw_request_ar() {
         let mut acc = DaoStatisticsAccumulator::default();
         let active = DaoDepositCacheEntry {
             capacity: (DAO_OCCUPIED_CAPACITY + 1_000) as i64,
@@ -1590,7 +1587,9 @@ mod tests {
             (tip_ts - active.deposit_timestamp) as f64
         );
         assert_eq!(acc.active_filtered_count, 1);
-        assert_eq!(acc.total_unclaimed, 1_000);
+        // status=0: free=1000, gross=1000*200/100=2000, comp=1000
+        // status=1: free=2000, gross=2000*150/100=3000, comp=1000 (uses withdraw_request_ar=150)
+        assert_eq!(acc.total_unclaimed, 2_000);
     }
 
     #[test]

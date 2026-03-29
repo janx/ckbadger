@@ -5,12 +5,12 @@ use ckbadger_store::keys;
 use ckbadger_store::types::DaoDepositCacheEntry;
 use std::collections::{HashMap, HashSet};
 
+pub(crate) use ckbadger_common::dao::calculate_dao_compensation_from_ar;
+
 use crate::parser::ParsedDaoDeposit;
 use crate::sync::dao_helpers::DaoConsumedRow;
 
 use super::BatchWriter;
-
-const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000;
 
 fn build_dao_cache_entry(
     deposit: &ParsedDaoDeposit,
@@ -115,47 +115,6 @@ pub(crate) fn extract_ar_from_dao(dao: &[u8]) -> Option<u64> {
     }
     let bytes: [u8; 8] = dao[8..16].try_into().ok()?;
     Some(u64::from_le_bytes(bytes))
-}
-
-pub(crate) fn calculate_dao_compensation_from_ar(
-    capacity: i64,
-    ar_deposit: u64,
-    ar_withdraw: u64,
-) -> Result<i64> {
-    if ar_deposit == 0 {
-        bail!(
-            "invalid zero deposit AR while calculating DAO compensation: capacity={}, ar_deposit={}, ar_withdraw={}",
-            capacity,
-            ar_deposit,
-            ar_withdraw
-        );
-    }
-
-    let capacity_u128 = u128::try_from(capacity)
-        .map_err(|_| anyhow!("DAO capacity is negative: capacity={}", capacity))?;
-    let occupied = DAO_OCCUPIED_CAPACITY as u128;
-    if capacity_u128 < occupied {
-        bail!(
-            "DAO capacity below occupied capacity: capacity={}, occupied={}",
-            capacity,
-            DAO_OCCUPIED_CAPACITY
-        );
-    }
-    let free_capacity = capacity_u128 - occupied;
-    let gross = free_capacity
-        .checked_mul(ar_withdraw as u128)
-        .ok_or_else(|| anyhow!("DAO compensation multiply overflow"))?
-        / (ar_deposit as u128);
-    let compensation_u128 = gross.checked_sub(free_capacity).ok_or_else(|| {
-        anyhow!(
-            "DAO compensation underflow: free_capacity={}, ar_deposit={}, ar_withdraw={}",
-            free_capacity,
-            ar_deposit,
-            ar_withdraw
-        )
-    })?;
-    i64::try_from(compensation_u128)
-        .map_err(|_| anyhow!("DAO compensation exceeds i64: {}", compensation_u128))
 }
 
 fn infer_withdraw_to_output_index_from_outputs(

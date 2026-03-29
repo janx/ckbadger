@@ -204,7 +204,11 @@ pub fn execute_check(
     }
 }
 
-/// HTTP GET with exponential-backoff retry on 429 (Too Many Requests).
+const WARMUP_PENDING_MAX_ATTEMPTS: usize = 30;
+const WARMUP_PENDING_RETRY_DELAY_MS: u64 = 1_000;
+
+/// HTTP GET with exponential-backoff retry on 429 (Too Many Requests)
+/// and warmup-pending retry on 503.
 /// Shared by api_checks and explorer modules.
 pub(super) fn api_get<T: serde::de::DeserializeOwned>(
     ctx: &CheckContext,
@@ -216,16 +220,27 @@ pub(super) fn api_get<T: serde::de::DeserializeOwned>(
         path.trim_start_matches('/')
     );
     let mut backoff_ms = 500;
-    for attempt in 0..5 {
+    for attempt in 0..WARMUP_PENDING_MAX_ATTEMPTS {
         let resp = ctx.http.get(&url).send()?;
         let status = resp.status();
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 4 {
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            && attempt + 1 < WARMUP_PENDING_MAX_ATTEMPTS
+        {
             std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
-            backoff_ms *= 2;
+            backoff_ms = (backoff_ms * 2).min(8_000);
             continue;
         }
         if !status.is_success() {
             let body = resp.text().unwrap_or_default();
+            if status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+                && is_warmup_pending_body(&body)
+                && attempt + 1 < WARMUP_PENDING_MAX_ATTEMPTS
+            {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    WARMUP_PENDING_RETRY_DELAY_MS,
+                ));
+                continue;
+            }
             let detail = if body.is_empty() {
                 String::new()
             } else {
@@ -236,4 +251,16 @@ pub(super) fn api_get<T: serde::de::DeserializeOwned>(
         return Ok(resp.json()?);
     }
     unreachable!()
+}
+
+fn is_warmup_pending_body(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(|error| error.as_str())
+                .map(str::to_owned)
+        })
+        .is_some_and(|error| error == "warmup_pending")
 }

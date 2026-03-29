@@ -1,4 +1,55 @@
+use anyhow::{anyhow, bail};
+
 pub const SHANNON: u64 = 100_000_000;
+
+/// DAO cell occupied capacity: 102 CKB in shannons.
+/// Every DAO deposit cell has this minimum storage cost.
+pub const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000;
+
+/// Calculate DAO compensation from accumulated rate values.
+///
+/// Formula (per RFC-0023): `free_capacity * ar_withdraw / ar_deposit - free_capacity`
+/// where `free_capacity = capacity - DAO_OCCUPIED_CAPACITY`.
+pub fn calculate_dao_compensation_from_ar(
+    capacity: i64,
+    ar_deposit: u64,
+    ar_withdraw: u64,
+) -> anyhow::Result<i64> {
+    if ar_deposit == 0 {
+        bail!(
+            "invalid zero deposit AR while calculating DAO compensation: capacity={}, ar_deposit={}, ar_withdraw={}",
+            capacity,
+            ar_deposit,
+            ar_withdraw
+        );
+    }
+
+    let capacity_u128 = u128::try_from(capacity)
+        .map_err(|_| anyhow!("DAO capacity is negative: capacity={}", capacity))?;
+    let occupied = DAO_OCCUPIED_CAPACITY as u128;
+    if capacity_u128 < occupied {
+        bail!(
+            "DAO capacity below occupied capacity: capacity={}, occupied={}",
+            capacity,
+            DAO_OCCUPIED_CAPACITY
+        );
+    }
+    let free_capacity = capacity_u128 - occupied;
+    let gross = free_capacity
+        .checked_mul(ar_withdraw as u128)
+        .ok_or_else(|| anyhow!("DAO compensation multiply overflow"))?
+        / (ar_deposit as u128);
+    let compensation_u128 = gross.checked_sub(free_capacity).ok_or_else(|| {
+        anyhow!(
+            "DAO compensation underflow: free_capacity={}, ar_deposit={}, ar_withdraw={}",
+            free_capacity,
+            ar_deposit,
+            ar_withdraw
+        )
+    })?;
+    i64::try_from(compensation_u128)
+        .map_err(|_| anyhow!("DAO compensation exceeds i64: {}", compensation_u128))
+}
 
 /// 8.4B CKB burnt at genesis (in shannons).
 /// This is 25% of the 33.6B genesis issuance, split as:

@@ -175,7 +175,7 @@ pub struct DaoSnapshotInput {
     pub protocol_deposited: Option<i128>,
 }
 
-const DAO_OCCUPIED_CAPACITY: u128 = 102_00000000;
+use ckbadger_common::dao::calculate_dao_compensation_from_ar;
 
 impl BatchWriter {
     pub fn update_hourly_statistics(
@@ -952,24 +952,6 @@ impl BatchWriter {
 
                 // Compensation accrues for both status=0 and status=1 deposits
                 // (both are still locked in the DAO contract).
-                if entry.capacity < 0 {
-                    bail!(
-                        "negative DAO deposit capacity while refreshing latest dao statistics: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                        entry.deposit_block_number,
-                        hex::encode(&entry.lock_script_hash),
-                        entry.capacity
-                    );
-                }
-                let capacity = entry.capacity as u128;
-                let free_capacity =
-                    capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
-                        anyhow!(
-                            "DAO deposit capacity below occupied capacity while refreshing latest dao statistics: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                            entry.deposit_block_number,
-                            hex::encode(&entry.lock_script_hash),
-                            capacity
-                        )
-                    })?;
                 let ar_deposit = u64::try_from(entry.deposit_ar).map_err(|_| {
                     anyhow!(
                         "invalid negative DAO deposit AR while refreshing latest dao statistics: deposit_block={}, lock_script_hash=0x{}, deposit_ar={}",
@@ -999,21 +981,12 @@ impl BatchWriter {
                     tip_ar
                 };
                 if ar_deposit > 0 && effective_ar > ar_deposit {
-                    let gross = free_capacity
-                        .checked_mul(effective_ar as u128)
-                        .ok_or_else(|| anyhow!("DAO compensation multiply overflow"))?
-                        / ar_deposit as u128;
-                    let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
-                        anyhow!(
-                            "DAO compensation underflow while refreshing latest dao statistics: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, effective_ar={}",
-                            entry.deposit_block_number,
-                            hex::encode(&entry.lock_script_hash),
-                            free_capacity,
-                            ar_deposit,
-                            effective_ar
-                        )
-                    })?;
-                    unclaimed_compensation += compensation;
+                    let compensation = calculate_dao_compensation_from_ar(
+                        entry.capacity,
+                        ar_deposit,
+                        effective_ar,
+                    )?;
+                    unclaimed_compensation += compensation as u128;
                 }
 
                 Ok(())
