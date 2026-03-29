@@ -1559,7 +1559,9 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_EPOCH_TIME_DIST
             | keys::STATS_PREFIX_DAILY_BLOCK
             | keys::STATS_PREFIX_ACTIVITY_DAILY
-            | keys::STATS_PREFIX_ACTIVITY_HOURLY => Ok(self.cf_stats_chain()),
+            | keys::STATS_PREFIX_ACTIVITY_HOURLY
+            | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET
+            | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET => Ok(self.cf_stats_chain()),
             keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
             | keys::STATS_PREFIX_DAO_LATEST_STATS
             | keys::STATS_PREFIX_DAO_TOP_DEPOSITORS => Ok(self.cf_stats_dao()),

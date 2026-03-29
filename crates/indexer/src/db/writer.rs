@@ -2,11 +2,16 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::manual_is_multiple_of)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::types::{UndoLogEntry, UndoLogStoreTarget};
 use ckbadger_store::CkbadgerStore;
 
 use crate::cache::CacheInvalidator;
+use crate::sync::types::UndoSeqScope;
+use crate::sync::undo::next_undo_seq;
 
 #[derive(Clone)]
 pub struct BatchWriter {
@@ -46,6 +51,34 @@ impl BatchWriter {
 
     pub fn append_only_store(&self) -> &CkbadgerStore {
         &self.append_only_store
+    }
+
+    /// Record an undo log entry for an NFT/identity entity mutation.
+    /// Captures the previous value so rollback can restore it.
+    /// Skipped during bulk sync mode (no undo log needed).
+    pub(crate) fn record_nft_undo(
+        &self,
+        batch: &mut StoreBatch,
+        block_number: i64,
+        cf_name: &'static str,
+        key: &[u8],
+        previous_value: Option<Vec<u8>>,
+        undo_seq: &mut HashMap<i64, u64>,
+    ) {
+        if self.store.is_bulk_sync_mode() {
+            return;
+        }
+        let seq = next_undo_seq(undo_seq, block_number, UndoSeqScope::Nft);
+        batch.put_reorg_undo_log_by_block(
+            block_number,
+            seq,
+            &UndoLogEntry::KeyMutation {
+                target_store: UndoLogStoreTarget::Domain,
+                cf_name: cf_name.to_string(),
+                key: key.to_vec(),
+                previous_value,
+            },
+        );
     }
 }
 

@@ -244,12 +244,12 @@ fn should_delete_stats_for_replay(
             })?);
             Ok(date >= cutoff_date)
         }
-        // activity daily: YYYYMMDD
-        keys::STATS_PREFIX_ACTIVITY_DAILY => {
+        // activity daily + daily addr set: YYYYMMDD
+        keys::STATS_PREFIX_ACTIVITY_DAILY | keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET => {
             Ok(suffix.len() >= 8 && &suffix[..8] >= cutoff_yyyymmdd)
         }
-        // activity hourly: YYYYMMDDHH
-        keys::STATS_PREFIX_ACTIVITY_HOURLY => {
+        // activity hourly + hourly addr set: YYYYMMDDHH
+        keys::STATS_PREFIX_ACTIVITY_HOURLY | keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET => {
             Ok(suffix.len() >= 10 && &suffix[..8] >= cutoff_yyyymmdd)
         }
         // per-asset hourly transfer counters: entity_hash(32B) + hour_bucket(8B BE i64)
@@ -1986,19 +1986,32 @@ impl CkbadgerStore {
                 } else if channel.close_block.is_some_and(|b| b > rollback_to)
                     || channel.settlement_block.is_some_and(|b| b > rollback_to)
                 {
-                    // Channel was opened before rollback but modified after —
-                    // reset to Open state.
+                    // Channel was opened before rollback but modified after.
+                    // Determine the correct restored state based on which
+                    // events survive the rollback.
+                    let close_survives = channel.close_block.is_some_and(|b| b <= rollback_to);
                     let mut reset_channel = channel.clone();
-                    reset_channel.state = FiberChannelState::Open;
-                    reset_channel.close_tx_hash = None;
-                    reset_channel.close_block = None;
-                    reset_channel.close_timestamp = None;
-                    reset_channel.commitment_tx_hash = None;
-                    reset_channel.commitment_output_index = None;
-                    reset_channel.delay_epoch = None;
-                    reset_channel.settlement_tx_hash = None;
-                    reset_channel.settlement_block = None;
-                    reset_channel.settlement_timestamp = None;
+
+                    if close_survives {
+                        // Force-close happened before rollback point — restore to
+                        // ForceClosed, clearing only settlement fields.
+                        reset_channel.state = FiberChannelState::ForceClosed;
+                        reset_channel.settlement_tx_hash = None;
+                        reset_channel.settlement_block = None;
+                        reset_channel.settlement_timestamp = None;
+                    } else {
+                        // Close also happened after rollback — reset to Open.
+                        reset_channel.state = FiberChannelState::Open;
+                        reset_channel.close_tx_hash = None;
+                        reset_channel.close_block = None;
+                        reset_channel.close_timestamp = None;
+                        reset_channel.commitment_tx_hash = None;
+                        reset_channel.commitment_output_index = None;
+                        reset_channel.delay_epoch = None;
+                        reset_channel.settlement_tx_hash = None;
+                        reset_channel.settlement_block = None;
+                        reset_channel.settlement_timestamp = None;
+                    }
 
                     let value = bincode::serialize(&reset_channel).expect("serialize FiberChannel");
                     batch.put_cf(self.cf_fiber_channels(), &key, &value);
@@ -5558,10 +5571,15 @@ mod tests {
             "commitment index should be deleted when settlement_block > rollback_to"
         );
 
-        // Verify channel was reset to Open.
+        // Verify channel was restored to ForceClosed (close at block 100 survives
+        // rollback to 120, only settlement at block 150 is rolled back).
         let ch = store.get_fiber_channel(&channel_id).unwrap().unwrap();
-        assert_eq!(ch.state, FiberChannelState::Open);
+        assert_eq!(ch.state, FiberChannelState::ForceClosed);
         assert!(ch.settlement_block.is_none());
+        assert!(ch.settlement_tx_hash.is_none());
+        // Close fields are preserved because close_block (100) <= rollback_to (120).
+        assert_eq!(ch.close_block, Some(100));
+        assert_eq!(ch.close_tx_hash, Some(vec![0xEE; 32]));
     }
 
     #[test]

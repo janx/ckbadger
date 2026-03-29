@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
+use ckbadger_store::store::CF_MNFT_DATA;
 use ckbadger_store::types::{
     CompositionTier, MnftCollectionAggregate, MnftTypeIndex, ObjectEntry, ObjectExtra,
     ObjectStandard,
@@ -20,6 +21,7 @@ pub(crate) struct MnftBatchState {
     collection_aggs: HashMap<Vec<u8>, Option<MnftCollectionAggregate>>,
     collection_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
     hourly_transfers: HashMap<Vec<u8>, i64>,
+    pub(crate) undo_seq_by_block: HashMap<i64, u64>,
 }
 
 impl MnftBatchState {
@@ -274,15 +276,24 @@ impl BatchWriter {
         Ok(())
     }
 
-    pub fn insert_mnft_issuer(
+    pub(crate) fn insert_mnft_issuer(
         &self,
         issuer: &ParsedMnftIssuer,
         tx_hash: &[u8],
         _output_index: i16,
         block_number: i64,
         batch: &mut StoreBatch,
+        state: &mut MnftBatchState,
     ) -> Result<()> {
-        let existing = self.store.get_mnft(&issuer.issuer_id)?;
+        let existing = state.get_token(self.store.as_ref(), &issuer.issuer_id)?;
+        self.record_nft_undo(
+            batch,
+            block_number,
+            CF_MNFT_DATA,
+            &issuer.issuer_id,
+            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            &mut state.undo_seq_by_block,
+        );
         let entry = ObjectEntry {
             standard: ObjectStandard::MnftIssuer,
             collection_id: None,
@@ -306,6 +317,7 @@ impl BatchWriter {
             },
         };
         batch.put_mnft(&issuer.issuer_id, &entry);
+        state.put_token(&issuer.issuer_id, entry);
         Ok(())
     }
 
@@ -338,6 +350,14 @@ impl BatchWriter {
         state: &mut MnftBatchState,
     ) -> Result<()> {
         let existing = state.get_token(self.store.as_ref(), &class.class_id)?;
+        self.record_nft_undo(
+            batch,
+            block_number,
+            CF_MNFT_DATA,
+            &class.class_id,
+            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            &mut state.undo_seq_by_block,
+        );
         let new_tier = analyze_renderer_tier(class.renderer.as_deref());
         let old_tier = existing.as_ref().and_then(|e| match &e.extra {
             ObjectExtra::MnftClass {
@@ -445,6 +465,14 @@ impl BatchWriter {
         state: &mut MnftBatchState,
     ) -> Result<()> {
         let existing = state.get_token(self.store.as_ref(), &token.token_id)?;
+        self.record_nft_undo(
+            batch,
+            block_number,
+            CF_MNFT_DATA,
+            &token.token_id,
+            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            &mut state.undo_seq_by_block,
+        );
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
         let old_owner = if was_live {
             existing
@@ -635,6 +663,14 @@ impl BatchWriter {
                     hex::encode(tx_hash)
                 );
             }
+            self.record_nft_undo(
+                batch,
+                block_number,
+                CF_MNFT_DATA,
+                token_id,
+                bincode::serialize(&entry).ok(),
+                &mut state.undo_seq_by_block,
+            );
             let collection_id = entry.collection_id.clone();
             let old_owner = entry.owner_lock_hash.clone();
             if old_owner.is_none() {

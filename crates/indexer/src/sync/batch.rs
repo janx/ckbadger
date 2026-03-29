@@ -2058,6 +2058,7 @@ impl Indexer {
                             output_index_i16,
                             parsed.number,
                             &mut data_batch,
+                            &mut mnft_state,
                         )?;
                     }
                     for (output_index, class) in MnftParser::parse_classes_with_output_indices(tx) {
@@ -2999,26 +3000,17 @@ impl Indexer {
             let mut stats_batch = StoreBatch::new(self.writer.store());
             self.write_batch_stats_to_batch(&batch_stats, &mut stats_batch)?;
             // Write accumulated daily activity stats
+            let empty_addr_set = HashSet::new();
             for (date, stats) in &daily_activity_accum {
-                let unique_count = daily_activity_addrs.get(date).map_or(0, |s| s.len() as u32);
-                self.writer.update_daily_activity_stats(
-                    date,
-                    stats,
-                    unique_count,
-                    &mut stats_batch,
-                )?;
+                let addrs = daily_activity_addrs.get(date).unwrap_or(&empty_addr_set);
+                self.writer
+                    .update_daily_activity_stats(date, stats, addrs, &mut stats_batch)?;
             }
             // Write accumulated hourly activity stats
             for (hour, stats) in &hourly_activity_accum {
-                let unique_count = hourly_activity_addrs
-                    .get(hour)
-                    .map_or(0, |s| s.len() as u32);
-                self.writer.update_hourly_activity_stats(
-                    hour,
-                    stats,
-                    unique_count,
-                    &mut stats_batch,
-                )?;
+                let addrs = hourly_activity_addrs.get(hour).unwrap_or(&empty_addr_set);
+                self.writer
+                    .update_hourly_activity_stats(hour, stats, addrs, &mut stats_batch)?;
             }
             // Inject sync_status update into the finalize batch so it is
             // committed atomically with block headers and domain data.

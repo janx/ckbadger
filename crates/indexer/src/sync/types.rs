@@ -28,6 +28,7 @@ impl InternId {
 pub(crate) enum UndoSeqScope {
     TxContext = 0x0001,
     DotBit = 0x0002,
+    Nft = 0x0003,
 }
 
 // ── Sync / Reorg action enums ──────────────────────────────────────────

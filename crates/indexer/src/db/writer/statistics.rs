@@ -648,13 +648,20 @@ impl BatchWriter {
 
     /// Write accumulated daily activity stats for a date.
     /// Reads existing stats for the date, merges with accumulated, writes back.
+    /// Uses a persistent address set to correctly dedup unique addresses across batches.
     pub fn update_daily_activity_stats(
         &self,
         date: &str,
         accumulated: &DailyActivityStats,
-        unique_addresses: u32,
+        batch_addrs: &HashSet<[u8; 32]>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
+        let unique_address_count = self.merge_persistent_addr_set(
+            keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET,
+            date.as_bytes(),
+            batch_addrs,
+            batch,
+        )?;
         let existing = self.store.get_daily_activity_stats(date)?;
         let merged = match existing {
             Some(mut e) => {
@@ -668,7 +675,7 @@ impl BatchWriter {
                 e.script_call_count += accumulated.script_call_count;
                 e.unknown_count += accumulated.unknown_count;
                 e.coinbase_count += accumulated.coinbase_count;
-                e.unique_address_count += unique_addresses;
+                e.unique_address_count = unique_address_count;
                 e.total_ckb_moved = e
                     .total_ckb_moved
                     .checked_add(accumulated.total_ckb_moved)
@@ -690,7 +697,7 @@ impl BatchWriter {
             }
             None => {
                 let mut s = accumulated.clone();
-                s.unique_address_count = unique_addresses;
+                s.unique_address_count = unique_address_count;
                 s
             }
         };
@@ -702,13 +709,20 @@ impl BatchWriter {
 
     /// Write accumulated hourly activity stats for an hour key.
     /// Reads existing stats for the hour, merges with accumulated, writes back.
+    /// Uses a persistent address set to correctly dedup unique addresses across batches.
     pub fn update_hourly_activity_stats(
         &self,
         hour_key: &str,
         accumulated: &DailyActivityStats,
-        unique_addresses: u32,
+        batch_addrs: &HashSet<[u8; 32]>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
+        let unique_address_count = self.merge_persistent_addr_set(
+            keys::stats_prefix::ACTIVITY_HOURLY_ADDR_SET,
+            hour_key.as_bytes(),
+            batch_addrs,
+            batch,
+        )?;
         let existing = self.store.get_hourly_activity_stats(hour_key)?;
         let merged = match existing {
             Some(mut e) => {
@@ -722,7 +736,7 @@ impl BatchWriter {
                 e.script_call_count += accumulated.script_call_count;
                 e.unknown_count += accumulated.unknown_count;
                 e.coinbase_count += accumulated.coinbase_count;
-                e.unique_address_count += unique_addresses;
+                e.unique_address_count = unique_address_count;
                 e.total_ckb_moved = e
                     .total_ckb_moved
                     .checked_add(accumulated.total_ckb_moved)
@@ -744,7 +758,7 @@ impl BatchWriter {
             }
             None => {
                 let mut s = accumulated.clone();
-                s.unique_address_count = unique_addresses;
+                s.unique_address_count = unique_address_count;
                 s
             }
         };
@@ -752,6 +766,44 @@ impl BatchWriter {
         let value = bincode::serialize(&merged)?;
         batch.put_stats(&key, &value);
         Ok(())
+    }
+
+    /// Load an existing persistent address set from CF_STATS_CHAIN, merge in
+    /// new addresses from the current batch, store back, and return the total
+    /// unique address count as u32.
+    fn merge_persistent_addr_set(
+        &self,
+        prefix: u8,
+        bucket: &[u8],
+        batch_addrs: &HashSet<[u8; 32]>,
+        batch: &mut StoreBatch,
+    ) -> Result<u32> {
+        let set_key = keys::encode_stats_key(prefix, bucket);
+        let mut addrs: HashSet<[u8; 32]> = match self.store.get_stats_key(&set_key)? {
+            Some(raw) => {
+                let mut set = HashSet::with_capacity(raw.len() / 32);
+                for chunk in raw.chunks_exact(32) {
+                    let mut hash = [0u8; 32];
+                    hash.copy_from_slice(chunk);
+                    set.insert(hash);
+                }
+                set
+            }
+            None => HashSet::new(),
+        };
+        addrs.extend(batch_addrs);
+        // Serialize as sorted flat bytes for deterministic storage.
+        let mut sorted: Vec<[u8; 32]> = addrs.iter().copied().collect();
+        sorted.sort_unstable();
+        let flat: Vec<u8> = sorted.iter().flat_map(|h| h.iter().copied()).collect();
+        batch.put_stats(&set_key, &flat);
+        u32::try_from(sorted.len()).map_err(|_| {
+            anyhow::anyhow!(
+                "unique_address_count exceeds u32: bucket=0x{}, count={}",
+                hex::encode(bucket),
+                sorted.len()
+            )
+        })
     }
 
     pub fn refresh_token_24h_transfers(&self) -> Result<u64> {
@@ -2108,8 +2160,15 @@ mod activity_stats_tests {
             total_ckb_moved: 50_00000000,
             ..Default::default()
         };
+        let addrs: HashSet<[u8; 32]> = (0..3u8)
+            .map(|i| {
+                let mut h = [0u8; 32];
+                h[0] = i;
+                h
+            })
+            .collect();
         writer
-            .update_hourly_activity_stats("2026030912", &stats, 3, &mut batch)
+            .update_hourly_activity_stats("2026030912", &stats, &addrs, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
@@ -2127,19 +2186,26 @@ mod activity_stats_tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        // First write
+        // First write: 3 addresses (bytes 0, 1, 2)
         let mut batch = StoreBatch::new(&store);
         let s1 = DailyActivityStats {
             transfer_count: 5,
             total_ckb_moved: 50_00000000,
             ..Default::default()
         };
+        let addrs1: HashSet<[u8; 32]> = (0..3u8)
+            .map(|i| {
+                let mut h = [0u8; 32];
+                h[0] = i;
+                h
+            })
+            .collect();
         writer
-            .update_hourly_activity_stats("2026030912", &s1, 3, &mut batch)
+            .update_hourly_activity_stats("2026030912", &s1, &addrs1, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
-        // Merge write
+        // Merge write: 7 addresses (bytes 1..8), 2 overlap with first batch
         let mut batch2 = StoreBatch::new(&store);
         let s2 = DailyActivityStats {
             transfer_count: 10,
@@ -2147,8 +2213,15 @@ mod activity_stats_tests {
             total_ckb_moved: 100_00000000,
             ..Default::default()
         };
+        let addrs2: HashSet<[u8; 32]> = (1..8u8)
+            .map(|i| {
+                let mut h = [0u8; 32];
+                h[0] = i;
+                h
+            })
+            .collect();
         writer
-            .update_hourly_activity_stats("2026030912", &s2, 7, &mut batch2)
+            .update_hourly_activity_stats("2026030912", &s2, &addrs2, &mut batch2)
             .unwrap();
         batch2.commit().unwrap();
 
@@ -2159,7 +2232,8 @@ mod activity_stats_tests {
         assert_eq!(got.transfer_count, 15);
         assert_eq!(got.dao_deposit_count, 2);
         assert_eq!(got.total_ckb_moved, 150_00000000);
-        assert_eq!(got.unique_address_count, 10); // 3 + 7, summed across batches
+        // Cross-batch dedup: {0,1,2} ∪ {1,2,3,4,5,6,7} = 8 unique addresses
+        assert_eq!(got.unique_address_count, 8);
     }
 
     #[test]

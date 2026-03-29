@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use crate::parser::{analyze_spore_media_profile, ParsedClusterCell, ParsedSporeCell};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
+use ckbadger_store::store::{CF_IDENTITY_DATA, CF_SPORE_DATA};
 use ckbadger_store::types::{
     ClusterAggregate, CompositionTier, IdentityCollectionAggregate, IdentityEntry, IdentityExtra,
     IdentityStandard, ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex,
@@ -26,6 +27,7 @@ pub(crate) struct SporeBatchState {
     identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
     spore_hourly_transfers: HashMap<Vec<u8>, i64>,
     spore_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>>,
+    undo_seq_by_block: HashMap<i64, u64>,
 }
 
 impl SporeBatchState {
@@ -419,6 +421,14 @@ impl BatchWriter {
         state: &mut SporeBatchState,
     ) -> Result<()> {
         let existing = state.get_spore(self.store.as_ref(), &cluster.cluster_id)?;
+        self.record_nft_undo(
+            batch,
+            block_number,
+            CF_SPORE_DATA,
+            &cluster.cluster_id,
+            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            &mut state.undo_seq_by_block,
+        );
         let entry = ObjectEntry {
             standard: ObjectStandard::SporeCluster,
             collection_id: None, // This IS a cluster, not a spore in a cluster
@@ -471,6 +481,14 @@ impl BatchWriter {
         // did:ckb entries are written to the identity store, not the spore/object store.
         if new_is_did {
             let existing = state.get_identity(self.store.as_ref(), &spore.spore_id)?;
+            self.record_nft_undo(
+                batch,
+                block_number,
+                CF_IDENTITY_DATA,
+                &spore.spore_id,
+                existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+                &mut state.undo_seq_by_block,
+            );
             let was_live = existing.as_ref().is_some_and(|e| e.is_live);
             let old_owner = if was_live {
                 existing.as_ref().and_then(|e| e.owner_lock_hash.clone())
@@ -543,6 +561,14 @@ impl BatchWriter {
 
         // Regular spore/object handling below.
         let existing = state.get_spore(self.store.as_ref(), &spore.spore_id)?;
+        self.record_nft_undo(
+            batch,
+            block_number,
+            CF_SPORE_DATA,
+            &spore.spore_id,
+            existing.as_ref().and_then(|e| bincode::serialize(e).ok()),
+            &mut state.undo_seq_by_block,
+        );
         let was_live = existing.as_ref().is_some_and(|e| e.is_live);
         let old_live_tier = if was_live {
             existing
@@ -763,7 +789,7 @@ impl BatchWriter {
     pub(crate) fn consume_spore(
         &self,
         spore_id: &[u8],
-        _block_number: i64,
+        block_number: i64,
         _tx_hash: &[u8],
         batch: &mut StoreBatch,
         state: &mut SporeBatchState,
@@ -776,6 +802,14 @@ impl BatchWriter {
                     hex::encode(spore_id)
                 );
             }
+            self.record_nft_undo(
+                batch,
+                block_number,
+                CF_IDENTITY_DATA,
+                spore_id,
+                bincode::serialize(&identity).ok(),
+                &mut state.undo_seq_by_block,
+            );
             let old_owner = identity.owner_lock_hash.clone();
             identity.is_live = false;
             identity.owner_lock_hash = None;
@@ -813,6 +847,14 @@ impl BatchWriter {
                     hex::encode(spore_id)
                 );
             }
+            self.record_nft_undo(
+                batch,
+                block_number,
+                CF_SPORE_DATA,
+                spore_id,
+                bincode::serialize(&entry).ok(),
+                &mut state.undo_seq_by_block,
+            );
 
             let old_owner = entry.owner_lock_hash.clone();
             let cluster_id = entry.collection_id.clone();

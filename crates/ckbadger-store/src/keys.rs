@@ -532,6 +532,11 @@ pub mod stats_prefix {
     pub const DAO_TOP_DEPOSITORS: u8 = 0x20;
     pub const CELL_DISTRIBUTION: u8 = 0x21;
     pub const ADDR_COHORT: u8 = 0x22;
+    /// Persistent address set for daily unique address dedup across batches.
+    /// Value: sorted, concatenated [u8; 32] lock hashes.
+    pub const ACTIVITY_DAILY_ADDR_SET: u8 = 0x23;
+    /// Persistent address set for hourly unique address dedup across batches.
+    pub const ACTIVITY_HOURLY_ADDR_SET: u8 = 0x24;
 }
 
 // Flat re-exports for convenience
@@ -570,6 +575,8 @@ pub const STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 =
 pub const STATS_PREFIX_DAO_TOP_DEPOSITORS: u8 = stats_prefix::DAO_TOP_DEPOSITORS;
 pub const STATS_PREFIX_CELL_DISTRIBUTION: u8 = stats_prefix::CELL_DISTRIBUTION;
 pub const STATS_PREFIX_ADDR_COHORT: u8 = stats_prefix::ADDR_COHORT;
+pub const STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET: u8 = stats_prefix::ACTIVITY_DAILY_ADDR_SET;
+pub const STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET: u8 = stats_prefix::ACTIVITY_HOURLY_ADDR_SET;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {

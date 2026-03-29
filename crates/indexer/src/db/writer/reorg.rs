@@ -76,11 +76,14 @@ impl BatchWriter {
             )
         })?;
 
-        // Domain rollback for canonical mutable state.
+        // Revert domain mutations from undo-log first so that entity data
+        // (Spore, mNFT, dotbit) is restored to pre-fork state before the
+        // multi-stage rollback rebuilds aggregates from it.
+        self.store.rollback_via_undo_log(append_store, fork_point)?;
+        // Domain rollback for canonical mutable state (cells, blocks, stats,
+        // aggregates rebuilt from now-correct entity data).
         self.store
             .rollback_to_block_with_append_only_store(fork_point, Some(append_store))?;
-        // Revert domain mutations from undo-log and prune append undo entries.
-        self.store.rollback_via_undo_log(append_store, fork_point)?;
         // Re-derive script version/family rollups from the corrected reference info.
         self.refresh_script_reference_rollups()?;
 
