@@ -461,6 +461,34 @@ prev_secondary_pool = secondary_pool;
 
 ---
 
+### DAO-019: total_deposit and depositors_count 10% too high vs explorer
+
+**Symptom**: Verify checks nervos_dao_total_deposit (+10.4%), nervos_dao_depositors_count (+8.3%), nervos_dao_average_deposit_time (+9.7%), nervos_dao_treasury_amount (-1.25%) all failing.
+
+**Root Cause**: CKB explorer subtracts deposits from `total_deposit` at phase-1 withdrawal (when deposit cell is consumed by withdraw request), not at phase-2 completion. Our code counted both status=0 (active deposit) and status=1 (withdraw request pending) in `total_deposited` and `total_depositors`. The ~81T shannons difference was pending withdrawal capacity.
+
+Confirmed from explorer source: `process_withdraw_dao_events!` does `total_deposit -= withdraw_amount` at phase-1. The `depositor` scope is `DaoEvent.where(event_type: "deposit_to_dao", consumed_transaction_id: nil)` — only unconsumed deposits.
+
+**Fix**: Changed `refresh_latest_dao_statistics` and API accumulator to only count status=0 for `total_deposited`, `total_depositors`, `average_deposit_days`, and `unclaimed_compensation`. Status=1 reported separately as `pending_withdrawal_capacity`.
+
+**Lesson**: When comparing against an external reference, verify their exact definition — "deposited in DAO" can mean "unconsumed deposit cells only" (explorer) or "all locked CKB including pending withdrawals" (protocol-level). Read the reference implementation's source code.
+
+**Files**: `crates/indexer/src/db/writer/statistics.rs`, `crates/api/src/routes/dao.rs`
+
+---
+
+### DAO-020: cumulative depositors 17% below explorer (known acceptable)
+
+**Symptom**: Verify check explorer_total_depositors_count showing ours=66,009 vs explorer=79,276 (16.7% deviation).
+
+**Root Cause**: Explorer uses incremental accumulation: `yesterday_total + daily_new_active_depositors`. The daily count includes returning depositors (withdrew all deposits, then deposited again), causing the cumulative total to re-count them. Our `cumulative_depositors` uses an `ever_deposited` HashSet that tracks each address exactly once (first deposit only). Our value is more accurate.
+
+**Decision**: Accepted as known discrepancy. Widened X26 tolerance to 20%. Our definition is protocol-correct; the explorer's incremental formula has an inherent overcount.
+
+**Files**: `crates/indexer/src/verify/explorer.rs`
+
+---
+
 ## Category: Statistics & Charts
 
 ### STATS-001: Cumulative values wrong for new days (19ee513)
