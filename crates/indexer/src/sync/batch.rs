@@ -137,7 +137,7 @@ fn resolve_consumed_stats(
                         key.1
                     )
                 })?;
-            data_size_consumed += info.data_size as i64;
+            data_size_consumed += i64::from(info.data_size);
             used_capacity_consumed += i128::from(info.occupied_capacity);
         }
     }
@@ -948,10 +948,18 @@ pub(super) fn parse_blocks_parallel(
                                 parsed.number,
                             )?
                         };
+                        let tx_index_i32 = i32::try_from(tx_index).map_err(|_| {
+                            anyhow!(
+                                "tx index exceeds i32 range in parse_blocks_parallel: tx_hash=0x{}, block={}, tx_index={}",
+                                hex::encode(parsed_tx.hash),
+                                parsed.number,
+                                tx_index
+                            )
+                        })?;
                         Ok(TxData {
                             hash: parsed_tx.hash,
                             block_number: parsed.number,
-                            tx_index: tx_index as i32,
+                            tx_index: tx_index_i32,
                             inputs_count: i16::try_from(parsed_tx.inputs_count).map_err(|_| {
                                 anyhow!(
                                     "tx inputs count exceeds i16 range: tx_hash=0x{}, block={}, inputs_count={}",
@@ -1124,9 +1132,15 @@ impl Indexer {
             return Ok(BatchWriteMetrics::default());
         }
 
-        let first_block = all_parsed_blocks.first().map(|b| b.number).unwrap_or(0);
-        let last_block = all_parsed_blocks.last().map(|b| b.number).unwrap_or(0);
-        let end_block = last_block as u64;
+        // Safe: early return on empty guarantees .first()/.last() are Some.
+        let first_block = all_parsed_blocks.first().unwrap().number;
+        let last_block = all_parsed_blocks.last().unwrap().number;
+        let end_block = u64::try_from(last_block).map_err(|_| {
+            anyhow!(
+                "negative last_block in write_parsed_batch: last_block={}",
+                last_block
+            )
+        })?;
         let bulk_sync_mode = is_effective_bulk_sync_batch(
             chain_tip,
             end_block,
@@ -2809,7 +2823,7 @@ impl Indexer {
             let data_size_added: i64 = tx_slice
                 .iter()
                 .flat_map(|tx| tx.cells.iter())
-                .map(|cell| cell.data_size as i64)
+                .map(|cell| i64::from(cell.data_size))
                 .sum();
             let used_capacity_created: i128 = tx_slice
                 .iter()
@@ -2829,9 +2843,36 @@ impl Indexer {
                 parsed.number,
             )?;
 
-            batch_stats.sync_totals.0 += parsed.transactions_count as i64;
-            batch_stats.sync_totals.1 += cells_created as i64;
-            batch_stats.sync_totals.2 += cells_consumed as i64;
+            batch_stats.sync_totals.0 = batch_stats
+                .sync_totals
+                .0
+                .checked_add(i64::from(parsed.transactions_count))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "sync_totals transaction count overflow at block {}",
+                        parsed.number
+                    )
+                })?;
+            batch_stats.sync_totals.1 = batch_stats
+                .sync_totals
+                .1
+                .checked_add(i64::from(cells_created))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "sync_totals cells_created overflow at block {}",
+                        parsed.number
+                    )
+                })?;
+            batch_stats.sync_totals.2 = batch_stats
+                .sync_totals
+                .2
+                .checked_add(i64::from(cells_consumed))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "sync_totals cells_consumed overflow at block {}",
+                        parsed.number
+                    )
+                })?;
             batch_stats.last_block = Some((parsed.number, parsed.hash.clone()));
 
             {
@@ -2946,7 +2987,8 @@ impl Indexer {
                     if prev_epoch_num == parsed.epoch_number - 1 {
                         let epoch_duration_minutes =
                             (parsed.timestamp - prev_start_ts).num_seconds() as f64 / 60.0;
-                        let bucket_minutes = epoch_duration_minutes.round() as i32;
+                        let bucket_minutes = i32::try_from(epoch_duration_minutes.round() as i64)
+                            .unwrap_or(i32::MAX);
                         *batch_stats
                             .epoch_time_dist
                             .entry(bucket_minutes)
