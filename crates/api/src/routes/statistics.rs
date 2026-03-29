@@ -2264,9 +2264,8 @@ async fn fetch_network_stats_from_db(
     // Use epoch average block time for stable hash rate estimate.
     // Individual block intervals are too noisy; the epoch window (~4h)
     // matches CKB's difficulty adjustment granularity.
-    // Divide by milliseconds to match CKB explorer convention.
     let hash_rate = if epoch_avg_time > 0.0 {
-        avg_difficulty / (epoch_avg_time * 1000.0)
+        avg_difficulty / epoch_avg_time
     } else {
         0.0
     };
@@ -2534,14 +2533,13 @@ fn calculate_daily_hash_rate(difficulty: u64, block_count: i32) -> f64 {
         return 0.0;
     }
 
-    // Hash rate = difficulty / avg_block_time_ms
-    // CKB explorer divides by millisecond-denominated block time (CKB timestamps are ms).
-    // avg_block_time_ms = 86_400_000 / block_count
-    let avg_block_time_ms = 86_400_000.0 / block_count as f64;
-    if avg_block_time_ms <= 0.0 {
+    // Hash rate = difficulty / avg_block_time_seconds
+    // avg_block_time_seconds = 86400 / block_count
+    let avg_block_time_s = 86_400.0 / block_count as f64;
+    if avg_block_time_s <= 0.0 {
         0.0
     } else {
-        difficulty as f64 / avg_block_time_ms
+        difficulty as f64 / avg_block_time_s
     }
 }
 
@@ -3477,11 +3475,11 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_daily_hash_rate_uses_milliseconds() {
-        // 8,640 blocks/day => 10s avg block time => 10_000ms
-        // hash_rate = difficulty / avg_block_time_ms = 1_000_000 / 10_000 = 100
+    fn test_calculate_daily_hash_rate_uses_seconds() {
+        // 8,640 blocks/day => 10s avg block time
+        // hash_rate = difficulty / avg_block_time_s = 1_000_000 / 10 = 100_000 H/s
         let hash_rate = calculate_daily_hash_rate(1_000_000, 8_640);
-        assert_eq!(hash_rate, 100.0);
+        assert_eq!(hash_rate, 100000.0);
     }
 
     #[test]

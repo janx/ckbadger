@@ -2581,7 +2581,7 @@ fn controller_panel_lines(
     if dense {
         // Dense: 2 lines
         // Line 0: build + band bar + io + sizing decision
-        let mut spans0 = vec![
+        let spans0 = vec![
             Span::styled("  ", Style::default()),
             Span::styled(
                 format!("build {:.1}s ", build_ema / 1000.0),
@@ -2597,14 +2597,6 @@ fn controller_panel_lines(
                 Style::default().fg(sizing_decision.1),
             ),
         ];
-        // Budget inline if available
-        if target_cells > 0 {
-            spans0.push(Span::styled(
-                format!("  {}K", budget_k),
-                Style::default().fg(FOREGROUND),
-            ));
-        }
-
         // Line 1: bottleneck badge + knobs + L0
         let mut spans1 = vec![
             Span::styled("  ", Style::default()),
@@ -6903,6 +6895,11 @@ mod tests {
             "line 4 should contain [FLUSH] bottleneck badge, got: {}",
             text4
         );
+        assert!(
+            text4.contains("HOLD"),
+            "line 4 without deltas should show sizing decision, got: {}",
+            text4
+        );
 
         // Line 5: Adjust header
         let text5: String = lines[5].spans.iter().map(|s| s.content.as_ref()).collect();
@@ -6948,6 +6945,89 @@ mod tests {
             text6_d.contains("("),
             "line 6 should show inline deltas with '(', got: {}",
             text6_d
+        );
+    }
+
+    #[test]
+    fn test_controller_panel_sizing_decision_branches() {
+        // Cold start: build_ema < 1.0
+        let bb = BulkBuildProgressData {
+            controller_build_ema: Some(0.5),
+            controller_recv_ema: Some(0.0),
+            controller_wait_ema: Some(0.0),
+            controller_bottleneck: Some(2),
+            ..Default::default()
+        };
+        let lines = controller_panel_lines(&bb, true, None);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("cold start"),
+            "cold start branch, got: {}",
+            text
+        );
+
+        // Below band: build_ema < 2000
+        let bb = BulkBuildProgressData {
+            controller_build_ema: Some(1500.0),
+            controller_recv_ema: Some(100.0),
+            controller_wait_ema: Some(100.0),
+            controller_bottleneck: Some(1),
+            ..Default::default()
+        };
+        let lines = controller_panel_lines(&bb, true, None);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("GROW"),
+            "below band should GROW, got: {}",
+            text
+        );
+
+        // Above band: build_ema > 5000
+        let bb = BulkBuildProgressData {
+            controller_build_ema: Some(6000.0),
+            controller_recv_ema: Some(100.0),
+            controller_wait_ema: Some(100.0),
+            controller_bottleneck: Some(2),
+            ..Default::default()
+        };
+        let lines = controller_panel_lines(&bb, true, None);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("SHRINK"),
+            "above band should SHRINK, got: {}",
+            text
+        );
+
+        // In-band, build > io: GROW
+        let bb = BulkBuildProgressData {
+            controller_build_ema: Some(3500.0),
+            controller_recv_ema: Some(500.0),
+            controller_wait_ema: Some(500.0),
+            controller_bottleneck: Some(2),
+            ..Default::default()
+        };
+        let lines = controller_panel_lines(&bb, true, None);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("GROW"),
+            "in-band build>io should GROW, got: {}",
+            text
+        );
+
+        // In-band, io >= build: HOLD
+        let bb = BulkBuildProgressData {
+            controller_build_ema: Some(3000.0),
+            controller_recv_ema: Some(2000.0),
+            controller_wait_ema: Some(2000.0),
+            controller_bottleneck: Some(3),
+            ..Default::default()
+        };
+        let lines = controller_panel_lines(&bb, true, None);
+        let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("HOLD"),
+            "in-band io>=build should HOLD, got: {}",
+            text
         );
     }
 
