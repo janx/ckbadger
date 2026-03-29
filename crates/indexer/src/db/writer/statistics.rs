@@ -170,6 +170,9 @@ pub struct DaoSnapshotInput {
     pub cumulative_depositors: i64,
     /// Unique addresses that deposited on this specific day (including repeat depositors).
     pub daily_depositor_addresses: i64,
+    /// Protocol-level total deposited (includes status=1 cells still locked in DAO).
+    /// Used for secondary issuance split instead of display `total_deposited`.
+    pub protocol_deposited: Option<i128>,
 }
 
 const DAO_OCCUPIED_CAPACITY: u128 = 102_00000000;
@@ -629,6 +632,7 @@ impl BatchWriter {
             unclaimed_compensation: dao_snapshot.unclaimed_compensation,
             cumulative_depositors: dao_snapshot.cumulative_depositors,
             daily_depositor_addresses: dao_snapshot.daily_depositor_addresses,
+            protocol_deposited: dao_snapshot.protocol_deposited,
         };
 
         let value = bincode::serialize(&snapshot)?;
@@ -1362,6 +1366,7 @@ mod tests {
             unclaimed_compensation: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
+            protocol_deposited: None,
         };
         let snapshot_val = bincode::serialize(&snapshot).unwrap();
         seed.put_stats(&snapshot_key, &snapshot_val);
@@ -1497,6 +1502,7 @@ mod tests {
             unclaimed_compensation: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
+            protocol_deposited: None,
         };
         let snapshot_val = bincode::serialize(&snapshot).unwrap();
         seed.put_stats(&snapshot_key, &snapshot_val);

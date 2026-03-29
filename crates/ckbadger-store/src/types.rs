@@ -249,6 +249,9 @@ pub struct DaoDailySnapshot {
     /// (includes repeat depositors, not just first-timers).
     #[serde(default)]
     pub daily_depositor_addresses: i64,
+    /// Protocol-level total deposited (includes status=1 cells still locked in DAO).
+    #[serde(default)]
+    pub protocol_deposited: Option<i128>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

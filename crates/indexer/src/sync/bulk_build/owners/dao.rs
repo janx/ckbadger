@@ -551,6 +551,7 @@ impl BulkReducer for DaoOwner {
                     .get(date)
                     .map(|s| s.len() as i64)
                     .unwrap_or(0),
+                protocol_deposited: None, // Task 7 will add proper tracking
             };
             let key = keys::encode_stats_key(
                 keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,

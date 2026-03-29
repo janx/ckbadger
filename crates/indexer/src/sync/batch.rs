@@ -3319,6 +3319,10 @@ impl Indexer {
                     .as_ref()
                     .map(|s| s.total_deposited)
                     .unwrap_or(0);
+                let mut running_protocol_deposited = latest_snapshot
+                    .as_ref()
+                    .map(|s| s.protocol_deposited.unwrap_or(s.total_deposited))
+                    .unwrap_or(0);
                 let mut running_total_deposit_count = latest_snapshot
                     .as_ref()
                     .map(|s| s.new_deposits)
@@ -3353,6 +3357,11 @@ impl Indexer {
                 for date in snapshot_dates {
                     running_total_deposited +=
                         stats.dao_daily_active_delta.get(date).copied().unwrap_or(0);
+                    running_protocol_deposited += stats
+                        .dao_daily_protocol_delta
+                        .get(date)
+                        .copied()
+                        .unwrap_or(0);
                     running_cumulative_deposit_amount += stats
                         .dao_daily_gross_deposit_delta
                         .get(date)
@@ -3381,7 +3390,7 @@ impl Indexer {
                             split_secondary_issuance(
                                 total_issuance,
                                 occupied_capacity,
-                                running_total_deposited,
+                                running_protocol_deposited,
                                 non_miner_secondary,
                             )?
                         } else {
@@ -3466,6 +3475,7 @@ impl Indexer {
                         unclaimed_compensation: 0,
                         cumulative_depositors: running_cumulative_depositors,
                         daily_depositor_addresses,
+                        protocol_deposited: Some(running_protocol_deposited),
                     };
                     self.writer
                         .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;

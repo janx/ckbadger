@@ -3395,6 +3395,7 @@ mod tests {
             unclaimed_compensation: 0,
             cumulative_depositors: 0,
             daily_depositor_addresses: 0,
+            protocol_deposited: None,
         }
     }
 
