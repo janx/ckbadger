@@ -289,14 +289,14 @@ fn fetch_from_explorer_api(
                 Some(a) => a,
                 None => continue,
             };
-            let ts_val = attrs
-                .get("created_at_unixtimestamp")
-                .and_then(|v| {
-                    v.as_str()
-                        .and_then(|s| s.parse::<i64>().ok())
-                        .or_else(|| v.as_i64())
-                })
-                .unwrap_or(0);
+            let ts_val = match attrs.get("created_at_unixtimestamp").and_then(|v| {
+                v.as_str()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .or_else(|| v.as_i64())
+            }) {
+                Some(ts) if ts > 0 => ts,
+                _ => continue,
+            };
 
             let date = explorer_timestamp_to_date(ts_val).unwrap_or_default();
 

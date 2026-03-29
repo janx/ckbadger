@@ -1615,7 +1615,10 @@ async fn get_capacity_turnover_ratio_chart(
     let mut data = Vec::with_capacity(daily_stats.len());
 
     for (date, stats) in daily_stats {
-        let live = stats.knowledge_size.unwrap_or(0);
+        let live = match stats.knowledge_size {
+            Some(v) => v,
+            None => continue,
+        };
         if live < 0 {
             return Err(ApiError::internal(format!(
                 "negative knowledge_size in daily_stats for {}: {}",
@@ -2061,7 +2064,11 @@ async fn fetch_network_stats_from_db(
                     let duration = latest_timestamp
                         .signed_duration_since(es.start_timestamp)
                         .num_seconds() as f64;
-                    Some(duration / epoch_index.max(1) as f64)
+                    if epoch_index == 0 {
+                        Some(duration) // first block of epoch, use raw duration
+                    } else {
+                        Some(duration / epoch_index as f64)
+                    }
                 }
             } else {
                 None
@@ -2074,7 +2081,11 @@ async fn fetch_network_stats_from_db(
         let ts0 = DateTime::from_timestamp_millis(recent_blocks[1].1.timestamp).unwrap_or_default();
         let ts1 = DateTime::from_timestamp_millis(recent_blocks[0].1.timestamp).unwrap_or_default();
         let duration = ts0.signed_duration_since(ts1).num_seconds() as f64;
-        duration.abs().max(1.0)
+        if duration <= 0.0 {
+            10.0 // fallback to CKB target block time when timestamps are equal or misordered
+        } else {
+            duration
+        }
     } else {
         10.0
     };
@@ -3332,7 +3343,12 @@ async fn get_asset_ecosystem(
 
     // Compute "other" = knowledge_size - (tokens + objects + dao)
     let categorized = total_token_capacity + total_object_capacity + dao_locked;
-    let other_capacity = if knowledge_size > categorized {
+    let other_capacity = if knowledge_size > 0 && knowledge_size < categorized {
+        return Err(ApiError::internal(format!(
+            "categorized capacity {} exceeds knowledge_size {}: tokens={}, objects={}, dao={}",
+            categorized, knowledge_size, total_token_capacity, total_object_capacity, dao_locked,
+        )));
+    } else if knowledge_size > categorized {
         knowledge_size - categorized
     } else {
         0
@@ -3344,7 +3360,11 @@ async fn get_asset_ecosystem(
         if total <= 0 {
             return "0.00".to_string();
         }
-        let scaled = value.saturating_mul(10_000).checked_div(total).unwrap_or(0);
+        let scaled = value
+            .checked_mul(10_000)
+            .unwrap_or(0)
+            .checked_div(total)
+            .unwrap_or(0);
         let whole = scaled / 100;
         let frac = (scaled % 100).abs();
         format!("{whole}.{frac:02}")

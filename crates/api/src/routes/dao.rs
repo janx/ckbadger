@@ -294,7 +294,13 @@ fn accumulate_dao_statistics_entry(
                 acc.total_compensation_paid += comp as i128;
             }
         }
-        _ => {}
+        _ => {
+            anyhow::bail!(
+                "unknown DAO deposit status {} for deposit_block={}",
+                entry.status,
+                entry.deposit_block_number
+            );
+        }
     }
 
     Ok(())
@@ -657,8 +663,7 @@ fn compute_dao_24h_deltas(state: &AppState) -> DaoDeltas {
     let deposit_delta = latest.total_deposited - prev.total_deposited;
     let depositors_delta = latest.depositors_count - prev.depositors_count;
     let claimed_delta = latest.compensation - prev.compensation;
-    let unclaimed_delta =
-        latest.unclaimed_compensation as i128 - prev.unclaimed_compensation as i128;
+    let unclaimed_delta = latest.unclaimed_compensation - prev.unclaimed_compensation;
 
     DaoDeltas {
         deposit_change: Some(shannon_to_ckb_signed(deposit_delta)),
@@ -908,10 +913,16 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         }
         // Use tip S-field and live unmade computation for explorer-compatible treasury.
         let treasury_from_s = tip_s as i128 - acc.unmade_active_compensation as i128;
+        if treasury_from_s < 0 {
+            return Err(ApiError::internal(format!(
+                "negative treasury_from_s in dao statistics: tip_s={}, unmade_active_compensation={}",
+                tip_s, acc.unmade_active_compensation
+            )));
+        }
         (
             s.cum_miner_secondary.to_string(),
             s.cum_dao_compensation.to_string(),
-            treasury_from_s.max(0).to_string(),
+            treasury_from_s.to_string(),
         )
     } else {
         ("0".to_string(), "0".to_string(), "0".to_string())
@@ -1073,22 +1084,13 @@ async fn calculate_compensation(
         }
     };
 
-    let occupied = 102_00000000u128;
-    let free = capacity
-        .checked_sub(occupied)
-        .ok_or_else(|| ApiError::bad_request("Capacity must be at least 102 CKB"))?;
-    if ar_deposit == 0 {
-        return Err(ApiError::bad_request(
-            "Invalid zero deposit AR — corrupt block header data",
-        ));
-    }
-    let gross = free
-        .checked_mul(ar_withdraw as u128)
-        .ok_or_else(|| ApiError::internal("DAO compensation multiply overflow"))?
-        / ar_deposit as u128;
-    let compensation = gross
-        .checked_sub(free)
-        .ok_or_else(|| ApiError::internal("DAO compensation underflow"))?;
+    let capacity_i64 = i64::try_from(capacity)
+        .map_err(|_| ApiError::bad_request("Capacity exceeds valid range"))?;
+    let compensation_i64 =
+        calculate_dao_compensation_from_ar(capacity_i64, ar_deposit, ar_withdraw)
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let compensation = compensation_i64 as u128;
+    let free = capacity - ckbadger_common::dao::DAO_OCCUPIED_CAPACITY as u128;
 
     let total = capacity + compensation;
 

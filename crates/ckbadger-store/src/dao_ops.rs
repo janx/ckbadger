@@ -4,6 +4,8 @@ use rocksdb::{IteratorMode, Snapshot};
 #[cfg(test)]
 use std::sync::{Mutex, OnceLock};
 
+use ckbadger_common::dao::calculate_dao_compensation_from_ar;
+
 use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::DaoDepositCacheEntry;
@@ -205,21 +207,23 @@ impl CkbadgerStore {
     /// Sum AR-based compensation for all status-0 deposits using the given AR.
     /// Returns the total unmade DAO interests in shannons.
     pub fn compute_unmade_dao_interests(&self, ar: u64) -> anyhow::Result<i128> {
-        const DAO_OCCUPIED_CAPACITY: i64 = 102_00000000;
         let mut total: i128 = 0;
-        let occupied = DAO_OCCUPIED_CAPACITY as i128;
         self.scan_dao_deposits(|_, entry| {
             if entry.status == 0 {
-                let cap = entry.capacity as i128;
-                if cap > occupied {
-                    let free_cap = (cap - occupied) as u128;
-                    let ar_deposit = entry.deposit_ar;
-                    if ar_deposit > 0 {
-                        let ar_deposit_u128 = ar_deposit as u128;
-                        let gross = free_cap.saturating_mul(ar as u128) / ar_deposit_u128;
-                        let comp = gross.saturating_sub(free_cap);
-                        total += comp as i128;
-                    }
+                let ar_deposit = u64::try_from(entry.deposit_ar).map_err(|_| {
+                    anyhow::anyhow!(
+                        "invalid negative DAO deposit AR in compute_unmade_dao_interests: deposit_block={}, deposit_ar={}",
+                        entry.deposit_block_number,
+                        entry.deposit_ar
+                    )
+                })?;
+                if ar_deposit > 0 && ar > ar_deposit {
+                    let compensation = calculate_dao_compensation_from_ar(
+                        entry.capacity,
+                        ar_deposit,
+                        ar,
+                    )?;
+                    total += compensation as i128;
                 }
             }
             Ok(())

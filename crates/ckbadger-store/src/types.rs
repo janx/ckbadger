@@ -244,7 +244,7 @@ pub struct DaoDailySnapshot {
     pub unmade_dao_interests: i128,
     /// Unclaimed DAO compensation at end of day (shannons).
     #[serde(default)]
-    pub unclaimed_compensation: u128,
+    pub unclaimed_compensation: i128,
     /// Cumulative count of unique addresses that have ever deposited into DAO
     /// (only increments, never decremented on withdrawal).
     #[serde(default)]
@@ -265,7 +265,7 @@ pub struct DaoLatestStatistics {
     pub total_depositors: i32,
     pub active_deposits: i32,
     pub total_compensation_paid: i128,
-    pub unclaimed_compensation: u128,
+    pub unclaimed_compensation: i128,
     pub average_deposit_days: String,
     pub estimated_apc: String,
     pub mining_reward: i128,

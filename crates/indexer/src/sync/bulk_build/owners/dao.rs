@@ -186,7 +186,17 @@ impl BulkReducer for DaoOwner {
 
                     // Decrement running sums: deposit leaving status 0 at phase-1.
                     {
-                        let free_cap = (entry.capacity - DAO_OCCUPIED_CAPACITY).max(0) as i128;
+                        if entry.capacity < DAO_OCCUPIED_CAPACITY {
+                            bail!(
+                                "DAO deposit capacity {} below occupied capacity {} at block {}, deposit_block={}, lock_hash=0x{}",
+                                entry.capacity,
+                                DAO_OCCUPIED_CAPACITY,
+                                tx.block_number,
+                                entry.deposit_block_number,
+                                hex::encode(&entry.lock_script_hash),
+                            );
+                        }
+                        let free_cap = (entry.capacity - DAO_OCCUPIED_CAPACITY) as i128;
                         let ar_deposit = entry.deposit_ar as i128;
                         if ar_deposit > 0 {
                             self.running_weighted_free_cap -= free_cap * UNMADE_SCALE / ar_deposit;
@@ -431,7 +441,17 @@ impl BulkReducer for DaoOwner {
 
             // Update running sums for unmade_dao_interests (new status-0 deposit).
             {
-                let free_cap = (output.capacity - DAO_OCCUPIED_CAPACITY).max(0) as i128;
+                if output.capacity < DAO_OCCUPIED_CAPACITY {
+                    bail!(
+                        "DAO deposit capacity {} below occupied capacity {} at block {}, tx={}, outpoint={}",
+                        output.capacity,
+                        DAO_OCCUPIED_CAPACITY,
+                        tx.block_number,
+                        hex::encode(tx.tx_hash),
+                        format_outpoint(&output.outpoint),
+                    );
+                }
+                let free_cap = (output.capacity - DAO_OCCUPIED_CAPACITY) as i128;
                 let ar_deposit = tx.block_dao_ar as i128;
                 if ar_deposit > 0 {
                     self.running_weighted_free_cap += free_cap * UNMADE_SCALE / ar_deposit;
@@ -783,8 +803,17 @@ impl DaoOwner {
             } else {
                 0
             };
-            self.daily_unmade_dao_interests
-                .insert(block_date, unmade.max(0));
+            if unmade < 0 {
+                bail!(
+                    "negative unmade_dao_interests {} at block {}: running_weighted_free_cap={}, running_total_free_cap={}, ar={}",
+                    unmade,
+                    block.number,
+                    self.running_weighted_free_cap,
+                    self.running_total_free_cap,
+                    ar_i128,
+                );
+            }
+            self.daily_unmade_dao_interests.insert(block_date, unmade);
         }
 
         let claimed_compensation_in_block = self

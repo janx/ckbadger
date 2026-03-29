@@ -167,7 +167,7 @@ pub struct DaoSnapshotInput {
     /// AR-based compensation sum for active (status-0) deposits (shannons).
     pub unmade_dao_interests: i128,
     /// Unclaimed DAO compensation at this point (shannons).
-    pub unclaimed_compensation: u128,
+    pub unclaimed_compensation: i128,
     /// Cumulative count of unique addresses that have ever deposited.
     pub cumulative_depositors: i64,
     /// Unique addresses that deposited on this specific day (including repeat depositors).
@@ -271,7 +271,12 @@ impl BatchWriter {
                     let bt_count = block_time.map(|(_, c)| c).unwrap_or(0);
                     s.avg_block_time_ms = match s.avg_block_time_ms {
                         Some(existing_avg) => {
-                            let prev_count = (s.blocks_count as i64 - 1).max(0);
+                            anyhow::ensure!(
+                                s.blocks_count >= 1,
+                                "existing daily stats entry has avg_block_time_ms but blocks_count={} (expected >= 1)",
+                                s.blocks_count,
+                            );
+                            let prev_count = s.blocks_count as i64 - 1;
                             let new_total = prev_count + bt_count as i64;
                             if new_total > 0 {
                                 Some(
@@ -975,7 +980,7 @@ impl BatchWriter {
         let mut total_compensation_paid: i128 = 0;
         let mut total_ms_held: f64 = 0.0;
         let mut active_filtered_count = 0usize;
-        let mut unclaimed_compensation: u128 = 0;
+        let mut unclaimed_compensation: i128 = 0;
         let mut depositor_map: HashMap<Vec<u8>, (i128, i32, f64)> = HashMap::new();
 
         for scan_status in [0i16, 1] {
@@ -1041,7 +1046,7 @@ impl BatchWriter {
                         ar_deposit,
                         effective_ar,
                     )?;
-                    unclaimed_compensation += compensation as u128;
+                    unclaimed_compensation += compensation as i128;
                 }
 
                 Ok(())

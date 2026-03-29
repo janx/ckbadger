@@ -991,7 +991,14 @@ impl Check for AddressBalanceSpotCheck {
         for addr in top_addresses.iter().take(n) {
             let address_balance: AddressBalanceApiRecord =
                 api_get(ctx, &format!("addresses/{}", addr.lock_script_hash))?;
-            let stored_balance: i128 = address_balance.balance.parse().unwrap_or(0);
+            let stored_balance: i128 = address_balance.balance.parse().map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to parse balance '{}' for lock_hash {}: {}",
+                    address_balance.balance,
+                    addr.lock_script_hash,
+                    e
+                )
+            })?;
 
             // Paginate through all live cells for this lock_script_hash
             let mut computed_balance: i128 = 0;
@@ -1009,7 +1016,14 @@ impl Check for AddressBalanceSpotCheck {
                 };
                 let resp: CellListResponse = api_get(ctx, &path)?;
                 for cell in &resp.data {
-                    let cap: i128 = cell.capacity.parse().unwrap_or(0);
+                    let cap: i128 = cell.capacity.parse().map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to parse cell capacity '{}' for lock_hash {}: {}",
+                            cell.capacity,
+                            addr.lock_script_hash,
+                            e
+                        )
+                    })?;
                     computed_balance += cap;
                 }
                 cursor = resp.next_cursor;
