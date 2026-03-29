@@ -33,6 +33,7 @@ pub(crate) struct DaoOwner {
     snapshot_dates: BTreeSet<NaiveDate>,
     daily_dao_fields: FxHashMap<NaiveDate, (i128, i128, i128)>,
     daily_active_delta: FxHashMap<NaiveDate, i128>,
+    daily_protocol_delta: FxHashMap<NaiveDate, i128>,
     daily_gross_deposit_delta: FxHashMap<NaiveDate, i128>,
     daily_new_deposits_delta: FxHashMap<NaiveDate, i64>,
     daily_withdrawals_delta: FxHashMap<NaiveDate, i64>,
@@ -201,6 +202,8 @@ impl BulkReducer for DaoOwner {
                         -(entry.capacity as i128),
                         "dao daily active delta (phase-1 withdraw request)",
                     )?;
+                    // Protocol delta NOT subtracted at phase-1 — cell still
+                    // locked in DAO contract until phase-2 completion.
                     Self::bump_active_depositor_count(
                         &mut self.active_deposit_counts_by_lock,
                         &mut self.daily_unique_depositors_delta,
@@ -319,6 +322,12 @@ impl BulkReducer for DaoOwner {
                         1,
                         "dao daily withdrawals delta",
                     )?;
+                    Self::bump_daily_i128(
+                        &mut self.daily_protocol_delta,
+                        tx_date,
+                        -(entry.capacity as i128),
+                        "dao daily protocol delta (phase-2 withdrawal)",
+                    )?;
                     // Active delta and depositor count already subtracted at
                     // phase-1 withdraw request — no double-counting at
                     // phase-2 completion.  Only the compensations above,
@@ -395,6 +404,12 @@ impl BulkReducer for DaoOwner {
                 "dao daily active delta",
             )?;
             Self::bump_daily_i128(
+                &mut self.daily_protocol_delta,
+                tx_date,
+                output.capacity as i128,
+                "dao daily protocol delta",
+            )?;
+            Self::bump_daily_i128(
                 &mut self.daily_gross_deposit_delta,
                 tx_date,
                 output.capacity as i128,
@@ -434,6 +449,7 @@ impl BulkReducer for DaoOwner {
     fn flush_sealed(&mut self, materializer: &mut Materializer<'_>) -> Result<()> {
         let mut rows = Vec::new();
         let mut running_total_deposited = 0i128;
+        let mut running_protocol_deposited = 0i128;
         let mut running_total_deposit_count = 0i64;
         let mut running_total_withdrawal_count = 0i64;
         let mut running_cumulative_depositors = 0i64;
@@ -448,6 +464,12 @@ impl BulkReducer for DaoOwner {
                 running_total_deposited,
                 self.daily_active_delta.get(date).copied().unwrap_or(0),
                 "dao running total_deposited",
+                *date,
+            )?;
+            running_protocol_deposited = checked_next_i128_total(
+                running_protocol_deposited,
+                self.daily_protocol_delta.get(date).copied().unwrap_or(0),
+                "dao running protocol_deposited",
                 *date,
             )?;
             running_cumulative_deposit_amount = checked_next_i128_total(
@@ -489,7 +511,7 @@ impl BulkReducer for DaoOwner {
                     split_secondary_issuance(
                         total_issuance,
                         occupied_capacity,
-                        running_total_deposited,
+                        running_protocol_deposited,
                         non_miner_secondary,
                     )?
                 } else {
@@ -551,7 +573,7 @@ impl BulkReducer for DaoOwner {
                     .get(date)
                     .map(|s| s.len() as i64)
                     .unwrap_or(0),
-                protocol_deposited: None, // Task 7 will add proper tracking
+                protocol_deposited: Some(running_protocol_deposited),
             };
             let key = keys::encode_stats_key(
                 keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
@@ -654,6 +676,8 @@ impl DaoOwner {
         let fixed_map_bytes = self.daily_dao_fields.len() as u64
             * std::mem::size_of::<(NaiveDate, (i128, i128, i128))>() as u64
             + self.daily_active_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64
+            + self.daily_protocol_delta.len() as u64
                 * std::mem::size_of::<(NaiveDate, i128)>() as u64
             + self.daily_gross_deposit_delta.len() as u64
                 * std::mem::size_of::<(NaiveDate, i128)>() as u64
