@@ -2,14 +2,17 @@
 //
 // Two independent control dimensions:
 //
-//   1. BATCH SIZE — wall-clock band + build/IO overlap.
-//      Primary goal: keep batch wall clock in [1s, 3s].
-//        Below band → grow target_cells to fill time budget.
-//        Above band → shrink target_cells to fit time budget.
+//   1. BATCH SIZE — build-time band + build/IO overlap.
+//      Primary goal: keep batch build time in [1s, 3s].
+//        Below band → grow target_cells to fill compute budget.
+//        Above band → shrink target_cells (batch genuinely too large).
+//      IO wait (recv + flush) is excluded from the band check:
+//      shrinking batch size cannot reduce IO-bound time and only
+//      increases per-batch overhead (prefetch, finalize, channel sync).
 //      Secondary goal (in-band): push toward build ≈ IO.
 //        build > IO → IO has headroom, grow batch (more data
 //        may push IO toward its non-linear knee, increasing
-//        throughput until build ≈ IO or wall clock hits ceiling).
+//        throughput until build ≈ IO or build hits ceiling).
 //        IO ≥ build → physical IO limit reached, hold steady.
 //
 //   2. I/O RESOURCES — governed by waste classification (ratio).
@@ -20,8 +23,8 @@
 //
 //   Dimension  │ Signal            │ Knobs
 //   ───────────│───────────────────│──────────────────────────
-//   Batch size │ wall clock, build │ target_cells
-//              │ vs IO             │
+//   Batch size │ build time,       │ target_cells
+//              │ build vs IO       │
 //   I/O        │ waste composition │ fetch_threads, bg_jobs
 //
 // Key design principle: fetch (CKB RocksDB reads via std::thread::scope)
@@ -61,11 +64,12 @@ const FLUSH_PCT_THRESHOLD: f64 = 0.4;
 // catch up — without suppressing the pipeline (no Flush classification).
 const FLUSH_L0_THRESHOLD: f64 = 40.0;
 
-// Batch wall-clock target range (ms).  The controller keeps batch
-// iteration time inside this band.  Below MIN → grow target_cells;
-// above MAX → shrink.  Inside the band → optimize build/IO overlap.
-const WALL_CLOCK_MIN: f64 = 1000.0;
-const WALL_CLOCK_MAX: f64 = 3000.0;
+// Build-time target range (ms).  The controller keeps batch build
+// time inside this band.  Below MIN → grow target_cells; above MAX →
+// shrink.  Inside the band → optimize build/IO overlap.  IO wait
+// (recv + flush) is excluded — it cannot be reduced by batch sizing.
+const BUILD_TIME_MIN: f64 = 1000.0;
+const BUILD_TIME_MAX: f64 = 3000.0;
 
 // Overlap growth gain.  When build > IO inside the wall-clock band,
 // target_cells grows by OVERLAP_GAIN × (build − IO) / wall_clock.
@@ -213,11 +217,13 @@ impl BottleneckController {
         self.wait_ema = ema(self.wait_ema, signals.flush_wait_ms);
         self.l0_ema = ema(self.l0_ema, signals.l0_files as f64);
 
-        // ── Batch size: wall-clock band + build/IO overlap ──────────
+        // ── Batch size: build-time band + build/IO overlap ─────────
         //
-        // Priority 1 (override): keep wall clock in [WALL_CLOCK_MIN, WALL_CLOCK_MAX].
-        //   Below band → grow to fill time budget.
-        //   Above band → shrink to fit time budget.
+        // Priority 1 (override): keep build in [BUILD_TIME_MIN, BUILD_TIME_MAX].
+        //   Below band → grow to fill compute budget.
+        //   Above band → shrink (batch genuinely too large).
+        //   IO wait (recv + flush) is excluded: shrinking batch size
+        //   cannot reduce IO-bound time and only adds per-batch overhead.
         //
         // Priority 2 (in-band): optimize build/IO overlap.
         //   build > IO → IO has headroom, grow toward build ≈ IO.
@@ -225,23 +231,23 @@ impl BottleneckController {
         let wall_clock = self.recv_ema + self.build_ema + self.wait_ema;
         let io_ms = self.recv_ema + self.wait_ema;
 
-        let factor = if wall_clock < 1.0 {
-            // Near-zero wall clock (cold start) — grow to discover capacity.
+        let factor = if self.build_ema < 1.0 {
+            // Near-zero build (cold start) — grow to discover capacity.
             STEP_CEIL
-        } else if wall_clock < WALL_CLOCK_MIN {
-            // Below band: batch too small, grow to fill time budget.
-            (WALL_CLOCK_MIN / wall_clock).min(STEP_CEIL)
-        } else if wall_clock > WALL_CLOCK_MAX {
-            // Above band: batch too large, shrink to fit time budget.
-            (WALL_CLOCK_MAX / wall_clock).max(STEP_FLOOR)
+        } else if self.build_ema < BUILD_TIME_MIN {
+            // Below band: batch too small, grow to fill compute budget.
+            (BUILD_TIME_MIN / self.build_ema).min(STEP_CEIL)
+        } else if self.build_ema > BUILD_TIME_MAX {
+            // Above band: build itself is too slow, batch genuinely too large.
+            (BUILD_TIME_MAX / self.build_ema).max(STEP_FLOOR)
         } else {
-            // In band: optimize build/IO overlap.
+            // Build in band: optimize build/IO overlap.
             if self.build_ema > io_ms {
                 // Build-dominant: IO has headroom, grow toward build ≈ IO.
-                // Growth proportional to IO gap, capped by wall-clock ceiling.
+                // Growth proportional to IO gap, capped by build ceiling.
                 let overlap_factor = 1.0 + OVERLAP_GAIN * (self.build_ema - io_ms) / wall_clock;
-                let wall_cap = WALL_CLOCK_MAX / wall_clock;
-                overlap_factor.min(wall_cap)
+                let build_cap = BUILD_TIME_MAX / self.build_ema;
+                overlap_factor.min(build_cap)
             } else {
                 // IO-dominant: at physical limit, hold steady.
                 1.0
@@ -413,7 +419,7 @@ mod tests {
         last.expect("should have output after warmup + N batches")
     }
 
-    // ── Wall-clock band tests ──────────────────────────────────────
+    // ── Build-time band tests ──────────────────────────────────────
 
     #[test]
     fn first_batch_returns_none() {
@@ -423,8 +429,8 @@ mod tests {
 
     #[test]
     fn cold_start_grows_to_discover_capacity() {
-        // When all EMAs are near zero (cold start after warmup),
-        // wall_clock < 1.0 → factor = STEP_CEIL = 2.0
+        // When build EMA is near zero (cold start after warmup),
+        // build_ema < 1.0 → factor = STEP_CEIL = 2.0
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         let initial = ctrl.target_cells;
         // Warmup with near-zero signals
@@ -440,28 +446,43 @@ mod tests {
     }
 
     #[test]
-    fn wall_clock_below_min_grows() {
-        // wall = 200 + 300 + 0 = 500 < 1000 → grow
+    fn build_below_min_grows() {
+        // build = 300 < 1000 → grow (batch too small)
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         let initial = ctrl.target_cells;
         run_batches(&mut ctrl, 5, &signals(200.0, 300.0, 0.0));
         assert!(
             ctrl.target_cells > initial,
-            "wall_clock < MIN should grow: {} should be > initial {}",
+            "build < MIN should grow: {} should be > initial {}",
             ctrl.target_cells,
             initial
         );
     }
 
     #[test]
-    fn wall_clock_above_max_shrinks() {
-        // wall = 500 + 2000 + 2000 = 4500 > 3000 → shrink
+    fn build_above_max_shrinks() {
+        // build = 4000 > 3000 → shrink (batch genuinely too large)
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         let initial = ctrl.target_cells;
-        run_batches(&mut ctrl, 5, &signals(500.0, 2000.0, 2000.0));
+        run_batches(&mut ctrl, 5, &signals(100.0, 4000.0, 100.0));
         assert!(
             ctrl.target_cells < initial,
-            "wall_clock > MAX should shrink: {} should be < initial {}",
+            "build > MAX should shrink: {} should be < initial {}",
+            ctrl.target_cells,
+            initial
+        );
+    }
+
+    #[test]
+    fn io_wait_above_band_does_not_shrink() {
+        // build = 2000 ∈ [1000, 3000], but wall = 2000 + 500 + 2000 = 4500
+        // IO-dominant above band: hold (don't shrink for flush wait)
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        let initial = ctrl.target_cells;
+        run_batches(&mut ctrl, 10, &signals(500.0, 2000.0, 2000.0));
+        assert!(
+            ctrl.target_cells >= initial,
+            "IO wait should not cause shrink: {} should be >= initial {}",
             ctrl.target_cells,
             initial
         );
@@ -469,7 +490,7 @@ mod tests {
 
     #[test]
     fn in_range_build_dominant_grows() {
-        // wall = 100 + 1800 + 100 = 2000 ∈ [1000, 3000]
+        // build = 1800 ∈ [1000, 3000], IO = 200
         // build(1800) > IO(200) → grow
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         let initial = ctrl.target_cells;
@@ -483,27 +504,46 @@ mod tests {
     }
 
     #[test]
-    fn in_range_io_dominant_holds() {
-        // wall = 800 + 500 + 700 = 2000 ∈ [1000, 3000]
-        // build(500) < IO(1500) → hold
+    fn in_band_io_dominant_holds() {
+        // build = 2000 ∈ [1000, 3000], IO = 1200 + 1200 = 2400
+        // build(2000) < IO(2400) → hold.
+        // build value chosen so build_ema reaches band floor (1000)
+        // after one EMA step (2000 * 0.5 = 1000), avoiding warmup growth.
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         let initial = ctrl.target_cells;
-        run_batches(&mut ctrl, 10, &signals(800.0, 500.0, 700.0));
+        run_batches(&mut ctrl, 10, &signals(1200.0, 2000.0, 1200.0));
         assert_eq!(
             ctrl.target_cells, initial,
-            "in-range IO-dominant should hold: {} should equal initial {}",
+            "in-band IO-dominant should hold: {} should equal initial {}",
             ctrl.target_cells, initial
         );
     }
 
     #[test]
-    fn build_equals_io_converges() {
-        // wall = 500 + 1000 + 500 = 2000 ∈ [1000, 3000]
-        // build(1000) = IO(1000) → factor = 1.0
+    fn build_below_min_grows_even_when_io_dominant() {
+        // build = 500 < 1000 (below band), IO = 800 + 700 = 1500
+        // Even though IO > build, batch is too small → grow.
+        // IO wait cannot be reduced by batch sizing.
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
-        // After warmup the EMAs won't be exactly 1000/1000 due to smoothing,
+        let initial = ctrl.target_cells;
+        run_batches(&mut ctrl, 5, &signals(800.0, 500.0, 700.0));
+        assert!(
+            ctrl.target_cells > initial,
+            "build < MIN should grow regardless of IO: {} should be > initial {}",
+            ctrl.target_cells,
+            initial
+        );
+    }
+
+    #[test]
+    fn build_equals_io_converges() {
+        // build = 2000, IO = 1000 + 1000 = 2000
+        // build(2000) = IO(2000) → factor = 1.0.
+        // build value chosen so build_ema enters band immediately.
+        let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
+        // After warmup the EMAs won't be exactly 2000/2000 due to smoothing,
         // but after many batches they converge. Check stability.
-        run_batches(&mut ctrl, 20, &signals(500.0, 1000.0, 500.0));
+        run_batches(&mut ctrl, 20, &signals(1000.0, 2000.0, 1000.0));
         let ratio = ctrl.target_cells as f64 / 200_000.0;
         assert!(
             ratio > 0.8 && ratio < 1.2,
@@ -514,10 +554,9 @@ mod tests {
     }
 
     #[test]
-    fn growth_capped_by_wall_clock_ceiling() {
-        // wall = 50 + 2800 + 50 = 2900 ∈ [1000, 3000], very close to MAX
-        // build(2800) >> IO(100) → wants to grow, but wall_cap = 3000/2900 ≈ 1.034
-        // Growth should be modest to not overshoot 3000.
+    fn growth_capped_by_build_ceiling() {
+        // build(2800) >> IO(100) → wants to grow, but build_cap = 3000/build_ema
+        // prevents overshooting the build ceiling.
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         run_batches(&mut ctrl, 1, &signals(50.0, 2800.0, 50.0));
         // After 1 batch the EMA is a blend with warmup, but factor should be small.
@@ -685,7 +724,7 @@ mod tests {
 
         ctrl.observe(&signals(100.0, 2000.0, 0.0)); // warmup
 
-        // wall_clock >> 3000 → aggressive shrink, should never hit zero.
+        // build >> 3000 → aggressive shrink, should never hit zero.
         for _ in 0..100 {
             ctrl.observe(&signals(0.0, 100_000.0, 0.0));
         }
