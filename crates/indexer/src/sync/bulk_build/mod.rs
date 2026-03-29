@@ -593,8 +593,8 @@ impl BulkBuildEngine {
             .bulk_build_perf
             .record_finalize_step(13, finalize_started.elapsed());
         sync_totals.finalize_success(indexer.writer.store().as_ref(), false)?;
-        indexer.writer.refresh_latest_dao_statistics()?;
         indexer.writer.store().clear_bulk_build_session_marker()?;
+        indexer.writer.refresh_latest_dao_statistics()?;
 
         let finalize_elapsed = finalize_started.elapsed();
         indexer.bulk_build_perf.clear_finalize();

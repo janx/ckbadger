@@ -149,6 +149,7 @@ fn select_phase1_output_for_deposit<'a>(
     consumed_output_indices: &HashSet<usize>,
     capacity: i64,
     deposit_block_number: i64,
+    lock_script_hash: &[u8],
 ) -> Result<Option<(usize, &'a (Vec<u8>, i16, Vec<u8>, i64, u64))>> {
     let deposit_block_u64 = u64::try_from(deposit_block_number).map_err(|_| {
         anyhow!(
@@ -159,11 +160,14 @@ fn select_phase1_output_for_deposit<'a>(
     Ok(new_dao_outputs
         .iter()
         .enumerate()
-        .filter(|(pos, (_, _, _, cap, output_deposit_block))| {
-            *cap == capacity
-                && *output_deposit_block == deposit_block_u64
-                && !consumed_output_indices.contains(pos)
-        })
+        .filter(
+            |(pos, (_, _, output_lock_hash, cap, output_deposit_block))| {
+                *cap == capacity
+                    && *output_deposit_block == deposit_block_u64
+                    && output_lock_hash.as_slice() == lock_script_hash
+                    && !consumed_output_indices.contains(pos)
+            },
+        )
         // Use output index as a deterministic tie-breaker when exact metadata repeats.
         .min_by_key(|(pos, (_, output_index, _, _, _))| (*output_index, *pos)))
 }
@@ -408,6 +412,7 @@ impl BatchWriter {
                             &consumed_output_indices,
                             capacity,
                             entry.deposit_block_number,
+                            &entry.lock_script_hash,
                         )?
                         .ok_or_else(|| {
                             anyhow!(

@@ -156,6 +156,7 @@ impl BulkReducer for DaoOwner {
                         &consumed_request_output_positions,
                         entry.capacity,
                         entry.deposit_block_number,
+                        &entry.lock_script_hash,
                     )?
                     .ok_or_else(|| {
                         anyhow!(
@@ -1060,6 +1061,7 @@ fn select_phase1_output_for_deposit<'a>(
     consumed_output_positions: &HashSet<usize>,
     capacity: i64,
     deposit_block_number: i64,
+    lock_script_hash: &[u8],
 ) -> Result<Option<(usize, &'a DaoCellView)>> {
     let deposit_block_u64 = u64::try_from(deposit_block_number).map_err(|_| {
         anyhow!(
@@ -1075,6 +1077,7 @@ fn select_phase1_output_for_deposit<'a>(
                 deposit_block_number: output_deposit_block,
             } => (output.capacity == capacity
                 && u64::try_from(output_deposit_block).ok() == Some(deposit_block_u64)
+                && output.lock_hash.as_slice() == lock_script_hash
                 && !consumed_output_positions.contains(pos))
             .then_some((*pos, *output)),
             DaoCellState::Deposit => None,
