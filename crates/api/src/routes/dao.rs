@@ -610,17 +610,22 @@ fn snapshot_circulating_supply(
     if total_issuance <= 0 {
         return Ok(None);
     }
-    if snapshot.cum_treasury < 0 {
+    let explorer_treasury = if snapshot.unmade_dao_interests > 0 {
+        snapshot.secondary_pool - snapshot.unmade_dao_interests
+    } else {
+        snapshot.cum_treasury
+    };
+    if explorer_treasury < 0 {
         return Err(ApiError::internal(format!(
-            "negative cum_treasury in dao_daily_snapshots for {}: {}",
-            snapshot.date, snapshot.cum_treasury
+            "negative treasury in dao_daily_snapshots for {}: {}",
+            snapshot.date, explorer_treasury
         )));
     }
-    let circulating = total_issuance - GENESIS_BURNT - snapshot.cum_treasury;
+    let circulating = total_issuance - GENESIS_BURNT - explorer_treasury;
     if circulating < 0 {
         return Err(ApiError::internal(format!(
-            "negative circulating supply for {}: total_issuance={}, burnt={}, cum_treasury={}",
-            snapshot.date, total_issuance, GENESIS_BURNT, snapshot.cum_treasury
+            "negative circulating supply for {}: total_issuance={}, burnt={}, treasury={}",
+            snapshot.date, total_issuance, GENESIS_BURNT, explorer_treasury
         )));
     }
     Ok(Some(circulating))

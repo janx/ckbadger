@@ -1300,14 +1300,14 @@ fn build_circulating_supply_by_date_map(
         let Some(total_supply) = snapshot_total_issuance(snapshot) else {
             continue;
         };
-        let (_, _, cum_treasury) = snapshot_secondary_cumulative(snapshot)?;
+        let explorer_treasury = snapshot_explorer_treasury(snapshot)?;
         if snapshot.total_deposited < 0 {
             return Err(ApiError::internal(format!(
                 "negative total_deposited in dao_daily_snapshots for {}: {}",
                 snapshot.date, snapshot.total_deposited
             )));
         }
-        let burnt = GENESIS_BURNT as i128 + cum_treasury;
+        let burnt = GENESIS_BURNT as i128 + explorer_treasury;
         let circulating = total_supply - burnt - snapshot.total_deposited;
         if circulating < 0 {
             return Err(ApiError::internal(format!(
@@ -2280,8 +2280,8 @@ async fn fetch_network_stats_from_db(
     let circulating_supply = match dao_snapshot.as_ref() {
         Some(s) => {
             let total_supply = s.total_issuance;
-            let (_, _, cum_treasury) = snapshot_secondary_cumulative(s)?;
-            let burnt = GENESIS_BURNT as i128 + cum_treasury;
+            let explorer_treasury = snapshot_explorer_treasury(s)?;
+            let burnt = GENESIS_BURNT as i128 + explorer_treasury;
             Some((total_supply - burnt - s.total_deposited).to_string())
         }
         None => None,
@@ -2575,6 +2575,26 @@ fn snapshot_secondary_cumulative(
     ))
 }
 
+/// Compute explorer-compatible treasury from a daily snapshot.
+/// Formula: `secondary_pool - unmade_dao_interests`.
+/// Falls back to `cum_treasury` when `unmade_dao_interests == 0` (pre-resync data).
+fn snapshot_explorer_treasury(
+    snapshot: &ckbadger_store::DaoDailySnapshot,
+) -> Result<i128, ApiRouteError> {
+    if snapshot.unmade_dao_interests > 0 {
+        let treasury = snapshot.secondary_pool - snapshot.unmade_dao_interests;
+        if treasury < 0 {
+            return Err(ApiError::internal(format!(
+                "negative S-field treasury for {}: secondary_pool={}, unmade_dao_interests={}",
+                snapshot.date, snapshot.secondary_pool, snapshot.unmade_dao_interests
+            )));
+        }
+        Ok(treasury)
+    } else {
+        Ok(snapshot.cum_treasury)
+    }
+}
+
 async fn get_total_supply_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
@@ -2597,8 +2617,8 @@ async fn get_total_supply_chart(
                 snapshot.date
             )));
         };
-        let (_, _, cum_treasury) = snapshot_secondary_cumulative(snapshot)?;
-        let burnt = GENESIS_BURNT as i128 + cum_treasury;
+        let explorer_treasury = snapshot_explorer_treasury(snapshot)?;
+        let burnt = GENESIS_BURNT as i128 + explorer_treasury;
 
         // Nervos DAO locked = active deposits (can be unlocked, but currently locked)
         if snapshot.total_deposited < 0 {
@@ -2722,8 +2742,9 @@ async fn get_secondary_issuance_chart(
 
     let mut data = Vec::new();
     for snapshot in &snapshots {
-        let (cum_miner, cum_dao, cum_treasury) = snapshot_secondary_cumulative(snapshot)?;
-        if cum_miner <= 0 && cum_dao <= 0 && cum_treasury <= 0 {
+        let (cum_miner, cum_dao, _) = snapshot_secondary_cumulative(snapshot)?;
+        let explorer_treasury = snapshot_explorer_treasury(snapshot)?;
+        if cum_miner <= 0 && cum_dao <= 0 && explorer_treasury <= 0 {
             continue;
         }
 
@@ -2738,7 +2759,7 @@ async fn get_secondary_issuance_chart(
         );
         values.insert(
             "burnt".to_string(),
-            (cum_treasury / SHANNONS_PER_CKB).to_string(),
+            (explorer_treasury / SHANNONS_PER_CKB).to_string(),
         );
         data.push(StackedAreaDataPoint {
             date: snapshot.date.clone(),
