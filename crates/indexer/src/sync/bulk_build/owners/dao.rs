@@ -10,12 +10,6 @@ use ckbadger_store::{
 };
 use rustc_hash::FxHashMap;
 
-/// Precision scale for weighted free-cap running sum (10^18).
-const UNMADE_SCALE: i128 = 1_000_000_000_000_000_000;
-
-/// Minimum occupied capacity of a DAO cell: 102 CKB in shannons.
-const DAO_OCCUPIED_CAPACITY: i64 = 102_00000000;
-
 use super::{BulkReducer, ReducerContext};
 use crate::db::writer::dao::calculate_dao_compensation_from_ar;
 use crate::rpc::BlockResponseWithCycles;
@@ -61,12 +55,9 @@ pub(crate) struct DaoOwner {
     daily_depositing_addresses: FxHashMap<NaiveDate, HashSet<Vec<u8>>>,
     claimed_compensation_by_block: FxHashMap<i64, i128>,
     prev_dao_cs: Option<(i128, i128)>,
-    /// Running sum of (free_capacity * UNMADE_SCALE / ar_deposit) for all status-0 deposits.
-    running_weighted_free_cap: i128,
-    /// Running sum of free_capacity for all status-0 deposits.
-    running_total_free_cap: i128,
-    /// Per-date unmade_dao_interests computed at each block's record_block.
-    daily_unmade_dao_interests: FxHashMap<NaiveDate, i128>,
+    /// Per-date end-of-day block number and AR, for exact unmade_dao_interests
+    /// computation during materialization.
+    daily_end_of_day: FxHashMap<NaiveDate, (i64, u64)>,
 }
 
 impl BulkReducer for DaoOwner {
@@ -183,26 +174,6 @@ impl BulkReducer for DaoOwner {
                         )
                     })?;
                     consumed_request_output_positions.insert(request_output_pos);
-
-                    // Decrement running sums: deposit leaving status 0 at phase-1.
-                    {
-                        if entry.capacity < DAO_OCCUPIED_CAPACITY {
-                            bail!(
-                                "DAO deposit capacity {} below occupied capacity {} at block {}, deposit_block={}, lock_hash=0x{}",
-                                entry.capacity,
-                                DAO_OCCUPIED_CAPACITY,
-                                tx.block_number,
-                                entry.deposit_block_number,
-                                hex::encode(&entry.lock_script_hash),
-                            );
-                        }
-                        let free_cap = (entry.capacity - DAO_OCCUPIED_CAPACITY) as i128;
-                        let ar_deposit = entry.deposit_ar as i128;
-                        if ar_deposit > 0 {
-                            self.running_weighted_free_cap -= free_cap * UNMADE_SCALE / ar_deposit;
-                            self.running_total_free_cap -= free_cap;
-                        }
-                    }
 
                     entry.status = 1;
                     entry.withdraw_request_block = Some(tx.block_number);
@@ -439,26 +410,6 @@ impl BulkReducer for DaoOwner {
                 );
             }
 
-            // Update running sums for unmade_dao_interests (new status-0 deposit).
-            {
-                if output.capacity < DAO_OCCUPIED_CAPACITY {
-                    bail!(
-                        "DAO deposit capacity {} below occupied capacity {} at block {}, tx={}, outpoint={}",
-                        output.capacity,
-                        DAO_OCCUPIED_CAPACITY,
-                        tx.block_number,
-                        hex::encode(tx.tx_hash),
-                        format_outpoint(&output.outpoint),
-                    );
-                }
-                let free_cap = (output.capacity - DAO_OCCUPIED_CAPACITY) as i128;
-                let ar_deposit = tx.block_dao_ar as i128;
-                if ar_deposit > 0 {
-                    self.running_weighted_free_cap += free_cap * UNMADE_SCALE / ar_deposit;
-                    self.running_total_free_cap += free_cap;
-                }
-            }
-
             Self::bump_daily_i128(
                 &mut self.daily_active_delta,
                 tx_date,
@@ -618,11 +569,12 @@ impl BulkReducer for DaoOwner {
                 )
                 .ok_or_else(|| anyhow!("dao cumulative_depositors overflow on {}", date))?;
 
-            let unmade_dao_interests = self
-                .daily_unmade_dao_interests
-                .get(date)
-                .copied()
-                .unwrap_or(0);
+            let unmade_dao_interests =
+                if let Some(&(last_block, ar)) = self.daily_end_of_day.get(date) {
+                    self.compute_unmade_at_block(last_block, ar)?
+                } else {
+                    0
+                };
 
             let snapshot = DaoDailySnapshot {
                 date: date.format("%Y-%m-%d").to_string(),
@@ -772,13 +724,45 @@ impl DaoOwner {
                 * std::mem::size_of::<(Vec<u8>, i64)>() as u64
             + self.claimed_compensation_by_block.len() as u64
                 * std::mem::size_of::<(i64, i128)>() as u64
-            + self.daily_unmade_dao_interests.len() as u64
-                * (std::mem::size_of::<NaiveDate>() as u64 + 16);
+            + self.daily_end_of_day.len() as u64
+                * std::mem::size_of::<(NaiveDate, (i64, u64))>() as u64;
         std::mem::size_of::<Self>() as u64
             + deposits_bytes
             + request_bytes
             + date_set_bytes
             + fixed_map_bytes
+    }
+
+    /// Compute exact unmade_dao_interests at a given block by iterating all
+    /// deposits and summing per-deposit compensation for those that were
+    /// status-0 at `block_number`.  Same formula as the live-sync path
+    /// (`compute_unmade_dao_interests` in dao_ops.rs).
+    fn compute_unmade_at_block(&self, block_number: i64, ar: u64) -> Result<i128> {
+        let mut total: i128 = 0;
+        for entry in self.deposits.values() {
+            // Was this deposit status-0 at `block_number`?
+            if entry.deposit_block_number > block_number {
+                continue; // deposit didn't exist yet
+            }
+            if let Some(req_block) = entry.withdraw_request_block {
+                if req_block <= block_number {
+                    continue; // already moved to status 1+ by this block
+                }
+            }
+            let ar_deposit = u64::try_from(entry.deposit_ar).map_err(|_| {
+                anyhow!(
+                    "negative DAO deposit AR in compute_unmade_at_block: deposit_block={}, deposit_ar={}",
+                    entry.deposit_block_number,
+                    entry.deposit_ar
+                )
+            })?;
+            if ar_deposit > 0 && ar > ar_deposit {
+                let compensation =
+                    calculate_dao_compensation_from_ar(entry.capacity, ar_deposit, ar)?;
+                total += compensation as i128;
+            }
+        }
+        Ok(total)
     }
 
     pub(crate) fn record_block(&mut self, block: &BlockFacts) -> Result<()> {
@@ -794,26 +778,11 @@ impl DaoOwner {
         })?;
         self.daily_dao_fields.insert(block_date, (c, s, u));
 
-        // Compute unmade_dao_interests from running sums (O(1) per block).
+        // Track end-of-day block number and AR for exact unmade_dao_interests
+        // computation during materialization (HashMap overwrites → last block
+        // of each day persists).
         if let Some(ar) = extract_ar_from_dao_bytes(&block.dao) {
-            let ar_i128 = ar as i128;
-            let unmade = if self.running_weighted_free_cap > 0 && ar_i128 > 0 {
-                ar_i128 * self.running_weighted_free_cap / UNMADE_SCALE
-                    - self.running_total_free_cap
-            } else {
-                0
-            };
-            if unmade < 0 {
-                bail!(
-                    "negative unmade_dao_interests {} at block {}: running_weighted_free_cap={}, running_total_free_cap={}, ar={}",
-                    unmade,
-                    block.number,
-                    self.running_weighted_free_cap,
-                    self.running_total_free_cap,
-                    ar_i128,
-                );
-            }
-            self.daily_unmade_dao_interests.insert(block_date, unmade);
+            self.daily_end_of_day.insert(block_date, (block.number, ar));
         }
 
         let claimed_compensation_in_block = self
@@ -1173,6 +1142,13 @@ fn select_phase1_output_for_deposit<'a>(
     // (capacity, deposit_block) only — the CKB DAO type script does not
     // enforce lock preservation, so a legitimate withdraw request may change
     // the lock script.
+    //
+    // Known limitation: when multiple request outputs share the same
+    // (capacity, deposit_block) AND locks differ from the original deposits,
+    // the fallback min_by_key pairing is deterministic but arbitrary — it may
+    // mis-associate deposits with request outputs.  This requires a single tx
+    // to withdraw multiple identical-capacity deposits from the same block
+    // while also changing locks, which is rare in practice.
     let with_lock = base_candidates()
         .filter(|(_, output)| output.lock_hash.as_slice() == lock_script_hash)
         .min_by_key(|(pos, output)| (output.outpoint.index, *pos));
@@ -1393,6 +1369,136 @@ mod tests {
     use super::*;
     use crate::parser::dao::DAO_CODE_HASH;
     use crate::sync::types::InternId;
+
+    /// Regression: previously the running-sum formula crashed at block 64 with
+    /// "negative unmade_dao_interests -1" due to double integer truncation.
+    /// The new approach computes exact per-deposit compensation, matching the
+    /// live-sync path.
+    #[test]
+    fn compute_unmade_exact_near_genesis() {
+        let mut owner = DaoOwner::default();
+
+        // Simulate a deposit at genesis: capacity=193 CKB, ar_deposit=10^16.
+        let ar_genesis: u64 = 10_000_000_000_000_000;
+        let deposit = DaoDepositCacheEntry {
+            capacity: 193_00000000,
+            deposit_block_number: 0,
+            deposit_timestamp: 0,
+            lock_script_hash: vec![0xaa; 32],
+            deposit_ar: ar_genesis as i64,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+        owner.deposits.insert(
+            OutPointKey {
+                tx_hash: [0x01; 32],
+                index: 0,
+            },
+            deposit,
+        );
+
+        // Block 64 AR from actual mainnet data.
+        let ar_block64: u64 = 10_000_006_706_531_899;
+
+        // Exact per-deposit computation should succeed (no negative).
+        let unmade = owner.compute_unmade_at_block(64, ar_block64).unwrap();
+
+        // Interest = free_cap * ar / ar_deposit - free_cap
+        // free_cap = (193 - 102) * 10^8 = 91 * 10^8 = 9_100_000_000
+        // = 9_100_000_000 * 10_000_006_706_531_899 / 10_000_000_000_000_000 - 9_100_000_000
+        // = 9_100_006_102 - 9_100_000_000 = 6102
+        assert_eq!(
+            unmade, 6102,
+            "exact per-deposit compensation for genesis deposit at block 64"
+        );
+    }
+
+    /// Verify that deposits not yet created or already withdrawn are excluded.
+    #[test]
+    fn compute_unmade_filters_by_block_number() {
+        let mut owner = DaoOwner::default();
+
+        // Deposit at block 100, withdrawn at block 200.
+        let deposit_withdrawn = DaoDepositCacheEntry {
+            capacity: 200_00000000,
+            deposit_block_number: 100,
+            deposit_timestamp: 0,
+            lock_script_hash: vec![0xbb; 32],
+            deposit_ar: 10_000_000_000_000_000,
+            status: 1,
+            withdraw_request_tx: Some(vec![0x99; 32]),
+            withdraw_request_output_index: Some(0),
+            withdraw_request_block: Some(200),
+            withdraw_request_ar: Some(10_000_100_000_000_000),
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+        owner.deposits.insert(
+            OutPointKey {
+                tx_hash: [0x02; 32],
+                index: 0,
+            },
+            deposit_withdrawn,
+        );
+
+        // Deposit at block 300 (future).
+        let deposit_future = DaoDepositCacheEntry {
+            capacity: 300_00000000,
+            deposit_block_number: 300,
+            deposit_timestamp: 0,
+            lock_script_hash: vec![0xcc; 32],
+            deposit_ar: 10_000_100_000_000_000,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+        owner.deposits.insert(
+            OutPointKey {
+                tx_hash: [0x03; 32],
+                index: 0,
+            },
+            deposit_future,
+        );
+
+        let ar = 10_000_050_000_000_000_u64;
+
+        // At block 150: deposit_withdrawn is active (created 100, not yet withdrawn 200).
+        // deposit_future doesn't exist yet (created 300).
+        let unmade_150 = owner.compute_unmade_at_block(150, ar).unwrap();
+        assert!(
+            unmade_150 > 0,
+            "withdrawn deposit should be active at block 150"
+        );
+
+        // At block 250: deposit_withdrawn is no longer active (withdrawn at 200).
+        // deposit_future doesn't exist yet.
+        let unmade_250 = owner.compute_unmade_at_block(250, ar).unwrap();
+        assert_eq!(unmade_250, 0, "no active deposits at block 250");
+
+        // At block 350: only deposit_future is active.
+        // AR must be higher than deposit_future's ar_deposit for interest.
+        let ar_later = 10_000_200_000_000_000_u64;
+        let unmade_350 = owner.compute_unmade_at_block(350, ar_later).unwrap();
+        assert!(
+            unmade_350 > 0,
+            "future deposit should be active at block 350"
+        );
+    }
 
     #[test]
     fn dao_owner_reduces_deposit_request_completion_lifecycle() {

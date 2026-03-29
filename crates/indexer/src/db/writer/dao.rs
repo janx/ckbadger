@@ -173,6 +173,13 @@ fn select_phase1_output_for_deposit<'a>(
     // (capacity, deposit_block) only — the CKB DAO type script does not
     // enforce lock preservation, so a legitimate withdraw request may change
     // the lock script.
+    //
+    // Known limitation: when multiple request outputs share the same
+    // (capacity, deposit_block) AND locks differ from the original deposits,
+    // the fallback min_by_key pairing is deterministic but arbitrary — it may
+    // mis-associate deposits with request outputs.  This requires a single tx
+    // to withdraw multiple identical-capacity deposits from the same block
+    // while also changing locks, which is rare in practice.
     let with_lock = base_candidates()
         .filter(|(_, (_, _, output_lock_hash, _, _))| {
             output_lock_hash.as_slice() == lock_script_hash

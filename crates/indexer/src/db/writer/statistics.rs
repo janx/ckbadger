@@ -3,7 +3,7 @@ use chrono::{DateTime, Duration, NaiveDate, Utc};
 use rocksdb::{Direction, IteratorMode};
 use std::collections::{HashMap, HashSet};
 
-use ckbadger_common::dao::calculate_estimated_apc;
+use ckbadger_common::dao::{calculate_estimated_apc, extract_s_from_dao};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::*;
@@ -972,16 +972,25 @@ impl BatchWriter {
             )
         })?;
         let tip_timestamp = header.timestamp;
+        let tip_s = extract_s_from_dao(&header.dao).ok_or_else(|| {
+            anyhow!(
+                "invalid DAO S field in sync tip block while refreshing latest dao statistics: block_number={}, dao_len={}",
+                tip_block_number,
+                header.dao.len()
+            )
+        })?;
 
         let mut total_deposited: i128 = 0;
         let mut pending_withdrawal_capacity: i128 = 0;
         let mut unique_depositors: HashSet<Vec<u8>> = HashSet::new();
         let mut active_deposits = 0i32;
         let mut total_compensation_paid: i128 = 0;
-        let mut total_ms_held: f64 = 0.0;
-        let mut active_filtered_count = 0usize;
         let mut unclaimed_compensation: i128 = 0;
         let mut depositor_map: HashMap<Vec<u8>, (i128, i32, f64)> = HashMap::new();
+        let mut unmade_active_compensation: u128 = 0;
+        let mut weighted_deposit_days: f64 = 0.0;
+        let mut avg_total_capacity: i128 = 0;
+        let mut status1_for_avg: Vec<(i64, i64, i64)> = Vec::new();
 
         for scan_status in [0i16, 1] {
             self.store.scan_dao_deposits_by_status(scan_status, |_, entry| {
@@ -990,6 +999,13 @@ impl BatchWriter {
                 // Status-specific accounting
                 if entry.status == 1 {
                     pending_withdrawal_capacity += entry.capacity as i128;
+                    if let Some(request_block) = entry.withdraw_request_block {
+                        status1_for_avg.push((
+                            entry.capacity,
+                            entry.deposit_timestamp,
+                            request_block,
+                        ));
+                    }
                 } else {
                     // Only status=0 deposits count toward total_deposited,
                     // unique_depositors, depositor_map, and avg deposit time —
@@ -1006,8 +1022,9 @@ impl BatchWriter {
                     dm.2 += (tip_timestamp - entry.deposit_timestamp) as f64;
 
                     let held_ms = tip_timestamp - entry.deposit_timestamp;
-                    total_ms_held += held_ms as f64;
-                    active_filtered_count += 1;
+                    let days_held = held_ms as f64 / 86_400_000.0;
+                    weighted_deposit_days += entry.capacity as f64 * days_held;
+                    avg_total_capacity += entry.capacity as i128;
                 }
 
                 // Compensation accrues for both status=0 and status=1 deposits
@@ -1047,6 +1064,9 @@ impl BatchWriter {
                         effective_ar,
                     )?;
                     unclaimed_compensation += compensation as i128;
+                    if entry.status == 0 {
+                        unmade_active_compensation += compensation as u128;
+                    }
                 }
 
                 Ok(())
@@ -1059,6 +1079,17 @@ impl BatchWriter {
             }
             Ok(())
         })?;
+
+        // Resolve status-1 deposit timestamps from block headers for capacity-weighted average.
+        for &(capacity, deposit_ts, request_block) in &status1_for_avg {
+            if let Some(hdr) = self.store.get_block_header(request_block)? {
+                let frozen_days = (hdr.timestamp - deposit_ts) as f64 / 86_400_000.0;
+                if frozen_days >= 0.0 {
+                    weighted_deposit_days += capacity as f64 * frozen_days;
+                    avg_total_capacity += capacity as i128;
+                }
+            }
+        }
 
         let latest_snapshot = self.store.get_latest_dao_daily_snapshot()?;
         let estimated_apc = estimated_apc_from_header(&header).unwrap_or_default();
@@ -1078,24 +1109,25 @@ impl BatchWriter {
                     s.cum_dao_compensation
                 );
             }
-            if s.cum_treasury < 0 {
+            // Use tip S-field and live unmade computation for explorer-compatible treasury.
+            let treasury_from_s = tip_s as i128 - unmade_active_compensation as i128;
+            if treasury_from_s < 0 {
                 bail!(
-                    "negative cum_treasury in dao_daily_snapshots while refreshing latest dao statistics for {}: {}",
-                    s.date,
-                    s.cum_treasury
+                    "negative treasury_from_s in latest dao statistics: tip_s={}, unmade_active_compensation={}, block={}",
+                    tip_s, unmade_active_compensation, tip_block_number
                 );
             }
             (
                 s.cum_miner_secondary,
                 s.cum_dao_compensation,
-                s.cum_treasury,
+                treasury_from_s,
             )
         } else {
             (0, 0, 0)
         };
 
-        let avg_days = if active_filtered_count > 0 {
-            total_ms_held / active_filtered_count as f64 / 86_400_000.0
+        let avg_days = if avg_total_capacity > 0 {
+            weighted_deposit_days / avg_total_capacity as f64
         } else {
             0.0
         };
@@ -1343,8 +1375,12 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
+        // AR = 2, S = 130 CKB.
+        // unmade_comp for status-0 deposit: (200-102)*2/1 - (200-102) = 98 CKB
+        // treasury = S - unmade_comp = 130 - 98 = 32 CKB
         let mut dao = vec![0u8; 32];
         dao[8..16].copy_from_slice(&2u64.to_le_bytes());
+        dao[16..24].copy_from_slice(&130_00000000u64.to_le_bytes());
         let mut seed = StoreBatch::new(&store);
         seed.put_block_header(
             10,
@@ -1437,7 +1473,7 @@ mod tests {
         assert!(!latest.estimated_apc.is_empty());
         assert_eq!(latest.mining_reward, 10_00000000);
         assert_eq!(latest.deposit_compensation, 20_00000000);
-        assert_eq!(latest.burnt, 30_00000000);
+        assert_eq!(latest.burnt, 32_00000000);
     }
 
     #[test]
@@ -1446,10 +1482,11 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        // Tip block: AR=4, timestamp = day 10
-        let tip_timestamp: i64 = 1_700_000_000_000; // ~2023-11-14
+        // Tip block: AR=4, S=200 CKB, timestamp = day 10
+        let tip_timestamp: i64 = 1_700_000_000_000;
         let mut dao = vec![0u8; 32];
-        dao[8..16].copy_from_slice(&4u64.to_le_bytes()); // tip AR = 4
+        dao[8..16].copy_from_slice(&4u64.to_le_bytes());
+        dao[16..24].copy_from_slice(&200_00000000u64.to_le_bytes());
         let mut seed = StoreBatch::new(&store);
         seed.put_block_header(
             100,
@@ -1461,6 +1498,21 @@ mod tests {
                 epoch_index: 0,
                 epoch_length: 100,
                 dao,
+                transactions_count: 1,
+            },
+        );
+
+        // Block 80 header (for status-1 deposit frozen time lookup)
+        seed.put_block_header(
+            80,
+            &CachedBlockHeader {
+                hash: vec![0x22; 32],
+                parent_hash: vec![0u8; 32],
+                timestamp: tip_timestamp - 86_400_000, // 1 day before tip
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 100,
+                dao: vec![0u8; 32],
                 transactions_count: 1,
             },
         );
@@ -1577,8 +1629,9 @@ mod tests {
         assert_eq!(latest.unclaimed_compensation, 197_00000000);
         // pending_withdrawal_capacity = status=1: 300_00000000
         assert_eq!(latest.pending_withdrawal_capacity, 300_00000000);
-        // average_deposit_days follows explorer semantics: only the status=0 deposit
-        assert_eq!(latest.average_deposit_days, "2 days");
+        // Capacity-weighted average: status-0 (200 CKB * 2 days) + status-1 (300 CKB * 4 days frozen)
+        // = (400_00000000 + 1200_00000000) / 500_00000000 = 3.2 → "3 days"
+        assert_eq!(latest.average_deposit_days, "3 days");
         assert_eq!(latest.tip_block_number, 100);
     }
 

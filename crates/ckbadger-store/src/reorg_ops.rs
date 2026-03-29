@@ -1412,7 +1412,9 @@ impl CkbadgerStore {
             stage.finish(cells_restored);
         } else {
             let mut stage = RollbackStageProgress::new("rollback_cells_from_tx_context");
-            for ctx in tx_contexts.into_iter().rev() {
+            // tx_contexts is already in newest-first (LIFO) order from
+            // rollback_via_undo_log — do NOT reverse again.
+            for ctx in tx_contexts.into_iter() {
                 if ctx.tx_hash.len() != 32 {
                     anyhow::bail!(
                         "invalid tx-context hash length during rollback: expected=32, got={}",
