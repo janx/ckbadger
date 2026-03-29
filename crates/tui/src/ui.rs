@@ -3402,9 +3402,9 @@ fn draw_background_tasks(f: &mut Frame, app: &App, area: Rect) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
+            Constraint::Percentage(40),
             Constraint::Percentage(30),
-            Constraint::Percentage(35),
-            Constraint::Percentage(35),
+            Constraint::Percentage(30),
         ])
         .split(area);
 
@@ -3545,9 +3545,9 @@ fn background_tasks_height(app: &App) -> u16 {
         return 0;
     }
 
-    // Controller needs 7 lines (2 border + 5 detail lines).
+    // Controller needs 9 lines (2 border + 7 detail lines).
     // Tables need 3 + rows (2 border + 1 header + rows).
-    let controller_h: u16 = if has_controller { 7 } else { 5 };
+    let controller_h: u16 = if has_controller { 9 } else { 5 };
     let jobs_h = desired_background_task_table_height(jobs.len()).max(5);
     let watchers_h = desired_background_task_table_height(watchers.len()).max(5);
 
