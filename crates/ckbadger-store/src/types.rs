@@ -238,6 +238,10 @@ pub struct DaoDailySnapshot {
     /// Cumulative secondary issuance to treasury (shannons).
     #[serde(default)]
     pub cum_treasury: i128,
+    /// AR-based compensation sum for active (status-0) deposits at end of day (shannons).
+    /// Used to derive explorer-compatible treasury: `secondary_pool - unmade_dao_interests`.
+    #[serde(default)]
+    pub unmade_dao_interests: i128,
     /// Unclaimed DAO compensation at end of day (shannons).
     #[serde(default)]
     pub unclaimed_compensation: u128,

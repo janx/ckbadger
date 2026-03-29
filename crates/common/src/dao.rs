@@ -9,6 +9,15 @@ pub const SHANNON: u64 = 100_000_000;
 pub const GENESIS_BURNT: u128 = 840_000_000_000_000_000;
 pub const SECONDARY_ISSUANCE_PER_YEAR: u64 = 134_400_000_000_000_000;
 
+/// Extract the S field (secondary pool) from a 32-byte DAO header as u64.
+pub fn extract_s_from_dao(dao: &[u8]) -> Option<u64> {
+    if dao.len() < 24 {
+        return None;
+    }
+    let bytes: [u8; 8] = dao[16..24].try_into().ok()?;
+    Some(u64::from_le_bytes(bytes))
+}
+
 /// Satoshi's pubkey hash from Bitcoin genesis block coinbase.
 /// Used as lock_args for the 8.4B burnt cell in CKB genesis.
 pub const SATOSHI_PUBKEY_HASH: [u8; 20] = [
