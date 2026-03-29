@@ -42,13 +42,20 @@ const ABSOLUTE_MAX_BATCH_BYTES: u64 = 8_000_000_000; // 8 GB ceiling
 // No block-count bounds — drain_by_cells uses target_cells + max_batch_bytes
 // as the two budget dimensions.  Block count is an output, not a control knob.
 
-// Channel depth bounds (batches).  Max is computed from system RAM at
-// startup to cap total buffered data.  Each slot holds one batch of raw
-// blocks (prefetch) or materialized rows (flush); per-slot size scales
-// with batch size.  Absolute ceiling of 8 prevents runaway memory on
-// very large machines.
-const MIN_CHANNEL_DEPTH: u64 = 1;
-const ABSOLUTE_MAX_CHANNEL_DEPTH: u64 = 8;
+// Flush channel depth bounds (batches of materialized rows).
+// Each slot holds ~200-500 MB of MaterializedRow data.
+// Budget: ~500 MB per slot.  Halved divisor vs old 8 GB gives modest
+// headroom for variance absorption without wasting RAM on buffered
+// rows that are waiting on disk I/O anyway.
+const MIN_FLUSH_DEPTH: u64 = 2;
+const MAX_FLUSH_DEPTH: u64 = 12;
+
+// Prefetch channel depth bounds (chunks of raw blocks).
+// Each slot holds ~50 MB (CHUNK_BYTES_TARGET in prefetch.rs).
+// Deep prefetch absorbs CKB RocksDB read latency variance so the
+// build loop rarely blocks on prefetch_recv_ms.
+const MIN_PREFETCH_DEPTH: u64 = 4;
+const MAX_PREFETCH_DEPTH: u64 = 64;
 
 // Fetch thread bounds
 const MIN_FETCH_THREADS: u32 = 2;
@@ -373,20 +380,39 @@ fn shrink_threads(t: u32) -> u32 {
     t.saturating_sub((t / 4).max(1)).max(MIN_FETCH_THREADS)
 }
 
-/// Compute max channel depth (for both prefetch and flush) from system RAM.
+/// Flush channel depth from system RAM.
 ///
-/// Budget: ~2GB per channel slot at peak (raw blocks + pending rows).
-/// Halved to leave room for RocksDB + in-memory build structures.
+/// Each slot holds one batch of materialized rows (~200-500 MB typical).
+/// Flush throughput is disk-write-bound, so deep buffering only helps
+/// absorb build/flush timing variance, not raise steady-state throughput.
 ///
 ///   RAM      depth
 ///   ≤16 GB   2
 ///   32 GB    4
 ///   64 GB    8
-///   128 GB   8 (capped)
-pub(crate) fn channel_depth_for_ram(system_ram_bytes: u64) -> u64 {
+///   128 GB   12 (capped)
+pub(crate) fn flush_channel_depth(system_ram_bytes: u64) -> u64 {
     const GB: u64 = 1024 * 1024 * 1024;
     let depth = system_ram_bytes / (8 * GB);
-    depth.clamp(MIN_CHANNEL_DEPTH, ABSOLUTE_MAX_CHANNEL_DEPTH)
+    depth.clamp(MIN_FLUSH_DEPTH, MAX_FLUSH_DEPTH)
+}
+
+/// Prefetch channel depth from system RAM.
+///
+/// Each slot holds one prefetch chunk (~50 MB, set by CHUNK_BYTES_TARGET).
+/// Deep read-ahead absorbs CKB RocksDB latency variance (compaction,
+/// page-cache misses) so the build loop rarely blocks on prefetch recv.
+/// Even 64 slots costs only ~3.2 GB — trivial next to RocksDB buffers.
+///
+///   RAM      depth
+///   ≤16 GB   16
+///   32 GB    32
+///   64 GB    64 (capped)
+///   128 GB   64 (capped)
+pub(crate) fn prefetch_channel_depth(system_ram_bytes: u64) -> u64 {
+    const GB: u64 = 1024 * 1024 * 1024;
+    let depth = system_ram_bytes / GB;
+    depth.clamp(MIN_PREFETCH_DEPTH, MAX_PREFETCH_DEPTH)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -787,13 +813,24 @@ mod tests {
     // ── Infrastructure tests (unchanged) ───────────────────────────
 
     #[test]
-    fn channel_depth_scales_with_ram() {
-        assert_eq!(channel_depth_for_ram(8 * GB), 1);
-        assert_eq!(channel_depth_for_ram(16 * GB), 2);
-        assert_eq!(channel_depth_for_ram(32 * GB), 4);
-        assert_eq!(channel_depth_for_ram(64 * GB), 8);
-        assert_eq!(channel_depth_for_ram(128 * GB), 8);
-        assert_eq!(channel_depth_for_ram(256 * GB), 8);
+    fn flush_depth_scales_with_ram() {
+        assert_eq!(flush_channel_depth(8 * GB), 2); // min
+        assert_eq!(flush_channel_depth(16 * GB), 2);
+        assert_eq!(flush_channel_depth(32 * GB), 4);
+        assert_eq!(flush_channel_depth(64 * GB), 8);
+        assert_eq!(flush_channel_depth(96 * GB), 12); // max
+        assert_eq!(flush_channel_depth(128 * GB), 12);
+        assert_eq!(flush_channel_depth(256 * GB), 12);
+    }
+
+    #[test]
+    fn prefetch_depth_scales_with_ram() {
+        assert_eq!(prefetch_channel_depth(2 * GB), 4); // min
+        assert_eq!(prefetch_channel_depth(16 * GB), 16);
+        assert_eq!(prefetch_channel_depth(32 * GB), 32);
+        assert_eq!(prefetch_channel_depth(64 * GB), 64); // max
+        assert_eq!(prefetch_channel_depth(128 * GB), 64);
+        assert_eq!(prefetch_channel_depth(256 * GB), 64);
     }
 
     #[test]
