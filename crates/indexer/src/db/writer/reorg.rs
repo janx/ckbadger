@@ -86,6 +86,9 @@ impl BatchWriter {
             .rollback_to_block_with_append_only_store(fork_point, Some(append_store))?;
         // Re-derive script version/family rollups from the corrected reference info.
         self.refresh_script_reference_rollups()?;
+        // Re-derive DAO singleton stats (latest stats + top depositors) which were
+        // deleted during rollback by should_delete_stats_for_replay().
+        self.refresh_latest_dao_statistics()?;
 
         // Record reorg event and clear deep fork flag in one sync_meta batch.
         let event = ReorgEvent {

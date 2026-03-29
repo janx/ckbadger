@@ -15,7 +15,7 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
     DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, MnftTypeIndex,
-    PositionedCellInfo, SporeTypeIndex, SOLE_SPORES_SENTINEL_COLLECTION,
+    PositionedCellInfo, ScriptReferenceInfo, SporeTypeIndex, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -1436,6 +1436,8 @@ impl Indexer {
         let need_balances = !lock_hash_keys.is_empty();
         let need_scripts = !code_hash_refs.is_empty();
         let need_script_references = !reference_keys.is_empty();
+        let mut updated_script_references: HashMap<(Vec<u8>, u8), ScriptReferenceInfo> =
+            HashMap::new();
         let mut domain_analytics_batch = StoreBatch::new(self.writer.store());
         let mut append_history_batch = StoreBatch::new(self.writer.store());
 
@@ -1481,7 +1483,7 @@ impl Indexer {
                 )?;
             }
             if let Some(existing) = existing_script_references {
-                self.writer.apply_script_reference_usage_deltas(
+                updated_script_references = self.writer.apply_script_reference_usage_deltas(
                     &existing?,
                     &script_reference_usage_changes,
                     &mut domain_analytics_batch,
@@ -3067,7 +3069,10 @@ impl Indexer {
             // eliminating the crash window between data_batch.commit() and a
             // separate post-commit refresh.
             self.writer
-                .materialize_script_versions_and_families(&[], &mut data_batch)
+                .materialize_script_versions_and_families(
+                    &updated_script_references,
+                    &mut data_batch,
+                )
                 .with_context(|| {
                     format!(
                         "script reference rollup materialize failed for blocks {}-{}",

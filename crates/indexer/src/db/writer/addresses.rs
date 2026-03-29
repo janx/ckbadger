@@ -295,11 +295,8 @@ pub(crate) struct ScriptReferenceRollupState {
 fn build_script_reference_rollup_state(
     store: &ckbadger_store::CkbadgerStore,
     mut reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
+    reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
 ) -> Result<ScriptReferenceRollupState> {
-    let reference_info_map = store
-        .list_script_reference_infos()?
-        .into_iter()
-        .collect::<HashMap<_, _>>();
     let existing_versions = store.list_script_versions()?;
     let existing_families = store.list_script_families()?;
 
@@ -483,34 +480,32 @@ pub(crate) fn collect_script_reference_rollup_state(
     store: &ckbadger_store::CkbadgerStore,
     _append_only_store: &ckbadger_store::CkbadgerStore,
 ) -> Result<ScriptReferenceRollupState> {
-    let reference_mappings = store
-        .list_script_reference_infos()?
-        .into_iter()
+    let all_infos = store.list_script_reference_infos()?;
+    let reference_mappings = all_infos
+        .iter()
         .map(|((reference_hash, hash_type), _info)| {
             let version_hash =
-                store.get_script_reference_version_hash(hash_type, &reference_hash)?;
-            Ok(((reference_hash, hash_type), version_hash))
+                store.get_script_reference_version_hash(*hash_type, reference_hash)?;
+            Ok(((reference_hash.clone(), *hash_type), version_hash))
         })
         .collect::<Result<Vec<_>>>()?;
-    build_script_reference_rollup_state(store, reference_mappings)
+    let reference_info_map = all_infos.into_iter().collect();
+    build_script_reference_rollup_state(store, reference_mappings, reference_info_map)
 }
 
 pub(crate) fn collect_current_script_reference_rollup_state(
     store: &ckbadger_store::CkbadgerStore,
     append_only_store: &ckbadger_store::CkbadgerStore,
 ) -> Result<ScriptReferenceRollupState> {
-    let reference_mappings = store
-        .list_script_reference_infos()?
-        .into_iter()
+    let all_infos = store.list_script_reference_infos()?;
+    let reference_mappings = all_infos
+        .iter()
         .map(|((reference_hash, hash_type), _info)| {
-            let version_hash = if hash_type == 1 {
-                let live_versions = resolve_type_reference_live_versions(
-                    store,
-                    append_only_store,
-                    &reference_hash,
-                )?;
+            let version_hash = if *hash_type == 1 {
+                let live_versions =
+                    resolve_type_reference_live_versions(store, append_only_store, reference_hash)?;
                 match live_versions.len() {
-                    0 => store.get_script_reference_version_hash(1, &reference_hash)?,
+                    0 => store.get_script_reference_version_hash(1, reference_hash)?,
                     1 => Some(live_versions[0].clone()),
                     _ => None,
                 }
@@ -518,14 +513,15 @@ pub(crate) fn collect_current_script_reference_rollup_state(
                 resolve_reference_version_hash(
                     store,
                     append_only_store,
-                    &reference_hash,
-                    hash_type,
+                    reference_hash,
+                    *hash_type,
                 )?
             };
-            Ok(((reference_hash, hash_type), version_hash))
+            Ok(((reference_hash.clone(), *hash_type), version_hash))
         })
         .collect::<Result<Vec<_>>>()?;
-    build_script_reference_rollup_state(store, reference_mappings)
+    let reference_info_map = all_infos.into_iter().collect();
+    build_script_reference_rollup_state(store, reference_mappings, reference_info_map)
 }
 
 impl BatchWriter {
@@ -1251,12 +1247,35 @@ impl BatchWriter {
 
     pub fn materialize_script_versions_and_families(
         &self,
-        _references: &[(Vec<u8>, u8)],
+        updated_references: &HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let rollups = collect_script_reference_rollup_state(
+        // Build complete reference info map: committed state + batch-pending updates.
+        // This ensures the rollup reflects post-delta state for references modified
+        // in the current batch, rather than reading stale pre-commit values.
+        let mut reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo> = self
+            .store
+            .list_script_reference_infos()?
+            .into_iter()
+            .collect();
+        for (key, info) in updated_references {
+            reference_info_map.insert(key.clone(), info.clone());
+        }
+
+        let reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)> = reference_info_map
+            .keys()
+            .map(|(reference_hash, hash_type)| {
+                let version_hash = self
+                    .store
+                    .get_script_reference_version_hash(*hash_type, reference_hash)?;
+                Ok(((reference_hash.clone(), *hash_type), version_hash))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let rollups = build_script_reference_rollup_state(
             self.store.as_ref(),
-            self.append_only_store.as_ref(),
+            reference_mappings,
+            reference_info_map,
         )?;
 
         for ((reference_hash, hash_type), version_hash) in rollups.reference_mappings {
@@ -1788,13 +1807,7 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         writer
-            .materialize_script_versions_and_families(
-                &[
-                    (type_reference_hash.clone(), 1),
-                    (data_reference_hash.clone(), 0),
-                ],
-                &mut batch,
-            )
+            .materialize_script_versions_and_families(&HashMap::new(), &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
