@@ -209,6 +209,46 @@ fn accumulate_dao_statistics_entry(
             acc.total_deposited += entry.capacity as i128;
             acc.unique_depositors.insert(entry.lock_script_hash.clone());
             acc.active_count += 1;
+
+            if entry.deposit_block_number <= latest_block_number {
+                let held_ms = tip_timestamp - entry.deposit_timestamp;
+                acc.total_ms_held += held_ms as f64;
+                acc.active_filtered_count += 1;
+
+                if entry.capacity < 0 {
+                    anyhow::bail!(
+                        "negative DAO deposit capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                        entry.deposit_block_number,
+                        hex::encode(&entry.lock_script_hash),
+                        entry.capacity
+                    );
+                }
+                let capacity = entry.capacity as u128;
+                let free_capacity = capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "DAO deposit capacity below occupied capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                        entry.deposit_block_number,
+                        hex::encode(&entry.lock_script_hash),
+                        capacity
+                    )
+                })?;
+
+                let ar_deposit = dao_deposit_ar_as_u64(entry, "statistics")?;
+                if ar_deposit > 0 && latest_ar > ar_deposit {
+                    let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
+                    let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
+                            entry.deposit_block_number,
+                            hex::encode(&entry.lock_script_hash),
+                            free_capacity,
+                            ar_deposit,
+                            latest_ar
+                        )
+                    })?;
+                    acc.total_unclaimed += compensation;
+                }
+            }
         }
         1 => {
             acc.pending_withdrawal_capacity += entry.capacity as i128;
@@ -220,50 +260,6 @@ fn accumulate_dao_statistics_entry(
             }
         }
         _ => {}
-    }
-
-    // Compensation and deposit time apply to BOTH status=0 and status=1.
-    // Status=1 cells are still locked in the DAO contract and earn
-    // interest until phase-2 completion.
-    if (entry.status == 0 || entry.status == 1) && entry.deposit_block_number <= latest_block_number
-    {
-        let held_ms = tip_timestamp - entry.deposit_timestamp;
-        acc.total_ms_held += held_ms as f64;
-        acc.active_filtered_count += 1;
-
-        if entry.capacity < 0 {
-            anyhow::bail!(
-                "negative DAO deposit capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                entry.deposit_block_number,
-                hex::encode(&entry.lock_script_hash),
-                entry.capacity
-            );
-        }
-        let capacity = entry.capacity as u128;
-        let free_capacity = capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
-            anyhow::anyhow!(
-                "DAO deposit capacity below occupied capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                entry.deposit_block_number,
-                hex::encode(&entry.lock_script_hash),
-                capacity
-            )
-        })?;
-
-        let ar_deposit = dao_deposit_ar_as_u64(entry, "statistics")?;
-        if ar_deposit > 0 && latest_ar > ar_deposit {
-            let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
-            let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
-                    entry.deposit_block_number,
-                    hex::encode(&entry.lock_script_hash),
-                    free_capacity,
-                    ar_deposit,
-                    latest_ar
-                )
-            })?;
-            acc.total_unclaimed += compensation;
-        }
     }
 
     Ok(())
@@ -1537,6 +1533,58 @@ mod tests {
         assert_eq!(acc.unique_depositors.len(), 1);
         assert_eq!(acc.active_count, 1);
         assert_eq!(acc.total_compensation_paid, 500);
+        assert_eq!(
+            acc.total_ms_held,
+            (tip_ts - active.deposit_timestamp) as f64
+        );
+        assert_eq!(acc.active_filtered_count, 1);
+        assert_eq!(acc.total_unclaimed, 1_000);
+    }
+
+    #[test]
+    fn test_accumulate_dao_statistics_entry_excludes_status1_from_explorer_totals() {
+        let mut acc = DaoStatisticsAccumulator::default();
+        let active = DaoDepositCacheEntry {
+            capacity: (DAO_OCCUPIED_CAPACITY + 1_000) as i64,
+            deposit_block_number: 90,
+            deposit_timestamp: 8 * 86_400_000,
+            lock_script_hash: vec![0xAB; 32],
+            deposit_ar: 100,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+        let pending = DaoDepositCacheEntry {
+            capacity: (DAO_OCCUPIED_CAPACITY + 2_000) as i64,
+            deposit_block_number: 80,
+            deposit_timestamp: 5 * 86_400_000,
+            lock_script_hash: vec![0xCD; 32],
+            deposit_ar: 100,
+            status: 1,
+            withdraw_request_tx: Some(vec![0x11; 32]),
+            withdraw_request_output_index: Some(0),
+            withdraw_request_block: Some(95),
+            withdraw_request_ar: Some(150),
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+
+        let tip_ts = 10 * 86_400_000i64;
+        accumulate_dao_statistics_entry(&mut acc, &active, 100, 200, tip_ts).unwrap();
+        accumulate_dao_statistics_entry(&mut acc, &pending, 100, 200, tip_ts).unwrap();
+
+        assert_eq!(acc.total_deposited, active.capacity as i128);
+        assert_eq!(acc.unique_depositors.len(), 1);
+        assert_eq!(acc.active_count, 2);
+        assert_eq!(acc.pending_withdrawal_capacity, pending.capacity as i128);
         assert_eq!(
             acc.total_ms_held,
             (tip_ts - active.deposit_timestamp) as f64

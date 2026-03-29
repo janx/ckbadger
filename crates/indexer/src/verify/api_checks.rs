@@ -27,6 +27,8 @@ const TOP_ASSET_LIMIT: usize = 10;
 const TOP_HOLDER_LIMIT: usize = 10;
 const IDENTITY_HOLDER_SPOT_CHECK_LIMIT: usize = 10;
 const ADDRESS_TOKENS_LIMIT: usize = 100;
+const WARMUP_PENDING_RETRY_ATTEMPTS: usize = 30;
+const WARMUP_PENDING_RETRY_DELAY_MS: u64 = 1_000;
 
 // ---------------------------------------------------------------------------
 // Lightweight API response types (deserialized from ckbadger API JSON).
@@ -261,7 +263,7 @@ fn api_get<T: serde::de::DeserializeOwned>(ctx: &CheckContext, path: &str) -> an
         path.trim_start_matches('/')
     );
     let mut backoff_ms = 500;
-    for attempt in 0..5 {
+    for attempt in 0..WARMUP_PENDING_RETRY_ATTEMPTS {
         let resp = ctx.http.get(&url).send()?;
         let status = resp.status();
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < 4 {
@@ -271,6 +273,15 @@ fn api_get<T: serde::de::DeserializeOwned>(ctx: &CheckContext, path: &str) -> an
         }
         if !status.is_success() {
             let body = resp.text().unwrap_or_default();
+            if status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+                && is_warmup_pending_body(&body)
+                && attempt + 1 < WARMUP_PENDING_RETRY_ATTEMPTS
+            {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    WARMUP_PENDING_RETRY_DELAY_MS,
+                ));
+                continue;
+            }
             let detail = if body.is_empty() {
                 String::new()
             } else {
@@ -281,6 +292,18 @@ fn api_get<T: serde::de::DeserializeOwned>(ctx: &CheckContext, path: &str) -> an
         return Ok(resp.json()?);
     }
     unreachable!()
+}
+
+fn is_warmup_pending_body(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(|error| error.as_str())
+                .map(str::to_owned)
+        })
+        .is_some_and(|error| error == "warmup_pending")
 }
 
 /// Fetch network stats (used by multiple fast checks).
@@ -3387,6 +3410,13 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
     fn test_ctx() -> CheckContext {
         CheckContext {
@@ -3489,6 +3519,62 @@ mod tests {
         let findings = sync_complete_findings(&ss);
         assert_eq!(findings.len(), 1);
         assert!(findings[0].details[0].contains("isSyncing=true"));
+    }
+
+    struct WarmupPendingThenOk {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl Respond for WarmupPendingThenOk {
+        fn respond(&self, _request: &Request) -> ResponseTemplate {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                ResponseTemplate::new(503).set_body_json(json!({
+                    "error": "warmup_pending",
+                    "message": "nft asset cache unavailable; warmup in progress"
+                }))
+            } else {
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [],
+                    "total": 0
+                }))
+            }
+        }
+    }
+
+    #[test]
+    fn test_api_get_retries_warmup_pending_until_cache_ready() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/assets"))
+                .respond_with(WarmupPendingThenOk {
+                    calls: calls.clone(),
+                })
+                .mount(&server)
+                .await;
+        });
+
+        let ctx = CheckContext {
+            api_url: format!("{}/api/v1", server.uri()),
+            rpc_url: None,
+            explorer_url: None,
+            http: reqwest::blocking::Client::new(),
+            sample_count: 10,
+            seed: 42,
+            tolerance: 0.001,
+            cache_dir: None,
+        };
+
+        let response: CursorPageWithTotal<serde_json::Value> =
+            api_get(&ctx, "assets?type=nft&limit=100").expect("api_get should retry warmup");
+
+        assert!(response.data.is_empty());
+        assert_eq!(response.total, Some(0));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]
