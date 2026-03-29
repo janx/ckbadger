@@ -10,6 +10,12 @@ use ckbadger_store::{
 };
 use rustc_hash::FxHashMap;
 
+/// Precision scale for weighted free-cap running sum (10^18).
+const UNMADE_SCALE: i128 = 1_000_000_000_000_000_000;
+
+/// Minimum occupied capacity of a DAO cell: 102 CKB in shannons.
+const DAO_OCCUPIED_CAPACITY: i64 = 102_00000000;
+
 use super::{BulkReducer, ReducerContext};
 use crate::db::writer::dao::calculate_dao_compensation_from_ar;
 use crate::rpc::BlockResponseWithCycles;
@@ -47,6 +53,12 @@ pub(crate) struct DaoOwner {
     daily_depositing_addresses: FxHashMap<NaiveDate, HashSet<Vec<u8>>>,
     claimed_compensation_by_block: FxHashMap<i64, i128>,
     prev_dao_cs: Option<(i128, i128)>,
+    /// Running sum of (free_capacity * UNMADE_SCALE / ar_deposit) for all status-0 deposits.
+    running_weighted_free_cap: i128,
+    /// Running sum of free_capacity for all status-0 deposits.
+    running_total_free_cap: i128,
+    /// Per-date unmade_dao_interests computed at each block's record_block.
+    daily_unmade_dao_interests: FxHashMap<NaiveDate, i128>,
 }
 
 impl BulkReducer for DaoOwner {
@@ -162,6 +174,18 @@ impl BulkReducer for DaoOwner {
                         )
                     })?;
                     consumed_request_output_positions.insert(request_output_pos);
+
+                    // Decrement running sums: deposit leaving status 0 at phase-1.
+                    {
+                        let free_cap =
+                            (entry.capacity - DAO_OCCUPIED_CAPACITY).max(0) as i128;
+                        let ar_deposit = entry.deposit_ar as i128;
+                        if ar_deposit > 0 {
+                            self.running_weighted_free_cap -=
+                                free_cap * UNMADE_SCALE / ar_deposit;
+                            self.running_total_free_cap -= free_cap;
+                        }
+                    }
 
                     entry.status = 1;
                     entry.withdraw_request_block = Some(tx.block_number);
@@ -397,6 +421,17 @@ impl BulkReducer for DaoOwner {
                 );
             }
 
+            // Update running sums for unmade_dao_interests (new status-0 deposit).
+            {
+                let free_cap =
+                    (output.capacity - DAO_OCCUPIED_CAPACITY).max(0) as i128;
+                let ar_deposit = tx.block_dao_ar as i128;
+                if ar_deposit > 0 {
+                    self.running_weighted_free_cap += free_cap * UNMADE_SCALE / ar_deposit;
+                    self.running_total_free_cap += free_cap;
+                }
+            }
+
             Self::bump_daily_i128(
                 &mut self.daily_active_delta,
                 tx_date,
@@ -552,6 +587,12 @@ impl BulkReducer for DaoOwner {
                 )
                 .ok_or_else(|| anyhow!("dao cumulative_depositors overflow on {}", date))?;
 
+            let unmade_dao_interests = self
+                .daily_unmade_dao_interests
+                .get(date)
+                .copied()
+                .unwrap_or(0);
+
             let snapshot = DaoDailySnapshot {
                 date: date.format("%Y-%m-%d").to_string(),
                 total_deposited: running_total_deposited,
@@ -566,6 +607,7 @@ impl BulkReducer for DaoOwner {
                 cum_miner_secondary: running_cum_miner,
                 cum_dao_compensation: running_cum_dao,
                 cum_treasury: running_cum_treasury,
+                unmade_dao_interests,
                 unclaimed_compensation: 0,
                 cumulative_depositors: running_cumulative_depositors,
                 daily_depositor_addresses: self
@@ -692,7 +734,9 @@ impl DaoOwner {
             + self.active_deposit_counts_by_lock.len() as u64
                 * std::mem::size_of::<(Vec<u8>, i64)>() as u64
             + self.claimed_compensation_by_block.len() as u64
-                * std::mem::size_of::<(i64, i128)>() as u64;
+                * std::mem::size_of::<(i64, i128)>() as u64
+            + self.daily_unmade_dao_interests.len() as u64
+                * (std::mem::size_of::<NaiveDate>() as u64 + 16);
         std::mem::size_of::<Self>() as u64
             + deposits_bytes
             + request_bytes
@@ -712,6 +756,20 @@ impl DaoOwner {
             )
         })?;
         self.daily_dao_fields.insert(block_date, (c, s, u));
+
+        // Compute unmade_dao_interests from running sums (O(1) per block).
+        if let Some(ar) = extract_ar_from_dao_bytes(&block.dao) {
+            let ar_i128 = ar as i128;
+            let unmade = if self.running_weighted_free_cap > 0 && ar_i128 > 0 {
+                ar_i128 * self.running_weighted_free_cap / UNMADE_SCALE
+                    - self.running_total_free_cap
+            } else {
+                0
+            };
+            self.daily_unmade_dao_interests
+                .insert(block_date, unmade.max(0));
+        }
+
         let claimed_compensation_in_block = self
             .claimed_compensation_by_block
             .remove(&block.number)
@@ -1071,6 +1129,14 @@ fn infer_withdraw_to_output_index_from_outputs(
     }
 
     None
+}
+
+fn extract_ar_from_dao_bytes(dao: &[u8]) -> Option<u64> {
+    if dao.len() < 16 {
+        return None;
+    }
+    let bytes: [u8; 8] = dao[8..16].try_into().ok()?;
+    Some(u64::from_le_bytes(bytes))
 }
 
 fn checked_outpoint_index_i16(
