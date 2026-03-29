@@ -2757,6 +2757,15 @@ impl Indexer {
             }
         }
 
+        // Maintain per-block running protocol deposited for accurate secondary
+        // issuance split.  Initialized from the latest snapshot; updated after
+        // each block's DAO transactions are processed.
+        let mut running_protocol_deposited_for_split = {
+            let snap = load_latest_dao_daily_snapshot(self.writer.store())?;
+            snap.map(|s| s.protocol_deposited.unwrap_or(s.total_deposited))
+                .unwrap_or(0)
+        };
+
         let mut block_tx_idx = 0usize;
         for parsed in all_parsed_blocks {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
@@ -2764,11 +2773,18 @@ impl Indexer {
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
             let claimed_compensation_in_block =
                 tx_slice_claimed_dao_compensation(tx_slice, &dao_compensations)?;
+            // Save pre-block protocol delta for this date to compute per-block change.
+            let pre_block_protocol_delta = batch_stats
+                .dao_daily_protocol_delta
+                .get(&block_date)
+                .copied()
+                .unwrap_or(0);
             accumulate_secondary_issuance_deltas(
                 &mut batch_stats,
                 parsed,
                 block_date,
                 claimed_compensation_in_block,
+                running_protocol_deposited_for_split,
                 &mut prev_dao_cs,
             )?;
             block_tx_idx += tx_count_for_block;
@@ -2954,6 +2970,15 @@ impl Indexer {
                 &mut batch_stats.dao_daily_cumulative_depositors_delta,
                 &mut batch_stats.dao_daily_depositing_addresses,
             )?;
+
+            // Update per-block running protocol deposited after this block's DAO txs.
+            let post_block_protocol_delta = batch_stats
+                .dao_daily_protocol_delta
+                .get(&block_date)
+                .copied()
+                .unwrap_or(0);
+            running_protocol_deposited_for_split +=
+                post_block_protocol_delta - pre_block_protocol_delta;
 
             batch_stats.dao_snapshot_dates.insert(block_date);
             batch_stats
@@ -3381,21 +3406,25 @@ impl Indexer {
                     // Extract C, S, U from the DAO header field for this date.
                     let (total_issuance, secondary_pool, occupied_capacity) =
                         dao_csu_for_snapshot_date(stats, *date)?;
-                    let non_miner_secondary = resolve_non_miner_secondary_delta_for_snapshot(
-                        *date,
-                        stats.daily_secondary_non_miner_delta.get(date).copied(),
-                    )?;
-                    let (daily_miner, daily_dao_share, daily_treasury_share) =
-                        if total_issuance > 0 && non_miner_secondary > 0 {
-                            split_secondary_issuance(
-                                total_issuance,
-                                occupied_capacity,
-                                running_protocol_deposited,
-                                non_miner_secondary,
-                            )?
-                        } else {
-                            (0, 0, 0)
-                        };
+
+                    // Use per-block accumulated dao/treasury deltas (computed during
+                    // block processing with exact per-block deposited values) instead
+                    // of re-splitting at daily granularity with end-of-day deposited.
+                    let daily_miner = stats
+                        .daily_secondary_miner_delta
+                        .get(date)
+                        .copied()
+                        .unwrap_or(0);
+                    let daily_dao_share = stats
+                        .daily_secondary_dao_delta
+                        .get(date)
+                        .copied()
+                        .unwrap_or(0);
+                    let daily_treasury_share = stats
+                        .daily_secondary_treasury_delta
+                        .get(date)
+                        .copied()
+                        .unwrap_or(0);
                     running_cum_miner += daily_miner;
                     running_cum_dao += daily_dao_share;
                     running_cum_treasury += daily_treasury_share;

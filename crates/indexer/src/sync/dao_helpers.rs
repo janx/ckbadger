@@ -52,6 +52,10 @@ pub(crate) struct BatchStats {
     pub(crate) dao_block_numbers_by_date: HashMap<NaiveDate, Vec<i64>>,
     pub(crate) daily_secondary_non_miner_delta: HashMap<NaiveDate, i128>,
     pub(crate) daily_secondary_miner_delta: HashMap<NaiveDate, i128>,
+    /// Per-block accumulated dao compensation share of secondary issuance.
+    pub(crate) daily_secondary_dao_delta: HashMap<NaiveDate, i128>,
+    /// Per-block accumulated treasury (burnt) share of secondary issuance.
+    pub(crate) daily_secondary_treasury_delta: HashMap<NaiveDate, i128>,
     /// Set to true after the DAO delta computation code path runs, even if no
     /// DAO transactions were found.  This distinguishes "genuinely zero deltas"
     /// from "deltas never computed" (e.g. stale DB from an older indexer).
@@ -314,6 +318,7 @@ pub(crate) fn split_secondary_issuance(
 // Non-miner secondary delta resolution
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 pub(crate) fn resolve_non_miner_secondary_delta_for_snapshot(
     date: NaiveDate,
     daily_non_miner_delta: Option<i128>,
@@ -550,6 +555,7 @@ pub(crate) fn accumulate_secondary_issuance_deltas_from_csu(
     s: i128,
     u: i128,
     claimed_compensation_in_block: i128,
+    running_deposited: i128,
     prev_dao_cs: &mut Option<(i128, i128)>,
 ) -> Result<()> {
     if claimed_compensation_in_block < 0 {
@@ -583,11 +589,23 @@ pub(crate) fn accumulate_secondary_issuance_deltas_from_csu(
                 .daily_secondary_non_miner_delta
                 .entry(block_date)
                 .or_default() += non_miner_delta;
-            let (miner, _, _) = split_secondary_issuance(c, u, 0, non_miner_delta)?;
+            // Per-block split using the deposited amount at this block.
+            // This is exact (matching CKB protocol) rather than the previous
+            // daily-aggregated split which used end-of-day deposited.
+            let (miner, dao, treasury) =
+                split_secondary_issuance(c, u, running_deposited, non_miner_delta)?;
             *stats
                 .daily_secondary_miner_delta
                 .entry(block_date)
                 .or_default() += miner;
+            *stats
+                .daily_secondary_dao_delta
+                .entry(block_date)
+                .or_default() += dao;
+            *stats
+                .daily_secondary_treasury_delta
+                .entry(block_date)
+                .or_default() += treasury;
         }
     }
 
@@ -600,6 +618,7 @@ pub(crate) fn accumulate_secondary_issuance_deltas(
     parsed: &crate::parser::block::ParsedBlock,
     block_date: NaiveDate,
     claimed_compensation_in_block: i128,
+    running_deposited: i128,
     prev_dao_cs: &mut Option<(i128, i128)>,
 ) -> Result<()> {
     let (c, s, u) = extract_dao_csu(&parsed.dao).ok_or_else(|| {
@@ -619,6 +638,7 @@ pub(crate) fn accumulate_secondary_issuance_deltas(
         s,
         u,
         claimed_compensation_in_block,
+        running_deposited,
         prev_dao_cs,
     )
 }
@@ -1135,7 +1155,7 @@ mod tests {
         let block = dummy_parsed_block(build_dao_field(c as u64, s as u64, u as u64), 0, 1000);
         let date = ckbadger_common::block_date(block.timestamp);
 
-        accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, &mut prev).unwrap();
+        accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, 0, &mut prev).unwrap();
 
         assert_eq!(stats.daily_secondary_non_miner_delta.get(&date), Some(&600));
         assert_eq!(
@@ -1163,6 +1183,7 @@ mod tests {
             &block,
             date,
             claimed_compensation,
+            0,
             &mut prev,
         )
         .unwrap();
@@ -1189,12 +1210,12 @@ mod tests {
 
         let block_drop =
             dummy_parsed_block(build_dao_field(30_000_000_000_500, 9_950, 100), 0, 1000);
-        accumulate_secondary_issuance_deltas(&mut stats, &block_drop, date, 120, &mut prev)
+        accumulate_secondary_issuance_deltas(&mut stats, &block_drop, date, 120, 0, &mut prev)
             .unwrap();
 
         let block_growth =
             dummy_parsed_block(build_dao_field(30_000_000_001_000, 10_020, 100), 1, 2000);
-        accumulate_secondary_issuance_deltas(&mut stats, &block_growth, date, 0, &mut prev)
+        accumulate_secondary_issuance_deltas(&mut stats, &block_growth, date, 0, 0, &mut prev)
             .unwrap();
 
         assert_eq!(
@@ -1223,7 +1244,8 @@ mod tests {
 
         // Verify the happy path doesn't error with a valid progressing DAO field.
         let block = dummy_parsed_block(build_dao_field(30_000_000_000_100, 10_000, 0), 0, 1000);
-        let result = accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, &mut prev);
+        let result =
+            accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, 0, &mut prev);
         assert!(result.is_ok());
     }
 
@@ -1237,7 +1259,8 @@ mod tests {
 
         // S drops from 10_000 to 9_000 — simulates protocol upgrade boundary.
         let block = dummy_parsed_block(build_dao_field(20_000_000_000_500, 9_000, 100), 0, 1000);
-        let result = accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, &mut prev);
+        let result =
+            accumulate_secondary_issuance_deltas(&mut stats, &block, date, 0, 0, &mut prev);
         assert!(
             result.is_ok(),
             "negative S delta should not crash: {result:?}"

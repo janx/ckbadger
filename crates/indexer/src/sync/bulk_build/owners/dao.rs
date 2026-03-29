@@ -22,7 +22,7 @@ use crate::sync::bulk_build::materialize::{MaterializedRow, Materializer};
 use crate::sync::bulk_build::sequencer::BulkSequencer;
 use crate::sync::dao_helpers::{
     accumulate_secondary_issuance_deltas_from_csu, derive_running_depositors, extract_dao_csu,
-    resolve_non_miner_secondary_delta_for_snapshot, split_secondary_issuance, BatchStats,
+    BatchStats,
 };
 use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 
@@ -40,6 +40,14 @@ pub(crate) struct DaoOwner {
     daily_unique_depositors_delta: FxHashMap<NaiveDate, i64>,
     daily_cumulative_depositors_delta: FxHashMap<NaiveDate, i64>,
     daily_secondary_non_miner_delta: FxHashMap<NaiveDate, i128>,
+    daily_secondary_miner_delta: FxHashMap<NaiveDate, i128>,
+    daily_secondary_dao_delta: FxHashMap<NaiveDate, i128>,
+    daily_secondary_treasury_delta: FxHashMap<NaiveDate, i128>,
+    /// Running protocol-level deposited total, updated per-block for accurate
+    /// secondary issuance split.
+    running_protocol_deposited: i128,
+    /// Protocol delta accumulated within the current block (reset per block).
+    current_block_protocol_delta: i128,
     active_deposit_counts_by_lock: FxHashMap<Vec<u8>, i64>,
     /// Tracks all lock_hashes that have ever created a DAO deposit (never removed).
     ever_deposited: HashSet<Vec<u8>>,
@@ -328,6 +336,7 @@ impl BulkReducer for DaoOwner {
                         -(entry.capacity as i128),
                         "dao daily protocol delta (phase-2 withdrawal)",
                     )?;
+                    self.current_block_protocol_delta -= entry.capacity as i128;
                     // Active delta and depositor count already subtracted at
                     // phase-1 withdraw request — no double-counting at
                     // phase-2 completion.  Only the compensations above,
@@ -409,6 +418,7 @@ impl BulkReducer for DaoOwner {
                 output.capacity as i128,
                 "dao daily protocol delta",
             )?;
+            self.current_block_protocol_delta += output.capacity as i128;
             Self::bump_daily_i128(
                 &mut self.daily_gross_deposit_delta,
                 tx_date,
@@ -502,21 +512,24 @@ impl BulkReducer for DaoOwner {
                 .get(date)
                 .copied()
                 .ok_or_else(|| anyhow!("missing DAO field for bulk snapshot date {}", date))?;
-            let non_miner_secondary = resolve_non_miner_secondary_delta_for_snapshot(
-                *date,
-                self.daily_secondary_non_miner_delta.get(date).copied(),
-            )?;
-            let (daily_miner, daily_dao_share, daily_treasury_share) =
-                if total_issuance > 0 && non_miner_secondary > 0 {
-                    split_secondary_issuance(
-                        total_issuance,
-                        occupied_capacity,
-                        running_protocol_deposited,
-                        non_miner_secondary,
-                    )?
-                } else {
-                    (0, 0, 0)
-                };
+
+            // Use per-block accumulated dao/treasury deltas (computed during
+            // block processing with exact per-block deposited values).
+            let daily_miner = self
+                .daily_secondary_miner_delta
+                .get(date)
+                .copied()
+                .unwrap_or(0);
+            let daily_dao_share = self
+                .daily_secondary_dao_delta
+                .get(date)
+                .copied()
+                .unwrap_or(0);
+            let daily_treasury_share = self
+                .daily_secondary_treasury_delta
+                .get(date)
+                .copied()
+                .unwrap_or(0);
             running_cum_miner = checked_next_i128_total(
                 running_cum_miner,
                 daily_miner,
@@ -689,6 +702,12 @@ impl DaoOwner {
                 * std::mem::size_of::<(NaiveDate, i64)>() as u64
             + self.daily_secondary_non_miner_delta.len() as u64
                 * std::mem::size_of::<(NaiveDate, i128)>() as u64
+            + self.daily_secondary_miner_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64
+            + self.daily_secondary_dao_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64
+            + self.daily_secondary_treasury_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64
             + self.active_deposit_counts_by_lock.len() as u64
                 * std::mem::size_of::<(Vec<u8>, i64)>() as u64
             + self.claimed_compensation_by_block.len() as u64
@@ -717,6 +736,12 @@ impl DaoOwner {
             .remove(&block.number)
             .unwrap_or(0);
 
+        // Use pre-block deposited for the split (apply_tx already ran for this
+        // block's transactions, updating current_block_protocol_delta).
+        // The running value reflects state BEFORE this block's txs because we
+        // only commit the block delta AFTER the split.
+        let deposited_for_split = self.running_protocol_deposited;
+
         let mut stats = BatchStats::default();
         accumulate_secondary_issuance_deltas_from_csu(
             &mut stats,
@@ -726,6 +751,7 @@ impl DaoOwner {
             s,
             u,
             claimed_compensation_in_block,
+            deposited_for_split,
             &mut self.prev_dao_cs,
         )?;
         if let Some(delta) = stats.daily_secondary_non_miner_delta.get(&block_date) {
@@ -736,6 +762,35 @@ impl DaoOwner {
                 "dao daily secondary non-miner delta",
             )?;
         }
+        if let Some(delta) = stats.daily_secondary_miner_delta.get(&block_date) {
+            Self::bump_daily_i128(
+                &mut self.daily_secondary_miner_delta,
+                block_date,
+                *delta,
+                "dao daily secondary miner delta",
+            )?;
+        }
+        if let Some(delta) = stats.daily_secondary_dao_delta.get(&block_date) {
+            Self::bump_daily_i128(
+                &mut self.daily_secondary_dao_delta,
+                block_date,
+                *delta,
+                "dao daily secondary dao delta",
+            )?;
+        }
+        if let Some(delta) = stats.daily_secondary_treasury_delta.get(&block_date) {
+            Self::bump_daily_i128(
+                &mut self.daily_secondary_treasury_delta,
+                block_date,
+                *delta,
+                "dao daily secondary treasury delta",
+            )?;
+        }
+
+        // Commit this block's protocol delta to the running total.
+        self.running_protocol_deposited += self.current_block_protocol_delta;
+        self.current_block_protocol_delta = 0;
+
         Ok(())
     }
 

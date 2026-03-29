@@ -209,46 +209,6 @@ fn accumulate_dao_statistics_entry(
             acc.total_deposited += entry.capacity as i128;
             acc.unique_depositors.insert(entry.lock_script_hash.clone());
             acc.active_count += 1;
-
-            if entry.deposit_block_number <= latest_block_number {
-                let held_ms = tip_timestamp - entry.deposit_timestamp;
-                acc.total_ms_held += held_ms as f64;
-                acc.active_filtered_count += 1;
-
-                if entry.capacity < 0 {
-                    anyhow::bail!(
-                        "negative DAO deposit capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                        entry.deposit_block_number,
-                        hex::encode(&entry.lock_script_hash),
-                        entry.capacity
-                    );
-                }
-                let capacity = entry.capacity as u128;
-                let free_capacity = capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "DAO deposit capacity below occupied capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                        entry.deposit_block_number,
-                        hex::encode(&entry.lock_script_hash),
-                        capacity
-                    )
-                })?;
-
-                let ar_deposit = dao_deposit_ar_as_u64(entry, "statistics")?;
-                if ar_deposit > 0 && latest_ar > ar_deposit {
-                    let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
-                    let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
-                            entry.deposit_block_number,
-                            hex::encode(&entry.lock_script_hash),
-                            free_capacity,
-                            ar_deposit,
-                            latest_ar
-                        )
-                    })?;
-                    acc.total_unclaimed += compensation;
-                }
-            }
         }
         1 => {
             acc.pending_withdrawal_capacity += entry.capacity as i128;
@@ -260,6 +220,50 @@ fn accumulate_dao_statistics_entry(
             }
         }
         _ => {}
+    }
+
+    // Compensation and deposit time apply to BOTH status=0 and status=1.
+    // Status=1 cells are still locked in the DAO contract and earn
+    // interest until phase-2 completion.
+    if (entry.status == 0 || entry.status == 1) && entry.deposit_block_number <= latest_block_number
+    {
+        let held_ms = tip_timestamp - entry.deposit_timestamp;
+        acc.total_ms_held += held_ms as f64;
+        acc.active_filtered_count += 1;
+
+        if entry.capacity < 0 {
+            anyhow::bail!(
+                "negative DAO deposit capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                entry.deposit_block_number,
+                hex::encode(&entry.lock_script_hash),
+                entry.capacity
+            );
+        }
+        let capacity = entry.capacity as u128;
+        let free_capacity = capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
+            anyhow::anyhow!(
+                "DAO deposit capacity below occupied capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                entry.deposit_block_number,
+                hex::encode(&entry.lock_script_hash),
+                capacity
+            )
+        })?;
+
+        let ar_deposit = dao_deposit_ar_as_u64(entry, "statistics")?;
+        if ar_deposit > 0 && latest_ar > ar_deposit {
+            let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
+            let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
+                    entry.deposit_block_number,
+                    hex::encode(&entry.lock_script_hash),
+                    free_capacity,
+                    ar_deposit,
+                    latest_ar
+                )
+            })?;
+            acc.total_unclaimed += compensation;
+        }
     }
 
     Ok(())
