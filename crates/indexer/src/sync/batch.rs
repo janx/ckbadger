@@ -2738,11 +2738,11 @@ impl Indexer {
                     .store()
                     .scan_dao_deposits_by_lock(&lock_hash, |_, entry| {
                         has_any_deposit = true;
-                        // Status 0 (deposit) and 1 (withdraw-request) are both
-                        // "active" for depositor counting: the -1 delta only fires
-                        // at phase-2 completion (status 1→2), so status-1 deposits
-                        // must be included in the seed count.
-                        if entry.status == 0 || entry.status == 1 {
+                        // Only status=0 (deposit) counts as active.  The runtime
+                        // decrements at phase-1 (status 0→1 withdraw request),
+                        // not at phase-2, so status=1 deposits have already been
+                        // decremented and must NOT be included in the seed count.
+                        if entry.status == 0 {
                             active_count = active_count.checked_add(1).ok_or_else(|| {
                                 anyhow!(
                                     "active DAO deposit count overflow while seeding unique depositor tracking: lock_hash=0x{}",
