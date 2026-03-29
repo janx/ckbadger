@@ -270,12 +270,16 @@ impl BatchWriter {
             // so that the subsequent canonical rollback rebuilds aggregates from
             // correct entity state.  This matches the normal reorg path ordering
             // in execute_reorg().
-            self.store
+            let undo_result = self
+                .store
                 .rollback_via_undo_log(append_store, rollback_target)?;
             // Domain rollback for canonical mutable state (cells, blocks, stats,
             // aggregates rebuilt from now-correct entity data).
-            self.store
-                .rollback_to_block_with_append_only_store(rollback_target, Some(append_store))?;
+            self.store.rollback_to_block_with_tx_contexts(
+                rollback_target,
+                Some(append_store),
+                undo_result.tx_contexts,
+            )?;
             // Re-derive script version/family rollups from corrected reference info.
             self.refresh_script_reference_rollups()?;
             // Re-derive DAO singleton stats (latest stats + top depositors)

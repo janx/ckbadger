@@ -4,7 +4,7 @@ use rocksdb::{IteratorMode, WriteBatch};
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{UndoLogEntry, UndoLogStoreTarget};
+use crate::types::{UndoLogEntry, UndoLogStoreTarget, UndoTxContext};
 
 const UNDO_ROLLBACK_FLUSH_EVERY: usize = 50_000;
 
@@ -15,6 +15,10 @@ pub struct UndoRollbackResult {
     pub undo_entries_applied: u64,
     pub domain_ops_applied: u64,
     pub append_ops_skipped: u64,
+    /// TxContext entries extracted from the undo log before deletion.
+    /// Needed by `rollback_to_block_with_append_only_store` for targeted
+    /// cell rollback instead of full CF scans.
+    pub tx_contexts: Vec<UndoTxContext>,
 }
 
 fn flush_undo_batches(
@@ -149,9 +153,9 @@ impl CkbadgerStore {
                         result.append_ops_skipped += 1;
                     }
                 },
-                UndoLogEntry::TxContext(_) => {
-                    // Cell rollback is derived from TxContext during rollback_to_block.
-                    // rollback_via_undo_log only prunes this journal entry.
+                UndoLogEntry::TxContext(ctx) => {
+                    // Preserve TxContext for rollback_to_block cell cleanup.
+                    result.tx_contexts.push(ctx);
                 }
             }
 
@@ -336,6 +340,54 @@ mod tests {
         assert!(domain.has_undo_log_entries_after(4).unwrap());
         assert!(domain.has_undo_log_entries_after(7).unwrap());
         assert!(!domain.has_undo_log_entries_after(8).unwrap());
+    }
+
+    #[test]
+    fn test_rollback_via_undo_log_extracts_tx_contexts() {
+        let (domain, append, _root) = open_dual_store();
+        let mut batch = StoreBatch::new(&domain);
+        batch.put_reorg_undo_log_by_block(
+            10,
+            0,
+            &UndoLogEntry::KeyMutation {
+                target_store: UndoLogStoreTarget::Domain,
+                cf_name: crate::store::CF_SYNC_META.to_string(),
+                key: b"k".to_vec(),
+                previous_value: Some(b"v".to_vec()),
+            },
+        );
+        batch.put_reorg_undo_log_by_block(
+            10,
+            1,
+            &UndoLogEntry::TxContext(crate::types::UndoTxContext {
+                tx_hash: vec![0xAA; 32],
+                outputs_count: 2,
+                inputs: vec![],
+            }),
+        );
+        batch.put_reorg_undo_log_by_block(
+            10,
+            2,
+            &UndoLogEntry::TxContext(crate::types::UndoTxContext {
+                tx_hash: vec![0xBB; 32],
+                outputs_count: 1,
+                inputs: vec![crate::types::UndoInputOutPoint {
+                    tx_hash: vec![0xCC; 32],
+                    output_index: 0,
+                }],
+            }),
+        );
+        batch.commit().unwrap();
+
+        let res = domain.rollback_via_undo_log(&append, 9).unwrap();
+        assert_eq!(res.undo_entries_applied, 3);
+        assert_eq!(res.domain_ops_applied, 1);
+        assert_eq!(res.tx_contexts.len(), 2);
+        // Undo log replays in reverse (LIFO), so seq=2 (0xBB) comes first.
+        assert_eq!(res.tx_contexts[0].tx_hash, vec![0xBB; 32]);
+        assert_eq!(res.tx_contexts[0].inputs.len(), 1);
+        assert_eq!(res.tx_contexts[1].tx_hash, vec![0xAA; 32]);
+        assert_eq!(res.tx_contexts[1].outputs_count, 2);
     }
 
     #[test]

@@ -882,6 +882,28 @@ impl CkbadgerStore {
         rollback_to: i64,
         append_only_store: Option<&CkbadgerStore>,
     ) -> anyhow::Result<RollbackResult> {
+        self.rollback_to_block_impl(rollback_to, append_only_store, None)
+    }
+
+    /// Like `rollback_to_block_with_append_only_store` but accepts pre-loaded
+    /// tx-context entries extracted by a prior `rollback_via_undo_log` call.
+    /// This avoids re-reading from `CF_REORG_UNDO_LOG_BY_BLOCK` after the
+    /// undo-log replay has already deleted those entries.
+    pub fn rollback_to_block_with_tx_contexts(
+        &self,
+        rollback_to: i64,
+        append_only_store: Option<&CkbadgerStore>,
+        tx_contexts: Vec<UndoTxContext>,
+    ) -> anyhow::Result<RollbackResult> {
+        self.rollback_to_block_impl(rollback_to, append_only_store, Some(tx_contexts))
+    }
+
+    fn rollback_to_block_impl(
+        &self,
+        rollback_to: i64,
+        append_only_store: Option<&CkbadgerStore>,
+        preloaded_tx_contexts: Option<Vec<UndoTxContext>>,
+    ) -> anyhow::Result<RollbackResult> {
         if rollback_to < -1 {
             anyhow::bail!(
                 "invalid rollback target: rollback_to={} (expected >= -1)",
@@ -1108,8 +1130,12 @@ impl CkbadgerStore {
         stage.finish(txs_removed);
 
         // 3. Delete tx_hash_map entries for rolled-back transactions.
-        // Prefer tx-context hashes from undo log to avoid full-CF scans.
-        let tx_contexts = load_tx_contexts_from_undo_log(self, rollback_to)?;
+        // Use pre-loaded tx-context entries when available (from prior
+        // rollback_via_undo_log), otherwise read from the undo log CF.
+        let tx_contexts = match preloaded_tx_contexts {
+            Some(ctx) => ctx,
+            None => load_tx_contexts_from_undo_log(self, rollback_to)?,
+        };
         let tx_context_count = tx_contexts.len() as u64;
         let use_tx_context = tx_context_count > 0 && tx_context_count == txs_removed;
         let mut tx_hash_map_removed = 0u64;
@@ -3966,6 +3992,154 @@ mod tests {
             .get_consumed_cell(&input_tx, 0, &store)
             .unwrap()
             .is_none());
+    }
+
+    /// Regression test: rollback_via_undo_log deletes undo entries, so the
+    /// subsequent rollback_to_block must use pre-loaded tx-contexts rather
+    /// than re-reading from the (now empty) undo log CF.
+    #[test]
+    fn test_rollback_via_undo_log_then_rollback_to_block_uses_preloaded_tx_contexts() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            parent_hash: vec![0x01; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let input_tx = vec![0x31; 32];
+        let consuming_tx = vec![0x32; 32];
+        let input_cell = LiveCellInfo {
+            capacity: 400,
+            lock_script_hash: vec![0xAA; 32],
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 400,
+            udt_amount: None,
+            data_hash: None,
+        };
+        let output_cell = LiveCellInfo {
+            capacity: 200,
+            lock_script_hash: vec![0xBB; 32],
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 200,
+            udt_amount: None,
+            data_hash: None,
+        };
+
+        let tx_index = TxIndexEntry {
+            is_cellbase: false,
+            timestamp: header2.timestamp,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_tx_index(2, 0, &tx_index);
+        batch.put_cell(&input_tx, 0, &input_cell, 1);
+        batch.put_cell(&consuming_tx, 0, &output_cell, 2);
+        batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 1, 2, Some(&consuming_tx));
+        batch.delete_cell(&input_tx, 0);
+        batch.put_reorg_undo_log_by_block(
+            2,
+            0,
+            &UndoLogEntry::TxContext(UndoTxContext {
+                tx_hash: consuming_tx.clone(),
+                outputs_count: 1,
+                inputs: vec![UndoInputOutPoint {
+                    tx_hash: input_tx.clone(),
+                    output_index: 0,
+                }],
+            }),
+        );
+        batch.put_addr_balance(&[0xAA; 32], &AddressBalance::default());
+        batch.put_addr_balance(
+            &[0xBB; 32],
+            &AddressBalance {
+                balance: 200,
+                used_capacity: 200,
+                live_cells_count: 1,
+                total_cells_count: 1,
+                ..Default::default()
+            },
+        );
+        batch.put_script_info(
+            &[0x11; 32],
+            &ScriptInfo {
+                code_hash: vec![0x11; 32],
+                lock_live_cells_count: 1,
+                lock_owned_capacity_sum: 200,
+                lock_owned_knowledge_sum: 200,
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+        seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
+
+        // Step 1: rollback_via_undo_log deletes undo entries and returns
+        // extracted TxContext entries.
+        let undo_result = store.rollback_via_undo_log(&store, 1).unwrap();
+        assert_eq!(undo_result.tx_contexts.len(), 1);
+
+        // Verify undo log is now empty for block 2.
+        assert!(!store.has_undo_log_entries_after(1).unwrap());
+
+        // Step 2: rollback_to_block_with_tx_contexts uses the pre-loaded
+        // tx-context entries (targeted lookup, not full CF scan).
+        store
+            .rollback_to_block_with_tx_contexts(1, None, undo_result.tx_contexts)
+            .unwrap();
+
+        // Verify cell state is correctly rolled back.
+        assert!(
+            store.get_cell(&input_tx, 0, &store).unwrap().is_some(),
+            "input cell should be restored as live"
+        );
+        assert!(
+            store.get_cell(&consuming_tx, 0, &store).unwrap().is_none(),
+            "output cell should be removed"
+        );
+        assert!(
+            store
+                .get_consumed_cell(&input_tx, 0, &store)
+                .unwrap()
+                .is_none(),
+            "consumed marker should be removed"
+        );
     }
 
     #[test]

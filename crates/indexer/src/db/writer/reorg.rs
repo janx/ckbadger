@@ -79,11 +79,17 @@ impl BatchWriter {
         // Revert domain mutations from undo-log first so that entity data
         // (Spore, mNFT, dotbit) is restored to pre-fork state before the
         // multi-stage rollback rebuilds aggregates from it.
-        self.store.rollback_via_undo_log(append_store, fork_point)?;
+        // Extract TxContext entries before the undo log deletes them, so the
+        // subsequent cell rollback can use targeted lookups instead of full
+        // CF scans.
+        let undo_result = self.store.rollback_via_undo_log(append_store, fork_point)?;
         // Domain rollback for canonical mutable state (cells, blocks, stats,
         // aggregates rebuilt from now-correct entity data).
-        self.store
-            .rollback_to_block_with_append_only_store(fork_point, Some(append_store))?;
+        self.store.rollback_to_block_with_tx_contexts(
+            fork_point,
+            Some(append_store),
+            undo_result.tx_contexts,
+        )?;
         // Re-derive script version/family rollups from the corrected reference info.
         self.refresh_script_reference_rollups()?;
         // Re-derive DAO singleton stats (latest stats + top depositors) which were
