@@ -3,7 +3,7 @@
 // Two independent control dimensions:
 //
 //   1. BATCH SIZE — build-time band + build/IO overlap.
-//      Primary goal: keep batch build time in [1s, 3s].
+//      Primary goal: keep batch build time in [2s, 5s].
 //        Below band → grow target_cells to fill compute budget.
 //        Above band → shrink target_cells (batch genuinely too large).
 //      IO wait (recv + flush) is excluded from the band check:
@@ -68,8 +68,10 @@ const FLUSH_L0_THRESHOLD: f64 = 40.0;
 // time inside this band.  Below MIN → grow target_cells; above MAX →
 // shrink.  Inside the band → optimize build/IO overlap.  IO wait
 // (recv + flush) is excluded — it cannot be reduced by batch sizing.
-const BUILD_TIME_MIN: f64 = 1000.0;
-const BUILD_TIME_MAX: f64 = 3000.0;
+// Band: [2000, 5000] — wider window reduces oscillation on machines
+// where build time varies batch-to-batch.
+const BUILD_TIME_MIN: f64 = 2000.0;
+const BUILD_TIME_MAX: f64 = 5000.0;
 
 // Overlap growth gain.  When build > IO inside the wall-clock band,
 // target_cells grows by OVERLAP_GAIN × (build − IO) / wall_clock.
@@ -461,10 +463,10 @@ mod tests {
 
     #[test]
     fn build_above_max_shrinks() {
-        // build = 4000 > 3000 → shrink (batch genuinely too large)
+        // build = 7000 > 5000 → shrink (batch genuinely too large)
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         let initial = ctrl.target_cells;
-        run_batches(&mut ctrl, 5, &signals(100.0, 4000.0, 100.0));
+        run_batches(&mut ctrl, 5, &signals(100.0, 7000.0, 100.0));
         assert!(
             ctrl.target_cells < initial,
             "build > MAX should shrink: {} should be < initial {}",
@@ -475,11 +477,11 @@ mod tests {
 
     #[test]
     fn io_wait_above_band_does_not_shrink() {
-        // build = 2000 ∈ [1000, 3000], but wall = 2000 + 500 + 2000 = 4500
-        // IO-dominant above band: hold (don't shrink for flush wait)
+        // build = 3500 ∈ [2000, 5000], IO = 500 + 2000 = 2500
+        // IO-dominant: hold (don't shrink for flush wait)
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         let initial = ctrl.target_cells;
-        run_batches(&mut ctrl, 10, &signals(500.0, 2000.0, 2000.0));
+        run_batches(&mut ctrl, 10, &signals(500.0, 3500.0, 2000.0));
         assert!(
             ctrl.target_cells >= initial,
             "IO wait should not cause shrink: {} should be >= initial {}",
@@ -490,11 +492,11 @@ mod tests {
 
     #[test]
     fn in_range_build_dominant_grows() {
-        // build = 1800 ∈ [1000, 3000], IO = 200
-        // build(1800) > IO(200) → grow
+        // build = 3500 ∈ [2000, 5000], IO = 200
+        // build(3500) > IO(200) → grow
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         let initial = ctrl.target_cells;
-        run_batches(&mut ctrl, 5, &signals(100.0, 1800.0, 100.0));
+        run_batches(&mut ctrl, 5, &signals(100.0, 3500.0, 100.0));
         assert!(
             ctrl.target_cells > initial,
             "in-range build-dominant should grow: {} should be > initial {}",
@@ -505,13 +507,13 @@ mod tests {
 
     #[test]
     fn in_band_io_dominant_holds() {
-        // build = 2000 ∈ [1000, 3000], IO = 1200 + 1200 = 2400
-        // build(2000) < IO(2400) → hold.
-        // build value chosen so build_ema reaches band floor (1000)
-        // after one EMA step (2000 * 0.5 = 1000), avoiding warmup growth.
+        // build = 4000 ∈ [2000, 5000], IO = 2400 + 2400 = 4800
+        // build(4000) < IO(4800) → hold.
+        // build value chosen so build_ema reaches band floor (2000)
+        // after one EMA step (4000 * 0.5 = 2000), avoiding warmup growth.
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
         let initial = ctrl.target_cells;
-        run_batches(&mut ctrl, 10, &signals(1200.0, 2000.0, 1200.0));
+        run_batches(&mut ctrl, 10, &signals(2400.0, 4000.0, 2400.0));
         assert_eq!(
             ctrl.target_cells, initial,
             "in-band IO-dominant should hold: {} should equal initial {}",
@@ -521,7 +523,7 @@ mod tests {
 
     #[test]
     fn build_below_min_grows_even_when_io_dominant() {
-        // build = 500 < 1000 (below band), IO = 800 + 700 = 1500
+        // build = 500 < 2000 (below band), IO = 800 + 700 = 1500
         // Even though IO > build, batch is too small → grow.
         // IO wait cannot be reduced by batch sizing.
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
@@ -537,13 +539,13 @@ mod tests {
 
     #[test]
     fn build_equals_io_converges() {
-        // build = 2000, IO = 1000 + 1000 = 2000
-        // build(2000) = IO(2000) → factor = 1.0.
-        // build value chosen so build_ema enters band immediately.
+        // build = 4000, IO = 2000 + 2000 = 4000
+        // build(4000) = IO(4000) → factor = 1.0.
+        // build value chosen so build_ema enters band (2000) after one EMA step.
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
-        // After warmup the EMAs won't be exactly 2000/2000 due to smoothing,
+        // After warmup the EMAs won't be exactly 4000/4000 due to smoothing,
         // but after many batches they converge. Check stability.
-        run_batches(&mut ctrl, 20, &signals(1000.0, 2000.0, 1000.0));
+        run_batches(&mut ctrl, 20, &signals(2000.0, 4000.0, 2000.0));
         let ratio = ctrl.target_cells as f64 / 200_000.0;
         assert!(
             ratio > 0.8 && ratio < 1.2,
@@ -555,10 +557,9 @@ mod tests {
 
     #[test]
     fn growth_capped_by_build_ceiling() {
-        // build(2800) >> IO(100) → wants to grow, but build_cap = 3000/build_ema
-        // prevents overshooting the build ceiling.
+        // build(4800) near ceiling → build_cap = 5000/build_ema limits growth.
         let mut ctrl = BottleneckController::new(200_000, 12, 8, 32 * GB);
-        run_batches(&mut ctrl, 1, &signals(50.0, 2800.0, 50.0));
+        run_batches(&mut ctrl, 1, &signals(50.0, 4800.0, 50.0));
         // After 1 batch the EMA is a blend with warmup, but factor should be small.
         // Verify target_cells didn't jump more than 50%.
         assert!(
