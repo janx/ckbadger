@@ -2150,7 +2150,7 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
             // Wall clock + dominance indicator
             let wall_ms = iteration_ms;
             let io_ms = wait_ms; // prefetch_recv + flush_wait
-            let wall_color = if (1000.0..=3000.0).contains(&wall_ms) {
+            let wall_color = if (2000.0..=5000.0).contains(&wall_ms) {
                 TERMINAL_GREEN
             } else {
                 ERROR_RED
@@ -2424,9 +2424,9 @@ fn build_bulk_build_diagnostics(
 
 /// Build the controller observation panel lines for bulk-build diagnostics.
 ///
-/// Two orthogonal sections:
-/// 1. Sizing — overlap gauge (THE sizing signal) + budget in cells
-/// 2. I/O — bottleneck classification + waste breakdown + knobs with inline deltas
+/// Three sections (Observe / Decide / Adjust):
+/// - Detail mode: 7 lines with section headers
+/// - Dense mode: 2 lines, compact
 fn controller_panel_lines(
     bb: &BulkBuildProgressData,
     dense: bool,
@@ -2437,18 +2437,17 @@ fn controller_panel_lines(
     let wait_ema = bb.controller_wait_ema.unwrap_or(0.0);
     let l0_ema = bb.controller_l0_ema.unwrap_or(0.0);
     let io_ema = recv_ema + wait_ema;
-    let wall_clock = build_ema + io_ema;
     let target_cells = bb.target_cells.unwrap_or(0);
 
-    // Wall-clock band color: green if in [1s, 3s], red if outside.
-    let wall_color = if (1000.0..=3000.0).contains(&wall_clock) {
+    // Band bar color: green if build_ema in [2s, 5s], red if outside.
+    let build_band_color = if (2000.0..=5000.0).contains(&build_ema) {
         TERMINAL_GREEN
     } else {
         ERROR_RED
     };
 
-    // Band bar: 10-char visual showing wall clock position within [1s, 3s].
-    let band_position = ((wall_clock - 1000.0) / 2000.0 * 10.0)
+    // Band bar: 10-char visual showing build_ema position within [2s, 5s].
+    let band_position = ((build_ema - 2000.0) / 3000.0 * 10.0)
         .round()
         .clamp(0.0, 10.0) as usize;
     let band_bar = format!(
@@ -2457,7 +2456,7 @@ fn controller_panel_lines(
         "\u{2591}".repeat(10 - band_position)
     );
 
-    // Waste composition (for I/O classification display in detail mode)
+    // Waste composition
     let (recv_waste_pct, wait_waste_pct) = if io_ema > 1.0 {
         (recv_ema / io_ema * 100.0, wait_ema / io_ema * 100.0)
     } else {
@@ -2505,27 +2504,30 @@ fn controller_panel_lines(
         }
     });
 
-    // Decision label: grow / shrink / hold (derived from budget delta)
-    let decision_text = deltas.map(|d| {
+    // Sizing decision: derived from build_ema position (mirrors bottleneck.rs observe())
+    // When deltas are available, override with delta-based decision.
+    let sizing_decision: (&str, Color) = if let Some(d) = deltas {
         let pct = d.budget_delta_pct;
         if pct > 0.5 {
-            ("\u{2192} grow", TERMINAL_GREEN) // → grow
+            ("GROW", TERMINAL_GREEN)
         } else if pct < -0.5 {
-            ("\u{2192} shrink", AMBER) // → shrink
+            ("SHRINK", AMBER)
         } else {
-            ("\u{2192} hold", SLATE_500) // → hold
+            ("HOLD", SLATE_500)
         }
-    });
-
-    // Cell density: cells per block
-    let density_text = match (bb.facts_cell_count, bb.batch_block_count) {
-        (Some(cells), Some(blocks)) if blocks > 0 => {
-            format!("{:.1} c/b", cells as f64 / blocks as f64)
-        }
-        _ => String::new(),
+    } else if build_ema < 1.0 {
+        ("cold start", SLATE_500)
+    } else if build_ema < 2000.0 {
+        ("below band \u{2192} GROW", TERMINAL_GREEN)
+    } else if build_ema > 5000.0 {
+        ("above band \u{2192} SHRINK", AMBER)
+    } else if build_ema > io_ema {
+        ("build>io \u{2192} GROW", TERMINAL_GREEN)
+    } else {
+        ("io\u{2265}build \u{2192} HOLD", SLATE_500)
     };
 
-    // Fill ratio: actual cells vs target cells (supply cap visibility)
+    // Fill ratio: actual cells vs target cells
     let fill_text = match (bb.facts_cell_count, bb.target_cells) {
         (Some(actual), Some(target)) if target > 0 => {
             let fill_pct = (actual as f64 / target as f64 * 100.0).min(999.0);
@@ -2577,186 +2579,165 @@ fn controller_panel_lines(
     });
 
     if dense {
-        // Compact: 2 lines
-        // Line 1: wall clock + band bar + build vs io + budget + fill
-        let mut spans1 = vec![
+        // Dense: 2 lines
+        // Line 0: build + band bar + io + sizing decision
+        let mut spans0 = vec![
+            Span::styled("  ", Style::default()),
             Span::styled(
-                format!("wall {:.1}s ", wall_clock / 1000.0),
-                Style::default().fg(wall_color),
-            ),
-            Span::styled(band_bar.clone(), Style::default().fg(wall_color)),
-            Span::styled(
-                format!(" build {:.1}s", build_ema / 1000.0),
+                format!("build {:.1}s ", build_ema / 1000.0),
                 Style::default().fg(FOREGROUND),
             ),
-            Span::styled(
-                format!(" io {:.1}s", io_ema / 1000.0),
-                Style::default().fg(SLATE_500),
-            ),
-        ];
-        if target_cells > 0 {
-            spans1.push(Span::styled(
-                format!("  {}K", budget_k),
-                Style::default().fg(FOREGROUND),
-            ));
-            if let Some((ref txt, col)) = budget_delta_text {
-                spans1.push(Span::styled(format!(" {}", txt), Style::default().fg(col)));
-            }
-        }
-        if let Some((ref txt, col)) = fill_text {
-            spans1.push(Span::styled(
-                format!("  fill {}", txt),
-                Style::default().fg(col),
-            ));
-        }
-        // Line 2: bottleneck badge + knobs + L0 + flush
-        let mut spans2 = vec![
-            Span::styled(
-                format!("[{}]", bn_label),
-                Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" thr ", Style::default().fg(SLATE_500)),
-            Span::styled(threads_text, Style::default().fg(FOREGROUND)),
-            Span::styled(" bg ", Style::default().fg(SLATE_500)),
-            Span::styled(bg_text, Style::default().fg(FOREGROUND)),
-        ];
-        if let Some((ref txt, col)) = bg_delta_text {
-            spans2.push(Span::styled(format!(" {}", txt), Style::default().fg(col)));
-        }
-        spans2.push(Span::styled("  L0 ", Style::default().fg(SLATE_500)));
-        spans2.push(Span::styled(
-            format!("{:.0}", l0_ema),
-            Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
-        ));
-        if let Some((ref txt, col)) = flush_text {
-            spans2.push(Span::styled("  fl ", Style::default().fg(SLATE_500)));
-            spans2.push(Span::styled(txt.clone(), Style::default().fg(col)));
-        }
-
-        vec![Line::from(spans1), Line::from(spans2)]
-    } else {
-        // Detail: 5 lines
-        // Line 1: sizing header with wall clock + band bar
-        let line1 = Line::from(vec![
-            Span::styled(
-                "\u{2500}\u{2500} sizing \u{2500}\u{2500}\u{2500} ",
-                Style::default().fg(SLATE_500),
-            ),
-            Span::styled(
-                format!("wall {:.1}s ", wall_clock / 1000.0),
-                Style::default().fg(wall_color),
-            ),
-            Span::styled(band_bar, Style::default().fg(wall_color)),
-            Span::styled(
-                " \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
-                Style::default().fg(SLATE_500),
-            ),
-        ]);
-
-        // Line 2: build vs IO + waste composition + decision
-        let mut line2_spans = vec![
-            Span::styled(
-                format!("  build {:.1}s", build_ema / 1000.0),
-                Style::default().fg(FOREGROUND),
-            ),
+            Span::styled(band_bar.clone(), Style::default().fg(build_band_color)),
             Span::styled(
                 format!("  io {:.1}s", io_ema / 1000.0),
                 Style::default().fg(SLATE_500),
             ),
-        ];
-        if io_ema > 1.0 {
-            line2_spans.push(Span::styled(
-                format!(" (recv {:.0}%", recv_waste_pct),
-                Style::default().fg(AMBER),
-            ));
-            line2_spans.push(Span::styled(
-                format!(" flush {:.0}%)", wait_waste_pct),
-                Style::default().fg(ERROR_RED),
-            ));
-        }
-        if let Some((txt, col)) = decision_text {
-            line2_spans.push(Span::styled(format!("  {}", txt), Style::default().fg(col)));
-        }
-        let line2 = Line::from(line2_spans);
-
-        // Line 3: budget + density + fill
-        let mut budget_spans = Vec::new();
-        if target_cells > 0 {
-            budget_spans.push(Span::styled("  budget ", Style::default().fg(SLATE_500)));
-            budget_spans.push(Span::styled(
-                format!("{}K cells", budget_k),
-                Style::default().fg(FOREGROUND),
-            ));
-            if let Some((ref txt, col)) = budget_delta_text {
-                budget_spans.push(Span::styled(format!(" {}", txt), Style::default().fg(col)));
-            }
-            budget_spans.push(Span::styled(
-                format!("  {} blk", blocks_text),
-                Style::default().fg(FOREGROUND),
-            ));
-        } else {
-            budget_spans.push(Span::styled("  budget ", Style::default().fg(SLATE_500)));
-            budget_spans.push(Span::styled("-", Style::default().fg(SLATE_500)));
-            budget_spans.push(Span::styled(
-                format!("  {} blk", blocks_text),
-                Style::default().fg(FOREGROUND),
-            ));
-        }
-        if !density_text.is_empty() {
-            budget_spans.push(Span::styled(
-                format!("  {}", density_text),
-                Style::default().fg(SLATE_500),
-            ));
-        }
-        if let Some((ref txt, col)) = fill_text {
-            budget_spans.push(Span::styled(
-                format!("  fill {}", txt),
-                Style::default().fg(col),
-            ));
-        }
-        let line3 = Line::from(budget_spans);
-
-        // Line 4: I/O header + bottleneck badge
-        let line4 = Line::from(vec![
             Span::styled(
-                "\u{2500}\u{2500} i/o \u{2500}\u{2500} ",
-                Style::default().fg(SLATE_500),
+                format!(" \u{2192} {}", sizing_decision.0),
+                Style::default().fg(sizing_decision.1),
             ),
+        ];
+        // Budget inline if available
+        if target_cells > 0 {
+            spans0.push(Span::styled(
+                format!("  {}K", budget_k),
+                Style::default().fg(FOREGROUND),
+            ));
+        }
+
+        // Line 1: bottleneck badge + knobs + L0
+        let mut spans1 = vec![
+            Span::styled("  ", Style::default()),
             Span::styled(
                 format!("[{}]", bn_label),
                 Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
             ),
+            Span::styled(format!(" {}K", budget_k), Style::default().fg(FOREGROUND)),
+            Span::styled(" thr ", Style::default().fg(SLATE_500)),
+            Span::styled(threads_text.clone(), Style::default().fg(FOREGROUND)),
+            Span::styled(" bg ", Style::default().fg(SLATE_500)),
+            Span::styled(bg_text.clone(), Style::default().fg(FOREGROUND)),
+        ];
+        if let Some((ref txt, col)) = bg_delta_text {
+            spans1.push(Span::styled(txt.to_string(), Style::default().fg(col)));
+        }
+        spans1.push(Span::styled("  L0 ", Style::default().fg(SLATE_500)));
+        spans1.push(Span::styled(
+            format!("{:.0}", l0_ema),
+            Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
+        ));
+
+        vec![Line::from(spans0), Line::from(spans1)]
+    } else {
+        // Detail: 7 lines
+        // Line 0: Observe header
+        let line0 = Line::from(vec![Span::styled(
+            " \u{2500}\u{2500} Observe \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+            Style::default().fg(SLATE_500),
+        )]);
+
+        // Line 1: build + band bar + io
+        let line1 = Line::from(vec![
+            Span::styled("  ", Style::default()),
             Span::styled(
-                " \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+                format!("build {:.1}s ", build_ema / 1000.0),
+                Style::default().fg(FOREGROUND),
+            ),
+            Span::styled(band_bar, Style::default().fg(build_band_color)),
+            Span::styled(
+                format!("  io {:.1}s", io_ema / 1000.0),
                 Style::default().fg(SLATE_500),
             ),
         ]);
 
-        // Line 5: knobs with inline deltas + L0 + flush channel
-        let mut knob_spans = vec![
-            Span::styled("  thr ", Style::default().fg(SLATE_500)),
-            Span::styled(threads_text, Style::default().fg(FOREGROUND)),
-        ];
+        // Line 2: waste composition
+        let mut waste_spans = vec![Span::styled("  waste: ", Style::default().fg(SLATE_500))];
+        if io_ema > 1.0 {
+            waste_spans.push(Span::styled(
+                format!("recv {:.0}%", recv_waste_pct),
+                Style::default().fg(AMBER),
+            ));
+            waste_spans.push(Span::styled(" \u{2502} ", Style::default().fg(SLATE_500)));
+            waste_spans.push(Span::styled(
+                format!("flush {:.0}%", wait_waste_pct),
+                Style::default().fg(ERROR_RED),
+            ));
+        } else {
+            waste_spans.push(Span::styled("-", Style::default().fg(SLATE_500)));
+        }
+        let line2 = Line::from(waste_spans);
+
+        // Line 3: Decide header
+        let line3 = Line::from(vec![Span::styled(
+            " \u{2500}\u{2500} Decide \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+            Style::default().fg(SLATE_500),
+        )]);
+
+        // Line 4: sizing decision + bottleneck badge
+        let line4 = Line::from(vec![
+            Span::styled("  sizing: ", Style::default().fg(SLATE_500)),
+            Span::styled(
+                sizing_decision.0.to_string(),
+                Style::default().fg(sizing_decision.1),
+            ),
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("[{}]", bn_label),
+                Style::default().fg(bn_color).add_modifier(Modifier::BOLD),
+            ),
+        ]);
+
+        // Line 5: Adjust header
+        let line5 = Line::from(vec![Span::styled(
+            " \u{2500}\u{2500} Adjust \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+            Style::default().fg(SLATE_500),
+        )]);
+
+        // Line 6: budget + fill + blocks + knobs + L0 + flush
+        let mut adjust_spans = vec![Span::styled("  ", Style::default())];
+        if target_cells > 0 {
+            adjust_spans.push(Span::styled(
+                format!("{}K", budget_k),
+                Style::default().fg(FOREGROUND),
+            ));
+            if let Some((ref txt, col)) = budget_delta_text {
+                adjust_spans.push(Span::styled(txt.clone(), Style::default().fg(col)));
+            }
+        } else {
+            adjust_spans.push(Span::styled("-", Style::default().fg(SLATE_500)));
+        }
+        if let Some((ref txt, col)) = fill_text {
+            adjust_spans.push(Span::styled(
+                format!(" fill {}", txt),
+                Style::default().fg(col),
+            ));
+        }
+        adjust_spans.push(Span::styled(
+            format!("  {} blk", blocks_text),
+            Style::default().fg(FOREGROUND),
+        ));
+        adjust_spans.push(Span::styled("  thr ", Style::default().fg(SLATE_500)));
+        adjust_spans.push(Span::styled(threads_text, Style::default().fg(FOREGROUND)));
         if let Some((ref txt, col)) = threads_delta_text {
-            knob_spans.push(Span::styled(format!(" {}", txt), Style::default().fg(col)));
+            adjust_spans.push(Span::styled(txt.clone(), Style::default().fg(col)));
         }
-        knob_spans.push(Span::styled("  bg ", Style::default().fg(SLATE_500)));
-        knob_spans.push(Span::styled(bg_text, Style::default().fg(FOREGROUND)));
+        adjust_spans.push(Span::styled("  bg ", Style::default().fg(SLATE_500)));
+        adjust_spans.push(Span::styled(bg_text, Style::default().fg(FOREGROUND)));
         if let Some((ref txt, col)) = bg_delta_text {
-            knob_spans.push(Span::styled(format!(" {}", txt), Style::default().fg(col)));
+            adjust_spans.push(Span::styled(txt.clone(), Style::default().fg(col)));
         }
-        knob_spans.push(Span::styled("  L0 ", Style::default().fg(SLATE_500)));
-        knob_spans.push(Span::styled(
+        adjust_spans.push(Span::styled("  L0 ", Style::default().fg(SLATE_500)));
+        adjust_spans.push(Span::styled(
             format!("{:.0}", l0_ema),
             Style::default().fg(if l0_ema > 40.0 { ERROR_RED } else { FOREGROUND }),
         ));
         if let Some((ref txt, col)) = flush_text {
-            knob_spans.push(Span::styled("  flush ", Style::default().fg(SLATE_500)));
-            knob_spans.push(Span::styled(txt.clone(), Style::default().fg(col)));
+            adjust_spans.push(Span::styled("  fl ", Style::default().fg(SLATE_500)));
+            adjust_spans.push(Span::styled(txt.clone(), Style::default().fg(col)));
         }
-        let line5 = Line::from(knob_spans);
+        let line6 = Line::from(adjust_spans);
 
-        vec![line1, line2, line3, line4, line5]
+        vec![line0, line1, line2, line3, line4, line5, line6]
     }
 }
 
@@ -6804,32 +6785,42 @@ mod tests {
             prefetch_channel_capacity: Some(4),
             ..Default::default()
         };
-        // Compact: always 2 lines (no variable action line)
+        // Dense: always 2 lines
         let lines = controller_panel_lines(&bb, true, None);
-        assert_eq!(lines.len(), 2, "compact mode should produce 2 lines");
+        assert_eq!(lines.len(), 2, "dense mode should produce 2 lines");
 
-        // Line 1: wall clock + build + io + budget
+        // Line 0: build + io + band bar brackets, no "wall"
         let text0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text0.contains("wall") && text0.contains("build") && text0.contains("io"),
-            "line 1 should contain wall, build, and io, got: {}",
+            text0.contains("build") && text0.contains("io"),
+            "line 0 should contain build and io, got: {}",
             text0
         );
         assert!(
-            text0.contains("85K"),
-            "line 1 should contain budget, got: {}",
+            text0.contains('[') && text0.contains(']'),
+            "line 0 should contain band bar brackets, got: {}",
+            text0
+        );
+        assert!(
+            !text0.contains("wall"),
+            "line 0 must NOT contain 'wall', got: {}",
             text0
         );
 
-        // Line 2: bottleneck badge + knobs
+        // Line 1: bottleneck badge + budget
         let text1: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
             text1.contains("[BUILD]"),
-            "line 2 should contain bottleneck label, got: {}",
+            "line 1 should contain bottleneck label, got: {}",
+            text1
+        );
+        assert!(
+            text1.contains("85K"),
+            "line 1 should contain budget 85K, got: {}",
             text1
         );
 
-        // With deltas: still 2 lines (deltas are inline)
+        // With deltas: still 2 lines, line 0 contains GROW
         let deltas = ControllerDeltas {
             budget_delta_pct: 8.0,
             threads_delta: 0,
@@ -6839,7 +6830,13 @@ mod tests {
         assert_eq!(
             lines.len(),
             2,
-            "compact mode with deltas should still produce 2 lines"
+            "dense mode with deltas should still produce 2 lines"
+        );
+        let text0_d: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text0_d.contains("GROW"),
+            "line 0 with positive deltas should contain GROW, got: {}",
+            text0_d
         );
     }
 
@@ -6858,51 +6855,77 @@ mod tests {
             prefetch_channel_capacity: Some(4),
             ..Default::default()
         };
-        // Detail: always 5 lines
+        // Detail: always 7 lines
         let lines = controller_panel_lines(&bb, false, None);
-        assert_eq!(lines.len(), 5, "detail mode should produce 5 lines");
+        assert_eq!(lines.len(), 7, "detail mode should produce 7 lines");
 
-        // Line 1: sizing header
+        // Line 0: Observe header
         let text0: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text0.contains("sizing"),
-            "line 1 should be sizing header, got: {}",
+            text0.contains("Observe"),
+            "line 0 should contain 'Observe', got: {}",
             text0
         );
 
-        // Line 2: build vs IO + decision
+        // Line 1: build + io, no "wall"
         let text1: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
             text1.contains("build") && text1.contains("io"),
-            "line 2 should contain build and io, got: {}",
+            "line 1 should contain build and io, got: {}",
+            text1
+        );
+        assert!(
+            !text1.contains("wall"),
+            "line 1 must NOT contain 'wall', got: {}",
             text1
         );
 
-        // Line 3: budget
+        // Line 2: waste + recv + flush
         let text2: String = lines[2].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text2.contains("budget") && text2.contains("120K cells"),
-            "line 3 should contain budget, got: {}",
+            text2.contains("waste") && text2.contains("recv") && text2.contains("flush"),
+            "line 2 should contain waste, recv, and flush, got: {}",
             text2
         );
 
-        // Line 4: I/O header + bottleneck badge
+        // Line 3: Decide header
         let text3: String = lines[3].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text3.contains("i/o") && text3.contains("[FLUSH]"),
-            "line 4 should contain i/o header and bottleneck label, got: {}",
+            text3.contains("Decide"),
+            "line 3 should contain 'Decide', got: {}",
             text3
         );
 
-        // Line 5: knobs with L0
+        // Line 4: bottleneck badge [FLUSH]
         let text4: String = lines[4].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            text4.contains("thr") && text4.contains("bg") && text4.contains("L0"),
-            "line 5 should contain knobs and L0, got: {}",
+            text4.contains("[FLUSH]"),
+            "line 4 should contain [FLUSH] bottleneck badge, got: {}",
             text4
         );
 
-        // With deltas: still 5 lines (deltas are inline)
+        // Line 5: Adjust header
+        let text5: String = lines[5].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text5.contains("Adjust"),
+            "line 5 should contain 'Adjust', got: {}",
+            text5
+        );
+
+        // Line 6: budget 120K + thr + bg + L0
+        let text6: String = lines[6].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text6.contains("120K"),
+            "line 6 should contain budget 120K, got: {}",
+            text6
+        );
+        assert!(
+            text6.contains("thr") && text6.contains("bg") && text6.contains("L0"),
+            "line 6 should contain thr, bg, and L0, got: {}",
+            text6
+        );
+
+        // With deltas: still 7 lines, line 4 contains SHRINK, line 6 contains "("
         let deltas = ControllerDeltas {
             budget_delta_pct: -5.0,
             threads_delta: -1,
@@ -6911,14 +6934,20 @@ mod tests {
         let lines = controller_panel_lines(&bb, false, Some(&deltas));
         assert_eq!(
             lines.len(),
-            5,
-            "detail mode with deltas should still produce 5 lines"
+            7,
+            "detail mode with deltas should still produce 7 lines"
         );
-        let knobs_text: String = lines[4].spans.iter().map(|s| s.content.as_ref()).collect();
+        let text4_d: String = lines[4].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(
-            knobs_text.contains("thr") && knobs_text.contains("("),
-            "knobs line should show inline deltas, got: {}",
-            knobs_text
+            text4_d.contains("SHRINK"),
+            "line 4 with negative deltas should contain SHRINK, got: {}",
+            text4_d
+        );
+        let text6_d: String = lines[6].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text6_d.contains("("),
+            "line 6 should show inline deltas with '(', got: {}",
+            text6_d
         );
     }
 

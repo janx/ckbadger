@@ -2533,13 +2533,14 @@ fn calculate_daily_hash_rate(difficulty: u64, block_count: i32) -> f64 {
         return 0.0;
     }
 
-    // Hash rate = difficulty / avg_block_time_seconds
-    // avg_block_time_seconds = 86400 / block_count
-    let avg_block_time_s = 86_400.0 / block_count as f64;
-    if avg_block_time_s <= 0.0 {
+    // Hash rate = difficulty / avg_block_time_ms
+    // CKB explorer divides by millisecond-denominated block time (CKB timestamps are ms).
+    // avg_block_time_ms = 86_400_000 / block_count
+    let avg_block_time_ms = 86_400_000.0 / block_count as f64;
+    if avg_block_time_ms <= 0.0 {
         0.0
     } else {
-        difficulty as f64 / avg_block_time_s
+        difficulty as f64 / avg_block_time_ms
     }
 }
 
@@ -3475,11 +3476,11 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_daily_hash_rate_uses_seconds() {
-        // 8,640 blocks/day => 10s avg block time
-        // hash_rate = difficulty / avg_block_time_s = 1_000_000 / 10 = 100_000 H/s
+    fn test_calculate_daily_hash_rate_uses_milliseconds() {
+        // 8,640 blocks/day => 10s avg block time => 10_000ms
+        // hash_rate = difficulty / avg_block_time_ms = 1_000_000 / 10_000 = 100
         let hash_rate = calculate_daily_hash_rate(1_000_000, 8_640);
-        assert_eq!(hash_rate, 100000.0);
+        assert_eq!(hash_rate, 100.0);
     }
 
     #[test]
