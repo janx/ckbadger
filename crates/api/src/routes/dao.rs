@@ -205,11 +205,8 @@ fn accumulate_dao_statistics_entry(
     tip_timestamp: i64,
 ) -> anyhow::Result<()> {
     match entry.status {
-        0 | 1 => {
+        0 => {
             acc.total_deposited += entry.capacity as i128;
-            if entry.status == 1 {
-                acc.pending_withdrawal_capacity += entry.capacity as i128;
-            }
             acc.unique_depositors.insert(entry.lock_script_hash.clone());
             acc.active_count += 1;
 
@@ -236,41 +233,26 @@ fn accumulate_dao_statistics_entry(
                     )
                 })?;
 
-                let effective_ar = if entry.status == 1 {
-                    let ar_i64 = entry.withdraw_request_ar.ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "status=1 deposit missing withdraw_request_ar: deposit_block={}, lock_hash=0x{}",
-                            entry.deposit_block_number,
-                            hex::encode(&entry.lock_script_hash)
-                        )
-                    })?;
-                    u64::try_from(ar_i64).map_err(|_| {
-                        anyhow::anyhow!(
-                            "status=1 deposit withdraw_request_ar exceeds u64: deposit_block={}, ar={}",
-                            entry.deposit_block_number,
-                            ar_i64
-                        )
-                    })?
-                } else {
-                    latest_ar
-                };
-
                 let ar_deposit = dao_deposit_ar_as_u64(entry, "statistics")?;
-                if ar_deposit > 0 && effective_ar > ar_deposit {
-                    let gross = free_capacity * effective_ar as u128 / ar_deposit as u128;
+                if ar_deposit > 0 && latest_ar > ar_deposit {
+                    let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
                     let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
                         anyhow::anyhow!(
-                            "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, effective_ar={}",
+                            "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
                             entry.deposit_block_number,
                             hex::encode(&entry.lock_script_hash),
                             free_capacity,
                             ar_deposit,
-                            effective_ar
+                            latest_ar
                         )
                     })?;
                     acc.total_unclaimed += compensation;
                 }
             }
+        }
+        1 => {
+            acc.pending_withdrawal_capacity += entry.capacity as i128;
+            acc.active_count += 1;
         }
         2 => {
             if let Some(comp) = entry.compensation {
