@@ -6,7 +6,6 @@ use axum::{
     Router,
 };
 use chrono::{DateTime, Utc};
-use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_common::dao::GENESIS_BURNT;
 use ckbadger_common::sync::{format_duration_smart, BackgroundTaskEntry, SyncProgressData};
 use ckbadger_store::types::{DailyAddressCohort, DailyCellDistribution};
@@ -370,11 +369,6 @@ async fn get_recent_blocks(State(state): State<Arc<AppState>>) -> ApiResult<Rece
         .await;
 
     ok(response)
-}
-
-fn compact_to_difficulty(compact: i64) -> u64 {
-    let difficulty = ckb_compact_to_difficulty(compact as u32);
-    difficulty.to_string().parse::<u64>().unwrap_or(u64::MAX)
 }
 
 fn format_hash_rate(hash_rate: f64) -> String {
@@ -2096,10 +2090,10 @@ async fn fetch_network_stats_from_db(
             .map_err(|e| ApiError::internal(e.to_string()))?,
     };
 
-    let compact_target = daily_block_stats
+    let avg_difficulty = daily_block_stats
         .as_ref()
-        .map(|s| s.avg_compact_target as i64)
-        .unwrap_or(0);
+        .map(|s| s.avg_difficulty)
+        .unwrap_or(0.0);
 
     let remaining_blocks = epoch_length - epoch_index;
     let estimated_epoch_seconds = (remaining_blocks as f64 * epoch_avg_time) as i64;
@@ -2266,12 +2260,12 @@ async fn fetch_network_stats_from_db(
         fork_point: deep_fork_fork_point,
     };
 
-    let difficulty = compact_to_difficulty(compact_target);
+    let difficulty = avg_difficulty as u64;
     // Use epoch average block time for stable hash rate estimate.
     // Individual block intervals are too noisy; the epoch window (~4h)
     // matches CKB's difficulty adjustment granularity.
     let hash_rate = if epoch_avg_time > 0.0 {
-        difficulty as f64 / epoch_avg_time
+        avg_difficulty / epoch_avg_time
     } else {
         0.0
     };
@@ -2338,12 +2332,12 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
     let data: Vec<ChartDataPoint> = daily_block_stats
         .into_iter()
         .filter(|(date, stats)| {
-            stats.avg_compact_target > 0.0
+            stats.avg_difficulty > 0.0
                 && max_date.as_ref().is_none_or(|m| date.as_str() < m.as_str())
         })
         .map(|(date_str, stats)| {
-            let difficulty = compact_to_difficulty(stats.avg_compact_target as i64);
-            let hash_rate = calculate_daily_hash_rate(difficulty, stats.block_count);
+            let hash_rate =
+                calculate_daily_hash_rate(stats.avg_difficulty as u64, stats.block_count);
             ChartDataPoint {
                 date: format_date_for_chart(&date_str),
                 value: format!("{:.0}", hash_rate),
@@ -2387,16 +2381,13 @@ async fn get_difficulty_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
     let data: Vec<ChartDataPoint> = daily_block_stats
         .into_iter()
         .filter(|(date, stats)| {
-            stats.avg_compact_target > 0.0
+            stats.avg_difficulty > 0.0
                 && max_date.as_ref().is_none_or(|m| date.as_str() < m.as_str())
         })
-        .map(|(date_str, stats)| {
-            let difficulty = compact_to_difficulty(stats.avg_compact_target as i64);
-            ChartDataPoint {
-                date: format_date_for_chart(&date_str),
-                value: difficulty.to_string(),
-                value2: None,
-            }
+        .map(|(date_str, stats)| ChartDataPoint {
+            date: format_date_for_chart(&date_str),
+            value: format!("{:.0}", stats.avg_difficulty),
+            value2: None,
         })
         .collect();
 
@@ -2598,7 +2589,6 @@ async fn get_total_supply_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    const SHANNON: f64 = 100_000_000.0;
     let mut data = Vec::with_capacity(snapshots.len());
     for snapshot in &snapshots {
         let Some(total_supply) = snapshot_total_issuance(snapshot) else {
@@ -2607,9 +2597,8 @@ async fn get_total_supply_chart(
                 snapshot.date
             )));
         };
-        let total_supply = total_supply as f64;
         let (_, _, cum_treasury) = snapshot_secondary_cumulative(snapshot)?;
-        let burnt = (GENESIS_BURNT as i128 + cum_treasury) as f64;
+        let burnt = GENESIS_BURNT as i128 + cum_treasury;
 
         // Nervos DAO locked = active deposits (can be unlocked, but currently locked)
         if snapshot.total_deposited < 0 {
@@ -2618,10 +2607,10 @@ async fn get_total_supply_chart(
                 snapshot.date, snapshot.total_deposited
             )));
         }
-        let nervos_dao = snapshot.total_deposited as f64;
+        let nervos_dao = snapshot.total_deposited;
         // Circulating = total_supply - burnt - nervos_dao_locked
         let circulating = total_supply - burnt - nervos_dao;
-        if circulating < 0.0 {
+        if circulating < 0 {
             return Err(ApiError::internal(format!(
                 "negative circulating supply in total-supply chart for {}: total={}, burnt={}, dao_locked={}",
                 snapshot.date, total_supply, burnt, nervos_dao
@@ -2631,13 +2620,13 @@ async fn get_total_supply_chart(
         let mut values = std::collections::HashMap::new();
         values.insert(
             "circulating".to_string(),
-            format!("{:.0}", circulating / SHANNON),
+            (circulating / SHANNONS_PER_CKB).to_string(),
         );
         values.insert(
             "nervosdao".to_string(),
-            format!("{:.0}", nervos_dao / SHANNON),
+            (nervos_dao / SHANNONS_PER_CKB).to_string(),
         );
-        values.insert("burnt".to_string(), format!("{:.0}", burnt / SHANNON));
+        values.insert("burnt".to_string(), (burnt / SHANNONS_PER_CKB).to_string());
         data.push(StackedAreaDataPoint {
             date: snapshot.date.clone(),
             values,

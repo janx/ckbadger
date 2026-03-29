@@ -711,7 +711,7 @@ pub struct MinerStats {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DailyBlockStats {
-    pub avg_compact_target: f64,
+    pub avg_difficulty: f64,
     pub block_count: i32,
     pub total_uncles: i32,
     pub avg_block_time_ms: Option<i64>,

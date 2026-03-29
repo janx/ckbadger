@@ -406,7 +406,7 @@ impl BatchWriter {
     pub fn update_daily_block_stats_batch(
         &self,
         date: NaiveDate,
-        avg_compact_target: i64,
+        avg_difficulty: f64,
         block_count: i32,
         total_uncles: i32,
         batch: &mut StoreBatch,
@@ -420,15 +420,15 @@ impl BatchWriter {
         let stats = match existing {
             Some(val) => {
                 let mut s: DailyBlockStats = deserialize_stats(&val, "daily block stats")?;
-                let old_total = s.avg_compact_target * s.block_count as f64;
+                let old_total = s.avg_difficulty * s.block_count as f64;
                 s.block_count += block_count;
-                s.avg_compact_target = (old_total + avg_compact_target as f64 * block_count as f64)
-                    / s.block_count as f64;
+                s.avg_difficulty =
+                    (old_total + avg_difficulty * block_count as f64) / s.block_count as f64;
                 s.total_uncles += total_uncles;
                 s
             }
             None => DailyBlockStats {
-                avg_compact_target: avg_compact_target as f64,
+                avg_difficulty,
                 block_count,
                 total_uncles,
                 avg_block_time_ms: None,

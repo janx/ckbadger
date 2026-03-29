@@ -758,7 +758,7 @@ async fn test_network_stats_reads_derived_statistics() {
         .put_daily_block_stats(
             &today_str,
             &DailyBlockStats {
-                avg_compact_target: 1_000_000.0,
+                avg_difficulty: 1_000_000.0,
                 block_count: 100,
                 total_uncles: 5,
                 avg_block_time_ms: Some(10_000),
@@ -869,7 +869,7 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
         .put_daily_block_stats(
             &today_str,
             &DailyBlockStats {
-                avg_compact_target: 1_000_000.0,
+                avg_difficulty: 1_000_000.0,
                 block_count: 100,
                 total_uncles: 5,
                 avg_block_time_ms: Some(10_000),
@@ -938,7 +938,7 @@ async fn test_daily_block_charts_read_from_derived_store() {
         .put_daily_block_stats(
             "20260101",
             &DailyBlockStats {
-                avg_compact_target: 1_000_000.0,
+                avg_difficulty: 1_000_000.0,
                 block_count: 100,
                 total_uncles: 2,
                 avg_block_time_ms: Some(10_000),
@@ -949,7 +949,7 @@ async fn test_daily_block_charts_read_from_derived_store() {
         .put_daily_block_stats(
             "20260102",
             &DailyBlockStats {
-                avg_compact_target: 2_000_000.0,
+                avg_difficulty: 2_000_000.0,
                 block_count: 120,
                 total_uncles: 3,
                 avg_block_time_ms: Some(10_000),

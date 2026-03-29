@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Timelike, Utc};
+use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use dashmap::DashMap;
 use rayon::prelude::*;
 use tracing::{debug, info, warn};
@@ -2864,7 +2865,9 @@ impl Indexer {
             }
             {
                 let entry = batch_stats.daily_block_stats.entry(block_date).or_default();
-                entry.0 += parsed.compact_target as i128;
+                let difficulty_u256 = ckb_compact_to_difficulty(parsed.compact_target as u32);
+                let difficulty_u64: u64 = difficulty_u256.to_string().parse().unwrap_or(u64::MAX);
+                entry.0 += difficulty_u64 as i128;
                 entry.1 += 1;
                 entry.2 += parsed.uncles_count;
             }
@@ -3254,21 +3257,19 @@ impl Indexer {
         }
 
         // Daily block stats
-        for (date, (sum_target, count, uncles)) in &stats.daily_block_stats {
-            let avg_target = if *count > 0 {
-                i64::try_from(*sum_target / *count as i128).map_err(|_| {
-                    anyhow!(
-                        "daily avg compact target exceeds i64: date={} sum_target={} count={}",
-                        date,
-                        sum_target,
-                        count
-                    )
-                })?
+        for (date, (sum_difficulty, count, uncles)) in &stats.daily_block_stats {
+            let avg_difficulty = if *count > 0 {
+                (*sum_difficulty / *count as i128) as f64
             } else {
-                0
+                0.0
             };
-            self.writer
-                .update_daily_block_stats_batch(*date, avg_target, *count, *uncles, batch)?;
+            self.writer.update_daily_block_stats_batch(
+                *date,
+                avg_difficulty,
+                *count,
+                *uncles,
+                batch,
+            )?;
         }
 
         // Hourly statistics

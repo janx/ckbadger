@@ -8,6 +8,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use anyhow::Result;
 use anyhow::{anyhow, bail};
+use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_store::keys;
 use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use ckbadger_store::types::{
@@ -995,7 +996,7 @@ struct ChainStatsAccumulator {
     /// Per-day: (blocks, txs, cells_created, cells_consumed, capacity_transferred,
     ///           used_cap_created, used_cap_consumed, data_size_added, data_size_consumed)
     daily_stats: FxHashMap<chrono::NaiveDate, (i32, i32, i32, i32, i128, i128, i128, i64, i64)>,
-    /// Per-day: (sum_compact_target, block_count, total_uncles)
+    /// Per-day: (sum_difficulty, block_count, total_uncles)
     daily_block_stats: FxHashMap<chrono::NaiveDate, (i128, i32, i32)>,
     /// Last DAO field seen per day (for knowledge_size).
     daily_dao_fields: FxHashMap<chrono::NaiveDate, [u8; 32]>,
@@ -1113,9 +1114,11 @@ impl ChainStatsAccumulator {
             // --- DAO field (last per day wins) ---
             self.daily_dao_fields.insert(block_date, block.dao);
 
-            // --- DailyBlockStats ---
+            // --- DailyBlockStats (accumulate difficulty, not compact_target) ---
             let block_entry = self.daily_block_stats.entry(block_date).or_default();
-            block_entry.0 += block.compact_target as i128;
+            let difficulty_u256 = ckb_compact_to_difficulty(block.compact_target);
+            let difficulty_u64: u64 = difficulty_u256.to_string().parse().unwrap_or(u64::MAX);
+            block_entry.0 += difficulty_u64 as i128;
             block_entry.1 += 1;
             block_entry.2 += block.uncles_count;
 
@@ -1229,17 +1232,9 @@ impl ChainStatsAccumulator {
         let mut sorted_block_dates: Vec<_> = self.daily_block_stats.keys().copied().collect();
         sorted_block_dates.sort();
         for date in &sorted_block_dates {
-            let (sum_target, count, uncles) = self.daily_block_stats[date];
-            let avg_compact_target = if count > 0 {
-                let avg_i64 = i64::try_from(sum_target / count as i128).map_err(|_| {
-                    anyhow!(
-                        "chain stats: daily avg compact target exceeds i64: date={} sum={} count={}",
-                        date,
-                        sum_target,
-                        count
-                    )
-                })?;
-                avg_i64 as f64
+            let (sum_difficulty, count, uncles) = self.daily_block_stats[date];
+            let avg_difficulty = if count > 0 {
+                (sum_difficulty / count as i128) as f64
             } else {
                 0.0
             };
@@ -1256,7 +1251,7 @@ impl ChainStatsAccumulator {
                 });
 
             let stats = ckbadger_store::types::DailyBlockStats {
-                avg_compact_target,
+                avg_difficulty,
                 block_count: count,
                 total_uncles: uncles,
                 avg_block_time_ms,
@@ -6379,10 +6374,17 @@ mod tests {
         // data_size_consumed: 10 (the consumed input had data_size=10)
         assert_eq!(daily.8, 10, "data_size_consumed");
 
-        // DailyBlockStats: both blocks on same day
+        // DailyBlockStats: both blocks on same day (sum of difficulties)
         let block_stats = acc.daily_block_stats.get(&date).expect("daily block stats");
-        // sum_compact_target: 0x1a08a97e * 2
-        assert_eq!(block_stats.0, 0x1a08a97e_i128 * 2, "sum_compact_target");
+        let expected_difficulty: u64 = ckb_compact_to_difficulty(0x1a08a97e_u32)
+            .to_string()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            block_stats.0,
+            expected_difficulty as i128 * 2,
+            "sum_difficulty"
+        );
         assert_eq!(block_stats.1, 2, "block_count");
         // uncles: block 100=0, block 101=1
         assert_eq!(block_stats.2, 1, "total_uncles");
