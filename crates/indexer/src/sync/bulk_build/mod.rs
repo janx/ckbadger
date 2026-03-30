@@ -156,10 +156,10 @@ impl BulkBuildEngine {
         );
         let chunk_rx = prefetch.take_receiver();
         let mut buffer = block_buffer::BlockBufferHandle::new(chunk_rx);
-        // Bounded flush channel: the build loop sends PendingFlush into
+        // Bounded flush channel: the build loop sends PreparedBatch into
         // a channel. A dedicated worker drains it serially, committing
-        // each batch to RocksDB. Build only blocks when the channel is
-        // full, eliminating the flush bubble when flush_ms > build_ms.
+        // each WriteBatch pair to RocksDB. Build only blocks when the
+        // channel is full, eliminating the flush bubble when flush_ms > build_ms.
         let flush_channel = materialize::FlushChannelHandle::new(
             flush_depth,
             indexer.writer.store().clone(),
@@ -213,10 +213,12 @@ impl BulkBuildEngine {
             let raw_blocks: Vec<_> = drained.into_iter().map(|b| b.raw).collect();
 
             let build_started = Instant::now();
-            let (batch_stats, build_timings, pending_flush) = runtime.apply_blocks(
+            let (batch_stats, build_timings, prepared_batch) = runtime.apply_blocks(
                 &raw_blocks,
                 indexer.config.is_mainnet(),
                 &token_info_cache,
+                indexer.writer.store().as_ref(),
+                indexer.append_only_store.as_ref(),
             )?;
             let build_elapsed = build_started.elapsed();
 
@@ -225,20 +227,18 @@ impl BulkBuildEngine {
             let critical_stage_ms = (build_elapsed.as_secs_f64() * 1000.0).max(prev_flush_ms);
 
             // Capture row counts before send() moves the data.
-            let pending_flush_row_count = (
-                pending_flush.history_rows.len(),
-                pending_flush.sealed_rows.len(),
-            );
+            let prepared_batch_row_count =
+                (prepared_batch.history_count, prepared_batch.sealed_count);
 
             // Send to flush channel.  Blocks when channel is full (natural
             // backpressure).  Channel depth is memory-budget-derived.
             let flush_wait_started = Instant::now();
-            flush_channel.send(pending_flush).await?;
+            flush_channel.send(prepared_batch).await?;
             let flush_wait_elapsed = flush_wait_started.elapsed();
             let flush_channel_pending = flush_channel.pending() as u64;
 
-            cumulative_history_rows += pending_flush_row_count.0;
-            cumulative_sealed_rows += pending_flush_row_count.1;
+            cumulative_history_rows += prepared_batch_row_count.0;
+            cumulative_sealed_rows += prepared_batch_row_count.1;
             _flush_send_count += 1;
             sync_totals.record_batch(&batch_stats)?;
 
@@ -660,11 +660,6 @@ struct BatchBuildTimings {
 
 /// Rows produced by `apply_blocks` that need to be flushed to RocksDB.
 /// Designed to be `Send` so it can be moved into `spawn_blocking`.
-pub(crate) struct PendingFlush {
-    pub(crate) history_rows: Vec<materialize::MaterializedRow>,
-    pub(crate) sealed_rows: Vec<materialize::MaterializedRow>,
-}
-
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct BulkBuildSyncTotals {
     last_block_number: Option<i64>,
@@ -1368,14 +1363,22 @@ impl BulkBuildRuntimeState {
         blocks: &[binary_facts::RawCkbBlock],
         is_mainnet: bool,
         token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-    ) -> Result<(BatchExecutionStats, BatchBuildTimings, PendingFlush)> {
+        domain_store: &CkbadgerStore,
+        append_only_store: &CkbadgerStore,
+    ) -> Result<(
+        BatchExecutionStats,
+        BatchBuildTimings,
+        materialize::PreparedBatch,
+    )> {
         if blocks.is_empty() {
             return Ok((
                 BatchExecutionStats::default(),
                 BatchBuildTimings::default(),
-                PendingFlush {
-                    history_rows: Vec::new(),
-                    sealed_rows: Vec::new(),
+                materialize::PreparedBatch {
+                    append_batch: rocksdb::WriteBatch::default(),
+                    domain_batch: rocksdb::WriteBatch::default(),
+                    history_count: 0,
+                    sealed_count: 0,
                 },
             ));
         }
@@ -1442,13 +1445,15 @@ impl BulkBuildRuntimeState {
             // LEFT: history materialization → activity stats accumulation
             || -> Result<(HistoryBuildResult, std::time::Duration, std::time::Duration)> {
                 let history_started = Instant::now();
-                let history = build_history_rows(
+                let history = build_history_batches(
                     &arena,
                     &resolved,
                     &frozen,
                     is_mainnet,
                     token_info_cache,
                     written_lock_script_ids,
+                    domain_store,
+                    append_only_store,
                 )?;
                 let history_elapsed = history_started.elapsed();
 
@@ -1616,7 +1621,7 @@ impl BulkBuildRuntimeState {
                 )
             },
         );
-        let (history, history_elapsed, activity_stats_elapsed) = left_result?;
+        let (mut history, history_elapsed, activity_stats_elapsed) = left_result?;
         mid_result?;
         let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = right_result?;
 
@@ -1629,13 +1634,26 @@ impl BulkBuildRuntimeState {
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
         let reduce_elapsed = reduce_started.elapsed();
 
-        // Collect all sealed rows into a single vec for the pending flush.
-        let mut all_sealed = hodl_sealed_rows;
-        all_sealed.extend(cell_dist_sealed_rows);
+        // Append sealed rows directly into the domain WriteBatch.
+        let mut sealed_count = 0usize;
+        for row in &hodl_sealed_rows {
+            history
+                .domain_wb
+                .put_cf(domain_store.cf(row.cf_name), &row.key, &row.value);
+            sealed_count += 1;
+        }
+        for row in &cell_dist_sealed_rows {
+            history
+                .domain_wb
+                .put_cf(domain_store.cf(row.cf_name), &row.key, &row.value);
+            sealed_count += 1;
+        }
 
-        let pending = PendingFlush {
-            history_rows: history.rows,
-            sealed_rows: all_sealed,
+        let prepared = materialize::PreparedBatch {
+            append_batch: history.append_wb,
+            domain_batch: history.domain_wb,
+            history_count: history.history_row_count,
+            sealed_count,
         };
 
         let timings = BatchBuildTimings {
@@ -1660,7 +1678,7 @@ impl BulkBuildRuntimeState {
             tx_count,
             cells_created,
             cells_consumed: consumed_cells,
-        }, timings, pending))
+        }, timings, prepared))
     }
 
     /// Apply blocks from hex-based RPC fixtures (used by test helpers and integration tests).
@@ -1669,14 +1687,22 @@ impl BulkBuildRuntimeState {
         blocks: &[BlockResponseWithCycles],
         is_mainnet: bool,
         token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-    ) -> Result<(BatchExecutionStats, BatchBuildTimings, PendingFlush)> {
+        domain_store: &CkbadgerStore,
+        append_only_store: &CkbadgerStore,
+    ) -> Result<(
+        BatchExecutionStats,
+        BatchBuildTimings,
+        materialize::PreparedBatch,
+    )> {
         if blocks.is_empty() {
             return Ok((
                 BatchExecutionStats::default(),
                 BatchBuildTimings::default(),
-                PendingFlush {
-                    history_rows: Vec::new(),
-                    sealed_rows: Vec::new(),
+                materialize::PreparedBatch {
+                    append_batch: rocksdb::WriteBatch::default(),
+                    domain_batch: rocksdb::WriteBatch::default(),
+                    history_count: 0,
+                    sealed_count: 0,
                 },
             ));
         }
@@ -1732,13 +1758,15 @@ impl BulkBuildRuntimeState {
         let (left_result, (mid_result, right_result)) = rayon::join(
             || -> Result<(HistoryBuildResult, std::time::Duration, std::time::Duration)> {
                 let history_started = Instant::now();
-                let history = build_history_rows(
+                let history = build_history_batches(
                     &arena,
                     &resolved,
                     &frozen,
                     is_mainnet,
                     token_info_cache,
                     written_lock_script_ids,
+                    domain_store,
+                    append_only_store,
                 )?;
                 let history_elapsed = history_started.elapsed();
                 let activity_stats_started = Instant::now();
@@ -1790,7 +1818,7 @@ impl BulkBuildRuntimeState {
             )
             },
         );
-        let (history, history_elapsed, activity_stats_elapsed) = left_result?;
+        let (mut history, history_elapsed, activity_stats_elapsed) = left_result?;
         mid_result?;
         let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = right_result?;
         owners
@@ -1800,8 +1828,20 @@ impl BulkBuildRuntimeState {
             .object
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
         let reduce_elapsed = reduce_started.elapsed();
-        let mut all_sealed = hodl_sealed_rows;
-        all_sealed.extend(cell_dist_sealed_rows);
+        // Append sealed rows directly into the domain WriteBatch.
+        let mut sealed_count = 0usize;
+        for row in &hodl_sealed_rows {
+            history
+                .domain_wb
+                .put_cf(domain_store.cf(row.cf_name), &row.key, &row.value);
+            sealed_count += 1;
+        }
+        for row in &cell_dist_sealed_rows {
+            history
+                .domain_wb
+                .put_cf(domain_store.cf(row.cf_name), &row.key, &row.value);
+            sealed_count += 1;
+        }
         Ok((
             BatchExecutionStats {
                 last_block_number: Some(last_block.number),
@@ -1825,9 +1865,11 @@ impl BulkBuildRuntimeState {
                 address_reduce_ms: address_elapsed.as_secs_f64() * 1000.0,
                 activity_stats_ms: activity_stats_elapsed.as_secs_f64() * 1000.0,
             },
-            PendingFlush {
-                history_rows: history.rows,
-                sealed_rows: all_sealed,
+            materialize::PreparedBatch {
+                append_batch: history.append_wb,
+                domain_batch: history.domain_wb,
+                history_count: history.history_row_count,
+                sealed_count,
             },
         ))
     }
@@ -2014,18 +2056,21 @@ fn apply_cell_dist_cohort_deltas(
 }
 
 struct HistoryBuildResult {
-    rows: Vec<materialize::MaterializedRow>,
+    append_wb: rocksdb::WriteBatch,
+    domain_wb: rocksdb::WriteBatch,
+    history_row_count: usize,
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     tx_actions_list: Vec<ckbadger_store::types::TxActions>,
 }
 
-struct BlockHistoryRows {
-    rows: Vec<materialize::MaterializedRow>,
-    /// Lock script rows collected separately for cross-batch dedup in the
-    /// serial merge phase. Each entry pairs the interned lock hash id with
-    /// its materialized CF_LOCK_SCRIPTS row.
-    lock_script_rows: Vec<(crate::sync::types::InternId, materialize::MaterializedRow)>,
+struct BlockHistoryBatches {
+    append_wb: rocksdb::WriteBatch,
+    domain_wb: rocksdb::WriteBatch,
+    row_count: usize,
+    /// Lock script candidates collected separately for cross-batch dedup in the
+    /// serial merge phase. Each entry is (InternId, key_bytes, value_bytes).
+    lock_script_candidates: Vec<(crate::sync::types::InternId, Vec<u8>, Vec<u8>)>,
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     tx_actions_list: Vec<ckbadger_store::types::TxActions>,
@@ -2184,13 +2229,20 @@ where
                 break;
             }
 
-            let (batch_stats, _timings, pending) = runtime.apply_blocks_hex(
+            let (batch_stats, _timings, prepared) = runtime.apply_blocks_hex(
                 std::slice::from_ref(block),
                 true,
                 &FxHashMap::default(),
+                domain_store.as_ref(),
+                append_store.as_ref(),
             )?;
-            materializer.stream_history_rows(&pending.history_rows)?;
-            materializer.stream_sealed_aggregate_rows(&pending.sealed_rows)?;
+            materializer.add_external_counts(prepared.history_count, prepared.sealed_count, 1);
+            if !prepared.append_batch.is_empty() {
+                append_store.write_batch_no_wal_bulk(prepared.append_batch)?;
+            }
+            if !prepared.domain_batch.is_empty() {
+                domain_store.write_batch_no_wal_bulk(prepared.domain_batch)?;
+            }
             sync_totals.record_batch(&batch_stats)?;
             let last_block_number = batch_stats
                 .last_block_number
@@ -2306,10 +2358,20 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         let mut materializer =
             materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
         for batch in block_batches {
-            let (batch_stats, _timings, pending) =
-                runtime.apply_blocks_hex(batch, true, &FxHashMap::default())?;
-            materializer.stream_history_rows(&pending.history_rows)?;
-            materializer.stream_sealed_aggregate_rows(&pending.sealed_rows)?;
+            let (batch_stats, _timings, prepared) = runtime.apply_blocks_hex(
+                batch,
+                true,
+                &FxHashMap::default(),
+                domain_store.as_ref(),
+                append_store.as_ref(),
+            )?;
+            materializer.add_external_counts(prepared.history_count, prepared.sealed_count, 1);
+            if !prepared.append_batch.is_empty() {
+                append_store.write_batch_no_wal_bulk(prepared.append_batch)?;
+            }
+            if !prepared.domain_batch.is_empty() {
+                domain_store.write_batch_no_wal_bulk(prepared.domain_batch)?;
+            }
             sync_totals.record_batch(&batch_stats)?;
         }
         runtime.finalize(domain_store.as_ref(), &mut materializer)?;
@@ -2449,13 +2511,16 @@ fn collect_script_daily_deltas_snapshot(
     Ok(script_daily_deltas)
 }
 
-fn build_history_rows(
+#[allow(clippy::too_many_arguments)]
+fn build_history_batches(
     arena: &facts::FactsArena,
     resolved: &[facts::ResolvedTxFacts<'_>],
     interner: &interner::FrozenIdentityView,
     is_mainnet: bool,
     token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
     written_lock_script_ids: &mut FxHashSet<crate::sync::types::InternId>,
+    domain_store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
 ) -> Result<HistoryBuildResult> {
     if arena.txs.len() != resolved.len() {
         bail!(
@@ -2467,13 +2532,13 @@ fn build_history_rows(
 
     let detectors = build_activity_protocol_detectors(resolved, interner, is_mainnet)?;
 
-    let block_results: Vec<Result<BlockHistoryRows>> = arena
+    let block_results: Vec<Result<BlockHistoryBatches>> = arena
         .blocks
         .par_iter()
         .map(|block| {
             let block_txs = &arena.txs[block.tx_range.clone()];
             let block_resolved = &resolved[block.tx_range.clone()];
-            build_history_rows_for_block(
+            build_history_batches_for_block(
                 block,
                 block_txs,
                 block_resolved,
@@ -2481,36 +2546,41 @@ fn build_history_rows(
                 interner,
                 &detectors,
                 token_info_cache,
+                domain_store,
+                append_only_store,
             )
         })
         .collect();
 
-    // Merge results preserving block order.
-    let estimated_total =
-        arena.blocks.len() * 2 + arena.txs.len() * 2 + arena.cells.len() * 2 + arena.txs.len();
-    let mut all_rows = Vec::with_capacity(estimated_total);
+    // Merge results preserving block order via WriteBatch byte-level concatenation.
+    let mut final_append_wb = rocksdb::WriteBatch::default();
+    let mut final_domain_wb = rocksdb::WriteBatch::default();
+    let mut total_row_count: usize = 0;
     let mut all_object_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_identity_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_tx_actions: Vec<ckbadger_store::types::TxActions> = Vec::new();
     for result in block_results {
-        let block_rows = result?;
-        all_rows.extend(block_rows.rows);
-        // Cross-batch dedup: only emit lock script rows whose InternId has
+        let block = result?;
+        ckbadger_store::merge_write_batches(&mut final_append_wb, block.append_wb);
+        ckbadger_store::merge_write_batches(&mut final_domain_wb, block.domain_wb);
+        total_row_count += block.row_count;
+        // Cross-batch dedup: only write lock script candidates whose InternId has
         // not been seen in any previous batch. The set persists across batches
         // via BulkBuildRuntimeState, eliminating ~97% of duplicate writes.
-        for (id, row) in block_rows.lock_script_rows {
+        for (id, key, value) in block.lock_script_candidates {
             if written_lock_script_ids.insert(id) {
-                all_rows.push(row);
+                final_domain_wb.put_cf(domain_store.cf(CF_LOCK_SCRIPTS), &key, &value);
+                total_row_count += 1;
             }
         }
-        all_tx_actions.extend(block_rows.tx_actions_list);
-        for (k, v) in block_rows.object_activity_count_deltas {
+        all_tx_actions.extend(block.tx_actions_list);
+        for (k, v) in block.object_activity_count_deltas {
             let entry = all_object_deltas.entry(k).or_insert(0);
             *entry = entry
                 .checked_add(v)
                 .ok_or_else(|| anyhow!("object activity delta overflow during parallel merge"))?;
         }
-        for (k, v) in block_rows.identity_activity_count_deltas {
+        for (k, v) in block.identity_activity_count_deltas {
             let entry = all_identity_deltas.entry(k).or_insert(0);
             *entry = entry
                 .checked_add(v)
@@ -2519,7 +2589,9 @@ fn build_history_rows(
     }
 
     Ok(HistoryBuildResult {
-        rows: all_rows,
+        append_wb: final_append_wb,
+        domain_wb: final_domain_wb,
+        history_row_count: total_row_count,
         object_activity_count_deltas: all_object_deltas,
         identity_activity_count_deltas: all_identity_deltas,
         tx_actions_list: all_tx_actions,
@@ -2531,9 +2603,9 @@ fn build_history_rows(
 ///
 /// Trade-off: traverses the value twice (once for size, once for serialization).
 /// Net positive for larger structs where avoiding multiple Vec reallocations
-/// outweighs the sizing pass. Used in the hot `par_iter` path of
-/// `build_history_rows_for_block` where the allocation saving is amplified
-/// across rayon threads.
+/// outweighs the sizing pass. Retained for test-only code paths
+/// (e.g. `build_object_collection_activity_rows`).
+#[cfg(test)]
 fn bincode_serialize_presized<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
     let size = bincode::serialized_size(value)
         .map_err(|e| anyhow!("bincode size estimation failed: {}", e))?;
@@ -2544,7 +2616,7 @@ fn bincode_serialize_presized<T: serde::Serialize>(value: &T) -> Result<Vec<u8>>
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_history_rows_for_block(
+fn build_history_batches_for_block(
     block: &facts::BlockFacts,
     block_txs: &[facts::TxFacts],
     block_resolved: &[facts::ResolvedTxFacts<'_>],
@@ -2552,18 +2624,13 @@ fn build_history_rows_for_block(
     interner: &interner::FrozenIdentityView,
     detectors: &[Box<dyn crate::db::writer::activities::ProtocolDetector>],
     _token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-) -> Result<BlockHistoryRows> {
-    let input_count: usize = block_resolved
-        .iter()
-        .map(|tx| tx.resolved_inputs.len())
-        .sum();
-    let cell_count: usize = block_txs.iter().map(|tx| tx.output_range.len()).sum();
-    let estimated_rows = 2 // block header + hash index
-        + block_txs.len() * 4 // tx_index + tx_hash_map + ~2 addr_txs
-        + input_count // consumed_cells
-        + cell_count * 2 // cells + possible data_hash
-        + block_txs.len(); // activity bundles estimate
-    let mut rows = Vec::with_capacity(estimated_rows);
+    domain_store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+) -> Result<BlockHistoryBatches> {
+    let mut append_wb = rocksdb::WriteBatch::default();
+    let mut domain_wb = rocksdb::WriteBatch::default();
+    let mut vbuf = Vec::with_capacity(256);
+    let mut row_count: usize = 0;
     let mut object_activity_count_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut identity_activity_count_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
 
@@ -2578,16 +2645,21 @@ fn build_history_rows_for_block(
         dao: block.dao.to_vec(),
         transactions_count: block.transactions_count,
     };
-    rows.push(materialize::MaterializedRow::new(
-        CF_BLOCK_HEADERS,
-        keys::encode_block_num(block.number).to_vec(),
-        bincode_serialize_presized(&header)?,
-    ));
-    rows.push(materialize::MaterializedRow::new(
-        CF_BLOCK_HASH_INDEX,
-        block.hash.to_vec(),
-        block.number.to_le_bytes().to_vec(),
-    ));
+    vbuf.clear();
+    bincode::serialize_into(&mut vbuf, &header)
+        .map_err(|e| anyhow!("bincode serialize block header failed: {}", e))?;
+    domain_wb.put_cf(
+        domain_store.cf(CF_BLOCK_HEADERS),
+        keys::encode_block_num(block.number),
+        &vbuf,
+    );
+    row_count += 1;
+    domain_wb.put_cf(
+        domain_store.cf(CF_BLOCK_HASH_INDEX),
+        block.hash,
+        block.number.to_le_bytes(),
+    );
+    row_count += 1;
 
     if block_txs.len() != block_resolved.len() {
         bail!(
@@ -2628,16 +2700,13 @@ fn build_history_rows_for_block(
             &keys::encode_block_num(tx.block_number),
             &keys::encode_tx_idx(tx.tx_index),
         ]);
-        rows.push(materialize::MaterializedRow::new(
-            CF_TX_INDEX,
-            tx_location.to_vec(),
-            bincode_serialize_presized(&entry)?,
-        ));
-        rows.push(materialize::MaterializedRow::new(
-            CF_TX_HASH_MAP,
-            tx.hash.to_vec(),
-            tx_location.to_vec(),
-        ));
+        vbuf.clear();
+        bincode::serialize_into(&mut vbuf, &entry)
+            .map_err(|e| anyhow!("bincode serialize tx index entry failed: {}", e))?;
+        domain_wb.put_cf(domain_store.cf(CF_TX_INDEX), &tx_location, &vbuf);
+        row_count += 1;
+        domain_wb.put_cf(domain_store.cf(CF_TX_HASH_MAP), tx.hash, &tx_location);
+        row_count += 1;
 
         let mut touched_lock_hash_ids = FxHashSet::default();
         for output in resolved_tx.cells.iter() {
@@ -2647,16 +2716,17 @@ fn build_history_rows_for_block(
             touched_lock_hash_ids.insert(input.lock_script_hash_id);
         }
         for lock_hash_id in touched_lock_hash_ids {
-            rows.push(materialize::MaterializedRow::new(
-                CF_ADDR_TXS,
+            domain_wb.put_cf(
+                domain_store.cf(CF_ADDR_TXS),
                 keys::encode_addr_tx_key(
                     interner.resolve_bytes(lock_hash_id),
                     tx.block_number,
                     tx.tx_index,
                     &tx.hash,
                 ),
-                Vec::new(),
-            ));
+                [],
+            );
+            row_count += 1;
         }
 
         if tx.is_cellbase {
@@ -2664,19 +2734,25 @@ fn build_history_rows_for_block(
         }
 
         for input in &resolved_tx.resolved_inputs {
-            rows.push(materialize::MaterializedRow::new(
-                CF_CONSUMED_CELLS,
-                keys::encode_outpoint(
-                    &input.outpoint.tx_hash,
-                    resolved_input_outpoint_index_i16(input)?,
-                )
-                .to_vec(),
-                bincode_serialize_presized(&ConsumedCellMeta {
+            vbuf.clear();
+            bincode::serialize_into(
+                &mut vbuf,
+                &ConsumedCellMeta {
                     created_at_block: input.created_at_block,
                     consumed_at_block: tx.block_number,
                     consumed_by_tx: Some(tx.hash.to_vec()),
-                })?,
-            ));
+                },
+            )
+            .map_err(|e| anyhow!("bincode serialize consumed cell meta failed: {}", e))?;
+            domain_wb.put_cf(
+                domain_store.cf(CF_CONSUMED_CELLS),
+                keys::encode_outpoint(
+                    &input.outpoint.tx_hash,
+                    resolved_input_outpoint_index_i16(input)?,
+                ),
+                &vbuf,
+            );
+            row_count += 1;
         }
     }
 
@@ -2709,15 +2785,20 @@ fn build_history_rows_for_block(
                     is_burn: transfer.is_burn,
                     timestamp: tx.timestamp_ms,
                 };
-                rows.push(materialize::MaterializedRow::new(
-                    CF_TOKEN_TRANSFERS,
+                vbuf.clear();
+                bincode::serialize_into(&mut vbuf, &record).map_err(|e| {
+                    anyhow!("bincode serialize token transfer record failed: {}", e)
+                })?;
+                domain_wb.put_cf(
+                    domain_store.cf(CF_TOKEN_TRANSFERS),
                     keys::encode_token_transfer_key(
                         &transfer.type_script_hash,
                         tx.block_number,
                         *idx,
                     ),
-                    bincode_serialize_presized(&record)?,
-                ));
+                    &vbuf,
+                );
+                row_count += 1;
                 *idx = idx.checked_add(1).ok_or_else(|| {
                     anyhow!(
                         "token transfer index overflow in bulk build history rows: type_hash=0x{} block={}",
@@ -2858,15 +2939,19 @@ fn build_history_rows_for_block(
             // (activities.rs:795) and they are never displayed. Activity stats
             // accumulation uses tx_actions_list (in-memory), not CF_TX_ACTIONS.
             if !tx_actions.is_cellbase {
-                rows.push(materialize::MaterializedRow::new(
-                    CF_TX_ACTIONS,
+                vbuf.clear();
+                bincode::serialize_into(&mut vbuf, &tx_actions)
+                    .map_err(|e| anyhow!("bincode serialize tx actions failed: {}", e))?;
+                domain_wb.put_cf(
+                    domain_store.cf(CF_TX_ACTIONS),
                     keys::encode_tx_actions_key(
                         tx_actions.block_number,
                         tx_actions.tx_index,
                         &tx_actions.tx_hash,
                     ),
-                    bincode_serialize_presized(&tx_actions)?,
-                ));
+                    &vbuf,
+                );
+                row_count += 1;
             }
             tx_actions_list.push(tx_actions);
         }
@@ -2983,18 +3068,22 @@ fn build_history_rows_for_block(
                 &tx.block_hash,
                 tx.timestamp_ms,
             ) {
-                rows.push(materialize::MaterializedRow::new(
-                    CF_IDENTITY_COLLECTION_ACTIVITIES,
+                vbuf.clear();
+                bincode::serialize_into(&mut vbuf, &entry).map_err(|e| {
+                    anyhow!("bincode serialize dotbit activity entry failed: {}", e)
+                })?;
+                domain_wb.put_cf(
+                    domain_store.cf(CF_IDENTITY_COLLECTION_ACTIVITIES),
                     keys::encode_nft_collection_activity_key(
                         &DOTBIT_SENTINEL_COLLECTION,
                         tx.block_number,
                         tx.tx_index,
                         &tx.block_hash,
                         &tx.tx_hash,
-                    )
-                    .to_vec(),
-                    bincode_serialize_presized(&entry)?,
-                ));
+                    ),
+                    &vbuf,
+                );
+                row_count += 1;
                 let delta = identity_activity_count_deltas
                     .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
                     .or_insert(0);
@@ -3018,18 +3107,21 @@ fn build_history_rows_for_block(
                     hex::encode(&resolved_entry.collection_id)
                 )
             })?;
-            rows.push(materialize::MaterializedRow::new(
-                CF_OBJECT_COLLECTION_ACTIVITIES,
+            vbuf.clear();
+            bincode::serialize_into(&mut vbuf, &resolved_entry.entry)
+                .map_err(|e| anyhow!("bincode serialize object activity entry failed: {}", e))?;
+            domain_wb.put_cf(
+                domain_store.cf(CF_OBJECT_COLLECTION_ACTIVITIES),
                 keys::encode_nft_collection_activity_key(
                     &resolved_entry.collection_id,
                     resolved_entry.block_number,
                     resolved_entry.tx_idx,
                     &resolved_entry.entry.block_hash,
                     &resolved_entry.entry.tx_hash,
-                )
-                .to_vec(),
-                bincode_serialize_presized(&resolved_entry.entry)?,
-            ));
+                ),
+                &vbuf,
+            );
+            row_count += 1;
         }
 
         for resolved_entry in identity_activity_acc.into_resolved_entries() {
@@ -3042,40 +3134,42 @@ fn build_history_rows_for_block(
                     hex::encode(&resolved_entry.collection_id)
                 )
             })?;
-            rows.push(materialize::MaterializedRow::new(
-                CF_IDENTITY_COLLECTION_ACTIVITIES,
+            vbuf.clear();
+            bincode::serialize_into(&mut vbuf, &resolved_entry.entry)
+                .map_err(|e| anyhow!("bincode serialize identity activity entry failed: {}", e))?;
+            domain_wb.put_cf(
+                domain_store.cf(CF_IDENTITY_COLLECTION_ACTIVITIES),
                 keys::encode_nft_collection_activity_key(
                     &resolved_entry.collection_id,
                     resolved_entry.block_number,
                     resolved_entry.tx_idx,
                     &resolved_entry.entry.block_hash,
                     &resolved_entry.entry.tx_hash,
-                )
-                .to_vec(),
-                bincode_serialize_presized(&resolved_entry.entry)?,
-            ));
+                ),
+                &vbuf,
+            );
+            row_count += 1;
         }
     }
 
     // Cell payloads (CF_CELLS) + data_hash index (CF_CELL_BY_DATA_HASH)
     // + lock script mapping (CF_LOCK_SCRIPTS) for this block's cells.
     //
-    // Lock script rows are collected separately (with their InternId) so
+    // Lock script candidates are collected separately (with their InternId) so
     // the serial merge phase can perform cross-batch dedup via a persistent
     // FxHashSet<InternId> in BulkBuildRuntimeState. Per-block dedup still
     // happens here via `seen_lock_ids` to avoid redundant serialization.
     let mut seen_lock_ids = rustc_hash::FxHashSet::default();
-    let mut lock_script_rows = Vec::new();
+    let mut lock_script_candidates = Vec::new();
     for tx in block_txs {
         for cell in &arena_cells[tx.output_range.clone()] {
             let outpoint_key =
-                keys::encode_outpoint(&cell.outpoint.tx_hash, cell_outpoint_index_i16(cell)?)
-                    .to_vec();
-            rows.push(materialize::MaterializedRow::new(
-                CF_CELLS,
-                outpoint_key,
-                bincode_serialize_presized(&cell_facts_to_live_cell_info(cell, interner))?,
-            ));
+                keys::encode_outpoint(&cell.outpoint.tx_hash, cell_outpoint_index_i16(cell)?);
+            vbuf.clear();
+            bincode::serialize_into(&mut vbuf, &cell_facts_to_live_cell_info(cell, interner))
+                .map_err(|e| anyhow!("bincode serialize cell info failed: {}", e))?;
+            append_wb.put_cf(append_only_store.cf(CF_CELLS), outpoint_key, &vbuf);
+            row_count += 1;
 
             // Lock script mapping — dedup within block, cross-batch dedup in merge.
             if seen_lock_ids.insert(cell.lock_script_hash_id) {
@@ -3085,34 +3179,33 @@ fn build_history_rows_for_block(
                     hash_type: cell.lock_hash_type,
                     args: interner.resolve_bytes(cell.lock_args_id).to_vec(),
                 };
-                lock_script_rows.push((
-                    cell.lock_script_hash_id,
-                    materialize::MaterializedRow::new(
-                        CF_LOCK_SCRIPTS,
-                        lock_hash,
-                        bincode_serialize_presized(&entry)?,
-                    ),
-                ));
+                vbuf.clear();
+                bincode::serialize_into(&mut vbuf, &entry)
+                    .map_err(|e| anyhow!("bincode serialize lock script entry failed: {}", e))?;
+                lock_script_candidates.push((cell.lock_script_hash_id, lock_hash, vbuf.clone()));
             }
 
             if let Some(data_hash) = &cell.data_hash {
-                rows.push(materialize::MaterializedRow::new(
-                    CF_CELL_BY_DATA_HASH,
+                domain_wb.put_cf(
+                    domain_store.cf(CF_CELL_BY_DATA_HASH),
                     keys::encode_cell_index_key(
                         data_hash,
                         cell.created_at_block,
                         &cell.outpoint.tx_hash,
                         cell_outpoint_index_i16(cell)?,
                     ),
-                    Vec::new(),
-                ));
+                    [],
+                );
+                row_count += 1;
             }
         }
     }
 
-    Ok(BlockHistoryRows {
-        rows,
-        lock_script_rows,
+    Ok(BlockHistoryBatches {
+        append_wb,
+        domain_wb,
+        row_count,
+        lock_script_candidates,
         object_activity_count_deltas,
         identity_activity_count_deltas,
         tx_actions_list,
@@ -4842,20 +4935,34 @@ mod tests {
             .expect("resolved txs");
         let frozen = interner.snapshot_for_reads();
 
-        let (_test_store, test_root) = open_empty_domain_store("bulk-build-addr-tx-test");
-        let addr_rows: Vec<_> = build_history_rows(
+        let root = unique_temp_test_dir("bulk-build-addr-tx-test");
+        std::fs::create_dir_all(&root).expect("create root");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("create domain");
+        std::fs::create_dir_all(&append_path).expect("create append");
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
+        let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
+
+        let history = build_history_batches(
             &arena,
             &resolved,
             &frozen,
             true,
             &FxHashMap::default(),
             &mut FxHashSet::default(),
+            &domain_store,
+            &append_store,
         )
-        .expect("history rows")
-        .rows
-        .into_iter()
-        .filter(|row| row.cf_name == CF_ADDR_TXS)
-        .collect();
+        .expect("history batches");
+
+        // Commit batches to stores and scan for CF_ADDR_TXS keys.
+        domain_store
+            .write_batch_no_wal_bulk(history.domain_wb)
+            .expect("commit domain");
+        append_store
+            .write_batch_no_wal_bulk(history.append_wb)
+            .expect("commit append");
 
         let expected = [
             keys::encode_addr_tx_key(&lock_a_hash, 14_000_888, 0, &create_tx_hash),
@@ -4863,13 +4970,17 @@ mod tests {
             keys::encode_addr_tx_key(&lock_b_hash, 14_000_888, 1, &split_tx_hash),
         ];
 
-        assert_eq!(addr_rows.len(), expected.len());
-        let actual_keys: HashSet<Vec<u8>> = addr_rows.iter().map(|row| row.key.clone()).collect();
+        let mut actual_keys: HashSet<Vec<u8>> = HashSet::new();
+        for item in domain_store.iterator_cf(domain_store.cf(CF_ADDR_TXS), IteratorMode::Start) {
+            let (key, _) = item.expect("iterator item");
+            actual_keys.insert(key.to_vec());
+        }
+
         assert_eq!(actual_keys.len(), expected.len());
         for key in expected {
             assert!(actual_keys.contains(&key));
         }
-        let _ = std::fs::remove_dir_all(&test_root);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -4898,32 +5009,46 @@ mod tests {
             .expect("resolved txs");
         let frozen = interner.snapshot_for_reads();
 
-        let (_test_store, test_root) = open_empty_domain_store("bulk-build-token-transfer-test");
-        let token_rows: Vec<_> = build_history_rows(
+        let root = unique_temp_test_dir("bulk-build-token-transfer-test");
+        std::fs::create_dir_all(&root).expect("create root");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("create domain");
+        std::fs::create_dir_all(&append_path).expect("create append");
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
+        let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
+
+        let history = build_history_batches(
             &arena,
             &resolved,
             &frozen,
             true,
             &FxHashMap::default(),
             &mut FxHashSet::default(),
+            &domain_store,
+            &append_store,
         )
-        .expect("history rows")
-        .rows
-        .into_iter()
-        .filter(|row| row.cf_name == CF_TOKEN_TRANSFERS)
-        .collect();
-        let _ = std::fs::remove_dir_all(&test_root);
+        .expect("history batches");
+        domain_store
+            .write_batch_no_wal_bulk(history.domain_wb)
+            .expect("commit domain");
+        append_store
+            .write_batch_no_wal_bulk(history.append_wb)
+            .expect("commit append");
 
-        assert_eq!(token_rows.len(), 2);
-        let token_records: HashMap<Vec<u8>, TokenTransferRecord> = token_rows
-            .into_iter()
-            .map(|row| {
+        let token_records: HashMap<Vec<u8>, TokenTransferRecord> = domain_store
+            .iterator_cf(domain_store.cf(CF_TOKEN_TRANSFERS), IteratorMode::Start)
+            .map(|item| {
+                let (key, value) = item.expect("iterator item");
                 (
-                    row.key,
-                    bincode::deserialize(&row.value).expect("deserialize token transfer"),
+                    key.to_vec(),
+                    bincode::deserialize(&value).expect("deserialize token transfer"),
                 )
             })
             .collect();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(token_records.len(), 2);
 
         let mint_key = keys::encode_token_transfer_key(&type_hash, 14_000_889, 0);
         let transfer_key = keys::encode_token_transfer_key(&type_hash, 14_000_889, 1);
@@ -4968,19 +5093,28 @@ mod tests {
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
         let append_store =
             CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
-        let history = build_history_rows(
+        let history = build_history_batches(
             &arena,
             &resolved,
             &frozen,
             true,
             &FxHashMap::default(),
             &mut FxHashSet::default(),
+            &domain_store,
+            &append_store,
         )
-        .expect("history rows");
-        let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
-        materializer
-            .stream_history_rows(&history.rows)
-            .expect("stream history rows");
+        .expect("history batches");
+        // Write batches directly to stores (no-WAL) to populate memtables.
+        if !history.append_wb.is_empty() {
+            append_store
+                .write_batch_no_wal_bulk(history.append_wb)
+                .expect("commit append");
+        }
+        if !history.domain_wb.is_empty() {
+            domain_store
+                .write_batch_no_wal_bulk(history.domain_wb)
+                .expect("commit domain");
+        }
 
         let domain_stats_before = domain_store.memory_stats();
         let append_stats_before = append_store.memory_stats();
@@ -5060,29 +5194,49 @@ mod tests {
             .expect("resolved txs");
         let frozen = interner.snapshot_for_reads();
 
-        let (_test_store, test_root) = open_empty_domain_store("bulk-build-activity-test");
-        let result = build_history_rows(
+        let root = unique_temp_test_dir("bulk-build-activity-test");
+        std::fs::create_dir_all(&root).expect("create root");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("create domain");
+        std::fs::create_dir_all(&append_path).expect("create append");
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
+        let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
+
+        let result = build_history_batches(
             &arena,
             &resolved,
             &frozen,
             true,
             &FxHashMap::default(),
             &mut FxHashSet::default(),
+            &domain_store,
+            &append_store,
         )
-        .expect("history rows");
-        let activity_rows: Vec<_> = result
-            .rows
-            .iter()
-            .filter(|row| row.cf_name == CF_TX_ACTIONS)
+        .expect("history batches");
+        domain_store
+            .write_batch_no_wal_bulk(result.domain_wb)
+            .expect("commit domain");
+        append_store
+            .write_batch_no_wal_bulk(result.append_wb)
+            .expect("commit append");
+
+        let activity_rows: Vec<(Vec<u8>, TxActions)> = domain_store
+            .iterator_cf(domain_store.cf(CF_TX_ACTIONS), IteratorMode::Start)
+            .map(|item| {
+                let (key, value) = item.expect("iterator item");
+                (
+                    key.to_vec(),
+                    bincode::deserialize(&value).expect("deserialize TxActions"),
+                )
+            })
             .collect();
-        let _ = std::fs::remove_dir_all(&test_root);
 
         // Only non-cellbase tx materialized to CF_TX_ACTIONS.
         assert_eq!(activity_rows.len(), 1);
         let split_key = keys::encode_tx_actions_key(14_000_888, 1, &split_tx_hash);
-        let split_actions: TxActions =
-            bincode::deserialize(&activity_rows[0].value).expect("deserialize TxActions");
-        assert_eq!(activity_rows[0].key, split_key);
+        let (ref actual_key, ref split_actions) = activity_rows[0];
+        assert_eq!(*actual_key, split_key);
         assert_eq!(split_actions.tx_hash, split_tx_hash);
         assert!(!split_actions.is_cellbase);
         assert_eq!(split_actions.participants.len(), 2);
@@ -5104,6 +5258,7 @@ mod tests {
         // tx_actions_list must still include cellbase for activity stats accumulation.
         assert_eq!(result.tx_actions_list.len(), 2);
         assert!(result.tx_actions_list.iter().any(|a| a.is_cellbase));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -5117,30 +5272,45 @@ mod tests {
         let resolved = seq.resolve(&arena).expect("resolved txs");
         let frozen = interner.snapshot_for_reads();
 
-        let result = build_history_rows(
+        let root = unique_temp_test_dir("bulk-build-cellbase-exclude-test");
+        std::fs::create_dir_all(&root).expect("create root");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("create domain");
+        std::fs::create_dir_all(&append_path).expect("create append");
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
+        let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
+
+        let result = build_history_batches(
             &arena,
             &resolved,
             &frozen,
             true,
             &FxHashMap::default(),
             &mut FxHashSet::default(),
+            &domain_store,
+            &append_store,
         )
-        .expect("history rows");
+        .expect("history batches");
+        domain_store
+            .write_batch_no_wal_bulk(result.domain_wb)
+            .expect("commit domain");
+        append_store
+            .write_batch_no_wal_bulk(result.append_wb)
+            .expect("commit append");
 
         // CF_TX_ACTIONS rows should NOT include cellbase.
-        let tx_action_rows: Vec<_> = result
-            .rows
-            .iter()
-            .filter(|r| r.cf_name == CF_TX_ACTIONS)
+        let tx_action_rows: Vec<TxActions> = domain_store
+            .iterator_cf(domain_store.cf(CF_TX_ACTIONS), IteratorMode::Start)
+            .map(|item| {
+                let (_key, value) = item.expect("iterator item");
+                bincode::deserialize(&value).expect("deserialize tx_actions")
+            })
             .collect();
 
         // tx_actions_list should include ALL txs (including cellbase) for stats accumulation.
         let cellbase_in_list = result.tx_actions_list.iter().any(|a| a.is_cellbase);
-        let cellbase_in_rows = tx_action_rows.iter().any(|r| {
-            let actions: ckbadger_store::types::TxActions =
-                bincode::deserialize(&r.value).expect("deserialize tx_actions");
-            actions.is_cellbase
-        });
+        let cellbase_in_rows = tx_action_rows.iter().any(|a| a.is_cellbase);
 
         assert!(
             cellbase_in_list,
@@ -5158,6 +5328,7 @@ mod tests {
             .filter(|a| !a.is_cellbase)
             .count();
         assert_eq!(tx_action_rows.len(), non_cellbase_in_list);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -5211,26 +5382,37 @@ mod tests {
         std::fs::create_dir_all(&append_path).expect("create append-only dir");
 
         let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain store");
-        let history = build_history_rows(
+        let append_store =
+            CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
+        let history = build_history_batches(
             &arena,
             &resolved,
             &frozen,
             true,
             &FxHashMap::default(),
             &mut FxHashSet::default(),
+            &domain_store,
+            &append_store,
         )
-        .expect("history rows");
+        .expect("history batches");
         let sealed_rows =
             build_sealed_aggregate_rows(&history.tx_actions_list).expect("sealed rows");
         let final_snapshot_rows =
             build_final_snapshot_rows(&sequencer, &frozen).expect("final snapshot rows");
 
-        let open_tx_actions = history
-            .rows
-            .iter()
-            .filter(|row| row.cf_name == CF_TX_ACTIONS)
-            .map(|row| {
-                bincode::deserialize::<TxActions>(&row.value).expect("deserialize TxActions")
+        // Commit history WriteBatches and then check tx actions from the store.
+        domain_store
+            .write_batch_no_wal_bulk(history.domain_wb)
+            .expect("commit domain");
+        append_store
+            .write_batch_no_wal_bulk(history.append_wb)
+            .expect("commit append");
+
+        let open_tx_actions: TxActions = domain_store
+            .iterator_cf(domain_store.cf(CF_TX_ACTIONS), IteratorMode::Start)
+            .map(|item| {
+                let (_key, value) = item.expect("iterator item");
+                bincode::deserialize::<TxActions>(&value).expect("deserialize TxActions")
             })
             .find(|actions| !actions.is_cellbase)
             .expect("non-cellbase TxActions");
@@ -5244,12 +5426,7 @@ mod tests {
         for tx in &resolved {
             owners.apply_tx(tx, &ctx).expect("apply core owners");
         }
-        let append_store =
-            CkbadgerStore::open_append_only(&append_path).expect("open append-only store");
         let mut materializer = materialize::Materializer::new(&domain_store, &append_store);
-        materializer
-            .stream_history_rows(&history.rows)
-            .expect("stream history rows");
         materializer
             .stream_sealed_aggregate_rows(&sealed_rows)
             .expect("stream sealed rows");
@@ -5291,50 +5468,64 @@ mod tests {
             .expect("resolved txs");
         let frozen = interner.snapshot_for_reads();
 
-        let (_test_store, test_root) =
-            open_empty_domain_store("bulk-build-spore-did-activity-test");
-        let history_rows: Vec<_> = build_history_rows(
+        let root = unique_temp_test_dir("bulk-build-spore-did-activity-test");
+        std::fs::create_dir_all(&root).expect("create root");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("create domain");
+        std::fs::create_dir_all(&append_path).expect("create append");
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
+        let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
+
+        let history = build_history_batches(
             &arena,
             &resolved,
             &frozen,
             true,
             &FxHashMap::default(),
             &mut FxHashSet::default(),
+            &domain_store,
+            &append_store,
         )
-        .expect("history rows")
-        .rows
-        .into_iter()
-        .filter(|row| {
-            row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES
-                || row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES
-        })
-        .collect();
-        let _ = std::fs::remove_dir_all(&test_root);
+        .expect("history batches");
+        domain_store
+            .write_batch_no_wal_bulk(history.domain_wb)
+            .expect("commit domain");
+        append_store
+            .write_batch_no_wal_bulk(history.append_wb)
+            .expect("commit append");
 
         let object_rows: std::collections::HashMap<Vec<u8>, ObjectCollectionActivityEntry> =
-            history_rows
-                .iter()
-                .filter(|row| row.cf_name == CF_OBJECT_COLLECTION_ACTIVITIES)
-                .map(|row| {
+            domain_store
+                .iterator_cf(
+                    domain_store.cf(CF_OBJECT_COLLECTION_ACTIVITIES),
+                    IteratorMode::Start,
+                )
+                .map(|item| {
+                    let (key, value) = item.expect("iterator item");
                     (
-                        row.key.clone(),
-                        bincode::deserialize(&row.value)
+                        key.to_vec(),
+                        bincode::deserialize(&value)
                             .expect("deserialize object collection activity"),
                     )
                 })
                 .collect();
         let identity_rows: std::collections::HashMap<Vec<u8>, ObjectCollectionActivityEntry> =
-            history_rows
-                .iter()
-                .filter(|row| row.cf_name == CF_IDENTITY_COLLECTION_ACTIVITIES)
-                .map(|row| {
+            domain_store
+                .iterator_cf(
+                    domain_store.cf(CF_IDENTITY_COLLECTION_ACTIVITIES),
+                    IteratorMode::Start,
+                )
+                .map(|item| {
+                    let (key, value) = item.expect("iterator item");
                     (
-                        row.key.clone(),
-                        bincode::deserialize(&row.value)
+                        key.to_vec(),
+                        bincode::deserialize(&value)
                             .expect("deserialize identity collection activity"),
                     )
                 })
                 .collect();
+        let _ = std::fs::remove_dir_all(&root);
 
         let cluster_mint_key = keys::encode_nft_collection_activity_key(
             &cluster_id,
@@ -6037,8 +6228,22 @@ mod tests {
     fn prepare_finalize_artifacts_matches_direct_finalize_components() {
         let mut runtime = BulkBuildRuntimeState::default();
         let block = bulk_build_addr_tx_fixture();
+        let root = unique_temp_test_dir("bulk-build-finalize-artifacts-test");
+        std::fs::create_dir_all(&root).expect("create root");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("create domain");
+        std::fs::create_dir_all(&append_path).expect("create append");
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
+        let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
         runtime
-            .apply_blocks_hex(std::slice::from_ref(&block), true, &FxHashMap::default())
+            .apply_blocks_hex(
+                std::slice::from_ref(&block),
+                true,
+                &FxHashMap::default(),
+                &domain_store,
+                &append_store,
+            )
             .unwrap();
 
         let direct_activity_rows = runtime.activity_stats.build_rows().unwrap();
@@ -6050,6 +6255,7 @@ mod tests {
         assert_eq!(prepared.activity_sealed_rows, direct_activity_rows);
         assert_eq!(prepared.chain_sealed_rows, direct_chain_rows);
         assert_eq!(prepared.final_snapshot_rows, direct_snapshot_rows);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -6507,57 +6713,84 @@ mod tests {
         let resolved = seq.resolve(&arena).expect("resolved txs");
         let frozen = interner.snapshot_for_reads();
 
+        let root = unique_temp_test_dir("bulk-build-lock-dedup-test");
+        std::fs::create_dir_all(&root).expect("create root");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("create domain");
+        std::fs::create_dir_all(&append_path).expect("create append");
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
+        let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
+
         let mut written_ids = FxHashSet::default();
 
-        // First call — should emit lock script rows.
-        let result1 = build_history_rows(
+        // First call — should emit lock script rows via the domain WriteBatch.
+        let result1 = build_history_batches(
             &arena,
             &resolved,
             &frozen,
             true,
             &FxHashMap::default(),
             &mut written_ids,
+            &domain_store,
+            &append_store,
         )
         .expect("first build");
-        let lock_rows_1: Vec<_> = result1
-            .rows
-            .iter()
-            .filter(|r| r.cf_name == CF_LOCK_SCRIPTS)
-            .collect();
+
+        // Commit first batch and count lock script entries in the store.
+        domain_store
+            .write_batch_no_wal_bulk(result1.domain_wb)
+            .expect("commit domain");
+        append_store
+            .write_batch_no_wal_bulk(result1.append_wb)
+            .expect("commit append");
+
+        let lock_count_after_first: usize = domain_store
+            .iterator_cf(domain_store.cf(CF_LOCK_SCRIPTS), IteratorMode::Start)
+            .count();
         assert!(
-            !lock_rows_1.is_empty(),
+            lock_count_after_first > 0,
             "first call should emit lock script rows"
         );
-        let first_count = lock_rows_1.len();
         let set_size_after_first = written_ids.len();
-        assert_eq!(set_size_after_first, first_count);
+        assert_eq!(set_size_after_first, lock_count_after_first);
 
         // Second call with same arena/resolved/frozen and same set —
-        // should emit zero lock script rows since all lock_hash_ids are
+        // should emit zero NEW lock script rows since all lock_hash_ids are
         // already in written_ids.
-        let result2 = build_history_rows(
+        let result2 = build_history_batches(
             &arena,
             &resolved,
             &frozen,
             true,
             &FxHashMap::default(),
             &mut written_ids,
+            &domain_store,
+            &append_store,
         )
         .expect("second build");
-        let lock_rows_2: Vec<_> = result2
-            .rows
-            .iter()
-            .filter(|r| r.cf_name == CF_LOCK_SCRIPTS)
-            .collect();
+
+        // Commit second batch.
+        domain_store
+            .write_batch_no_wal_bulk(result2.domain_wb)
+            .expect("commit domain 2");
+        append_store
+            .write_batch_no_wal_bulk(result2.append_wb)
+            .expect("commit append 2");
+
+        // Lock script count should not have grown (same keys, even if overwritten).
+        let lock_count_after_second: usize = domain_store
+            .iterator_cf(domain_store.cf(CF_LOCK_SCRIPTS), IteratorMode::Start)
+            .count();
         assert_eq!(
-            lock_rows_2.len(),
-            0,
-            "second call should emit zero lock script rows for already-seen locks"
+            lock_count_after_second, lock_count_after_first,
+            "second call should not add new lock script entries"
         );
         assert_eq!(
             written_ids.len(),
             set_size_after_first,
             "set should not grow"
         );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -8,8 +8,6 @@ use ckbadger_store::{
     CF_BLOCK_HEADERS, CF_CELLS, CF_LIVE_CELLS,
 };
 
-use super::PendingFlush;
-
 #[doc(hidden)]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MaterializationReport {
@@ -193,9 +191,9 @@ pub(crate) struct FlushResult {
 
 /// Flush materialized rows to RocksDB via `StoreBatch` (test-only path).
 ///
-/// The production flush pipeline uses `prepare_flush` + `write_batch_no_wal_bulk`
-/// directly, bypassing `StoreBatch`.  This function is retained for its test
-/// coverage of `CfWritePolicy` validation.
+/// The production flush pipeline builds WriteBatch pairs directly in
+/// `build_history_batches_for_block` and commits via `write_batch_no_wal_bulk`.
+/// This function is retained for its test coverage of `CfWritePolicy` validation.
 #[cfg(test)]
 pub(crate) fn flush_rows_to_stores(
     domain_store: &CkbadgerStore,
@@ -329,8 +327,8 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
     Ok(report)
 }
 
-/// A WriteBatch pair ready for sequential commit.  Built by `prepare_flush`
-/// on the prepare thread, consumed by the commit thread.
+/// A WriteBatch pair ready for sequential commit.  Built directly by
+/// `build_history_batches_for_block` during history materialization.
 pub(crate) struct PreparedBatch {
     pub(crate) append_batch: rocksdb::WriteBatch,
     pub(crate) domain_batch: rocksdb::WriteBatch,
@@ -346,6 +344,9 @@ pub(crate) struct PreparedBatch {
 /// - Single pass over each row vector.
 ///
 /// The returned WriteBatch objects are ready for `store.write_batch_no_wal_bulk()`.
+///
+/// Retained for test coverage of the MaterializedRow -> WriteBatch conversion path.
+#[cfg(test)]
 pub(crate) fn prepare_flush(
     domain_store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
@@ -388,7 +389,7 @@ pub(crate) struct FlushChannelStats {
 }
 
 pub(crate) struct FlushChannelHandle {
-    tx: tokio::sync::mpsc::Sender<PendingFlush>,
+    tx: tokio::sync::mpsc::Sender<PreparedBatch>,
     worker_handle: tokio::task::JoinHandle<Result<FlushChannelStats>>,
     flush_ms_rx: tokio::sync::watch::Receiver<f64>,
 }
@@ -411,7 +412,7 @@ impl FlushChannelHandle {
         domain_store: Arc<CkbadgerStore>,
         append_only_store: Arc<CkbadgerStore>,
     ) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::channel::<PendingFlush>(depth);
+        let (tx, rx) = tokio::sync::mpsc::channel::<PreparedBatch>(depth);
         let (flush_ms_tx, flush_ms_rx) = tokio::sync::watch::channel(0.0_f64);
         let worker_handle = tokio::task::spawn_blocking(move || {
             Self::flush_worker(rx, domain_store, append_only_store, flush_ms_tx)
@@ -424,77 +425,39 @@ impl FlushChannelHandle {
     }
 
     fn flush_worker(
-        mut rx: tokio::sync::mpsc::Receiver<PendingFlush>,
+        mut rx: tokio::sync::mpsc::Receiver<PreparedBatch>,
         domain_store: Arc<CkbadgerStore>,
         append_only_store: Arc<CkbadgerStore>,
         flush_ms_tx: tokio::sync::watch::Sender<f64>,
     ) -> Result<FlushChannelStats> {
-        // Commit channel: prepare thread sends WriteBatch pairs, commit thread
-        // writes them sequentially to RocksDB.  Depth=2 lets prepare stay
-        // 1-2 batches ahead without unbounded buffering.
-        let (commit_tx, commit_rx) = std::sync::mpsc::sync_channel::<PreparedBatch>(2);
+        // Commit loop: receives pre-built WriteBatch pairs and writes them
+        // sequentially to RocksDB. No prepare step needed — batches arrive
+        // ready to commit.
+        let mut stats = FlushChannelStats::default();
+        while let Some(prepared) = rx.blocking_recv() {
+            let commit_started = std::time::Instant::now();
 
-        // Commit thread: sequential disk writes — never contends with itself.
-        let commit_handle = {
-            let ds = Arc::clone(&domain_store);
-            let aos = Arc::clone(&append_only_store);
-            std::thread::Builder::new()
-                .name("flush-commit".into())
-                .spawn(move || -> Result<FlushChannelStats> {
-                    let mut stats = FlushChannelStats::default();
-                    while let Ok(prepared) = commit_rx.recv() {
-                        let commit_started = std::time::Instant::now();
+            if !prepared.append_batch.is_empty() {
+                append_only_store.write_batch_no_wal_bulk(prepared.append_batch)?;
+            }
+            if !prepared.domain_batch.is_empty() {
+                domain_store.write_batch_no_wal_bulk(prepared.domain_batch)?;
+            }
 
-                        if !prepared.append_batch.is_empty() {
-                            aos.write_batch_no_wal_bulk(prepared.append_batch)?;
-                        }
-                        if !prepared.domain_batch.is_empty() {
-                            ds.write_batch_no_wal_bulk(prepared.domain_batch)?;
-                        }
-
-                        let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
-                        stats.total_history_rows += prepared.history_count;
-                        stats.total_sealed_rows += prepared.sealed_count;
-                        stats.flush_count += 1;
-                        stats.total_commit_ms += commit_ms;
-                        stats.last_flush_ms = commit_ms;
-                        let _ = flush_ms_tx.send(commit_ms);
-                    }
-                    Ok(stats)
-                })
-                .map_err(|e| anyhow!("failed to spawn flush-commit thread: {}", e))?
-        };
-
-        // Prepare loop: runs on the spawn_blocking thread.
-        // Builds WriteBatch from MaterializedRows, sends to commit thread.
-        let mut prepare_total_ms = 0.0_f64;
-        while let Some(pending) = rx.blocking_recv() {
-            let prepare_started = std::time::Instant::now();
-            let prepared = prepare_flush(
-                &domain_store,
-                &append_only_store,
-                pending.history_rows,
-                pending.sealed_rows,
-            )?;
-            prepare_total_ms += prepare_started.elapsed().as_secs_f64() * 1000.0;
-
-            commit_tx
-                .send(prepared)
-                .map_err(|_| anyhow!("flush commit thread terminated unexpectedly"))?;
+            let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
+            stats.total_history_rows += prepared.history_count;
+            stats.total_sealed_rows += prepared.sealed_count;
+            stats.flush_count += 1;
+            stats.total_commit_ms += commit_ms;
+            stats.last_flush_ms = commit_ms;
+            let _ = flush_ms_tx.send(commit_ms);
         }
-
-        // Signal commit thread to drain and finish.
-        drop(commit_tx);
-        let mut stats = commit_handle
-            .join()
-            .map_err(|e| anyhow!("flush commit thread panicked: {:?}", e))??;
-        stats.total_prepare_ms = prepare_total_ms;
         Ok(stats)
     }
 
-    pub(crate) async fn send(&self, pending: PendingFlush) -> Result<()> {
+    pub(crate) async fn send(&self, prepared: PreparedBatch) -> Result<()> {
         self.tx
-            .send(pending)
+            .send(prepared)
             .await
             .map_err(|_| anyhow!("flush channel worker has terminated unexpectedly"))
     }
@@ -736,22 +699,25 @@ mod tests {
                 transactions_count: 1,
             };
 
-            let pending = PendingFlush {
-                history_rows: vec![
-                    MaterializedRow::new(
-                        CF_CELLS,
-                        outpoint_key.to_vec(),
-                        bincode::serialize(&cell_info).unwrap(),
-                    ),
-                    MaterializedRow::new(
-                        CF_BLOCK_HEADERS,
-                        header_key.to_vec(),
-                        bincode::serialize(&block_header).unwrap(),
-                    ),
-                ],
-                sealed_rows: vec![],
+            let mut append_batch = rocksdb::WriteBatch::default();
+            let mut domain_batch = rocksdb::WriteBatch::default();
+            append_batch.put_cf(
+                append_store.cf(CF_CELLS),
+                outpoint_key,
+                bincode::serialize(&cell_info).unwrap(),
+            );
+            domain_batch.put_cf(
+                domain_store.cf(CF_BLOCK_HEADERS),
+                header_key,
+                bincode::serialize(&block_header).unwrap(),
+            );
+            let prepared = PreparedBatch {
+                append_batch,
+                domain_batch,
+                history_count: 2,
+                sealed_count: 0,
             };
-            handle.send(pending).await.unwrap();
+            handle.send(prepared).await.unwrap();
         }
 
         let stats = handle.close_and_wait().await.unwrap();
@@ -820,15 +786,15 @@ mod tests {
 
         for i in 0u8..10 {
             let outpoint_key = keys::encode_outpoint(&[i; 32], 0);
-            let pending = PendingFlush {
-                history_rows: vec![MaterializedRow::new(
-                    CF_CELLS,
-                    outpoint_key.to_vec(),
-                    cell_bytes.clone(),
-                )],
-                sealed_rows: vec![],
+            let mut append_batch = rocksdb::WriteBatch::default();
+            append_batch.put_cf(append_store.cf(CF_CELLS), outpoint_key, &cell_bytes);
+            let prepared = PreparedBatch {
+                append_batch,
+                domain_batch: rocksdb::WriteBatch::default(),
+                history_count: 1,
+                sealed_count: 0,
             };
-            handle.send(pending).await.unwrap();
+            handle.send(prepared).await.unwrap();
         }
 
         let stats = handle.close_and_wait().await.unwrap();
