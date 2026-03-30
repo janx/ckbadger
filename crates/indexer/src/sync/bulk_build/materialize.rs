@@ -36,6 +36,16 @@ impl MaterializedRow {
     }
 }
 
+/// Rows produced by an owner's `build_final_rows()` method, split by write policy.
+/// `sealed_rows` are daily/hourly aggregates (SealedAggregate policy).
+/// `snapshot_rows` are current-state data (FinalSnapshot policy).
+#[derive(Debug, Default, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct OwnerFinalRows {
+    pub(crate) sealed_rows: Vec<MaterializedRow>,
+    pub(crate) snapshot_rows: Vec<MaterializedRow>,
+}
+
 pub(crate) struct Materializer<'a> {
     domain_store: &'a CkbadgerStore,
     append_only_store: &'a CkbadgerStore,
@@ -102,6 +112,16 @@ impl<'a> Materializer<'a> {
 
     pub(crate) fn finish(self) -> MaterializationReport {
         self.report
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn merge_report(&mut self, other: MaterializationReport) {
+        self.report.streamed_history_rows += other.streamed_history_rows;
+        self.report.sealed_aggregate_rows += other.sealed_aggregate_rows;
+        self.report.final_snapshot_rows += other.final_snapshot_rows;
+        self.report.history_flushes += other.history_flushes;
+        self.report.sealed_aggregate_flushes += other.sealed_aggregate_flushes;
+        self.report.final_snapshot_flushes += other.final_snapshot_flushes;
     }
 
     fn write_rows(
