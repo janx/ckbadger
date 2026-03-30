@@ -502,6 +502,13 @@ impl BulkBuildEngine {
             flush_stats.total_sealed_rows,
             flush_stats.flush_count,
         );
+        info!(
+            "flush pipeline: prepare={:.1}s commit={:.1}s flushes={} rows={}",
+            flush_stats.total_prepare_ms / 1000.0,
+            flush_stats.total_commit_ms / 1000.0,
+            flush_stats.flush_count,
+            flush_stats.total_history_rows + flush_stats.total_sealed_rows,
+        );
 
         // Destructure runtime to get owned fields for explicit sub-phase control.
         let BulkBuildRuntimeState {
