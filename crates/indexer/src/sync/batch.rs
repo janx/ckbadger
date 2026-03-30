@@ -3249,7 +3249,6 @@ impl Indexer {
             inputs = batch_input_count,
             "Batch write breakdown"
         );
-        let thread_ms = [0.0; 10];
         Ok(BatchWriteMetrics {
             commit_ms: write_commit_ms,
             write_ms,
@@ -3258,16 +3257,6 @@ impl Indexer {
             txs: u64::try_from(batch_tx_count).expect("parsed batch tx count exceeds u64"),
             cells: u64::try_from(batch_cell_count).expect("parsed batch cell count exceeds u64"),
             inputs: u64::try_from(batch_input_count).expect("parsed batch input count exceeds u64"),
-            t1_ms: thread_ms[0],
-            t1b_ms: thread_ms[1],
-            t2_ms: thread_ms[2],
-            t4_ms: thread_ms[3],
-            t5_ms: thread_ms[4],
-            t6a_ms: thread_ms[5],
-            t6b_ms: thread_ms[6],
-            t7_ms: thread_ms[7],
-            t_act_ms: thread_ms[8],
-            t_track_ms: thread_ms[9],
         })
     }
 

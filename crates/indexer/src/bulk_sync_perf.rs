@@ -48,16 +48,6 @@ pub struct BatchSample {
     pub build_ms: f64,
     pub prefetch_ms: f64,
     pub finalize_ms: f64,
-    pub t1_ms: f64,
-    pub t1b_ms: f64,
-    pub t2_ms: f64,
-    pub t4_ms: f64,
-    pub t5_ms: f64,
-    pub t6a_ms: f64,
-    pub t6b_ms: f64,
-    pub t7_ms: f64,
-    pub t_act_ms: f64,
-    pub t_track_ms: f64,
     // Bulk build sub-step timings (zero when engine=pipeline)
     pub fetch_ms: f64,
     pub facts_ms: f64,
@@ -131,16 +121,6 @@ impl BatchSample {
             build_ms: 0.0,
             prefetch_ms: 0.0,
             finalize_ms: 0.0,
-            t1_ms: 0.0,
-            t1b_ms: 0.0,
-            t2_ms: 0.0,
-            t4_ms: 0.0,
-            t5_ms: 0.0,
-            t6a_ms: 0.0,
-            t6b_ms: 0.0,
-            t7_ms: 0.0,
-            t_act_ms: 0.0,
-            t_track_ms: 0.0,
             fetch_ms: 0.0,
             facts_ms: 0.0,
             resolve_ms: 0.0,
@@ -2173,8 +2153,6 @@ mod tests {
         assert!(!samples.contains("\"nft_output_scan_ms\""));
         assert!(!samples.contains("\"nft_input_scan_ms\""));
         assert!(samples.contains("\"build_ms\""));
-        assert!(samples.contains("\"t1_ms\""));
-        assert!(samples.contains("\"t_act_ms\""));
     }
 
     #[test]
@@ -2189,8 +2167,6 @@ mod tests {
             parse_ms: 11.0,
             precompute_ms: 22.0,
             build_ms: 44.0,
-            t1_ms: 55.0,
-            t_act_ms: 66.0,
             ..test_batch_sample(10, 1.0, 40.0, 100, 4, 1)
         })
         .unwrap();
@@ -2203,7 +2179,6 @@ mod tests {
 
         let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
         assert!(!report.contains("nft_precompute_ms"));
-        assert!(!report.contains("t_act_ms"));
     }
 
     #[test]
