@@ -519,21 +519,13 @@ impl BulkBuildEngine {
                 return Err(err);
             }
         };
-        let flush_stats = flush_drain.wait().await?;
-        materializer.add_external_counts(
-            flush_stats.total_history_rows,
-            flush_stats.total_sealed_rows,
-            flush_stats.flush_count,
-        );
-        info!(
-            "flush pipeline: prepare={:.1}s commit={:.1}s flushes={} rows={}",
-            flush_stats.total_prepare_ms / 1000.0,
-            flush_stats.total_commit_ms / 1000.0,
-            flush_stats.flush_count,
-            flush_stats.total_history_rows + flush_stats.total_sealed_rows,
-        );
+        // Run flush drain and materialize phases concurrently.
+        // They write to disjoint CF sets — safe for concurrent RocksDB writes.
+        let domain_store_arc = indexer.writer.store().clone();
+        let append_only_arc = Arc::clone(&indexer.append_only_store);
+        let perf_stats = indexer.bulk_build_perf.clone();
+        let finalize_started_copy = finalize_started;
 
-        // Destructure runtime to get owned fields.
         let BulkBuildRuntimeState {
             owners,
             hodl_tracker,
@@ -541,20 +533,40 @@ impl BulkBuildEngine {
             ..
         } = runtime;
 
-        // Phases 1-11: materialize sealed aggregates, snapshot, owners, metadata
-        let materialize_report = materialize_finalize_phases(
-            indexer.writer.store().as_ref(),
-            indexer.append_only_store.as_ref(),
-            prepared_finalize,
-            owners,
-            hodl_tracker,
-            cell_dist_tracker,
-            &indexer.bulk_build_perf,
-            finalize_started,
-        )?;
+        let materialize_handle = tokio::task::spawn_blocking(move || {
+            materialize_finalize_phases(
+                domain_store_arc.as_ref(),
+                append_only_arc.as_ref(),
+                prepared_finalize,
+                owners,
+                hodl_tracker,
+                cell_dist_tracker,
+                &perf_stats,
+                finalize_started_copy,
+            )
+        });
 
-        // Merge materialization accounting
+        let (drain_result, materialize_result) =
+            tokio::join!(flush_drain.wait(), materialize_handle,);
+
+        let flush_stats = drain_result?;
+        let materialize_report = materialize_result
+            .map_err(|e| anyhow!("materialize finalize task panicked: {e}"))??;
+
+        materializer.add_external_counts(
+            flush_stats.total_history_rows,
+            flush_stats.total_sealed_rows,
+            flush_stats.flush_count,
+        );
         materializer.merge_report(materialize_report);
+
+        info!(
+            "flush pipeline: prepare={:.1}s commit={:.1}s flushes={} rows={}",
+            flush_stats.total_prepare_ms / 1000.0,
+            flush_stats.total_commit_ms / 1000.0,
+            flush_stats.flush_count,
+            flush_stats.total_history_rows + flush_stats.total_sealed_rows,
+        );
 
         // Phase 11: memtable flush
         {
