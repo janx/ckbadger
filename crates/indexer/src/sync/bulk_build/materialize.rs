@@ -351,9 +351,14 @@ pub(crate) struct PreparedBatch {
 pub(crate) fn prepare_flush(
     domain_store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
-    history_rows: Vec<MaterializedRow>,
-    sealed_rows: Vec<MaterializedRow>,
+    mut history_rows: Vec<MaterializedRow>,
+    mut sealed_rows: Vec<MaterializedRow>,
 ) -> Result<PreparedBatch> {
+    // Sort by (cf_name, key) so RocksDB memtable skiplist inserts are
+    // near-sequential within each CF, improving CPU cache hit rate.
+    history_rows.sort_unstable_by(|a, b| a.cf_name.cmp(b.cf_name).then_with(|| a.key.cmp(&b.key)));
+    sealed_rows.sort_unstable_by(|a, b| a.cf_name.cmp(b.cf_name).then_with(|| a.key.cmp(&b.key)));
+
     let mut append_batch = rocksdb::WriteBatch::default();
     let mut domain_batch = rocksdb::WriteBatch::default();
 
@@ -450,12 +455,24 @@ impl FlushChannelHandle {
             let prepare_ms = flush_started.elapsed().as_secs_f64() * 1000.0;
             let commit_started = std::time::Instant::now();
 
-            if !prepared.append_batch.is_empty() {
-                append_only_store.write_batch_no_wal_bulk(prepared.append_batch)?;
-            }
-            if !prepared.domain_batch.is_empty() {
-                domain_store.write_batch_no_wal_bulk(prepared.domain_batch)?;
-            }
+            // Commit append-only and domain stores in parallel — they are
+            // independent RocksDB instances with separate write mutexes.
+            let append_batch = prepared.append_batch;
+            let domain_batch = prepared.domain_batch;
+            std::thread::scope(|s| -> Result<()> {
+                let append_handle = if !append_batch.is_empty() {
+                    Some(s.spawn(|| append_only_store.write_batch_no_wal_bulk(append_batch)))
+                } else {
+                    None
+                };
+                if !domain_batch.is_empty() {
+                    domain_store.write_batch_no_wal_bulk(domain_batch)?;
+                }
+                if let Some(handle) = append_handle {
+                    handle.join().expect("append commit thread panicked")?;
+                }
+                Ok(())
+            })?;
 
             let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
             let flush_ms = flush_started.elapsed().as_secs_f64() * 1000.0;
