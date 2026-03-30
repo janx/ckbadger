@@ -130,16 +130,12 @@ impl AddressOwner {
     }
 }
 
-impl BulkReducer for AddressOwner {
-    fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
-        self.apply_tx_with_deltas(tx, ctx).map(|_| ())
-    }
-
-    fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
+impl AddressOwner {
+    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
         let mut lock_hashes: Vec<&Vec<u8>> = self.balances.keys().collect();
         lock_hashes.sort();
 
-        let rows = lock_hashes
+        lock_hashes
             .into_iter()
             .map(|lock_hash| {
                 let balance = self
@@ -152,8 +148,25 @@ impl BulkReducer for AddressOwner {
                     bincode::serialize(balance)?,
                 ))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()
+    }
 
+    #[allow(dead_code)]
+    pub(crate) fn build_final_rows(&self) -> Result<super::super::materialize::OwnerFinalRows> {
+        Ok(super::super::materialize::OwnerFinalRows {
+            sealed_rows: Vec::new(),
+            snapshot_rows: self.build_snapshot_rows()?,
+        })
+    }
+}
+
+impl BulkReducer for AddressOwner {
+    fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
+        self.apply_tx_with_deltas(tx, ctx).map(|_| ())
+    }
+
+    fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
+        let rows = self.build_snapshot_rows()?;
         materializer.materialize_final_snapshot(&rows)
     }
 }

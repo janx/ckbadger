@@ -61,6 +61,101 @@ pub(crate) struct ObjectOwner {
 
 impl BulkReducer for ObjectOwner {
     fn flush_sealed(&mut self, materializer: &mut Materializer<'_>) -> Result<()> {
+        let sealed_rows = self.build_sealed_rows();
+        if !sealed_rows.is_empty() {
+            materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
+        }
+        Ok(())
+    }
+
+    fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
+        let date_yyyymmdd = keys::timestamp_ms_to_date(tx.timestamp_ms);
+        let mnft_tokens_consumed_in_tx = tx
+            .resolved_inputs
+            .iter()
+            .filter_map(|input| match input.protocol_facts.as_ref() {
+                Some(CellProtocolFacts::MnftToken(token)) => Some(token.token_id.clone()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let dotbit_accounts_consumed_in_tx = tx
+            .resolved_inputs
+            .iter()
+            .filter_map(|input| match input.protocol_facts.as_ref() {
+                Some(CellProtocolFacts::Dotbit(dotbit)) => Some((
+                    dotbit.account_id.to_vec(),
+                    ctx.resolve_identity(input.lock_script_hash_id).to_vec(),
+                )),
+                _ => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        for input in &tx.resolved_inputs {
+            if let Some(collection_id) =
+                classify_nft_collection_from_protocol(&input.protocol_facts)
+            {
+                let entry = self
+                    .object_daily_deltas
+                    .entry((collection_id, date_yyyymmdd))
+                    .or_insert((0, 0));
+                entry.0 -= i128::from(input.capacity);
+                entry.1 -= i128::from(input.occupied_capacity);
+            }
+            if let Some(CellProtocolFacts::Spore(spore)) = input.protocol_facts.as_ref() {
+                if !spore.is_did {
+                    self.record_spore_daily_delta(
+                        spore.spore_id.as_slice(),
+                        spore.cluster_id.as_ref().map(|id| id.as_slice()),
+                        date_yyyymmdd,
+                        -i128::from(input.capacity),
+                        -i128::from(input.occupied_capacity),
+                    );
+                }
+            }
+            self.apply_input(input)?;
+        }
+
+        for cell in tx.cells.iter() {
+            if let Some(collection_id) = classify_nft_collection_from_protocol(&cell.protocol_facts)
+            {
+                let entry = self
+                    .object_daily_deltas
+                    .entry((collection_id, date_yyyymmdd))
+                    .or_insert((0, 0));
+                entry.0 += i128::from(cell.capacity);
+                entry.1 += i128::from(cell.occupied_capacity);
+            }
+            if let Some(CellProtocolFacts::Spore(spore)) = cell.protocol_facts.as_ref() {
+                if !spore.is_did {
+                    self.record_spore_daily_delta(
+                        spore.spore_id.as_slice(),
+                        spore.cluster_id.as_ref().map(|id| id.as_slice()),
+                        date_yyyymmdd,
+                        i128::from(cell.capacity),
+                        i128::from(cell.occupied_capacity),
+                    );
+                }
+            }
+            self.apply_output(
+                cell,
+                ctx,
+                tx,
+                &mnft_tokens_consumed_in_tx,
+                &dotbit_accounts_consumed_in_tx,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
+        let final_rows = self.build_snapshot_rows()?;
+        materializer.materialize_final_snapshot(&final_rows)
+    }
+}
+
+impl ObjectOwner {
+    fn build_sealed_rows(&self) -> Vec<MaterializedRow> {
         let mut sealed_rows: Vec<MaterializedRow> = self
             .stats_spore_rows
             .iter()
@@ -159,93 +254,10 @@ impl BulkReducer for ObjectOwner {
                     )
                 }),
         );
-        if !sealed_rows.is_empty() {
-            materializer.stream_sealed_aggregate_rows(&sealed_rows)?;
-        }
-        Ok(())
+        sealed_rows
     }
 
-    fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
-        let date_yyyymmdd = keys::timestamp_ms_to_date(tx.timestamp_ms);
-        let mnft_tokens_consumed_in_tx = tx
-            .resolved_inputs
-            .iter()
-            .filter_map(|input| match input.protocol_facts.as_ref() {
-                Some(CellProtocolFacts::MnftToken(token)) => Some(token.token_id.clone()),
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
-        let dotbit_accounts_consumed_in_tx = tx
-            .resolved_inputs
-            .iter()
-            .filter_map(|input| match input.protocol_facts.as_ref() {
-                Some(CellProtocolFacts::Dotbit(dotbit)) => Some((
-                    dotbit.account_id.to_vec(),
-                    ctx.resolve_identity(input.lock_script_hash_id).to_vec(),
-                )),
-                _ => None,
-            })
-            .collect::<BTreeMap<_, _>>();
-
-        for input in &tx.resolved_inputs {
-            if let Some(collection_id) =
-                classify_nft_collection_from_protocol(&input.protocol_facts)
-            {
-                let entry = self
-                    .object_daily_deltas
-                    .entry((collection_id, date_yyyymmdd))
-                    .or_insert((0, 0));
-                entry.0 -= i128::from(input.capacity);
-                entry.1 -= i128::from(input.occupied_capacity);
-            }
-            if let Some(CellProtocolFacts::Spore(spore)) = input.protocol_facts.as_ref() {
-                if !spore.is_did {
-                    self.record_spore_daily_delta(
-                        spore.spore_id.as_slice(),
-                        spore.cluster_id.as_ref().map(|id| id.as_slice()),
-                        date_yyyymmdd,
-                        -i128::from(input.capacity),
-                        -i128::from(input.occupied_capacity),
-                    );
-                }
-            }
-            self.apply_input(input)?;
-        }
-
-        for cell in tx.cells.iter() {
-            if let Some(collection_id) = classify_nft_collection_from_protocol(&cell.protocol_facts)
-            {
-                let entry = self
-                    .object_daily_deltas
-                    .entry((collection_id, date_yyyymmdd))
-                    .or_insert((0, 0));
-                entry.0 += i128::from(cell.capacity);
-                entry.1 += i128::from(cell.occupied_capacity);
-            }
-            if let Some(CellProtocolFacts::Spore(spore)) = cell.protocol_facts.as_ref() {
-                if !spore.is_did {
-                    self.record_spore_daily_delta(
-                        spore.spore_id.as_slice(),
-                        spore.cluster_id.as_ref().map(|id| id.as_slice()),
-                        date_yyyymmdd,
-                        i128::from(cell.capacity),
-                        i128::from(cell.occupied_capacity),
-                    );
-                }
-            }
-            self.apply_output(
-                cell,
-                ctx,
-                tx,
-                &mnft_tokens_consumed_in_tx,
-                &dotbit_accounts_consumed_in_tx,
-            )?;
-        }
-
-        Ok(())
-    }
-
-    fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
+    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
         let mut final_rows = Vec::new();
         for (id, entry) in &self.spore_entries {
             final_rows.push(MaterializedRow::new(
@@ -337,12 +349,17 @@ impl BulkReducer for ObjectOwner {
                 count.to_le_bytes().to_vec(),
             ));
         }
-
-        materializer.materialize_final_snapshot(&final_rows)
+        Ok(final_rows)
     }
-}
 
-impl ObjectOwner {
+    #[allow(dead_code)]
+    pub(crate) fn build_final_rows(&self) -> Result<super::super::materialize::OwnerFinalRows> {
+        Ok(super::super::materialize::OwnerFinalRows {
+            sealed_rows: self.build_sealed_rows(),
+            snapshot_rows: self.build_snapshot_rows()?,
+        })
+    }
+
     pub(crate) fn estimated_bytes(&self) -> u64 {
         crate::sync::bulk_build::accounting::btree_map_serialized_bytes(&self.spore_entries)
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(&self.mnft_entries)

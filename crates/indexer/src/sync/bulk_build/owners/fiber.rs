@@ -20,23 +20,8 @@ pub(crate) struct FiberOwner {
     channel_by_commitment: BTreeMap<Vec<u8>, Vec<u8>>,
 }
 
-impl BulkReducer for FiberOwner {
-    fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
-        let summary = FiberTxSummary::from_tx(tx, ctx)?;
-        let Some(event) = summary.classify_event() else {
-            return Ok(());
-        };
-
-        match event {
-            FiberEvent::ChannelOpen => self.handle_channel_open(tx, &summary),
-            FiberEvent::ChannelClose => self.handle_channel_close(tx, &summary),
-            FiberEvent::ForceClose => self.handle_force_close(tx, &summary),
-            FiberEvent::Settlement => self.handle_settlement(tx, &summary),
-            FiberEvent::CommitmentRevocation => self.handle_commitment_revocation(tx, &summary),
-        }
-    }
-
-    fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
+impl FiberOwner {
+    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
         let mut rows = Vec::new();
 
         for (channel_id, channel) in &self.channels {
@@ -73,6 +58,36 @@ impl BulkReducer for FiberOwner {
             }
         }
 
+        Ok(rows)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn build_final_rows(&self) -> Result<super::super::materialize::OwnerFinalRows> {
+        Ok(super::super::materialize::OwnerFinalRows {
+            sealed_rows: Vec::new(),
+            snapshot_rows: self.build_snapshot_rows()?,
+        })
+    }
+}
+
+impl BulkReducer for FiberOwner {
+    fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
+        let summary = FiberTxSummary::from_tx(tx, ctx)?;
+        let Some(event) = summary.classify_event() else {
+            return Ok(());
+        };
+
+        match event {
+            FiberEvent::ChannelOpen => self.handle_channel_open(tx, &summary),
+            FiberEvent::ChannelClose => self.handle_channel_close(tx, &summary),
+            FiberEvent::ForceClose => self.handle_force_close(tx, &summary),
+            FiberEvent::Settlement => self.handle_settlement(tx, &summary),
+            FiberEvent::CommitmentRevocation => self.handle_commitment_revocation(tx, &summary),
+        }
+    }
+
+    fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
+        let rows = self.build_snapshot_rows()?;
         materializer.materialize_final_snapshot(&rows)
     }
 }

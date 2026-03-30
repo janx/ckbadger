@@ -292,7 +292,7 @@ pub(crate) struct ScriptReferenceRollupState {
     pub(crate) families: Vec<(String, ScriptFamilyInfo)>,
 }
 
-fn build_script_reference_rollup_state(
+pub(crate) fn build_script_reference_rollup_state(
     store: &ckbadger_store::CkbadgerStore,
     mut reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
     reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
@@ -476,6 +476,7 @@ fn build_script_reference_rollup_state(
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn collect_script_reference_rollup_state(
     store: &ckbadger_store::CkbadgerStore,
     _append_only_store: &ckbadger_store::CkbadgerStore,

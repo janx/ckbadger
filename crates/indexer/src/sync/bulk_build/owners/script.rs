@@ -9,7 +9,7 @@ use ckbadger_store::{
 use rustc_hash::FxHashMap;
 
 use super::{BulkReducer, ReducerContext};
-use crate::db::writer::collect_script_reference_rollup_state;
+use crate::db::writer::build_script_reference_rollup_state;
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::facts::{CellFacts, ResolvedInputFacts, ResolvedTxFacts};
 use crate::sync::bulk_build::interner::IdentityInterner;
@@ -206,6 +206,161 @@ impl ScriptOwner {
         )?;
         Ok(())
     }
+
+    fn build_sealed_rows(&self) -> Vec<MaterializedRow> {
+        let mut daily_keys = self.daily_deltas.keys().collect::<Vec<_>>();
+        daily_keys.sort();
+
+        daily_keys
+            .into_iter()
+            .filter_map(|(code_hash, is_type, date)| {
+                let delta = self
+                    .daily_deltas
+                    .get(&(code_hash.clone(), *is_type, *date))
+                    .expect("sorted script daily key must exist");
+                (delta.owned_capacity_delta != 0 || delta.owned_knowledge_delta != 0).then_some(
+                    MaterializedRow::new(
+                        CF_STATS_SCRIPT,
+                        keys::encode_script_daily_key(code_hash, *is_type, *date).to_vec(),
+                        bincode::serialize(delta)
+                            .expect("script daily delta serialization must succeed"),
+                    ),
+                )
+            })
+            .collect::<Vec<_>>()
+    }
+
+    fn build_snapshot_rows(
+        &self,
+        domain_store: &CkbadgerStore,
+        _append_only_store: &CkbadgerStore,
+    ) -> Result<Vec<MaterializedRow>> {
+        let mut code_hashes: Vec<&Vec<u8>> = self.infos.keys().collect();
+        code_hashes.sort();
+
+        let mut all_rows = code_hashes
+            .into_iter()
+            .map(|code_hash| {
+                let mut info = self
+                    .infos
+                    .get(code_hash)
+                    .expect("sorted code hash must exist in script owner")
+                    .clone();
+
+                // Preserve label fields from existing store data (written by label import)
+                if let Ok(Some(existing)) = domain_store.get_script_info(code_hash) {
+                    if info.name.is_none() {
+                        info.name = existing.name;
+                    }
+                    if !info.deprecated {
+                        info.deprecated = existing.deprecated;
+                    }
+                    if info.category.is_none() {
+                        info.category = existing.category;
+                    }
+                    if info.website.is_none() {
+                        info.website = existing.website;
+                    }
+                    if info.description.is_none() {
+                        info.description = existing.description;
+                    }
+                }
+
+                Ok(MaterializedRow::new(
+                    CF_SCRIPT_INFO,
+                    code_hash.clone(),
+                    bincode::serialize(&info)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut reference_keys: Vec<&(Vec<u8>, u8)> = self.reference_infos.keys().collect();
+        reference_keys.sort();
+        let reference_rows = reference_keys
+            .into_iter()
+            .map(|(reference_hash, hash_type)| {
+                let info = self
+                    .reference_infos
+                    .get(&(reference_hash.clone(), *hash_type))
+                    .expect("sorted script reference key must exist in script owner");
+                Ok(MaterializedRow::new(
+                    CF_SCRIPT_REFERENCE_INFO,
+                    keys::encode_script_reference_key(*hash_type, reference_hash).to_vec(),
+                    bincode::serialize(info)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        all_rows.extend(reference_rows);
+
+        let mut mapping_keys = self.reference_infos.keys().cloned().collect::<Vec<_>>();
+        mapping_keys.sort();
+        let mut reference_mappings = Vec::with_capacity(self.reference_infos.len());
+        for (reference_hash, hash_type) in mapping_keys {
+            let version_hash = match hash_type {
+                0 | 2 | 4 => Some(reference_hash.clone()),
+                1 => self.type_reference_versions.get(&reference_hash).cloned().flatten(),
+                _ => bail!(
+                    "unsupported script reference hash_type during bulk-build materialization: reference_hash=0x{}, hash_type={}",
+                    hex::encode(&reference_hash),
+                    hash_type
+                ),
+            };
+            reference_mappings.push(((reference_hash, hash_type), version_hash));
+        }
+        for ((reference_hash, hash_type), version_hash) in &reference_mappings {
+            if let Some(version_hash) = version_hash {
+                all_rows.push(MaterializedRow::new(
+                    ckbadger_store::CF_SCRIPT_REFERENCE_TO_VERSION,
+                    keys::encode_script_reference_key(*hash_type, reference_hash).to_vec(),
+                    version_hash.clone(),
+                ));
+            }
+        }
+
+        // Build rollup state from in-memory data rather than reading from
+        // the store.  This allows build_snapshot_rows to produce correct
+        // version/family rows without requiring intermediate writes.
+        let reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo> = self
+            .reference_infos
+            .iter()
+            .map(|((h, ht), info)| ((h.clone(), *ht), info.clone()))
+            .collect();
+        let rollups = build_script_reference_rollup_state(
+            domain_store,
+            reference_mappings,
+            reference_info_map,
+        )?;
+
+        for (version_hash, info) in rollups.versions {
+            all_rows.push(MaterializedRow::new(
+                ckbadger_store::CF_SCRIPT_VERSIONS,
+                version_hash,
+                bincode::serialize(&info)?,
+            ));
+        }
+
+        for (family_id, info) in rollups.families {
+            all_rows.push(MaterializedRow::new(
+                ckbadger_store::CF_SCRIPT_FAMILIES,
+                family_id.into_bytes(),
+                bincode::serialize(&info)?,
+            ));
+        }
+
+        Ok(all_rows)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn build_final_rows(
+        &self,
+        domain_store: &CkbadgerStore,
+        append_only_store: &CkbadgerStore,
+    ) -> Result<super::super::materialize::OwnerFinalRows> {
+        Ok(super::super::materialize::OwnerFinalRows {
+            sealed_rows: self.build_sealed_rows(),
+            snapshot_rows: self.build_snapshot_rows(domain_store, append_only_store)?,
+        })
+    }
 }
 
 impl BulkReducer for ScriptOwner {
@@ -322,153 +477,19 @@ impl BulkReducer for ScriptOwner {
     }
 
     fn flush_sealed(&mut self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let mut daily_keys = self.daily_deltas.keys().collect::<Vec<_>>();
-        daily_keys.sort();
-
-        let rows = daily_keys
-            .into_iter()
-            .filter_map(|(code_hash, is_type, date)| {
-                let delta = self
-                    .daily_deltas
-                    .get(&(code_hash.clone(), *is_type, *date))
-                    .expect("sorted script daily key must exist");
-                (delta.owned_capacity_delta != 0 || delta.owned_knowledge_delta != 0).then_some(
-                    MaterializedRow::new(
-                        CF_STATS_SCRIPT,
-                        keys::encode_script_daily_key(code_hash, *is_type, *date).to_vec(),
-                        bincode::serialize(delta)
-                            .expect("script daily delta serialization must succeed"),
-                    ),
-                )
-            })
-            .collect::<Vec<_>>();
-
+        let rows = self.build_sealed_rows();
         if rows.is_empty() {
             return Ok(());
         }
-
         materializer.stream_sealed_aggregate_rows(&rows)
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let store = materializer.domain_store();
-        let mut code_hashes: Vec<&Vec<u8>> = self.infos.keys().collect();
-        code_hashes.sort();
-
-        let rows = code_hashes
-            .into_iter()
-            .map(|code_hash| {
-                let mut info = self
-                    .infos
-                    .get(code_hash)
-                    .expect("sorted code hash must exist in script owner")
-                    .clone();
-
-                // Preserve label fields from existing store data (written by label import)
-                if let Ok(Some(existing)) = store.get_script_info(code_hash) {
-                    if info.name.is_none() {
-                        info.name = existing.name;
-                    }
-                    if !info.deprecated {
-                        info.deprecated = existing.deprecated;
-                    }
-                    if info.category.is_none() {
-                        info.category = existing.category;
-                    }
-                    if info.website.is_none() {
-                        info.website = existing.website;
-                    }
-                    if info.description.is_none() {
-                        info.description = existing.description;
-                    }
-                }
-
-                Ok(MaterializedRow::new(
-                    CF_SCRIPT_INFO,
-                    code_hash.clone(),
-                    bincode::serialize(&info)?,
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        materializer.materialize_final_snapshot(&rows)?;
-
-        let mut reference_keys: Vec<&(Vec<u8>, u8)> = self.reference_infos.keys().collect();
-        reference_keys.sort();
-        let reference_rows = reference_keys
-            .into_iter()
-            .map(|(reference_hash, hash_type)| {
-                let info = self
-                    .reference_infos
-                    .get(&(reference_hash.clone(), *hash_type))
-                    .expect("sorted script reference key must exist in script owner");
-                Ok(MaterializedRow::new(
-                    CF_SCRIPT_REFERENCE_INFO,
-                    keys::encode_script_reference_key(*hash_type, reference_hash).to_vec(),
-                    bincode::serialize(info)?,
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        materializer.materialize_final_snapshot(&reference_rows)?;
-
-        let mut mapping_keys = self.reference_infos.keys().cloned().collect::<Vec<_>>();
-        mapping_keys.sort();
-        let mut reference_mappings = Vec::with_capacity(self.reference_infos.len());
-        for (reference_hash, hash_type) in mapping_keys {
-            let version_hash = match hash_type {
-                0 | 2 | 4 => Some(reference_hash.clone()),
-                1 => self.type_reference_versions.get(&reference_hash).cloned().flatten(),
-                _ => bail!(
-                    "unsupported script reference hash_type during bulk-build materialization: reference_hash=0x{}, hash_type={}",
-                    hex::encode(&reference_hash),
-                    hash_type
-                ),
-            };
-            reference_mappings.push(((reference_hash, hash_type), version_hash));
-        }
-        let mut mapping_rows = Vec::new();
-        for ((reference_hash, hash_type), version_hash) in &reference_mappings {
-            if let Some(version_hash) = version_hash {
-                mapping_rows.push(MaterializedRow::new(
-                    ckbadger_store::CF_SCRIPT_REFERENCE_TO_VERSION,
-                    keys::encode_script_reference_key(*hash_type, reference_hash).to_vec(),
-                    version_hash.clone(),
-                ));
-            }
-        }
-        materializer.materialize_final_snapshot(&mapping_rows)?;
-
-        let rollups =
-            collect_script_reference_rollup_state(store, materializer.append_only_store())?;
-
-        let version_rows = rollups
-            .versions
-            .into_iter()
-            .map(|(version_hash, info)| {
-                Ok(MaterializedRow::new(
-                    ckbadger_store::CF_SCRIPT_VERSIONS,
-                    version_hash,
-                    bincode::serialize(&info)?,
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        materializer.materialize_final_snapshot(&version_rows)?;
-
-        let family_rows = rollups
-            .families
-            .into_iter()
-            .map(
-                |(family_id, info): (String, ckbadger_store::ScriptFamilyInfo)| {
-                    Ok(MaterializedRow::new(
-                        ckbadger_store::CF_SCRIPT_FAMILIES,
-                        family_id.into_bytes(),
-                        bincode::serialize(&info)?,
-                    ))
-                },
-            )
-            .collect::<Result<Vec<_>>>()?;
-        materializer.materialize_final_snapshot(&family_rows)
+        let rows = self.build_snapshot_rows(
+            materializer.domain_store(),
+            materializer.append_only_store(),
+        )?;
+        materializer.materialize_final_snapshot(&rows)
     }
 }
 

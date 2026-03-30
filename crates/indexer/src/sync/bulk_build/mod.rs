@@ -6857,4 +6857,149 @@ mod tests {
         assert_eq!(per_block.rows, single_shard.rows);
         assert_eq!(per_block_written_ids, single_shard_written_ids);
     }
+
+    #[test]
+    fn build_final_rows_matches_flush_sealed_and_materialize_final() {
+        use super::materialize::Materializer;
+        use super::owners::BulkReducer;
+
+        let mut runtime = BulkBuildRuntimeState::default();
+        let block = bulk_build_addr_tx_fixture();
+        runtime
+            .apply_blocks_hex(std::slice::from_ref(&block), true, &FxHashMap::default())
+            .unwrap();
+
+        let root = super::unique_temp_test_dir("bulk-build-final-rows");
+        std::fs::create_dir_all(&root).unwrap();
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
+        let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append-only");
+
+        // -- AddressOwner --
+        let addr_final = runtime.owners.address.build_final_rows().unwrap();
+        assert!(addr_final.sealed_rows.is_empty());
+        {
+            let mut mat = Materializer::new(&domain_store, &append_store);
+            runtime.owners.address.materialize_final(&mut mat).unwrap();
+            let report = mat.finish();
+            assert_eq!(
+                addr_final.snapshot_rows.len(),
+                report.final_snapshot_rows,
+                "address snapshot row count"
+            );
+        }
+
+        // -- FiberOwner --
+        let fiber_final = runtime.owners.fiber.build_final_rows().unwrap();
+        assert!(fiber_final.sealed_rows.is_empty());
+        {
+            let mut mat = Materializer::new(&domain_store, &append_store);
+            runtime.owners.fiber.materialize_final(&mut mat).unwrap();
+            let report = mat.finish();
+            assert_eq!(
+                fiber_final.snapshot_rows.len(),
+                report.final_snapshot_rows,
+                "fiber snapshot row count"
+            );
+        }
+
+        // -- DaoOwner --
+        let dao_final = runtime.owners.dao.build_final_rows().unwrap();
+        {
+            let mut mat = Materializer::new(&domain_store, &append_store);
+            runtime.owners.dao.flush_sealed(&mut mat).unwrap();
+            runtime.owners.dao.materialize_final(&mut mat).unwrap();
+            let report = mat.finish();
+            assert_eq!(
+                dao_final.sealed_rows.len(),
+                report.sealed_aggregate_rows,
+                "dao sealed row count"
+            );
+            assert_eq!(
+                dao_final.snapshot_rows.len(),
+                report.final_snapshot_rows,
+                "dao snapshot row count"
+            );
+        }
+
+        // -- ObjectOwner --
+        let object_final = runtime.owners.object.build_final_rows().unwrap();
+        {
+            let mut mat = Materializer::new(&domain_store, &append_store);
+            runtime.owners.object.flush_sealed(&mut mat).unwrap();
+            runtime.owners.object.materialize_final(&mut mat).unwrap();
+            let report = mat.finish();
+            assert_eq!(
+                object_final.sealed_rows.len(),
+                report.sealed_aggregate_rows,
+                "object sealed row count"
+            );
+            assert_eq!(
+                object_final.snapshot_rows.len(),
+                report.final_snapshot_rows,
+                "object snapshot row count"
+            );
+        }
+
+        // -- ScriptOwner (needs both stores) --
+        let script_final = runtime
+            .owners
+            .script
+            .build_final_rows(&domain_store, &append_store)
+            .unwrap();
+        {
+            let mut mat = Materializer::new(&domain_store, &append_store);
+            runtime.owners.script.flush_sealed(&mut mat).unwrap();
+            runtime.owners.script.materialize_final(&mut mat).unwrap();
+            let report = mat.finish();
+            assert_eq!(
+                script_final.sealed_rows.len(),
+                report.sealed_aggregate_rows,
+                "script sealed row count"
+            );
+            assert_eq!(
+                script_final.snapshot_rows.len(),
+                report.final_snapshot_rows,
+                "script snapshot row count"
+            );
+        }
+
+        // -- TokenOwner (needs domain store) --
+        let token_final = runtime
+            .owners
+            .token
+            .build_final_rows(&domain_store)
+            .unwrap();
+        {
+            let mut mat = Materializer::new(&domain_store, &append_store);
+            runtime.owners.token.flush_sealed(&mut mat).unwrap();
+            runtime.owners.token.materialize_final(&mut mat).unwrap();
+            let report = mat.finish();
+            assert_eq!(
+                token_final.sealed_rows.len(),
+                report.sealed_aggregate_rows,
+                "token sealed row count"
+            );
+            assert_eq!(
+                token_final.snapshot_rows.len(),
+                report.final_snapshot_rows,
+                "token snapshot row count"
+            );
+        }
+
+        // Verify at least some owners produced non-empty rows.
+        assert!(
+            !addr_final.snapshot_rows.is_empty(),
+            "address owner should produce snapshot rows from fixture"
+        );
+        assert!(
+            !script_final.snapshot_rows.is_empty(),
+            "script owner should produce snapshot rows from fixture"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

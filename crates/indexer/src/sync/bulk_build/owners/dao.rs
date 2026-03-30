@@ -461,6 +461,63 @@ impl BulkReducer for DaoOwner {
     }
 
     fn flush_sealed(&mut self, materializer: &mut Materializer<'_>) -> Result<()> {
+        let rows = self.build_sealed_rows()?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        materializer.stream_sealed_aggregate_rows(&rows)
+    }
+
+    fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
+        let rows = self.build_snapshot_rows()?;
+        materializer.materialize_final_snapshot(&rows)
+    }
+}
+
+impl DaoOwner {
+    pub(crate) fn estimated_bytes(&self) -> u64 {
+        let deposits_bytes =
+            crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.deposits);
+        let request_bytes =
+            crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.request_outpoints);
+        let date_set_bytes = std::mem::size_of::<BTreeSet<NaiveDate>>() as u64
+            + self.snapshot_dates.len() as u64 * std::mem::size_of::<NaiveDate>() as u64;
+        let fixed_map_bytes = self.daily_dao_fields.len() as u64
+            * std::mem::size_of::<(NaiveDate, (i128, i128, i128))>() as u64
+            + self.daily_active_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64
+            + self.daily_protocol_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64
+            + self.daily_gross_deposit_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64
+            + self.daily_new_deposits_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i64)>() as u64
+            + self.daily_withdrawals_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i64)>() as u64
+            + self.daily_unique_depositors_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i64)>() as u64
+            + self.daily_secondary_non_miner_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64
+            + self.daily_secondary_miner_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64
+            + self.daily_secondary_dao_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64
+            + self.daily_secondary_treasury_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i128)>() as u64
+            + self.active_deposit_counts_by_lock.len() as u64
+                * std::mem::size_of::<(Vec<u8>, i64)>() as u64
+            + self.claimed_compensation_by_block.len() as u64
+                * std::mem::size_of::<(i64, i128)>() as u64
+            + self.daily_end_of_day.len() as u64
+                * std::mem::size_of::<(NaiveDate, (i64, u64))>() as u64;
+        std::mem::size_of::<Self>() as u64
+            + deposits_bytes
+            + request_bytes
+            + date_set_bytes
+            + fixed_map_bytes
+    }
+
+    fn build_sealed_rows(&self) -> Result<Vec<MaterializedRow>> {
         let mut rows = Vec::new();
         let mut running_total_deposited = 0i128;
         let mut running_protocol_deposited = 0i128;
@@ -517,8 +574,6 @@ impl BulkReducer for DaoOwner {
                 .copied()
                 .ok_or_else(|| anyhow!("missing DAO field for bulk snapshot date {}", date))?;
 
-            // Use per-block accumulated dao/treasury deltas (computed during
-            // block processing with exact per-block deposited values).
             let daily_miner = self
                 .daily_secondary_miner_delta
                 .get(date)
@@ -611,14 +666,10 @@ impl BulkReducer for DaoOwner {
             ));
         }
 
-        if rows.is_empty() {
-            return Ok(());
-        }
-
-        materializer.stream_sealed_aggregate_rows(&rows)
+        Ok(rows)
     }
 
-    fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
+    fn build_snapshot_rows(&self) -> Result<Vec<MaterializedRow>> {
         let mut rows = Vec::new();
         let mut outpoints = self.deposits.keys().copied().collect::<Vec<_>>();
         outpoints.sort_by_key(|outpoint| {
@@ -686,51 +737,15 @@ impl BulkReducer for DaoOwner {
             }
         }
 
-        materializer.materialize_final_snapshot(&rows)
+        Ok(rows)
     }
-}
 
-impl DaoOwner {
-    pub(crate) fn estimated_bytes(&self) -> u64 {
-        let deposits_bytes =
-            crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.deposits);
-        let request_bytes =
-            crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.request_outpoints);
-        let date_set_bytes = std::mem::size_of::<BTreeSet<NaiveDate>>() as u64
-            + self.snapshot_dates.len() as u64 * std::mem::size_of::<NaiveDate>() as u64;
-        let fixed_map_bytes = self.daily_dao_fields.len() as u64
-            * std::mem::size_of::<(NaiveDate, (i128, i128, i128))>() as u64
-            + self.daily_active_delta.len() as u64
-                * std::mem::size_of::<(NaiveDate, i128)>() as u64
-            + self.daily_protocol_delta.len() as u64
-                * std::mem::size_of::<(NaiveDate, i128)>() as u64
-            + self.daily_gross_deposit_delta.len() as u64
-                * std::mem::size_of::<(NaiveDate, i128)>() as u64
-            + self.daily_new_deposits_delta.len() as u64
-                * std::mem::size_of::<(NaiveDate, i64)>() as u64
-            + self.daily_withdrawals_delta.len() as u64
-                * std::mem::size_of::<(NaiveDate, i64)>() as u64
-            + self.daily_unique_depositors_delta.len() as u64
-                * std::mem::size_of::<(NaiveDate, i64)>() as u64
-            + self.daily_secondary_non_miner_delta.len() as u64
-                * std::mem::size_of::<(NaiveDate, i128)>() as u64
-            + self.daily_secondary_miner_delta.len() as u64
-                * std::mem::size_of::<(NaiveDate, i128)>() as u64
-            + self.daily_secondary_dao_delta.len() as u64
-                * std::mem::size_of::<(NaiveDate, i128)>() as u64
-            + self.daily_secondary_treasury_delta.len() as u64
-                * std::mem::size_of::<(NaiveDate, i128)>() as u64
-            + self.active_deposit_counts_by_lock.len() as u64
-                * std::mem::size_of::<(Vec<u8>, i64)>() as u64
-            + self.claimed_compensation_by_block.len() as u64
-                * std::mem::size_of::<(i64, i128)>() as u64
-            + self.daily_end_of_day.len() as u64
-                * std::mem::size_of::<(NaiveDate, (i64, u64))>() as u64;
-        std::mem::size_of::<Self>() as u64
-            + deposits_bytes
-            + request_bytes
-            + date_set_bytes
-            + fixed_map_bytes
+    #[allow(dead_code)]
+    pub(crate) fn build_final_rows(&self) -> Result<super::super::materialize::OwnerFinalRows> {
+        Ok(super::super::materialize::OwnerFinalRows {
+            sealed_rows: self.build_sealed_rows()?,
+            snapshot_rows: self.build_snapshot_rows()?,
+        })
     }
 
     /// Compute exact unmade_dao_interests at a given block by iterating all

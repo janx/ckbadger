@@ -215,6 +215,21 @@ impl BulkReducer for TokenOwner {
     }
 
     fn flush_sealed(&mut self, materializer: &mut Materializer<'_>) -> Result<()> {
+        let rows = self.build_sealed_rows()?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        materializer.stream_sealed_aggregate_rows(&rows)
+    }
+
+    fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
+        let rows = self.build_snapshot_rows(materializer.domain_store())?;
+        materializer.materialize_final_snapshot(&rows)
+    }
+}
+
+impl TokenOwner {
+    fn build_sealed_rows(&self) -> Result<Vec<MaterializedRow>> {
         let mut rows = Vec::new();
         let mut type_hashes: Vec<&Vec<u8>> = self.tokens.keys().collect();
         type_hashes.sort();
@@ -254,17 +269,12 @@ impl BulkReducer for TokenOwner {
             }
         }
 
-        if rows.is_empty() {
-            return Ok(());
-        }
-
-        materializer.stream_sealed_aggregate_rows(&rows)
+        Ok(rows)
     }
 
-    fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let store = materializer.domain_store();
+    fn build_snapshot_rows(&self, domain_store: &CkbadgerStore) -> Result<Vec<MaterializedRow>> {
         let all_type_hashes: Vec<Vec<u8>> = self.tokens.keys().cloned().collect();
-        let existing_tokens: FxHashMap<Vec<u8>, TokenInfo> = store
+        let existing_tokens: FxHashMap<Vec<u8>, TokenInfo> = domain_store
             .get_tokens_batch(&all_type_hashes)?
             .into_iter()
             .filter_map(|(k, v)| v.map(|info| (k, info)))
@@ -353,7 +363,18 @@ impl BulkReducer for TokenOwner {
             }
         }
 
-        materializer.materialize_final_snapshot(&rows)
+        Ok(rows)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn build_final_rows(
+        &self,
+        domain_store: &CkbadgerStore,
+    ) -> Result<super::super::materialize::OwnerFinalRows> {
+        Ok(super::super::materialize::OwnerFinalRows {
+            sealed_rows: self.build_sealed_rows()?,
+            snapshot_rows: self.build_snapshot_rows(domain_store)?,
+        })
     }
 }
 
