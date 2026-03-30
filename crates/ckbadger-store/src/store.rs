@@ -1478,6 +1478,20 @@ impl CkbadgerStore {
         Ok(self.db.write_opt(batch, &opts)?)
     }
 
+    /// Commit a pre-built WriteBatch without WAL.
+    ///
+    /// Intended for the bulk-sync flush pipeline where the caller has already
+    /// constructed the WriteBatch directly (bypassing StoreBatch).  The caller
+    /// is responsible for ensuring all keys target CFs owned by this store.
+    ///
+    /// # Safety contract (logical, not `unsafe`)
+    /// - Keys must target CFs that belong to this store instance.
+    /// - Caller must be in bulk-sync mode (no WAL, crash = rebuild).
+    #[allow(dead_code)]
+    pub(crate) fn write_batch_no_wal_bulk(&self, batch: rocksdb::WriteBatch) -> anyhow::Result<()> {
+        self.write_batch_no_wal_unchecked(batch)
+    }
+
     pub(crate) fn write_batch_no_wal_with_intent(
         &self,
         batch: WriteBatch,
