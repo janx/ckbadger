@@ -321,6 +321,7 @@ impl BatchWriter {
         contexts: &[T],
         batch: &mut StoreBatch,
         pending_deposits: &mut HashMap<[u8; 34], DaoDepositCacheEntry>,
+        batch_dao_fields: &HashMap<i64, Vec<u8>>,
     ) -> Result<()>
     where
         T: DaoWithdrawalContextTrait,
@@ -379,6 +380,12 @@ impl BatchWriter {
             let cached = self.store.get_dao_fields_batch(&blocks)?;
             for (block_num, dao) in cached {
                 result.insert(block_num, dao);
+            }
+            // Merge in-batch DAO fields for blocks whose headers haven't been
+            // committed yet (same atomic batch).  These take precedence because
+            // they come from the authoritative parsed block data.
+            for (block_num, dao) in batch_dao_fields {
+                result.entry(*block_num).or_insert_with(|| dao.clone());
             }
             result
         };
@@ -467,6 +474,15 @@ impl BatchWriter {
                                 original_output_index
                             )
                         })?;
+                    anyhow::ensure!(
+                        entry.withdraw_request_ar.is_some(),
+                        "DAO withdraw request AR missing after status 0→1 transition: block={}, consuming_tx=0x{}, deposit_outpoint=0x{}:{}, deposit_block={}",
+                        ctx.block_number(),
+                        hex::encode(ctx.consuming_tx_hash()),
+                        hex::encode(original_tx_hash),
+                        original_output_index,
+                        entry.deposit_block_number,
+                    );
                     batch.put_dao_deposit(&outpoint_key, &entry);
                     batch.put_dao_by_withdraw_tx(new_tx_hash, *new_output_index, &outpoint_key);
                     // Propagate phase1 update to pending map so a hypothetical
@@ -882,7 +898,12 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         let err = writer
-            .process_dao_withdrawals_batch(&[ctx], &mut batch, &mut pending_deposits)
+            .process_dao_withdrawals_batch(
+                &[ctx],
+                &mut batch,
+                &mut pending_deposits,
+                &HashMap::new(),
+            )
             .unwrap_err();
         assert!(err.to_string().contains("invalid DAO capacity string"));
     }
@@ -943,7 +964,12 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         let err = writer
-            .process_dao_withdrawals_batch(&[ctx], &mut batch, &mut pending_deposits)
+            .process_dao_withdrawals_batch(
+                &[ctx],
+                &mut batch,
+                &mut pending_deposits,
+                &HashMap::new(),
+            )
             .unwrap_err();
         assert!(err.to_string().contains("below occupied"));
     }
@@ -995,6 +1021,11 @@ mod tests {
         let withdraw_tx_hash = vec![0xCC; 32];
         let withdraw_block: i64 = 200;
 
+        // Commit the block header for the withdraw request block so the AR is available.
+        let mut setup = StoreBatch::new(&store);
+        setup.put_block_header(withdraw_block, &header_with_ar(10000100000000000));
+        setup.commit().unwrap();
+
         #[derive(Clone)]
         struct TestCtx {
             consumed: Vec<DaoConsumedRow>,
@@ -1042,7 +1073,12 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         writer
-            .process_dao_withdrawals_batch(&[ctx], &mut batch, &mut pending_deposits)
+            .process_dao_withdrawals_batch(
+                &[ctx],
+                &mut batch,
+                &mut pending_deposits,
+                &HashMap::new(),
+            )
             .unwrap();
         batch.commit().unwrap();
 
@@ -1127,7 +1163,12 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         let err = writer
-            .process_dao_withdrawals_batch(&[ctx], &mut batch, &mut pending_deposits)
+            .process_dao_withdrawals_batch(
+                &[ctx],
+                &mut batch,
+                &mut pending_deposits,
+                &HashMap::new(),
+            )
             .unwrap_err();
         assert!(
             err.to_string().contains("withdraw_request_block missing"),
@@ -1145,6 +1186,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone(), store.clone());
+
+        // Commit block header for the withdraw request block.
+        let mut setup = StoreBatch::new(&store);
+        setup.put_block_header(200, &header_with_ar(11));
+        setup.commit().unwrap();
 
         let deposit_tx_hash = vec![0xA1; 32];
         let deposit_output_index: i16 = 0;
@@ -1191,7 +1237,12 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         writer
-            .process_dao_withdrawals_batch(&[ctx], &mut batch, &mut pending_deposits)
+            .process_dao_withdrawals_batch(
+                &[ctx],
+                &mut batch,
+                &mut pending_deposits,
+                &HashMap::new(),
+            )
             .unwrap();
         batch.commit().unwrap();
 
@@ -1218,6 +1269,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone(), store.clone());
+
+        // Commit block header for the withdraw request block.
+        let mut setup = StoreBatch::new(&store);
+        setup.put_block_header(200, &header_with_ar(11));
+        setup.commit().unwrap();
 
         let deposit_tx = vec![0xA5; 32];
         let deposit_output_index: i16 = 0;
@@ -1265,7 +1321,12 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         writer
-            .process_dao_withdrawals_batch(&[ctx], &mut batch, &mut pending_deposits)
+            .process_dao_withdrawals_batch(
+                &[ctx],
+                &mut batch,
+                &mut pending_deposits,
+                &HashMap::new(),
+            )
             .unwrap();
         batch.commit().unwrap();
 
@@ -1299,6 +1360,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone(), store.clone());
+
+        // Commit block header for the withdraw request block.
+        let mut setup = StoreBatch::new(&store);
+        setup.put_block_header(5733774, &header_with_ar(11));
+        setup.commit().unwrap();
 
         let deposit_tx = vec![0xA8; 32];
         let deposit_output_index: i16 = 0;
@@ -1343,7 +1409,12 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         writer
-            .process_dao_withdrawals_batch(&[ctx], &mut batch, &mut pending_deposits)
+            .process_dao_withdrawals_batch(
+                &[ctx],
+                &mut batch,
+                &mut pending_deposits,
+                &HashMap::new(),
+            )
             .unwrap();
         batch.commit().unwrap();
 
@@ -1362,6 +1433,189 @@ mod tests {
                 .get_dao_deposit_by_withdraw_tx(&withdraw_tx, 0)
                 .unwrap(),
             Some(outpoint.to_vec())
+        );
+    }
+
+    /// Regression test: when a phase-1 withdrawal request happens in the same
+    /// batch as its block header, the DAO AR field is not yet committed to the
+    /// store.  `batch_dao_fields` must supply the AR so that
+    /// `withdraw_request_ar` is set correctly (not silently None).
+    #[test]
+    fn test_process_dao_withdrawals_batch_uses_batch_dao_fields_for_ar() {
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
+
+        let deposit_tx_hash = vec![0xAA; 32];
+        let deposit_output_index: i16 = 0;
+        let deposit_capacity: i64 = 500_00000000;
+        let deposit_block: i64 = 100;
+        let withdraw_request_block: i64 = 200;
+        let withdraw_request_tx = vec![0xDD; 32];
+        let lock_hash = vec![0xBB; 32];
+        let ar_value: u64 = 10_000_100_000_000_000;
+
+        // Commit the deposit block header (needed for deposit AR lookup).
+        let mut setup_batch = StoreBatch::new(&store);
+        setup_batch.put_block_header(deposit_block, &header_with_ar(10_000_000_000_000_000));
+        setup_batch.commit().unwrap();
+
+        // Do NOT commit block 200 header to the store — it's in the same batch.
+        // Instead, provide it via batch_dao_fields.
+        let mut dao_field = vec![0u8; 32];
+        dao_field[8..16].copy_from_slice(&ar_value.to_le_bytes());
+        let batch_dao_fields: HashMap<i64, Vec<u8>> =
+            [(withdraw_request_block, dao_field)].into_iter().collect();
+
+        let outpoint_key =
+            ckbadger_store::keys::encode_outpoint(&deposit_tx_hash, deposit_output_index);
+        let mut pending_deposits: HashMap<[u8; 34], DaoDepositCacheEntry> = HashMap::new();
+        pending_deposits.insert(
+            outpoint_key,
+            DaoDepositCacheEntry {
+                capacity: deposit_capacity,
+                deposit_block_number: deposit_block,
+                deposit_timestamp: 0,
+                lock_script_hash: lock_hash.clone(),
+                deposit_ar: 10_000_000_000_000_000,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+
+        let ctx = BatchCtx {
+            consumed: vec![DaoConsumedRow {
+                tx_hash: deposit_tx_hash.clone(),
+                output_index: deposit_output_index,
+                capacity_str: deposit_capacity.to_string(),
+                deposit_block,
+                status: 0,
+                lock_script_hash: lock_hash.clone(),
+            }],
+            new_outputs: vec![(
+                withdraw_request_tx.clone(),
+                0,
+                lock_hash.clone(),
+                deposit_capacity,
+                deposit_block as u64,
+            )],
+            block_num: withdraw_request_block,
+            consuming_tx: vec![0xCC; 32],
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .process_dao_withdrawals_batch(
+                &[ctx],
+                &mut batch,
+                &mut pending_deposits,
+                &batch_dao_fields,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        // Verify the deposit was updated to status=1 with correct AR.
+        let stored: DaoDepositCacheEntry = bincode::deserialize(
+            &store
+                .get_cf(store.cf_dao_deposits(), &outpoint_key)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stored.status, 1);
+        assert_eq!(
+            stored.withdraw_request_ar,
+            Some(ar_value as i64),
+            "withdraw_request_ar must be set from batch_dao_fields when block header is not committed"
+        );
+        assert_eq!(stored.withdraw_request_block, Some(withdraw_request_block));
+    }
+
+    /// Verify that the fail-fast guard fires when the DAO field is missing
+    /// from both the store and batch_dao_fields.
+    #[test]
+    fn test_process_dao_withdrawals_batch_errors_on_missing_ar_for_phase1() {
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
+
+        let deposit_tx_hash = vec![0xAA; 32];
+        let lock_hash = vec![0xBB; 32];
+        let deposit_capacity: i64 = 500_00000000;
+        let deposit_block: i64 = 100;
+
+        let outpoint_key = ckbadger_store::keys::encode_outpoint(&deposit_tx_hash, 0);
+        let mut pending_deposits: HashMap<[u8; 34], DaoDepositCacheEntry> = HashMap::new();
+        pending_deposits.insert(
+            outpoint_key,
+            DaoDepositCacheEntry {
+                capacity: deposit_capacity,
+                deposit_block_number: deposit_block,
+                deposit_timestamp: 0,
+                lock_script_hash: lock_hash.clone(),
+                deposit_ar: 10_000_000_000_000_000,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+
+        let ctx = BatchCtx {
+            consumed: vec![DaoConsumedRow {
+                tx_hash: deposit_tx_hash.clone(),
+                output_index: 0,
+                capacity_str: deposit_capacity.to_string(),
+                deposit_block,
+                status: 0,
+                lock_script_hash: lock_hash.clone(),
+            }],
+            new_outputs: vec![(
+                vec![0xDD; 32],
+                0,
+                lock_hash,
+                deposit_capacity,
+                deposit_block as u64,
+            )],
+            block_num: 200,
+            consuming_tx: vec![0xCC; 32],
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        // No batch_dao_fields, no committed header for block 200 → must fail.
+        let err = writer
+            .process_dao_withdrawals_batch(
+                &[ctx],
+                &mut batch,
+                &mut pending_deposits,
+                &HashMap::new(),
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("DAO withdraw request AR missing after status 0"),
+            "expected fail-fast guard, got: {}",
+            err
         );
     }
 

@@ -1562,6 +1562,14 @@ impl Indexer {
 
         // Group A: DAO processing
         {
+            // Build DAO field map from parsed blocks so that
+            // process_dao_withdrawals_batch can read AR for blocks in this
+            // batch (whose headers haven't been committed to the store yet).
+            let batch_dao_fields: HashMap<i64, Vec<u8>> = all_parsed_blocks
+                .iter()
+                .map(|p| (p.number, p.dao.to_vec()))
+                .collect();
+
             let mut all_dao_deposits: Vec<(
                 crate::parser::ParsedDaoDeposit,
                 i64,
@@ -1793,6 +1801,7 @@ impl Indexer {
                         &withdrawal_contexts,
                         &mut data_batch,
                         &mut pending_dao_entries,
+                        &batch_dao_fields,
                     )?;
                 }
             }
