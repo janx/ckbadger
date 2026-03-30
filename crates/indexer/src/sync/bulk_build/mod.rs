@@ -156,9 +156,9 @@ impl BulkBuildEngine {
         );
         let chunk_rx = prefetch.take_receiver();
         let mut buffer = block_buffer::BlockBufferHandle::new(chunk_rx);
-        // Bounded flush channel: the build loop sends PreparedBatch into
-        // a channel. A dedicated worker drains it serially, committing
-        // each WriteBatch pair to RocksDB. Build only blocks when the
+        // Bounded flush channel: the build loop sends PendingFlush into
+        // a channel. A dedicated worker converts rows to WriteBatch via
+        // prepare_flush and commits to RocksDB. Build only blocks when the
         // channel is full, eliminating the flush bubble when flush_ms > build_ms.
         let flush_channel = materialize::FlushChannelHandle::new(
             flush_depth,
@@ -225,12 +225,10 @@ impl BulkBuildEngine {
             let raw_blocks: Vec<_> = drained.into_iter().map(|b| b.raw).collect();
 
             let build_started = Instant::now();
-            let (batch_stats, build_timings, prepared_batch) = runtime.apply_blocks(
+            let (batch_stats, build_timings, pending_flush) = runtime.apply_blocks(
                 &raw_blocks,
                 indexer.config.is_mainnet(),
                 &token_info_cache,
-                indexer.writer.store().as_ref(),
-                indexer.append_only_store.as_ref(),
             )?;
             let build_elapsed = build_started.elapsed();
 
@@ -239,8 +237,10 @@ impl BulkBuildEngine {
             let critical_stage_ms = (build_elapsed.as_secs_f64() * 1000.0).max(prev_flush_ms);
 
             // Capture row counts before send() moves the data.
-            let prepared_batch_row_count =
-                (prepared_batch.history_count, prepared_batch.sealed_count);
+            let pending_flush_row_count = (
+                pending_flush.history_rows.len(),
+                pending_flush.sealed_rows.len(),
+            );
 
             // Drop the batch span guard before the next .await point.
             drop(_batch_guard);
@@ -248,12 +248,12 @@ impl BulkBuildEngine {
             // Send to flush channel.  Blocks when channel is full (natural
             // backpressure).  Channel depth is memory-budget-derived.
             let flush_wait_started = Instant::now();
-            flush_channel.send(prepared_batch).await?;
+            flush_channel.send(pending_flush).await?;
             let flush_wait_elapsed = flush_wait_started.elapsed();
             let flush_channel_pending = flush_channel.pending() as u64;
 
-            cumulative_history_rows += prepared_batch_row_count.0;
-            cumulative_sealed_rows += prepared_batch_row_count.1;
+            cumulative_history_rows += pending_flush_row_count.0;
+            cumulative_sealed_rows += pending_flush_row_count.1;
             _flush_send_count += 1;
             sync_totals.record_batch(&batch_stats)?;
 
@@ -1434,22 +1434,14 @@ impl BulkBuildRuntimeState {
         blocks: &[binary_facts::RawCkbBlock],
         is_mainnet: bool,
         token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-        domain_store: &CkbadgerStore,
-        append_only_store: &CkbadgerStore,
-    ) -> Result<(
-        BatchExecutionStats,
-        BatchBuildTimings,
-        materialize::PreparedBatch,
-    )> {
+    ) -> Result<(BatchExecutionStats, BatchBuildTimings, PendingFlush)> {
         if blocks.is_empty() {
             return Ok((
                 BatchExecutionStats::default(),
                 BatchBuildTimings::default(),
-                materialize::PreparedBatch {
-                    append_batch: rocksdb::WriteBatch::default(),
-                    domain_batch: rocksdb::WriteBatch::default(),
-                    history_count: 0,
-                    sealed_count: 0,
+                PendingFlush {
+                    history_rows: Vec::new(),
+                    sealed_rows: Vec::new(),
                 },
             ));
         }
@@ -1523,8 +1515,6 @@ impl BulkBuildRuntimeState {
                     is_mainnet,
                     token_info_cache,
                     written_lock_script_ids,
-                    domain_store,
-                    append_only_store,
                 )?;
                 let history_elapsed = history_started.elapsed();
 
@@ -1692,7 +1682,7 @@ impl BulkBuildRuntimeState {
                 )
             },
         );
-        let (mut history, history_elapsed, activity_stats_elapsed) = left_result?;
+        let (history, history_elapsed, activity_stats_elapsed) = left_result?;
         mid_result?;
         let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = right_result?;
 
@@ -1705,26 +1695,13 @@ impl BulkBuildRuntimeState {
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
         let reduce_elapsed = reduce_started.elapsed();
 
-        // Append sealed rows directly into the domain WriteBatch.
-        let mut sealed_count = 0usize;
-        for row in &hodl_sealed_rows {
-            history
-                .domain_wb
-                .put_cf(domain_store.cf(row.cf_name), &row.key, &row.value);
-            sealed_count += 1;
-        }
-        for row in &cell_dist_sealed_rows {
-            history
-                .domain_wb
-                .put_cf(domain_store.cf(row.cf_name), &row.key, &row.value);
-            sealed_count += 1;
-        }
+        // Collect sealed rows (pure data, no store dependency).
+        let mut sealed_rows = hodl_sealed_rows;
+        sealed_rows.extend(cell_dist_sealed_rows);
 
-        let prepared = materialize::PreparedBatch {
-            append_batch: history.append_wb,
-            domain_batch: history.domain_wb,
-            history_count: history.history_row_count,
-            sealed_count,
+        let pending = PendingFlush {
+            history_rows: history.rows,
+            sealed_rows,
         };
 
         let timings = BatchBuildTimings {
@@ -1749,7 +1726,7 @@ impl BulkBuildRuntimeState {
             tx_count,
             cells_created,
             cells_consumed: consumed_cells,
-        }, timings, prepared))
+        }, timings, pending))
     }
 
     /// Apply blocks from hex-based RPC fixtures (used by test helpers and integration tests).
@@ -1758,22 +1735,14 @@ impl BulkBuildRuntimeState {
         blocks: &[BlockResponseWithCycles],
         is_mainnet: bool,
         token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-        domain_store: &CkbadgerStore,
-        append_only_store: &CkbadgerStore,
-    ) -> Result<(
-        BatchExecutionStats,
-        BatchBuildTimings,
-        materialize::PreparedBatch,
-    )> {
+    ) -> Result<(BatchExecutionStats, BatchBuildTimings, PendingFlush)> {
         if blocks.is_empty() {
             return Ok((
                 BatchExecutionStats::default(),
                 BatchBuildTimings::default(),
-                materialize::PreparedBatch {
-                    append_batch: rocksdb::WriteBatch::default(),
-                    domain_batch: rocksdb::WriteBatch::default(),
-                    history_count: 0,
-                    sealed_count: 0,
+                PendingFlush {
+                    history_rows: Vec::new(),
+                    sealed_rows: Vec::new(),
                 },
             ));
         }
@@ -1836,8 +1805,6 @@ impl BulkBuildRuntimeState {
                     is_mainnet,
                     token_info_cache,
                     written_lock_script_ids,
-                    domain_store,
-                    append_only_store,
                 )?;
                 let history_elapsed = history_started.elapsed();
                 let activity_stats_started = Instant::now();
@@ -1889,7 +1856,7 @@ impl BulkBuildRuntimeState {
             )
             },
         );
-        let (mut history, history_elapsed, activity_stats_elapsed) = left_result?;
+        let (history, history_elapsed, activity_stats_elapsed) = left_result?;
         mid_result?;
         let (hodl_sealed_rows, cell_dist_sealed_rows, address_elapsed) = right_result?;
         owners
@@ -1899,20 +1866,11 @@ impl BulkBuildRuntimeState {
             .object
             .apply_identity_activity_count_deltas(&history.identity_activity_count_deltas)?;
         let reduce_elapsed = reduce_started.elapsed();
-        // Append sealed rows directly into the domain WriteBatch.
-        let mut sealed_count = 0usize;
-        for row in &hodl_sealed_rows {
-            history
-                .domain_wb
-                .put_cf(domain_store.cf(row.cf_name), &row.key, &row.value);
-            sealed_count += 1;
-        }
-        for row in &cell_dist_sealed_rows {
-            history
-                .domain_wb
-                .put_cf(domain_store.cf(row.cf_name), &row.key, &row.value);
-            sealed_count += 1;
-        }
+
+        // Collect sealed rows (pure data, no store dependency).
+        let mut sealed_rows = hodl_sealed_rows;
+        sealed_rows.extend(cell_dist_sealed_rows);
+
         Ok((
             BatchExecutionStats {
                 last_block_number: Some(last_block.number),
@@ -1936,11 +1894,9 @@ impl BulkBuildRuntimeState {
                 address_reduce_ms: address_elapsed.as_secs_f64() * 1000.0,
                 activity_stats_ms: activity_stats_elapsed.as_secs_f64() * 1000.0,
             },
-            materialize::PreparedBatch {
-                append_batch: history.append_wb,
-                domain_batch: history.domain_wb,
-                history_count: history.history_row_count,
-                sealed_count,
+            PendingFlush {
+                history_rows: history.rows,
+                sealed_rows,
             },
         ))
     }
@@ -2127,12 +2083,17 @@ fn apply_cell_dist_cohort_deltas(
 }
 
 struct HistoryBuildResult {
-    append_wb: rocksdb::WriteBatch,
-    domain_wb: rocksdb::WriteBatch,
-    history_row_count: usize,
+    rows: Vec<materialize::MaterializedRow>,
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     tx_actions_list: Vec<ckbadger_store::types::TxActions>,
+}
+
+/// Pure-data payload sent to the flush channel. Contains materialized rows
+/// that the flush worker converts to WriteBatch via `prepare_flush`.
+pub(crate) struct PendingFlush {
+    pub(crate) history_rows: Vec<materialize::MaterializedRow>,
+    pub(crate) sealed_rows: Vec<materialize::MaterializedRow>,
 }
 
 struct BlockHistoryRows {
@@ -2296,14 +2257,20 @@ where
                 break;
             }
 
-            let (batch_stats, _timings, prepared) = runtime.apply_blocks_hex(
+            let (batch_stats, _timings, pending) = runtime.apply_blocks_hex(
                 std::slice::from_ref(block),
                 true,
                 &FxHashMap::default(),
+            )?;
+            let history_count = pending.history_rows.len();
+            let sealed_count = pending.sealed_rows.len();
+            let prepared = materialize::prepare_flush(
                 domain_store.as_ref(),
                 append_store.as_ref(),
+                pending.history_rows,
+                pending.sealed_rows,
             )?;
-            materializer.add_external_counts(prepared.history_count, prepared.sealed_count, 1);
+            materializer.add_external_counts(history_count, sealed_count, 1);
             if !prepared.append_batch.is_empty() {
                 append_store.write_batch_no_wal_bulk(prepared.append_batch)?;
             }
@@ -2425,14 +2392,17 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         let mut materializer =
             materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
         for batch in block_batches {
-            let (batch_stats, _timings, prepared) = runtime.apply_blocks_hex(
-                batch,
-                true,
-                &FxHashMap::default(),
+            let (batch_stats, _timings, pending) =
+                runtime.apply_blocks_hex(batch, true, &FxHashMap::default())?;
+            let history_count = pending.history_rows.len();
+            let sealed_count = pending.sealed_rows.len();
+            let prepared = materialize::prepare_flush(
                 domain_store.as_ref(),
                 append_store.as_ref(),
+                pending.history_rows,
+                pending.sealed_rows,
             )?;
-            materializer.add_external_counts(prepared.history_count, prepared.sealed_count, 1);
+            materializer.add_external_counts(history_count, sealed_count, 1);
             if !prepared.append_batch.is_empty() {
                 append_store.write_batch_no_wal_bulk(prepared.append_batch)?;
             }
@@ -2586,8 +2556,6 @@ fn build_history_batches(
     is_mainnet: bool,
     token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
     written_lock_script_ids: &mut FxHashSet<crate::sync::types::InternId>,
-    domain_store: &CkbadgerStore,
-    append_only_store: &CkbadgerStore,
 ) -> Result<HistoryBuildResult> {
     if arena.txs.len() != resolved.len() {
         bail!(
@@ -2652,15 +2620,8 @@ fn build_history_batches(
         }
     }
 
-    // Convert to WriteBatch pair (single serial pass).
-    let row_count = all_rows.len();
-    let prepared =
-        materialize::prepare_flush(domain_store, append_only_store, all_rows, Vec::new())?;
-
     Ok(HistoryBuildResult {
-        append_wb: prepared.append_batch,
-        domain_wb: prepared.domain_batch,
-        history_row_count: row_count,
+        rows: all_rows,
         object_activity_count_deltas: all_object_deltas,
         identity_activity_count_deltas: all_identity_deltas,
         tx_actions_list: all_tx_actions,
@@ -2678,8 +2639,6 @@ fn build_history_batches_with_shard_size(
     is_mainnet: bool,
     token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
     written_lock_script_ids: &mut FxHashSet<crate::sync::types::InternId>,
-    domain_store: &CkbadgerStore,
-    append_only_store: &CkbadgerStore,
     _shard_block_count: usize,
 ) -> Result<HistoryBuildResult> {
     build_history_batches(
@@ -2689,8 +2648,6 @@ fn build_history_batches_with_shard_size(
         is_mainnet,
         token_info_cache,
         written_lock_script_ids,
-        domain_store,
-        append_only_store,
     )
 }
 
@@ -5013,17 +4970,18 @@ mod tests {
             true,
             &FxHashMap::default(),
             &mut FxHashSet::default(),
-            &domain_store,
-            &append_store,
         )
         .expect("history batches");
 
-        // Commit batches to stores and scan for CF_ADDR_TXS keys.
+        // Convert rows to WriteBatch and commit to stores, then scan for CF_ADDR_TXS keys.
+        let prepared =
+            materialize::prepare_flush(&domain_store, &append_store, history.rows, Vec::new())
+                .expect("prepare flush");
         domain_store
-            .write_batch_no_wal_bulk(history.domain_wb)
+            .write_batch_no_wal_bulk(prepared.domain_batch)
             .expect("commit domain");
         append_store
-            .write_batch_no_wal_bulk(history.append_wb)
+            .write_batch_no_wal_bulk(prepared.append_batch)
             .expect("commit append");
 
         let expected = [
@@ -5087,15 +5045,16 @@ mod tests {
             true,
             &FxHashMap::default(),
             &mut FxHashSet::default(),
-            &domain_store,
-            &append_store,
         )
         .expect("history batches");
+        let prepared =
+            materialize::prepare_flush(&domain_store, &append_store, history.rows, Vec::new())
+                .expect("prepare flush");
         domain_store
-            .write_batch_no_wal_bulk(history.domain_wb)
+            .write_batch_no_wal_bulk(prepared.domain_batch)
             .expect("commit domain");
         append_store
-            .write_batch_no_wal_bulk(history.append_wb)
+            .write_batch_no_wal_bulk(prepared.append_batch)
             .expect("commit append");
 
         let token_records: HashMap<Vec<u8>, TokenTransferRecord> = domain_store
@@ -5162,19 +5121,20 @@ mod tests {
             true,
             &FxHashMap::default(),
             &mut FxHashSet::default(),
-            &domain_store,
-            &append_store,
         )
         .expect("history batches");
-        // Write batches directly to stores (no-WAL) to populate memtables.
-        if !history.append_wb.is_empty() {
+        // Convert rows to WriteBatch and write to stores (no-WAL) to populate memtables.
+        let prepared =
+            materialize::prepare_flush(&domain_store, &append_store, history.rows, Vec::new())
+                .expect("prepare flush");
+        if !prepared.append_batch.is_empty() {
             append_store
-                .write_batch_no_wal_bulk(history.append_wb)
+                .write_batch_no_wal_bulk(prepared.append_batch)
                 .expect("commit append");
         }
-        if !history.domain_wb.is_empty() {
+        if !prepared.domain_batch.is_empty() {
             domain_store
-                .write_batch_no_wal_bulk(history.domain_wb)
+                .write_batch_no_wal_bulk(prepared.domain_batch)
                 .expect("commit domain");
         }
 
@@ -5272,15 +5232,16 @@ mod tests {
             true,
             &FxHashMap::default(),
             &mut FxHashSet::default(),
-            &domain_store,
-            &append_store,
         )
         .expect("history batches");
+        let prepared =
+            materialize::prepare_flush(&domain_store, &append_store, result.rows, Vec::new())
+                .expect("prepare flush");
         domain_store
-            .write_batch_no_wal_bulk(result.domain_wb)
+            .write_batch_no_wal_bulk(prepared.domain_batch)
             .expect("commit domain");
         append_store
-            .write_batch_no_wal_bulk(result.append_wb)
+            .write_batch_no_wal_bulk(prepared.append_batch)
             .expect("commit append");
 
         let activity_rows: Vec<(Vec<u8>, TxActions)> = domain_store
@@ -5350,15 +5311,16 @@ mod tests {
             true,
             &FxHashMap::default(),
             &mut FxHashSet::default(),
-            &domain_store,
-            &append_store,
         )
         .expect("history batches");
+        let prepared =
+            materialize::prepare_flush(&domain_store, &append_store, result.rows, Vec::new())
+                .expect("prepare flush");
         domain_store
-            .write_batch_no_wal_bulk(result.domain_wb)
+            .write_batch_no_wal_bulk(prepared.domain_batch)
             .expect("commit domain");
         append_store
-            .write_batch_no_wal_bulk(result.append_wb)
+            .write_batch_no_wal_bulk(prepared.append_batch)
             .expect("commit append");
 
         // CF_TX_ACTIONS rows should NOT include cellbase.
@@ -5453,8 +5415,6 @@ mod tests {
             true,
             &FxHashMap::default(),
             &mut FxHashSet::default(),
-            &domain_store,
-            &append_store,
         )
         .expect("history batches");
         let sealed_rows =
@@ -5462,12 +5422,15 @@ mod tests {
         let final_snapshot_rows =
             build_final_snapshot_rows(&sequencer, &frozen).expect("final snapshot rows");
 
-        // Commit history WriteBatches and then check tx actions from the store.
+        // Convert rows to WriteBatch and commit to stores.
+        let prepared =
+            materialize::prepare_flush(&domain_store, &append_store, history.rows, Vec::new())
+                .expect("prepare flush");
         domain_store
-            .write_batch_no_wal_bulk(history.domain_wb)
+            .write_batch_no_wal_bulk(prepared.domain_batch)
             .expect("commit domain");
         append_store
-            .write_batch_no_wal_bulk(history.append_wb)
+            .write_batch_no_wal_bulk(prepared.append_batch)
             .expect("commit append");
 
         let open_tx_actions: TxActions = domain_store
@@ -5546,15 +5509,16 @@ mod tests {
             true,
             &FxHashMap::default(),
             &mut FxHashSet::default(),
-            &domain_store,
-            &append_store,
         )
         .expect("history batches");
+        let prepared =
+            materialize::prepare_flush(&domain_store, &append_store, history.rows, Vec::new())
+                .expect("prepare flush");
         domain_store
-            .write_batch_no_wal_bulk(history.domain_wb)
+            .write_batch_no_wal_bulk(prepared.domain_batch)
             .expect("commit domain");
         append_store
-            .write_batch_no_wal_bulk(history.append_wb)
+            .write_batch_no_wal_bulk(prepared.append_batch)
             .expect("commit append");
 
         let object_rows: std::collections::HashMap<Vec<u8>, ObjectCollectionActivityEntry> =
@@ -6290,22 +6254,8 @@ mod tests {
     fn prepare_finalize_artifacts_matches_direct_finalize_components() {
         let mut runtime = BulkBuildRuntimeState::default();
         let block = bulk_build_addr_tx_fixture();
-        let root = unique_temp_test_dir("bulk-build-finalize-artifacts-test");
-        std::fs::create_dir_all(&root).expect("create root");
-        let domain_path = root.join("domain");
-        let append_path = root.join("append-only");
-        std::fs::create_dir_all(&domain_path).expect("create domain");
-        std::fs::create_dir_all(&append_path).expect("create append");
-        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
-        let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
         runtime
-            .apply_blocks_hex(
-                std::slice::from_ref(&block),
-                true,
-                &FxHashMap::default(),
-                &domain_store,
-                &append_store,
-            )
+            .apply_blocks_hex(std::slice::from_ref(&block), true, &FxHashMap::default())
             .unwrap();
 
         let direct_activity_rows = runtime.activity_stats.build_rows().unwrap();
@@ -6317,7 +6267,6 @@ mod tests {
         assert_eq!(prepared.activity_sealed_rows, direct_activity_rows);
         assert_eq!(prepared.chain_sealed_rows, direct_chain_rows);
         assert_eq!(prepared.final_snapshot_rows, direct_snapshot_rows);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -6786,7 +6735,7 @@ mod tests {
 
         let mut written_ids = FxHashSet::default();
 
-        // First call — should emit lock script rows via the domain WriteBatch.
+        // First call — should emit lock script rows.
         let result1 = build_history_batches(
             &arena,
             &resolved,
@@ -6794,17 +6743,18 @@ mod tests {
             true,
             &FxHashMap::default(),
             &mut written_ids,
-            &domain_store,
-            &append_store,
         )
         .expect("first build");
 
-        // Commit first batch and count lock script entries in the store.
+        // Convert rows, commit, and count lock script entries in the store.
+        let prepared1 =
+            materialize::prepare_flush(&domain_store, &append_store, result1.rows, Vec::new())
+                .expect("prepare flush 1");
         domain_store
-            .write_batch_no_wal_bulk(result1.domain_wb)
+            .write_batch_no_wal_bulk(prepared1.domain_batch)
             .expect("commit domain");
         append_store
-            .write_batch_no_wal_bulk(result1.append_wb)
+            .write_batch_no_wal_bulk(prepared1.append_batch)
             .expect("commit append");
 
         let lock_count_after_first: usize = domain_store
@@ -6827,17 +6777,18 @@ mod tests {
             true,
             &FxHashMap::default(),
             &mut written_ids,
-            &domain_store,
-            &append_store,
         )
         .expect("second build");
 
-        // Commit second batch.
+        // Convert rows and commit second batch.
+        let prepared2 =
+            materialize::prepare_flush(&domain_store, &append_store, result2.rows, Vec::new())
+                .expect("prepare flush 2");
         domain_store
-            .write_batch_no_wal_bulk(result2.domain_wb)
+            .write_batch_no_wal_bulk(prepared2.domain_batch)
             .expect("commit domain 2");
         append_store
-            .write_batch_no_wal_bulk(result2.append_wb)
+            .write_batch_no_wal_bulk(prepared2.append_batch)
             .expect("commit append 2");
 
         // Lock script count should not have grown (same keys, even if overwritten).
@@ -6857,7 +6808,7 @@ mod tests {
     }
 
     #[test]
-    fn shard_history_preserves_write_batch_bytes_and_lock_script_dedup() {
+    fn shard_history_preserves_rows_and_lock_script_dedup() {
         let blocks = bulk_build_object_activity_fixture();
         let interner = interner::IdentityInterner::default();
         let (arena, _) =
@@ -6868,15 +6819,6 @@ mod tests {
             .expect("resolved txs");
         let frozen = interner.snapshot_for_reads();
 
-        let root = unique_temp_test_dir("bulk-build-shard-history-test");
-        std::fs::create_dir_all(&root).expect("create root");
-        let domain_path = root.join("domain");
-        let append_path = root.join("append-only");
-        std::fs::create_dir_all(&domain_path).expect("create domain");
-        std::fs::create_dir_all(&append_path).expect("create append");
-        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
-        let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
-
         let mut single_shard_written_ids = FxHashSet::default();
         let single_shard = build_history_batches_with_shard_size(
             &arena,
@@ -6885,8 +6827,6 @@ mod tests {
             true,
             &FxHashMap::default(),
             &mut single_shard_written_ids,
-            &domain_store,
-            &append_store,
             arena.blocks.len().max(1),
         )
         .expect("single shard history");
@@ -6899,22 +6839,17 @@ mod tests {
             true,
             &FxHashMap::default(),
             &mut per_block_written_ids,
-            &domain_store,
-            &append_store,
             1,
         )
         .expect("per-block shard history");
 
-        assert_eq!(per_block.history_row_count, single_shard.history_row_count);
+        assert_eq!(per_block.rows.len(), single_shard.rows.len());
         assert_eq!(
             bincode::serialize(&per_block.tx_actions_list).expect("serialize per-block tx actions"),
             bincode::serialize(&single_shard.tx_actions_list)
                 .expect("serialize single-shard tx actions")
         );
-        assert_eq!(per_block.append_wb.data(), single_shard.append_wb.data());
-        assert_eq!(per_block.domain_wb.data(), single_shard.domain_wb.data());
+        assert_eq!(per_block.rows, single_shard.rows);
         assert_eq!(per_block_written_ids, single_shard_written_ids);
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 }
