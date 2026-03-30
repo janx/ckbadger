@@ -2116,6 +2116,12 @@ impl Indexer {
                     object_daily_changes,
                     parser_perf_sample,
                 })) => {
+                    let _batch_span = tracing::info_span!(
+                        "pipeline_batch",
+                        batch_index = pipeline_batch_index,
+                        start_block,
+                        end_block,
+                    );
                     consecutive_idle_timeouts = 0;
                     let recv_wait_ms = t_recv.elapsed().as_secs_f64() * 1000.0;
                     let current_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
