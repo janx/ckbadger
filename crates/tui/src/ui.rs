@@ -1644,28 +1644,38 @@ fn draw_sync_diagnostics(f: &mut Frame, app: &App, area: Rect) {
     let is_bulk_build = sync.bulk_build.is_some();
 
     if is_bulk_build {
-        // 3-column layout for bulk build
+        // 3-column layout: Pipeline | Controller | Resources
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Percentage(38),
-                Constraint::Percentage(30),
                 Constraint::Percentage(32),
+                Constraint::Percentage(30),
             ])
             .split(inner);
 
         if let Some(bb) = sync.bulk_build.as_ref() {
-            let (left, middle) = build_bulk_build_diagnostics(
+            // Col 1: Pipeline (stage bars, volume, queues)
+            let col1_lines = if bb.finalize_phase.is_some() {
+                build_finalize_left_column(bb, cols[0].height as usize)
+            } else {
+                build_pipeline_column(bb, &cols, dense_panel)
+            };
+            f.render_widget(Paragraph::new(col1_lines), cols[0]);
+
+            // Col 2: Controller (observe/decide/adjust + overlap timeline)
+            let col2_lines = build_controller_column_lines(
                 bb,
-                app,
-                &cols,
-                &rate_jitter_text,
-                &eta_conf,
                 dense_panel,
+                app.controller_deltas.as_ref(),
+                app.show_build_subphases,
+                cols[1].width,
             );
-            f.render_widget(Paragraph::new(left), cols[0]);
-            f.render_widget(Paragraph::new(middle), cols[1]);
-            draw_overlap_column(f, app, bb, cols[2]);
+            f.render_widget(Paragraph::new(col2_lines), cols[1]);
+
+            // Col 3: Resources (memory, materialization, storage gauges)
+            let col3_lines = build_resources_column(bb, app.memory_stats.as_ref(), cols[2].width);
+            f.render_widget(Paragraph::new(col3_lines), cols[2]);
         }
     } else {
         // 2-column layout for pipeline and idle modes
@@ -2052,6 +2062,7 @@ fn io_fetch_write_jitter_line(
 
 /// Build a single budget sparkline line for the diagnostics right column.
 /// Shows values with auto-scaled sparkline bars and a caller-specified unit.
+#[allow(dead_code)] // removed in Task 5
 fn budget_sparkline_line(
     label: &str,
     history: &VecDeque<f64>,
@@ -2125,6 +2136,7 @@ fn budget_sparkline_line(
 ///
 /// With show_build_subphases, the CPU row becomes multi-colored (one segment
 /// per sub-phase) but stays on a single line — no extra vertical space.
+#[allow(dead_code)] // removed in Task 5
 fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, area: Rect) {
     let build_ms = bb.build_ms.unwrap_or(0.0);
     let prefetch_recv_ms = bb.prefetch_recv_ms.unwrap_or(0.0);
@@ -2329,6 +2341,7 @@ fn draw_overlap_column(f: &mut Frame, app: &App, bb: &BulkBuildProgressData, are
     f.render_widget(Paragraph::new(lines), area);
 }
 
+#[allow(dead_code)] // removed in Task 5
 fn build_bulk_build_diagnostics(
     bb: &BulkBuildProgressData,
     app: &App,
@@ -2420,6 +2433,70 @@ fn build_bulk_build_diagnostics(
     ]));
 
     (left, right)
+}
+
+/// Build column 3 (Resources) for bulk-sync diagnostics.
+///
+/// Shows: owner memory, live cells, materialization stats, L0/WBM/compaction gauges, disk pressure.
+fn build_resources_column(
+    bb: &BulkBuildProgressData,
+    memory_stats: Option<&MemoryStatsData>,
+    col_width: u16,
+) -> Vec<Line<'static>> {
+    let owner_mem_text = bb
+        .owner_memory_bytes
+        .map(format_bytes)
+        .unwrap_or_else(|| "-".to_string());
+    let live_cells_text = bb
+        .live_cell_count
+        .map(format_num_u64)
+        .unwrap_or_else(|| "-".to_string());
+    let hist_rows = bb
+        .cumulative_history_rows
+        .map(format_num_u64)
+        .unwrap_or_else(|| "-".to_string());
+    let sealed_rows = bb
+        .cumulative_sealed_rows
+        .map(format_num_u64)
+        .unwrap_or_else(|| "-".to_string());
+
+    let gauge_width = (col_width / 4).clamp(6, 12) as usize;
+
+    let (l0_line, wbm_line, pressure_line) = if let Some(mem) = memory_stats {
+        (
+            storage_pressure_l0_line(mem, gauge_width),
+            storage_pressure_wbm_line(mem, gauge_width),
+            storage_pressure_summary_line(mem),
+        )
+    } else {
+        (
+            Line::from(Span::styled("L0 -", Style::default().fg(SLATE_500))),
+            Line::from(Span::styled("WBM -", Style::default().fg(SLATE_500))),
+            Line::from(Span::styled("Compact -", Style::default().fg(SLATE_500))),
+        )
+    };
+    let disk_lines = disk_pressure_lines(Some(bb), col_width);
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("Owner mem ", Style::default().fg(SLATE_500)),
+            Span::styled(owner_mem_text, Style::default().fg(FOREGROUND)),
+            Span::styled("  Live cells ", Style::default().fg(SLATE_500)),
+            Span::styled(live_cells_text, Style::default().fg(FOREGROUND)),
+        ]),
+        Line::from(vec![
+            Span::styled("Materialized ", Style::default().fg(SLATE_500)),
+            Span::styled("hist ", Style::default().fg(SLATE_500)),
+            Span::styled(hist_rows, Style::default().fg(FOREGROUND)),
+            Span::styled("  sealed ", Style::default().fg(SLATE_500)),
+            Span::styled(sealed_rows, Style::default().fg(FOREGROUND)),
+        ]),
+        l0_line,
+        wbm_line,
+        pressure_line,
+    ];
+    lines.extend(disk_lines);
+    lines
 }
 
 /// Build the controller observation panel lines for bulk-build diagnostics.
@@ -2731,6 +2808,197 @@ fn controller_panel_lines(
 
         vec![line0, line1, line2, line3, line4, line5, line6]
     }
+}
+
+/// Build column 1 (Pipeline) for bulk-sync diagnostics.
+///
+/// Shows: engine badge, 6-stage bars, facts par breakdown, volume, queue indicators.
+fn build_pipeline_column(
+    bb: &BulkBuildProgressData,
+    cols: &[Rect],
+    dense_panel: bool,
+) -> Vec<Line<'static>> {
+    // Reuse existing stage bar + volume logic from build_batch_left_column
+    let mut lines = build_batch_left_column(bb, cols, dense_panel);
+
+    // Append queue indicators (moved from draw_overlap_column)
+    if let Some(line) = bulk_queue_indicator_line(
+        "Prefetch",
+        bb.prefetch_channel_pending,
+        bb.prefetch_channel_capacity,
+    ) {
+        lines.push(line);
+    }
+    if let Some(line) =
+        bulk_queue_indicator_line("Flush", bb.flush_channel_pending, bb.flush_channel_capacity)
+    {
+        lines.push(line);
+    }
+
+    lines
+}
+
+/// Build column 2 (Controller) line content for bulk-sync diagnostics.
+///
+/// Contains: Observe/Decide/Adjust controller panel + overlap timeline + flush channel.
+/// Separated from the rendering function so it can be unit-tested.
+fn build_controller_column_lines(
+    bb: &BulkBuildProgressData,
+    dense_panel: bool,
+    deltas: Option<&ControllerDeltas>,
+    show_build_subphases: bool,
+    col_width: u16,
+) -> Vec<Line<'static>> {
+    // Controller panel (Observe / Decide / Adjust)
+    let mut lines = controller_panel_lines(bb, dense_panel, deltas);
+
+    // Overlap timeline (moved from draw_overlap_column)
+    let build_ms = bb.build_ms.unwrap_or(0.0);
+    let prefetch_recv_ms = bb.prefetch_recv_ms.unwrap_or(0.0);
+    let flush_wait_ms = bb.flush_wait_ms.unwrap_or(0.0);
+    let fetch_ms = bb.fetch_ms.unwrap_or(0.0);
+    let flush_ms = bb.flush_ms.unwrap_or(0.0);
+    let batch_count = bb.batch_count.unwrap_or(0);
+    let iteration_ms = build_ms + prefetch_recv_ms + flush_wait_ms;
+    let wait_ms = prefetch_recv_ms + flush_wait_ms;
+
+    if iteration_ms > 0.0 && build_ms > 0.0 {
+        let label_width = 5usize; // "Build" or "I/O  "
+        let bar_width = (col_width as usize).saturating_sub(label_width + 12).max(2);
+
+        let col = |ms: f64| -> usize {
+            ((ms / iteration_ms * bar_width as f64).round() as usize).min(bar_width)
+        };
+
+        // Wall clock + dominance
+        let io_ms = wait_ms;
+        let wall_color = if (2000.0..=5000.0).contains(&iteration_ms) {
+            TERMINAL_GREEN
+        } else {
+            ERROR_RED
+        };
+        let (dom_label, dom_color) = if build_ms > io_ms {
+            ("build>io", TERMINAL_GREEN)
+        } else {
+            ("io>build", AMBER)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("Batch #{} ", batch_count),
+                Style::default().fg(FOREGROUND),
+            ),
+            Span::styled(
+                format!("wall {:.1}s ", iteration_ms / 1000.0),
+                Style::default().fg(wall_color),
+            ),
+            Span::styled(dom_label.to_string(), Style::default().fg(dom_color)),
+        ]));
+
+        // CPU row
+        let cpu_annotation = if wait_ms > 0.5 {
+            format!(" {:.0}+{:.0}ms", build_ms, wait_ms)
+        } else {
+            format!(" {:.0}ms", build_ms)
+        };
+
+        if show_build_subphases {
+            let sub_phases: &[(f64, Color)] = &[
+                (bb.facts_ms.unwrap_or(0.0), AMBER),
+                (bb.resolve_ms.unwrap_or(0.0), Color::Magenta),
+                (bb.reduce_ms.unwrap_or(0.0), Color::Blue),
+                (bb.history_ms.unwrap_or(0.0), TERMINAL_GREEN),
+                (bb.address_reduce_ms.unwrap_or(0.0), CYAN),
+                (bb.activity_stats_ms.unwrap_or(0.0), FOREGROUND),
+            ];
+            let mut spans = vec![Span::styled("Build", Style::default().fg(AMBER))];
+            let mut offset = 0.0;
+            for &(dur, color) in sub_phases {
+                let s = col(offset);
+                let e = col(offset + dur);
+                let len = e.saturating_sub(s);
+                if len > 0 {
+                    spans.push(Span::styled(
+                        "\u{2588}".repeat(len),
+                        Style::default().fg(color),
+                    ));
+                }
+                offset += dur;
+            }
+            let wait_cols = col(iteration_ms).saturating_sub(col(build_ms));
+            if wait_cols > 0 {
+                spans.push(Span::styled(
+                    "\u{2591}".repeat(wait_cols),
+                    Style::default().fg(SLATE_500),
+                ));
+            }
+            spans.push(Span::styled(cpu_annotation, Style::default().fg(SLATE_500)));
+            lines.push(Line::from(spans));
+        } else {
+            let build_cols = col(build_ms).max(1);
+            let wait_cols = col(iteration_ms).saturating_sub(build_cols);
+            let mut spans = vec![
+                Span::styled("Build", Style::default().fg(AMBER)),
+                Span::styled("\u{2588}".repeat(build_cols), Style::default().fg(AMBER)),
+            ];
+            if wait_cols > 0 {
+                spans.push(Span::styled(
+                    "\u{2591}".repeat(wait_cols),
+                    Style::default().fg(SLATE_500),
+                ));
+            }
+            spans.push(Span::styled(cpu_annotation, Style::default().fg(SLATE_500)));
+            lines.push(Line::from(spans));
+        }
+
+        // I/O row
+        {
+            let fetch_cols = col(fetch_ms.min(iteration_ms));
+            let (flush_start, flush_end) = if flush_wait_ms > 0.5 {
+                (col((iteration_ms - flush_ms).max(0.0)), col(iteration_ms))
+            } else if flush_ms > 0.0 {
+                let end = col(build_ms.min(iteration_ms));
+                (col((build_ms - flush_ms).max(0.0)), end)
+            } else {
+                (0, 0)
+            };
+            let flush_start = flush_start.max(fetch_cols);
+            let flush_len = flush_end.saturating_sub(flush_start);
+
+            let mut spans = vec![Span::styled("I/O  ", Style::default().fg(SLATE_500))];
+            if fetch_cols > 0 {
+                spans.push(Span::styled(
+                    "\u{2593}".repeat(fetch_cols),
+                    Style::default().fg(TERMINAL_GREEN),
+                ));
+            }
+            let gap = flush_start.saturating_sub(fetch_cols);
+            if gap > 0 {
+                spans.push(Span::raw(" ".repeat(gap)));
+            }
+            if flush_len > 0 {
+                spans.push(Span::styled(
+                    "\u{2593}".repeat(flush_len),
+                    Style::default().fg(CYAN),
+                ));
+            }
+            spans.push(Span::styled(
+                format!(" {:.0}", fetch_ms),
+                Style::default().fg(TERMINAL_GREEN),
+            ));
+            if flush_ms > 0.0 {
+                spans.push(Span::styled(
+                    format!("+{:.0}ms", flush_ms),
+                    Style::default().fg(CYAN),
+                ));
+            } else {
+                spans.push(Span::styled("ms", Style::default().fg(SLATE_500)));
+            }
+            lines.push(Line::from(spans));
+        }
+    }
+
+    lines
 }
 
 /// Build the left column for normal per-batch bulk-build diagnostics.
@@ -5541,7 +5809,8 @@ fn draw_system_params_compact(
 mod tests {
     use super::{
         api_health_state, background_task_last_result, background_task_state_label,
-        build_finalize_left_column, bulk_queue_indicator_line, chart_height_warning,
+        build_controller_column_lines, build_finalize_left_column, build_pipeline_column,
+        build_resources_column, bulk_queue_indicator_line, chart_height_warning,
         compact_overview_layout, consumed_cells_source_color, consumed_cells_source_label,
         controller_panel_lines, dense_right_lines, detail_right_lines, diagnostics_dense_panel,
         direct_io_reads_label, disk_pressure_lines, eta_confidence_label, footer_hint_line,
@@ -5565,7 +5834,7 @@ mod tests {
         BackgroundTaskEntry, BackgroundTaskKind, BackgroundTaskState, BulkBuildProgressData,
         MemoryStatsData,
     };
-    use ratatui::layout::Rect;
+    use ratatui::layout::{Constraint, Direction, Layout, Rect};
     use ratatui::text::Line;
     use std::collections::VecDeque;
     use std::time::Instant;
@@ -7006,6 +7275,42 @@ mod tests {
     }
 
     #[test]
+    fn test_build_controller_column_contains_observe_decide_adjust() {
+        let bb = BulkBuildProgressData {
+            controller_bottleneck: Some(2), // BUILD
+            controller_recv_ema: Some(800.0),
+            controller_build_ema: Some(3200.0),
+            controller_wait_ema: Some(400.0),
+            controller_l0_ema: Some(12.0),
+            controller_fetch_threads: Some(4),
+            controller_bg_jobs: Some(6),
+            target_cells: Some(120_000),
+            facts_cell_count: Some(102_000),
+            flush_channel_pending: Some(1),
+            flush_channel_capacity: Some(4),
+            build_ms: Some(3200.0),
+            prefetch_recv_ms: Some(200.0),
+            flush_wait_ms: Some(100.0),
+            fetch_ms: Some(1800.0),
+            flush_ms: Some(500.0),
+            batch_count: Some(42),
+            ..Default::default()
+        };
+        let lines = build_controller_column_lines(&bb, false, None, false, 40);
+        let all_text: String = lines.iter().map(|l| line_text(l)).collect::<Vec<_>>().join(
+            "
+",
+        );
+        assert!(
+            all_text.contains("Observe"),
+            "missing Observe section header"
+        );
+        assert!(all_text.contains("Decide"), "missing Decide section header");
+        assert!(all_text.contains("Adjust"), "missing Adjust section header");
+        assert!(all_text.contains("BUILD"), "missing bottleneck badge");
+    }
+
+    #[test]
     fn test_iteration_budget_components() {
         // Iteration budget: build dominates, wait times are small fractions.
         let build_ms = 3000.0_f64;
@@ -7057,5 +7362,77 @@ mod tests {
             (sub_phase_sum - build_ms).abs() < 0.5,
             "sub-phase sum {sub_phase_sum} should be within 0.5ms of build_ms {build_ms}"
         );
+    }
+
+    #[test]
+    fn test_build_pipeline_column_line_count() {
+        let bb = BulkBuildProgressData {
+            batch_count: Some(42),
+            batch_block_count: Some(1200),
+            facts_ms: Some(340.0),
+            resolve_ms: Some(120.0),
+            reduce_ms: Some(280.0),
+            history_ms: Some(200.0),
+            address_reduce_ms: Some(40.0),
+            activity_stats_ms: Some(30.0),
+            build_ms: Some(1010.0),
+            cells_created: Some(42000),
+            cells_consumed: Some(38000),
+            prefetch_recv_ms: Some(200.0),
+            flush_wait_ms: Some(100.0),
+            prefetch_channel_pending: Some(3),
+            prefetch_channel_capacity: Some(8),
+            flush_channel_pending: Some(1),
+            flush_channel_capacity: Some(4),
+            ..Default::default()
+        };
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(38),
+                Constraint::Percentage(30),
+                Constraint::Percentage(32),
+            ])
+            .split(Rect::new(0, 0, 120, 20));
+        let lines = build_pipeline_column(&bb, &cols, false);
+        // Engine header(1) + 6 stages(6) + volume(1) + prefetch queue(1) + flush queue(1) = 10 min
+        assert!(
+            lines.len() >= 10,
+            "expected >=10 lines, got {}",
+            lines.len()
+        );
+        let text = line_text(&lines[0]);
+        assert!(
+            text.contains("BULK BUILD"),
+            "header missing BULK BUILD badge"
+        );
+        assert!(text.contains("42"), "header missing batch count");
+    }
+
+    #[test]
+    fn test_build_resources_column_shows_memory_and_storage() {
+        let bb = BulkBuildProgressData {
+            owner_memory_bytes: Some(12_400_000_000),
+            live_cell_count: Some(1_240_000),
+            cumulative_history_rows: Some(45_200_000),
+            cumulative_sealed_rows: Some(12_100_000),
+            ..Default::default()
+        };
+        let mem = MemoryStatsData {
+            l0_files_max: 12,
+            wbm_usage_bytes: 340_000_000,
+            wbm_budget_bytes: 1_000_000_000,
+            ..Default::default()
+        };
+        let lines = build_resources_column(&bb, Some(&mem), 40);
+        let all_text: String = lines
+            .iter()
+            .map(|l| line_text(l))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(all_text.contains("Owner mem"), "missing owner memory");
+        assert!(all_text.contains("Live cells"), "missing live cells");
+        assert!(all_text.contains("L0"), "missing L0 gauge");
+        assert!(all_text.contains("WBM"), "missing WBM gauge");
     }
 }
