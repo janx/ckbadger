@@ -187,6 +187,13 @@ impl BulkBuildEngine {
                 break;
             }
 
+            let batch_span = tracing::info_span!(
+                "bulk_batch",
+                batch_index = batch_count,
+                start_block = current_block,
+                end_block = tracing::field::Empty,
+            );
+
             // Fill buffer to match cell target.  fill_to_cell_budget seeds the
             // buffer with one chunk first (if empty) to get real cell density,
             // then pulls enough chunks for target_cells.
@@ -202,6 +209,10 @@ impl BulkBuildEngine {
                 }
             }
             let prefetch_recv_elapsed = recv_started.elapsed();
+
+            // Enter the batch span for the synchronous build + record section.
+            // Dropped explicitly before the next .await (flush_channel.send).
+            let _batch_guard = batch_span.enter();
 
             // Drain by cell count with byte safety cap.
             let drained =
@@ -231,6 +242,9 @@ impl BulkBuildEngine {
             let prepared_batch_row_count =
                 (prepared_batch.history_count, prepared_batch.sealed_count);
 
+            // Drop the batch span guard before the next .await point.
+            drop(_batch_guard);
+
             // Send to flush channel.  Blocks when channel is full (natural
             // backpressure).  Channel depth is memory-budget-derived.
             let flush_wait_started = Instant::now();
@@ -256,6 +270,7 @@ impl BulkBuildEngine {
                     last_block_number
                 )
             })?;
+            batch_span.record("end_block", last_block_u64);
             indexer.progress.record_batch(
                 last_block_u64,
                 batch_stats.block_count,
@@ -492,6 +507,7 @@ impl BulkBuildEngine {
         );
 
         // Phase 0: close channel and drain all queued flushes.
+        // No span here — contains .await points (flush_drain.wait()).
         indexer
             .bulk_build_perf
             .record_finalize_step(1, finalize_started.elapsed());
@@ -526,90 +542,138 @@ impl BulkBuildEngine {
         } = runtime;
 
         // Phase 1: activity stats (daily + hourly aggregates)
-        indexer
-            .bulk_build_perf
-            .record_finalize_step(2, finalize_started.elapsed());
-        materializer.stream_sealed_aggregate_rows(&prepared_finalize.activity_sealed_rows)?;
+        {
+            let _guard =
+                tracing::info_span!("bulk_finalize", phase = 2, label = "activity_stats").entered();
+            indexer
+                .bulk_build_perf
+                .record_finalize_step(2, finalize_started.elapsed());
+            materializer.stream_sealed_aggregate_rows(&prepared_finalize.activity_sealed_rows)?;
+        }
 
         // Phase 2: chain stats (hash rate, difficulty, uncle rate, epoch time, etc.)
-        indexer
-            .bulk_build_perf
-            .record_finalize_step(3, finalize_started.elapsed());
-        materializer.stream_sealed_aggregate_rows(&prepared_finalize.chain_sealed_rows)?;
+        {
+            let _guard =
+                tracing::info_span!("bulk_finalize", phase = 3, label = "chain_stats").entered();
+            indexer
+                .bulk_build_perf
+                .record_finalize_step(3, finalize_started.elapsed());
+            materializer.stream_sealed_aggregate_rows(&prepared_finalize.chain_sealed_rows)?;
+        }
 
         // Phase 3: final snapshot (live cell markers + index CFs)
-        indexer
-            .bulk_build_perf
-            .record_finalize_step(4, finalize_started.elapsed());
-        materializer.materialize_final_snapshot(&prepared_finalize.final_snapshot_rows)?;
+        {
+            let _guard =
+                tracing::info_span!("bulk_finalize", phase = 4, label = "final_snapshot").entered();
+            indexer
+                .bulk_build_perf
+                .record_finalize_step(4, finalize_started.elapsed());
+            materializer.materialize_final_snapshot(&prepared_finalize.final_snapshot_rows)?;
+        }
 
         // Phases 4-9: owners (flush_sealed + materialize_final per owner)
         let mut owners = owners;
 
-        indexer
-            .bulk_build_perf
-            .record_finalize_step(5, finalize_started.elapsed());
-        owners.address.flush_sealed(&mut materializer)?;
-        owners.address.materialize_final(&mut materializer)?;
+        {
+            let _guard =
+                tracing::info_span!("bulk_finalize", phase = 5, label = "owner_address").entered();
+            indexer
+                .bulk_build_perf
+                .record_finalize_step(5, finalize_started.elapsed());
+            owners.address.flush_sealed(&mut materializer)?;
+            owners.address.materialize_final(&mut materializer)?;
+        }
 
-        indexer
-            .bulk_build_perf
-            .record_finalize_step(6, finalize_started.elapsed());
-        owners.script.flush_sealed(&mut materializer)?;
-        owners.script.materialize_final(&mut materializer)?;
+        {
+            let _guard =
+                tracing::info_span!("bulk_finalize", phase = 6, label = "owner_script").entered();
+            indexer
+                .bulk_build_perf
+                .record_finalize_step(6, finalize_started.elapsed());
+            owners.script.flush_sealed(&mut materializer)?;
+            owners.script.materialize_final(&mut materializer)?;
+        }
 
-        indexer
-            .bulk_build_perf
-            .record_finalize_step(7, finalize_started.elapsed());
-        owners.token.flush_sealed(&mut materializer)?;
-        owners.token.materialize_final(&mut materializer)?;
+        {
+            let _guard =
+                tracing::info_span!("bulk_finalize", phase = 7, label = "owner_token").entered();
+            indexer
+                .bulk_build_perf
+                .record_finalize_step(7, finalize_started.elapsed());
+            owners.token.flush_sealed(&mut materializer)?;
+            owners.token.materialize_final(&mut materializer)?;
+        }
 
-        indexer
-            .bulk_build_perf
-            .record_finalize_step(8, finalize_started.elapsed());
-        owners.dao.flush_sealed(&mut materializer)?;
-        owners.dao.materialize_final(&mut materializer)?;
+        {
+            let _guard =
+                tracing::info_span!("bulk_finalize", phase = 8, label = "owner_dao").entered();
+            indexer
+                .bulk_build_perf
+                .record_finalize_step(8, finalize_started.elapsed());
+            owners.dao.flush_sealed(&mut materializer)?;
+            owners.dao.materialize_final(&mut materializer)?;
+        }
 
-        indexer
-            .bulk_build_perf
-            .record_finalize_step(9, finalize_started.elapsed());
-        owners.fiber.flush_sealed(&mut materializer)?;
-        owners.fiber.materialize_final(&mut materializer)?;
+        {
+            let _guard =
+                tracing::info_span!("bulk_finalize", phase = 9, label = "owner_fiber").entered();
+            indexer
+                .bulk_build_perf
+                .record_finalize_step(9, finalize_started.elapsed());
+            owners.fiber.flush_sealed(&mut materializer)?;
+            owners.fiber.materialize_final(&mut materializer)?;
+        }
 
-        indexer
-            .bulk_build_perf
-            .record_finalize_step(10, finalize_started.elapsed());
-        owners.object.flush_sealed(&mut materializer)?;
-        owners.object.materialize_final(&mut materializer)?;
+        {
+            let _guard =
+                tracing::info_span!("bulk_finalize", phase = 10, label = "owner_object").entered();
+            indexer
+                .bulk_build_perf
+                .record_finalize_step(10, finalize_started.elapsed());
+            owners.object.flush_sealed(&mut materializer)?;
+            owners.object.materialize_final(&mut materializer)?;
+        }
 
         // Phase 10: metadata (HODL + cell distribution tracker state)
-        indexer
-            .bulk_build_perf
-            .record_finalize_step(11, finalize_started.elapsed());
-        let mut meta_batch =
-            ckbadger_store::batch::StoreBatch::new(indexer.writer.store().as_ref());
-        meta_batch.put_hodl_tracker_state(&hodl_tracker.to_state());
-        meta_batch.put_cell_dist_tracker_state(&cell_dist_tracker.to_state());
-        if !meta_batch.is_empty() {
-            meta_batch.commit()?;
+        {
+            let _guard =
+                tracing::info_span!("bulk_finalize", phase = 11, label = "metadata").entered();
+            indexer
+                .bulk_build_perf
+                .record_finalize_step(11, finalize_started.elapsed());
+            let mut meta_batch =
+                ckbadger_store::batch::StoreBatch::new(indexer.writer.store().as_ref());
+            meta_batch.put_hodl_tracker_state(&hodl_tracker.to_state());
+            meta_batch.put_cell_dist_tracker_state(&cell_dist_tracker.to_state());
+            if !meta_batch.is_empty() {
+                meta_batch.commit()?;
+            }
         }
 
         // Phase 11: memtable flush
-        indexer
-            .bulk_build_perf
-            .record_finalize_step(12, finalize_started.elapsed());
-        flush_bulk_build_materialized_state(
-            indexer.writer.store().as_ref(),
-            indexer.writer.append_only_store(),
-        )?;
+        {
+            let _guard = tracing::info_span!("bulk_finalize", phase = 12, label = "memtable_flush")
+                .entered();
+            indexer
+                .bulk_build_perf
+                .record_finalize_step(12, finalize_started.elapsed());
+            flush_bulk_build_materialized_state(
+                indexer.writer.store().as_ref(),
+                indexer.writer.append_only_store(),
+            )?;
+        }
 
         // Phase 12: sync status + cleanup
-        indexer
-            .bulk_build_perf
-            .record_finalize_step(13, finalize_started.elapsed());
-        sync_totals.finalize_success(indexer.writer.store().as_ref(), false)?;
-        indexer.writer.store().clear_bulk_build_session_marker()?;
-        indexer.writer.refresh_latest_dao_statistics()?;
+        {
+            let _guard =
+                tracing::info_span!("bulk_finalize", phase = 13, label = "sync_cleanup").entered();
+            indexer
+                .bulk_build_perf
+                .record_finalize_step(13, finalize_started.elapsed());
+            sync_totals.finalize_success(indexer.writer.store().as_ref(), false)?;
+            indexer.writer.store().clear_bulk_build_session_marker()?;
+            indexer.writer.refresh_latest_dao_statistics()?;
+        }
 
         let finalize_elapsed = finalize_started.elapsed();
         indexer.bulk_build_perf.clear_finalize();
