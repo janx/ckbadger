@@ -318,6 +318,56 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
     Ok(report)
 }
 
+/// A WriteBatch pair ready for sequential commit.  Built by `prepare_flush`
+/// on the prepare thread, consumed by the commit thread.
+#[allow(dead_code)]
+pub(crate) struct PreparedBatch {
+    pub(crate) append_batch: rocksdb::WriteBatch,
+    pub(crate) domain_batch: rocksdb::WriteBatch,
+    pub(crate) history_count: usize,
+    pub(crate) sealed_count: usize,
+}
+
+/// Build two WriteBatch objects directly from MaterializedRows.
+///
+/// Bypasses StoreBatch / AppendBatchOp intermediate layers:
+/// - No per-row `cf_write_policy` string comparison (caller guarantees correctness).
+/// - No AppendBatchOp clone + HashMap dedup (keys are unique by construction in bulk build).
+/// - Single pass over each row vector.
+///
+/// The returned WriteBatch objects are ready for `store.write_batch_no_wal_bulk()`.
+#[allow(dead_code)]
+pub(crate) fn prepare_flush(
+    domain_store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+    history_rows: Vec<MaterializedRow>,
+    sealed_rows: Vec<MaterializedRow>,
+) -> Result<PreparedBatch> {
+    let mut append_batch = rocksdb::WriteBatch::default();
+    let mut domain_batch = rocksdb::WriteBatch::default();
+
+    for row in &history_rows {
+        if is_append_only_cf_name(row.cf_name) {
+            let cf = append_only_store.cf(row.cf_name);
+            append_batch.put_cf(cf, &row.key, &row.value);
+        } else {
+            let cf = domain_store.cf(row.cf_name);
+            domain_batch.put_cf(cf, &row.key, &row.value);
+        }
+    }
+    for row in &sealed_rows {
+        let cf = domain_store.cf(row.cf_name);
+        domain_batch.put_cf(cf, &row.key, &row.value);
+    }
+
+    Ok(PreparedBatch {
+        append_batch,
+        domain_batch,
+        history_count: history_rows.len(),
+        sealed_count: sealed_rows.len(),
+    })
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct FlushChannelStats {
     pub(crate) total_history_rows: usize,
@@ -754,6 +804,93 @@ mod tests {
         assert_eq!(report.sealed_aggregate_rows, 125);
         assert_eq!(report.history_flushes, 8);
         assert_eq!(report.sealed_aggregate_flushes, 8);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn prepare_flush_builds_correct_write_batches() {
+        let root = super::super::unique_temp_test_dir("prepare-flush");
+        std::fs::create_dir_all(&root).unwrap();
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+
+        let domain_store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
+
+        let outpoint_key = keys::encode_outpoint(&[0xCC; 32], 2);
+        let cell_info = LiveCellInfo {
+            capacity: 300_00000000,
+            lock_script_hash: vec![0x21; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x23; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        };
+        let block_header = CachedBlockHeader {
+            hash: vec![0xDD; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 200,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao: vec![0x00; 32],
+            transactions_count: 1,
+        };
+
+        let history_rows = vec![
+            MaterializedRow::new(
+                CF_CELLS,
+                outpoint_key.to_vec(),
+                bincode::serialize(&cell_info).unwrap(),
+            ),
+            MaterializedRow::new(
+                CF_BLOCK_HEADERS,
+                keys::encode_block_num(200).to_vec(),
+                bincode::serialize(&block_header).unwrap(),
+            ),
+        ];
+        use ckbadger_store::CF_STATS_CHAIN;
+        let sealed_rows = vec![MaterializedRow::new(
+            CF_STATS_CHAIN,
+            b"day:2026-03-30".to_vec(),
+            b"stats-value".to_vec(),
+        )];
+
+        let prepared =
+            prepare_flush(&domain_store, &append_store, history_rows, sealed_rows).unwrap();
+
+        assert_eq!(prepared.history_count, 2);
+        assert_eq!(prepared.sealed_count, 1);
+
+        // Commit the prepared batches and verify data landed correctly.
+        append_store
+            .write_batch_no_wal_bulk(prepared.append_batch)
+            .unwrap();
+        domain_store
+            .write_batch_no_wal_bulk(prepared.domain_batch)
+            .unwrap();
+
+        assert!(append_store
+            .get_cf(append_store.cf_cells(), &outpoint_key)
+            .unwrap()
+            .is_some());
+        assert!(domain_store
+            .get_cf(
+                domain_store.cf_block_headers(),
+                &keys::encode_block_num(200)
+            )
+            .unwrap()
+            .is_some());
 
         let _ = std::fs::remove_dir_all(&root);
     }
