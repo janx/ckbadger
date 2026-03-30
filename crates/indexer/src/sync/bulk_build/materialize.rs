@@ -345,8 +345,9 @@ pub(crate) struct PreparedBatch {
 ///
 /// The returned WriteBatch objects are ready for `store.write_batch_no_wal_bulk()`.
 ///
-/// Retained for test coverage of the MaterializedRow -> WriteBatch conversion path.
-#[cfg(test)]
+/// Used in production by `build_history_batches` to convert merged MaterializedRows
+/// into WriteBatch pairs after the parallel build phase completes.
+#[allow(dead_code)] // called after build_history_batches is rewired
 pub(crate) fn prepare_flush(
     domain_store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
