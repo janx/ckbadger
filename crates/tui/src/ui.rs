@@ -2446,18 +2446,21 @@ fn build_pipeline_column(
     // Reuse existing stage bar + volume logic from build_batch_left_column
     let mut lines = build_batch_left_column(bb, cols, dense_panel);
 
-    // Append queue indicators (moved from draw_overlap_column)
+    // Insert queue indicators right after the engine header line (index 0)
+    // so they're visible even when the panel is short.
+    let mut insert_idx = 1; // after engine header
     if let Some(line) = bulk_queue_indicator_line(
         "Prefetch",
         bb.prefetch_channel_pending,
         bb.prefetch_channel_capacity,
     ) {
-        lines.push(line);
+        lines.insert(insert_idx, line);
+        insert_idx += 1;
     }
     if let Some(line) =
         bulk_queue_indicator_line("Flush", bb.flush_channel_pending, bb.flush_channel_capacity)
     {
-        lines.push(line);
+        lines.insert(insert_idx, line);
     }
 
     lines
