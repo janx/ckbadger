@@ -773,6 +773,14 @@ impl BulkSyncPerfRun {
         self.write_report_wall_clock_breakdown(&mut content, metrics);
         self.write_report_stall_events(&mut content, metrics);
 
+        // Diagnosis section
+        let findings = build_diagnosis(metrics, self.environment.as_ref());
+        content.push_str("## Diagnosis\n\n");
+        for finding in &findings {
+            content.push_str(&format!("- {}\n", finding));
+        }
+        content.push('\n');
+
         content.push_str("## System Pressure\n\n");
         let valid_disk_windows = self
             .batch_samples
@@ -1797,6 +1805,90 @@ fn owner_memory_entries(entries: &HashMap<String, u64>) -> Vec<(String, u64)> {
     rows
 }
 
+fn build_diagnosis(
+    metrics: &BulkSyncPerfMetrics,
+    environment: Option<&crate::sys_info::EnvironmentSnapshot>,
+) -> Vec<String> {
+    let mut findings = Vec::new();
+
+    // Disk I/O latency
+    if let (Some(p95_await), Some(sat_ratio)) =
+        (metrics.p95_disk_await_ms, metrics.saturated_window_ratio)
+    {
+        if p95_await > DISK_AWAIT_SATURATION_THRESHOLD_MS && sat_ratio > 0.3 {
+            findings.push(format!(
+                "Disk I/O latency is the primary bottleneck. p95 disk await {:.1}ms with {:.0}% saturated windows.",
+                p95_await,
+                sat_ratio * 100.0,
+            ));
+        }
+    }
+
+    // Commit dominance
+    if metrics.total_batch_seconds > 0.0 {
+        let commit_ratio = metrics.total_commit_seconds / metrics.total_batch_seconds;
+        if commit_ratio > 0.5 {
+            findings.push(format!(
+                "RocksDB commit dominates batch time ({:.0}% of wall clock). Consider tuning write_buffer_size or max_background_jobs.",
+                commit_ratio * 100.0,
+            ));
+        }
+    }
+
+    // RocksDB compaction backlog
+    if metrics.max_l0_files > L0_BACKLOG_THRESHOLD as u64
+        || metrics.max_imm_memtables > IMM_MEMTABLE_BACKLOG_THRESHOLD as u64
+    {
+        findings.push(format!(
+            "RocksDB compaction backlog detected (L0={}, immutable memtables={}). Write stalls likely.",
+            metrics.max_l0_files, metrics.max_imm_memtables,
+        ));
+    }
+
+    // Large compaction pending
+    if metrics.max_compaction_pending_mb > COMPACTION_BACKLOG_THRESHOLD_MB as u64 {
+        findings.push(format!(
+            "Large compaction backlog ({}MB pending). Disk throughput may be insufficient.",
+            metrics.max_compaction_pending_mb,
+        ));
+    }
+
+    // High stall rate
+    if metrics.stall_count > 0 && metrics.batches > 0 {
+        let stall_ratio = metrics.stall_count as f64 / metrics.batches as f64;
+        if stall_ratio > 0.1 {
+            findings.push(format!(
+                "Stall rate is {:.0}% ({} stalls / {} batches). Check per-batch samples for outliers.",
+                stall_ratio * 100.0,
+                metrics.stall_count,
+                metrics.batches,
+            ));
+        }
+    }
+
+    // CPU pressure
+    if let Some(env) = environment {
+        if env.cpu_cores > 0 {
+            let threshold = env.cpu_cores as f64 * 1.5;
+            if metrics.avg_load_avg_1m > threshold {
+                findings.push(format!(
+                    "System under CPU pressure (avg load {:.1} vs {} cores).",
+                    metrics.avg_load_avg_1m, env.cpu_cores,
+                ));
+            }
+        }
+    }
+
+    // Default when no issues found
+    if findings.is_empty() {
+        findings.push(
+            "No bottleneck detected from aggregate metrics. Check per-batch samples for localized anomalies.".to_string(),
+        );
+    }
+
+    findings
+}
+
 fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
     if !path.exists() {
         return Ok(None);
@@ -1898,7 +1990,10 @@ fn read_optional_f64(map: &HashMap<String, String>, key: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BatchSample, BulkSyncPerfRun, HeartbeatSample, RocksDbConfig};
+    use super::{
+        build_diagnosis, BatchSample, BulkSyncPerfMetrics, BulkSyncPerfRun, HeartbeatSample,
+        RocksDbConfig,
+    };
     use crate::sync::MaterializationReport;
     use crate::sys_info::EnvironmentSnapshot;
     use tempfile::TempDir;
@@ -3250,5 +3345,135 @@ mod tests {
         let sample = test_batch_sample(10, 1.0, 20.0, 0, 0, 0);
         let json = serde_json::to_string(&sample).unwrap();
         assert!(!json.contains("bottleneck"));
+    }
+
+    fn build_test_metrics(batches: u64, blocks: u64) -> BulkSyncPerfMetrics {
+        use std::collections::HashMap;
+        BulkSyncPerfMetrics {
+            run_id: "test-run".to_string(),
+            status: "completed".to_string(),
+            started_at_utc: "2026-01-01T00:00:00.000Z".to_string(),
+            finished_at_utc: Some("2026-01-01T01:00:00.000Z".to_string()),
+            wall_clock_seconds: 3600.0,
+            batches,
+            blocks,
+            total_txs: blocks * 2,
+            blocks_per_sec_wall: blocks as f64 / 3600.0,
+            txs_per_sec_wall: (blocks * 2) as f64 / 3600.0,
+            blocks_per_batch: blocks as f64 / batches as f64,
+            avg_batch_seconds: 3.0,
+            p95_batch_seconds: 5.0,
+            p99_batch_seconds: 8.0,
+            total_commit_seconds: 10.0,
+            avg_commit_ms: 100.0,
+            p95_commit_ms: 200.0,
+            p99_commit_ms: 300.0,
+            finalize_seconds: 60.0,
+            max_compaction_pending_mb: 100,
+            max_l0_files: 10,
+            max_imm_memtables: 3,
+            avg_load_avg_1m: 4.0,
+            max_load_avg_1m: 8.0,
+            min_mem_available_mb: 8000,
+            avg_disk_write_mb_per_batch: 50.0,
+            avg_disk_util_pct: Some(40.0),
+            p95_disk_util_pct: Some(60.0),
+            avg_disk_await_ms: Some(2.0),
+            p95_disk_await_ms: Some(4.0),
+            max_disk_avg_queue_depth: Some(0.5),
+            peak_disk_write_mb_s: Some(200.0),
+            peak_disk_write_iops: Some(5000.0),
+            saturated_window_count: 0,
+            saturated_window_ratio: Some(0.0),
+            disk_telemetry_status: "available".to_string(),
+            peak_owner_memory_bytes: HashMap::new(),
+            peak_live_cell_count: 0,
+            streamed_history_rows: 0,
+            sealed_aggregate_rows: 0,
+            final_snapshot_rows: 0,
+            history_flushes: 0,
+            sealed_aggregate_flushes: 0,
+            final_snapshot_flushes: 0,
+            total_batch_seconds: 30.0,
+            stall_count: 0,
+        }
+    }
+
+    #[test]
+    fn test_diagnosis_identifies_disk_io_bottleneck() {
+        let mut metrics = build_test_metrics(10, 100);
+        metrics.p95_disk_await_ms = Some(12.0);
+        metrics.saturated_window_ratio = Some(0.5);
+        let findings = build_diagnosis(&metrics, None);
+        assert!(findings.iter().any(|f| f.contains("Disk I/O latency")));
+    }
+
+    #[test]
+    fn test_diagnosis_identifies_commit_dominance() {
+        let mut metrics = build_test_metrics(10, 100);
+        metrics.total_commit_seconds = 60.0;
+        metrics.total_batch_seconds = 100.0;
+        let findings = build_diagnosis(&metrics, None);
+        assert!(findings.iter().any(|f| f.contains("commit dominates")));
+    }
+
+    #[test]
+    fn test_diagnosis_identifies_compaction_backlog() {
+        let mut metrics = build_test_metrics(10, 100);
+        metrics.max_l0_files = 40;
+        metrics.max_imm_memtables = 10;
+        let findings = build_diagnosis(&metrics, None);
+        assert!(findings.iter().any(|f| f.contains("compaction backlog")));
+    }
+
+    #[test]
+    fn test_diagnosis_identifies_large_compaction_pending() {
+        let mut metrics = build_test_metrics(10, 100);
+        metrics.max_compaction_pending_mb = 400;
+        let findings = build_diagnosis(&metrics, None);
+        assert!(findings.iter().any(|f| f.contains("pending")));
+    }
+
+    #[test]
+    fn test_diagnosis_identifies_high_stall_rate() {
+        let mut metrics = build_test_metrics(100, 1000);
+        metrics.stall_count = 15;
+        let findings = build_diagnosis(&metrics, None);
+        assert!(findings.iter().any(|f| f.contains("Stall rate")));
+    }
+
+    #[test]
+    fn test_diagnosis_identifies_cpu_pressure() {
+        let mut metrics = build_test_metrics(10, 100);
+        metrics.avg_load_avg_1m = 60.0;
+        let env = EnvironmentSnapshot {
+            cpu_cores: 16,
+            ..Default::default()
+        };
+        let findings = build_diagnosis(&metrics, Some(&env));
+        assert!(findings.iter().any(|f| f.contains("CPU pressure")));
+    }
+
+    #[test]
+    fn test_diagnosis_returns_no_bottleneck_when_clean() {
+        let metrics = build_test_metrics(10, 100);
+        let findings = build_diagnosis(&metrics, None);
+        assert!(findings.iter().any(|f| f.contains("No bottleneck")));
+    }
+
+    #[test]
+    fn test_report_includes_diagnosis_section() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-diag", TEST_BUILD_VERSION).unwrap();
+        let mut sample = test_batch_sample(100, 2.0, 50.0, 0, 0, 0);
+        sample.disk_state = Some("saturated".to_string());
+        sample.disk_await_ms = Some(15.0);
+        sample.disk_util_pct = Some(95.0);
+        run.record_batch_sample(sample).unwrap();
+        run.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-diag/report.md")).unwrap();
+        assert!(report.contains("## Diagnosis"));
     }
 }
