@@ -350,7 +350,6 @@ impl ScriptOwner {
         Ok(all_rows)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn build_final_rows(
         &self,
         domain_store: &CkbadgerStore,

@@ -777,7 +777,7 @@ fn materialize_finalize_phases(
     domain_store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
     prepared: PreparedFinalizeArtifacts,
-    mut owners: CoreOwners,
+    owners: CoreOwners,
     hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker,
     cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker,
     perf_stats: &crate::sync::diagnostics::BulkBuildPerfStats,
@@ -809,47 +809,62 @@ fn materialize_finalize_phases(
         materializer.materialize_final_snapshot(&prepared.final_snapshot_rows)?;
     }
 
-    // Phases 4-9: owners (flush_sealed + materialize_final per owner)
+    // Phases 4-9: build owner rows in parallel, write sequentially
     {
         let _guard =
-            tracing::info_span!("bulk_finalize", phase = 5, label = "owner_address").entered();
+            tracing::info_span!("bulk_finalize", phase = 5, label = "owners_build").entered();
         perf_stats.record_finalize_step(5, finalize_started.elapsed());
-        owners.address.flush_sealed(&mut materializer)?;
-        owners.address.materialize_final(&mut materializer)?;
-    }
-    {
-        let _guard =
-            tracing::info_span!("bulk_finalize", phase = 6, label = "owner_script").entered();
+
+        // Build rows in parallel — each owner is independent
+        let (addr_result, fiber_result, dao_result, object_result, script_result, token_result) =
+            std::thread::scope(|s| {
+                let h_addr = s.spawn(|| owners.address.build_final_rows());
+                let h_script = s.spawn(|| {
+                    owners
+                        .script
+                        .build_final_rows(domain_store, append_only_store)
+                });
+                let h_token = s.spawn(|| owners.token.build_final_rows(domain_store));
+                let h_object = s.spawn(|| owners.object.build_final_rows());
+
+                // dao + fiber are small, run inline on the scope's thread
+                let dao_result = owners.dao.build_final_rows();
+                let fiber_result = owners.fiber.build_final_rows();
+
+                (
+                    h_addr.join().expect("address build_final_rows panicked"),
+                    fiber_result,
+                    dao_result,
+                    h_object.join().expect("object build_final_rows panicked"),
+                    h_script.join().expect("script build_final_rows panicked"),
+                    h_token.join().expect("token build_final_rows panicked"),
+                )
+            });
+
+        let addr_rows = addr_result?;
+        let fiber_rows = fiber_result?;
+        let dao_rows = dao_result?;
+        let object_rows = object_result?;
+        let script_rows = script_result?;
+        let token_rows = token_result?;
+
+        // Write all rows sequentially through Materializer
         perf_stats.record_finalize_step(6, finalize_started.elapsed());
-        owners.script.flush_sealed(&mut materializer)?;
-        owners.script.materialize_final(&mut materializer)?;
-    }
-    {
-        let _guard =
-            tracing::info_span!("bulk_finalize", phase = 7, label = "owner_token").entered();
-        perf_stats.record_finalize_step(7, finalize_started.elapsed());
-        owners.token.flush_sealed(&mut materializer)?;
-        owners.token.materialize_final(&mut materializer)?;
-    }
-    {
-        let _guard = tracing::info_span!("bulk_finalize", phase = 8, label = "owner_dao").entered();
-        perf_stats.record_finalize_step(8, finalize_started.elapsed());
-        owners.dao.flush_sealed(&mut materializer)?;
-        owners.dao.materialize_final(&mut materializer)?;
-    }
-    {
-        let _guard =
-            tracing::info_span!("bulk_finalize", phase = 9, label = "owner_fiber").entered();
-        perf_stats.record_finalize_step(9, finalize_started.elapsed());
-        owners.fiber.flush_sealed(&mut materializer)?;
-        owners.fiber.materialize_final(&mut materializer)?;
-    }
-    {
-        let _guard =
-            tracing::info_span!("bulk_finalize", phase = 10, label = "owner_object").entered();
-        perf_stats.record_finalize_step(10, finalize_started.elapsed());
-        owners.object.flush_sealed(&mut materializer)?;
-        owners.object.materialize_final(&mut materializer)?;
+        for rows in [
+            &addr_rows,
+            &script_rows,
+            &token_rows,
+            &dao_rows,
+            &fiber_rows,
+            &object_rows,
+        ] {
+            if !rows.sealed_rows.is_empty() {
+                materializer.stream_sealed_aggregate_rows(&rows.sealed_rows)?;
+            }
+            if !rows.snapshot_rows.is_empty() {
+                materializer.materialize_final_snapshot(&rows.snapshot_rows)?;
+            }
+        }
     }
 
     // Phase 10: metadata (HODL + cell distribution tracker state)

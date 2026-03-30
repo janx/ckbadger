@@ -352,7 +352,6 @@ impl ObjectOwner {
         Ok(final_rows)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn build_final_rows(&self) -> Result<super::super::materialize::OwnerFinalRows> {
         Ok(super::super::materialize::OwnerFinalRows {
             sealed_rows: self.build_sealed_rows(),

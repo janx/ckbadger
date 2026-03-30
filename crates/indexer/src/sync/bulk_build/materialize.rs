@@ -40,7 +40,6 @@ impl MaterializedRow {
 /// `sealed_rows` are daily/hourly aggregates (SealedAggregate policy).
 /// `snapshot_rows` are current-state data (FinalSnapshot policy).
 #[derive(Debug, Default, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) struct OwnerFinalRows {
     pub(crate) sealed_rows: Vec<MaterializedRow>,
     pub(crate) snapshot_rows: Vec<MaterializedRow>,
