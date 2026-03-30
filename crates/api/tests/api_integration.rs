@@ -2603,17 +2603,23 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
 async fn test_charts_block_time_distribution_with_data() {
     let store = test_store();
 
+    // Blocks in epoch 0 (complete) + tip in epoch 1 so epoch 0 counts
     let mut batch = StoreBatch::new(store.as_ref());
-    for (number, ts_ms) in [(0i64, 0i64), (1, 1_000), (2, 3_000)] {
+    for (number, ts_ms, epoch) in [
+        (0i64, 0i64, 0i64),
+        (1, 1_000, 0),
+        (2, 3_000, 0),
+        (3, 4_000, 1),
+    ] {
         batch.put_block_header(
             number,
             &CachedBlockHeader {
                 hash: vec![number as u8; 32],
                 parent_hash: vec![0u8; 32],
                 timestamp: ts_ms,
-                epoch_number: 0,
+                epoch_number: epoch,
                 epoch_index: 0,
-                epoch_length: 1,
+                epoch_length: 3,
                 dao: vec![0; 32],
                 transactions_count: 1,
             },
@@ -2637,6 +2643,7 @@ async fn test_charts_block_time_distribution_with_data() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 501);
 
+    // Epoch 0 deltas: 0→1 = 1s, 1→2 = 2s
     let point_1s = data.iter().find(|point| point["date"] == "1.0").unwrap();
     let point_2s = data.iter().find(|point| point["date"] == "2.0").unwrap();
     assert_eq!(point_1s["value"], "50.000");

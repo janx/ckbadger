@@ -1735,7 +1735,10 @@ async fn get_block_time_distribution_chart(
     ok(response)
 }
 
-const BLOCK_TIME_DIST_RECENT_BLOCKS: usize = 50_000;
+/// Number of complete epochs to include in the block-time distribution.
+/// ~1 week at ~4 h/epoch. CKB adjusts difficulty per epoch, so aligning
+/// on epoch boundaries gives a clean view of network behaviour.
+const BLOCK_TIME_DIST_EPOCHS: i64 = 42;
 const BLOCK_TIME_DIST_BUCKET_MS: i64 = 100;
 const BLOCK_TIME_DIST_MAX_MS: i64 = 50_000;
 const BLOCK_TIME_DIST_BUCKET_COUNT: usize =
@@ -1775,25 +1778,71 @@ fn block_time_dist_has_data(response: &ChartResponse) -> bool {
         .any(|p| p.value.parse::<f64>().is_ok_and(|v| v > 0.0))
 }
 
+/// Try to resolve a precise block range from EpochStats.
+/// Returns `Some((end_block, fetch_count))` on success.
+fn epoch_range_to_block_range(
+    store: &ckbadger_store::CkbadgerStore,
+    first_epoch: i64,
+    last_epoch: i64,
+) -> Option<(i64, usize)> {
+    let first = store.get_epoch_stats(first_epoch).ok()??;
+    let last = store.get_epoch_stats(last_epoch).ok()??;
+    let end_block = last.end_block?;
+    // One extra predecessor for the first time delta
+    let start_block = (first.start_block - 1).max(0);
+    Some((end_block, (end_block - start_block + 1) as usize))
+}
+
 pub(crate) fn build_block_time_distribution_response(
     store: &ckbadger_store::CkbadgerStore,
 ) -> Result<ChartResponse, String> {
+    let (_, tip_header) = store
+        .get_sync_tip_block()
+        .map_err(|e| e.to_string())?
+        .ok_or("no synced blocks")?;
+
+    if tip_header.epoch_number < 1 {
+        return Ok(ChartResponse {
+            data: build_block_time_distribution_data(&vec![0u64; BLOCK_TIME_DIST_BUCKET_COUNT], 0),
+            title: "Block Time Distribution (Last 0 Epochs)".to_string(),
+            y_axis_label: "Block Ratio (%)".to_string(),
+            y2_axis_label: None,
+        });
+    }
+
+    // Last N complete epochs — current epoch may be incomplete
+    let last_epoch = tip_header.epoch_number - 1;
+    let first_epoch = (last_epoch - BLOCK_TIME_DIST_EPOCHS + 1).max(0);
+    let actual_epochs = last_epoch - first_epoch + 1;
+
+    // Precise range via EpochStats (two point lookups); fall back to scan from tip
+    let mut headers = match epoch_range_to_block_range(store, first_epoch, last_epoch) {
+        Some((end_block, count)) => store
+            .list_blocks_desc(Some(end_block), count)
+            .map_err(|e| e.to_string())?,
+        None => {
+            let estimate = (actual_epochs as usize + 1) * 2000 + 100;
+            store
+                .list_blocks_desc(None, estimate)
+                .map_err(|e| e.to_string())?
+        }
+    };
+    headers.reverse();
+
     let mut bucket_counts = vec![0u64; BLOCK_TIME_DIST_BUCKET_COUNT];
     let mut total_blocks = 0u64;
 
-    let mut headers = store
-        .list_blocks_desc(None, BLOCK_TIME_DIST_RECENT_BLOCKS + 1)
-        .map_err(|e| e.to_string())?;
-
     if headers.len() >= 2 {
-        headers.reverse();
         for window in headers.windows(2) {
             let (prev_number, prev_header) = &window[0];
             let (curr_number, curr_header) = &window[1];
             if *curr_number != *prev_number + 1 {
                 continue;
             }
-
+            // Only count blocks within the epoch range
+            if curr_header.epoch_number < first_epoch || curr_header.epoch_number > last_epoch {
+                continue;
+            }
             let diff_ms = curr_header.timestamp - prev_header.timestamp;
             if let Some(bucket_index) = block_time_ms_to_bucket_index(diff_ms) {
                 bucket_counts[bucket_index] += 1;
@@ -1804,7 +1853,7 @@ pub(crate) fn build_block_time_distribution_response(
 
     Ok(ChartResponse {
         data: build_block_time_distribution_data(&bucket_counts, total_blocks),
-        title: "Block Time Distribution (Recent 50000 blocks)".to_string(),
+        title: format!("Block Time Distribution (Last {} Epochs)", actual_epochs),
         y_axis_label: "Block Ratio (%)".to_string(),
         y2_axis_label: None,
     })
@@ -3621,21 +3670,27 @@ mod tests {
     }
 
     #[test]
-    fn test_build_block_time_distribution_response_uses_recent_headers() {
+    fn test_build_block_time_distribution_response_epoch_aligned() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
+        // Blocks in epoch 0 (complete) + one block in epoch 1 (tip → epoch 0 is complete)
         let mut batch = StoreBatch::new(&store);
-        for (number, ts_ms) in [(0i64, 0i64), (1, 1_000), (2, 3_000)] {
+        for (number, ts_ms, epoch) in [
+            (0i64, 0i64, 0i64),
+            (1, 1_000, 0),
+            (2, 3_000, 0),
+            (3, 4_000, 1),
+        ] {
             batch.put_block_header(
                 number,
                 &CachedBlockHeader {
                     hash: vec![number as u8; 32],
                     parent_hash: vec![0u8; 32],
                     timestamp: ts_ms,
-                    epoch_number: 0,
+                    epoch_number: epoch,
                     epoch_index: 0,
-                    epoch_length: 1,
+                    epoch_length: 3,
                     dao: vec![0; 32],
                     transactions_count: 1,
                 },
@@ -3644,12 +3699,10 @@ mod tests {
         batch.commit().unwrap();
 
         let response = build_block_time_distribution_response(&store).unwrap();
-        assert_eq!(
-            response.title,
-            "Block Time Distribution (Recent 50000 blocks)"
-        );
+        assert_eq!(response.title, "Block Time Distribution (Last 1 Epochs)");
         assert_eq!(response.data.len(), BLOCK_TIME_DIST_BUCKET_COUNT);
 
+        // Epoch 0 block deltas: 0→1 = 1s, 1→2 = 2s (block 3 is epoch 1, excluded)
         let at_1s = response
             .data
             .iter()
@@ -3670,17 +3723,22 @@ mod tests {
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
         let mut batch = StoreBatch::new(&store);
-        // 0->1 is 60s (overflow), 1->2 is 1s (in-range)
-        for (number, ts_ms) in [(0i64, 0i64), (1, 60_000), (2, 61_000)] {
+        // 0→1 is 60s (overflow), 1→2 is 1s (in-range), block 3 is tip in epoch 1
+        for (number, ts_ms, epoch) in [
+            (0i64, 0i64, 0i64),
+            (1, 60_000, 0),
+            (2, 61_000, 0),
+            (3, 62_000, 1),
+        ] {
             batch.put_block_header(
                 number,
                 &CachedBlockHeader {
                     hash: vec![number as u8; 32],
                     parent_hash: vec![0u8; 32],
                     timestamp: ts_ms,
-                    epoch_number: 0,
+                    epoch_number: epoch,
                     epoch_index: 0,
-                    epoch_length: 1,
+                    epoch_length: 3,
                     dao: vec![0; 32],
                     transactions_count: 1,
                 },
@@ -3701,6 +3759,34 @@ mod tests {
             .unwrap();
         assert_eq!(at_1s.value, "100.000");
         assert_eq!(at_50s.value, "0.000");
+    }
+
+    #[test]
+    fn test_build_block_time_distribution_response_empty_when_epoch_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        for (number, ts_ms) in [(0i64, 0i64), (1, 1_000)] {
+            batch.put_block_header(
+                number,
+                &CachedBlockHeader {
+                    hash: vec![number as u8; 32],
+                    parent_hash: vec![0u8; 32],
+                    timestamp: ts_ms,
+                    epoch_number: 0,
+                    epoch_index: number as i32,
+                    epoch_length: 100,
+                    dao: vec![0; 32],
+                    transactions_count: 1,
+                },
+            );
+        }
+        batch.commit().unwrap();
+
+        let response = build_block_time_distribution_response(&store).unwrap();
+        assert_eq!(response.title, "Block Time Distribution (Last 0 Epochs)");
+        assert!(!block_time_dist_has_data(&response));
     }
 
     #[test]

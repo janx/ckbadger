@@ -214,48 +214,6 @@ fn fetch_explorer_daily(
 }
 
 /// Fetch a single explorer statistic value from `/api/v1/statistics/{name}`.
-fn fetch_explorer_statistic_f64(
-    ctx: &CheckContext,
-    statistic: &str,
-    field: &str,
-) -> anyhow::Result<f64> {
-    let explorer_url = ctx
-        .explorer_url
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Explorer URL not set"))?;
-    let url = format!(
-        "{}/api/v1/statistics/{}",
-        explorer_url.trim_end_matches('/'),
-        statistic
-    );
-
-    let resp = ctx
-        .http
-        .get(&url)
-        .header("Content-Type", "application/vnd.api+json")
-        .header("Accept", "application/vnd.api+json")
-        .send()?;
-    let status = resp.status();
-    if !status.is_success() {
-        anyhow::bail!("GET {} returned {}", url, status);
-    }
-
-    let body: serde_json::Value = resp.json()?;
-    let raw = body
-        .get("data")
-        .and_then(|d| d.get("attributes"))
-        .and_then(|a| a.get(field))
-        .ok_or_else(|| anyhow::anyhow!("missing explorer field '{}'", field))?;
-
-    match raw {
-        serde_json::Value::String(s) => s.parse::<f64>().map_err(Into::into),
-        serde_json::Value::Number(n) => n
-            .as_f64()
-            .ok_or_else(|| anyhow::anyhow!("invalid explorer number '{}'", n)),
-        _ => anyhow::bail!("unexpected explorer value type for '{}'", field),
-    }
-}
-
 /// Perform the actual HTTP fetch from the explorer API.
 fn fetch_from_explorer_api(
     ctx: &CheckContext,
@@ -1538,66 +1496,111 @@ impl Check for ExplorerTreasuryAmount {
     }
 }
 
-/// X16: Compare weighted average from /charts/block-time-distribution vs explorer average_block_time.
-pub struct ExplorerBlockTimeDistribution;
+/// X16: Compare weighted average from /charts/block-time-distribution vs
+/// recent daily averages from /charts/average-block-time (internal consistency).
+pub struct BlockTimeDistributionConsistency;
 
-impl Check for ExplorerBlockTimeDistribution {
+/// Number of recent daily averages to compare against the distribution.
+/// 42 epochs ≈ 7 days at ~4h/epoch, so 7 days covers the window.
+const BLOCK_TIME_CONSISTENCY_RECENT_DAYS: usize = 7;
+
+impl Check for BlockTimeDistributionConsistency {
     fn name(&self) -> &'static str {
-        "explorer_block_time_distribution"
+        "block_time_distribution_consistency"
     }
     fn description(&self) -> &'static str {
-        "Derived average_block_time from distribution vs explorer statistic"
+        "Block-time distribution weighted avg vs recent daily avg_block_time"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
     }
     fn requires_explorer(&self) -> bool {
-        true
+        false
     }
     fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
         Some(1)
     }
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        // 1. Weighted average from distribution (last ~50k blocks)
         let distribution: ChartResponse = api_get(ctx, "charts/block-time-distribution")?;
 
-        // Guard: empty or all-zero distribution
         let has_nonzero = distribution
             .data
             .iter()
             .any(|p| p.value.parse::<f64>().unwrap_or(0.0) > 0.0);
         if distribution.data.is_empty() || !has_nonzero {
-            return Ok(CheckResult::fail(1, vec![Finding {
-                entity: "distribution".to_string(),
-                details: vec![format!(
-                    "block-time-distribution chart has no data ({} points, all ratios zero); secondary store may not have replicated block headers yet",
-                    distribution.data.len()
-                )],
-            }]));
+            return Ok(CheckResult::fail(
+                1,
+                vec![Finding {
+                    entity: "distribution".to_string(),
+                    details: vec![format!(
+                        "block-time-distribution chart has no data ({} points, all ratios zero)",
+                        distribution.data.len()
+                    )],
+                }],
+            ));
         }
 
-        let our_ms = weighted_avg_block_time_ms_from_distribution(&distribution.data)
+        let dist_ms = weighted_avg_block_time_ms_from_distribution(&distribution.data)
             .ok_or_else(|| anyhow::anyhow!(
                 "failed to derive avg block time from distribution: {} points, unexpected parse failure",
                 distribution.data.len()
             ))?;
-        let explorer_ms =
-            fetch_explorer_statistic_f64(ctx, "average_block_time", "average_block_time")?;
 
+        // 2. Average from recent daily stats
+        let daily_chart: ChartResponse = api_get(ctx, "charts/average-block-time")?;
+        let recent_days: Vec<&ChartDataPoint> = daily_chart
+            .data
+            .iter()
+            .rev()
+            .take(BLOCK_TIME_CONSISTENCY_RECENT_DAYS)
+            .collect();
+
+        if recent_days.is_empty() {
+            return Ok(CheckResult::fail(
+                1,
+                vec![Finding {
+                    entity: "daily".to_string(),
+                    details: vec!["average-block-time chart has no data".to_string()],
+                }],
+            ));
+        }
+
+        let mut sum_ms = 0.0f64;
+        let mut count = 0usize;
+        for point in &recent_days {
+            if let Ok(seconds) = point.value.parse::<f64>() {
+                if seconds > 0.0 {
+                    sum_ms += seconds * 1000.0;
+                    count += 1;
+                }
+            }
+        }
+
+        if count == 0 {
+            return Ok(CheckResult::fail(
+                1,
+                vec![Finding {
+                    entity: "daily".to_string(),
+                    details: vec!["no valid daily avg_block_time values in recent days".to_string()],
+                }],
+            ));
+        }
+
+        let daily_ms = sum_ms / count as f64;
+
+        // 3. Compare — both from our own data, 20% tolerance for window mismatch
         let mut findings = vec![];
-        if let Some(f) = compare_tolerance_f64_values(
-            our_ms,
-            explorer_ms,
-            "latest",
-            "average_block_time_ms",
-            0.30,
-        ) {
+        if let Some(f) =
+            compare_tolerance_f64_values(dist_ms, daily_ms, "latest", "avg_block_time_ms", 0.20)
+        {
             findings.push(f);
         }
 
         if findings.is_empty() {
             Ok(CheckResult::pass_with_detail(
                 1,
-                format!("ours={our_ms:.2}ms, explorer={explorer_ms:.2}ms"),
+                format!("distribution={dist_ms:.2}ms, daily_avg={daily_ms:.2}ms ({count} days)",),
             ))
         } else {
             Ok(CheckResult::fail(1, findings))
@@ -2021,32 +2024,32 @@ impl Check for ExplorerTotalDepositorsCount {
 /// Return all explorer comparison checks.
 pub fn explorer_checks() -> Vec<Box<dyn Check>> {
     vec![
-        Box::new(ExplorerTxCount),                // X1
-        Box::new(ExplorerTotalDeposit),           // X2
-        Box::new(ExplorerHashRate),               // X3
-        Box::new(ExplorerDifficulty),             // X4
-        Box::new(ExplorerKnowledgeSize),          // X5
-        Box::new(ExplorerUncleRate),              // X6
-        Box::new(ExplorerLiveCellCount),          // X7
-        Box::new(ExplorerDeadCellCount),          // X8
-        Box::new(ExplorerDailyDeposit),           // X9
-        Box::new(ExplorerCirculationRatio),       // X10
-        Box::new(ExplorerCirculatingSupply),      // X11
-        Box::new(ExplorerBurnt),                  // X12
-        Box::new(ExplorerDepositCompensation),    // X13
-        Box::new(ExplorerMiningReward),           // X14
-        Box::new(ExplorerTreasuryAmount),         // X15
-        Box::new(ExplorerBlockTimeDistribution),  // X16
-        Box::new(NervosDaoTotalDeposit),          // X17
-        Box::new(NervosDaoDepositorsCount),       // X18
-        Box::new(NervosDaoUnclaimedCompensation), // X19
-        Box::new(NervosDaoClaimedCompensation),   // X20
-        Box::new(NervosDaoAverageDepositTime),    // X21
-        Box::new(NervosDaoMiningReward),          // X22
-        Box::new(NervosDaoDepositCompensation),   // X23
-        Box::new(NervosDaoTreasuryAmount),        // X24
-        Box::new(NervosDaoEstimatedApc),          // X25
-        Box::new(ExplorerTotalDepositorsCount),   // X26
+        Box::new(ExplorerTxCount),                  // X1
+        Box::new(ExplorerTotalDeposit),             // X2
+        Box::new(ExplorerHashRate),                 // X3
+        Box::new(ExplorerDifficulty),               // X4
+        Box::new(ExplorerKnowledgeSize),            // X5
+        Box::new(ExplorerUncleRate),                // X6
+        Box::new(ExplorerLiveCellCount),            // X7
+        Box::new(ExplorerDeadCellCount),            // X8
+        Box::new(ExplorerDailyDeposit),             // X9
+        Box::new(ExplorerCirculationRatio),         // X10
+        Box::new(ExplorerCirculatingSupply),        // X11
+        Box::new(ExplorerBurnt),                    // X12
+        Box::new(ExplorerDepositCompensation),      // X13
+        Box::new(ExplorerMiningReward),             // X14
+        Box::new(ExplorerTreasuryAmount),           // X15
+        Box::new(BlockTimeDistributionConsistency), // X16
+        Box::new(NervosDaoTotalDeposit),            // X17
+        Box::new(NervosDaoDepositorsCount),         // X18
+        Box::new(NervosDaoUnclaimedCompensation),   // X19
+        Box::new(NervosDaoClaimedCompensation),     // X20
+        Box::new(NervosDaoAverageDepositTime),      // X21
+        Box::new(NervosDaoMiningReward),            // X22
+        Box::new(NervosDaoDepositCompensation),     // X23
+        Box::new(NervosDaoTreasuryAmount),          // X24
+        Box::new(NervosDaoEstimatedApc),            // X25
+        Box::new(ExplorerTotalDepositorsCount),     // X26
     ]
 }
 
@@ -2285,7 +2288,7 @@ mod tests {
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
         assert_eq!(names.len(), unique.len(), "Duplicate check names found");
-        assert!(names.contains(&"explorer_block_time_distribution"));
+        assert!(names.contains(&"block_time_distribution_consistency"));
         assert!(names.contains(&"nervos_dao_total_deposit"));
         assert!(names.contains(&"nervos_dao_depositors_count"));
         assert!(names.contains(&"nervos_dao_unclaimed_compensation"));
