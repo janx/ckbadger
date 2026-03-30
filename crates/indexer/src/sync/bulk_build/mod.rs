@@ -2620,6 +2620,11 @@ fn build_history_batches(
         }
     }
 
+    // Sort by (cf_name, key) so RocksDB memtable skiplist inserts are
+    // near-sequential per CF, improving cache hit rate during commit.
+    // Uses rayon par_sort (~20 cores) instead of single-threaded sort.
+    all_rows.par_sort_unstable_by(|a, b| a.cf_name.cmp(b.cf_name).then_with(|| a.key.cmp(&b.key)));
+
     Ok(HistoryBuildResult {
         rows: all_rows,
         object_activity_count_deltas: all_object_deltas,

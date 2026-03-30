@@ -351,14 +351,12 @@ pub(crate) struct PreparedBatch {
 pub(crate) fn prepare_flush(
     domain_store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
-    mut history_rows: Vec<MaterializedRow>,
-    mut sealed_rows: Vec<MaterializedRow>,
+    history_rows: Vec<MaterializedRow>,
+    sealed_rows: Vec<MaterializedRow>,
 ) -> Result<PreparedBatch> {
-    // Sort by (cf_name, key) so RocksDB memtable skiplist inserts are
-    // near-sequential within each CF, improving CPU cache hit rate.
-    history_rows.sort_unstable_by(|a, b| a.cf_name.cmp(b.cf_name).then_with(|| a.key.cmp(&b.key)));
-    sealed_rows.sort_unstable_by(|a, b| a.cf_name.cmp(b.cf_name).then_with(|| a.key.cmp(&b.key)));
-
+    // Rows arrive pre-sorted by (cf_name, key) from build_history_batches
+    // (rayon par_sort). This makes RocksDB memtable skiplist inserts
+    // near-sequential per CF, improving cache hit rate during commit.
     let mut append_batch = rocksdb::WriteBatch::default();
     let mut domain_batch = rocksdb::WriteBatch::default();
 
