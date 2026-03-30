@@ -1339,6 +1339,62 @@ pub fn merge_write_batches(target: &mut WriteBatch, source: WriteBatch) {
     *target = WriteBatch::from_data(&merged);
 }
 
+/// Pack multiple WriteBatch fragments into one batch with a single linear pass.
+///
+/// Empty batches are ignored. Operation order is preserved exactly as provided.
+/// The resulting batch preserves the header sequence bytes from the first
+/// non-empty batch and recomputes the total entry count once.
+pub fn pack_write_batches_in_order(batches: Vec<WriteBatch>) -> WriteBatch {
+    let mut non_empty_batches = batches
+        .into_iter()
+        .filter(|batch| !batch.is_empty())
+        .collect::<Vec<_>>();
+
+    if non_empty_batches.is_empty() {
+        return WriteBatch::default();
+    }
+
+    if non_empty_batches.len() == 1 {
+        return non_empty_batches
+            .pop()
+            .expect("non-empty batch collection must contain one batch");
+    }
+
+    let first_data = non_empty_batches[0].data();
+    let mut total_count = u32::from_le_bytes(
+        first_data[8..12]
+            .try_into()
+            .expect("WriteBatch header must be at least 12 bytes"),
+    );
+    let mut total_len = first_data.len();
+
+    for batch in non_empty_batches.iter().skip(1) {
+        let data = batch.data();
+        let batch_count = u32::from_le_bytes(
+            data[8..12]
+                .try_into()
+                .expect("WriteBatch header must be at least 12 bytes"),
+        );
+        total_count = total_count
+            .checked_add(batch_count)
+            .expect("WriteBatch pack: operation count overflow");
+        total_len = total_len
+            .checked_add(data.len() - 12)
+            .expect("WriteBatch pack: serialized byte length overflow");
+    }
+
+    let mut packed = Vec::with_capacity(total_len);
+    packed.extend_from_slice(&first_data[..8]);
+    packed.extend_from_slice(&total_count.to_le_bytes());
+    packed.extend_from_slice(&first_data[12..]);
+
+    for batch in non_empty_batches.iter().skip(1) {
+        packed.extend_from_slice(&batch.data()[12..]);
+    }
+
+    WriteBatch::from_data(&packed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2273,5 +2329,74 @@ mod tests {
 
         merge_write_batches(&mut a, b);
         assert_eq!(a.len(), 1);
+    }
+
+    #[test]
+    fn pack_write_batches_in_order_preserves_entry_order() {
+        let mut first = rocksdb::WriteBatch::default();
+        first.put(b"k1", b"v1");
+
+        let mut second = rocksdb::WriteBatch::default();
+        second.delete(b"k2");
+
+        let mut third = rocksdb::WriteBatch::default();
+        third.put(b"k3", b"v3");
+
+        let packed = pack_write_batches_in_order(vec![first, second, third]);
+
+        let mut expected = rocksdb::WriteBatch::default();
+        expected.put(b"k1", b"v1");
+        expected.delete(b"k2");
+        expected.put(b"k3", b"v3");
+
+        assert_eq!(packed.len(), 3);
+        assert_eq!(packed.data(), expected.data());
+    }
+
+    #[test]
+    fn pack_write_batches_in_order_skips_empty_batches() {
+        let empty = rocksdb::WriteBatch::default();
+
+        let mut middle = rocksdb::WriteBatch::default();
+        middle.put(b"k1", b"v1");
+
+        let packed =
+            pack_write_batches_in_order(vec![empty, middle, rocksdb::WriteBatch::default()]);
+
+        let mut expected = rocksdb::WriteBatch::default();
+        expected.put(b"k1", b"v1");
+
+        assert_eq!(packed.len(), 1);
+        assert_eq!(packed.data(), expected.data());
+    }
+
+    #[test]
+    fn pack_write_batches_in_order_matches_left_fold_for_small_inputs() {
+        let mut first = rocksdb::WriteBatch::default();
+        first.put(b"k1", b"v1");
+
+        let mut second = rocksdb::WriteBatch::default();
+        second.put(b"k2", b"v2");
+
+        let mut third = rocksdb::WriteBatch::default();
+        third.delete(b"k3");
+
+        let packed =
+            pack_write_batches_in_order(vec![first, rocksdb::WriteBatch::default(), second, third]);
+
+        let mut left_fold = rocksdb::WriteBatch::default();
+        let mut batch_a = rocksdb::WriteBatch::default();
+        batch_a.put(b"k1", b"v1");
+        merge_write_batches(&mut left_fold, batch_a);
+        merge_write_batches(&mut left_fold, rocksdb::WriteBatch::default());
+        let mut batch_b = rocksdb::WriteBatch::default();
+        batch_b.put(b"k2", b"v2");
+        merge_write_batches(&mut left_fold, batch_b);
+        let mut batch_c = rocksdb::WriteBatch::default();
+        batch_c.delete(b"k3");
+        merge_write_batches(&mut left_fold, batch_c);
+
+        assert_eq!(packed.len(), left_fold.len());
+        assert_eq!(packed.data(), left_fold.data());
     }
 }

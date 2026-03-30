@@ -2135,6 +2135,8 @@ struct HistoryBuildResult {
     tx_actions_list: Vec<ckbadger_store::types::TxActions>,
 }
 
+const HISTORY_SHARD_BLOCKS: usize = 512;
+
 struct BlockHistoryBatches {
     append_wb: rocksdb::WriteBatch,
     domain_wb: rocksdb::WriteBatch,
@@ -2593,6 +2595,31 @@ fn build_history_batches(
     domain_store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
 ) -> Result<HistoryBuildResult> {
+    build_history_batches_with_shard_size(
+        arena,
+        resolved,
+        interner,
+        is_mainnet,
+        token_info_cache,
+        written_lock_script_ids,
+        domain_store,
+        append_only_store,
+        HISTORY_SHARD_BLOCKS,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_history_batches_with_shard_size(
+    arena: &facts::FactsArena,
+    resolved: &[facts::ResolvedTxFacts<'_>],
+    interner: &interner::FrozenIdentityView,
+    is_mainnet: bool,
+    token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
+    written_lock_script_ids: &mut FxHashSet<crate::sync::types::InternId>,
+    domain_store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+    shard_block_count: usize,
+) -> Result<HistoryBuildResult> {
     if arena.txs.len() != resolved.len() {
         bail!(
             "bulk build history tx count mismatch: facts_txs={} resolved_txs={}",
@@ -2600,20 +2627,20 @@ fn build_history_batches(
             resolved.len()
         );
     }
+    if shard_block_count == 0 {
+        bail!("bulk build history shard size must be greater than zero");
+    }
 
     let detectors = build_activity_protocol_detectors(resolved, interner, is_mainnet)?;
 
-    let block_results: Vec<Result<BlockHistoryBatches>> = arena
+    let shard_results: Vec<Result<Vec<BlockHistoryBatches>>> = arena
         .blocks
-        .par_iter()
-        .map(|block| {
-            let block_txs = &arena.txs[block.tx_range.clone()];
-            let block_resolved = &resolved[block.tx_range.clone()];
-            build_history_batches_for_block(
-                block,
-                block_txs,
-                block_resolved,
-                &arena.cells,
+        .par_chunks(shard_block_count)
+        .map(|block_shard| {
+            build_history_batches_for_shard(
+                block_shard,
+                arena,
+                resolved,
                 interner,
                 &detectors,
                 token_info_cache,
@@ -2623,45 +2650,52 @@ fn build_history_batches(
         })
         .collect();
 
-    // Merge results preserving block order via WriteBatch byte-level concatenation.
-    let mut final_append_wb = rocksdb::WriteBatch::default();
-    let mut final_domain_wb = rocksdb::WriteBatch::default();
+    let mut append_fragments = Vec::with_capacity(arena.blocks.len());
+    let mut domain_fragments = Vec::with_capacity(arena.blocks.len().saturating_mul(2));
     let mut total_row_count: usize = 0;
     let mut all_object_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_identity_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_tx_actions: Vec<ckbadger_store::types::TxActions> = Vec::new();
-    for result in block_results {
-        let block = result?;
-        ckbadger_store::merge_write_batches(&mut final_append_wb, block.append_wb);
-        ckbadger_store::merge_write_batches(&mut final_domain_wb, block.domain_wb);
-        total_row_count += block.row_count;
-        // Cross-batch dedup: only write lock script candidates whose InternId has
-        // not been seen in any previous batch. The set persists across batches
-        // via BulkBuildRuntimeState, eliminating ~97% of duplicate writes.
-        for (id, key, value) in block.lock_script_candidates {
-            if written_lock_script_ids.insert(id) {
-                final_domain_wb.put_cf(domain_store.cf(CF_LOCK_SCRIPTS), &key, &value);
-                total_row_count += 1;
+    for result in shard_results {
+        let block_results = result?;
+        for block in block_results {
+            append_fragments.push(block.append_wb);
+            domain_fragments.push(block.domain_wb);
+            total_row_count += block.row_count;
+
+            // Cross-batch dedup: only write lock script candidates whose InternId has
+            // not been seen in any previous batch. The set persists across batches
+            // via BulkBuildRuntimeState, eliminating ~97% of duplicate writes.
+            let mut lock_script_batch = rocksdb::WriteBatch::default();
+            for (id, key, value) in block.lock_script_candidates {
+                if written_lock_script_ids.insert(id) {
+                    lock_script_batch.put_cf(domain_store.cf(CF_LOCK_SCRIPTS), &key, &value);
+                    total_row_count += 1;
+                }
             }
-        }
-        all_tx_actions.extend(block.tx_actions_list);
-        for (k, v) in block.object_activity_count_deltas {
-            let entry = all_object_deltas.entry(k).or_insert(0);
-            *entry = entry
-                .checked_add(v)
-                .ok_or_else(|| anyhow!("object activity delta overflow during parallel merge"))?;
-        }
-        for (k, v) in block.identity_activity_count_deltas {
-            let entry = all_identity_deltas.entry(k).or_insert(0);
-            *entry = entry
-                .checked_add(v)
-                .ok_or_else(|| anyhow!("identity activity delta overflow during parallel merge"))?;
+            if !lock_script_batch.is_empty() {
+                domain_fragments.push(lock_script_batch);
+            }
+
+            all_tx_actions.extend(block.tx_actions_list);
+            for (k, v) in block.object_activity_count_deltas {
+                let entry = all_object_deltas.entry(k).or_insert(0);
+                *entry = entry.checked_add(v).ok_or_else(|| {
+                    anyhow!("object activity delta overflow during parallel merge")
+                })?;
+            }
+            for (k, v) in block.identity_activity_count_deltas {
+                let entry = all_identity_deltas.entry(k).or_insert(0);
+                *entry = entry.checked_add(v).ok_or_else(|| {
+                    anyhow!("identity activity delta overflow during parallel merge")
+                })?;
+            }
         }
     }
 
     Ok(HistoryBuildResult {
-        append_wb: final_append_wb,
-        domain_wb: final_domain_wb,
+        append_wb: ckbadger_store::pack_write_batches_in_order(append_fragments),
+        domain_wb: ckbadger_store::pack_write_batches_in_order(domain_fragments),
         history_row_count: total_row_count,
         object_activity_count_deltas: all_object_deltas,
         identity_activity_count_deltas: all_identity_deltas,
@@ -3281,6 +3315,36 @@ fn build_history_batches_for_block(
         identity_activity_count_deltas,
         tx_actions_list,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_history_batches_for_shard(
+    block_shard: &[facts::BlockFacts],
+    arena: &facts::FactsArena,
+    resolved: &[facts::ResolvedTxFacts<'_>],
+    interner: &interner::FrozenIdentityView,
+    detectors: &[Box<dyn crate::db::writer::activities::ProtocolDetector>],
+    token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
+    domain_store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+) -> Result<Vec<BlockHistoryBatches>> {
+    let mut block_results = Vec::with_capacity(block_shard.len());
+    for block in block_shard {
+        let block_txs = &arena.txs[block.tx_range.clone()];
+        let block_resolved = &resolved[block.tx_range.clone()];
+        block_results.push(build_history_batches_for_block(
+            block,
+            block_txs,
+            block_resolved,
+            &arena.cells,
+            interner,
+            detectors,
+            token_info_cache,
+            domain_store,
+            append_only_store,
+        )?);
+    }
+    Ok(block_results)
 }
 
 #[cfg(test)]
@@ -6862,6 +6926,68 @@ mod tests {
             set_size_after_first,
             "set should not grow"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn shard_history_preserves_write_batch_bytes_and_lock_script_dedup() {
+        let blocks = bulk_build_object_activity_fixture();
+        let interner = interner::IdentityInterner::default();
+        let (arena, _) =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&blocks, &interner)
+                .expect("facts arena");
+        let resolved = sequencer::BulkSequencer::default()
+            .resolve(&arena)
+            .expect("resolved txs");
+        let frozen = interner.snapshot_for_reads();
+
+        let root = unique_temp_test_dir("bulk-build-shard-history-test");
+        std::fs::create_dir_all(&root).expect("create root");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("create domain");
+        std::fs::create_dir_all(&append_path).expect("create append");
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("open domain");
+        let append_store = CkbadgerStore::open_append_only(&append_path).expect("open append");
+
+        let mut single_shard_written_ids = FxHashSet::default();
+        let single_shard = build_history_batches_with_shard_size(
+            &arena,
+            &resolved,
+            &frozen,
+            true,
+            &FxHashMap::default(),
+            &mut single_shard_written_ids,
+            &domain_store,
+            &append_store,
+            arena.blocks.len().max(1),
+        )
+        .expect("single shard history");
+
+        let mut per_block_written_ids = FxHashSet::default();
+        let per_block = build_history_batches_with_shard_size(
+            &arena,
+            &resolved,
+            &frozen,
+            true,
+            &FxHashMap::default(),
+            &mut per_block_written_ids,
+            &domain_store,
+            &append_store,
+            1,
+        )
+        .expect("per-block shard history");
+
+        assert_eq!(per_block.history_row_count, single_shard.history_row_count);
+        assert_eq!(
+            bincode::serialize(&per_block.tx_actions_list).expect("serialize per-block tx actions"),
+            bincode::serialize(&single_shard.tx_actions_list)
+                .expect("serialize single-shard tx actions")
+        );
+        assert_eq!(per_block.append_wb.data(), single_shard.append_wb.data());
+        assert_eq!(per_block.domain_wb.data(), single_shard.domain_wb.data());
+        assert_eq!(per_block_written_ids, single_shard_written_ids);
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }
