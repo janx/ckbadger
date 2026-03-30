@@ -662,12 +662,12 @@ fn finalize_step_label(step: u8) -> String {
         2 => "activity_stats",
         3 => "chain_stats",
         4 => "final_snapshot",
-        5 => "owner:address",
-        6 => "owner:script",
-        7 => "owner:token",
-        8 => "owner:dao",
-        9 => "owner:fiber",
-        10 => "owner:object",
+        5 => "owners_build",
+        6 => "owners_write",
+        7 => "unused",
+        8 => "unused",
+        9 => "unused",
+        10 => "unused",
         11 => "metadata",
         12 => "memtable_flush",
         13 => "sync_status",
@@ -1364,7 +1364,7 @@ mod tests {
     fn test_finalize_step_label_covers_all_steps() {
         assert_eq!(finalize_step_label(1), "drain_flush");
         assert_eq!(finalize_step_label(3), "chain_stats");
-        assert_eq!(finalize_step_label(5), "owner:address");
+        assert_eq!(finalize_step_label(5), "owners_build");
         assert_eq!(finalize_step_label(13), "sync_status");
         assert_eq!(finalize_step_label(0), "unknown");
         assert_eq!(finalize_step_label(14), "unknown");
@@ -1401,7 +1401,7 @@ mod tests {
         stats.batch_count.store(1, Ordering::Relaxed);
         stats.record_finalize_step(5, std::time::Duration::from_millis(2500));
         let snap = stats.snapshot().unwrap();
-        assert_eq!(snap.finalize_phase.as_deref(), Some("owner:address"));
+        assert_eq!(snap.finalize_phase.as_deref(), Some("owners_build"));
         assert_eq!(snap.finalize_step, Some(4)); // 0-indexed
         assert_eq!(snap.finalize_steps_total, Some(13));
         assert!((snap.finalize_elapsed_ms.unwrap() - 2500.0).abs() < 1.0);
