@@ -3252,52 +3252,27 @@ fn draw_background_tasks(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let bb = app.sync_status.as_ref().and_then(|s| s.bulk_build.as_ref());
-
     let visible_refs = visible_background_tasks(&app.background_tasks);
     let visible: Vec<BackgroundTaskEntry> = visible_refs.iter().map(|t| (*t).clone()).collect();
     let (mut jobs, mut watchers) = split_background_tasks(&visible);
     sort_background_tasks(&mut jobs);
     sort_background_tasks(&mut watchers);
 
-    let has_controller = bb.is_some();
     let has_watchers = !watchers.is_empty();
     let has_jobs = !jobs.is_empty();
 
-    if !has_controller && !has_watchers && !has_jobs {
+    if !has_watchers && !has_jobs {
         return;
     }
 
-    // 3-column horizontal layout: Controller | Watchers | Jobs
+    // 2-column horizontal layout: Watchers | Jobs
+    // (Controller moved to row 3 diagnostics panel col 2)
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(40),
-            Constraint::Percentage(30),
-            Constraint::Percentage(30),
-        ])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    // ── Column 1: Controller observation window ──
-    let ctrl_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(SLATE_800))
-        .title(Span::styled(
-            " Controller ",
-            Style::default().fg(FOREGROUND),
-        ));
-    if let Some(bb) = bb {
-        let dense = cols[0].height <= 4;
-        let lines = controller_panel_lines(bb, dense, app.controller_deltas.as_ref());
-        f.render_widget(Paragraph::new(lines).block(ctrl_block), cols[0]);
-    } else {
-        f.render_widget(
-            Paragraph::new(Span::styled("-", Style::default().fg(SLATE_500))).block(ctrl_block),
-            cols[0],
-        );
-    }
-
-    // ── Column 2: Watchers ──
+    // ── Column 1: Watchers ──
     let watcher_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(SLATE_800))
@@ -3338,15 +3313,15 @@ fn draw_background_tasks(f: &mut Frame, app: &App, area: Rect) {
             .header(watcher_header)
             .block(watcher_block)
             .style(Style::default().fg(FOREGROUND));
-        f.render_widget(watcher_table, cols[1]);
+        f.render_widget(watcher_table, cols[0]);
     } else {
         f.render_widget(
             Paragraph::new(Span::styled("-", Style::default().fg(SLATE_500))).block(watcher_block),
-            cols[1],
+            cols[0],
         );
     }
 
-    // ── Column 3: Jobs ──
+    // ── Column 2: Jobs ──
     let jobs_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(SLATE_800))
@@ -3386,42 +3361,33 @@ fn draw_background_tasks(f: &mut Frame, app: &App, area: Rect) {
             .header(jobs_header)
             .block(jobs_block)
             .style(Style::default().fg(FOREGROUND));
-        f.render_widget(jobs_table, cols[2]);
+        f.render_widget(jobs_table, cols[1]);
     } else {
         f.render_widget(
             Paragraph::new(Span::styled("-", Style::default().fg(SLATE_500))).block(jobs_block),
-            cols[2],
+            cols[1],
         );
     }
 }
 
 /// Height needed for the bottom row section (0 if hidden).
 ///
-/// The bottom row uses a 3-column horizontal layout: Controller | Watchers | Jobs.
-/// It is visible when any of the three columns has content.
+/// The bottom row uses a 2-column horizontal layout: Watchers | Jobs.
+/// It is visible when either column has content.
 fn background_tasks_height(app: &App) -> u16 {
-    let has_controller = app
-        .sync_status
-        .as_ref()
-        .and_then(|s| s.bulk_build.as_ref())
-        .is_some();
-
     let visible_refs = visible_background_tasks(&app.background_tasks);
     let visible: Vec<BackgroundTaskEntry> = visible_refs.iter().map(|t| (*t).clone()).collect();
     let (jobs, watchers) = split_background_tasks(&visible);
 
-    let has_content = has_controller || !jobs.is_empty() || !watchers.is_empty();
-    if !has_content {
+    if jobs.is_empty() && watchers.is_empty() {
         return 0;
     }
 
-    // Controller needs 9 lines (2 border + 7 detail lines).
     // Tables need 3 + rows (2 border + 1 header + rows).
-    let controller_h: u16 = if has_controller { 9 } else { 5 };
     let jobs_h = desired_background_task_table_height(jobs.len()).max(5);
     let watchers_h = desired_background_task_table_height(watchers.len()).max(5);
 
-    controller_h.max(jobs_h).max(watchers_h).min(12)
+    jobs_h.max(watchers_h).min(12)
 }
 
 fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
