@@ -2135,15 +2135,9 @@ struct HistoryBuildResult {
     tx_actions_list: Vec<ckbadger_store::types::TxActions>,
 }
 
-const HISTORY_SHARD_BLOCKS: usize = 512;
-
-struct BlockHistoryBatches {
-    append_wb: rocksdb::WriteBatch,
-    domain_wb: rocksdb::WriteBatch,
-    row_count: usize,
-    /// Lock script candidates collected separately for cross-batch dedup in the
-    /// serial merge phase. Each entry is (InternId, key_bytes, value_bytes).
-    lock_script_candidates: Vec<(crate::sync::types::InternId, Vec<u8>, Vec<u8>)>,
+struct BlockHistoryRows {
+    rows: Vec<materialize::MaterializedRow>,
+    lock_script_rows: Vec<(crate::sync::types::InternId, materialize::MaterializedRow)>,
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     tx_actions_list: Vec<ckbadger_store::types::TxActions>,
@@ -2595,19 +2589,87 @@ fn build_history_batches(
     domain_store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
 ) -> Result<HistoryBuildResult> {
-    build_history_batches_with_shard_size(
-        arena,
-        resolved,
-        interner,
-        is_mainnet,
-        token_info_cache,
-        written_lock_script_ids,
-        domain_store,
-        append_only_store,
-        HISTORY_SHARD_BLOCKS,
-    )
+    if arena.txs.len() != resolved.len() {
+        bail!(
+            "bulk build history tx count mismatch: facts_txs={} resolved_txs={}",
+            arena.txs.len(),
+            resolved.len()
+        );
+    }
+
+    let detectors = build_activity_protocol_detectors(resolved, interner, is_mainnet)?;
+
+    // par_iter: one rayon task per block — maximum parallelism, no WriteBatch overhead.
+    let block_results: Vec<Result<BlockHistoryRows>> = arena
+        .blocks
+        .par_iter()
+        .map(|block| {
+            let block_txs = &arena.txs[block.tx_range.clone()];
+            let block_resolved = &resolved[block.tx_range.clone()];
+            build_history_rows_for_block(
+                block,
+                block_txs,
+                block_resolved,
+                &arena.cells,
+                interner,
+                &detectors,
+                token_info_cache,
+            )
+        })
+        .collect();
+
+    // Merge via Vec::extend (fast pointer moves, no WriteBatch left-fold).
+    let estimated_rows = arena.txs.len().saturating_mul(6);
+    let mut all_rows: Vec<materialize::MaterializedRow> = Vec::with_capacity(estimated_rows);
+    let mut all_object_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
+    let mut all_identity_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
+    let mut all_tx_actions: Vec<ckbadger_store::types::TxActions> = Vec::new();
+    for result in block_results {
+        let block_rows = result?;
+        all_rows.extend(block_rows.rows);
+
+        // Cross-batch dedup: only write lock script rows whose InternId has
+        // not been seen in any previous batch. The set persists across batches
+        // via BulkBuildRuntimeState, eliminating ~97% of duplicate writes.
+        for (id, row) in block_rows.lock_script_rows {
+            if written_lock_script_ids.insert(id) {
+                all_rows.push(row);
+            }
+        }
+
+        all_tx_actions.extend(block_rows.tx_actions_list);
+        for (k, v) in block_rows.object_activity_count_deltas {
+            let entry = all_object_deltas.entry(k).or_insert(0);
+            *entry = entry
+                .checked_add(v)
+                .ok_or_else(|| anyhow!("object activity delta overflow during parallel merge"))?;
+        }
+        for (k, v) in block_rows.identity_activity_count_deltas {
+            let entry = all_identity_deltas.entry(k).or_insert(0);
+            *entry = entry
+                .checked_add(v)
+                .ok_or_else(|| anyhow!("identity activity delta overflow during parallel merge"))?;
+        }
+    }
+
+    // Convert to WriteBatch pair (single serial pass).
+    let row_count = all_rows.len();
+    let prepared =
+        materialize::prepare_flush(domain_store, append_only_store, all_rows, Vec::new())?;
+
+    Ok(HistoryBuildResult {
+        append_wb: prepared.append_batch,
+        domain_wb: prepared.domain_batch,
+        history_row_count: row_count,
+        object_activity_count_deltas: all_object_deltas,
+        identity_activity_count_deltas: all_identity_deltas,
+        tx_actions_list: all_tx_actions,
+    })
 }
 
+/// Thin wrapper that ignores `shard_block_count` and delegates to `build_history_batches`.
+/// Retained for test compatibility.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn build_history_batches_with_shard_size(
     arena: &facts::FactsArena,
@@ -2618,89 +2680,18 @@ fn build_history_batches_with_shard_size(
     written_lock_script_ids: &mut FxHashSet<crate::sync::types::InternId>,
     domain_store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
-    shard_block_count: usize,
+    _shard_block_count: usize,
 ) -> Result<HistoryBuildResult> {
-    if arena.txs.len() != resolved.len() {
-        bail!(
-            "bulk build history tx count mismatch: facts_txs={} resolved_txs={}",
-            arena.txs.len(),
-            resolved.len()
-        );
-    }
-    if shard_block_count == 0 {
-        bail!("bulk build history shard size must be greater than zero");
-    }
-
-    let detectors = build_activity_protocol_detectors(resolved, interner, is_mainnet)?;
-
-    let shard_results: Vec<Result<Vec<BlockHistoryBatches>>> = arena
-        .blocks
-        .par_chunks(shard_block_count)
-        .map(|block_shard| {
-            build_history_batches_for_shard(
-                block_shard,
-                arena,
-                resolved,
-                interner,
-                &detectors,
-                token_info_cache,
-                domain_store,
-                append_only_store,
-            )
-        })
-        .collect();
-
-    let mut append_fragments = Vec::with_capacity(arena.blocks.len());
-    let mut domain_fragments = Vec::with_capacity(arena.blocks.len().saturating_mul(2));
-    let mut total_row_count: usize = 0;
-    let mut all_object_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
-    let mut all_identity_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
-    let mut all_tx_actions: Vec<ckbadger_store::types::TxActions> = Vec::new();
-    for result in shard_results {
-        let block_results = result?;
-        for block in block_results {
-            append_fragments.push(block.append_wb);
-            domain_fragments.push(block.domain_wb);
-            total_row_count += block.row_count;
-
-            // Cross-batch dedup: only write lock script candidates whose InternId has
-            // not been seen in any previous batch. The set persists across batches
-            // via BulkBuildRuntimeState, eliminating ~97% of duplicate writes.
-            let mut lock_script_batch = rocksdb::WriteBatch::default();
-            for (id, key, value) in block.lock_script_candidates {
-                if written_lock_script_ids.insert(id) {
-                    lock_script_batch.put_cf(domain_store.cf(CF_LOCK_SCRIPTS), &key, &value);
-                    total_row_count += 1;
-                }
-            }
-            if !lock_script_batch.is_empty() {
-                domain_fragments.push(lock_script_batch);
-            }
-
-            all_tx_actions.extend(block.tx_actions_list);
-            for (k, v) in block.object_activity_count_deltas {
-                let entry = all_object_deltas.entry(k).or_insert(0);
-                *entry = entry.checked_add(v).ok_or_else(|| {
-                    anyhow!("object activity delta overflow during parallel merge")
-                })?;
-            }
-            for (k, v) in block.identity_activity_count_deltas {
-                let entry = all_identity_deltas.entry(k).or_insert(0);
-                *entry = entry.checked_add(v).ok_or_else(|| {
-                    anyhow!("identity activity delta overflow during parallel merge")
-                })?;
-            }
-        }
-    }
-
-    Ok(HistoryBuildResult {
-        append_wb: ckbadger_store::pack_write_batches_in_order(append_fragments),
-        domain_wb: ckbadger_store::pack_write_batches_in_order(domain_fragments),
-        history_row_count: total_row_count,
-        object_activity_count_deltas: all_object_deltas,
-        identity_activity_count_deltas: all_identity_deltas,
-        tx_actions_list: all_tx_actions,
-    })
+    build_history_batches(
+        arena,
+        resolved,
+        interner,
+        is_mainnet,
+        token_info_cache,
+        written_lock_script_ids,
+        domain_store,
+        append_only_store,
+    )
 }
 
 /// Serialize into a pre-allocated Vec, avoiding realloc overhead of `bincode::serialize`
@@ -2708,9 +2699,7 @@ fn build_history_batches_with_shard_size(
 ///
 /// Trade-off: traverses the value twice (once for size, once for serialization).
 /// Net positive for larger structs where avoiding multiple Vec reallocations
-/// outweighs the sizing pass. Retained for test-only code paths
-/// (e.g. `build_object_collection_activity_rows`).
-#[cfg(test)]
+/// outweighs the sizing pass.
 fn bincode_serialize_presized<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
     let size = bincode::serialized_size(value)
         .map_err(|e| anyhow!("bincode size estimation failed: {}", e))?;
@@ -2721,7 +2710,7 @@ fn bincode_serialize_presized<T: serde::Serialize>(value: &T) -> Result<Vec<u8>>
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_history_batches_for_block(
+fn build_history_rows_for_block(
     block: &facts::BlockFacts,
     block_txs: &[facts::TxFacts],
     block_resolved: &[facts::ResolvedTxFacts<'_>],
@@ -2729,13 +2718,8 @@ fn build_history_batches_for_block(
     interner: &interner::FrozenIdentityView,
     detectors: &[Box<dyn crate::db::writer::activities::ProtocolDetector>],
     _token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-    domain_store: &CkbadgerStore,
-    append_only_store: &CkbadgerStore,
-) -> Result<BlockHistoryBatches> {
-    let mut append_wb = rocksdb::WriteBatch::default();
-    let mut domain_wb = rocksdb::WriteBatch::default();
-    let mut vbuf = Vec::with_capacity(256);
-    let mut row_count: usize = 0;
+) -> Result<BlockHistoryRows> {
+    let mut rows = Vec::with_capacity(block_txs.len().saturating_mul(6));
     let mut object_activity_count_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut identity_activity_count_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
 
@@ -2750,21 +2734,16 @@ fn build_history_batches_for_block(
         dao: block.dao.to_vec(),
         transactions_count: block.transactions_count,
     };
-    vbuf.clear();
-    bincode::serialize_into(&mut vbuf, &header)
-        .map_err(|e| anyhow!("bincode serialize block header failed: {}", e))?;
-    domain_wb.put_cf(
-        domain_store.cf(CF_BLOCK_HEADERS),
-        keys::encode_block_num(block.number),
-        &vbuf,
-    );
-    row_count += 1;
-    domain_wb.put_cf(
-        domain_store.cf(CF_BLOCK_HASH_INDEX),
-        block.hash,
-        block.number.to_le_bytes(),
-    );
-    row_count += 1;
+    rows.push(materialize::MaterializedRow::new(
+        CF_BLOCK_HEADERS,
+        keys::encode_block_num(block.number).to_vec(),
+        bincode_serialize_presized(&header)?,
+    ));
+    rows.push(materialize::MaterializedRow::new(
+        CF_BLOCK_HASH_INDEX,
+        block.hash.to_vec(),
+        block.number.to_le_bytes().to_vec(),
+    ));
 
     if block_txs.len() != block_resolved.len() {
         bail!(
@@ -2805,13 +2784,16 @@ fn build_history_batches_for_block(
             &keys::encode_block_num(tx.block_number),
             &keys::encode_tx_idx(tx.tx_index),
         ]);
-        vbuf.clear();
-        bincode::serialize_into(&mut vbuf, &entry)
-            .map_err(|e| anyhow!("bincode serialize tx index entry failed: {}", e))?;
-        domain_wb.put_cf(domain_store.cf(CF_TX_INDEX), &tx_location, &vbuf);
-        row_count += 1;
-        domain_wb.put_cf(domain_store.cf(CF_TX_HASH_MAP), tx.hash, &tx_location);
-        row_count += 1;
+        rows.push(materialize::MaterializedRow::new(
+            CF_TX_INDEX,
+            tx_location.clone(),
+            bincode_serialize_presized(&entry)?,
+        ));
+        rows.push(materialize::MaterializedRow::new(
+            CF_TX_HASH_MAP,
+            tx.hash.to_vec(),
+            tx_location,
+        ));
 
         let mut touched_lock_hash_ids = FxHashSet::default();
         for output in resolved_tx.cells.iter() {
@@ -2821,17 +2803,16 @@ fn build_history_batches_for_block(
             touched_lock_hash_ids.insert(input.lock_script_hash_id);
         }
         for lock_hash_id in touched_lock_hash_ids {
-            domain_wb.put_cf(
-                domain_store.cf(CF_ADDR_TXS),
+            rows.push(materialize::MaterializedRow::new(
+                CF_ADDR_TXS,
                 keys::encode_addr_tx_key(
                     interner.resolve_bytes(lock_hash_id),
                     tx.block_number,
                     tx.tx_index,
                     &tx.hash,
                 ),
-                [],
-            );
-            row_count += 1;
+                vec![],
+            ));
         }
 
         if tx.is_cellbase {
@@ -2839,25 +2820,19 @@ fn build_history_batches_for_block(
         }
 
         for input in &resolved_tx.resolved_inputs {
-            vbuf.clear();
-            bincode::serialize_into(
-                &mut vbuf,
-                &ConsumedCellMeta {
-                    created_at_block: input.created_at_block,
-                    consumed_at_block: tx.block_number,
-                    consumed_by_tx: Some(tx.hash.to_vec()),
-                },
-            )
-            .map_err(|e| anyhow!("bincode serialize consumed cell meta failed: {}", e))?;
-            domain_wb.put_cf(
-                domain_store.cf(CF_CONSUMED_CELLS),
+            rows.push(materialize::MaterializedRow::new(
+                CF_CONSUMED_CELLS,
                 keys::encode_outpoint(
                     &input.outpoint.tx_hash,
                     resolved_input_outpoint_index_i16(input)?,
-                ),
-                &vbuf,
-            );
-            row_count += 1;
+                )
+                .to_vec(),
+                bincode_serialize_presized(&ConsumedCellMeta {
+                    created_at_block: input.created_at_block,
+                    consumed_at_block: tx.block_number,
+                    consumed_by_tx: Some(tx.hash.to_vec()),
+                })?,
+            ));
         }
     }
 
@@ -2890,20 +2865,15 @@ fn build_history_batches_for_block(
                     is_burn: transfer.is_burn,
                     timestamp: tx.timestamp_ms,
                 };
-                vbuf.clear();
-                bincode::serialize_into(&mut vbuf, &record).map_err(|e| {
-                    anyhow!("bincode serialize token transfer record failed: {}", e)
-                })?;
-                domain_wb.put_cf(
-                    domain_store.cf(CF_TOKEN_TRANSFERS),
+                rows.push(materialize::MaterializedRow::new(
+                    CF_TOKEN_TRANSFERS,
                     keys::encode_token_transfer_key(
                         &transfer.type_script_hash,
                         tx.block_number,
                         *idx,
                     ),
-                    &vbuf,
-                );
-                row_count += 1;
+                    bincode_serialize_presized(&record)?,
+                ));
                 *idx = idx.checked_add(1).ok_or_else(|| {
                     anyhow!(
                         "token transfer index overflow in bulk build history rows: type_hash=0x{} block={}",
@@ -3044,19 +3014,15 @@ fn build_history_batches_for_block(
             // (activities.rs:795) and they are never displayed. Activity stats
             // accumulation uses tx_actions_list (in-memory), not CF_TX_ACTIONS.
             if !tx_actions.is_cellbase {
-                vbuf.clear();
-                bincode::serialize_into(&mut vbuf, &tx_actions)
-                    .map_err(|e| anyhow!("bincode serialize tx actions failed: {}", e))?;
-                domain_wb.put_cf(
-                    domain_store.cf(CF_TX_ACTIONS),
+                rows.push(materialize::MaterializedRow::new(
+                    CF_TX_ACTIONS,
                     keys::encode_tx_actions_key(
                         tx_actions.block_number,
                         tx_actions.tx_index,
                         &tx_actions.tx_hash,
                     ),
-                    &vbuf,
-                );
-                row_count += 1;
+                    bincode_serialize_presized(&tx_actions)?,
+                ));
             }
             tx_actions_list.push(tx_actions);
         }
@@ -3173,22 +3139,18 @@ fn build_history_batches_for_block(
                 &tx.block_hash,
                 tx.timestamp_ms,
             ) {
-                vbuf.clear();
-                bincode::serialize_into(&mut vbuf, &entry).map_err(|e| {
-                    anyhow!("bincode serialize dotbit activity entry failed: {}", e)
-                })?;
-                domain_wb.put_cf(
-                    domain_store.cf(CF_IDENTITY_COLLECTION_ACTIVITIES),
+                rows.push(materialize::MaterializedRow::new(
+                    CF_IDENTITY_COLLECTION_ACTIVITIES,
                     keys::encode_nft_collection_activity_key(
                         &DOTBIT_SENTINEL_COLLECTION,
                         tx.block_number,
                         tx.tx_index,
                         &tx.block_hash,
                         &tx.tx_hash,
-                    ),
-                    &vbuf,
-                );
-                row_count += 1;
+                    )
+                    .to_vec(),
+                    bincode_serialize_presized(&entry)?,
+                ));
                 let delta = identity_activity_count_deltas
                     .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
                     .or_insert(0);
@@ -3212,21 +3174,18 @@ fn build_history_batches_for_block(
                     hex::encode(&resolved_entry.collection_id)
                 )
             })?;
-            vbuf.clear();
-            bincode::serialize_into(&mut vbuf, &resolved_entry.entry)
-                .map_err(|e| anyhow!("bincode serialize object activity entry failed: {}", e))?;
-            domain_wb.put_cf(
-                domain_store.cf(CF_OBJECT_COLLECTION_ACTIVITIES),
+            rows.push(materialize::MaterializedRow::new(
+                CF_OBJECT_COLLECTION_ACTIVITIES,
                 keys::encode_nft_collection_activity_key(
                     &resolved_entry.collection_id,
                     resolved_entry.block_number,
                     resolved_entry.tx_idx,
                     &resolved_entry.entry.block_hash,
                     &resolved_entry.entry.tx_hash,
-                ),
-                &vbuf,
-            );
-            row_count += 1;
+                )
+                .to_vec(),
+                bincode_serialize_presized(&resolved_entry.entry)?,
+            ));
         }
 
         for resolved_entry in identity_activity_acc.into_resolved_entries() {
@@ -3239,42 +3198,39 @@ fn build_history_batches_for_block(
                     hex::encode(&resolved_entry.collection_id)
                 )
             })?;
-            vbuf.clear();
-            bincode::serialize_into(&mut vbuf, &resolved_entry.entry)
-                .map_err(|e| anyhow!("bincode serialize identity activity entry failed: {}", e))?;
-            domain_wb.put_cf(
-                domain_store.cf(CF_IDENTITY_COLLECTION_ACTIVITIES),
+            rows.push(materialize::MaterializedRow::new(
+                CF_IDENTITY_COLLECTION_ACTIVITIES,
                 keys::encode_nft_collection_activity_key(
                     &resolved_entry.collection_id,
                     resolved_entry.block_number,
                     resolved_entry.tx_idx,
                     &resolved_entry.entry.block_hash,
                     &resolved_entry.entry.tx_hash,
-                ),
-                &vbuf,
-            );
-            row_count += 1;
+                )
+                .to_vec(),
+                bincode_serialize_presized(&resolved_entry.entry)?,
+            ));
         }
     }
 
     // Cell payloads (CF_CELLS) + data_hash index (CF_CELL_BY_DATA_HASH)
     // + lock script mapping (CF_LOCK_SCRIPTS) for this block's cells.
     //
-    // Lock script candidates are collected separately (with their InternId) so
+    // Lock script rows are collected separately (with their InternId) so
     // the serial merge phase can perform cross-batch dedup via a persistent
     // FxHashSet<InternId> in BulkBuildRuntimeState. Per-block dedup still
     // happens here via `seen_lock_ids` to avoid redundant serialization.
     let mut seen_lock_ids = rustc_hash::FxHashSet::default();
-    let mut lock_script_candidates = Vec::new();
+    let mut lock_script_rows = Vec::new();
     for tx in block_txs {
         for cell in &arena_cells[tx.output_range.clone()] {
             let outpoint_key =
                 keys::encode_outpoint(&cell.outpoint.tx_hash, cell_outpoint_index_i16(cell)?);
-            vbuf.clear();
-            bincode::serialize_into(&mut vbuf, &cell_facts_to_live_cell_info(cell, interner))
-                .map_err(|e| anyhow!("bincode serialize cell info failed: {}", e))?;
-            append_wb.put_cf(append_only_store.cf(CF_CELLS), outpoint_key, &vbuf);
-            row_count += 1;
+            rows.push(materialize::MaterializedRow::new(
+                CF_CELLS,
+                outpoint_key.to_vec(),
+                bincode_serialize_presized(&cell_facts_to_live_cell_info(cell, interner))?,
+            ));
 
             // Lock script mapping — dedup within block, cross-batch dedup in merge.
             if seen_lock_ids.insert(cell.lock_script_hash_id) {
@@ -3284,67 +3240,38 @@ fn build_history_batches_for_block(
                     hash_type: cell.lock_hash_type,
                     args: interner.resolve_bytes(cell.lock_args_id).to_vec(),
                 };
-                vbuf.clear();
-                bincode::serialize_into(&mut vbuf, &entry)
-                    .map_err(|e| anyhow!("bincode serialize lock script entry failed: {}", e))?;
-                lock_script_candidates.push((cell.lock_script_hash_id, lock_hash, vbuf.clone()));
+                lock_script_rows.push((
+                    cell.lock_script_hash_id,
+                    materialize::MaterializedRow::new(
+                        CF_LOCK_SCRIPTS,
+                        lock_hash,
+                        bincode_serialize_presized(&entry)?,
+                    ),
+                ));
             }
 
             if let Some(data_hash) = &cell.data_hash {
-                domain_wb.put_cf(
-                    domain_store.cf(CF_CELL_BY_DATA_HASH),
+                rows.push(materialize::MaterializedRow::new(
+                    CF_CELL_BY_DATA_HASH,
                     keys::encode_cell_index_key(
                         data_hash,
                         cell.created_at_block,
                         &cell.outpoint.tx_hash,
                         cell_outpoint_index_i16(cell)?,
                     ),
-                    [],
-                );
-                row_count += 1;
+                    vec![],
+                ));
             }
         }
     }
 
-    Ok(BlockHistoryBatches {
-        append_wb,
-        domain_wb,
-        row_count,
-        lock_script_candidates,
+    Ok(BlockHistoryRows {
+        rows,
+        lock_script_rows,
         object_activity_count_deltas,
         identity_activity_count_deltas,
         tx_actions_list,
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_history_batches_for_shard(
-    block_shard: &[facts::BlockFacts],
-    arena: &facts::FactsArena,
-    resolved: &[facts::ResolvedTxFacts<'_>],
-    interner: &interner::FrozenIdentityView,
-    detectors: &[Box<dyn crate::db::writer::activities::ProtocolDetector>],
-    token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-    domain_store: &CkbadgerStore,
-    append_only_store: &CkbadgerStore,
-) -> Result<Vec<BlockHistoryBatches>> {
-    let mut block_results = Vec::with_capacity(block_shard.len());
-    for block in block_shard {
-        let block_txs = &arena.txs[block.tx_range.clone()];
-        let block_resolved = &resolved[block.tx_range.clone()];
-        block_results.push(build_history_batches_for_block(
-            block,
-            block_txs,
-            block_resolved,
-            &arena.cells,
-            interner,
-            detectors,
-            token_info_cache,
-            domain_store,
-            append_only_store,
-        )?);
-    }
-    Ok(block_results)
 }
 
 #[cfg(test)]

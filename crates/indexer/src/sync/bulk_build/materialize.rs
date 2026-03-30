@@ -191,8 +191,8 @@ pub(crate) struct FlushResult {
 
 /// Flush materialized rows to RocksDB via `StoreBatch` (test-only path).
 ///
-/// The production flush pipeline builds WriteBatch pairs directly in
-/// `build_history_batches_for_block` and commits via `write_batch_no_wal_bulk`.
+/// The production flush pipeline builds MaterializedRows in
+/// `build_history_rows_for_block` and converts via `prepare_flush`.
 /// This function is retained for its test coverage of `CfWritePolicy` validation.
 #[cfg(test)]
 pub(crate) fn flush_rows_to_stores(
@@ -327,8 +327,8 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
     Ok(report)
 }
 
-/// A WriteBatch pair ready for sequential commit.  Built directly by
-/// `build_history_batches_for_block` during history materialization.
+/// A WriteBatch pair ready for sequential commit.  Built by `prepare_flush`
+/// from MaterializedRows produced by `build_history_rows_for_block`.
 pub(crate) struct PreparedBatch {
     pub(crate) append_batch: rocksdb::WriteBatch,
     pub(crate) domain_batch: rocksdb::WriteBatch,
@@ -347,7 +347,6 @@ pub(crate) struct PreparedBatch {
 ///
 /// Used in production by `build_history_batches` to convert merged MaterializedRows
 /// into WriteBatch pairs after the parallel build phase completes.
-#[allow(dead_code)] // called after build_history_batches is rewired
 pub(crate) fn prepare_flush(
     domain_store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
