@@ -2127,6 +2127,64 @@ fn build_resources_column(
 /// Build the controller observation panel lines for bulk-build diagnostics.
 ///
 /// Three sections (Observe / Decide / Adjust):
+/// Build lines for the Cost Model panel in the background tasks row.
+///
+/// Shows the controller's internal cost model: per-block EMA, controllable wall-clock,
+/// iteration budget, tx density, and batch bytes.
+fn cost_model_panel_lines(bb: &BulkBuildProgressData) -> Vec<Line<'static>> {
+    let ms_per_block = bb
+        .ms_per_block_ema
+        .map(|v| format!("{v:.3} ms/blk"))
+        .unwrap_or_else(|| "-".to_string());
+    let controllable = bb
+        .controllable_ms
+        .map(|v| format!("{v:.0}ms"))
+        .unwrap_or_else(|| "-".to_string());
+    let target = bb
+        .target_iteration_ms
+        .map(|v| format!("{v:.0}ms"))
+        .unwrap_or_else(|| "-".to_string());
+    let tx_density = bb
+        .tx_density
+        .map(|v| format!("{v:.1} tx/blk"))
+        .unwrap_or_else(|| "-".to_string());
+    let batch_bytes = bb
+        .batch_bytes
+        .map(format_bytes)
+        .unwrap_or_else(|| "-".to_string());
+    let target_cells = bb
+        .target_cells
+        .map(|v| format!("{}K", v / 1000))
+        .unwrap_or_else(|| "-".to_string());
+
+    vec![
+        Line::from(vec![
+            Span::styled("ms/block  ", Style::default().fg(SLATE_500)),
+            Span::styled(ms_per_block, Style::default().fg(FOREGROUND)),
+        ]),
+        Line::from(vec![
+            Span::styled("wall      ", Style::default().fg(SLATE_500)),
+            Span::styled(controllable, Style::default().fg(FOREGROUND)),
+            Span::styled(" / ", Style::default().fg(SLATE_500)),
+            Span::styled(target, Style::default().fg(FOREGROUND)),
+            Span::styled(" budget", Style::default().fg(SLATE_500)),
+        ]),
+        Line::from(vec![
+            Span::styled("batch     ", Style::default().fg(SLATE_500)),
+            Span::styled(target_cells, Style::default().fg(FOREGROUND)),
+            Span::styled(" cells  ", Style::default().fg(SLATE_500)),
+            Span::styled(batch_bytes, Style::default().fg(FOREGROUND)),
+        ]),
+        Line::from(vec![
+            Span::styled("density   ", Style::default().fg(SLATE_500)),
+            Span::styled(tx_density, Style::default().fg(FOREGROUND)),
+        ]),
+    ]
+}
+
+/// Build the controller observation panel lines for bulk-build diagnostics.
+///
+/// Three sections (Observe / Decide / Adjust):
 /// - Detail mode: 7 lines with section headers
 /// - Dense mode: 2 lines, compact
 fn controller_panel_lines(
@@ -3260,15 +3318,15 @@ fn draw_background_tasks(f: &mut Frame, app: &App, area: Rect) {
     sort_background_tasks(&mut jobs);
     sort_background_tasks(&mut watchers);
 
-    let has_controller = bb.is_some();
+    let has_cost_model = bb.is_some();
     let has_watchers = !watchers.is_empty();
     let has_jobs = !jobs.is_empty();
 
-    if !has_controller && !has_watchers && !has_jobs {
+    if !has_cost_model && !has_watchers && !has_jobs {
         return;
     }
 
-    // 3-column horizontal layout: Controller | Watchers | Jobs
+    // 3-column horizontal layout: Cost Model | Watchers | Jobs
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -3278,21 +3336,20 @@ fn draw_background_tasks(f: &mut Frame, app: &App, area: Rect) {
         ])
         .split(area);
 
-    // ── Column 1: Controller observation window ──
-    let ctrl_block = Block::default()
+    // ── Column 1: Cost Model (controller internals) ──
+    let model_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(SLATE_800))
         .title(Span::styled(
-            " Controller ",
+            " Cost Model ",
             Style::default().fg(FOREGROUND),
         ));
     if let Some(bb) = bb {
-        let dense = cols[0].height <= 4;
-        let lines = controller_panel_lines(bb, dense, app.controller_deltas.as_ref());
-        f.render_widget(Paragraph::new(lines).block(ctrl_block), cols[0]);
+        let lines = cost_model_panel_lines(bb);
+        f.render_widget(Paragraph::new(lines).block(model_block), cols[0]);
     } else {
         f.render_widget(
-            Paragraph::new(Span::styled("-", Style::default().fg(SLATE_500))).block(ctrl_block),
+            Paragraph::new(Span::styled("-", Style::default().fg(SLATE_500))).block(model_block),
             cols[0],
         );
     }
@@ -3397,10 +3454,10 @@ fn draw_background_tasks(f: &mut Frame, app: &App, area: Rect) {
 
 /// Height needed for the bottom row section (0 if hidden).
 ///
-/// The bottom row uses a 3-column horizontal layout: Controller | Watchers | Jobs.
+/// The bottom row uses a 3-column horizontal layout: Cost Model | Watchers | Jobs.
 /// It is visible when any of the three columns has content.
 fn background_tasks_height(app: &App) -> u16 {
-    let has_controller = app
+    let has_cost_model = app
         .sync_status
         .as_ref()
         .and_then(|s| s.bulk_build.as_ref())
@@ -3410,18 +3467,18 @@ fn background_tasks_height(app: &App) -> u16 {
     let visible: Vec<BackgroundTaskEntry> = visible_refs.iter().map(|t| (*t).clone()).collect();
     let (jobs, watchers) = split_background_tasks(&visible);
 
-    let has_content = has_controller || !jobs.is_empty() || !watchers.is_empty();
+    let has_content = has_cost_model || !jobs.is_empty() || !watchers.is_empty();
     if !has_content {
         return 0;
     }
 
-    // Controller needs 9 lines (2 border + 7 detail lines).
+    // Cost model needs 7 lines (2 border + 5 content lines).
     // Tables need 3 + rows (2 border + 1 header + rows).
-    let controller_h: u16 = if has_controller { 9 } else { 5 };
+    let cost_model_h: u16 = if has_cost_model { 7 } else { 5 };
     let jobs_h = desired_background_task_table_height(jobs.len()).max(5);
     let watchers_h = desired_background_task_table_height(watchers.len()).max(5);
 
-    controller_h.max(jobs_h).max(watchers_h).min(12)
+    cost_model_h.max(jobs_h).max(watchers_h).min(12)
 }
 
 fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
