@@ -60,7 +60,7 @@ pub fn bytes_to_hex(bytes: &[u8]) -> String {
     out
 }
 
-pub use batch::StoreBatch;
+pub use batch::{merge_write_batches, StoreBatch};
 pub use reorg_ops::RollbackResult;
 pub use store::{
     cf_write_policy, is_append_only_cf_name, known_append_only_secondary_store_paths,

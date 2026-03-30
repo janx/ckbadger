@@ -1296,6 +1296,49 @@ impl<'a> StoreBatch<'a> {
     }
 }
 
+/// Merge `source` WriteBatch into `target` using byte-level concatenation.
+///
+/// Uses the RocksDB WriteBatch wire format:
+///   [0..8]  sequence number (u64 LE) — target's preserved
+///   [8..12] operation count (u32 LE) — summed
+///   [12..]  serialized operations  — concatenated
+///
+/// This is the same technique as `StoreBatch::merge_from` but operates on
+/// raw `WriteBatch` without requiring a store reference.
+pub fn merge_write_batches(target: &mut WriteBatch, source: WriteBatch) {
+    if source.is_empty() {
+        return;
+    }
+    if target.is_empty() {
+        *target = source;
+        return;
+    }
+    let target_data = target.data();
+    let source_data = source.data();
+
+    let target_count = u32::from_le_bytes(
+        target_data[8..12]
+            .try_into()
+            .expect("WriteBatch header must be at least 12 bytes"),
+    );
+    let source_count = u32::from_le_bytes(
+        source_data[8..12]
+            .try_into()
+            .expect("WriteBatch header must be at least 12 bytes"),
+    );
+    let total_count = target_count
+        .checked_add(source_count)
+        .expect("WriteBatch merge: operation count overflow");
+
+    let mut merged = Vec::with_capacity(target_data.len() + source_data.len() - 12);
+    merged.extend_from_slice(&target_data[..8]);
+    merged.extend_from_slice(&total_count.to_le_bytes());
+    merged.extend_from_slice(&target_data[12..]);
+    merged.extend_from_slice(&source_data[12..]);
+
+    *target = WriteBatch::from_data(&merged);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2198,5 +2241,37 @@ mod tests {
             .expect("overwrite append-only put");
         let err = overwrite_batch.commit().unwrap_err();
         assert!(err.to_string().contains("append-only overwrite blocked"));
+    }
+
+    #[test]
+    fn merge_write_batches_concatenates_entries() {
+        let mut a = rocksdb::WriteBatch::default();
+        a.put(b"k1", b"v1");
+        a.put(b"k2", b"v2");
+        let mut b = rocksdb::WriteBatch::default();
+        b.put(b"k3", b"v3");
+
+        merge_write_batches(&mut a, b);
+        assert_eq!(a.len(), 3);
+    }
+
+    #[test]
+    fn merge_write_batches_into_empty() {
+        let mut a = rocksdb::WriteBatch::default();
+        let mut b = rocksdb::WriteBatch::default();
+        b.put(b"k1", b"v1");
+
+        merge_write_batches(&mut a, b);
+        assert_eq!(a.len(), 1);
+    }
+
+    #[test]
+    fn merge_write_batches_from_empty_noop() {
+        let mut a = rocksdb::WriteBatch::default();
+        a.put(b"k1", b"v1");
+        let b = rocksdb::WriteBatch::default();
+
+        merge_write_batches(&mut a, b);
+        assert_eq!(a.len(), 1);
     }
 }
