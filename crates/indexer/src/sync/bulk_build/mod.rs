@@ -172,6 +172,7 @@ impl BulkBuildEngine {
         let mut cumulative_history_rows: usize = 0;
         let mut cumulative_sealed_rows: usize = 0;
         let mut _flush_send_count: usize = 0;
+        let mut last_bottleneck: Option<String> = None;
 
         loop {
             ckb_store.refresh()?;
@@ -279,6 +280,10 @@ impl BulkBuildEngine {
                 snap.disk_write_mb,
             );
             sample.engine = "bulk_build".to_string();
+            sample.start_block = current_block;
+            sample.end_block = last_block_u64;
+            sample.batch_index = batch_count;
+            sample.bottleneck = last_bottleneck.clone();
             sample.disk_read_mb_s = snap.disk_read_mb_s;
             sample.disk_write_mb_s = snap.disk_write_mb_s;
             sample.disk_read_iops = snap.disk_read_iops;
@@ -454,6 +459,8 @@ impl BulkBuildEngine {
                     output.bg_jobs,
                     output.target_cells,
                 );
+
+                last_bottleneck = Some(output.bottleneck.to_string());
             }
 
             // Periodic memory summary every 10 batches

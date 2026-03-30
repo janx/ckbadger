@@ -37,6 +37,11 @@ pub struct RocksDbConfig {
 #[derive(Debug, Clone, Serialize)]
 pub struct BatchSample {
     pub engine: String,
+    pub start_block: u64,
+    pub end_block: u64,
+    pub batch_index: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bottleneck: Option<String>,
     pub blocks: u64,
     pub batch_seconds: f64,
     pub commit_ms: f64,
@@ -110,6 +115,10 @@ impl BatchSample {
     ) -> Self {
         Self {
             engine: "pipeline".to_string(),
+            start_block: 0,
+            end_block: 0,
+            batch_index: 0,
+            bottleneck: None,
             blocks,
             batch_seconds,
             commit_ms,
@@ -3214,5 +3223,32 @@ mod tests {
         let trend = std::fs::read_to_string(dir.path().join("trend.jsonl")).unwrap();
         let entry: serde_json::Value = serde_json::from_str(trend.lines().next().unwrap()).unwrap();
         assert_eq!(entry["stall_count"], 1);
+    }
+
+    #[test]
+    fn test_batch_sample_includes_block_range_and_batch_index() {
+        let mut sample = test_batch_sample(100, 2.0, 50.0, 0, 0, 0);
+        assert_eq!(sample.start_block, 0);
+        assert_eq!(sample.end_block, 0);
+        assert_eq!(sample.batch_index, 0);
+        assert_eq!(sample.bottleneck, None);
+
+        sample.start_block = 1000;
+        sample.end_block = 1099;
+        sample.batch_index = 5;
+        sample.bottleneck = Some("build".to_string());
+
+        let json = serde_json::to_string(&sample).unwrap();
+        assert!(json.contains("\"start_block\":1000"));
+        assert!(json.contains("\"end_block\":1099"));
+        assert!(json.contains("\"batch_index\":5"));
+        assert!(json.contains("\"bottleneck\":\"build\""));
+    }
+
+    #[test]
+    fn test_batch_sample_omits_bottleneck_when_none() {
+        let sample = test_batch_sample(10, 1.0, 20.0, 0, 0, 0);
+        let json = serde_json::to_string(&sample).unwrap();
+        assert!(!json.contains("bottleneck"));
     }
 }

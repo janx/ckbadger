@@ -2052,6 +2052,7 @@ impl Indexer {
         // === Writer loop ===
         let committed_tip_for_cache_for_writer = Arc::clone(&committed_tip_for_cache);
         let mut consecutive_idle_timeouts: u64 = 0;
+        let mut pipeline_batch_index: u64 = 0;
 
         // Resolve disk device once for per-batch I/O delta tracking
         let disk_device = crate::sys_info::detect_disk_device(&self.config.domain_data_path);
@@ -2594,6 +2595,10 @@ impl Indexer {
                         let perf_stats = self.writer.store().memory_stats();
                         let batch_env = crate::sys_info::read_batch_environment(&mut disk_tracker);
                         self.record_bulk_sync_perf_batch_sample(BatchSample {
+                            start_block,
+                            end_block,
+                            batch_index: pipeline_batch_index,
+                            bottleneck: None,
                             txs: write_metrics.txs,
                             cells: write_metrics.cells,
                             inputs: write_metrics.inputs,
@@ -2640,6 +2645,7 @@ impl Indexer {
                         .blocks_count
                         .fetch_add(all_parsed_blocks.len() as u64, Ordering::Relaxed);
                     self.perf.report_and_reset();
+                    pipeline_batch_index += 1;
                 }
                 Ok(None) => {
                     let parser_reason = get_worker_exit_reason(&parser_exit_reason);
