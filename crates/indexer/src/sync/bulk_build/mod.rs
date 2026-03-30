@@ -533,7 +533,7 @@ impl BulkBuildEngine {
             flush_stats.total_history_rows + flush_stats.total_sealed_rows,
         );
 
-        // Destructure runtime to get owned fields for explicit sub-phase control.
+        // Destructure runtime to get owned fields.
         let BulkBuildRuntimeState {
             owners,
             hodl_tracker,
@@ -541,114 +541,20 @@ impl BulkBuildEngine {
             ..
         } = runtime;
 
-        // Phase 1: activity stats (daily + hourly aggregates)
-        {
-            let _guard =
-                tracing::info_span!("bulk_finalize", phase = 2, label = "activity_stats").entered();
-            indexer
-                .bulk_build_perf
-                .record_finalize_step(2, finalize_started.elapsed());
-            materializer.stream_sealed_aggregate_rows(&prepared_finalize.activity_sealed_rows)?;
-        }
+        // Phases 1-11: materialize sealed aggregates, snapshot, owners, metadata
+        let materialize_report = materialize_finalize_phases(
+            indexer.writer.store().as_ref(),
+            indexer.append_only_store.as_ref(),
+            prepared_finalize,
+            owners,
+            hodl_tracker,
+            cell_dist_tracker,
+            &indexer.bulk_build_perf,
+            finalize_started,
+        )?;
 
-        // Phase 2: chain stats (hash rate, difficulty, uncle rate, epoch time, etc.)
-        {
-            let _guard =
-                tracing::info_span!("bulk_finalize", phase = 3, label = "chain_stats").entered();
-            indexer
-                .bulk_build_perf
-                .record_finalize_step(3, finalize_started.elapsed());
-            materializer.stream_sealed_aggregate_rows(&prepared_finalize.chain_sealed_rows)?;
-        }
-
-        // Phase 3: final snapshot (live cell markers + index CFs)
-        {
-            let _guard =
-                tracing::info_span!("bulk_finalize", phase = 4, label = "final_snapshot").entered();
-            indexer
-                .bulk_build_perf
-                .record_finalize_step(4, finalize_started.elapsed());
-            materializer.materialize_final_snapshot(&prepared_finalize.final_snapshot_rows)?;
-        }
-
-        // Phases 4-9: owners (flush_sealed + materialize_final per owner)
-        let mut owners = owners;
-
-        {
-            let _guard =
-                tracing::info_span!("bulk_finalize", phase = 5, label = "owner_address").entered();
-            indexer
-                .bulk_build_perf
-                .record_finalize_step(5, finalize_started.elapsed());
-            owners.address.flush_sealed(&mut materializer)?;
-            owners.address.materialize_final(&mut materializer)?;
-        }
-
-        {
-            let _guard =
-                tracing::info_span!("bulk_finalize", phase = 6, label = "owner_script").entered();
-            indexer
-                .bulk_build_perf
-                .record_finalize_step(6, finalize_started.elapsed());
-            owners.script.flush_sealed(&mut materializer)?;
-            owners.script.materialize_final(&mut materializer)?;
-        }
-
-        {
-            let _guard =
-                tracing::info_span!("bulk_finalize", phase = 7, label = "owner_token").entered();
-            indexer
-                .bulk_build_perf
-                .record_finalize_step(7, finalize_started.elapsed());
-            owners.token.flush_sealed(&mut materializer)?;
-            owners.token.materialize_final(&mut materializer)?;
-        }
-
-        {
-            let _guard =
-                tracing::info_span!("bulk_finalize", phase = 8, label = "owner_dao").entered();
-            indexer
-                .bulk_build_perf
-                .record_finalize_step(8, finalize_started.elapsed());
-            owners.dao.flush_sealed(&mut materializer)?;
-            owners.dao.materialize_final(&mut materializer)?;
-        }
-
-        {
-            let _guard =
-                tracing::info_span!("bulk_finalize", phase = 9, label = "owner_fiber").entered();
-            indexer
-                .bulk_build_perf
-                .record_finalize_step(9, finalize_started.elapsed());
-            owners.fiber.flush_sealed(&mut materializer)?;
-            owners.fiber.materialize_final(&mut materializer)?;
-        }
-
-        {
-            let _guard =
-                tracing::info_span!("bulk_finalize", phase = 10, label = "owner_object").entered();
-            indexer
-                .bulk_build_perf
-                .record_finalize_step(10, finalize_started.elapsed());
-            owners.object.flush_sealed(&mut materializer)?;
-            owners.object.materialize_final(&mut materializer)?;
-        }
-
-        // Phase 10: metadata (HODL + cell distribution tracker state)
-        {
-            let _guard =
-                tracing::info_span!("bulk_finalize", phase = 11, label = "metadata").entered();
-            indexer
-                .bulk_build_perf
-                .record_finalize_step(11, finalize_started.elapsed());
-            let mut meta_batch =
-                ckbadger_store::batch::StoreBatch::new(indexer.writer.store().as_ref());
-            meta_batch.put_hodl_tracker_state(&hodl_tracker.to_state());
-            meta_batch.put_cell_dist_tracker_state(&cell_dist_tracker.to_state());
-            if !meta_batch.is_empty() {
-                meta_batch.commit()?;
-            }
-        }
+        // Merge materialization accounting
+        materializer.merge_report(materialize_report);
 
         // Phase 11: memtable flush
         {
@@ -858,6 +764,107 @@ fn flush_bulk_build_materialized_state(
         )
     })?;
     Ok(())
+}
+
+/// Executes finalize phases 1-11: writes sealed aggregates, final snapshot,
+/// owner data, and metadata to RocksDB. Returns a MaterializationReport
+/// for merging into the main accounting.
+///
+/// Designed to be `Send` so it can run in `tokio::task::spawn_blocking`
+/// concurrently with flush drain.
+#[allow(clippy::too_many_arguments)]
+fn materialize_finalize_phases(
+    domain_store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+    prepared: PreparedFinalizeArtifacts,
+    mut owners: CoreOwners,
+    hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker,
+    cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker,
+    perf_stats: &crate::sync::diagnostics::BulkBuildPerfStats,
+    finalize_started: Instant,
+) -> Result<materialize::MaterializationReport> {
+    let mut materializer = materialize::Materializer::new(domain_store, append_only_store);
+
+    // Phase 1: activity stats (sealed aggregates)
+    {
+        let _guard =
+            tracing::info_span!("bulk_finalize", phase = 2, label = "activity_stats").entered();
+        perf_stats.record_finalize_step(2, finalize_started.elapsed());
+        materializer.stream_sealed_aggregate_rows(&prepared.activity_sealed_rows)?;
+    }
+
+    // Phase 2: chain stats (sealed aggregates)
+    {
+        let _guard =
+            tracing::info_span!("bulk_finalize", phase = 3, label = "chain_stats").entered();
+        perf_stats.record_finalize_step(3, finalize_started.elapsed());
+        materializer.stream_sealed_aggregate_rows(&prepared.chain_sealed_rows)?;
+    }
+
+    // Phase 3: final snapshot (live cell markers + index CFs)
+    {
+        let _guard =
+            tracing::info_span!("bulk_finalize", phase = 4, label = "final_snapshot").entered();
+        perf_stats.record_finalize_step(4, finalize_started.elapsed());
+        materializer.materialize_final_snapshot(&prepared.final_snapshot_rows)?;
+    }
+
+    // Phases 4-9: owners (flush_sealed + materialize_final per owner)
+    {
+        let _guard =
+            tracing::info_span!("bulk_finalize", phase = 5, label = "owner_address").entered();
+        perf_stats.record_finalize_step(5, finalize_started.elapsed());
+        owners.address.flush_sealed(&mut materializer)?;
+        owners.address.materialize_final(&mut materializer)?;
+    }
+    {
+        let _guard =
+            tracing::info_span!("bulk_finalize", phase = 6, label = "owner_script").entered();
+        perf_stats.record_finalize_step(6, finalize_started.elapsed());
+        owners.script.flush_sealed(&mut materializer)?;
+        owners.script.materialize_final(&mut materializer)?;
+    }
+    {
+        let _guard =
+            tracing::info_span!("bulk_finalize", phase = 7, label = "owner_token").entered();
+        perf_stats.record_finalize_step(7, finalize_started.elapsed());
+        owners.token.flush_sealed(&mut materializer)?;
+        owners.token.materialize_final(&mut materializer)?;
+    }
+    {
+        let _guard = tracing::info_span!("bulk_finalize", phase = 8, label = "owner_dao").entered();
+        perf_stats.record_finalize_step(8, finalize_started.elapsed());
+        owners.dao.flush_sealed(&mut materializer)?;
+        owners.dao.materialize_final(&mut materializer)?;
+    }
+    {
+        let _guard =
+            tracing::info_span!("bulk_finalize", phase = 9, label = "owner_fiber").entered();
+        perf_stats.record_finalize_step(9, finalize_started.elapsed());
+        owners.fiber.flush_sealed(&mut materializer)?;
+        owners.fiber.materialize_final(&mut materializer)?;
+    }
+    {
+        let _guard =
+            tracing::info_span!("bulk_finalize", phase = 10, label = "owner_object").entered();
+        perf_stats.record_finalize_step(10, finalize_started.elapsed());
+        owners.object.flush_sealed(&mut materializer)?;
+        owners.object.materialize_final(&mut materializer)?;
+    }
+
+    // Phase 10: metadata (HODL + cell distribution tracker state)
+    {
+        let _guard = tracing::info_span!("bulk_finalize", phase = 11, label = "metadata").entered();
+        perf_stats.record_finalize_step(11, finalize_started.elapsed());
+        let mut meta_batch = ckbadger_store::batch::StoreBatch::new(domain_store);
+        meta_batch.put_hodl_tracker_state(&hodl_tracker.to_state());
+        meta_batch.put_cell_dist_tracker_state(&cell_dist_tracker.to_state());
+        if !meta_batch.is_empty() {
+            meta_batch.commit()?;
+        }
+    }
+
+    Ok(materializer.finish())
 }
 
 #[derive(Default)]

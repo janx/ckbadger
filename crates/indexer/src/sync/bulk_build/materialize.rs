@@ -114,7 +114,6 @@ impl<'a> Materializer<'a> {
         self.report
     }
 
-    #[allow(dead_code)]
     pub(crate) fn merge_report(&mut self, other: MaterializationReport) {
         self.report.streamed_history_rows += other.streamed_history_rows;
         self.report.sealed_aggregate_rows += other.sealed_aggregate_rows;
