@@ -3693,6 +3693,7 @@ mod tests {
                     epoch_length: 3,
                     dao: vec![0; 32],
                     transactions_count: 1,
+                    cycles: None,
                 },
             );
         }
@@ -3741,6 +3742,7 @@ mod tests {
                     epoch_length: 3,
                     dao: vec![0; 32],
                     transactions_count: 1,
+                    cycles: None,
                 },
             );
         }
@@ -3779,6 +3781,7 @@ mod tests {
                     epoch_length: 100,
                     dao: vec![0; 32],
                     transactions_count: 1,
+                    cycles: None,
                 },
             );
         }

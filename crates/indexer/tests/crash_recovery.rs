@@ -37,6 +37,7 @@ fn make_header(block_num: i64) -> CachedBlockHeader {
         epoch_length: 1800,
         dao: vec![0u8; 32],
         transactions_count: 3,
+        cycles: None,
     }
 }
 

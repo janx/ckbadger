@@ -3452,6 +3452,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -3501,6 +3502,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x42; 32],
@@ -3511,6 +3513,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let keep_actions = make_tx_actions(&tx_hash_keep, 1, 0);
@@ -3550,6 +3553,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x22; 32],
@@ -3560,6 +3564,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 2,
+            cycles: None,
         };
 
         let block1_tx = TxIndexEntry {
@@ -3651,6 +3656,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header1 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -3661,6 +3667,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let mut domain_batch = StoreBatch::new(&domain);
@@ -3754,6 +3761,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header1 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -3764,6 +3772,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let mut batch = StoreBatch::new(&domain);
@@ -3846,6 +3855,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -3856,6 +3866,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let cell = LiveCellInfo {
             capacity: 500,
@@ -3925,6 +3936,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -3935,6 +3947,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let input_tx = vec![0x31; 32];
@@ -4059,6 +4072,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -4069,6 +4083,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let input_tx = vec![0x31; 32];
@@ -4204,6 +4219,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -4214,6 +4230,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let type_hash = vec![0x90; 32];
@@ -4380,6 +4397,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -4390,6 +4408,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 2,
+            cycles: None,
         };
 
         let input_tx = vec![0x41; 32];
@@ -4562,6 +4581,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -4572,6 +4592,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let keep_tx = vec![0x11; 32];
@@ -4616,6 +4637,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -4626,6 +4648,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let keep_tx = vec![0x11; 32];
@@ -4684,6 +4707,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -4694,6 +4718,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let cellbase_tx = vec![0x22; 32];
@@ -4785,6 +4810,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -4795,6 +4821,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let keep_cell = LiveCellInfo {
             capacity: 100,
@@ -4918,6 +4945,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -4928,6 +4956,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header3 = CachedBlockHeader {
             hash: vec![0x03; 32],
@@ -4938,6 +4967,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let tx_a = vec![0xAA; 32];
@@ -5097,6 +5127,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -5107,6 +5138,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let deposit_tx = vec![0xAB; 32];
@@ -5193,6 +5225,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -5220,6 +5253,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -5230,6 +5264,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let tx_hash = vec![0x21; 32];
         let lock_hash = vec![0xAA; 32];
@@ -5299,6 +5334,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -5309,6 +5345,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let cluster_id = vec![0xAA; 32];
@@ -5492,6 +5529,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -5502,6 +5540,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
@@ -5603,6 +5642,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -5613,6 +5653,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
@@ -5806,6 +5847,7 @@ mod tests {
                     epoch_length: 1800,
                     dao: vec![0; 32],
                     transactions_count: 0,
+                    cycles: None,
                 },
             );
         }
@@ -5859,6 +5901,7 @@ mod tests {
                     epoch_length: 1800,
                     dao: vec![0; 32],
                     transactions_count: 3,
+                    cycles: None,
                 },
             );
             // Each block has 1 cellbase + 1 non-cellbase tx.

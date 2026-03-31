@@ -2735,6 +2735,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         }
     }
 

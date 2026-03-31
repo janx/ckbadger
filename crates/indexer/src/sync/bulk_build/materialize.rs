@@ -304,6 +304,7 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
             epoch_length: 1800,
             dao: vec![0x00; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         materializer.stream_history_rows(&[
@@ -596,6 +597,7 @@ mod tests {
             epoch_length: 1800,
             dao: vec![0x00; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let history_rows = vec![
@@ -740,6 +742,7 @@ mod tests {
                 epoch_length: 1800,
                 dao: vec![0x00; 32],
                 transactions_count: 1,
+                cycles: None,
             };
 
             let pending = super::super::PendingFlush {
@@ -907,6 +910,7 @@ mod tests {
             epoch_length: 1800,
             dao: vec![0x00; 32],
             transactions_count: 1,
+            cycles: None,
         };
 
         let history_rows = vec![

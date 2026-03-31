@@ -147,6 +147,10 @@ pub struct CachedBlockHeader {
     pub epoch_length: i32,
     pub dao: Vec<u8>,
     pub transactions_count: i32,
+    /// Total cycles consumed by all transactions in this block.
+    /// Written only by lazy cycles evaluation, not during bulk/live sync.
+    #[serde(default)]
+    pub cycles: Option<i64>,
 }
 
 // ============================================

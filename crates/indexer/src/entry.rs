@@ -1310,6 +1310,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -1320,6 +1321,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            cycles: None,
         };
         let live_cell = LiveCellInfo {
             capacity: 1_000,

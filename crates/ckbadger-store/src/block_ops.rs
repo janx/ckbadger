@@ -15,6 +15,19 @@ impl CkbadgerStore {
         }
     }
 
+    /// Update the cycles field of a block header. Used by the cycles worker
+    /// after all transaction cycles in the block have been calculated.
+    pub fn update_block_cycles(&self, block_number: i64, cycles: i64) -> anyhow::Result<()> {
+        let key = keys::encode_block_num(block_number);
+        let mut header = self
+            .get_block_header(block_number)?
+            .ok_or_else(|| anyhow::anyhow!("block header not found: {}", block_number))?;
+        header.cycles = Some(cycles);
+        let value = bincode::serialize(&header)?;
+        self.put_cf(self.cf_block_headers(), &key, &value)?;
+        Ok(())
+    }
+
     pub fn get_block_number_by_hash(&self, hash: &[u8]) -> anyhow::Result<Option<i64>> {
         match self.get_cf(self.cf_block_hash_index(), hash)? {
             None => Ok(None),
@@ -260,6 +273,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0u8; 32],
             transactions_count: 1,
+            cycles: None,
         }
     }
 

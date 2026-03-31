@@ -2752,6 +2752,7 @@ fn build_history_rows_for_block(
         epoch_length: block.epoch_length,
         dao: block.dao.to_vec(),
         transactions_count: block.transactions_count,
+        cycles: None,
     };
     rows.push(materialize::MaterializedRow::new(
         CF_BLOCK_HEADERS,
@@ -6273,6 +6274,7 @@ mod tests {
             epoch_length: 1800,
             dao: vec![0x00; 32],
             transactions_count: 42,
+            cycles: None,
         };
         let standard = bincode::serialize(&header).unwrap();
         let presized = bincode_serialize_presized(&header).unwrap();
@@ -6306,6 +6308,7 @@ mod tests {
             epoch_length: 0,
             dao: vec![],
             transactions_count: 0,
+            cycles: None,
         };
         let standard = bincode::serialize(&header).unwrap();
         let presized = bincode_serialize_presized(&header).unwrap();
