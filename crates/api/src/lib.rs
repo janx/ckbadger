@@ -263,11 +263,15 @@ pub async fn create_router(config: AppConfig) -> Router {
             let append_only = refresh_append_only_store.clone();
             let ckb = refresh_ckb_store.clone();
             let result = tokio::task::spawn_blocking(move || {
-                if let Err(e) = store.refresh() {
-                    tracing::warn!("Store refresh failed: {}", e);
-                }
+                // Refresh append-only BEFORE domain to match the indexer's commit
+                // order (append-only first, domain second). This eliminates a
+                // transient window where domain has a live-cell marker whose
+                // payload hasn't been caught up in the append-only secondary yet.
                 if let Err(e) = append_only.refresh() {
                     tracing::warn!("Append-only store refresh failed: {}", e);
+                }
+                if let Err(e) = store.refresh() {
+                    tracing::warn!("Store refresh failed: {}", e);
                 }
                 if let Some(ref ckb_store) = ckb {
                     if let Err(e) = ckb_store.refresh() {

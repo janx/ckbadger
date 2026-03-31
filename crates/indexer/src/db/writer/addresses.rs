@@ -563,7 +563,17 @@ impl BatchWriter {
             let updated = match prev {
                 Some(bal) => {
                     let mut bal = bal.clone();
-                    let next_balance = bal.balance + delta.balance_delta;
+                    let next_balance =
+                        bal.balance
+                            .checked_add(delta.balance_delta)
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                            "address balance overflow: lock_hash=0x{}, balance={}, delta={}",
+                            hex::encode(lock_hash),
+                            bal.balance,
+                            delta.balance_delta
+                        )
+                            })?;
                     if next_balance < 0 {
                         bail!(
                             "address balance underflow: lock_hash=0x{}, balance={}, delta={}",
@@ -572,7 +582,14 @@ impl BatchWriter {
                             delta.balance_delta
                         );
                     }
-                    let next_used = bal.used_capacity + delta.used_delta;
+                    let next_used = bal.used_capacity.checked_add(delta.used_delta).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "address used capacity overflow: lock_hash=0x{}, used_capacity={}, delta={}",
+                            hex::encode(lock_hash),
+                            bal.used_capacity,
+                            delta.used_delta
+                        )
+                    })?;
                     if next_used < 0 {
                         bail!(
                             "address used capacity underflow: lock_hash=0x{}, used_capacity={}, delta={}",
@@ -581,7 +598,14 @@ impl BatchWriter {
                             delta.used_delta
                         );
                     }
-                    let next_live_cells = bal.live_cells_count + delta.live_delta;
+                    let next_live_cells = bal.live_cells_count.checked_add(delta.live_delta).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "address live_cells_count overflow: lock_hash=0x{}, live_cells_count={}, delta={}",
+                            hex::encode(lock_hash),
+                            bal.live_cells_count,
+                            delta.live_delta
+                        )
+                    })?;
                     if next_live_cells < 0 {
                         bail!(
                             "address live_cells_count underflow: lock_hash=0x{}, live_cells_count={}, delta={}",
@@ -590,7 +614,14 @@ impl BatchWriter {
                             delta.live_delta
                         );
                     }
-                    let next_total_cells = bal.total_cells_count + delta.total_delta as i64;
+                    let next_total_cells = bal.total_cells_count.checked_add(delta.total_delta as i64).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "address total_cells_count overflow: lock_hash=0x{}, total_cells_count={}, delta={}",
+                            hex::encode(lock_hash),
+                            bal.total_cells_count,
+                            delta.total_delta
+                        )
+                    })?;
                     if next_total_cells < 0 {
                         bail!(
                             "address total_cells_count underflow: lock_hash=0x{}, total_cells_count={}, delta={}",
@@ -599,7 +630,15 @@ impl BatchWriter {
                             delta.total_delta
                         );
                     }
-                    let next_txs_count = bal.txs_count + delta.tx_delta;
+                    let next_txs_count =
+                        bal.txs_count.checked_add(delta.tx_delta).ok_or_else(|| {
+                            anyhow::anyhow!(
+                            "address txs_count overflow: lock_hash=0x{}, txs_count={}, delta={}",
+                            hex::encode(lock_hash),
+                            bal.txs_count,
+                            delta.tx_delta
+                        )
+                        })?;
                     if next_txs_count < 0 {
                         bail!(
                             "address txs_count underflow: lock_hash=0x{}, txs_count={}, delta={}",

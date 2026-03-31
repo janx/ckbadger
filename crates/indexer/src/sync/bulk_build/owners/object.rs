@@ -46,6 +46,7 @@ pub(crate) struct ObjectOwner {
     mnft_token_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
     mnft_type_indexes: BTreeMap<Vec<u8>, MnftTypeIndex>,
     mnft_hourly_transfers: BTreeMap<Vec<u8>, i64>,
+    spore_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     did_owner_counts: BTreeMap<Vec<u8>, i64>,
     dotbit_owner_counts: BTreeMap<Vec<u8>, i64>,
     dotbit_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -75,6 +76,14 @@ impl BulkReducer for ObjectOwner {
             .iter()
             .filter_map(|input| match input.protocol_facts.as_ref() {
                 Some(CellProtocolFacts::MnftToken(token)) => Some(token.token_id.clone()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let spores_consumed_in_tx = tx
+            .resolved_inputs
+            .iter()
+            .filter_map(|input| match input.protocol_facts.as_ref() {
+                Some(CellProtocolFacts::Spore(spore)) => Some(spore.spore_id.to_vec()),
                 _ => None,
             })
             .collect::<BTreeSet<_>>();
@@ -140,6 +149,7 @@ impl BulkReducer for ObjectOwner {
                 cell,
                 ctx,
                 tx,
+                &spores_consumed_in_tx,
                 &mnft_tokens_consumed_in_tx,
                 &dotbit_accounts_consumed_in_tx,
             )?;
@@ -161,6 +171,9 @@ impl ObjectOwner {
             .iter()
             .map(|(key, value)| MaterializedRow::new(CF_STATS_SPORE, key.clone(), value.clone()))
             .collect();
+        sealed_rows.extend(self.spore_hourly_transfers.iter().map(|(key, count)| {
+            MaterializedRow::new(CF_STATS_SPORE, key.clone(), count.to_le_bytes().to_vec())
+        }));
         sealed_rows.extend(
             self.mnft_class_outpoints.iter().map(|(key, value)| {
                 MaterializedRow::new(CF_STATS_MNFT, key.clone(), value.clone())
@@ -403,6 +416,9 @@ impl ObjectOwner {
                 &self.mnft_hourly_transfers,
             )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
+                &self.spore_hourly_transfers,
+            )
+            + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.did_owner_counts,
             )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
@@ -542,6 +558,7 @@ impl ObjectOwner {
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts<'_>,
+        spores_consumed_in_tx: &BTreeSet<Vec<u8>>,
         mnft_tokens_consumed_in_tx: &BTreeSet<Vec<u8>>,
         dotbit_accounts_consumed_in_tx: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) -> Result<()> {
@@ -554,7 +571,13 @@ impl ObjectOwner {
             CellProtocolFacts::Spore(spore) if spore.is_did => {
                 self.insert_did(spore, cell, ctx, tx)
             }
-            CellProtocolFacts::Spore(spore) => self.insert_spore(spore, cell, ctx, tx),
+            CellProtocolFacts::Spore(spore) => self.insert_spore(
+                spore,
+                cell,
+                ctx,
+                tx,
+                spores_consumed_in_tx.contains(spore.spore_id.as_slice()),
+            ),
             CellProtocolFacts::MnftIssuer(issuer) => self.insert_mnft_issuer(issuer, cell, ctx, tx),
             CellProtocolFacts::MnftClass(class) => self.insert_mnft_class(class, cell, ctx, tx),
             CellProtocolFacts::MnftToken(token) => self.insert_mnft_token(
@@ -731,6 +754,7 @@ impl ObjectOwner {
         cell: &CellFacts,
         ctx: &ReducerContext<'_>,
         tx: &ResolvedTxFacts<'_>,
+        consumed_in_same_tx: bool,
     ) -> Result<()> {
         let spore_id = spore.spore_id.to_vec();
         let owner_lock = ctx.resolve_identity(cell.lock_script_hash_id).to_vec();
@@ -901,7 +925,40 @@ impl ObjectOwner {
                 Some(owner_lock.as_slice()),
                 agg,
             )?;
+            if consumed_in_same_tx {
+                let hour_bucket = tx.timestamp_ms / 3_600_000;
+                let key = keys::encode_spore_hourly_key(&cluster_id, hour_bucket);
+                let current = *self
+                    .spore_hourly_transfers
+                    .get(key.as_slice())
+                    .unwrap_or(&0);
+                let next = checked_next_i64(
+                    current,
+                    1,
+                    "spore hourly transfer",
+                    &spore_id,
+                    tx.block_number,
+                )?;
+                self.spore_hourly_transfers.insert(key, next);
+            }
         } else {
+            // Same-cluster re-insert (transfer) — increment hourly bucket
+            {
+                let hour_bucket = tx.timestamp_ms / 3_600_000;
+                let key = keys::encode_spore_hourly_key(&cluster_id, hour_bucket);
+                let current = *self
+                    .spore_hourly_transfers
+                    .get(key.as_slice())
+                    .unwrap_or(&0);
+                let next = checked_next_i64(
+                    current,
+                    1,
+                    "spore hourly transfer",
+                    &spore_id,
+                    tx.block_number,
+                )?;
+                self.spore_hourly_transfers.insert(key, next);
+            }
             if old_tier != new_tier {
                 Self::adjust_cluster_tier_count(agg, old_tier, -1, &cluster_id, &spore_id)?;
                 Self::adjust_cluster_tier_count(agg, new_tier, 1, &cluster_id, &spore_id)?;
@@ -1225,6 +1282,21 @@ impl ObjectOwner {
                 )?;
             }
         } else {
+            // Re-insert (transfer) — increment hourly bucket unconditionally,
+            // matching the live sync path in db/writer/mnft.rs.
+            {
+                let hour_bucket = tx.timestamp_ms / 3_600_000;
+                let key = keys::encode_nft_hourly_key(&class_id, hour_bucket).to_vec();
+                let current = *self.mnft_hourly_transfers.get(key.as_slice()).unwrap_or(&0);
+                let next = checked_next_i64(
+                    current,
+                    1,
+                    "mnft hourly transfer",
+                    &token_id,
+                    tx.block_number,
+                )?;
+                self.mnft_hourly_transfers.insert(key, next);
+            }
             Self::apply_mnft_owner_transition(
                 &mut self.mnft_owner_counts,
                 &class_id,
@@ -1232,14 +1304,6 @@ impl ObjectOwner {
                 Some(owner_lock.as_slice()),
                 agg,
             )?;
-            if old_owner.as_deref() != Some(owner_lock.as_slice()) {
-                self.increment_mnft_hourly_transfer(
-                    &class_id,
-                    &token_id,
-                    tx.timestamp_ms,
-                    tx.block_number,
-                )?;
-            }
         }
 
         let type_script_hash = cell
