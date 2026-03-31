@@ -317,6 +317,7 @@ fn store_runtime_config(store: &StoreConfig) -> StoreRuntimeConfig {
     StoreRuntimeConfig {
         memory_budget_gb: store.memory_budget_gb,
         direct_io_reads: store.direct_io_reads,
+        bulk_sync_memtable: false, // set by indexer entry at runtime
     }
 }
 

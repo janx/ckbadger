@@ -116,6 +116,13 @@ async fn run_startup_label_import(store: Arc<CkbadgerStore>, config: &Config) ->
 /// This is the shared core that both `main.rs` and the CLI entry point call.
 pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     config.validate()?;
+
+    // Use VectorRep memtable (O(1) insert) for the indexer. The indexer is
+    // the sole writer — no concurrent memtable access. Sort deferred to
+    // background memtable→SST flush. Safe for both bulk sync and live sync
+    // (live sync has low write rate, so deferred sort cost is negligible).
+    config.store_runtime_config.bulk_sync_memtable = true;
+
     info!(
         "Opening ckbadger domain store at: {}",
         config.domain_data_path
@@ -1416,6 +1423,7 @@ mod tests {
             store_runtime_config: StoreRuntimeConfig {
                 memory_budget_gb: Some(24),
                 direct_io_reads: false,
+                bulk_sync_memtable: false,
             },
             decoder_cache_path: "/data/decoder-cache".to_string(),
             dob_decode_dir: "/workdir/media".to_string(),

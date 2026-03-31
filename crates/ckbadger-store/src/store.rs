@@ -24,6 +24,10 @@ const MB: u64 = 1024 * 1024;
 pub struct StoreRuntimeConfig {
     pub memory_budget_gb: Option<u64>,
     pub direct_io_reads: bool,
+    /// When true, use VectorRep memtable (O(1) insert) instead of skiplist
+    /// (O(log n) insert). Safe only when there is a single writer thread
+    /// and no concurrent memtable readers. Bulk sync meets both conditions.
+    pub bulk_sync_memtable: bool,
 }
 
 impl Default for StoreRuntimeConfig {
@@ -31,6 +35,7 @@ impl Default for StoreRuntimeConfig {
         Self {
             memory_budget_gb: None,
             direct_io_reads: true,
+            bulk_sync_memtable: false,
         }
     }
 }
@@ -829,7 +834,7 @@ impl CkbadgerStore {
             .map(|name| {
                 ColumnFamilyDescriptor::new(
                     *name,
-                    Self::cf_options(name, &block_cache, &memory_profile),
+                    Self::cf_options(name, &block_cache, &memory_profile, runtime_config),
                 )
             })
             .collect();
@@ -1150,7 +1155,15 @@ impl CkbadgerStore {
         // Safe because the indexer is the sole writer process and the API
         // uses secondary (read-only) mode. Relaxes snapshot ordering but
         // maintains read-your-own-write consistency.
-        opts.set_unordered_write(true);
+        //
+        // Disabled when bulk_sync_memtable is set: unordered_write implies
+        // allow_concurrent_memtable_write which is incompatible with VectorRep.
+        if runtime_config.bulk_sync_memtable {
+            opts.set_unordered_write(false);
+            opts.set_allow_concurrent_memtable_write(false);
+        } else {
+            opts.set_unordered_write(true);
+        }
 
         let block_cache = rocksdb::Cache::new_lru_cache(profile.block_cache_normal_bytes);
         let block_opts = Self::default_block_options(&block_cache);
@@ -1173,8 +1186,20 @@ impl CkbadgerStore {
     /// - Mega-write CFs: 256MB × 4 buffers = 1GB per CF
     /// - High-write (remaining CFs): 128MB × 4 buffers = 512MB per CF
     /// - Everything else: 32MB × 2 buffers = 64MB per CF
-    fn cf_options(name: &str, block_cache: &rocksdb::Cache, profile: &MemoryProfile) -> Options {
+    fn cf_options(
+        name: &str,
+        block_cache: &rocksdb::Cache,
+        profile: &MemoryProfile,
+        runtime_config: StoreRuntimeConfig,
+    ) -> Options {
         let mut opts = Options::default();
+
+        // VectorRep memtable: O(1) append instead of O(log n) skiplist insert.
+        // Sort deferred to memtable→SST flush (background thread).
+        // Only safe with single-writer, no concurrent memtable reads.
+        if runtime_config.bulk_sync_memtable {
+            opts.set_memtable_factory(rocksdb::MemtableFactory::Vector);
+        }
 
         if Self::is_mega_write_cf(name) {
             opts.set_write_buffer_size(profile.write_buffer_mega_bytes);
@@ -1704,7 +1729,8 @@ impl CkbadgerStore {
             block_cache_bulk_mb = p.block_cache_bulk_sync_bytes / (1024 * 1024),
             wbm_normal_mb = p.wbm_normal_bytes / (1024 * 1024),
             wbm_bulk_mb = p.wbm_bulk_sync_bytes / (1024 * 1024),
-            unordered_write = true,
+            unordered_write = !self.runtime_config.bulk_sync_memtable,
+            vector_memtable = self.runtime_config.bulk_sync_memtable,
             direct_io_reads = self.runtime_config.direct_io_reads,
             direct_io_compaction = true,
             bytes_per_sync_mb = 4,
@@ -2508,6 +2534,7 @@ mod tests {
         let runtime_config = StoreRuntimeConfig {
             memory_budget_gb: Some(12),
             direct_io_reads: false,
+            bulk_sync_memtable: false,
         };
 
         let store = CkbadgerStore::open_domain_with_runtime(dir.path(), runtime_config).unwrap();
