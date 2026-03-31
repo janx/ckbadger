@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use axum::extract::State;
-use axum::http::{header, StatusCode, Uri};
+use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::{routing::get, Router};
 use std::net::SocketAddr;
@@ -167,6 +167,7 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
                     move || frontend_runtime_config_handler(runtime_config.clone())
                 }),
             )
+            .route("/capabilities", get(frontend_capabilities_handler))
             .fallback({
                 let state = state.clone();
                 move |uri| frontend_filesystem_handler(State(state.clone()), uri)
@@ -183,6 +184,7 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
                     move || frontend_runtime_config_handler(runtime_config.clone())
                 }),
             )
+            .route("/capabilities", get(frontend_capabilities_handler))
             .fallback(embedded_frontend::embedded_frontend_handler));
     }
 
@@ -233,6 +235,127 @@ async fn frontend_runtime_config_handler(config: FrontendRuntimeConfig) -> Respo
         body,
     )
         .into_response()
+}
+
+async fn frontend_capabilities_handler(headers: HeaderMap) -> Response {
+    let origin = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(|host| format!("http://{}", host))
+        .unwrap_or_default();
+    let body = build_capabilities_json(&origin);
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/json; charset=utf-8"),
+            (
+                header::CACHE_CONTROL,
+                "public, s-maxage=10, stale-while-revalidate=30",
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+/// Build the `/capabilities` JSON payload.
+///
+/// This is the Rust equivalent of `frontend/lib/ai/capabilities.ts` `buildAiCapabilities()`.
+/// The route patterns are kept in sync manually — they change infrequently.
+fn build_capabilities_json(origin: &str) -> String {
+    serde_json::json!({
+        "origin": origin,
+        "site": {
+            "name": "ckbadger",
+            "apiBase": "/api/v1"
+        },
+        "formatNegotiation": {
+            "priority": ["query.format", "path.suffix", "accept.header"],
+            "supportedFormats": ["html", "md", "raw"],
+            "markdown": {
+                "suffix": ".md",
+                "query": "format=md",
+                "accept": "text/markdown"
+            },
+            "raw": {
+                "suffix": ".raw",
+                "query": "format=raw",
+                "accept": "application/vnd.ckbadger.raw+json",
+                "profileQuery": "profile=<name>",
+                "defaultProfile": "default"
+            }
+        },
+        "responseHeaders": {
+            "raw": {
+                "formatHeader": "x-ckbadger-format",
+                "profileHeader": "x-ckbadger-profile",
+                "schemaHeader": "x-ckbadger-schema"
+            }
+        },
+        "responseMetadata": {
+            "markdown": {
+                "frontmatterFields": [
+                    "title", "path", "canonical", "pageType",
+                    "generatedAt", "buildVersion", "formatVersion"
+                ]
+            },
+            "raw": {
+                "metaFields": [
+                    "format", "profile", "schemaVersion", "buildVersion",
+                    "network", "path", "canonical", "pageType", "generatedAt"
+                ]
+            }
+        },
+        "routes": {
+            "markdown": [
+                "/", "/activities", "/address/{addr}",
+                "/inventory/tokens", "/inventory/objects", "/inventory/identities",
+                "/blocks", "/blocks/{id}", "/cell/{outpoint}",
+                "/charts", "/charts/{slug}",
+                "/classes/{classId}", "/clusters/{clusterId}",
+                "/dao", "/dao/charts",
+                "/forks", "/forks/{id}", "/hardforks",
+                "/identities/{collectionId}",
+                "/identities/dotbit/{identityId}", "/identities/did/{identityId}",
+                "/objects", "/objects/{sporeId}", "/objects/mnft/{objectId}",
+                "/script/{codeHash}", "/scripts", "/scripts/{name}",
+                "/tokens", "/tokens/{typeHash}",
+                "/fiber/channels", "/fiber/channels/{channelId}",
+                "/transactions", "/tx/{hash}"
+            ],
+            "raw": [
+                "/blocks/{id}", "/cell/{outpoint}",
+                "/identities/dotbit/{identityId}", "/identities/did/{identityId}",
+                "/objects/mnft/{objectId}", "/tx/{hash}"
+            ]
+        },
+        "rawProfiles": {
+            "routes": {
+                "/blocks/{id}": ["default"],
+                "/cell/{outpoint}": ["default"],
+                "/identities/dotbit/{identityId}": ["default"],
+                "/identities/did/{identityId}": ["default"],
+                "/objects/mnft/{objectId}": ["default"],
+                "/tx/{hash}": ["default", "debugger"]
+            },
+            "strictErrors": {
+                "invalidProfile": "invalid_profile",
+                "profileNotSupported": "profile_not_supported"
+            },
+            "txDebuggerProfile": {
+                "route": "/tx/{hash}",
+                "profile": "debugger",
+                "payloadPath": "data.txDebugger.mockTransaction",
+                "debuggerCommandTemplate": "curl \"<url>.raw?profile=debugger\" | jq '.data.txDebugger.mockTransaction' > mock_tx.json && ckb-debugger --tx-file mock_tx.json --cell-index 0 --cell-type input --script-group-type lock"
+            },
+            "txWitnessPayload": {
+                "route": "/tx/{hash}",
+                "payloadPath": "data.txWitness",
+                "fields": ["available", "witnessesCount", "inputCount", "analyses", "inference"]
+            }
+        }
+    })
+    .to_string()
 }
 
 async fn frontend_filesystem_handler(State(state): State<FrontendFsState>, uri: Uri) -> Response {
@@ -471,5 +594,56 @@ mod tests {
         assert!(text.contains("\"http://127.0.0.1:18114\""));
         assert!(text.contains("buildVersion"));
         assert!(text.contains("\"0.1.0+feature/foo@abcdef123456\""));
+    }
+
+    #[tokio::test]
+    async fn test_capabilities_route_returns_valid_json() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("index.html"), "<html>spa</html>").unwrap();
+
+        let router = build_frontend_router(FrontendServiceConfig {
+            host: "127.0.0.1".to_string(),
+            port: 8100,
+            api_port: 8101,
+            ckb_network: "mainnet".to_string(),
+            ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
+            build_version: "0.1.0+testbuild".to_string(),
+            frontend_dir: Some(dir.path().to_path_buf()),
+        })
+        .unwrap();
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/capabilities")
+                    .header("host", "localhost:8100")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/json; charset=utf-8"
+        );
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["origin"], "http://localhost:8100");
+        assert_eq!(json["site"]["name"], "ckbadger");
+        assert_eq!(json["site"]["apiBase"], "/api/v1");
+        assert!(json["routes"]["markdown"].as_array().unwrap().len() > 20);
+        assert!(!json["routes"]["raw"].as_array().unwrap().is_empty());
+        assert_eq!(
+            json["formatNegotiation"]["raw"]["accept"],
+            "application/vnd.ckbadger.raw+json"
+        );
+        assert_eq!(
+            json["rawProfiles"]["txDebuggerProfile"]["profile"],
+            "debugger"
+        );
     }
 }
