@@ -55,6 +55,7 @@ const TX_BLOCK_HASHES_CACHE_TTL: StdDuration = StdDuration::from_secs(30);
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/transactions", get(list_transactions))
+        .route("/transactions/backfill-cycles", post(backfill_cycles))
         .route("/transactions/{hash}", get(get_transaction))
         .route("/transactions/{hash}/detail", get(get_transaction_detail))
         .route("/transactions/{hash}/cell-deps", get(get_cell_deps))
@@ -1651,6 +1652,106 @@ async fn trigger_cycles_calculation(
             ok(wait_cycles_result(&state, &hash, &hash_bytes).await?)
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackfillCyclesParams {
+    start_block: i64,
+    end_block: i64,
+    #[serde(default = "default_backfill_limit")]
+    limit: Option<usize>,
+}
+
+fn default_backfill_limit() -> Option<usize> {
+    Some(1000)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackfillCyclesResponse {
+    scanned_range: [i64; 2],
+    found: usize,
+    queued: usize,
+    errors: Vec<String>,
+}
+
+async fn backfill_cycles(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<BackfillCyclesParams>,
+) -> ApiResult<BackfillCyclesResponse> {
+    if !state.cycles_client.is_enabled() {
+        return Err(ApiError::bad_request("Cycles worker not connected"));
+    }
+
+    if params.end_block < params.start_block {
+        return Err(ApiError::bad_request("end_block must be >= start_block"));
+    }
+
+    let limit = params.limit.unwrap_or(1000).min(10_000);
+    let store = state.store.clone();
+    let start = params.start_block;
+    let end = params.end_block;
+
+    // Scan store for transactions with missing cycles
+    let missing =
+        tokio::task::spawn_blocking(move || store.scan_txs_missing_cycles(start, end, limit))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let found = missing.len();
+    let mut queued = 0usize;
+    let mut errors = Vec::new();
+
+    // Group by block_num to batch-fetch tx hashes
+    let mut by_block: std::collections::BTreeMap<i64, Vec<i32>> = std::collections::BTreeMap::new();
+    for (block_num, tx_idx) in &missing {
+        by_block.entry(*block_num).or_default().push(*tx_idx);
+    }
+
+    for (block_num, tx_indices) in &by_block {
+        // Get tx hashes from CKB node's RocksDB (read-only)
+        let all_hashes = match get_block_tx_hashes_from_ckb_store(&state.ckb_store, *block_num) {
+            Some(hashes) => hashes,
+            None => {
+                errors.push(format!(
+                    "block {}: cannot resolve tx hashes (CKB store unavailable)",
+                    block_num
+                ));
+                continue;
+            }
+        };
+
+        for &tx_idx in tx_indices {
+            let idx = tx_idx as usize;
+            if idx >= all_hashes.len() {
+                errors.push(format!(
+                    "block {} tx {}: index out of range",
+                    block_num, tx_idx
+                ));
+                continue;
+            }
+            let tx_hash = format!("0x{}", hex::encode(&all_hashes[idx]));
+            match state.cycles_client.enqueue_task(&tx_hash).await {
+                Ok(()) => queued += 1,
+                Err(e) => {
+                    errors.push(format!(
+                        "block {} tx {}: enqueue failed: {}",
+                        block_num, tx_idx, e
+                    ));
+                    break; // Channel likely full, stop queuing
+                }
+            }
+        }
+    }
+
+    ok(BackfillCyclesResponse {
+        scanned_range: [params.start_block, params.end_block],
+        found,
+        queued,
+        errors,
+    })
 }
 
 async fn load_tx_cycles_state(
