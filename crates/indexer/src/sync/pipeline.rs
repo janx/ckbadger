@@ -2536,6 +2536,12 @@ impl Indexer {
                                     });
                                 }
                             }
+                            // Clear in-process caches to prevent stale entries from the
+                            // failed batch being used during retry. Without this, outputs
+                            // that were rolled back in RocksDB would still be found via
+                            // cache lookups when resolving inputs in the next batch.
+                            self.cell_cache.clear();
+                            self.udt_cell_cache.clear();
                             self.request_pipeline_reset("batch write failed", None, None, None);
                             let drained = Self::drain_channel(&mut parse_rx).await;
                             parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
@@ -2543,7 +2549,7 @@ impl Indexer {
                                 run_id = %self.run_id,
                                 pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
                                 drained,
-                                "Batch write failure drain completed"
+                                "Batch write failure drain completed, caches cleared"
                             );
                             sleep(Duration::from_secs(5)).await;
                             continue;

@@ -279,38 +279,65 @@ impl DobDecodeWorker {
         spore_id: &[u8],
         new_sources: &[SporeMediaSource],
     ) -> Result<()> {
-        let mut entry = self.store.get_spore(spore_id)?.with_context(|| {
+        let entry = self.store.get_spore(spore_id)?.with_context(|| {
             format!(
                 "spore entry not found when updating media profile: spore_id=0x{}",
                 hex::encode(spore_id)
             )
         })?;
 
-        let (old_tier, new_tier) = if let ObjectExtra::Spore {
-            ref mut media_profile,
-            ..
+        // Compute the new media_profile in isolation without mutating the entry.
+        // We'll apply the result to a freshly-read entry below to avoid clobbering
+        // concurrent canonical state changes (is_live, owner_lock_hash) made by
+        // the live sync writer between our read and write.
+        let (old_tier, new_media_profile) = if let ObjectExtra::Spore {
+            ref media_profile, ..
         } = entry.extra
         {
             let old_tier = media_profile.tier;
-            merge_media_sources(media_profile, new_sources);
-            (old_tier, media_profile.tier)
+            let mut mp = media_profile.clone();
+            merge_media_sources(&mut mp, new_sources);
+            (old_tier, mp)
         } else {
-            // Not a spore entry — this shouldn't happen since we only decode DOB spores,
-            // but log and return without error.
             warn!(
                 spore_id = hex::encode(spore_id),
                 "expected Spore extra when updating media profile"
             );
             return Ok(());
         };
+        let new_tier = new_media_profile.tier;
+
+        // Re-read the entry to get the latest canonical state (is_live,
+        // owner_lock_hash, etc.) and apply only the media_profile change.
+        // This prevents overwriting concurrent consume/transfer updates.
+        let mut fresh_entry = self.store.get_spore(spore_id)?.with_context(|| {
+            format!(
+                "spore entry vanished during media profile update: spore_id=0x{}",
+                hex::encode(spore_id)
+            )
+        })?;
+
+        if let ObjectExtra::Spore {
+            ref mut media_profile,
+            ..
+        } = fresh_entry.extra
+        {
+            *media_profile = new_media_profile;
+        }
 
         let mut batch = StoreBatch::new(&self.store);
         if old_tier != new_tier {
+            // Use fresh_entry.is_live for the cluster aggregate decision so we
+            // don't incorrectly update aggregates for already-consumed spores.
             self.sync_cluster_aggregate_for_media_tier_change(
-                spore_id, &entry, old_tier, new_tier, &mut batch,
+                spore_id,
+                &fresh_entry,
+                old_tier,
+                new_tier,
+                &mut batch,
             )?;
         }
-        batch.put_spore(spore_id, &entry);
+        batch.put_spore(spore_id, &fresh_entry);
         batch.commit()?;
         Ok(())
     }

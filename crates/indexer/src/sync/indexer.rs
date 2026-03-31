@@ -1002,9 +1002,6 @@ impl Indexer {
         let blocks_behind = self.progress.blocks_remaining();
         let (start_block, start_block_hash) = self.repo.get_sync_tip().await?;
         let fresh_sync_tip = is_fresh_sync_tip_state(start_block, &start_block_hash);
-        let bulk_sync_allowed = fresh_sync_tip;
-        self.bulk_sync_allowed
-            .store(bulk_sync_allowed, Ordering::SeqCst);
         let sync_path = select_startup_sync_path(
             blocks_behind,
             self.config.bulk_sync_threshold,
@@ -1012,6 +1009,13 @@ impl Indexer {
             &start_block_hash,
         );
         let bulk_sync_mode = matches!(sync_path, SyncPath::BulkBuild);
+        // Only allow bulk sync re-entry if we're actually taking the BulkBuild
+        // path. A fresh DB near tip selects Pipeline; setting bulk_sync_allowed
+        // =true in that case would cause a spurious fail-fast if lag later
+        // crosses the threshold (the pipeline writer rejects bulk batches).
+        let bulk_sync_allowed = fresh_sync_tip && bulk_sync_mode;
+        self.bulk_sync_allowed
+            .store(bulk_sync_allowed, Ordering::SeqCst);
         info!(
             run_id = %self.run_id,
             "Starting indexer ({} blocks behind, threshold={})",
