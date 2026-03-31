@@ -1907,8 +1907,6 @@ impl CkbadgerStore {
 
         // Flush all memtables to SST BEFORE reducing WBM budget.
         // This ensures all commit_no_wal() data from bulk sync is durable.
-        // atomic_flush=true (set at open) means the first flush_cf() triggers
-        // an atomic flush of all CFs together.
         if let Err(e) = self.flush_all_memtables() {
             error!(
                 error = %e,
@@ -1965,14 +1963,15 @@ impl CkbadgerStore {
     /// Flush all column family memtables to SST files.
     ///
     /// Required after bulk sync (commit_no_wal) to make memtable data durable.
-    /// With `atomic_flush=true` (set at DB open), flushing any single CF
-    /// triggers an atomic flush of ALL CFs, so one call suffices.
+    /// Each CF must be flushed individually: `flush_cf` rotates that CF's
+    /// active memtable to immutable and triggers a flush. With VectorRep
+    /// memtables, unflushed active memtables require O(n) linear scan per
+    /// read — flushing converts them to sorted SSTs with bloom filters.
     pub fn flush_all_memtables(&self) -> anyhow::Result<()> {
         let started = std::time::Instant::now();
 
         let cfs = Self::cfs_for_class(self.store_class);
-        // atomic_flush=true: flushing any CF flushes all CFs atomically.
-        if let Some(&cf_name) = cfs.first() {
+        for &cf_name in cfs {
             if let Some(cf) = self.db.cf_handle(cf_name) {
                 self.db.flush_cf(cf).map_err(|e| {
                     anyhow::anyhow!("flush_all_memtables failed on CF '{}': {}", cf_name, e)
