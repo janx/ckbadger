@@ -341,10 +341,10 @@ export default function DaoPage() {
           subtitle="Deposit CKB to earn compensation from secondary issuance"
           actions={
             <Link
-              href="/charts"
+              href="/charts/total-deposit"
               className="border-base-border bg-base-elevated text-text hover:bg-base-elevated/80 hover:text-text-bright rounded border px-4 py-2 font-mono text-sm transition-colors"
             >
-              View Charts
+              View Chart
             </Link>
           }
         />

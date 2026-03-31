@@ -246,11 +246,6 @@ export default function ChartsPage() {
     queryFn: () => api.getDaoDailyDepositChart(),
   });
 
-  const { data: circulationRatio } = useQuery({
-    queryKey: ['dao-chart-circulation-ratio'],
-    queryFn: () => api.getDaoCirculationRatioChart(),
-  });
-
   const { data: transactionCount } = useQuery({
     queryKey: ['chart-transaction-count'],
     queryFn: () => api.getTransactionCountChart(),
@@ -405,47 +400,6 @@ export default function ChartsPage() {
 
         <ChartDataWarning show={networkStats?.syncStatus?.chartDataMayBeIncomplete ?? false} />
 
-        <ChartSection title="Proof of Work">
-          <LineChartPreview data={hashRate} href="/charts/hash-rate" />
-          <LineChartPreview data={difficulty} href="/charts/difficulty" />
-          <LineChartPreview data={uncleRate} href="/charts/uncle-rate" />
-          <MinerDistributionPreview
-            data={minerDistribution}
-            href="/charts/miner-address-distribution"
-          />
-        </ChartSection>
-
-        <ChartSection title="Nervos DAO">
-          <LineChartPreview data={totalDeposit} href="/charts/total-deposit" />
-          <LineChartPreview data={dailyDeposit} href="/charts/daily-deposit" />
-          <LineChartPreview data={circulationRatio} href="/charts/circulation-ratio" />
-        </ChartSection>
-
-        <ChartSection title="Block">
-          <LineChartPreview data={blockTimeDistribution} href="/charts/block-time-distribution" />
-          <LineChartPreview data={epochTimeDistribution} href="/charts/epoch-time-distribution" />
-          <LineChartPreview
-            data={epochTimeLength}
-            href="/charts/epoch-time-length"
-            markers={epochHardforkMarkers}
-          />
-          <LineChartPreview data={averageBlockTime} href="/charts/average-block-time" />
-        </ChartSection>
-
-        <ChartSection title="Activities">
-          <LineChartPreview data={transactionCount} href="/charts/transaction-count" />
-          <MultiSeriesPreview
-            data={cellCount}
-            href="/charts/cell-count"
-            defaultSeries="liveCells"
-          />
-          <StackedAreaPreview data={hodlWave} href="/charts/hodl-wave" isPercentage />
-          <LineChartPreview data={activityVolume} href="/charts/activity-volume" />
-          <StackedAreaPreview data={activityTypeBreakdown} href="/charts/activity-type-breakdown" />
-          <LineChartPreview data={activeAddresses} href="/charts/active-addresses" />
-          <LineChartPreview data={ckbVolume} href="/charts/ckb-volume" chartType="bar" />
-        </ChartSection>
-
         <ChartSection title="Common Knowledge Bytes">
           <LineChartPreview data={knowledgeSize} href="/charts/knowledge-size" />
           <StackedAreaPreview
@@ -473,7 +427,23 @@ export default function ChartsPage() {
           />
         </ChartSection>
 
-        <ChartSection title="Economics">
+        <ChartSection title="Activities">
+          <LineChartPreview data={transactionCount} href="/charts/transaction-count" />
+          <MultiSeriesPreview
+            data={cellCount}
+            href="/charts/cell-count"
+            defaultSeries="liveCells"
+          />
+          <StackedAreaPreview data={hodlWave} href="/charts/hodl-wave" isPercentage />
+          <LineChartPreview data={activityVolume} href="/charts/activity-volume" />
+          <StackedAreaPreview data={activityTypeBreakdown} href="/charts/activity-type-breakdown" />
+          <LineChartPreview data={activeAddresses} href="/charts/active-addresses" />
+          <LineChartPreview data={ckbVolume} href="/charts/ckb-volume" chartType="bar" />
+        </ChartSection>
+
+        <ChartSection title="Nervos DAO & Economics">
+          <LineChartPreview data={totalDeposit} href="/charts/total-deposit" />
+          <LineChartPreview data={dailyDeposit} href="/charts/daily-deposit" />
           <StackedAreaPreview data={totalSupply} href="/charts/total-supply" />
           <LineChartPreview data={nominalApc} href="/charts/nominal-apc" />
           <StackedAreaPreview
@@ -482,6 +452,27 @@ export default function ChartsPage() {
             isPercentage
           />
           <LineChartPreview data={inflationRate} href="/charts/inflation-rate" />
+        </ChartSection>
+
+        <ChartSection title="Block">
+          <LineChartPreview data={blockTimeDistribution} href="/charts/block-time-distribution" />
+          <LineChartPreview data={epochTimeDistribution} href="/charts/epoch-time-distribution" />
+          <LineChartPreview
+            data={epochTimeLength}
+            href="/charts/epoch-time-length"
+            markers={epochHardforkMarkers}
+          />
+          <LineChartPreview data={averageBlockTime} href="/charts/average-block-time" />
+        </ChartSection>
+
+        <ChartSection title="Proof of Work">
+          <LineChartPreview data={hashRate} href="/charts/hash-rate" />
+          <LineChartPreview data={difficulty} href="/charts/difficulty" />
+          <LineChartPreview data={uncleRate} href="/charts/uncle-rate" />
+          <MinerDistributionPreview
+            data={minerDistribution}
+            href="/charts/miner-address-distribution"
+          />
         </ChartSection>
       </main>
     </div>
