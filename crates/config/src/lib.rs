@@ -174,6 +174,8 @@ pub struct WorkDir {
     pub supervisor_pid: PathBuf,
     /// Indexer IPC socket.
     pub indexer_sock: PathBuf,
+    /// Directory where API writes cycles calculation request files.
+    pub cycles_request_dir: PathBuf,
     /// Process log directory.
     pub log_dir: PathBuf,
     /// Local metadata override directory (if it exists on disk).
@@ -197,6 +199,7 @@ impl WorkDir {
         let dob_decode_dir = root.join("dob_decode");
         let supervisor_pid = run_dir.join("supervisor.pid");
         let indexer_sock = run_dir.join("indexer.sock");
+        let cycles_request_dir = run_dir.join("cycles_requests");
         let log_dir = run_dir.join("logs");
 
         let metadata_path = root.join("metadata");
@@ -217,6 +220,7 @@ impl WorkDir {
             dob_decode_dir,
             supervisor_pid,
             indexer_sock,
+            cycles_request_dir,
             log_dir,
             metadata,
         }
@@ -745,6 +749,7 @@ network = "testnet"
         assert_eq!(wd.dob_decode_dir, root.join("dob_decode"));
         assert_eq!(wd.supervisor_pid, root.join("run/supervisor.pid"));
         assert_eq!(wd.indexer_sock, root.join("run/indexer.sock"));
+        assert_eq!(wd.cycles_request_dir, root.join("run/cycles_requests"));
         assert_eq!(wd.log_dir, root.join("run/logs"));
         assert!(wd.metadata.is_none());
     }
