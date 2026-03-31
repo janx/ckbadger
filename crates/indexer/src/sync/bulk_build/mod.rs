@@ -1114,6 +1114,8 @@ struct ChainStatsAccumulator {
     block_time_dist: FxHashMap<i32, i32>,
     /// Epoch time distribution buckets (minutes → count).
     epoch_time_dist: FxHashMap<i32, i32>,
+    /// Per-epoch stats: epoch_number → (start_block, end_block, length, start_ts_ms, end_ts_ms, tx_count).
+    epoch_stats: FxHashMap<i64, (i64, i64, i32, i64, i64, i32)>,
     /// Timestamp of the previous block (for inter-block time deltas).
     prev_timestamp_ms: Option<i64>,
     /// Previous epoch: (epoch_number, epoch_start_timestamp_ms).
@@ -1128,7 +1130,8 @@ impl ChainStatsAccumulator {
             + self.daily_dao_fields.len()
             + self.daily_block_times.len();
         let dist_count = self.block_time_dist.len() + self.epoch_time_dist.len();
-        (daily_count * 100 + dist_count * 16) as u64
+        let epoch_count = self.epoch_stats.len();
+        (daily_count * 100 + dist_count * 16 + epoch_count * 48) as u64
     }
 
     /// Accumulate chain statistics from a batch of blocks.
@@ -1268,6 +1271,24 @@ impl ChainStatsAccumulator {
             if block.epoch_index == 0 {
                 self.prev_epoch = Some((block.epoch_number, block.timestamp_ms));
             }
+
+            // --- Per-epoch stats ---
+            let epoch_entry = self
+                .epoch_stats
+                .entry(block.epoch_number)
+                .or_insert_with(|| {
+                    (
+                        block.number,
+                        block.number,
+                        block.epoch_length,
+                        block.timestamp_ms,
+                        block.timestamp_ms,
+                        0,
+                    )
+                });
+            epoch_entry.1 = block.number; // end_block
+            epoch_entry.4 = block.timestamp_ms; // end_ts_ms
+            epoch_entry.5 += block.transactions_count; // tx_count
         }
         Ok(())
     }
@@ -1394,6 +1415,31 @@ impl ChainStatsAccumulator {
                 CF_STATS_CHAIN,
                 keys::encode_stats_key(keys::stats_prefix::EPOCH_TIME_DIST, &bucket.to_be_bytes()),
                 count.to_le_bytes().to_vec(),
+            ));
+        }
+
+        // --- Per-epoch stats ---
+        for (&epoch_number, &(start_block, end_block, length, start_ts_ms, end_ts_ms, tx_count)) in
+            &self.epoch_stats
+        {
+            let start_timestamp =
+                chrono::DateTime::from_timestamp(start_ts_ms / 1000, 0).unwrap_or_default();
+            let end_timestamp =
+                chrono::DateTime::from_timestamp(end_ts_ms / 1000, 0).unwrap_or_default();
+            let stats = ckbadger_store::types::EpochStats {
+                epoch_number,
+                start_block,
+                end_block: Some(end_block),
+                blocks_count: (end_block - start_block + 1) as i32,
+                length,
+                start_timestamp,
+                end_timestamp: Some(end_timestamp),
+                transactions_count: tx_count,
+            };
+            rows.push(materialize::MaterializedRow::new(
+                CF_STATS_CHAIN,
+                keys::encode_stats_key(keys::stats_prefix::EPOCH, &epoch_number.to_be_bytes()),
+                bincode::serialize(&stats)?,
             ));
         }
 
@@ -6743,6 +6789,94 @@ mod tests {
 
         // Epoch 5→6 boundary: 240 minutes
         assert_eq!(acc.epoch_time_dist.get(&240), Some(&1));
+    }
+
+    #[test]
+    fn chain_stats_accumulator_epoch_stats() {
+        let mut acc = ChainStatsAccumulator::default();
+
+        let arena = facts::FactsArena {
+            blocks: vec![
+                facts::BlockFacts {
+                    number: 1000,
+                    epoch_number: 5,
+                    epoch_index: 0,
+                    epoch_length: 1800,
+                    timestamp_ms: 1_700_000_000_000,
+                    transactions_count: 3,
+                    ..Default::default()
+                },
+                facts::BlockFacts {
+                    number: 1001,
+                    epoch_number: 5,
+                    epoch_index: 1,
+                    epoch_length: 1800,
+                    timestamp_ms: 1_700_000_010_000,
+                    transactions_count: 2,
+                    ..Default::default()
+                },
+                facts::BlockFacts {
+                    number: 2800,
+                    epoch_number: 6,
+                    epoch_index: 0,
+                    epoch_length: 1750,
+                    timestamp_ms: 1_700_000_020_000,
+                    transactions_count: 1,
+                    ..Default::default()
+                },
+            ],
+            txs: vec![],
+            cells: vec![],
+        };
+
+        let resolved: Vec<facts::ResolvedTxFacts<'_>> = vec![];
+        acc.apply_blocks(&arena, &resolved).unwrap();
+
+        // Epoch 5: blocks 1000-1001, tx_count=5, length=1800
+        let e5 = acc.epoch_stats.get(&5).expect("epoch 5 stats");
+        assert_eq!(e5.0, 1000); // start_block
+        assert_eq!(e5.1, 1001); // end_block
+        assert_eq!(e5.2, 1800); // length
+        assert_eq!(e5.3, 1_700_000_000_000); // start_ts_ms
+        assert_eq!(e5.4, 1_700_000_010_000); // end_ts_ms
+        assert_eq!(e5.5, 5); // tx_count
+
+        // Epoch 6: single block 2800, tx_count=1, length=1750
+        let e6 = acc.epoch_stats.get(&6).expect("epoch 6 stats");
+        assert_eq!(e6.0, 2800);
+        assert_eq!(e6.1, 2800);
+        assert_eq!(e6.2, 1750);
+        assert_eq!(e6.5, 1);
+
+        // build_rows should produce EpochStats rows
+        let rows = acc.build_rows().unwrap();
+        let epoch_rows: Vec<_> = rows
+            .iter()
+            .filter(|r| {
+                r.cf_name == CF_STATS_CHAIN && r.key.first() == Some(&keys::stats_prefix::EPOCH)
+            })
+            .collect();
+        assert_eq!(epoch_rows.len(), 2);
+
+        // Deserialize and verify epoch 5
+        let stats5: ckbadger_store::types::EpochStats = bincode::deserialize(
+            &epoch_rows
+                .iter()
+                .find(|r| {
+                    let epoch_bytes = &r.key[1..];
+                    i64::from_be_bytes(epoch_bytes.try_into().unwrap()) == 5
+                })
+                .unwrap()
+                .value,
+        )
+        .unwrap();
+        assert_eq!(stats5.epoch_number, 5);
+        assert_eq!(stats5.start_block, 1000);
+        assert_eq!(stats5.end_block, Some(1001));
+        assert_eq!(stats5.blocks_count, 2);
+        assert_eq!(stats5.length, 1800);
+        assert_eq!(stats5.transactions_count, 5);
+        assert!(stats5.end_timestamp.is_some());
     }
 
     #[test]
