@@ -2599,26 +2599,6 @@ export const api = {
     });
   },
 
-  backfillCycles: (
-    startBlock: number,
-    endBlock: number,
-    limit?: number
-  ): Promise<{
-    scannedRange: [number, number];
-    found: number;
-    queued: number;
-    errors: string[];
-  }> => {
-    const params = new URLSearchParams({
-      startBlock: startBlock.toString(),
-      endBlock: endBlock.toString(),
-    });
-    if (limit !== undefined) params.set('limit', limit.toString());
-    return fetchJson(`${API_BASE}/transactions/backfill-cycles?${params}`, {
-      method: 'POST',
-    });
-  },
-
   getActivityVolumeChart: async (): Promise<ChartResponse> => {
     const stats = await api.getDailyActivityStats(0);
     return {

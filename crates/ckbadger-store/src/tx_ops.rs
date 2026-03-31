@@ -303,44 +303,6 @@ impl CkbadgerStore {
         }
     }
 
-    /// Scan CF_TX_INDEX for non-cellbase transactions with missing cycles
-    /// within a block range [start_block, end_block]. Returns (block_num, tx_idx) pairs.
-    pub fn scan_txs_missing_cycles(
-        &self,
-        start_block: i64,
-        end_block: i64,
-        limit: usize,
-    ) -> anyhow::Result<Vec<(i64, i32)>> {
-        use rocksdb::{Direction, IteratorMode};
-
-        let start_key = keys::encode_block_num(start_block);
-        let end_prefix = keys::encode_block_num(end_block + 1);
-
-        let mode = IteratorMode::From(&start_key, Direction::Forward);
-        let iter = self.iterator_cf(self.cf_tx_index(), mode);
-
-        let mut results = Vec::new();
-        for item in iter {
-            let (key, value) = item.map_err(|e| anyhow::anyhow!("iterator error: {}", e))?;
-            if key.as_ref() >= end_prefix.as_slice() {
-                break;
-            }
-            if key.len() != 12 {
-                continue;
-            }
-            let entry: TxIndexEntry = bincode::deserialize(&value)?;
-            if !entry.is_cellbase && entry.cycles.is_none() {
-                let block_num = keys::decode_block_num(&key[..8]);
-                let tx_idx = keys::decode_tx_idx(&key[8..12]);
-                results.push((block_num, tx_idx));
-                if results.len() >= limit {
-                    break;
-                }
-            }
-        }
-        Ok(results)
-    }
-
     /// List transactions for a block with tx_idx > `after_tx_idx`, ordered ascending.
     /// Returns at most `limit` entries. Used for ascending single-block pagination.
     pub fn list_block_txs_after(
@@ -644,76 +606,5 @@ mod tests {
         assert_eq!(rows[0].0, tx_hash.to_vec());
         assert_eq!(rows[0].1, Some((200, 3, vec![0xAB; 32])));
         assert_eq!(rows[1], (missing_tx.to_vec(), None));
-    }
-
-    fn make_tx_entry(is_cellbase: bool, cycles: Option<i64>) -> TxIndexEntry {
-        TxIndexEntry {
-            is_cellbase,
-            timestamp: 1_700_000_000_000,
-            inputs_count: 1,
-            outputs_count: 1,
-            fee: 1_000,
-            tx_size: 200,
-            cycles,
-        }
-    }
-
-    #[test]
-    fn test_scan_txs_missing_cycles() {
-        let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        let mut batch = StoreBatch::new(&store);
-        // Block 10: cellbase (skip) + tx with cycles (skip)
-        batch.put_tx_index(10, 0, &make_tx_entry(true, Some(0)));
-        batch.put_tx_index(10, 1, &make_tx_entry(false, Some(5000)));
-        // Block 11: tx without cycles (match) + failed tx (skip)
-        batch.put_tx_index(11, 0, &make_tx_entry(true, Some(0)));
-        batch.put_tx_index(11, 1, &make_tx_entry(false, None));
-        batch.put_tx_index(11, 2, &make_tx_entry(false, Some(-1)));
-        // Block 12: tx without cycles (match)
-        batch.put_tx_index(12, 0, &make_tx_entry(true, Some(0)));
-        batch.put_tx_index(12, 1, &make_tx_entry(false, None));
-        batch.commit().unwrap();
-
-        let results = store.scan_txs_missing_cycles(10, 12, 100).unwrap();
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0], (11, 1));
-        assert_eq!(results[1], (12, 1));
-    }
-
-    #[test]
-    fn test_scan_txs_missing_cycles_respects_limit() {
-        let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        let mut batch = StoreBatch::new(&store);
-        for block in 0i64..10 {
-            batch.put_tx_index(block, 0, &make_tx_entry(true, Some(0)));
-            batch.put_tx_index(block, 1, &make_tx_entry(false, None));
-        }
-        batch.commit().unwrap();
-
-        let results = store.scan_txs_missing_cycles(0, 9, 3).unwrap();
-        assert_eq!(results.len(), 3);
-    }
-
-    #[test]
-    fn test_scan_txs_missing_cycles_empty_range() {
-        let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_tx_index(10, 0, &make_tx_entry(true, Some(0)));
-        batch.put_tx_index(10, 1, &make_tx_entry(false, Some(5000)));
-        batch.commit().unwrap();
-
-        // Range with no missing cycles
-        let results = store.scan_txs_missing_cycles(10, 10, 100).unwrap();
-        assert!(results.is_empty());
-
-        // Range with no data
-        let results = store.scan_txs_missing_cycles(100, 200, 100).unwrap();
-        assert!(results.is_empty());
     }
 }
