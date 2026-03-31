@@ -126,6 +126,7 @@ pub struct DiscoveredParams {
     pub top_script_names: Vec<String>,
     pub top_token_type_hashes: Vec<String>,
     pub top_spore_ids: Vec<String>,
+    pub top_cluster_ids: Vec<String>,
     pub top_dotbit_item_ids: Vec<String>,
     pub busiest_lock_hashes: Vec<String>,
 }

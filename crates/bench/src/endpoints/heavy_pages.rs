@@ -9,6 +9,7 @@ pub fn entries() -> Vec<EndpointEntry> {
     out.extend(script_detail_entries());
     out.extend(token_detail_entries());
     out.extend(spore_detail_entries());
+    out.extend(cluster_detail_entries());
     out.extend(identity_detail_entries());
     out.extend(busiest_address_entries());
     out
@@ -144,6 +145,79 @@ fn spore_detail_entries() -> Vec<EndpointEntry> {
                         Some(get(&format!(
                             "{base}/spore/objects/{id}/activities?limit=50"
                         )))
+                    }),
+                    expect_status: 200,
+                    risk_tier: RiskTier::High,
+                    read_pattern: ReadPattern::PrefixScan,
+                },
+            ]
+        })
+        .collect()
+}
+
+fn cluster_detail_entries() -> Vec<EndpointEntry> {
+    (0..10)
+        .flat_map(|i| {
+            let rank = i + 1;
+            let desc_detail: &'static str =
+                Box::leak(format!("Cluster detail #{rank} (by spores)").into_boxed_str());
+            let desc_holders: &'static str =
+                Box::leak(format!("Cluster holders #{rank} (by spores)").into_boxed_str());
+            let desc_activities: &'static str =
+                Box::leak(format!("Cluster activities #{rank} (by spores)").into_boxed_str());
+            let desc_spores: &'static str =
+                Box::leak(format!("Cluster spores #{rank} (by spores)").into_boxed_str());
+
+            vec![
+                EndpointEntry {
+                    module: "heavy_pages",
+                    method: Method::Get,
+                    path_template: "/spore/clusters/{cluster_id}",
+                    description: desc_detail,
+                    resolve: Box::new(move |base, p| {
+                        let id = p.top_cluster_ids.get(i)?;
+                        Some(get(&format!("{base}/spore/clusters/{id}")))
+                    }),
+                    expect_status: 200,
+                    risk_tier: RiskTier::Medium,
+                    read_pattern: ReadPattern::KeyLookup,
+                },
+                EndpointEntry {
+                    module: "heavy_pages",
+                    method: Method::Get,
+                    path_template: "/spore/clusters/{cluster_id}/holders",
+                    description: desc_holders,
+                    resolve: Box::new(move |base, p| {
+                        let id = p.top_cluster_ids.get(i)?;
+                        Some(get(&format!("{base}/spore/clusters/{id}/holders?limit=50")))
+                    }),
+                    expect_status: 200,
+                    risk_tier: RiskTier::High,
+                    read_pattern: ReadPattern::PrefixScan,
+                },
+                EndpointEntry {
+                    module: "heavy_pages",
+                    method: Method::Get,
+                    path_template: "/spore/clusters/{cluster_id}/activities",
+                    description: desc_activities,
+                    resolve: Box::new(move |base, p| {
+                        let id = p.top_cluster_ids.get(i)?;
+                        Some(get(&format!(
+                            "{base}/spore/clusters/{id}/activities?limit=50"
+                        )))
+                    }),
+                    expect_status: 200,
+                    risk_tier: RiskTier::High,
+                    read_pattern: ReadPattern::PrefixScan,
+                },
+                EndpointEntry {
+                    module: "heavy_pages",
+                    method: Method::Get,
+                    path_template: "/spore/clusters/{cluster_id}/spores",
+                    description: desc_spores,
+                    resolve: Box::new(move |base, p| {
+                        let id = p.top_cluster_ids.get(i)?;
+                        Some(get(&format!("{base}/spore/clusters/{id}/spores?limit=50")))
                     }),
                     expect_status: 200,
                     risk_tier: RiskTier::High,

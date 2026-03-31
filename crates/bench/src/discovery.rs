@@ -144,6 +144,10 @@ pub fn print_discovery(discovery: &Discovery) {
     );
     println!("  top_spore_ids:        [{} items]", p.top_spore_ids.len());
     println!(
+        "  top_cluster_ids:      [{} items]",
+        p.top_cluster_ids.len()
+    );
+    println!(
         "  top_dotbit_item_ids:  [{} items]",
         p.top_dotbit_item_ids.len()
     );
@@ -477,6 +481,28 @@ async fn discover_params(
                         .and_then(|v| v.as_str())
                         .map(String::from)
                 })
+                .collect();
+        }
+
+        // top_cluster_ids: top 10 clusters by spore count (heaviest cluster pages)
+        let all_clusters = fetch_json(client, &format!("{}/spore/clusters?limit=50", base)).await?;
+        if let Some(arr) = data_array(&all_clusters) {
+            let mut with_counts: Vec<(&str, i64)> = arr
+                .iter()
+                .filter_map(|item| {
+                    let id = item.get("clusterId").and_then(|v| v.as_str())?;
+                    let count = item
+                        .get("sporesCount")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    Some((id, count))
+                })
+                .collect();
+            with_counts.sort_by(|a, b| b.1.cmp(&a.1));
+            params.top_cluster_ids = with_counts
+                .into_iter()
+                .take(10)
+                .map(|(id, _)| id.to_string())
                 .collect();
         }
     }
