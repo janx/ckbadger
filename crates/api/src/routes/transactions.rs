@@ -89,8 +89,21 @@ pub struct TransactionResponse {
     pub fee: String,
     pub tx_size: Option<i32>,
     pub cycles: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cycles_status: Option<String>,
     pub is_cellbase: bool,
     pub timestamp: String,
+}
+
+fn derive_cycles_status(cycles: Option<i64>, is_cellbase: bool) -> Option<String> {
+    if is_cellbase {
+        return None;
+    }
+    match cycles {
+        Some(c) if c > 0 => None,
+        Some(-1) => Some("failed".to_string()),
+        _ => Some("pending".to_string()),
+    }
 }
 
 /// Helper: get all tx hashes in a block from the CKB node's RocksDB.
@@ -245,6 +258,7 @@ async fn list_transactions(
                     fee: entry.fee.to_string(),
                     tx_size: Some(entry.tx_size),
                     cycles: entry.cycles,
+                    cycles_status: derive_cycles_status(entry.cycles, entry.is_cellbase),
                     is_cellbase: entry.is_cellbase,
                     timestamp,
                 }
@@ -347,6 +361,7 @@ async fn list_transactions(
                     fee: entry.fee.to_string(),
                     tx_size: Some(entry.tx_size),
                     cycles: entry.cycles,
+                    cycles_status: derive_cycles_status(entry.cycles, entry.is_cellbase),
                     is_cellbase: entry.is_cellbase,
                     timestamp,
                 }
@@ -400,6 +415,7 @@ async fn get_transaction(
                 fee: entry.fee.to_string(),
                 tx_size: Some(entry.tx_size),
                 cycles: entry.cycles,
+                cycles_status: derive_cycles_status(entry.cycles, entry.is_cellbase),
                 is_cellbase: entry.is_cellbase,
                 timestamp,
             })
@@ -467,6 +483,8 @@ pub struct TransactionDetailResponse {
     pub fee_rate: Option<String>,
     pub tx_size: Option<i32>,
     pub cycles: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cycles_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confirmations: Option<i64>,
     pub is_cellbase: bool,
@@ -739,6 +757,7 @@ async fn get_transaction_detail(
             fee_rate,
             tx_size: tx_lookup.tx_size,
             cycles: tx_lookup.cycles.map(|value| value as i64),
+            cycles_status: Some("pending".to_string()),
             confirmations: None,
             is_cellbase: rpc_tx.inputs.first().is_some_and(|input| {
                 input.previous_output.tx_hash
@@ -864,6 +883,7 @@ async fn get_transaction_detail(
         fee_rate,
         tx_size: final_tx_size,
         cycles,
+        cycles_status: derive_cycles_status(cycles, is_cellbase),
         confirmations: Some(confirmations),
         is_cellbase,
         timestamp: Some(timestamp),
@@ -2023,6 +2043,7 @@ mod tests {
             fee: "1000".to_string(),
             tx_size: Some(200),
             cycles: Some(5000),
+            cycles_status: None,
             is_cellbase: false,
             timestamp: "2024-01-01T00:00:00Z".to_string(),
         };
@@ -2200,6 +2221,7 @@ mod tests {
             fee_rate: Some("1000".to_string()),
             tx_size: Some(123),
             cycles: Some(456),
+            cycles_status: None,
             confirmations: Some(7),
             is_cellbase: false,
             timestamp: Some("2024-01-01T00:00:00Z".to_string()),

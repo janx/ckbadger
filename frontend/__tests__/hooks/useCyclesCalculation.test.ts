@@ -70,9 +70,10 @@ describe('useCyclesCalculation', () => {
       error: null,
     });
 
-    const { result } = renderHook(() => useCyclesCalculation('0xabc', undefined, false), {
-      wrapper: createWrapper(),
-    });
+    const { result } = renderHook(
+      () => useCyclesCalculation('0xabc', undefined, false, 'pending'),
+      { wrapper: createWrapper() }
+    );
 
     await waitFor(() => {
       expect(api.triggerCyclesCalculation).toHaveBeenCalledWith('0xabc');
@@ -98,9 +99,10 @@ describe('useCyclesCalculation', () => {
       pendingTrigger as Promise<{ status: 'done'; cycles: number; error: null }>
     );
 
-    const { result } = renderHook(() => useCyclesCalculation('0xabc', undefined, false), {
-      wrapper: createWrapper(),
-    });
+    const { result } = renderHook(
+      () => useCyclesCalculation('0xabc', undefined, false, 'pending'),
+      { wrapper: createWrapper() }
+    );
 
     await waitFor(() => {
       expect(api.triggerCyclesCalculation).toHaveBeenCalledWith('0xabc');
@@ -132,9 +134,10 @@ describe('useCyclesCalculation', () => {
       error: null,
     });
 
-    const { result } = renderHook(() => useCyclesCalculation('0xabc', undefined, false), {
-      wrapper: createWrapper(),
-    });
+    const { result } = renderHook(
+      () => useCyclesCalculation('0xabc', undefined, false, 'pending'),
+      { wrapper: createWrapper() }
+    );
 
     await waitFor(() => {
       expect(api.triggerCyclesCalculation).toHaveBeenCalledWith('0xabc');
@@ -151,9 +154,10 @@ describe('useCyclesCalculation', () => {
       error: null,
     });
 
-    const { result } = renderHook(() => useCyclesCalculation('0xabc', undefined, false), {
-      wrapper: createWrapper(),
-    });
+    const { result } = renderHook(
+      () => useCyclesCalculation('0xabc', undefined, false, 'pending'),
+      { wrapper: createWrapper() }
+    );
 
     await waitFor(() => {
       expect(api.triggerCyclesCalculation).toHaveBeenCalledWith('0xabc');
@@ -185,9 +189,10 @@ describe('useCyclesCalculation', () => {
     });
     const clearIntervalSpy = vi.spyOn(global, 'clearInterval').mockImplementation(() => {});
 
-    const { result } = renderHook(() => useCyclesCalculation('0xabc', undefined, false), {
-      wrapper: createWrapper(),
-    });
+    const { result } = renderHook(
+      () => useCyclesCalculation('0xabc', undefined, false, 'pending'),
+      { wrapper: createWrapper() }
+    );
 
     await waitFor(() => {
       expect(api.triggerCyclesCalculation).toHaveBeenCalledWith('0xabc');
@@ -223,9 +228,10 @@ describe('useCyclesCalculation', () => {
     const { Wrapper, queryClient } = createWrapperWithClient();
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
-    const { result } = renderHook(() => useCyclesCalculation('0xabc', undefined, false), {
-      wrapper: Wrapper,
-    });
+    const { result } = renderHook(
+      () => useCyclesCalculation('0xabc', undefined, false, 'pending'),
+      { wrapper: Wrapper }
+    );
 
     await waitFor(() => expect(api.getCyclesStatus).toHaveBeenCalledWith('0xabc'));
     await waitFor(() =>
@@ -244,9 +250,10 @@ describe('useCyclesCalculation', () => {
       error: 'Calculation failed',
     });
 
-    const { result } = renderHook(() => useCyclesCalculation('0xabc', undefined, false), {
-      wrapper: createWrapper(),
-    });
+    const { result } = renderHook(
+      () => useCyclesCalculation('0xabc', undefined, false, 'pending'),
+      { wrapper: createWrapper() }
+    );
 
     await waitFor(() => {
       expect(result.current.hasFailed).toBe(true);
@@ -262,9 +269,10 @@ describe('useCyclesCalculation', () => {
       error: 'Transaction not found',
     });
 
-    const { result } = renderHook(() => useCyclesCalculation('0xabc', undefined, false), {
-      wrapper: createWrapper(),
-    });
+    const { result } = renderHook(
+      () => useCyclesCalculation('0xabc', undefined, false, 'pending'),
+      { wrapper: createWrapper() }
+    );
 
     await waitFor(() => {
       expect(result.current.hasFailed).toBe(true);
@@ -279,7 +287,7 @@ describe('useCyclesCalculation', () => {
     });
 
     const { result, rerender } = renderHook(
-      ({ hash }) => useCyclesCalculation(hash, undefined, false),
+      ({ hash }) => useCyclesCalculation(hash, undefined, false, 'pending'),
       { wrapper: createWrapper(), initialProps: { hash: '0xabc' } }
     );
 

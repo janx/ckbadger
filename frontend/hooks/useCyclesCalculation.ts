@@ -7,7 +7,8 @@ import { api } from '@/lib/api';
 export function useCyclesCalculation(
   hash: string,
   txCycles: number | null | undefined,
-  isCellbase: boolean
+  isCellbase: boolean,
+  cyclesStatus?: string | null
 ) {
   const queryClient = useQueryClient();
   const [isCalculating, setIsCalculating] = useState(false);
@@ -18,8 +19,8 @@ export function useCyclesCalculation(
   const parsedCycles = txCycles ?? null;
   const effectiveCycles = parsedCycles ?? resolvedCycles;
   const hasCycles = effectiveCycles !== null && effectiveCycles > 0;
-  const needsCalculation = !isCellbase && !hasCycles && !hasFailed;
-  const displayCalculating = needsCalculation;
+  const needsCalculation = cyclesStatus === 'pending' && !hasFailed;
+  const displayCalculating = needsCalculation && !hasCycles;
   const invalidateTransactionQuery = useCallback(
     () => queryClient.invalidateQueries({ queryKey: ['transaction', hash] }),
     [queryClient, hash]
@@ -27,10 +28,10 @@ export function useCyclesCalculation(
 
   useEffect(() => {
     setIsCalculating(false);
-    setHasFailed(false);
+    setHasFailed(cyclesStatus === 'failed');
     setTriggeredForHash(null);
     setResolvedCycles(null);
-  }, [hash]);
+  }, [hash, cyclesStatus]);
 
   useEffect(() => {
     if (!needsCalculation || triggeredForHash === hash) return;

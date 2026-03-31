@@ -120,6 +120,7 @@ interface Transaction {
   fee: string;
   txSize?: number;
   cycles?: number;
+  cyclesStatus?: 'pending' | 'failed' | null;
   isCellbase: boolean;
   timestamp: string;
 }
@@ -284,6 +285,7 @@ interface TransactionDetail extends Omit<
   feeRate?: string;
   txSize?: number;
   cycles?: number;
+  cyclesStatus?: 'pending' | 'failed' | null;
   timestamp: string | null;
   confirmations: number | null;
   inputsCapacity: string | null;

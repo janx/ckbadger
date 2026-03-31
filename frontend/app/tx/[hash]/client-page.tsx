@@ -198,7 +198,8 @@ export default function TransactionDetailPage() {
   const { cycles, hasCycles, isCalculating, hasFailed } = useCyclesCalculation(
     hash,
     tx?.cycles,
-    (tx?.isCellbase ?? false) || isPendingTransaction
+    (tx?.isCellbase ?? false) || isPendingTransaction,
+    tx?.cyclesStatus
   );
   const { data: graphData } = useQuery({
     queryKey: ['txGraph', hash],
