@@ -1935,8 +1935,12 @@ impl CkbadgerStore {
         let level_base_str = p.normal_max_bytes_for_level_base.to_string();
         let file_base_str = p.normal_target_file_size_base.to_string();
 
-        self.write_buffer_manager
-            .set_buffer_size(p.wbm_normal_bytes);
+        // Cap WBM budget for live sync.  The open-time wbm_normal_bytes is
+        // scaled for bulk-sync headroom (often 24 GB+).  Live sync writes
+        // ~3-5 MB/block; a 64 MB cap triggers an atomic flush every ~13-21
+        // blocks, keeping VectorRep memtables small enough for fast reads.
+        let live_wbm = p.wbm_normal_bytes.min(64 * MB as usize);
+        self.write_buffer_manager.set_buffer_size(live_wbm);
 
         self.block_cache
             .lock()
@@ -1945,10 +1949,12 @@ impl CkbadgerStore {
 
         for &cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
-                let max_wb = if Self::is_mega_write_cf(cf_name) || Self::is_high_write_cf(cf_name) {
-                    "4"
+                let (max_wb, wb_size) = if Self::is_mega_write_cf(cf_name) {
+                    ("4", "8388608") // 8 MB
+                } else if Self::is_high_write_cf(cf_name) {
+                    ("4", "4194304") // 4 MB
                 } else {
-                    "2"
+                    ("2", "2097152") // 2 MB
                 };
                 let _ = self.db.set_options_cf(
                     cf,
@@ -1956,6 +1962,7 @@ impl CkbadgerStore {
                         ("level0_slowdown_writes_trigger", "12"),
                         ("level0_stop_writes_trigger", "24"),
                         ("max_write_buffer_number", max_wb),
+                        ("write_buffer_size", wb_size),
                         ("max_bytes_for_level_base", &level_base_str),
                         ("target_file_size_base", &file_base_str),
                     ],
@@ -1963,7 +1970,7 @@ impl CkbadgerStore {
             }
         }
         info!(
-            wbm_budget_mb = p.wbm_normal_bytes / (1024 * 1024),
+            wbm_budget_mb = live_wbm / (1024 * 1024),
             block_cache_mb = p.block_cache_normal_bytes / (1024 * 1024),
             "Normal compaction options restored: l0_slowdown=12, l0_stop=24"
         );
