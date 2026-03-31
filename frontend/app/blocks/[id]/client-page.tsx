@@ -71,6 +71,7 @@ export default function BlockDetailPage() {
     queryKey: ['block-fee-stats', id],
     queryFn: () => api.getBlockFeeStats(id),
     enabled: !!block,
+    refetchInterval: (query) => (query.state.data?.cyclesPending ? 3000 : false),
   });
 
   const { data: proposals } = useQuery({
@@ -298,7 +299,14 @@ export default function BlockDetailPage() {
                 </DataField>
                 <DataField label="Cycles">
                   {feeStats && (feeStats.totalCycles > 0 || block.number === 0) ? (
-                    <UsageBar value={feeStats.totalCycles} max={BLOCK_MAX_CYCLES} />
+                    <span className="flex items-center gap-2">
+                      <UsageBar value={feeStats.totalCycles} max={BLOCK_MAX_CYCLES} />
+                      {feeStats.cyclesPending && (
+                        <span className="text-text-dim text-xs italic">(partial)</span>
+                      )}
+                    </span>
+                  ) : feeStats?.cyclesPending ? (
+                    <span className="text-text-dim italic">Calculating...</span>
                   ) : (
                     <span className="text-text-dim italic">Calculating...</span>
                   )}

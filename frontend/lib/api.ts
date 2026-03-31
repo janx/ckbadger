@@ -1545,6 +1545,7 @@ interface BlockFeeStats {
   minFeeRate: number;
   maxFeeRate: number;
   transactionCount: number;
+  cyclesPending?: boolean;
 }
 
 interface BlockProposal {

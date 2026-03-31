@@ -617,6 +617,8 @@ pub struct BlockFeeStatsResponse {
     pub min_fee_rate: f64,
     pub max_fee_rate: f64,
     pub transaction_count: i32,
+    #[serde(default)]
+    pub cycles_pending: bool,
 }
 
 async fn get_block_fee_stats(
@@ -640,6 +642,18 @@ async fn get_block_fee_stats(
             .map_err(|_| ApiError::bad_request("Invalid block number"))?
     };
 
+    // Try to read pre-computed cycles from block header first
+    let store_c = store.clone();
+    let bn = block_number;
+    let header_cycles = tokio::task::spawn_blocking(move || {
+        store_c
+            .get_block_header(bn)
+            .map(|h| h.and_then(|h| h.cycles))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
     let store_c = store.clone();
     let txs = tokio::task::spawn_blocking(move || store_c.list_block_txs(block_number))
         .await
@@ -661,23 +675,56 @@ async fn get_block_fee_stats(
     }
 
     let mut total_size: i64 = 0;
-    let mut total_cycles: i64 = 0;
     let mut fee_rates: Vec<f64> = Vec::new();
     let mut non_cellbase_count: i32 = 0;
 
-    for (_tx_idx, entry) in &txs {
-        if entry.is_cellbase {
-            continue;
+    // Determine cycles: use header if available, otherwise sum from txs
+    let (total_cycles, cycles_pending) = if let Some(c) = header_cycles {
+        // Header has pre-computed total — all tx cycles are resolved
+        // Still need to iterate txs for size/fee stats below
+        for (_tx_idx, entry) in &txs {
+            if entry.is_cellbase {
+                continue;
+            }
+            non_cellbase_count += 1;
+            total_size += entry.tx_size as i64;
+            if entry.tx_size > 0 {
+                let fee_rate = (entry.fee as f64 * 1000.0) / entry.tx_size as f64;
+                fee_rates.push(fee_rate);
+            }
         }
-        non_cellbase_count += 1;
-        total_size += entry.tx_size as i64;
-        total_cycles += entry.cycles.unwrap_or(0);
+        (c, false)
+    } else {
+        // Fallback: sum from individual tx entries
+        let mut sum_cycles: i64 = 0;
+        let mut any_missing = false;
+        for (_tx_idx, entry) in &txs {
+            if entry.is_cellbase {
+                continue;
+            }
+            non_cellbase_count += 1;
+            total_size += entry.tx_size as i64;
+            sum_cycles += entry.cycles.unwrap_or(0);
+            if entry.cycles.is_none() {
+                any_missing = true;
+            }
+            if entry.tx_size > 0 {
+                let fee_rate = (entry.fee as f64 * 1000.0) / entry.tx_size as f64;
+                fee_rates.push(fee_rate);
+            }
+        }
+        (sum_cycles, any_missing)
+    };
 
-        if entry.tx_size > 0 {
-            // Fee rate in shannons/KB, consistent with transaction detail endpoint
-            let fee_rate = (entry.fee as f64 * 1000.0) / entry.tx_size as f64;
-            fee_rates.push(fee_rate);
-        }
+    // Fire-and-forget block cycles request if pending
+    if cycles_pending && state.cycles_client.is_enabled() {
+        let client = state.cycles_client.clone();
+        let bn = block_number;
+        tokio::spawn(async move {
+            if let Err(e) = client.enqueue_block(bn).await {
+                tracing::debug!("Failed to enqueue block cycles request: {}", e);
+            }
+        });
     }
 
     let (avg_fee_rate, min_fee_rate, max_fee_rate) = if fee_rates.is_empty() {
@@ -697,6 +744,7 @@ async fn get_block_fee_stats(
         min_fee_rate,
         max_fee_rate,
         transaction_count: non_cellbase_count,
+        cycles_pending,
     })
 }
 
@@ -889,10 +937,33 @@ mod tests {
             min_fee_rate: 0.5,
             max_fee_rate: 3.0,
             transaction_count: 10,
+            cycles_pending: false,
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["blockNumber"], 100);
         assert_eq!(json["transactionCount"], 10);
+        assert_eq!(json["cyclesPending"], false);
+    }
+
+    #[test]
+    fn test_block_fee_stats_cycles_pending_serialization() {
+        let resp = BlockFeeStatsResponse {
+            block_number: 200,
+            total_size: 3000,
+            total_cycles: 0,
+            avg_fee_rate: 0.0,
+            min_fee_rate: 0.0,
+            max_fee_rate: 0.0,
+            transaction_count: 5,
+            cycles_pending: true,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["cyclesPending"], true);
+
+        // Deserialize without cyclesPending field should default to false
+        let without_pending = r#"{"blockNumber":300,"totalSize":100,"totalCycles":50,"avgFeeRate":1.0,"minFeeRate":0.5,"maxFeeRate":1.5,"transactionCount":2}"#;
+        let deserialized: BlockFeeStatsResponse = serde_json::from_str(without_pending).unwrap();
+        assert!(!deserialized.cycles_pending);
     }
 
     #[test]
