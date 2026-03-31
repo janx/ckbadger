@@ -514,7 +514,7 @@ fn parse_binary_tx_cycles(
     })?;
 
     match raw_cycles {
-        Some(c) => {
+        Some(c) if *c > 0 => {
             let cycles_i64 = i64::try_from(*c).map_err(|_| {
                 anyhow!(
                     "binary facts cycles exceed i64 range: block={} tx=0x{} tx_position={} cycles={}",
@@ -526,7 +526,9 @@ fn parse_binary_tx_cycles(
             })?;
             Ok(Some(cycles_i64))
         }
-        None => Ok(Some(0)),
+        // CKB node returns 0 for pre-hardfork blocks where cycles weren't tracked.
+        // Treat as unknown (None) so lazy calculation can fill it in.
+        Some(_) | None => Ok(None),
     }
 }
 

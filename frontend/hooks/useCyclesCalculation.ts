@@ -54,13 +54,15 @@ export function useCyclesCalculation(
         } else if (response.status === 'calculating' || response.status === 'queued') {
           setIsCalculating(true);
           await invalidateTransactionQuery();
-        } else if (response.status === 'failed' || response.status === 'notFound') {
+        } else if (response.status === 'notFound') {
+          // Transaction not yet indexed — retry later, don't mark as permanent failure
+          setIsCalculating(false);
+        } else if (response.status === 'failed') {
           setIsCalculating(false);
           setHasFailed(true);
         }
       } catch {
         setIsCalculating(false);
-        setHasFailed(true);
       }
     };
 
@@ -84,13 +86,15 @@ export function useCyclesCalculation(
           }
         } else if (response.status === 'calculating' || response.status === 'queued') {
           await invalidateTransactionQuery();
-        } else if (response.status === 'failed' || response.status === 'notFound') {
+        } else if (response.status === 'notFound') {
+          // Transaction not yet indexed — retry later
+          setIsCalculating(false);
+        } else if (response.status === 'failed') {
           setIsCalculating(false);
           setHasFailed(true);
         }
       } catch {
         setIsCalculating(false);
-        setHasFailed(true);
       }
     }, 2000);
 

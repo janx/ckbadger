@@ -548,6 +548,11 @@ fn parse_bulk_tx_cycles(
             e
         )
     })?;
+    // CKB node returns 0 for pre-hardfork blocks where cycles weren't tracked.
+    // Treat as unknown (None) so lazy calculation can fill it in.
+    if parsed_cycles == 0 {
+        return Ok(None);
+    }
     let cycles_i64 = i64::try_from(parsed_cycles).map_err(|_| {
         anyhow!(
             "bulk facts cycles exceed i64 range: block={} tx=0x{} tx_position={} cycles={}",
