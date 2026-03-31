@@ -1,7 +1,6 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import Image from '@/components/ui/image';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
 import { AppLink } from '@/components/ui/app-link';
@@ -303,7 +302,6 @@ function InventoryTable({
             {/* Card skeleton (<lg) */}
             <div className="animate-pulse space-y-2 lg:hidden">
               <div className="flex items-center gap-2">
-                <div className="bg-base-elevated h-6 w-6 shrink-0 rounded-full" />
                 <div className="bg-base-elevated h-4 w-40 rounded" />
                 <div className="bg-base-elevated ml-auto h-4 w-12 rounded" />
               </div>
@@ -352,57 +350,34 @@ function InventoryTable({
           <div className="hidden items-center lg:flex">
             <div className={nameColumnClass}>
               <AppLink href={getAssetLink(asset)} className="block">
-                <div className="flex items-center gap-2">
-                  <span
-                    data-testid="asset-icon-slot"
-                    className="flex h-6 w-6 shrink-0 items-center justify-center"
-                  >
-                    {asset.assetType === 'token' && asset.iconUrl && (
-                      <Image
-                        src={asset.iconUrl}
-                        alt=""
-                        className="h-6 w-6 rounded-full"
-                        width={24}
-                        height={24}
-                        unoptimized
-                        onError={(event) => {
-                          event.currentTarget.style.visibility = 'hidden';
-                        }}
-                      />
-                    )}
-                    {asset.assetType === 'object' && asset.standard === 'spore' && (
-                      <span className="text-sm leading-none">{'\uD83D\uDDC2\uFE0F'}</span>
-                    )}
-                  </span>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span
-                        className="text-emphasis max-w-full truncate font-medium hover:underline"
-                        title={getAssetName(asset)}
-                      >
-                        {getAssetName(asset)}
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="text-emphasis max-w-full truncate font-medium hover:underline"
+                      title={getAssetName(asset)}
+                    >
+                      {getAssetName(asset)}
+                    </span>
+                    {asset.published && (
+                      <span className="text-emphasis" title="Verified">
+                        <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path
+                            fillRule="evenodd"
+                            d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                            clipRule="evenodd"
+                          />
+                        </svg>
                       </span>
-                      {asset.published && (
-                        <span className="text-emphasis" title="Verified">
-                          <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                            <path
-                              fillRule="evenodd"
-                              d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                              clipRule="evenodd"
-                            />
-                          </svg>
-                        </span>
-                      )}
-                      {asset.famous && (
-                        <span className="text-warning" title="Famous">
-                          <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                            <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                          </svg>
-                        </span>
-                      )}
-                    </div>
-                    <HexDisplay value={asset.id} size="sm" startChars={8} endChars={6} />
+                    )}
+                    {asset.famous && (
+                      <span className="text-warning" title="Famous">
+                        <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                        </svg>
+                      </span>
+                    )}
                   </div>
+                  <HexDisplay value={asset.id} size="sm" startChars={8} endChars={6} />
                 </div>
               </AppLink>
             </div>
@@ -490,57 +465,34 @@ function InventoryTable({
           <div className="space-y-1.5 lg:hidden">
             <div className="flex items-center gap-2">
               <AppLink href={getAssetLink(asset)} className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span
-                    data-testid="asset-icon-slot"
-                    className="flex h-6 w-6 shrink-0 items-center justify-center"
-                  >
-                    {asset.assetType === 'token' && asset.iconUrl && (
-                      <Image
-                        src={asset.iconUrl}
-                        alt=""
-                        className="h-6 w-6 rounded-full"
-                        width={24}
-                        height={24}
-                        unoptimized
-                        onError={(event) => {
-                          event.currentTarget.style.visibility = 'hidden';
-                        }}
-                      />
-                    )}
-                    {asset.assetType === 'object' && asset.standard === 'spore' && (
-                      <span className="text-sm leading-none">{'\uD83D\uDDC2\uFE0F'}</span>
-                    )}
-                  </span>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span
-                        className="text-emphasis max-w-full truncate font-medium hover:underline"
-                        title={getAssetName(asset)}
-                      >
-                        {getAssetName(asset)}
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="text-emphasis max-w-full truncate font-medium hover:underline"
+                      title={getAssetName(asset)}
+                    >
+                      {getAssetName(asset)}
+                    </span>
+                    {asset.published && (
+                      <span className="text-emphasis" title="Verified">
+                        <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path
+                            fillRule="evenodd"
+                            d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                            clipRule="evenodd"
+                          />
+                        </svg>
                       </span>
-                      {asset.published && (
-                        <span className="text-emphasis" title="Verified">
-                          <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                            <path
-                              fillRule="evenodd"
-                              d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                              clipRule="evenodd"
-                            />
-                          </svg>
-                        </span>
-                      )}
-                      {asset.famous && (
-                        <span className="text-warning" title="Famous">
-                          <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                            <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                          </svg>
-                        </span>
-                      )}
-                    </div>
-                    <HexDisplay value={asset.id} size="sm" startChars={8} endChars={6} />
+                    )}
+                    {asset.famous && (
+                      <span className="text-warning" title="Famous">
+                        <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                        </svg>
+                      </span>
+                    )}
                   </div>
+                  <HexDisplay value={asset.id} size="sm" startChars={8} endChars={6} />
                 </div>
               </AppLink>
               <Badge variant="neutral">{getTypeBadgeLabel(asset)}</Badge>
