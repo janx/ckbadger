@@ -411,6 +411,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
                 store_runtime_config,
                 dob_decode_dir: work.dob_decode_dir.clone(),
+                cycles_request_dir: Some(work.cycles_request_dir.clone()),
             };
             run_api(api_config).await
         }

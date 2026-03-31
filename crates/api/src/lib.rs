@@ -154,6 +154,8 @@ pub struct AppConfig {
     pub ckb_db_cleanup: Option<Arc<CleanupPathGuard>>,
     /// Root directory for content-addressed media blobs.
     pub dob_decode_dir: PathBuf,
+    /// Directory where API writes cycles calculation request files for the indexer worker.
+    pub cycles_request_dir: Option<PathBuf>,
 }
 
 pub async fn create_router(config: AppConfig) -> Router {
@@ -166,7 +168,7 @@ pub async fn create_router(config: AppConfig) -> Router {
     let broadcaster_ao_store = config.append_only_store.clone();
     let broadcaster_rpc_url = config.ckb_rpc_url.clone();
 
-    let cycles_client = CyclesClient::disabled();
+    let cycles_client = CyclesClient::new(config.cycles_request_dir.clone());
 
     let ckb_store = match CkbChainReader::open(&config.ckb_db_path) {
         Ok(reader) => {

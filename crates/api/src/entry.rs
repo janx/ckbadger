@@ -30,6 +30,8 @@ pub struct ApiServiceConfig {
     pub store_runtime_config: StoreRuntimeConfig,
     /// Root directory for content-addressed media blobs.
     pub dob_decode_dir: PathBuf,
+    /// Directory where API writes cycles calculation request files for the indexer worker.
+    pub cycles_request_dir: Option<std::path::PathBuf>,
 }
 
 /// Configuration for the standalone frontend server.
@@ -84,6 +86,7 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
         ckb_db_path: config.ckb_db_path,
         ckb_db_cleanup: None,
         dob_decode_dir: config.dob_decode_dir,
+        cycles_request_dir: config.cycles_request_dir.clone(),
     };
     let app = create_router(app_config).await;
 
@@ -448,6 +451,7 @@ mod tests {
             ckb_db_path: "/ckb/data/db".to_string(),
             store_runtime_config: StoreRuntimeConfig::default(),
             dob_decode_dir: PathBuf::from("/data/media"),
+            cycles_request_dir: None,
         };
 
         assert_eq!(config.domain_data_path, "/data/domain");

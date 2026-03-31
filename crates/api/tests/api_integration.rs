@@ -93,6 +93,7 @@ fn test_config_with_ckb_db_path(
         ckb_db_path,
         ckb_db_cleanup,
         dob_decode_dir: std::path::PathBuf::from("/tmp/ckbadger-test-media"),
+        cycles_request_dir: None,
     }
 }
 
