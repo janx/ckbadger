@@ -940,16 +940,23 @@ fn build_inputs_outputs_from_rpc_pending(
                 Some(32),
             )?;
 
-            let cell_info = core_store
-                .get_cell(&prev_tx_hash_bytes, prev_index as i16, cells_store)
-                .ok()
-                .flatten()
-                .or_else(|| {
-                    core_store
-                        .get_consumed_cell(&prev_tx_hash_bytes, prev_index as i16, cells_store)
-                        .ok()
-                        .flatten()
-                });
+            // Cellbase input: prev_tx_hash is all zeros, index is 0xffffffff.
+            let is_cellbase_input = prev_tx_hash_bytes.iter().all(|&b| b == 0);
+
+            let cell_info = if is_cellbase_input {
+                None
+            } else {
+                core_store
+                    .get_cell(&prev_tx_hash_bytes, prev_index as i16, cells_store)
+                    .ok()
+                    .flatten()
+                    .or_else(|| {
+                        core_store
+                            .get_consumed_cell(&prev_tx_hash_bytes, prev_index as i16, cells_store)
+                            .ok()
+                            .flatten()
+                    })
+            };
 
             let (capacity, lock, type_script, address) = match cell_info {
                 Some(info) => {
@@ -1219,7 +1226,13 @@ fn build_inputs_outputs_from_ckb(
                 Some(32),
             )?;
 
-            let (capacity, lock, type_script, address) = {
+            // Cellbase input: prev_tx_hash is all zeros, index is 0xffffffff.
+            // No previous cell exists to look up.
+            let is_cellbase_input = prev_tx_hash_bytes.iter().all(|&b| b == 0);
+
+            let (capacity, lock, type_script, address) = if is_cellbase_input {
+                (None, None, None, None)
+            } else {
                 // Try live cells first, then consumed cells in our store
                 let cell_info = core_store
                     .get_cell(&prev_tx_hash_bytes, prev_index as i16, cells_store)
