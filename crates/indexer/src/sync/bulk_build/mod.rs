@@ -2654,23 +2654,6 @@ fn build_history_batches(
         }
     }
 
-    // Group rows by CF so RocksDB commits write to one memtable skiplist
-    // at a time instead of thrashing between 60 CFs. O(n) partition by
-    // cf_name replaces O(n log n) sort. Within each CF bucket, block-keyed
-    // CFs are already in order from par_iter (rayon preserves index order).
-    {
-        let mut buckets: FxHashMap<&'static str, Vec<materialize::MaterializedRow>> =
-            FxHashMap::default();
-        for row in all_rows.drain(..) {
-            buckets.entry(row.cf_name).or_default().push(row);
-        }
-        let mut cf_names: Vec<_> = buckets.keys().copied().collect();
-        cf_names.sort_unstable();
-        for cf in cf_names {
-            all_rows.extend(buckets.remove(cf).unwrap());
-        }
-    }
-
     Ok(HistoryBuildResult {
         rows: all_rows,
         object_activity_count_deltas: all_object_deltas,

@@ -372,9 +372,7 @@ pub(crate) fn prepare_flush(
     history_rows: Vec<MaterializedRow>,
     sealed_rows: Vec<MaterializedRow>,
 ) -> Result<PreparedBatch> {
-    // Rows arrive pre-sorted by (cf_name, key) from build_history_batches
-    // (rayon par_sort). This makes RocksDB memtable skiplist inserts
-    // near-sequential per CF, improving cache hit rate during commit.
+    // Single pass: route each row to its target WriteBatch by CF name.
     let mut append_batch = rocksdb::WriteBatch::default();
     let mut domain_batch = rocksdb::WriteBatch::default();
 
