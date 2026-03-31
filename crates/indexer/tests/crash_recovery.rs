@@ -50,6 +50,7 @@ fn make_tx_entry(is_cellbase: bool) -> TxIndexEntry {
         fee: if is_cellbase { 0 } else { 500 },
         tx_size: 256,
         cycles: Some(50_000),
+        semantic_tags: 0,
     }
 }
 

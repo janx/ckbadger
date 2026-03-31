@@ -989,6 +989,7 @@ mod tests {
             fee: 1000,
             tx_size: 128,
             cycles: Some(10_000),
+            semantic_tags: 0,
         }
     }
 

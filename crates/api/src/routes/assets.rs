@@ -2793,6 +2793,7 @@ mod tests {
             fee: 0,
             tx_size: 1,
             cycles: None,
+            semantic_tags: 0,
         };
         let mut domain_batch = StoreBatch::new(&domain);
         domain_batch.put_object_collection_activity(
@@ -2897,6 +2898,7 @@ mod tests {
             fee: 0,
             tx_size: 1,
             cycles: None,
+            semantic_tags: 0,
         };
         let mut domain_batch = StoreBatch::new(&domain);
         domain_batch.put_object_collection_activity(

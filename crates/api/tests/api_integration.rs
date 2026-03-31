@@ -250,6 +250,7 @@ fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) {
             fee: 1234,
             tx_size: 222,
             cycles: Some(333),
+            semantic_tags: 0,
         },
     );
     batch.commit().unwrap();
@@ -5638,6 +5639,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             fee: 0,
             tx_size: 100,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     core_batch.put_tx_index(
@@ -5651,6 +5653,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             fee: 0,
             tx_size: 100,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     core_batch.put_tx_index(
@@ -5664,6 +5667,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             fee: 0,
             tx_size: 100,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     core_batch.put_block_header(
@@ -7142,6 +7146,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
             fee: 0,
             tx_size: 180,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     batch.put_tx_hash_map(&transfer_tx, 200, 0);
@@ -7156,6 +7161,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
             fee: 0,
             tx_size: 200,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     batch.commit().unwrap();
@@ -7912,6 +7918,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             fee: 0,
             tx_size: 180,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     core_batch.put_tx_hash_map(&transfer_tx, 200, 0);
@@ -7926,6 +7933,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             fee: 0,
             tx_size: 220,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     core_batch.put_tx_hash_map(&burn_tx, 300, 0);
@@ -7940,6 +7948,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             fee: 0,
             tx_size: 160,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     core_batch.put_block_header(
@@ -8247,6 +8256,7 @@ async fn test_assets_nft_item_activities_mnft() {
             fee: 0,
             tx_size: 180,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     batch.put_tx_hash_map(&transfer_tx, 300, 0);
@@ -8261,6 +8271,7 @@ async fn test_assets_nft_item_activities_mnft() {
             fee: 0,
             tx_size: 220,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     batch.commit().unwrap();
@@ -8434,6 +8445,7 @@ async fn test_assets_nft_item_activities_dotbit() {
             fee: 0,
             tx_size: 180,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     batch.put_tx_hash_map(&transfer_tx_1, 320, 0);
@@ -8448,6 +8460,7 @@ async fn test_assets_nft_item_activities_dotbit() {
             fee: 0,
             tx_size: 220,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     batch.put_tx_hash_map(&transfer_tx_2, 340, 0);
@@ -8462,6 +8475,7 @@ async fn test_assets_nft_item_activities_dotbit() {
             fee: 0,
             tx_size: 220,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     batch.commit().unwrap();
@@ -8624,6 +8638,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
             fee: 0,
             tx_size: 180,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     batch.put_tx_hash_map(&transfer_tx, 200, 0);
@@ -8638,6 +8653,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
             fee: 0,
             tx_size: 220,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     batch.put_tx_hash_map(&burn_tx, 260, 0);
@@ -8652,6 +8668,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
             fee: 0,
             tx_size: 200,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     batch.commit().unwrap();
@@ -8768,6 +8785,7 @@ async fn test_address_activities_reads_from_store() {
             fee: 0,
             tx_size: 100,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     core_batch.put_block_header(
@@ -8841,6 +8859,7 @@ async fn test_address_activities_returns_protocol_metadata() {
             fee: 0,
             tx_size: 100,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     batch.put_block_header(
@@ -8978,6 +8997,7 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
             fee: 0,
             tx_size: 120,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     core_batch.put_block_header(
@@ -9116,6 +9136,7 @@ async fn test_latest_activities_return_type_calls() {
             fee: 0,
             tx_size: 1,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     core_batch.put_tx_actions(&actions);
@@ -9181,6 +9202,7 @@ async fn test_global_activities_basic() {
             fee: 0,
             tx_size: 100,
             cycles: None,
+            semantic_tags: 0,
         },
     );
     batch.put_tx_actions(&actions);
@@ -9609,6 +9631,7 @@ async fn test_address_transactions_reads_from_derived_store() {
             fee: 1000,
             tx_size: 120,
             cycles: Some(10_000),
+            semantic_tags: 0,
         },
     );
     core_batch.commit().unwrap();

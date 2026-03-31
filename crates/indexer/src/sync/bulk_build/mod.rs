@@ -2799,6 +2799,7 @@ fn build_history_rows_for_block(
             fee: resolved_tx_fee(tx, resolved_tx)?,
             tx_size: tx.tx_size,
             cycles: tx.cycles,
+            semantic_tags: 0,
         };
         let tx_location = keys::encode_composite(&[
             &keys::encode_block_num(tx.block_number),
@@ -6291,6 +6292,7 @@ mod tests {
             fee: 100_000,
             tx_size: 512,
             cycles: Some(1_000_000),
+            semantic_tags: 0,
         };
         let standard = bincode::serialize(&entry).unwrap();
         let presized = bincode_serialize_presized(&entry).unwrap();

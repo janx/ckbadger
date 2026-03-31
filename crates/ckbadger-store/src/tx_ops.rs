@@ -381,6 +381,7 @@ mod tests {
                 fee: 1_000,
                 tx_size: 200,
                 cycles: None,
+                semantic_tags: 0,
             },
         );
         batch.commit().unwrap();
@@ -418,6 +419,7 @@ mod tests {
             fee: 1_000,
             tx_size: 200,
             cycles: Some(10),
+            semantic_tags: 0,
         };
         let entry_b = TxIndexEntry {
             is_cellbase: false,
@@ -427,6 +429,7 @@ mod tests {
             fee: 2_000,
             tx_size: 300,
             cycles: Some(20),
+            semantic_tags: 0,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -491,6 +494,7 @@ mod tests {
                     fee: (i as i64) * 100,
                     tx_size: 200,
                     cycles: None,
+                    semantic_tags: 0,
                 },
             );
         }
@@ -545,6 +549,7 @@ mod tests {
                     fee: (i as i64) * 100,
                     tx_size: 200,
                     cycles: None,
+                    semantic_tags: 0,
                 },
             );
         }
@@ -594,6 +599,7 @@ mod tests {
                 fee: 0,
                 tx_size: 100,
                 cycles: None,
+                semantic_tags: 0,
             },
         );
         batch.put_block_header(200, &make_header(0xAB));

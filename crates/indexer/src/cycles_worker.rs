@@ -424,6 +424,7 @@ mod tests {
                 fee: 1_000,
                 tx_size: 200,
                 cycles,
+                semantic_tags: 0,
             },
         );
         batch.commit().unwrap();

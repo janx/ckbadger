@@ -3206,6 +3206,7 @@ mod tests {
                 fee: 0,
                 tx_size: 100,
                 cycles: None,
+                semantic_tags: 0,
             },
         );
     }
@@ -3575,6 +3576,7 @@ mod tests {
             fee: 0,
             tx_size: 100,
             cycles: None,
+            semantic_tags: 0,
         };
         let block2_tx_a = TxIndexEntry {
             is_cellbase: false,
@@ -3584,6 +3586,7 @@ mod tests {
             fee: 0,
             tx_size: 100,
             cycles: None,
+            semantic_tags: 0,
         };
         let block2_tx_b = TxIndexEntry {
             is_cellbase: false,
@@ -3593,6 +3596,7 @@ mod tests {
             fee: 0,
             tx_size: 100,
             cycles: None,
+            semantic_tags: 0,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -3991,6 +3995,7 @@ mod tests {
             fee: 0,
             tx_size: 1,
             cycles: None,
+            semantic_tags: 0,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -4127,6 +4132,7 @@ mod tests {
             fee: 0,
             tx_size: 1,
             cycles: None,
+            semantic_tags: 0,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -4468,6 +4474,7 @@ mod tests {
             fee: 0,
             tx_size: 1,
             cycles: None,
+            semantic_tags: 0,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -4605,6 +4612,7 @@ mod tests {
             fee: 0,
             tx_size: 1,
             cycles: None,
+            semantic_tags: 0,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -4661,6 +4669,7 @@ mod tests {
             fee: 0,
             tx_size: 1,
             cycles: None,
+            semantic_tags: 0,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -4730,6 +4739,7 @@ mod tests {
             fee: 0,
             tx_size: 1,
             cycles: None,
+            semantic_tags: 0,
         };
         let cell = LiveCellInfo {
             capacity: 100,
@@ -5919,6 +5929,7 @@ mod tests {
                     fee: 0,
                     tx_size: 100,
                     cycles: None,
+                    semantic_tags: 0,
                 },
             );
             batch.put_tx_hash_map(&tx_hash, b, 1);
@@ -5933,6 +5944,7 @@ mod tests {
                     fee: 100,
                     tx_size: 200,
                     cycles: None,
+                    semantic_tags: 0,
                 },
             );
         }

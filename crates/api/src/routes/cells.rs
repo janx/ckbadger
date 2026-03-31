@@ -3795,6 +3795,7 @@ mod tests {
             fee: 0,
             tx_size: 1,
             cycles: None,
+            semantic_tags: 0,
         };
         let mut domain_batch = StoreBatch::new(&domain);
         domain_batch.put_addr_tx(&lock_hash, 30, 0, &stale_tx);

@@ -508,6 +508,7 @@ mod tests {
             fee: 1,
             tx_size: 1,
             cycles: None,
+            semantic_tags: 0,
         }
     }
 

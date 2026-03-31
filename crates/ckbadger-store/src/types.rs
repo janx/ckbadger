@@ -82,6 +82,63 @@ pub struct ConsumedCellMeta {
     pub consumed_by_tx: Option<Vec<u8>>,
 }
 
+/// Pre-computed value stored in CF_ADDR_TXS.
+/// Encodes capacity change and transaction type for fast query-time access.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AddrTxValue {
+    pub capacity_change: i64,
+    pub flags: u8,
+}
+
+impl AddrTxValue {
+    pub const TX_TYPE_RECEIVED: u8 = 0;
+    pub const TX_TYPE_SENT: u8 = 1;
+    pub const TX_TYPE_INTERNAL: u8 = 2;
+    pub const TX_TYPE_TRANSFER: u8 = 3;
+
+    pub fn new(capacity_change: i64, has_inputs: bool, has_outputs: bool) -> Self {
+        let tx_type = match (has_inputs, has_outputs) {
+            (true, true) => {
+                if capacity_change > 0 {
+                    Self::TX_TYPE_RECEIVED
+                } else if capacity_change < 0 {
+                    Self::TX_TYPE_SENT
+                } else {
+                    Self::TX_TYPE_INTERNAL
+                }
+            }
+            (false, true) => Self::TX_TYPE_RECEIVED,
+            (true, false) => Self::TX_TYPE_SENT,
+            (false, false) => Self::TX_TYPE_TRANSFER,
+        };
+        Self {
+            capacity_change,
+            flags: tx_type,
+        }
+    }
+
+    pub fn tx_type_str(&self) -> &'static str {
+        match self.flags {
+            Self::TX_TYPE_RECEIVED => "received",
+            Self::TX_TYPE_SENT => "sent",
+            Self::TX_TYPE_INTERNAL => "internal",
+            _ => "transfer",
+        }
+    }
+}
+
+/// Semantic tag bitmap constants for tagging transactions by protocol type.
+pub mod semantic_tags {
+    pub const PLAIN: u16 = 0;
+    pub const DAO: u16 = 1 << 0;
+    pub const SUDT: u16 = 1 << 1;
+    pub const XUDT: u16 = 1 << 2;
+    pub const DOTBIT: u16 = 1 << 3;
+    pub const MNFT: u16 = 1 << 4;
+    pub const SPORE: u16 = 1 << 5;
+    pub const CLUSTER: u16 = 1 << 6;
+}
+
 /// Aggregated cell statistics for a token.
 #[derive(Debug, Clone, Default)]
 pub struct TokenCellStats {
@@ -166,6 +223,8 @@ pub struct TxIndexEntry {
     pub fee: i64,
     pub tx_size: i32,
     pub cycles: Option<i64>,
+    #[serde(default)]
+    pub semantic_tags: u16,
 }
 
 // ============================================
