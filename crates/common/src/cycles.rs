@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::process::Stdio;
 use tokio::process::Command;
 use tracing::debug;
@@ -555,6 +556,105 @@ async fn build_mock_transaction(
     })
 }
 
+/// Identifies a representative cell for one script group within a mock transaction.
+struct ScriptGroupRef {
+    cell_index: usize,
+    /// "input" or "output"
+    cell_type: &'static str,
+    /// "lock" or "type"
+    script_group_type: &'static str,
+}
+
+fn script_identity(s: &Script) -> String {
+    format!("{}:{}:{}", s.code_hash, s.hash_type, s.args)
+}
+
+/// Enumerate all unique script groups in a mock transaction.
+fn enumerate_script_groups(mock_tx: &MockTransaction) -> Vec<ScriptGroupRef> {
+    let mut groups = Vec::new();
+    let mut seen_locks = HashSet::new();
+    let mut seen_types = HashSet::new();
+
+    // Lock groups from inputs
+    for (i, mock_input) in mock_tx.mock_info.inputs.iter().enumerate() {
+        let key = script_identity(&mock_input.output.lock);
+        if seen_locks.insert(key) {
+            groups.push(ScriptGroupRef {
+                cell_index: i,
+                cell_type: "input",
+                script_group_type: "lock",
+            });
+        }
+    }
+
+    // Type groups from inputs
+    for (i, mock_input) in mock_tx.mock_info.inputs.iter().enumerate() {
+        if let Some(ref ts) = mock_input.output.type_script {
+            let key = script_identity(ts);
+            if seen_types.insert(key) {
+                groups.push(ScriptGroupRef {
+                    cell_index: i,
+                    cell_type: "input",
+                    script_group_type: "type",
+                });
+            }
+        }
+    }
+
+    // Type groups from outputs not already seen in inputs
+    for (i, output) in mock_tx.tx.outputs.iter().enumerate() {
+        if let Some(ref ts) = output.type_script {
+            let key = script_identity(ts);
+            if seen_types.insert(key) {
+                groups.push(ScriptGroupRef {
+                    cell_index: i,
+                    cell_type: "output",
+                    script_group_type: "type",
+                });
+            }
+        }
+    }
+
+    groups
+}
+
+async fn run_ckb_debugger_for_group(
+    temp_file: &str,
+    group: &ScriptGroupRef,
+) -> Result<i64, String> {
+    let output = Command::new("ckb-debugger")
+        .args([
+            "--tx-file",
+            temp_file,
+            "--cell-index",
+            &group.cell_index.to_string(),
+            "--cell-type",
+            group.cell_type,
+            "--script-group-type",
+            group.script_group_type,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run ckb-debugger: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    debug!(
+        group_type = group.script_group_type,
+        cell_type = group.cell_type,
+        cell_index = group.cell_index,
+        "ckb-debugger stdout: {}",
+        stdout
+    );
+    debug!("ckb-debugger stderr: {}", stderr);
+
+    let combined = format!("{}\n{}", stdout, stderr);
+    parse_all_cycles_from_output(&combined)
+}
+
 async fn run_ckb_debugger(mock_tx: &MockTransaction) -> Result<i64, String> {
     let json = serde_json::to_string(mock_tx)
         .map_err(|e| format!("Failed to serialize mock transaction: {}", e))?;
@@ -572,33 +672,32 @@ async fn run_ckb_debugger(mock_tx: &MockTransaction) -> Result<i64, String> {
         .to_str()
         .ok_or_else(|| "Temp file path contains invalid UTF-8".to_string())?;
 
-    let output = Command::new("ckb-debugger")
-        .args([
-            "--tx-file",
-            temp_file_str,
-            "--cell-index",
-            "0",
-            "--cell-type",
-            "input",
-            "--script-group-type",
-            "lock",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| format!("Failed to run ckb-debugger: {}", e))?;
+    let groups = enumerate_script_groups(mock_tx);
+    if groups.is_empty() {
+        let _ = tokio::fs::remove_file(&temp_file).await;
+        return Ok(0);
+    }
+
+    let mut total_cycles: i64 = 0;
+    for group in &groups {
+        match run_ckb_debugger_for_group(temp_file_str, group).await {
+            Ok(cycles) => {
+                total_cycles = total_cycles
+                    .checked_add(cycles)
+                    .ok_or_else(|| "cycles overflow".to_string())?;
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&temp_file).await;
+                return Err(format!(
+                    "Failed to calculate cycles for {} {} group (cell {}): {}",
+                    group.script_group_type, group.cell_type, group.cell_index, e
+                ));
+            }
+        }
+    }
 
     let _ = tokio::fs::remove_file(&temp_file).await;
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    debug!("ckb-debugger stdout: {}", stdout);
-    debug!("ckb-debugger stderr: {}", stderr);
-
-    let combined = format!("{}\n{}", stdout, stderr);
-    parse_all_cycles_from_output(&combined)
+    Ok(total_cycles)
 }
 
 fn parse_all_cycles_from_output(output: &str) -> Result<i64, String> {
@@ -664,5 +763,189 @@ mod tests {
         );
         assert_eq!(out_points[0].index, "0x3");
         assert_eq!(out_points[1].index, "0x1");
+    }
+
+    #[test]
+    fn test_enumerate_script_groups_single_lock() {
+        let lock = Script {
+            code_hash: "0xaaa".to_string(),
+            hash_type: "type".to_string(),
+            args: "0x01".to_string(),
+        };
+        let mock_tx = MockTransaction {
+            mock_info: MockInfo {
+                inputs: vec![MockInput {
+                    input: Input {
+                        previous_output: OutPoint {
+                            tx_hash: "0x00".to_string(),
+                            index: "0x0".to_string(),
+                        },
+                        since: "0x0".to_string(),
+                    },
+                    output: Output {
+                        capacity: "0x100".to_string(),
+                        lock: lock.clone(),
+                        type_script: None,
+                    },
+                    data: "0x".to_string(),
+                }],
+                cell_deps: vec![],
+                header_deps: vec![],
+            },
+            tx: Transaction {
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![],
+                outputs: vec![],
+                outputs_data: vec![],
+                witnesses: vec![],
+            },
+        };
+        let groups = enumerate_script_groups(&mock_tx);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].script_group_type, "lock");
+    }
+
+    #[test]
+    fn test_enumerate_script_groups_deduplicates_same_lock() {
+        let lock = Script {
+            code_hash: "0xaaa".to_string(),
+            hash_type: "type".to_string(),
+            args: "0x01".to_string(),
+        };
+        let make_input = |idx: &str| MockInput {
+            input: Input {
+                previous_output: OutPoint {
+                    tx_hash: "0x00".to_string(),
+                    index: idx.to_string(),
+                },
+                since: "0x0".to_string(),
+            },
+            output: Output {
+                capacity: "0x100".to_string(),
+                lock: lock.clone(),
+                type_script: None,
+            },
+            data: "0x".to_string(),
+        };
+        let mock_tx = MockTransaction {
+            mock_info: MockInfo {
+                inputs: vec![make_input("0x0"), make_input("0x1")],
+                cell_deps: vec![],
+                header_deps: vec![],
+            },
+            tx: Transaction {
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![],
+                outputs: vec![],
+                outputs_data: vec![],
+                witnesses: vec![],
+            },
+        };
+        let groups = enumerate_script_groups(&mock_tx);
+        assert_eq!(groups.len(), 1); // Same lock -> one group
+    }
+
+    #[test]
+    fn test_enumerate_script_groups_lock_and_type() {
+        let lock = Script {
+            code_hash: "0xaaa".to_string(),
+            hash_type: "type".to_string(),
+            args: "0x01".to_string(),
+        };
+        let type_s = Script {
+            code_hash: "0xbbb".to_string(),
+            hash_type: "data".to_string(),
+            args: "0x02".to_string(),
+        };
+        let mock_tx = MockTransaction {
+            mock_info: MockInfo {
+                inputs: vec![MockInput {
+                    input: Input {
+                        previous_output: OutPoint {
+                            tx_hash: "0x00".to_string(),
+                            index: "0x0".to_string(),
+                        },
+                        since: "0x0".to_string(),
+                    },
+                    output: Output {
+                        capacity: "0x100".to_string(),
+                        lock: lock.clone(),
+                        type_script: Some(type_s.clone()),
+                    },
+                    data: "0x".to_string(),
+                }],
+                cell_deps: vec![],
+                header_deps: vec![],
+            },
+            tx: Transaction {
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![],
+                outputs: vec![],
+                outputs_data: vec![],
+                witnesses: vec![],
+            },
+        };
+        let groups = enumerate_script_groups(&mock_tx);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].script_group_type, "lock");
+        assert_eq!(groups[1].script_group_type, "type");
+    }
+
+    #[test]
+    fn test_enumerate_script_groups_output_only_type() {
+        let lock = Script {
+            code_hash: "0xaaa".to_string(),
+            hash_type: "type".to_string(),
+            args: "0x01".to_string(),
+        };
+        let type_out = Script {
+            code_hash: "0xccc".to_string(),
+            hash_type: "data".to_string(),
+            args: "0x03".to_string(),
+        };
+        let mock_tx = MockTransaction {
+            mock_info: MockInfo {
+                inputs: vec![MockInput {
+                    input: Input {
+                        previous_output: OutPoint {
+                            tx_hash: "0x00".to_string(),
+                            index: "0x0".to_string(),
+                        },
+                        since: "0x0".to_string(),
+                    },
+                    output: Output {
+                        capacity: "0x100".to_string(),
+                        lock: lock.clone(),
+                        type_script: None,
+                    },
+                    data: "0x".to_string(),
+                }],
+                cell_deps: vec![],
+                header_deps: vec![],
+            },
+            tx: Transaction {
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![],
+                outputs: vec![Output {
+                    capacity: "0x100".to_string(),
+                    lock: lock.clone(),
+                    type_script: Some(type_out.clone()),
+                }],
+                outputs_data: vec!["0x".to_string()],
+                witnesses: vec![],
+            },
+        };
+        let groups = enumerate_script_groups(&mock_tx);
+        assert_eq!(groups.len(), 2); // 1 lock (input) + 1 type (output only)
+        assert_eq!(groups[1].cell_type, "output");
+        assert_eq!(groups[1].cell_index, 0);
     }
 }
