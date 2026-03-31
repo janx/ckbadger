@@ -112,36 +112,66 @@ export interface MediaViewItem {
   url: string;
 }
 
+export type DependencyTier =
+  | 'btc_ckb'
+  | 'pure_ckb'
+  | 'decentralized_mixture'
+  | 'centralized_mixture'
+  | 'unknown';
+
+export interface MediaSourceView {
+  uri: string;
+  scheme: string;
+  sourceLocation: string;
+  dependencyTier: DependencyTier;
+}
+
 export interface MediaCompositionView {
   standard: ObjectStandard;
   parsingMethod: string | null;
   decodedItems: MediaViewItem[];
   rawPayload: string | null;
-  offChainSources: Array<{
-    uri: string;
-    scheme: string;
-    sourceLocation: string;
-  }>;
+  onChainSources: MediaSourceView[];
+  offChainSources: MediaSourceView[];
   issues: string[];
+}
+
+function isOnChainTier(tier: DependencyTier): boolean {
+  return tier === 'pure_ckb' || tier === 'btc_ckb';
 }
 
 export function buildMediaCompositionView(
   contentType: string,
   mediaProfile: {
-    sources: Array<{ uri: string; scheme: string; sourceLocation: string }>;
+    sources: Array<{
+      uri: string;
+      scheme: string;
+      sourceLocation: string;
+      dependencyTier: DependencyTier;
+    }>;
     issues: string[];
   },
   dobMedia: DecodedMediaItem[],
   textPayload: string | null
 ): MediaCompositionView {
   const info = getStandardInfo(contentType);
+  const onChain: MediaSourceView[] = [];
+  const offChain: MediaSourceView[] = [];
+  for (const source of mediaProfile.sources) {
+    if (isOnChainTier(source.dependencyTier)) {
+      onChain.push(source);
+    } else {
+      offChain.push(source);
+    }
+  }
 
   return {
     standard: info.standard,
     parsingMethod: info.parsingMethod,
     decodedItems: buildDecodedItems(info.standard, dobMedia),
     rawPayload: dobMedia.length === 0 && !info.supportsDobDecode ? textPayload : null,
-    offChainSources: mediaProfile.sources,
+    onChainSources: onChain,
+    offChainSources: offChain,
     issues: mediaProfile.issues,
   };
 }

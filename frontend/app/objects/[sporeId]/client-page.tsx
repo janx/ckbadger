@@ -157,6 +157,39 @@ function MediaItemRow({
   );
 }
 
+function MediaSourceGroup({
+  label,
+  sources,
+}: {
+  label: string;
+  sources: MediaCompositionView['onChainSources'];
+}) {
+  if (sources.length === 0) return null;
+  return (
+    <div>
+      <div className="text-text-dim mb-2 font-mono text-[10px] uppercase tracking-wider">
+        {label}
+      </div>
+      <div className="space-y-2">
+        {sources.map((source, index) => (
+          <div
+            key={`${source.uri}-${index}`}
+            className="border-base-border bg-base-surface/40 rounded border p-2.5"
+          >
+            <div className="flex items-baseline gap-2">
+              <span className="bg-base-elevated text-text-dim inline-block rounded px-1.5 py-0.5 font-mono text-[10px] uppercase">
+                {source.scheme}
+              </span>
+              <span className="text-text-dim font-mono text-[10px]">{source.sourceLocation}</span>
+            </div>
+            <div className="text-text-bright mt-1 break-all font-mono text-xs">{source.uri}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function MediaCompositionsPanel({ view }: { view: MediaCompositionView }) {
   const [expandedMedia, setExpandedMedia] = useState<Set<string>>(new Set());
   const toggleMedia = useCallback((key: string) => {
@@ -169,7 +202,10 @@ function MediaCompositionsPanel({ view }: { view: MediaCompositionView }) {
   }, []);
 
   const hasContent =
-    view.decodedItems.length > 0 || !!view.rawPayload || view.offChainSources.length > 0;
+    view.decodedItems.length > 0 ||
+    !!view.rawPayload ||
+    view.onChainSources.length > 0 ||
+    view.offChainSources.length > 0;
 
   return (
     <TerminalPanel className="mb-6">
@@ -208,33 +244,8 @@ function MediaCompositionsPanel({ view }: { view: MediaCompositionView }) {
               </pre>
             </div>
           )}
-          {view.offChainSources.length > 0 && (
-            <div>
-              <div className="text-text-dim mb-2 font-mono text-[10px] uppercase tracking-wider">
-                Off-Chain
-              </div>
-              <div className="space-y-2">
-                {view.offChainSources.map((source, index) => (
-                  <div
-                    key={`${source.uri}-${index}`}
-                    className="border-base-border bg-base-surface/40 rounded border p-2.5"
-                  >
-                    <div className="flex items-baseline gap-2">
-                      <span className="bg-base-elevated text-text-dim inline-block rounded px-1.5 py-0.5 font-mono text-[10px] uppercase">
-                        {source.scheme}
-                      </span>
-                      <span className="text-text-dim font-mono text-[10px]">
-                        {source.sourceLocation}
-                      </span>
-                    </div>
-                    <div className="text-text-bright mt-1 break-all font-mono text-xs">
-                      {source.uri}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          <MediaSourceGroup label="On-Chain" sources={view.onChainSources} />
+          <MediaSourceGroup label="Off-Chain" sources={view.offChainSources} />
           {!hasContent && (
             <div className="text-text-dim text-xs">No media compositions detected.</div>
           )}

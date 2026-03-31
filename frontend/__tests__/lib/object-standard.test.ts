@@ -182,13 +182,36 @@ describe('buildMediaCompositionView', () => {
     expect(view.rawPayload).toBeNull();
   });
 
-  it('passes through off-chain sources', () => {
+  it('groups sources by on-chain vs off-chain dependency tier', () => {
     const profile = {
-      sources: [{ uri: 'ipfs://Qm123', scheme: 'ipfs', sourceLocation: 'payload_text' }],
+      sources: [
+        {
+          uri: 'ipfs://Qm123',
+          scheme: 'ipfs',
+          sourceLocation: 'payload_text',
+          dependencyTier: 'decentralized_mixture' as const,
+        },
+        {
+          uri: 'btcfs://abc',
+          scheme: 'btcfs',
+          sourceLocation: 'dob_decoded_trait',
+          dependencyTier: 'btc_ckb' as const,
+        },
+        {
+          uri: 'ckbfs://def',
+          scheme: 'ckbfs',
+          sourceLocation: 'payload_text',
+          dependencyTier: 'pure_ckb' as const,
+        },
+      ],
       issues: ['some issue'],
     };
     const view = buildMediaCompositionView('dob/0', profile, [], null);
-    expect(view.offChainSources).toEqual(profile.sources);
+    expect(view.offChainSources).toHaveLength(1);
+    expect(view.offChainSources[0].uri).toBe('ipfs://Qm123');
+    expect(view.onChainSources).toHaveLength(2);
+    expect(view.onChainSources[0].uri).toBe('btcfs://abc');
+    expect(view.onChainSources[1].uri).toBe('ckbfs://def');
     expect(view.issues).toEqual(['some issue']);
   });
 
