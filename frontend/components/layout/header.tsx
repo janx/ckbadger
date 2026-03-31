@@ -40,7 +40,7 @@ const navItems: NavItem[] = [
   { href: '/charts', label: 'Charts' },
 ];
 
-const DESKTOP_START_COLUMN = 'hidden md:block md:w-[128px] md:shrink-0';
+const DESKTOP_START_COLUMN = 'hidden md:block md:w-[108px] md:shrink-0';
 
 export function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -52,29 +52,38 @@ export function Header() {
   const heroVisible = useHomeScrollStore((s) => s.heroVisible);
   const showStatsBar = isHomePage ? !heroVisible : true;
 
+  const activeLabel = (() => {
+    if (pathname === '/') return 'Home';
+    for (const item of navItems) {
+      if (isDropdown(item)) {
+        const child = item.children.find((c) => isLinkActive(c.href));
+        if (child) return child.label;
+      } else if (isLinkActive(item.href)) {
+        return item.label;
+      }
+    }
+    return null;
+  })();
+
   return (
     <header className="border-base-border bg-base-bg/95 sticky top-0 z-40 mb-4 overflow-visible border-b backdrop-blur-sm">
       <div className="container relative mx-auto flex h-[56px] items-center gap-4 px-4 md:gap-0">
-        <Logo />
+        <div className="hidden md:block">
+          <Logo />
+        </div>
         <div
           data-testid="desktop-header-start-column"
           aria-hidden="true"
           className={DESKTOP_START_COLUMN}
         />
 
-        <div className="hidden min-w-0 flex-1 items-center md:flex">
-          <div className="w-full max-w-[clamp(18rem,36vw,36rem)]">
-            <SearchBar variant="compact" />
-          </div>
-        </div>
-
-        <nav className="relative z-10 ml-auto hidden shrink-0 items-center justify-end gap-2 md:flex">
+        <nav className="relative z-10 hidden shrink-0 items-center gap-0.5 md:flex">
           {navItems.map((item) =>
             isDropdown(item) ? (
               <div key={item.label} className="group relative">
                 <button
                   type="button"
-                  className={`flex items-center gap-1 rounded-md border px-3 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
+                  className={`flex items-center gap-1 rounded-md border px-2 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
                     isDropdownActive(item)
                       ? 'border-jade/40 bg-jade/8 text-jade'
                       : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
@@ -117,7 +126,7 @@ export function Header() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`rounded-md border px-3 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
+                className={`rounded-md border px-2 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
                   isLinkActive(item.href)
                     ? 'border-jade/40 bg-jade/8 text-jade'
                     : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
@@ -129,7 +138,7 @@ export function Header() {
           )}
         </nav>
 
-        <div className="ml-auto flex items-center space-x-3 md:hidden">
+        <div className="flex items-center gap-2 md:hidden">
           <button
             type="button"
             onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -156,6 +165,17 @@ export function Header() {
               </svg>
             )}
           </button>
+          {activeLabel && (
+            <span className="text-jade font-mono text-xs uppercase tracking-[0.12em]">
+              {activeLabel}
+            </span>
+          )}
+        </div>
+
+        <div className="flex min-w-0 flex-1 items-center justify-end">
+          <div className="w-full max-w-[clamp(18rem,36vw,36rem)]">
+            <SearchBar variant="compact" />
+          </div>
         </div>
       </div>
 
@@ -177,37 +197,53 @@ export function Header() {
       {isMenuOpen && (
         <div className="border-base-border bg-base-bg/95 absolute z-50 w-full border-t shadow-xl backdrop-blur-sm md:hidden">
           <nav className="container mx-auto px-4 py-4">
-            <div className="mb-4">
-              <SearchBar variant="compact" />
-            </div>
-            <div className="flex flex-col items-end gap-2">
+            <div className="flex flex-col gap-1">
+              <Link
+                href="/"
+                onClick={() => setIsMenuOpen(false)}
+                className={`block rounded-md border px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
+                  pathname === '/'
+                    ? 'border-jade/40 bg-jade/8 text-jade'
+                    : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
+                }`}
+              >
+                Home
+              </Link>
               {navItems.map((item) =>
                 isDropdown(item) ? (
-                  <div key={item.label} className="flex w-full max-w-[12rem] flex-col gap-1">
-                    <span className="text-text-dim px-3 py-1 text-right font-mono text-xs uppercase tracking-[0.12em]">
+                  <div key={item.label} className="flex flex-col">
+                    <span
+                      className={`block rounded-md border px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] ${
+                        isDropdownActive(item)
+                          ? 'border-jade/40 bg-jade/8 text-jade'
+                          : 'text-text border-transparent'
+                      }`}
+                    >
                       {item.label}
                     </span>
-                    {item.children.map((child) => (
-                      <Link
-                        key={child.href}
-                        href={child.href}
-                        onClick={() => setIsMenuOpen(false)}
-                        className={`block w-full rounded-md border px-3 py-2.5 text-right font-mono text-xs uppercase tracking-[0.12em] transition ${
-                          isLinkActive(child.href)
-                            ? 'border-jade/40 bg-jade/8 text-jade'
-                            : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
-                        }`}
-                      >
-                        {child.label}
-                      </Link>
-                    ))}
+                    <div className="border-base-border/40 ml-3 flex flex-col gap-1 border-l pl-3 pt-1">
+                      {item.children.map((child) => (
+                        <Link
+                          key={child.href}
+                          href={child.href}
+                          onClick={() => setIsMenuOpen(false)}
+                          className={`block rounded-md px-3 py-2 font-mono text-[11px] uppercase tracking-[0.12em] transition ${
+                            isLinkActive(child.href)
+                              ? 'text-jade bg-jade/8'
+                              : 'text-text-dim hover:text-jade'
+                          }`}
+                        >
+                          {child.label}
+                        </Link>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   <Link
                     key={item.href}
                     href={item.href}
                     onClick={() => setIsMenuOpen(false)}
-                    className={`block w-full max-w-[12rem] rounded-md border px-3 py-2.5 text-right font-mono text-xs uppercase tracking-[0.12em] transition ${
+                    className={`block rounded-md border px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
                       isLinkActive(item.href)
                         ? 'border-jade/40 bg-jade/8 text-jade'
                         : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
