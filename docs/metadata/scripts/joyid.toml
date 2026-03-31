@@ -8,6 +8,11 @@ canonical_ref_hash = "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b
 version_hash = "0x7e1baf1e2c98959b3b2972b57942cd6977afce520551913a6ff4933037848d0a"
 canonical_hash_type = "type"
 
+[[mainnet.versions]]
+canonical_ref_hash = "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323"
+version_hash = "0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe"
+canonical_hash_type = "type"
+
 [testnet]
 [[testnet.versions]]
 canonical_ref_hash = "0xd23761b364210735c19c60561d213fb3beae2fd6172743719eff6920e020baac"
