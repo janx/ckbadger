@@ -11,7 +11,7 @@ import {
   TerminalPanelHeader,
   TerminalPanelContent,
 } from '@/components/ui/terminal-panel';
-import { PageHeader } from '@/components/ui/page-header';
+import { PageHeader, Badge } from '@/components/ui/page-header';
 import { StatCard, FilterButtonGroup } from '@/components/ui/chart-card';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
@@ -25,6 +25,17 @@ import {
   formatCompactCkbDelta,
 } from '@/lib/utils';
 
+const HIDDEN_SCRIPT_NAMES = new Set(['unknown', 'ambiguous script reference']);
+
+function scriptBadgeVariant(
+  scriptKind: string | null | undefined
+): 'green' | 'gold' | 'blue' | 'purple' | 'gray' | 'neutral' {
+  if (!scriptKind) return 'neutral';
+  if (scriptKind.includes('lock')) return 'green';
+  if (scriptKind === 'type') return 'blue';
+  return 'neutral';
+}
+
 function ScriptLabel({
   codeHash,
   scriptLookup,
@@ -35,13 +46,14 @@ function ScriptLabel({
   if (!codeHash || !scriptLookup) return null;
   const info = scriptLookup[codeHash];
   if (!info) return null;
+  const name = info.name?.trim();
+  if (!name || HIDDEN_SCRIPT_NAMES.has(name.toLowerCase())) return null;
 
   return (
-    <Link
-      href={`/scripts/${encodeURIComponent(info.name)}`}
-      className="bg-info/10 text-info inline-flex items-center rounded px-2 py-0.5 text-xs hover:opacity-80"
-    >
-      {info.name}
+    <Link href={`/scripts/${encodeURIComponent(name)}`}>
+      <Badge variant={scriptBadgeVariant(info.scriptKind)} className="hover:opacity-80">
+        {name}
+      </Badge>
     </Link>
   );
 }
@@ -339,7 +351,7 @@ export default function DaoPage() {
 
         <TerminalPanel className="mb-4" glow>
           <TerminalPanelContent>
-            <div className="grid gap-x-6 gap-y-4 md:grid-cols-3">
+            <div className="grid grid-cols-2 gap-x-6 gap-y-4 md:grid-cols-3">
               <StatCard
                 label="Deposit"
                 value={stats ? formatStatCkb(stats.totalDepositedCkb) : '...'}
@@ -421,7 +433,7 @@ export default function DaoPage() {
                 <div className="text-text-dim mb-4 font-mono text-xs uppercase tracking-wider">
                   Secondary Issuance
                 </div>
-                <div className="flex items-center gap-6">
+                <div className="flex items-center justify-center gap-6">
                   <InteractivePieChart
                     data={getSecondaryIssuanceData()}
                     size={120}
@@ -473,11 +485,11 @@ export default function DaoPage() {
                 </div>
               </div>
 
-              <div className="border-base-border border-l pl-8">
+              <div className="border-base-border border-t pt-4 md:border-l md:border-t-0 md:pl-8 md:pt-0">
                 <div className="text-text-dim mb-4 font-mono text-xs uppercase tracking-wider">
                   Compensation
                 </div>
-                <div className="flex items-center gap-6">
+                <div className="flex items-center justify-center gap-6">
                   <InteractivePieChart
                     data={getCompensationData()}
                     size={120}
@@ -558,7 +570,7 @@ export default function DaoPage() {
             </div>
           </TerminalPanelHeader>
           {activeTab === 'deposits' && (
-            <div className="border-base-border/50 from-base-elevated/30 flex items-center justify-end border-b bg-gradient-to-r to-transparent px-3 py-2">
+            <div className="border-base-border/50 from-base-elevated/30 flex items-center justify-start border-b bg-gradient-to-r to-transparent px-3 py-2">
               <FilterButtonGroup
                 options={filterOptions}
                 selected={status}

@@ -1242,16 +1242,49 @@ async fn lookup_scripts(
             }
             ScriptIdentifierResolution::Ambiguous(ambiguous) => {
                 let AmbiguousScriptIdentifier { version_hashes } = ambiguous;
+                let infos_bare: Vec<ckbadger_store::ScriptInfo> = all_script_infos
+                    .iter()
+                    .map(|(_, info)| info.clone())
+                    .collect();
+                let merged = merge_script_info_for_reference(&infos_bare, code_hash);
+                // Try to get a known name: first from merged ScriptInfo, then from any version
+                let merged_name = merged
+                    .as_ref()
+                    .and_then(|m| m.name.clone())
+                    .filter(|n| crate::utils::is_known_script_name(Some(n.as_str())));
+                let name = if let Some(n) = merged_name {
+                    n
+                } else {
+                    // Try each version_hash for a name
+                    let mut found_name = None;
+                    for vh in &version_hashes {
+                        if let Ok(Some(vi)) = state.store.get_script_version(vh) {
+                            if let Ok(n) = resolved_version_name(&state, vh, &vi, "") {
+                                if !n.is_empty() {
+                                    found_name = Some(n);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    found_name.unwrap_or_else(|| "Ambiguous Script Reference".to_string())
+                };
+                let script_kind = merged
+                    .as_ref()
+                    .and_then(|m| script_kind_from_counts(m.lock_cells_count, m.type_cells_count));
+                let hash_type = merged
+                    .as_ref()
+                    .and_then(|m| hash_type_to_string(m.hash_type).map(|s| s.to_string()));
                 result.insert(
                     reference_hash_hex.clone(),
                     ScriptLookupInfo {
                         reference_hash: reference_hash_hex.clone(),
                         code_hash: reference_hash_hex.clone(),
-                        name: "Ambiguous Script Reference".to_string(),
+                        name,
                         deprecated: false,
-                        script_kind: None,
+                        script_kind,
                         decoder_type: None,
-                        hash_type: None,
+                        hash_type,
                         deployment_type_hash: None,
                         deployment_data_hash: None,
                         code_cell_tx_hash: None,
