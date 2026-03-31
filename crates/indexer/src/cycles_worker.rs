@@ -161,7 +161,7 @@ async fn process_cycles_task(
         }
         Err(e) => {
             let marker_err = store
-                .update_tx_cycles(block_num, tx_idx, 0)
+                .update_tx_cycles(block_num, tx_idx, -1)
                 .err()
                 .map(|write_err| format!(" (failed to persist failure marker: {})", write_err))
                 .unwrap_or_default();
@@ -226,7 +226,7 @@ mod tests {
             .contains("calculation previously failed"));
 
         let (_, _, updated) = store.get_tx_by_hash(&tx_hash).unwrap().unwrap();
-        assert_eq!(updated.cycles, Some(0));
+        assert_eq!(updated.cycles, Some(-1));
     }
 
     #[tokio::test]
