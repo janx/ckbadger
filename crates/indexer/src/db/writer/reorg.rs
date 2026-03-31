@@ -90,6 +90,11 @@ impl BatchWriter {
             Some(append_store),
             undo_result.tx_contexts,
         )?;
+        // Flush memtables after rollback so that the subsequent refresh reads
+        // (script rollups, DAO statistics) hit sorted SSTs instead of
+        // triggering O(N log N) VectorRep sorts on the un-flushed memtable.
+        self.store.flush_all_memtables()?;
+        append_store.flush_all_memtables()?;
         // Re-derive script version/family rollups from the corrected reference info.
         self.refresh_script_reference_rollups()?;
         // Re-derive DAO singleton stats (latest stats + top depositors) which were
