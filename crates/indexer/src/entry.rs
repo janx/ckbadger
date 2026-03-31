@@ -7,7 +7,7 @@ use tracing::{info, warn};
 use ckbadger_common::{BulkBuildProgressData, LabelImportConfig};
 use ckbadger_store::{types::SyncStatus, CkbadgerStore, RuntimeStatus, StoreRuntimeConfig};
 
-use crate::cycles_worker::spawn_cycles_task_worker;
+use crate::cycles_worker::spawn_cycles_worker;
 use crate::db::Repository;
 use crate::label_import::run_label_import as label_import_run;
 use crate::runtime_diag::{generate_run_id, read_cgroup_memory_snapshot};
@@ -301,8 +301,13 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     .await?;
     let indexer = Arc::new(indexer);
 
-    let (_cycles_tx, _cycles_result_store) =
-        spawn_cycles_task_worker(store.clone(), config.ckb_rpc_url.clone());
+    // TODO(task#8): Wire up cycles_request_dir from config
+    let _cycles_request_dir = std::path::PathBuf::from("run/cycles_requests");
+    spawn_cycles_worker(
+        store.clone(),
+        config.ckb_rpc_url.clone(),
+        _cycles_request_dir,
+    );
 
     let data_source = if indexer.is_direct_db_read() {
         "DB"
