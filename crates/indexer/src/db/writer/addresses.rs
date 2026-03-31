@@ -476,24 +476,6 @@ pub(crate) fn build_script_reference_rollup_state(
     })
 }
 
-#[allow(dead_code)]
-pub(crate) fn collect_script_reference_rollup_state(
-    store: &ckbadger_store::CkbadgerStore,
-    _append_only_store: &ckbadger_store::CkbadgerStore,
-) -> Result<ScriptReferenceRollupState> {
-    let all_infos = store.list_script_reference_infos()?;
-    let reference_mappings = all_infos
-        .iter()
-        .map(|((reference_hash, hash_type), _info)| {
-            let version_hash =
-                store.get_script_reference_version_hash(*hash_type, reference_hash)?;
-            Ok(((reference_hash.clone(), *hash_type), version_hash))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let reference_info_map = all_infos.into_iter().collect();
-    build_script_reference_rollup_state(store, reference_mappings, reference_info_map)
-}
-
 pub(crate) fn collect_current_script_reference_rollup_state(
     store: &ckbadger_store::CkbadgerStore,
     append_only_store: &ckbadger_store::CkbadgerStore,

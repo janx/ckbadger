@@ -520,7 +520,16 @@ impl BulkBuildEngine {
             }
         };
         // Run flush drain and materialize phases concurrently.
-        // They write to disjoint CF sets — safe for concurrent RocksDB writes.
+        // Safety: they write to disjoint CF sets.
+        //   Flush drain: CF_CELLS (append-only), CF_BLOCK_HEADERS, CF_TX_INDEX,
+        //     CF_ADDR_TXS, CF_CONSUMED_CELLS, CF_ACTIVITIES, CF_ADDR_ACTIVITIES,
+        //     and other per-block history CFs.
+        //   Materialize: CF_STATS_*, CF_ADDR_STATS, CF_LIVE_CELLS, CF_SCRIPT_INFO,
+        //     CF_SCRIPT_VERSIONS, CF_SCRIPT_FAMILIES, CF_TOKEN_INFO, CF_DAO_*,
+        //     CF_ADDR_BALANCE, CF_FIBER_*, CF_SPORE_*, CF_CLUSTER_*, and other
+        //     sealed-aggregate / final-snapshot CFs.
+        // If a future change adds a CF to both paths, concurrent writes will
+        // corrupt data silently.
         let domain_store_arc = indexer.writer.store().clone();
         let append_only_arc = Arc::clone(&indexer.append_only_store);
         let perf_stats = indexer.bulk_build_perf.clone();
@@ -797,7 +806,7 @@ fn materialize_finalize_phases(
 ) -> Result<materialize::MaterializationReport> {
     let mut materializer = materialize::Materializer::new(domain_store, append_only_store);
 
-    // Phase 1: activity stats (sealed aggregates)
+    // Step 2: activity stats (sealed aggregates)
     {
         let _guard =
             tracing::info_span!("bulk_finalize", phase = 2, label = "activity_stats").entered();
@@ -805,7 +814,7 @@ fn materialize_finalize_phases(
         materializer.stream_sealed_aggregate_rows(&prepared.activity_sealed_rows)?;
     }
 
-    // Phase 2: chain stats (sealed aggregates)
+    // Step 3: chain stats (sealed aggregates)
     {
         let _guard =
             tracing::info_span!("bulk_finalize", phase = 3, label = "chain_stats").entered();
@@ -813,7 +822,7 @@ fn materialize_finalize_phases(
         materializer.stream_sealed_aggregate_rows(&prepared.chain_sealed_rows)?;
     }
 
-    // Phase 3: final snapshot (live cell markers + index CFs)
+    // Step 4: final snapshot (live cell markers + index CFs)
     {
         let _guard =
             tracing::info_span!("bulk_finalize", phase = 4, label = "final_snapshot").entered();
@@ -821,7 +830,7 @@ fn materialize_finalize_phases(
         materializer.materialize_final_snapshot(&prepared.final_snapshot_rows)?;
     }
 
-    // Phases 4-9: build owner rows in parallel, write sequentially
+    // Steps 5-6: build owner rows in parallel, write sequentially
     {
         let _guard =
             tracing::info_span!("bulk_finalize", phase = 5, label = "owners_build").entered();
@@ -831,11 +840,7 @@ fn materialize_finalize_phases(
         let (addr_result, fiber_result, dao_result, object_result, script_result, token_result) =
             std::thread::scope(|s| {
                 let h_addr = s.spawn(|| owners.address.build_final_rows());
-                let h_script = s.spawn(|| {
-                    owners
-                        .script
-                        .build_final_rows(domain_store, append_only_store)
-                });
+                let h_script = s.spawn(|| owners.script.build_final_rows(domain_store));
                 let h_token = s.spawn(|| owners.token.build_final_rows(domain_store));
                 let h_object = s.spawn(|| owners.object.build_final_rows());
 
@@ -879,7 +884,7 @@ fn materialize_finalize_phases(
         }
     }
 
-    // Phase 10: metadata (HODL + cell distribution tracker state)
+    // Step 11: metadata (HODL + cell distribution tracker state)
     {
         let _guard = tracing::info_span!("bulk_finalize", phase = 11, label = "metadata").entered();
         perf_stats.record_finalize_step(11, finalize_started.elapsed());
@@ -2706,29 +2711,6 @@ fn build_history_batches(
         identity_activity_count_deltas: all_identity_deltas,
         tx_actions_list: all_tx_actions,
     })
-}
-
-/// Thin wrapper that ignores `shard_block_count` and delegates to `build_history_batches`.
-/// Retained for test compatibility.
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-fn build_history_batches_with_shard_size(
-    arena: &facts::FactsArena,
-    resolved: &[facts::ResolvedTxFacts<'_>],
-    interner: &interner::FrozenIdentityView,
-    is_mainnet: bool,
-    token_info_cache: &FxHashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-    written_lock_script_ids: &mut FxHashSet<crate::sync::types::InternId>,
-    _shard_block_count: usize,
-) -> Result<HistoryBuildResult> {
-    build_history_batches(
-        arena,
-        resolved,
-        interner,
-        is_mainnet,
-        token_info_cache,
-        written_lock_script_ids,
-    )
 }
 
 /// Serialize into a pre-allocated Vec, avoiding realloc overhead of `bincode::serialize`
@@ -6976,52 +6958,6 @@ mod tests {
     }
 
     #[test]
-    fn shard_history_preserves_rows_and_lock_script_dedup() {
-        let blocks = bulk_build_object_activity_fixture();
-        let interner = interner::IdentityInterner::default();
-        let (arena, _) =
-            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&blocks, &interner)
-                .expect("facts arena");
-        let resolved = sequencer::BulkSequencer::default()
-            .resolve(&arena)
-            .expect("resolved txs");
-        let frozen = interner.snapshot_for_reads();
-
-        let mut single_shard_written_ids = FxHashSet::default();
-        let single_shard = build_history_batches_with_shard_size(
-            &arena,
-            &resolved,
-            &frozen,
-            true,
-            &FxHashMap::default(),
-            &mut single_shard_written_ids,
-            arena.blocks.len().max(1),
-        )
-        .expect("single shard history");
-
-        let mut per_block_written_ids = FxHashSet::default();
-        let per_block = build_history_batches_with_shard_size(
-            &arena,
-            &resolved,
-            &frozen,
-            true,
-            &FxHashMap::default(),
-            &mut per_block_written_ids,
-            1,
-        )
-        .expect("per-block shard history");
-
-        assert_eq!(per_block.rows.len(), single_shard.rows.len());
-        assert_eq!(
-            bincode::serialize(&per_block.tx_actions_list).expect("serialize per-block tx actions"),
-            bincode::serialize(&single_shard.tx_actions_list)
-                .expect("serialize single-shard tx actions")
-        );
-        assert_eq!(per_block.rows, single_shard.rows);
-        assert_eq!(per_block_written_ids, single_shard_written_ids);
-    }
-
-    #[test]
     fn build_final_rows_matches_flush_sealed_and_materialize_final() {
         use super::materialize::Materializer;
         use super::owners::BulkReducer;
@@ -7107,11 +7043,11 @@ mod tests {
             );
         }
 
-        // -- ScriptOwner (needs both stores) --
+        // -- ScriptOwner --
         let script_final = runtime
             .owners
             .script
-            .build_final_rows(&domain_store, &append_store)
+            .build_final_rows(&domain_store)
             .unwrap();
         {
             let mut mat = Materializer::new(&domain_store, &append_store);

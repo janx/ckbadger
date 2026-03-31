@@ -26,8 +26,9 @@ pub struct StoreRuntimeConfig {
     pub direct_io_reads: bool,
     /// When true, use VectorRep memtable (O(1) insert) instead of skiplist
     /// (O(log n) insert). Safe only when there is a single writer thread
-    /// and no concurrent memtable readers. Bulk sync meets both conditions.
-    pub bulk_sync_memtable: bool,
+    /// and no concurrent memtable readers. Set at DB open time and persists
+    /// for the lifetime of the process (cannot be changed at runtime).
+    pub vector_memtable: bool,
 }
 
 impl Default for StoreRuntimeConfig {
@@ -35,7 +36,7 @@ impl Default for StoreRuntimeConfig {
         Self {
             memory_budget_gb: None,
             direct_io_reads: true,
-            bulk_sync_memtable: false,
+            vector_memtable: false,
         }
     }
 }
@@ -1143,12 +1144,11 @@ impl CkbadgerStore {
         // leave live_cells deletes flushed to SST while consumed_cells puts
         // are lost in memtable, creating unrecoverable "cell black holes".
         //
-        // Toggled OFF during bulk sync by set_bulk_sync_compaction_options():
-        // with 61 CFs, atomic flush serializes all CF memtable→L0 flushes
-        // into a single background job (30-60+ seconds), blocking all other
-        // flushes and causing unbounded imm_memtable growth.  Bulk sync
-        // does not need atomic flush because crash → fail-fast → rebuild
-        // from genesis (partial flush state is discarded).
+        // Stays ON for the entire process lifetime (the rocksdb crate does not
+        // expose SetDBOptions, so atomic_flush cannot be toggled at runtime).
+        // This means background flushes during bulk sync coordinate all 61 CFs,
+        // which is slower than independent per-CF flushes but ensures cross-CF
+        // consistency on crash during live sync (WAL + atomic flush).
         opts.set_atomic_flush(true);
 
         // Unordered write: skip write-group leader serialization overhead.
@@ -1156,9 +1156,9 @@ impl CkbadgerStore {
         // uses secondary (read-only) mode. Relaxes snapshot ordering but
         // maintains read-your-own-write consistency.
         //
-        // Disabled when bulk_sync_memtable is set: unordered_write implies
+        // Disabled when vector_memtable is set: unordered_write implies
         // allow_concurrent_memtable_write which is incompatible with VectorRep.
-        if runtime_config.bulk_sync_memtable {
+        if runtime_config.vector_memtable {
             opts.set_unordered_write(false);
             opts.set_allow_concurrent_memtable_write(false);
         } else {
@@ -1197,7 +1197,7 @@ impl CkbadgerStore {
         // VectorRep memtable: O(1) append instead of O(log n) skiplist insert.
         // Sort deferred to memtable→SST flush (background thread).
         // Only safe with single-writer, no concurrent memtable reads.
-        if runtime_config.bulk_sync_memtable {
+        if runtime_config.vector_memtable {
             opts.set_memtable_factory(rocksdb::MemtableFactory::Vector);
         }
 
@@ -1729,8 +1729,8 @@ impl CkbadgerStore {
             block_cache_bulk_mb = p.block_cache_bulk_sync_bytes / (1024 * 1024),
             wbm_normal_mb = p.wbm_normal_bytes / (1024 * 1024),
             wbm_bulk_mb = p.wbm_bulk_sync_bytes / (1024 * 1024),
-            unordered_write = !self.runtime_config.bulk_sync_memtable,
-            vector_memtable = self.runtime_config.bulk_sync_memtable,
+            unordered_write = !self.runtime_config.vector_memtable,
+            vector_memtable = self.runtime_config.vector_memtable,
             direct_io_reads = self.runtime_config.direct_io_reads,
             direct_io_compaction = true,
             bytes_per_sync_mb = 4,
@@ -1807,14 +1807,6 @@ impl CkbadgerStore {
         let level_base_str = p.bulk_max_bytes_for_level_base.to_string();
         let file_base_str = p.bulk_target_file_size_base.to_string();
         let hot_cf_buffer_str = p.write_buffer_hot_cf_bytes.to_string();
-
-        // Disable atomic flush: with 61 CFs it serializes all memtable→L0
-        // flushes into a single 30-60s background job, causing imm_memtable
-        // pileup and OOM.  Bulk sync doesn't need it — crash → fail-fast →
-        // rebuild from genesis.
-        if let Err(e) = self.db.set_options(&[("atomic_flush", "false")]) {
-            warn!("Failed to disable atomic_flush for bulk sync: {}", e);
-        }
 
         self.write_buffer_manager
             .set_buffer_size(p.wbm_bulk_sync_bytes);
@@ -1915,20 +1907,14 @@ impl CkbadgerStore {
 
         // Flush all memtables to SST BEFORE reducing WBM budget.
         // This ensures all commit_no_wal() data from bulk sync is durable.
-        // Done while atomic_flush is still OFF so each CF flushes independently
-        // (fast), rather than serializing all 61 CFs into one mega-flush.
+        // atomic_flush=true (set at open) means the first flush_cf() triggers
+        // an atomic flush of all CFs together.
         if let Err(e) = self.flush_all_memtables() {
             error!(
                 error = %e,
                 "Failed to flush memtables during bulk-to-normal transition; \
                  unflushed commit_no_wal data is at risk on crash"
             );
-        }
-
-        // Re-enable atomic flush for live sync crash safety (WAL + atomic flush
-        // ensures cross-CF consistency on crash recovery).
-        if let Err(e) = self.db.set_options(&[("atomic_flush", "true")]) {
-            warn!("Failed to re-enable atomic_flush for live sync: {}", e);
         }
 
         let p = &self.memory_profile;
@@ -1979,12 +1965,14 @@ impl CkbadgerStore {
     /// Flush all column family memtables to SST files.
     ///
     /// Required after bulk sync (commit_no_wal) to make memtable data durable.
-    /// Iterates all CFs to ensure every memtable is captured.
+    /// With `atomic_flush=true` (set at DB open), flushing any single CF
+    /// triggers an atomic flush of ALL CFs, so one call suffices.
     pub fn flush_all_memtables(&self) -> anyhow::Result<()> {
         let started = std::time::Instant::now();
 
         let cfs = Self::cfs_for_class(self.store_class);
-        for &cf_name in cfs {
+        // atomic_flush=true: flushing any CF flushes all CFs atomically.
+        if let Some(&cf_name) = cfs.first() {
             if let Some(cf) = self.db.cf_handle(cf_name) {
                 self.db.flush_cf(cf).map_err(|e| {
                     anyhow::anyhow!("flush_all_memtables failed on CF '{}': {}", cf_name, e)
@@ -2541,7 +2529,7 @@ mod tests {
         let runtime_config = StoreRuntimeConfig {
             memory_budget_gb: Some(12),
             direct_io_reads: false,
-            bulk_sync_memtable: false,
+            vector_memtable: false,
         };
 
         let store = CkbadgerStore::open_domain_with_runtime(dir.path(), runtime_config).unwrap();

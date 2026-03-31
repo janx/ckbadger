@@ -381,9 +381,9 @@ impl BatchWriter {
             for (block_num, dao) in cached {
                 result.insert(block_num, dao);
             }
-            // Merge in-batch DAO fields for blocks whose headers haven't been
-            // committed yet (same atomic batch).  These take precedence because
-            // they come from the authoritative parsed block data.
+            // Fill in DAO fields for blocks not yet committed to the store
+            // (same atomic batch).  Store-fetched entries take precedence if
+            // present; this only fills gaps for uncommitted blocks.
             for (block_num, dao) in batch_dao_fields {
                 result.entry(*block_num).or_insert_with(|| dao.clone());
             }

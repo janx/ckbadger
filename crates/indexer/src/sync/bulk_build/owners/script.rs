@@ -230,11 +230,7 @@ impl ScriptOwner {
             .collect::<Vec<_>>()
     }
 
-    fn build_snapshot_rows(
-        &self,
-        domain_store: &CkbadgerStore,
-        _append_only_store: &CkbadgerStore,
-    ) -> Result<Vec<MaterializedRow>> {
+    fn build_snapshot_rows(&self, domain_store: &CkbadgerStore) -> Result<Vec<MaterializedRow>> {
         let mut code_hashes: Vec<&Vec<u8>> = self.infos.keys().collect();
         code_hashes.sort();
 
@@ -353,11 +349,10 @@ impl ScriptOwner {
     pub(crate) fn build_final_rows(
         &self,
         domain_store: &CkbadgerStore,
-        append_only_store: &CkbadgerStore,
     ) -> Result<super::super::materialize::OwnerFinalRows> {
         Ok(super::super::materialize::OwnerFinalRows {
             sealed_rows: self.build_sealed_rows(),
-            snapshot_rows: self.build_snapshot_rows(domain_store, append_only_store)?,
+            snapshot_rows: self.build_snapshot_rows(domain_store)?,
         })
     }
 }
@@ -484,10 +479,7 @@ impl BulkReducer for ScriptOwner {
     }
 
     fn materialize_final(&self, materializer: &mut Materializer<'_>) -> Result<()> {
-        let rows = self.build_snapshot_rows(
-            materializer.domain_store(),
-            materializer.append_only_store(),
-        )?;
+        let rows = self.build_snapshot_rows(materializer.domain_store())?;
         materializer.materialize_final_snapshot(&rows)
     }
 }

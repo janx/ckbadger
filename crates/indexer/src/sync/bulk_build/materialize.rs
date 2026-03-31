@@ -87,10 +87,6 @@ impl<'a> Materializer<'a> {
         self.domain_store
     }
 
-    pub(crate) fn append_only_store(&self) -> &'a CkbadgerStore {
-        self.append_only_store
-    }
-
     /// Track rows that were flushed externally (e.g. via the flush channel
     /// pipeline in a background `spawn_blocking` task).
     pub(crate) fn add_external_counts(
@@ -347,11 +343,12 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
 
 /// A WriteBatch pair ready for sequential commit.  Built by `prepare_flush`
 /// from MaterializedRows produced by `build_history_rows_for_block`.
-#[allow(dead_code)]
 pub(crate) struct PreparedBatch {
     pub(crate) append_batch: rocksdb::WriteBatch,
     pub(crate) domain_batch: rocksdb::WriteBatch,
+    #[allow(dead_code)] // read only in tests
     pub(crate) history_count: usize,
+    #[allow(dead_code)] // read only in tests
     pub(crate) sealed_count: usize,
 }
 

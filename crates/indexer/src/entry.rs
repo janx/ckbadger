@@ -121,7 +121,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     // the sole writer — no concurrent memtable access. Sort deferred to
     // background memtable→SST flush. Safe for both bulk sync and live sync
     // (live sync has low write rate, so deferred sort cost is negligible).
-    config.store_runtime_config.bulk_sync_memtable = true;
+    config.store_runtime_config.vector_memtable = true;
 
     info!(
         "Opening ckbadger domain store at: {}",
@@ -1423,7 +1423,7 @@ mod tests {
             store_runtime_config: StoreRuntimeConfig {
                 memory_budget_gb: Some(24),
                 direct_io_reads: false,
-                bulk_sync_memtable: false,
+                vector_memtable: false,
             },
             decoder_cache_path: "/data/decoder-cache".to_string(),
             dob_decode_dir: "/workdir/media".to_string(),
