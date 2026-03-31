@@ -122,6 +122,12 @@ pub struct DiscoveredParams {
     pub object_item_id: Option<String>,
     pub identity_collection_id: Option<String>,
     pub fork_id: Option<String>,
+    // Heavy-page discovery: top-10 items by data volume
+    pub top_script_names: Vec<String>,
+    pub top_token_type_hashes: Vec<String>,
+    pub top_spore_ids: Vec<String>,
+    pub top_dotbit_item_ids: Vec<String>,
+    pub busiest_lock_hashes: Vec<String>,
 }
 
 pub struct Registry {

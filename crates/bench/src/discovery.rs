@@ -133,6 +133,25 @@ pub fn print_discovery(discovery: &Discovery) {
         p.fork_id.as_deref().unwrap_or("(none)")
     );
     println!();
+    println!("  Heavy-page discovery:");
+    println!(
+        "  top_script_names:     [{} items]",
+        p.top_script_names.len()
+    );
+    println!(
+        "  top_token_type_hashes:[{} items]",
+        p.top_token_type_hashes.len()
+    );
+    println!("  top_spore_ids:        [{} items]", p.top_spore_ids.len());
+    println!(
+        "  top_dotbit_item_ids:  [{} items]",
+        p.top_dotbit_item_ids.len()
+    );
+    println!(
+        "  busiest_lock_hashes:  [{} items]",
+        p.busiest_lock_hashes.len()
+    );
+    println!();
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +351,33 @@ async fn discover_params(
         }
     }
 
+    // busiest_lock_hashes: top 10 addresses by transaction count
+    {
+        let top_by_tx = fetch_json(client, &format!("{}/addresses/top?limit=50", base)).await?;
+        let top_tx_items: &[Value] = if let Some(arr) = data_array(&top_by_tx) {
+            arr
+        } else if let Some(arr) = top_by_tx.as_array() {
+            arr.as_slice()
+        } else {
+            &[]
+        };
+        // Sort by transactionsCount descending to find busiest addresses
+        let mut with_counts: Vec<(&str, i64)> = top_tx_items
+            .iter()
+            .filter_map(|item| {
+                let hash = item.get("lockScriptHash").and_then(|v| v.as_str())?;
+                let count = item.get("transactionsCount").and_then(|v| v.as_i64())?;
+                Some((hash, count))
+            })
+            .collect();
+        with_counts.sort_by(|a, b| b.1.cmp(&a.1));
+        params.busiest_lock_hashes = with_counts
+            .into_iter()
+            .take(10)
+            .map(|(hash, _)| hash.to_string())
+            .collect();
+    }
+
     // DAO parameters (if has_dao)
     if availability.has_dao {
         // dao_lock_hashes from /dao/top-depositors?limit=3
@@ -380,6 +426,19 @@ async fn discover_params(
                 })
                 .collect();
         }
+
+        // top_token_type_hashes: top 10 tokens by holders (default sort)
+        let top_tokens = fetch_json(client, &format!("{}/tokens?limit=10", base)).await?;
+        if let Some(arr) = data_array(&top_tokens) {
+            params.top_token_type_hashes = arr
+                .iter()
+                .filter_map(|item| {
+                    item.get("typeScriptHash")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                })
+                .collect();
+        }
     }
 
     // cluster_ids, spore_ids from spore endpoints (if has_spore)
@@ -407,12 +466,45 @@ async fn discover_params(
                 })
                 .collect();
         }
+
+        // top_spore_ids: first 10 spore objects (default sort)
+        let top_spores = fetch_json(client, &format!("{}/spore/objects?limit=10", base)).await?;
+        if let Some(arr) = data_array(&top_spores) {
+            params.top_spore_ids = arr
+                .iter()
+                .filter_map(|item| {
+                    item.get("sporeId")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                })
+                .collect();
+        }
     }
 
     // script_names from /scripts?limit=3
     let scripts = fetch_json(client, &format!("{}/scripts?limit=3", base)).await?;
     if let Some(arr) = data_array(&scripts) {
         params.script_names = arr
+            .iter()
+            .filter_map(|item| {
+                item.get("familyId")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+            .collect();
+    }
+
+    // top_script_names: top 10 scripts by cell count (heaviest detail pages)
+    let top_scripts = fetch_json(
+        client,
+        &format!(
+            "{}/scripts?limit=10&sort_key=cells&sort_direction=desc",
+            base
+        ),
+    )
+    .await?;
+    if let Some(arr) = data_array(&top_scripts) {
+        params.top_script_names = arr
             .iter()
             .filter_map(|item| {
                 item.get("familyId")
@@ -464,6 +556,19 @@ async fn discover_params(
                 .map(String::from);
         }
         params.identity_collection_id = Some("dotbit".to_string());
+
+        // top_dotbit_item_ids: first 10 .bit identity items
+        let top_items = fetch_json(
+            client,
+            &format!("{}/assets/identities/dotbit/items?limit=10", base),
+        )
+        .await?;
+        if let Some(arr) = data_array(&top_items) {
+            params.top_dotbit_item_ids = arr
+                .iter()
+                .filter_map(|item| item.get("nftId").and_then(|v| v.as_str()).map(String::from))
+                .collect();
+        }
     }
 
     // object_collection_id from /assets?limit=1 (if has_assets)

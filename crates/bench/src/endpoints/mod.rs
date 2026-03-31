@@ -7,6 +7,7 @@ mod fiber;
 mod forks;
 mod graph;
 mod hardforks;
+mod heavy_pages;
 mod identities;
 mod mempool;
 mod scripts;
@@ -45,6 +46,9 @@ pub fn register_all() -> Registry {
         reg.add(entry);
     }
     for entry in hardforks::entries() {
+        reg.add(entry);
+    }
+    for entry in heavy_pages::entries() {
         reg.add(entry);
     }
     for entry in identities::entries() {
