@@ -46,6 +46,9 @@ pub struct Config {
     /// Path to the DOB decode output blobs directory.
     #[serde(default = "default_dob_decode_dir", alias = "media_dir")]
     pub dob_decode_dir: String,
+    /// Directory where cycles calculation request files are written by the API.
+    #[serde(default)]
+    pub cycles_request_dir: Option<String>,
 }
 
 fn default_decoder_cache_path() -> String {
@@ -140,6 +143,7 @@ mod tests {
             store_runtime_config: StoreRuntimeConfig::default(),
             decoder_cache_path: default_decoder_cache_path(),
             dob_decode_dir: default_dob_decode_dir(),
+            cycles_request_dir: None,
         }
     }
 

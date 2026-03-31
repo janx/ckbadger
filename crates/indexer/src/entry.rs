@@ -30,6 +30,7 @@ pub struct IndexerServiceConfig {
     pub store_runtime_config: StoreRuntimeConfig,
     pub decoder_cache_path: String,
     pub dob_decode_dir: String,
+    pub cycles_request_dir: Option<String>,
 }
 
 impl From<IndexerServiceConfig> for Config {
@@ -51,6 +52,7 @@ impl From<IndexerServiceConfig> for Config {
             store_runtime_config: svc.store_runtime_config,
             decoder_cache_path: svc.decoder_cache_path,
             dob_decode_dir: svc.dob_decode_dir,
+            cycles_request_dir: svc.cycles_request_dir,
         }
     }
 }
@@ -301,13 +303,13 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     .await?;
     let indexer = Arc::new(indexer);
 
-    // TODO(task#8): Wire up cycles_request_dir from config
-    let _cycles_request_dir = std::path::PathBuf::from("run/cycles_requests");
-    spawn_cycles_worker(
-        store.clone(),
-        config.ckb_rpc_url.clone(),
-        _cycles_request_dir,
-    );
+    if let Some(ref dir) = config.cycles_request_dir {
+        spawn_cycles_worker(
+            store.clone(),
+            config.ckb_rpc_url.clone(),
+            std::path::PathBuf::from(dir),
+        );
+    }
 
     let data_source = if indexer.is_direct_db_read() {
         "DB"
@@ -1434,6 +1436,7 @@ mod tests {
             },
             decoder_cache_path: "/data/decoder-cache".to_string(),
             dob_decode_dir: "/workdir/media".to_string(),
+            cycles_request_dir: Some("/workdir/run/cycles_requests".to_string()),
         };
 
         let config: Config = svc.into();

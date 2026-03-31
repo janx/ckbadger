@@ -347,6 +347,7 @@ fn build_indexer_service_config(
         store_runtime_config: store_runtime_config(&config.store),
         decoder_cache_path: store_paths.decoder_cache.to_string_lossy().to_string(),
         dob_decode_dir: work.dob_decode_dir.to_string_lossy().to_string(),
+        cycles_request_dir: Some(work.cycles_request_dir.to_string_lossy().to_string()),
     })
 }
 
