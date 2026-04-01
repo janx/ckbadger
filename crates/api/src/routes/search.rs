@@ -15,7 +15,7 @@ use crate::utils::{
 };
 use crate::warmup::{
     CachedAssetEntry, CachedScriptEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN,
-    CACHE_KEY_SCRIPTS_NAMED, CACHE_KEY_SPORES_ALL,
+    CACHE_KEY_SCRIPTS_NAMED,
 };
 use crate::AppState;
 
@@ -561,9 +561,7 @@ async fn search(
         let cached_nfts = state
             .mem_cache
             .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT);
-        let cached_spores = state
-            .mem_cache
-            .get::<Vec<(Vec<u8>, ckbadger_store::ObjectEntry)>>(CACHE_KEY_SPORES_ALL);
+        let spore_guard = state.spore_cache.load();
 
         if scope_allows(scope, &[SearchScope::Script]) {
             let cached = cached_scripts.as_ref().ok_or_else(|| {
@@ -683,20 +681,19 @@ async fn search(
         }
 
         if scope_allows(scope, &[SearchScope::Spore]) {
-            let cached = cached_spores.as_ref().ok_or_else(|| {
+            let cached_spores = spore_guard.as_ref().as_ref().ok_or_else(|| {
                 ApiError::warmup_pending("spore cache unavailable; warmup in progress")
             })?;
-            let mut spore_matches: Vec<_> = cached
+            let mut spore_matches: Vec<_> = cached_spores
+                .name_index
                 .iter()
                 .take(SPORE_NAME_SCAN_LIMIT)
-                .filter_map(|(spore_id, entry)| {
-                    if entry.standard.is_cluster() {
+                .filter_map(|(idx, lowercase_name)| {
+                    if !lowercase_name.contains(&pattern) {
                         return None;
                     }
+                    let (spore_id, entry) = &cached_spores.all[*idx];
                     let name = entry.name.clone()?;
-                    if !name.to_ascii_lowercase().contains(&pattern) {
-                        return None;
-                    }
                     Some((spore_id.clone(), name, entry.created_at_block))
                 })
                 .collect();
