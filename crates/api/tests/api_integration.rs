@@ -6332,6 +6332,7 @@ async fn test_assets_list_supports_composition_tier_filter_and_onchain_ratio_sor
             decentralized_mixture_count: 0,
             centralized_mixture_count: 0,
             unknown_count: 0,
+            ..Default::default()
         },
     );
     batch.put_cluster_aggregate(
@@ -6347,6 +6348,7 @@ async fn test_assets_list_supports_composition_tier_filter_and_onchain_ratio_sor
             decentralized_mixture_count: 0,
             centralized_mixture_count: 4,
             unknown_count: 0,
+            ..Default::default()
         },
     );
     batch.commit().unwrap();

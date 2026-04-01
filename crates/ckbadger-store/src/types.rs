@@ -691,6 +691,12 @@ pub struct ClusterAggregate {
     pub centralized_mixture_count: i64,
     #[serde(default)]
     pub unknown_count: i64,
+    /// Cumulative owned capacity (shannon) of all live spores in this cluster.
+    #[serde(default)]
+    pub owned_capacity: i128,
+    /// Cumulative occupied capacity (shannon) of all live spores in this cluster.
+    #[serde(default)]
+    pub owned_knowledge: i128,
 }
 
 /// Pre-aggregated mNFT collection data, maintained inline by the indexer.
