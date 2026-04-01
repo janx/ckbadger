@@ -979,30 +979,12 @@ async fn get_cluster(
             .unwrap_or(0);
         (name, description, owner_lock_hash, created_at_block)
     };
-    let store = state.store.clone();
-    let id_c = id.clone();
-    let daily = tokio::task::spawn_blocking(move || store.list_cluster_daily_deltas(&id_c))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let chart = build_capacity_history_chart(
-        daily
-            .into_iter()
-            .map(|(date, delta)| {
-                (
-                    date,
-                    delta.owned_capacity_delta,
-                    delta.owned_knowledge_delta,
-                )
-            })
-            .collect(),
-        format!(
-            "{} Capacity History",
-            name.clone().unwrap_or_else(|| "Spore Cluster".to_string())
-        ),
-    )
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-    let (owned_capacity, owned_knowledge) = latest_capacity_from_chart(&chart);
+    let owned_capacity = cluster_aggregate
+        .as_ref()
+        .map(|agg| agg.owned_capacity.to_string());
+    let owned_knowledge = cluster_aggregate
+        .as_ref()
+        .map(|agg| agg.owned_knowledge.to_string());
 
     ok(ClusterResponse {
         cluster_id: format!("0x{}", hex::encode(&id)),

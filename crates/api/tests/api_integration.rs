@@ -5469,6 +5469,18 @@ async fn test_cluster_capacity_chart_and_cluster_capacity_fields() {
         )
         .unwrap();
 
+    // Write aggregate with cumulative totals (sum of daily deltas: 100-20=80, 60-10=50)
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cluster_aggregate(
+        &cluster_id,
+        &ClusterAggregate {
+            owned_capacity: 80,
+            owned_knowledge: 50,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+
     let config = test_config(store);
     let app = create_router(config).await;
 
