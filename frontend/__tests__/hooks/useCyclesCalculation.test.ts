@@ -262,7 +262,7 @@ describe('useCyclesCalculation', () => {
     expect(result.current.isCalculating).toBe(false);
   });
 
-  it('does not set hasFailed when not found (retry later)', async () => {
+  it('keeps polling when not found (tx not yet indexed)', async () => {
     vi.mocked(api.triggerCyclesCalculation).mockResolvedValue({
       status: 'notFound',
       cycles: null,
@@ -277,8 +277,9 @@ describe('useCyclesCalculation', () => {
     await waitFor(() => {
       expect(api.triggerCyclesCalculation).toHaveBeenCalled();
     });
-    // notFound does not mark as permanent failure — stays retryable
+    // notFound keeps calculating (polling) — not a permanent failure
     expect(result.current.hasFailed).toBe(false);
+    expect(result.current.isCalculating).toBe(true);
   });
 
   it('sets hasFailed on network error during trigger', async () => {
