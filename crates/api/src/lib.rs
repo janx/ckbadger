@@ -358,8 +358,8 @@ pub async fn create_router(config: AppConfig) -> Router {
         .layer(rate_limit_layer)
         .layer(cors)
         .layer(CompressionLayer::new())
-        .layer(trace_layer)
         .layer(axum::middleware::from_fn(mark_polling_request))
+        .layer(trace_layer)
         .with_state(state)
 }
 
