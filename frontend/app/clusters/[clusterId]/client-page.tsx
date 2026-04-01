@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueries, keepPreviousData } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
@@ -254,11 +254,11 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     enabled: !!clusterId && activeCollectionTab === 'activities',
     placeholderData: keepPreviousData,
   });
-  const capacityRef = useRef<HTMLDivElement>(null);
+  const [capacityNode, setCapacityNode] = useState<HTMLDivElement | null>(null);
   const [capacityInView, setCapacityInView] = useState(false);
 
   useEffect(() => {
-    if (!capacityRef.current || capacityInView) return;
+    if (!capacityNode || capacityInView) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry?.isIntersecting) {
@@ -267,9 +267,9 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
       },
       { rootMargin: '200px 0px' }
     );
-    observer.observe(capacityRef.current);
+    observer.observe(capacityNode);
     return () => observer.disconnect();
-  }, [capacityInView]);
+  }, [capacityNode, capacityInView]);
 
   const { data: capacityChart, isLoading: isCapacityChartLoading } = useQuery({
     queryKey: ['cluster-capacity-chart', clusterId, capacityRange],
@@ -602,7 +602,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
             )}
           </TerminalPanelContent>
         </TerminalPanel>
-        <div ref={capacityRef}>
+        <div ref={setCapacityNode}>
           <CapacityStatisticsSection
             className="mb-6"
             capacityRange={capacityRange}
