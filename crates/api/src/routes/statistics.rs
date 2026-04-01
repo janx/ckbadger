@@ -3391,13 +3391,12 @@ async fn get_asset_ecosystem(
     };
 
     // Compute "other" = knowledge_size - (tokens + objects + dao)
+    // Categorized may transiently exceed knowledge_size because token/object
+    // capacity comes from the warmup cache (current tip) while knowledge_size
+    // comes from the latest DAO daily snapshot (end-of-day). Clamp to zero
+    // instead of failing.
     let categorized = total_token_capacity + total_object_capacity + dao_locked;
-    let other_capacity = if knowledge_size > 0 && knowledge_size < categorized {
-        return Err(ApiError::internal(format!(
-            "categorized capacity {} exceeds knowledge_size {}: tokens={}, objects={}, dao={}",
-            categorized, knowledge_size, total_token_capacity, total_object_capacity, dao_locked,
-        )));
-    } else if knowledge_size > categorized {
+    let other_capacity = if knowledge_size > categorized {
         knowledge_size - categorized
     } else {
         0
