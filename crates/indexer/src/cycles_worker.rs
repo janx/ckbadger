@@ -279,7 +279,7 @@ async fn fetch_block_tx_hashes(
         "id": 1,
         "jsonrpc": "2.0",
         "method": "get_block_by_number",
-        "params": [hex_number, "0x1", false]
+        "params": [hex_number, "0x2", false]
     });
 
     let resp = client
@@ -294,6 +294,11 @@ async fn fetch_block_tx_hashes(
         .await
         .map_err(|e| anyhow::anyhow!("RPC response parse failed: {}", e))?;
 
+    if let Some(err) = json.get("error") {
+        return Err(anyhow::anyhow!("RPC error: {}", err));
+    }
+
+    // Verbosity 0x2 returns { header, transactions, uncles, proposals } at result level
     let txs = json["result"]["transactions"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("RPC response missing transactions array"))?;
