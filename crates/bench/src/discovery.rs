@@ -630,7 +630,7 @@ async fn discover_params(
         )
         .await?;
         if let Some(first) = data_array(&did_items).and_then(|arr| arr.first()) {
-            params.did_ckb_item_id = first
+            params.did_item_id = first
                 .get("nftId")
                 .and_then(|v| v.as_str())
                 .map(String::from);

@@ -121,7 +121,7 @@ pub struct DiscoveredParams {
     pub live_cell_outpoint: Option<(String, u32)>,
     pub fiber_channel_id: Option<String>,
     pub dotbit_item_id: Option<String>,
-    pub did_ckb_item_id: Option<String>,
+    pub did_item_id: Option<String>,
     pub object_collection_id: Option<String>,
     pub object_item_id: Option<String>,
     pub identity_collection_id: Option<String>,
