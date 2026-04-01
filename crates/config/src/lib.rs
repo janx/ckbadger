@@ -42,6 +42,7 @@ pub struct ApiConfig {
     pub port: u16,
     pub rate_limit: u32,
     pub rate_limit_burst: u32,
+    pub slow_request_threshold_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -101,6 +102,7 @@ impl Default for ApiConfig {
             port: 8101,
             rate_limit: 100,
             rate_limit_burst: 200,
+            slow_request_threshold_ms: 100,
         }
     }
 }
@@ -289,6 +291,7 @@ host = "127.0.0.1"
 port = 8101
 rate_limit = 100
 rate_limit_burst = 200
+slow_request_threshold_ms = 100
 
 [frontend]
 host = "127.0.0.1"
@@ -480,6 +483,7 @@ mod tests {
         assert_eq!(cfg.api.port, 8101);
         assert_eq!(cfg.api.rate_limit, 100);
         assert_eq!(cfg.api.rate_limit_burst, 200);
+        assert_eq!(cfg.api.slow_request_threshold_ms, 100);
 
         assert_eq!(cfg.frontend.host, "127.0.0.1");
         assert_eq!(cfg.frontend.port, 8100);
@@ -534,6 +538,7 @@ host = "0.0.0.0"
 port = 3001
 rate_limit = 50
 rate_limit_burst = 100
+slow_request_threshold_ms = 50
 
 [frontend]
 host = "0.0.0.0"
@@ -560,6 +565,7 @@ level = "debug"
         assert_eq!(cfg.api.port, 3001);
         assert_eq!(cfg.api.rate_limit, 50);
         assert_eq!(cfg.api.rate_limit_burst, 100);
+        assert_eq!(cfg.api.slow_request_threshold_ms, 50);
         assert_eq!(cfg.frontend.host, "0.0.0.0");
         assert_eq!(cfg.frontend.port, 3000);
         assert_eq!(cfg.indexer.bulk_sync_threshold, 500);
