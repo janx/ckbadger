@@ -26,7 +26,6 @@ pub const CACHE_KEY_ASSETS_TOKEN: &str = "assets:token";
 pub const CACHE_KEY_ASSETS_NFT: &str = "assets:nft";
 pub const CACHE_KEY_ADDRESSES_TOP: &str = "addresses:top";
 pub const CACHE_KEY_ADDRESSES_ACTIVE: &str = "addresses:active";
-pub const CACHE_KEY_SPORES_ALL: &str = "spores:all";
 pub const CACHE_KEY_SCRIPT_FAMILIES_ALL: &str = "scripts:families:all";
 pub const CACHE_KEY_SCRIPTS_ALL: &str = "scripts:all";
 pub const CACHE_KEY_SCRIPTS_NAMED: &str = "scripts:named";
