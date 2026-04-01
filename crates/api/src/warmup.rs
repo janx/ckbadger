@@ -501,9 +501,8 @@ fn refresh_address_cache_sync(state: &AppState) -> anyhow::Result<()> {
 fn refresh_spore_cache_sync(state: &AppState) -> anyhow::Result<()> {
     let mut spores = state.store.list_spores(SPORE_CACHE_LIMIT)?;
     spores.sort_by(|a, b| b.1.created_at_block.cmp(&a.1.created_at_block));
-    state
-        .mem_cache
-        .set(CACHE_KEY_SPORES_ALL, &spores, CacheTtl::ASSETS);
+    let cache = SporeCache::build(spores);
+    state.spore_cache.store(Arc::new(Some(cache)));
     Ok(())
 }
 
