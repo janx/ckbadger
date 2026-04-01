@@ -262,7 +262,7 @@ describe('useCyclesCalculation', () => {
     expect(result.current.isCalculating).toBe(false);
   });
 
-  it('sets hasFailed when not found', async () => {
+  it('does not set hasFailed when not found (retry later)', async () => {
     vi.mocked(api.triggerCyclesCalculation).mockResolvedValue({
       status: 'notFound',
       cycles: null,
@@ -275,8 +275,24 @@ describe('useCyclesCalculation', () => {
     );
 
     await waitFor(() => {
+      expect(api.triggerCyclesCalculation).toHaveBeenCalled();
+    });
+    // notFound does not mark as permanent failure — stays retryable
+    expect(result.current.hasFailed).toBe(false);
+  });
+
+  it('sets hasFailed on network error during trigger', async () => {
+    vi.mocked(api.triggerCyclesCalculation).mockRejectedValue(new Error('Network error'));
+
+    const { result } = renderHook(
+      () => useCyclesCalculation('0xabc', undefined, false, 'pending'),
+      { wrapper: createWrapper() }
+    );
+
+    await waitFor(() => {
       expect(result.current.hasFailed).toBe(true);
     });
+    expect(result.current.isCalculating).toBe(false);
   });
 
   it('resets state when hash changes', async () => {

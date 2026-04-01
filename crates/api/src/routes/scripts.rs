@@ -1258,12 +1258,15 @@ async fn lookup_scripts(
                     // Try each version_hash for a name
                     let mut found_name = None;
                     for vh in &version_hashes {
-                        if let Ok(Some(vi)) = state.store.get_script_version(vh) {
-                            if let Ok(n) = resolved_version_name(&state, vh, &vi, "") {
-                                if !n.is_empty() {
-                                    found_name = Some(n);
-                                    break;
-                                }
+                        if let Some(vi) = state
+                            .store
+                            .get_script_version(vh)
+                            .map_err(|e| ApiError::internal(e.to_string()))?
+                        {
+                            let n = resolved_version_name(&state, vh, &vi, "")?;
+                            if !n.is_empty() {
+                                found_name = Some(n);
+                                break;
                             }
                         }
                     }

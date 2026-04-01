@@ -64,11 +64,12 @@ impl CkbadgerStore {
             if key.len() == crate::keys::ADDR_TX_KEY_SIZE {
                 let (_, block_num, tx_idx, tx_hash) = crate::keys::decode_addr_tx_key(&key);
                 let addr_tx_value = if value.is_empty() {
-                    // Legacy entries written before materialization.
-                    AddrTxValue {
-                        capacity_change: 0,
-                        flags: AddrTxValue::TX_TYPE_TRANSFER,
-                    }
+                    anyhow::bail!(
+                        "empty AddrTxValue for lock_hash=0x{}, block={}, tx_idx={} — re-sync required",
+                        bytes_to_hex(lock_hash),
+                        block_num,
+                        tx_idx,
+                    );
                 } else {
                     bincode::deserialize(&value).map_err(|e| {
                         anyhow::anyhow!(

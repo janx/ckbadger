@@ -704,9 +704,9 @@ async fn get_block_fee_stats(
             }
             non_cellbase_count += 1;
             total_size += entry.tx_size as i64;
-            sum_cycles += entry.cycles.unwrap_or(0);
-            if entry.cycles.is_none() {
-                any_missing = true;
+            match entry.cycles {
+                Some(c) if c > 0 => sum_cycles += c,
+                Some(_) | None => any_missing = true,
             }
             if entry.tx_size > 0 {
                 let fee_rate = (entry.fee as f64 * 1000.0) / entry.tx_size as f64;

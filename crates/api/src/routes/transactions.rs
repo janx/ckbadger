@@ -744,6 +744,11 @@ async fn get_transaction_detail(
             Some(((fee_value * 1000) / size as u128).to_string())
         });
 
+        let pool_cycles = tx_lookup.cycles.map(|value| value as i64);
+        let pool_is_cellbase = rpc_tx.inputs.first().is_some_and(|input| {
+            input.previous_output.tx_hash
+                == "0x0000000000000000000000000000000000000000000000000000000000000000"
+        });
         return ok(TransactionDetailResponse {
             hash: format!("0x{}", hex::encode(&hash_bytes)),
             status: tx_lookup.status_str().to_string(),
@@ -756,13 +761,10 @@ async fn get_transaction_detail(
             fee,
             fee_rate,
             tx_size: tx_lookup.tx_size,
-            cycles: tx_lookup.cycles.map(|value| value as i64),
-            cycles_status: Some("pending".to_string()),
+            cycles: pool_cycles,
+            cycles_status: derive_cycles_status(pool_cycles, pool_is_cellbase),
             confirmations: None,
-            is_cellbase: rpc_tx.inputs.first().is_some_and(|input| {
-                input.previous_output.tx_hash
-                    == "0x0000000000000000000000000000000000000000000000000000000000000000"
-            }),
+            is_cellbase: pool_is_cellbase,
             timestamp: None,
             inputs_capacity: io.inputs_capacity.map(|value| value.to_string()),
             outputs_capacity: Some(io.outputs_capacity.to_string()),
@@ -966,13 +968,19 @@ fn build_inputs_outputs_from_rpc_pending(
             let cell_info = if is_cellbase_input {
                 None
             } else {
+                let prev_index_i16 = i16::try_from(prev_index).map_err(|_| {
+                    ApiError::internal(format!(
+                        "output index {} exceeds i16 range while {}",
+                        prev_index, input_context
+                    ))
+                })?;
                 core_store
-                    .get_cell(&prev_tx_hash_bytes, prev_index as i16, cells_store)
+                    .get_cell(&prev_tx_hash_bytes, prev_index_i16, cells_store)
                     .ok()
                     .flatten()
                     .or_else(|| {
                         core_store
-                            .get_consumed_cell(&prev_tx_hash_bytes, prev_index as i16, cells_store)
+                            .get_consumed_cell(&prev_tx_hash_bytes, prev_index_i16, cells_store)
                             .ok()
                             .flatten()
                     })
@@ -1254,13 +1262,19 @@ fn build_inputs_outputs_from_ckb(
                 (None, None, None, None)
             } else {
                 // Try live cells first, then consumed cells in our store
+                let prev_index_i16 = i16::try_from(prev_index).map_err(|_| {
+                    ApiError::internal(format!(
+                        "output index {} exceeds i16 range while {}",
+                        prev_index, input_context
+                    ))
+                })?;
                 let cell_info = core_store
-                    .get_cell(&prev_tx_hash_bytes, prev_index as i16, cells_store)
+                    .get_cell(&prev_tx_hash_bytes, prev_index_i16, cells_store)
                     .ok()
                     .flatten()
                     .or_else(|| {
                         core_store
-                            .get_consumed_cell(&prev_tx_hash_bytes, prev_index as i16, cells_store)
+                            .get_consumed_cell(&prev_tx_hash_bytes, prev_index_i16, cells_store)
                             .ok()
                             .flatten()
                     });

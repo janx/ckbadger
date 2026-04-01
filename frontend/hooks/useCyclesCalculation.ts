@@ -63,6 +63,7 @@ export function useCyclesCalculation(
         }
       } catch {
         setIsCalculating(false);
+        setHasFailed(true);
       }
     };
 
@@ -95,6 +96,7 @@ export function useCyclesCalculation(
         }
       } catch {
         setIsCalculating(false);
+        setHasFailed(true);
       }
     }, 2000);
 

@@ -2843,16 +2843,33 @@ fn build_history_rows_for_block(
         // Tuple: (output_cap_sum, input_cap_sum, has_outputs, has_inputs)
         for output in resolved_tx.cells.iter() {
             let e = per_addr.entry(output.lock_script_hash_id).or_default();
-            e.0 = e.0.saturating_add(output.capacity);
+            e.0 = e.0.checked_add(output.capacity).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "output capacity sum overflow for addr in tx block={}",
+                    tx.block_number
+                )
+            })?;
             e.2 = true;
         }
         for input in &resolved_tx.resolved_inputs {
             let e = per_addr.entry(input.lock_script_hash_id).or_default();
-            e.1 = e.1.saturating_add(input.capacity);
+            e.1 = e.1.checked_add(input.capacity).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "input capacity sum overflow for addr in tx block={}",
+                    tx.block_number
+                )
+            })?;
             e.3 = true;
         }
         for (lock_hash_id, (out_cap, in_cap, has_out, has_in)) in per_addr {
-            let capacity_change = out_cap.saturating_sub(in_cap);
+            let capacity_change = out_cap.checked_sub(in_cap).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "capacity_change overflow: out={} in={} block={}",
+                    out_cap,
+                    in_cap,
+                    tx.block_number
+                )
+            })?;
             let value = ckbadger_store::types::AddrTxValue::new(capacity_change, has_in, has_out);
             let encoded_value = bincode_serialize_presized(&value)?;
             rows.push(materialize::MaterializedRow::new(

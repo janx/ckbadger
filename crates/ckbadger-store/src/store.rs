@@ -1940,7 +1940,7 @@ impl CkbadgerStore {
                 } else {
                     ("2", "2097152") // 2 MB
                 };
-                let _ = self.db.set_options_cf(
+                if let Err(e) = self.db.set_options_cf(
                     cf,
                     &[
                         ("level0_slowdown_writes_trigger", "12"),
@@ -1950,7 +1950,9 @@ impl CkbadgerStore {
                         ("max_bytes_for_level_base", &level_base_str),
                         ("target_file_size_base", &file_base_str),
                     ],
-                );
+                ) {
+                    warn!(cf = cf_name, error = %e, "failed to set normal compaction options for CF");
+                }
             }
         }
         info!(

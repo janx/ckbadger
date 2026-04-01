@@ -1302,7 +1302,12 @@ impl Indexer {
             let mut per_addr: HashMap<Vec<u8>, (i64, i64, bool, bool)> = HashMap::new();
             for cell in &tx_data.cells {
                 let e = per_addr.entry(cell.lock_script_hash.clone()).or_default();
-                e.0 = e.0.saturating_add(cell.capacity);
+                e.0 = e.0.checked_add(cell.capacity).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "output capacity sum overflow for addr in tx block={}",
+                        tx_data.block_number
+                    )
+                })?;
                 e.2 = true;
             }
             if !tx_data.is_cellbase {
@@ -1327,12 +1332,24 @@ impl Indexer {
                         )
                     })?;
                     let e = per_addr.entry(info.lock_script_hash.clone()).or_default();
-                    e.1 = e.1.saturating_add(info.capacity);
+                    e.1 = e.1.checked_add(info.capacity).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "input capacity sum overflow for addr in tx block={}",
+                            tx_data.block_number
+                        )
+                    })?;
                     e.3 = true;
                 }
             }
             for (lock_hash, (out_cap, in_cap, has_out, has_in)) in per_addr {
-                let capacity_change = out_cap.saturating_sub(in_cap);
+                let capacity_change = out_cap.checked_sub(in_cap).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "capacity_change overflow: out={} in={} block={}",
+                        out_cap,
+                        in_cap,
+                        tx_data.block_number
+                    )
+                })?;
                 addr_tx_entries.push((
                     lock_hash,
                     tx_data.block_number,
