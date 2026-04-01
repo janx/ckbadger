@@ -1444,6 +1444,111 @@ pub struct DailyActivityStats {
     pub protocol_action_counts: HashMap<String, u32>,
 }
 
+impl DailyActivityStats {
+    /// Accumulate statistics from a single transaction's actions.
+    ///
+    /// This is the **single calculation path** for activity stats accumulation,
+    /// shared by both live sync (indexer) and reorg rollback (store).
+    pub fn accumulate_from_tx_actions(&mut self, tx_actions: &TxActions) {
+        // Coinbase transactions are counted but excluded from all other metrics
+        if tx_actions.is_cellbase {
+            self.coinbase_count += 1;
+            return;
+        }
+
+        // Total CKB moved (absolute value of all participants) — excludes coinbase
+        for p in &tx_actions.participants {
+            self.total_ckb_moved = self
+                .total_ckb_moved
+                .checked_add(p.ckb_delta.unsigned_abs())
+                .expect("total_ckb_moved overflow in accumulate_from_tx_actions");
+        }
+
+        // Count each involved script from type_calls and lock_calls — excludes coinbase
+        for tc in &tx_actions.type_calls {
+            let hex = hex::encode(&tc.type_code_hash);
+            *self.script_counts.entry(hex).or_insert(0) += 1;
+        }
+        for lc in &tx_actions.lock_calls {
+            let hex = hex::encode(&lc.lock_code_hash);
+            *self.script_counts.entry(hex).or_insert(0) += 1;
+        }
+
+        // Count each protocol action — excludes coinbase
+        for pa in &tx_actions.protocol_actions {
+            let key = format!("{}:{}", pa.protocol, pa.action);
+            *self.protocol_action_counts.entry(key).or_insert(0) += 1;
+        }
+
+        // DAO counts from protocol_actions (TX-level)
+        let mut has_dao = false;
+        for pa in &tx_actions.protocol_actions {
+            if pa.protocol == "dao" {
+                has_dao = true;
+                match pa.action.as_str() {
+                    "deposit" => self.dao_deposit_count += 1,
+                    "withdraw_request" => self.dao_withdraw_request_count += 1,
+                    "withdraw_complete" => self.dao_withdraw_complete_count += 1,
+                    _ => {}
+                }
+            }
+        }
+
+        // Token/Object/Identity/Script call flags from participant tags
+        let mut has_token = false;
+        let mut has_object = false;
+        let mut has_identity = false;
+        for p in &tx_actions.participants {
+            if p.tags & TAG_TOKEN != 0 {
+                has_token = true;
+            }
+            if p.tags & TAG_OBJECT != 0 {
+                has_object = true;
+            }
+            if p.tags & TAG_IDENTITY != 0 {
+                has_identity = true;
+            }
+        }
+
+        let has_script_call = !tx_actions.type_calls.is_empty();
+
+        if has_token {
+            self.token_count += 1;
+        }
+        if has_object {
+            self.object_count += 1;
+        }
+        if has_identity {
+            self.identity_count += 1;
+        }
+        if has_script_call {
+            self.script_call_count += 1;
+        }
+
+        // transfer_count = Layer 1 only (CKB delta with no Layer 2 or Layer 3 signals).
+        // Any Layer 2 asset/script signal or Layer 3 protocol action excludes from transfer.
+        let has_protocol_action = !tx_actions.protocol_actions.is_empty();
+        let matched = has_dao
+            || has_token
+            || has_object
+            || has_identity
+            || has_script_call
+            || has_protocol_action;
+        if !matched {
+            // Check if any participant has a type_call tag (meaning type script was involved)
+            let has_type_call_tag = tx_actions
+                .participants
+                .iter()
+                .any(|p| p.tags & TAG_TYPE_CALL != 0);
+            if !has_type_call_tag {
+                self.transfer_count += 1;
+            } else {
+                self.unknown_count += 1;
+            }
+        }
+    }
+}
+
 // ============================================
 // Group I-b: Object Collection Activities (pre-computed)
 // ============================================
