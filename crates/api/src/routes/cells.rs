@@ -88,6 +88,125 @@ fn format_script_code_hash_label(code_hash: &[u8]) -> String {
     format!("script:0x{}...{}", prefix, suffix)
 }
 
+/// Convert a `semantic_tags` bitmap into human-readable script label strings.
+/// Returns an empty vec when no bits are set (including legacy `0` values).
+fn script_labels_from_semantic_tags(semantic_tags: u16) -> Vec<String> {
+    use ckbadger_store::types::semantic_tags as st;
+    let mut labels = Vec::new();
+    if semantic_tags & st::DAO != 0 {
+        labels.push("NervosDAO".to_string());
+    }
+    if semantic_tags & st::SUDT != 0 {
+        labels.push("sUDT".to_string());
+    }
+    if semantic_tags & st::XUDT != 0 {
+        labels.push("xUDT".to_string());
+    }
+    if semantic_tags & st::DOTBIT != 0 {
+        labels.push(".bit".to_string());
+    }
+    if semantic_tags & st::MNFT != 0 {
+        labels.push("mNFT".to_string());
+    }
+    if semantic_tags & st::SPORE != 0 {
+        labels.push("Spore".to_string());
+    }
+    if semantic_tags & st::CLUSTER != 0 {
+        labels.push("Spore Cluster".to_string());
+    }
+    labels
+}
+
+/// Fallback script-label resolution for legacy data where `semantic_tags == 0`.
+/// Reads output cells (and input cells via CKB store) to collect code hashes,
+/// then resolves them to human-readable names via script_info.
+fn resolve_script_labels_from_cells(
+    state: &AppState,
+    tx_hash: &[u8],
+    outputs_count: i16,
+    is_cellbase: bool,
+) -> Result<Vec<String>, (axum::http::StatusCode, axum::Json<ApiError>)> {
+    let mut script_code_hashes: std::collections::HashSet<Vec<u8>> =
+        std::collections::HashSet::new();
+
+    // Check outputs to collect code hashes.
+    let output_outpoints: Vec<(&[u8], i16)> = (0..outputs_count)
+        .map(|output_index| (tx_hash, output_index))
+        .collect();
+    let output_cells = load_cells_preferring_consumed(
+        state.store.as_ref(),
+        &output_outpoints,
+        state.append_only_store.as_ref(),
+    )?;
+    for cell in output_cells.values() {
+        if let Some(ref tch) = cell.type_code_hash {
+            script_code_hashes.insert(tch.clone());
+        }
+        script_code_hashes.insert(cell.lock_code_hash.clone());
+    }
+
+    // Check inputs to collect code hashes.
+    if !is_cellbase {
+        if let Some(ref ckb_store) = state.ckb_store {
+            if tx_hash.len() == 32 {
+                let mut tx_hash_arr = [0u8; 32];
+                tx_hash_arr.copy_from_slice(tx_hash);
+                if let Some(tx_view) = ckb_store.get_transaction(&tx_hash_arr) {
+                    use ckb_types::prelude::*;
+                    let mut input_outpoints: Vec<(Vec<u8>, i16)> = Vec::new();
+                    for input in tx_view.inputs().into_iter() {
+                        let prev_hash: [u8; 32] = input.previous_output().tx_hash().unpack();
+                        let prev_index_u32: u32 = input.previous_output().index().unpack();
+                        if let Ok(prev_index) = i16::try_from(prev_index_u32) {
+                            input_outpoints.push((prev_hash.to_vec(), prev_index));
+                        }
+                    }
+                    let input_refs: Vec<(&[u8], i16)> = input_outpoints
+                        .iter()
+                        .map(|(h, i)| (h.as_slice(), *i))
+                        .collect();
+                    let input_cells = load_cells_preferring_consumed(
+                        state.store.as_ref(),
+                        &input_refs,
+                        state.append_only_store.as_ref(),
+                    )?;
+                    for cell in input_cells.values() {
+                        if let Some(ref tch) = cell.type_code_hash {
+                            script_code_hashes.insert(tch.clone());
+                        }
+                        script_code_hashes.insert(cell.lock_code_hash.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut script_labels: Vec<String> = script_code_hashes
+        .iter()
+        .map(
+            |ch| -> Result<String, (axum::http::StatusCode, axum::Json<ApiError>)> {
+                let known_name = state
+                    .store
+                    .get_script_info(ch)
+                    .map_err(|e| ApiError::internal(e.to_string()))?
+                    .and_then(|si| si.name)
+                    .map(|name| name.trim().to_string())
+                    .filter(|name| is_known_script_name(Some(name)));
+                Ok(known_name.unwrap_or_else(|| format_script_code_hash_label(ch)))
+            },
+        )
+        .collect::<Result<Vec<_>, _>>()?;
+    script_labels.retain(|name| {
+        !matches!(
+            name.as_str(),
+            "Default Lock" | "Default Multisig" | "anyone_can_pay"
+        )
+    });
+    script_labels.sort();
+    script_labels.dedup();
+    Ok(script_labels)
+}
+
 pub(crate) struct DepGroupParseResult {
     pub(crate) is_dep_group: bool,
     pub(crate) items: Option<Vec<DepGroupItem>>,
@@ -2663,7 +2782,7 @@ fn list_canonical_addr_txs_page(
     lock_hash: &[u8],
     limit: usize,
     cursor: Option<(i64, i32)>,
-) -> anyhow::Result<Vec<(i64, i32, Vec<u8>)>> {
+) -> anyhow::Result<Vec<(i64, i32, Vec<u8>, ckbadger_store::AddrTxValue)>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
@@ -2679,10 +2798,10 @@ fn list_canonical_addr_txs_page(
         }
         let rows_len = rows.len();
         let mut last_seen = None;
-        for (block_num, tx_idx, tx_hash, _addr_tx_value) in rows {
+        for (block_num, tx_idx, tx_hash, addr_tx_value) in rows {
             last_seen = Some((block_num, tx_idx));
             if is_canonical_addr_tx(store, block_num, tx_idx, &tx_hash)? {
-                out.push((block_num, tx_idx, tx_hash));
+                out.push((block_num, tx_idx, tx_hash, addr_tx_value));
                 if out.len() >= limit {
                     return Ok(out);
                 }
@@ -2742,6 +2861,7 @@ async fn get_address_transactions(
     let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
 
     // Fetch canonical recent transactions for this address (newest first).
+    // Each row now includes the materialized AddrTxValue with capacity_change and tx_type.
     let store = state.store.clone();
     let lock_hash_c = lock_hash.clone();
     let addr_txs = tokio::task::spawn_blocking(move || {
@@ -2763,209 +2883,105 @@ async fn get_address_transactions(
     let next_cursor = if has_more {
         addr_txs
             .last()
-            .map(|(block_num, tx_idx, _)| encode_cursor(*block_num, *tx_idx))
+            .map(|(block_num, tx_idx, _, _)| encode_cursor(*block_num, *tx_idx))
     } else {
         None
     };
 
+    // Deduplicate block header lookups: collect unique block numbers first.
+    let unique_blocks: Vec<i64> = {
+        let mut blocks: Vec<i64> = addr_txs.iter().map(|(bn, _, _, _)| *bn).collect();
+        blocks.sort_unstable();
+        blocks.dedup();
+        blocks
+    };
+    let mut block_timestamps: HashMap<i64, String> = HashMap::with_capacity(unique_blocks.len());
+    for block_num in unique_blocks {
+        let ts = state
+            .store
+            .get_block_header(block_num)
+            .ok()
+            .flatten()
+            .map(|h| {
+                chrono::DateTime::from_timestamp_millis(h.timestamp)
+                    .unwrap_or_default()
+                    .to_rfc3339()
+            })
+            .unwrap_or_default();
+        block_timestamps.insert(block_num, ts);
+    }
+
     let txs: Vec<AddressTransactionResponse> = addr_txs
         .into_iter()
         .map(
-            |(block_number, tx_idx, tx_hash)| -> Result<
+            |(block_number, tx_idx, tx_hash, addr_val)| -> Result<
                 AddressTransactionResponse,
                 (axum::http::StatusCode, axum::Json<ApiError>),
             > {
-            let timestamp = state
-                .store
-                .get_block_header(block_number)
-                .ok()
-                .flatten()
-                .map(|h| {
-                    chrono::DateTime::from_timestamp_millis(h.timestamp)
-                        .unwrap_or_default()
-                        .to_rfc3339()
-                })
-                .unwrap_or_default();
+                let timestamp = block_timestamps
+                    .get(&block_number)
+                    .cloned()
+                    .unwrap_or_default();
 
-            let tx_entry = state
-                .store
-                .get_tx_index(block_number, tx_idx)
-                .ok()
-                .flatten();
-            let is_cellbase = tx_entry.as_ref().map(|e| e.is_cellbase).unwrap_or(false);
-            let outputs_count = tx_entry.as_ref().map(|e| e.outputs_count).unwrap_or(0);
+                let tx_entry = state
+                    .store
+                    .get_tx_index(block_number, tx_idx)
+                    .map_err(|e| {
+                        ApiError::internal(format!(
+                            "failed to read tx_index for tx 0x{} at block {}:{}: {}",
+                            hex::encode(&tx_hash),
+                            block_number,
+                            tx_idx,
+                            e
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "missing tx_index for canonical tx 0x{} at block {}:{}",
+                            hex::encode(&tx_hash),
+                            block_number,
+                            tx_idx
+                        ))
+                    })?;
 
-            // Compute capacity change: sum outputs to this address minus sum inputs from this address
-            let mut output_capacity: i128 = 0;
-            let mut input_capacity: i128 = 0;
-            let mut has_outputs = false;
-            let mut has_inputs = false;
-            let mut script_code_hashes: std::collections::HashSet<Vec<u8>> =
-                std::collections::HashSet::new();
+                // capacity_change and tx_type come from materialized AddrTxValue — no cell reads needed.
+                let capacity_change = addr_val.capacity_change;
+                let tx_type = addr_val.tx_type_str();
 
-            // Check outputs belonging to this address via batch cell lookups.
-            let output_outpoints: Vec<(&[u8], i16)> = (0..outputs_count)
-                .map(|output_index| (tx_hash.as_slice(), output_index))
-                .collect();
-            let output_cells = load_cells_preferring_consumed(state.store.as_ref(), &output_outpoints, state.append_only_store.as_ref())?;
-            for cell in output_cells.values() {
-                if let Some(ref tch) = cell.type_code_hash {
-                    script_code_hashes.insert(tch.clone());
-                }
-                script_code_hashes.insert(cell.lock_code_hash.clone());
-                if cell.lock_script_hash == lock_hash {
-                    output_capacity += cell.capacity as i128;
-                    has_outputs = true;
-                }
-            }
+                // fee is already DAO-corrected at index time — no compensation lookups needed.
+                let fee = tx_entry.fee;
 
-            // Check inputs belonging to this address (resolve previous outpoints)
-            let mut dao_compensation: i128 = 0;
-            if !is_cellbase {
-                if let Some(ref ckb_store) = state.ckb_store {
-                    if tx_hash.len() == 32 {
-                        let mut tx_hash_arr = [0u8; 32];
-                        tx_hash_arr.copy_from_slice(&tx_hash);
-                        if let Some(tx_view) = ckb_store.get_transaction(&tx_hash_arr) {
-                            use ckb_types::prelude::*;
-                            let mut input_outpoints: Vec<(Vec<u8>, i16)> = Vec::new();
-                            for input in tx_view.inputs().into_iter() {
-                                let prev_hash: [u8; 32] =
-                                    input.previous_output().tx_hash().unpack();
-                                let prev_index_u32: u32 = input.previous_output().index().unpack();
-                                let prev_index =
-                                    i16::try_from(prev_index_u32).map_err(|_| {
-                                        ApiError::internal(format!(
-                                            "input output index exceeds i16 for tx 0x{} at block {}: prev_index={}",
-                                            hex::encode(&tx_hash),
-                                            block_number,
-                                            prev_index_u32
-                                        ))
-                                    })?;
-                                input_outpoints.push((prev_hash.to_vec(), prev_index));
-                            }
+                let inputs_count = tx_entry.inputs_count;
+                let outputs_count = tx_entry.outputs_count;
+                let is_cellbase = tx_entry.is_cellbase;
+                let tx_size = Some(tx_entry.tx_size);
+                let cycles = tx_entry.cycles;
 
-                            let input_refs: Vec<(&[u8], i16)> = input_outpoints
-                                .iter()
-                                .map(|(prev_hash, prev_index)| (prev_hash.as_slice(), *prev_index))
-                                .collect();
-                            let input_cells =
-                                load_cells_preferring_consumed(state.store.as_ref(), &input_refs, state.append_only_store.as_ref())?;
-
-                            for (prev_hash, prev_index) in input_outpoints {
-                                // Check if this input is a DAO withdrawal request
-                                if let Ok(Some(outpoint_key)) =
-                                    state.store.get_dao_deposit_by_withdraw_tx(&prev_hash, prev_index)
-                                {
-                                    if let Ok(Some(entry)) =
-                                        state.store.get_dao_deposit(&outpoint_key)
-                                    {
-                                        if let Some(comp) = entry.compensation {
-                                            dao_compensation += comp as i128;
-                                        }
-                                    }
-                                }
-                                let cell = input_cells.get(&(prev_hash.clone(), prev_index));
-                                if let Some(cell) = cell {
-                                    if let Some(ref tch) = cell.type_code_hash {
-                                        script_code_hashes.insert(tch.clone());
-                                    }
-                                    script_code_hashes.insert(cell.lock_code_hash.clone());
-                                    if cell.lock_script_hash == lock_hash {
-                                        input_capacity += cell.capacity as i128;
-                                        has_inputs = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            let capacity_change = output_capacity - input_capacity;
-            let tx_type = if has_inputs && has_outputs {
-                if capacity_change < 0 {
-                    "sent"
-                } else if capacity_change > 0 {
-                    "received"
+                // Script labels from semantic_tags bitmap.
+                // When semantic_tags == 0 (legacy data before Task 5/6 materialization),
+                // fall back to the cell-based label resolution.
+                let script_labels = if tx_entry.semantic_tags != 0 {
+                    script_labels_from_semantic_tags(tx_entry.semantic_tags)
                 } else {
-                    "internal"
-                }
-            } else if has_outputs {
-                "received"
-            } else if has_inputs {
-                "sent"
-            } else {
-                "transfer"
-            };
+                    resolve_script_labels_from_cells(&state, &tx_hash, outputs_count, is_cellbase)?
+                };
 
-            let inputs_count = tx_entry.as_ref().map(|e| e.inputs_count).unwrap_or(0);
-            let stored_fee = tx_entry.as_ref().map(|e| e.fee as i128).unwrap_or(0);
-            // For DAO withdrawals, stored fee = actual_fee - compensation (negative).
-            // Correct by adding back the DAO compensation.
-            let fee_total = stored_fee + dao_compensation;
-            if fee_total < 0 {
-                return Err(ApiError::internal(format!(
-                    "negative corrected transaction fee for tx 0x{} at block {}: stored_fee={}, dao_compensation={}, corrected={}",
-                    hex::encode(&tx_hash),
+                Ok(AddressTransactionResponse {
+                    tx_hash: format!("0x{}", hex::encode(&tx_hash)),
                     block_number,
-                    stored_fee,
-                    dao_compensation,
-                    fee_total
-                )));
-            }
-            let fee = i64::try_from(fee_total).map_err(|_| {
-                ApiError::internal(format!(
-                    "corrected transaction fee exceeds i64 for tx 0x{} at block {}: {}",
-                    hex::encode(&tx_hash),
-                    block_number,
-                    fee_total
-                ))
-            })?;
-            let tx_size = tx_entry.as_ref().map(|e| e.tx_size);
-            let cycles = tx_entry.as_ref().and_then(|e| e.cycles);
-
-            // Resolve script labels from collected code hashes (type + lock scripts)
-            let mut script_labels: Vec<String> = script_code_hashes
-                .iter()
-                .map(
-                    |ch| -> Result<String, (axum::http::StatusCode, axum::Json<ApiError>)> {
-                    let known_name = state
-                        .store
-                        .get_script_info(ch)
-                        .map_err(|e| ApiError::internal(e.to_string()))?
-                        .and_then(|si| si.name)
-                        .map(|name| name.trim().to_string())
-                        .filter(|name| is_known_script_name(Some(name)));
-                    Ok(known_name.unwrap_or_else(|| format_script_code_hash_label(ch)))
-                    },
-                )
-                .collect::<Result<Vec<_>, _>>()?;
-            // Filter out common lock scripts that aren't interesting as labels.
-            script_labels.retain(|name| {
-                !matches!(
-                    name.as_str(),
-                    "Default Lock" | "Default Multisig" | "anyone_can_pay"
-                )
-            });
-            script_labels.sort();
-            script_labels.dedup();
-
-            Ok(AddressTransactionResponse {
-                tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-                block_number,
-                tx_type: tx_type.to_string(),
-                capacity_change: capacity_change.to_string(),
-                timestamp,
-                inputs_count,
-                outputs_count,
-                fee: fee.to_string(),
-                is_cellbase,
-                tx_size,
-                cycles,
-                script_labels,
-            })
-        })
+                    tx_type: tx_type.to_string(),
+                    capacity_change: (capacity_change as i128).to_string(),
+                    timestamp,
+                    inputs_count,
+                    outputs_count,
+                    fee: fee.to_string(),
+                    is_cellbase,
+                    tx_size,
+                    cycles,
+                    script_labels,
+                })
+            },
+        )
         .collect::<Result<Vec<_>, _>>()?;
 
     let total = state
@@ -3778,6 +3794,27 @@ mod tests {
     }
 
     #[test]
+    fn test_script_labels_from_semantic_tags() {
+        use ckbadger_store::types::semantic_tags as st;
+
+        // PLAIN (0) returns empty labels.
+        assert!(script_labels_from_semantic_tags(st::PLAIN).is_empty());
+
+        // Single bit.
+        assert_eq!(script_labels_from_semantic_tags(st::DAO), vec!["NervosDAO"]);
+        assert_eq!(script_labels_from_semantic_tags(st::SPORE), vec!["Spore"]);
+
+        // Multiple bits.
+        let labels = script_labels_from_semantic_tags(st::DAO | st::XUDT | st::CLUSTER);
+        assert_eq!(labels, vec!["NervosDAO", "xUDT", "Spore Cluster"]);
+
+        // All bits set.
+        let all = st::DAO | st::SUDT | st::XUDT | st::DOTBIT | st::MNFT | st::SPORE | st::CLUSTER;
+        let labels = script_labels_from_semantic_tags(all);
+        assert_eq!(labels.len(), 7);
+    }
+
+    #[test]
     fn test_list_canonical_addr_txs_page_filters_orphaned_entries() {
         let root = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
@@ -3832,6 +3869,9 @@ mod tests {
         assert_eq!(rows[1].0, 10);
         assert_eq!(rows[0].2, canonical_tx_new);
         assert_eq!(rows[1].2, canonical_tx_old);
+        // AddrTxValue is propagated through from the store.
+        assert_eq!(rows[0].3.tx_type_str(), "received");
+        assert_eq!(rows[1].3.tx_type_str(), "received");
     }
 
     #[test]
