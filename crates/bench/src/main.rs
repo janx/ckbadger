@@ -57,13 +57,13 @@ struct Cli {
     #[arg(long)]
     json: bool,
 
-    /// Save JSON output to file (in addition to auto-saved workdir report)
+    /// Save JSON output to file
     #[arg(long)]
     output: Option<String>,
 
-    /// ckbadger work directory (auto-detected from ckbadger.toml)
+    /// Directory for auto-saved timestamped reports
     #[arg(long)]
-    workdir: Option<PathBuf>,
+    output_dir: Option<PathBuf>,
 
     /// Compare against baseline JSON file
     #[arg(long)]
@@ -198,15 +198,11 @@ async fn main() -> Result<()> {
         report::print_table(&bench_report);
     }
 
-    // Auto-save to <workdir>/bench/
-    let workdir = cli.workdir.or_else(find_workdir);
-    if let Some(ref wd) = workdir {
-        let bench_dir = wd.join("bench");
+    // Auto-save timestamped report to output_dir
+    if let Some(ref dir) = cli.output_dir {
         let timestamp = bench_report.timestamp.replace(':', "-").replace('+', "p");
-        let auto_path = bench_dir.join(format!("{timestamp}.json"));
+        let auto_path = dir.join(format!("{timestamp}.json"));
         report::save_json(&bench_report, &auto_path)?;
-    } else {
-        eprintln!("Note: no ckbadger workdir found (no ckbadger.toml), skipping auto-save");
     }
 
     if let Some(ref path) = cli.output {
@@ -218,17 +214,4 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Search for ckbadger.toml starting from CWD, walking up parent directories.
-fn find_workdir() -> Option<PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        if dir.join("ckbadger.toml").is_file() {
-            return Some(dir);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
 }
