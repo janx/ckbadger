@@ -318,6 +318,10 @@ pub async fn create_router(config: AppConfig) -> Router {
                     .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
                     .and_then(|v: &str| v.parse::<u64>().ok())
                     .unwrap_or(0);
+                let is_polling = response
+                    .extensions()
+                    .get::<PollingRequestMarker>()
+                    .is_some();
 
                 if latency >= slow_threshold {
                     tracing::warn!(
@@ -326,6 +330,14 @@ pub async fn create_router(config: AppConfig) -> Router {
                         latency_ms,
                         size,
                         "slow request"
+                    );
+                } else if is_polling {
+                    tracing::debug!(
+                        parent: span,
+                        status,
+                        latency_ms,
+                        size,
+                        "completed"
                     );
                 } else {
                     tracing::info!(
@@ -347,7 +359,41 @@ pub async fn create_router(config: AppConfig) -> Router {
         .layer(cors)
         .layer(CompressionLayer::new())
         .layer(trace_layer)
+        .layer(axum::middleware::from_fn(mark_polling_request))
         .with_state(state)
+}
+
+/// Marker inserted into response extensions for high-frequency polling endpoints.
+/// TraceLayer's `on_response` checks for this to log at DEBUG instead of INFO.
+#[derive(Clone)]
+struct PollingRequestMarker;
+
+/// Paths frequently polled by the frontend (5-10s intervals) that generate
+/// excessive log volume at INFO level. Logged at DEBUG instead.
+const POLLING_PATHS: &[&str] = &[
+    "/api/v1/statistics/network",
+    "/api/v1/statistics/recent-blocks",
+    "/api/v1/activities/latest",
+    "/api/v1/mempool/info",
+    "/api/v1/mempool/transactions",
+    "/api/v1/mempool/blocks",
+    "/api/v1/mempool/pending-proposals",
+];
+
+fn is_polling_path(path: &str) -> bool {
+    POLLING_PATHS.contains(&path)
+}
+
+async fn mark_polling_request(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let polling = is_polling_path(request.uri().path());
+    let mut response = next.run(request).await;
+    if polling {
+        response.extensions_mut().insert(PollingRequestMarker);
+    }
+    response
 }
 
 #[cfg(test)]
@@ -359,5 +405,22 @@ mod tests {
         // Verify the module-level routes() function returns a valid router.
         // This exercises the route merging logic in routes::api_routes().
         let _router: Router<Arc<AppState>> = routes::api_routes();
+    }
+
+    #[test]
+    fn test_polling_path_detection() {
+        assert!(is_polling_path("/api/v1/statistics/network"));
+        assert!(is_polling_path("/api/v1/activities/latest"));
+        assert!(is_polling_path("/api/v1/mempool/info"));
+        assert!(is_polling_path("/api/v1/mempool/transactions"));
+        assert!(is_polling_path("/api/v1/mempool/blocks"));
+        assert!(is_polling_path("/api/v1/mempool/pending-proposals"));
+        assert!(is_polling_path("/api/v1/statistics/recent-blocks"));
+
+        assert!(!is_polling_path("/api/v1/blocks"));
+        assert!(!is_polling_path("/api/v1/blocks/12345"));
+        assert!(!is_polling_path("/api/v1/transactions/0xabc"));
+        assert!(!is_polling_path("/api/v1/search"));
+        assert!(!is_polling_path("/api/v1/statistics/tx-stats"));
     }
 }
