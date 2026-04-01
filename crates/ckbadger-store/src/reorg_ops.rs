@@ -11,7 +11,6 @@ use crate::sync_ops::checked_rollback_total;
 use crate::types::*;
 
 /// Bundled rollback delta maps for cutoff-date stats repair.
-#[allow(dead_code)] // activity_date, activity_hour, miner consumed in next commit (Task 4)
 struct RollbackStatsDeltas {
     /// Per-date: (blocks, txs, cells_created, cells_consumed)
     date: HashMap<String, (i32, i32, i32, i32)>,
@@ -51,7 +50,7 @@ fn repair_cutoff_date_stats(
     key: &[u8],
     value: &[u8],
     cutoff_date: &str,
-    _cutoff_yyyymmddhh: &str,
+    cutoff_yyyymmddhh: &str,
     deltas: &RollbackStatsDeltas,
     store: &CkbadgerStore,
     batch: &mut WriteBatch,
@@ -140,6 +139,11 @@ fn repair_cutoff_date_stats(
             if date_part != cutoff_date {
                 return Ok(false);
             }
+            // Only repair the cutoff hour itself; later hours are fully
+            // rolled back and should be deleted.
+            if hour_str != cutoff_yyyymmddhh {
+                return Ok(false);
+            }
             let delta = match deltas.hour.get(hour_str) {
                 Some(d) => *d,
                 None => return Ok(false),
@@ -165,9 +169,192 @@ fn repair_cutoff_date_stats(
             batch.put_cf(cf, key, &encoded);
             Ok(true)
         }
-        // Other date-scoped prefixes (miner, activity, per-entity stats):
-        // these are lower-impact and harder to subtract precisely.
-        // Fall through to deletion.
+        keys::STATS_PREFIX_ACTIVITY_DAILY => {
+            if suffix.len() < 8 {
+                return Ok(false);
+            }
+            let date_str = std::str::from_utf8(&suffix[..8])
+                .map_err(|e| anyhow::anyhow!("invalid activity daily date: {}", e))?;
+            if date_str != cutoff_date {
+                return Ok(false);
+            }
+            let delta = match deltas.activity_date.get(date_str) {
+                Some(d) => d,
+                None => return Ok(false),
+            };
+            let mut s: DailyActivityStats = bincode::deserialize(value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize activity daily stats for repair: date={}, {}",
+                    date_str,
+                    e
+                )
+            })?;
+            s.transfer_count = s.transfer_count.saturating_sub(delta.transfer_count);
+            s.dao_deposit_count = s.dao_deposit_count.saturating_sub(delta.dao_deposit_count);
+            s.dao_withdraw_request_count = s
+                .dao_withdraw_request_count
+                .saturating_sub(delta.dao_withdraw_request_count);
+            s.dao_withdraw_complete_count = s
+                .dao_withdraw_complete_count
+                .saturating_sub(delta.dao_withdraw_complete_count);
+            s.token_count = s.token_count.saturating_sub(delta.token_count);
+            s.object_count = s.object_count.saturating_sub(delta.object_count);
+            s.identity_count = s.identity_count.saturating_sub(delta.identity_count);
+            s.script_call_count = s.script_call_count.saturating_sub(delta.script_call_count);
+            s.unknown_count = s.unknown_count.saturating_sub(delta.unknown_count);
+            s.coinbase_count = s.coinbase_count.saturating_sub(delta.coinbase_count);
+            s.total_ckb_moved = s.total_ckb_moved.saturating_sub(delta.total_ckb_moved);
+            // unique_address_count: keep existing value — cutoff-date addr set
+            // is preserved (not deleted) so live sync dedup remains correct.
+            // Subtract script_counts
+            for (k, v) in &delta.script_counts {
+                if let Some(existing) = s.script_counts.get_mut(k) {
+                    *existing = existing.saturating_sub(*v);
+                }
+            }
+            s.script_counts.retain(|_, v| *v > 0);
+            // Subtract protocol_action_counts
+            for (k, v) in &delta.protocol_action_counts {
+                if let Some(existing) = s.protocol_action_counts.get_mut(k) {
+                    *existing = existing.saturating_sub(*v);
+                }
+            }
+            s.protocol_action_counts.retain(|_, v| *v > 0);
+            let cf = store.stats_cf_by_prefix(prefix)?;
+            let encoded = bincode::serialize(&s)
+                .map_err(|e| anyhow::anyhow!("serialize activity daily stats repair: {}", e))?;
+            batch.put_cf(cf, key, &encoded);
+            Ok(true)
+        }
+        keys::STATS_PREFIX_ACTIVITY_HOURLY => {
+            if suffix.len() < 10 {
+                return Ok(false);
+            }
+            let hour_str = std::str::from_utf8(&suffix[..10])
+                .map_err(|e| anyhow::anyhow!("invalid activity hourly hour: {}", e))?;
+            let date_part = &hour_str[..8];
+            if date_part != cutoff_date {
+                return Ok(false);
+            }
+            // Only repair the cutoff hour; later hours are fully rolled back.
+            if hour_str != cutoff_yyyymmddhh {
+                return Ok(false);
+            }
+            let delta = match deltas.activity_hour.get(hour_str) {
+                Some(d) => d,
+                None => return Ok(false),
+            };
+            let mut s: DailyActivityStats = bincode::deserialize(value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize activity hourly stats for repair: hour={}, {}",
+                    hour_str,
+                    e
+                )
+            })?;
+            s.transfer_count = s.transfer_count.saturating_sub(delta.transfer_count);
+            s.dao_deposit_count = s.dao_deposit_count.saturating_sub(delta.dao_deposit_count);
+            s.dao_withdraw_request_count = s
+                .dao_withdraw_request_count
+                .saturating_sub(delta.dao_withdraw_request_count);
+            s.dao_withdraw_complete_count = s
+                .dao_withdraw_complete_count
+                .saturating_sub(delta.dao_withdraw_complete_count);
+            s.token_count = s.token_count.saturating_sub(delta.token_count);
+            s.object_count = s.object_count.saturating_sub(delta.object_count);
+            s.identity_count = s.identity_count.saturating_sub(delta.identity_count);
+            s.script_call_count = s.script_call_count.saturating_sub(delta.script_call_count);
+            s.unknown_count = s.unknown_count.saturating_sub(delta.unknown_count);
+            s.coinbase_count = s.coinbase_count.saturating_sub(delta.coinbase_count);
+            s.total_ckb_moved = s.total_ckb_moved.saturating_sub(delta.total_ckb_moved);
+            for (k, v) in &delta.script_counts {
+                if let Some(existing) = s.script_counts.get_mut(k) {
+                    *existing = existing.saturating_sub(*v);
+                }
+            }
+            s.script_counts.retain(|_, v| *v > 0);
+            for (k, v) in &delta.protocol_action_counts {
+                if let Some(existing) = s.protocol_action_counts.get_mut(k) {
+                    *existing = existing.saturating_sub(*v);
+                }
+            }
+            s.protocol_action_counts.retain(|_, v| *v > 0);
+            let cf = store.stats_cf_by_prefix(prefix)?;
+            let encoded = bincode::serialize(&s)
+                .map_err(|e| anyhow::anyhow!("serialize activity hourly stats repair: {}", e))?;
+            batch.put_cf(cf, key, &encoded);
+            Ok(true)
+        }
+        keys::STATS_PREFIX_DAILY_BLOCK => {
+            if suffix.len() < 8 {
+                return Ok(false);
+            }
+            let date_str = std::str::from_utf8(&suffix[..8])
+                .map_err(|e| anyhow::anyhow!("invalid daily_block date: {}", e))?;
+            if date_str != cutoff_date {
+                return Ok(false);
+            }
+            let rb_blocks = deltas.date.get(date_str).map_or(0, |d| d.0);
+            if rb_blocks == 0 {
+                return Ok(false);
+            }
+            let mut s: DailyBlockStats = bincode::deserialize(value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize daily_block for repair: date={}, {}",
+                    date_str,
+                    e
+                )
+            })?;
+            s.block_count -= rb_blocks;
+            if s.block_count <= 0 {
+                return Ok(false); // all blocks rolled back — delete
+            }
+            // avg_difficulty and total_uncles: kept unchanged.
+            // For shallow reorgs (1-2 blocks out of ~720/day), the error is negligible.
+            let cf = store.stats_cf_by_prefix(prefix)?;
+            let encoded = bincode::serialize(&s)
+                .map_err(|e| anyhow::anyhow!("serialize daily_block repair: {}", e))?;
+            batch.put_cf(cf, key, &encoded);
+            Ok(true)
+        }
+        keys::STATS_PREFIX_MINER => {
+            if suffix.len() < 40 {
+                return Ok(false);
+            }
+            let date_str = std::str::from_utf8(&suffix[..8])
+                .map_err(|e| anyhow::anyhow!("invalid miner date: {}", e))?;
+            if date_str != cutoff_date {
+                return Ok(false);
+            }
+            let miner_hash = suffix[8..40].to_vec();
+            let rb_blocks = deltas
+                .miner
+                .get(&(date_str.to_string(), miner_hash))
+                .copied()
+                .unwrap_or(0);
+            if rb_blocks == 0 {
+                // This miner had no blocks in the rolled-back range — preserve as-is.
+                return Ok(true);
+            }
+            let mut s: MinerStats = bincode::deserialize(value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize miner stats for repair: date={}, {}",
+                    date_str,
+                    e
+                )
+            })?;
+            s.blocks_count -= rb_blocks;
+            if s.blocks_count <= 0 {
+                return Ok(false); // all blocks by this miner rolled back — delete
+            }
+            let cf = store.stats_cf_by_prefix(prefix)?;
+            let encoded = bincode::serialize(&s)
+                .map_err(|e| anyhow::anyhow!("serialize miner stats repair: {}", e))?;
+            batch.put_cf(cf, key, &encoded);
+            Ok(true)
+        }
+        // Remaining prefixes (per-entity daily stats, distribution, etc.)
+        // are either cumulative or per-entity-per-date and not worth repairing
+        // for shallow reorgs. Fall through to deletion.
         _ => Ok(false),
     }
 }
