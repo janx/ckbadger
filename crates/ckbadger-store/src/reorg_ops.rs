@@ -6318,4 +6318,235 @@ mod tests {
         assert_eq!(repaired.cells_created, 12); // 20 - 8
         assert_eq!(repaired.cells_consumed, 6); // 10 - 4
     }
+
+    #[test]
+    fn test_should_delete_hourly_uses_full_yyyymmddhh() {
+        let cutoff = b"20260210";
+        let cutoff_hh = b"2026021015"; // cutoff at hour 15
+
+        // Hour 14 on same date — canonical, should NOT be deleted
+        let key_before = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021014");
+        assert!(!should_delete_stats_for_replay(&key_before, cutoff, cutoff_hh, 0, 0).unwrap());
+
+        // Hour 15 (cutoff hour) — should be deleted (repair handles it)
+        let key_at = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021015");
+        assert!(should_delete_stats_for_replay(&key_at, cutoff, cutoff_hh, 0, 0).unwrap());
+
+        // Hour 16 — after cutoff, should be deleted
+        let key_after = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026021016");
+        assert!(should_delete_stats_for_replay(&key_after, cutoff, cutoff_hh, 0, 0).unwrap());
+
+        // Previous day — should NOT be deleted
+        let key_prev_day = keys::encode_stats_key(keys::STATS_PREFIX_HOURLY, b"2026020923");
+        assert!(!should_delete_stats_for_replay(&key_prev_day, cutoff, cutoff_hh, 0, 0).unwrap());
+    }
+
+    #[test]
+    fn test_should_delete_activity_hourly_uses_full_yyyymmddhh() {
+        let cutoff = b"20260210";
+        let cutoff_hh = b"2026021015";
+
+        // Hour 14 — canonical, NOT deleted
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021014");
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+
+        // Hour 15 (cutoff) — deleted
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021015");
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+
+        // Hour 16 — deleted
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY, b"2026021016");
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+    }
+
+    #[test]
+    fn test_addr_set_preserved_on_cutoff_date() {
+        let cutoff = b"20260210";
+        let cutoff_hh = b"2026021015";
+
+        // Daily ADDR_SET on cutoff date — preserved (strict >)
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, b"20260210");
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+
+        // Daily ADDR_SET day after — deleted
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, b"20260211");
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+
+        // Hourly ADDR_SET at cutoff hour — preserved (strict >)
+        let key =
+            keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021015");
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+
+        // Hourly ADDR_SET hour before cutoff — preserved
+        let key =
+            keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021014");
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+
+        // Hourly ADDR_SET hour after cutoff — deleted
+        let key =
+            keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, b"2026021016");
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
+    }
+
+    #[test]
+    fn test_repair_activity_daily_subtracts_deltas() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // Write an ACTIVITY_DAILY entry for the cutoff date
+        let date = "20260210";
+        let original = DailyActivityStats {
+            transfer_count: 100,
+            dao_deposit_count: 10,
+            dao_withdraw_request_count: 5,
+            dao_withdraw_complete_count: 3,
+            token_count: 20,
+            object_count: 15,
+            identity_count: 8,
+            script_call_count: 12,
+            unknown_count: 0,
+            coinbase_count: 50,
+            unique_address_count: 200,
+            total_ckb_moved: 500_000,
+            script_counts: std::collections::HashMap::new(),
+            protocol_action_counts: std::collections::HashMap::new(),
+        };
+        store.put_daily_activity_stats(date, &original).unwrap();
+
+        // Build deltas: pretend some activity was rolled back
+        let activity_delta = DailyActivityStats {
+            transfer_count: 3,
+            coinbase_count: 1,
+            total_ckb_moved: 10_000,
+            ..Default::default()
+        };
+
+        let mut activity_date = std::collections::HashMap::new();
+        activity_date.insert(date.to_string(), activity_delta);
+
+        let deltas = RollbackStatsDeltas {
+            date: std::collections::HashMap::new(),
+            hour: std::collections::HashMap::new(),
+            date_capacity: std::collections::HashMap::new(),
+            activity_date,
+            activity_hour: std::collections::HashMap::new(),
+            miner: std::collections::HashMap::new(),
+        };
+
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_ACTIVITY_DAILY, date.as_bytes());
+        let value = bincode::serialize(&original).unwrap();
+        let mut batch = rocksdb::WriteBatch::default();
+
+        let repaired = repair_cutoff_date_stats(
+            &key,
+            &value,
+            date,
+            "2026021015",
+            &deltas,
+            &store,
+            &mut batch,
+        )
+        .unwrap();
+
+        assert!(repaired, "ACTIVITY_DAILY should be repaired, not deleted");
+
+        // Apply the batch and read back
+        store.write_batch(batch).unwrap();
+        let result = store.get_daily_activity_stats(date).unwrap().unwrap();
+        assert_eq!(result.transfer_count, 97);
+        assert_eq!(result.coinbase_count, 49);
+        assert_eq!(result.total_ckb_moved, 490_000);
+        // unique_address_count preserved
+        assert_eq!(result.unique_address_count, 200);
+    }
+
+    #[test]
+    fn test_repair_daily_block_subtracts_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let date = "20260210";
+        let original = DailyBlockStats {
+            avg_difficulty: 1000.0,
+            block_count: 720,
+            total_uncles: 5,
+            avg_block_time_ms: Some(10000),
+        };
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_DAILY_BLOCK, date.as_bytes());
+        let value = bincode::serialize(&original).unwrap();
+
+        let mut date_deltas = std::collections::HashMap::new();
+        date_deltas.insert(date.to_string(), (2i32, 10, 5, 3)); // 2 blocks rolled back
+
+        let deltas = RollbackStatsDeltas {
+            date: date_deltas,
+            hour: std::collections::HashMap::new(),
+            date_capacity: std::collections::HashMap::new(),
+            activity_date: std::collections::HashMap::new(),
+            activity_hour: std::collections::HashMap::new(),
+            miner: std::collections::HashMap::new(),
+        };
+
+        let mut batch = rocksdb::WriteBatch::default();
+        let repaired = repair_cutoff_date_stats(
+            &key,
+            &value,
+            date,
+            "2026021015",
+            &deltas,
+            &store,
+            &mut batch,
+        )
+        .unwrap();
+
+        assert!(repaired, "DAILY_BLOCK should be repaired");
+
+        // Apply batch and verify block_count was decremented
+        store.write_batch(batch).unwrap();
+        let raw = store.get_stats_key(&key).unwrap().unwrap();
+        let result: DailyBlockStats = bincode::deserialize(&raw).unwrap();
+        assert_eq!(result.block_count, 718); // 720 - 2
+    }
+
+    #[test]
+    fn test_repair_miner_preserves_unaffected() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let date = "20260210";
+        let miner_hash = [0xBB; 32];
+        let original = MinerStats {
+            miner_lock_hash: miner_hash.to_vec(),
+            blocks_count: 50,
+            last_block_number: 1000,
+        };
+
+        let suffix = [date.as_bytes(), &miner_hash[..]].concat();
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_MINER, &suffix);
+        let value = bincode::serialize(&original).unwrap();
+
+        // Empty miner deltas — this miner not rolled back
+        let deltas = RollbackStatsDeltas {
+            date: std::collections::HashMap::new(),
+            hour: std::collections::HashMap::new(),
+            date_capacity: std::collections::HashMap::new(),
+            activity_date: std::collections::HashMap::new(),
+            activity_hour: std::collections::HashMap::new(),
+            miner: std::collections::HashMap::new(),
+        };
+
+        let mut batch = rocksdb::WriteBatch::default();
+        let repaired = repair_cutoff_date_stats(
+            &key,
+            &value,
+            date,
+            "2026021015",
+            &deltas,
+            &store,
+            &mut batch,
+        )
+        .unwrap();
+
+        assert!(repaired, "unaffected MINER should be preserved (Ok(true))");
+    }
 }

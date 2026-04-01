@@ -7357,4 +7357,73 @@ mod tests {
             "fee should equal the actual miner fee ({miner_fee}), not the raw input-output diff"
         );
     }
+
+    #[test]
+    fn activity_stats_build_rows_emits_addr_set_entries() {
+        let tx_actions = TxActions {
+            tx_hash: vec![0x11; 32],
+            block_hash: vec![0x22; 32],
+            block_number: 100,
+            tx_index: 0,
+            timestamp: 1_700_000_000_000, // 2023-11-14 22:13:20 UTC
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ckbadger_store::types::ParticipantDelta {
+                lock_hash: vec![0x33; 32],
+                ckb_delta: 100_00000000,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags: 0,
+            }],
+        };
+
+        let mut acc = ActivityStatsAccumulator::default();
+        acc.apply_tx_actions(&[tx_actions]).unwrap();
+
+        let rows = acc.build_rows().unwrap();
+
+        let date_key = ckbadger_common::block_date_from_ms(1_700_000_000_000)
+            .format("%Y%m%d")
+            .to_string();
+        let hour_key = ckbadger_common::block_datetime_from_ms(1_700_000_000_000)
+            .format("%Y%m%d%H")
+            .to_string();
+
+        // Expect: ACTIVITY_DAILY row, ACTIVITY_DAILY_ADDR_SET row,
+        //         ACTIVITY_HOURLY row, ACTIVITY_HOURLY_ADDR_SET row
+        assert_eq!(
+            rows.len(),
+            4,
+            "expected 4 rows: daily + daily_addr_set + hourly + hourly_addr_set"
+        );
+
+        // Verify ACTIVITY_DAILY_ADDR_SET key and value
+        let daily_addr_set_key = keys::encode_stats_key(
+            keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET,
+            date_key.as_bytes(),
+        );
+        let daily_addr_row = rows
+            .iter()
+            .find(|r| r.key == daily_addr_set_key)
+            .expect("ACTIVITY_DAILY_ADDR_SET row must exist");
+        assert_eq!(daily_addr_row.cf_name, CF_STATS_CHAIN);
+        // Value is flat sorted 32-byte hashes; 1 participant => 32 bytes
+        assert_eq!(daily_addr_row.value.len(), 32);
+        assert_eq!(&daily_addr_row.value[..32], &[0x33; 32]);
+
+        // Verify ACTIVITY_HOURLY_ADDR_SET key and value
+        let hourly_addr_set_key = keys::encode_stats_key(
+            keys::stats_prefix::ACTIVITY_HOURLY_ADDR_SET,
+            hour_key.as_bytes(),
+        );
+        let hourly_addr_row = rows
+            .iter()
+            .find(|r| r.key == hourly_addr_set_key)
+            .expect("ACTIVITY_HOURLY_ADDR_SET row must exist");
+        assert_eq!(hourly_addr_row.cf_name, CF_STATS_CHAIN);
+        assert_eq!(hourly_addr_row.value.len(), 32);
+        assert_eq!(&hourly_addr_row.value[..32], &[0x33; 32]);
+    }
 }
