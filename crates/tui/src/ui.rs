@@ -3142,6 +3142,7 @@ fn background_task_display_name(task: &BackgroundTaskEntry) -> Cow<'static, str>
         "cache_warmup" => Cow::Borrowed("Cache Warmup"),
         "chart_warmup" => Cow::Borrowed("Chart Warmup"),
         "api_cache_refresh" => Cow::Borrowed("API Cache Refresh"),
+        "cycles_calculate" => Cow::Borrowed("Cycles Calculate"),
         _ => Cow::Owned(task.name.clone()),
     }
 }

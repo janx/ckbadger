@@ -33,7 +33,7 @@ async fn run_cycles_worker(store: Arc<CkbadgerStore>, ckb_rpc_url: String, reque
 
     // Register as Waiting.
     let _ = store.update_background_task(TASK_NAME, |entry| {
-        entry.kind = BackgroundTaskKind::Job;
+        entry.kind = BackgroundTaskKind::Watcher;
         entry.state = BackgroundTaskState::Waiting;
         entry.message = Some("Polling for requests".to_string());
     });
@@ -55,7 +55,7 @@ async fn run_cycles_worker(store: Arc<CkbadgerStore>, ckb_rpc_url: String, reque
         info!("Cycles worker: processing {} request(s)", total);
 
         let _ = store.update_background_task(TASK_NAME, |entry| {
-            entry.kind = BackgroundTaskKind::Job;
+            entry.kind = BackgroundTaskKind::Watcher;
             entry.state = BackgroundTaskState::Running;
             entry.progress_current = Some(0);
             entry.progress_total = Some(total as u64);
@@ -85,7 +85,7 @@ async fn run_cycles_worker(store: Arc<CkbadgerStore>, ckb_rpc_url: String, reque
         }
 
         let _ = store.update_background_task(TASK_NAME, |entry| {
-            entry.kind = BackgroundTaskKind::Job;
+            entry.kind = BackgroundTaskKind::Watcher;
             entry.state = BackgroundTaskState::Waiting;
             entry.progress_current = None;
             entry.progress_total = None;
