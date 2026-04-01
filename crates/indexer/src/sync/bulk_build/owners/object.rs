@@ -2530,6 +2530,12 @@ pub(crate) fn materialize_object_state_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::mnft::{MNFT_CLASS_CODE_HASH, MNFT_ISSUER_CODE_HASH, MNFT_TOKEN_CODE_HASH};
+    use crate::rpc::{
+        BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
+        TransactionView,
+    };
+    use crate::sync::bulk_build::build_object_collection_activity_rows;
     use crate::sync::bulk_build::facts::{
         CellFacts, CellProtocolFacts, CellSemanticTag, ClusterProtocolFacts, DotbitProtocolFacts,
         MnftClassProtocolFacts, MnftIssuerProtocolFacts, MnftTokenProtocolFacts, OutPointKey,
@@ -2557,6 +2563,232 @@ mod tests {
                 $($body)*
             }
         };
+    }
+
+    fn fixture_lock_script(args_hex: &str) -> Script {
+        Script {
+            code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                .to_string(),
+            hash_type: "type".to_string(),
+            args: args_hex.to_string(),
+        }
+    }
+
+    fn fixture_header(number: u64, hash_byte: u8, timestamp_ms: u64) -> HeaderView {
+        HeaderView {
+            version: "0x0".to_string(),
+            compact_target: "0x1a08a97e".to_string(),
+            timestamp: format!("0x{timestamp_ms:x}"),
+            number: format!("0x{number:x}"),
+            epoch: "0x7080006000028".to_string(),
+            parent_hash: format!("0x{}", "11".repeat(32)),
+            transactions_root: format!("0x{}", "22".repeat(32)),
+            proposals_hash: format!("0x{}", "33".repeat(32)),
+            extra_hash: format!("0x{}", "44".repeat(32)),
+            dao: format!("0x{}", "00".repeat(32)),
+            nonce: "0x1".to_string(),
+            hash: format!("0x{}", format!("{hash_byte:02x}").repeat(32)),
+        }
+    }
+
+    fn create_mnft_issuer_type_script(type_id_hex: &str) -> Script {
+        Script {
+            code_hash: MNFT_ISSUER_CODE_HASH.to_string(),
+            hash_type: "type".to_string(),
+            args: type_id_hex.to_string(),
+        }
+    }
+
+    fn create_mnft_class_type_script(issuer_id: &[u8; 20], class_index: u32) -> Script {
+        let mut args = issuer_id.to_vec();
+        args.extend_from_slice(&class_index.to_le_bytes());
+        Script {
+            code_hash: MNFT_CLASS_CODE_HASH.to_string(),
+            hash_type: "type".to_string(),
+            args: format!("0x{}", hex::encode(args)),
+        }
+    }
+
+    fn create_mnft_token_type_script(class_id: &[u8], token_index: u32) -> Script {
+        let mut args = class_id.to_vec();
+        args.extend_from_slice(&token_index.to_le_bytes());
+        Script {
+            code_hash: MNFT_TOKEN_CODE_HASH.to_string(),
+            hash_type: "type".to_string(),
+            args: format!("0x{}", hex::encode(args)),
+        }
+    }
+
+    fn create_mnft_issuer_data(class_count: u32, set_count: u32, info: Option<&str>) -> Vec<u8> {
+        let mut data = vec![0u8];
+        data.extend_from_slice(&class_count.to_be_bytes());
+        data.extend_from_slice(&set_count.to_be_bytes());
+        if let Some(info) = info {
+            data.extend_from_slice(&(info.len() as u16).to_be_bytes());
+            data.extend_from_slice(info.as_bytes());
+        }
+        data
+    }
+
+    fn create_mnft_class_data(
+        total: u32,
+        issued: u32,
+        configure: u8,
+        name: &str,
+        description: &str,
+    ) -> Vec<u8> {
+        let mut data = vec![0u8];
+        data.extend_from_slice(&total.to_be_bytes());
+        data.extend_from_slice(&issued.to_be_bytes());
+        data.push(configure);
+        data.extend_from_slice(&(name.len() as u16).to_be_bytes());
+        data.extend_from_slice(name.as_bytes());
+        data.extend_from_slice(&(description.len() as u16).to_be_bytes());
+        data.extend_from_slice(description.as_bytes());
+        data.extend_from_slice(&0u16.to_be_bytes());
+        data
+    }
+
+    fn create_mnft_token_data(characteristic: &[u8; 8], configure: u8, state: u8) -> Vec<u8> {
+        let mut data = vec![0u8];
+        data.extend_from_slice(characteristic);
+        data.push(configure);
+        data.push(state);
+        data
+    }
+
+    fn bulk_build_mnft_object_fixture() -> Vec<BlockResponseWithCycles> {
+        let issuer_id = [0x44; 20];
+        let mut class_id = issuer_id.to_vec();
+        class_id.extend_from_slice(&7u32.to_le_bytes());
+        let issuer_type_id = format!("0x{}", "ab".repeat(32));
+
+        let create_tx = TransactionView {
+            hash: format!("0x{}", "c1".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", "00".repeat(32)),
+                    index: "0xffffffff".to_string(),
+                },
+            }],
+            outputs: vec![
+                CellOutput {
+                    capacity: format!("0x{:x}", 250_00000000u64),
+                    lock: fixture_lock_script(&format!("0x{}", "0a".repeat(20))),
+                    type_: Some(create_mnft_issuer_type_script(&issuer_type_id)),
+                },
+                CellOutput {
+                    capacity: format!("0x{:x}", 260_00000000u64),
+                    lock: fixture_lock_script(&format!("0x{}", "0a".repeat(20))),
+                    type_: Some(create_mnft_class_type_script(&issuer_id, 7)),
+                },
+                CellOutput {
+                    capacity: format!("0x{:x}", 270_00000000u64),
+                    lock: fixture_lock_script(&format!("0x{}", "0a".repeat(20))),
+                    type_: Some(create_mnft_token_type_script(&class_id, 9)),
+                },
+            ],
+            outputs_data: vec![
+                format!(
+                    "0x{}",
+                    hex::encode(create_mnft_issuer_data(
+                        1,
+                        0,
+                        Some(r#"{"name":"Test Issuer"}"#)
+                    ))
+                ),
+                format!(
+                    "0x{}",
+                    hex::encode(create_mnft_class_data(
+                        100,
+                        1,
+                        3,
+                        "Genesis Class",
+                        "class description"
+                    ))
+                ),
+                format!(
+                    "0x{}",
+                    hex::encode(create_mnft_token_data(&[1, 2, 3, 4, 5, 6, 7, 8], 1, 0))
+                ),
+            ],
+            witnesses: vec!["0x".to_string()],
+        };
+
+        let transfer_tx = TransactionView {
+            hash: format!("0x{}", "d1".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: create_tx.hash.clone(),
+                    index: "0x2".to_string(),
+                },
+            }],
+            outputs: vec![CellOutput {
+                capacity: format!("0x{:x}", 270_00000000u64),
+                lock: fixture_lock_script(&format!("0x{}", "0b".repeat(20))),
+                type_: Some(create_mnft_token_type_script(&class_id, 9)),
+            }],
+            outputs_data: vec![format!(
+                "0x{}",
+                hex::encode(create_mnft_token_data(&[1, 2, 3, 4, 5, 6, 7, 8], 1, 0))
+            )],
+            witnesses: vec!["0x".to_string()],
+        };
+
+        let consume_tx = TransactionView {
+            hash: format!("0x{}", "e1".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: transfer_tx.hash.clone(),
+                    index: "0x0".to_string(),
+                },
+            }],
+            outputs: vec![],
+            outputs_data: vec![],
+            witnesses: vec!["0x".to_string()],
+        };
+
+        vec![
+            BlockResponseWithCycles {
+                block: BlockView {
+                    header: fixture_header(14_002_000, 0x91, 1_700_100_000_000),
+                    uncles: vec![],
+                    transactions: vec![create_tx],
+                    proposals: vec![],
+                },
+                cycles: None,
+            },
+            BlockResponseWithCycles {
+                block: BlockView {
+                    header: fixture_header(14_002_001, 0x92, 1_700_100_010_000),
+                    uncles: vec![],
+                    transactions: vec![transfer_tx],
+                    proposals: vec![],
+                },
+                cycles: None,
+            },
+            BlockResponseWithCycles {
+                block: BlockView {
+                    header: fixture_header(14_002_002, 0x93, 1_700_100_020_000),
+                    uncles: vec![],
+                    transactions: vec![consume_tx],
+                    proposals: vec![],
+                },
+                cycles: None,
+            },
+        ]
     }
 
     #[test]
@@ -2892,6 +3124,81 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn object_owner_real_mnft_blocks_apply_activity_count_deltas() {
+        let issuer_id = [0x44; 20];
+        let mut class_id = issuer_id.to_vec();
+        class_id.extend_from_slice(&7u32.to_le_bytes());
+
+        let blocks = bulk_build_mnft_object_fixture();
+        let interner = IdentityInterner::default();
+        let (arena, _) =
+            build_bulk_facts_arena_from_blocks(&blocks, &interner).expect("build facts arena");
+        let resolved = BulkSequencer::default()
+            .resolve(&arena)
+            .expect("resolve facts arena");
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+
+        let mut owner = ObjectOwner::default();
+        for tx in &resolved {
+            owner.apply_tx(tx, &ctx).expect("apply tx");
+        }
+
+        let mut object_activity_count_deltas = FxHashMap::default();
+        let mut identity_activity_count_deltas = FxHashMap::default();
+        let rows = build_object_collection_activity_rows(
+            &resolved,
+            &mut object_activity_count_deltas,
+            &mut identity_activity_count_deltas,
+        )
+        .expect("build activity rows");
+
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row.cf_name == ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITIES)
+                .count(),
+            3,
+            "fixture should materialize mint, transfer, and burn rows"
+        );
+        assert_eq!(
+            object_activity_count_deltas.get(class_id.as_slice()),
+            Some(&3),
+            "fixture should accumulate three activity deltas for the mNFT class"
+        );
+        assert!(
+            identity_activity_count_deltas.is_empty(),
+            "mNFT fixture should not produce identity deltas"
+        );
+
+        owner
+            .apply_object_activity_count_deltas(&object_activity_count_deltas)
+            .expect("apply object activity deltas");
+
+        let root = unique_temp_test_dir("bulk-build-object-owner-mnft-real-blocks");
+        std::fs::create_dir_all(&root).expect("root");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("domain");
+        std::fs::create_dir_all(&append_path).expect("append");
+
+        let domain_store = CkbadgerStore::open_domain(&domain_path).expect("domain store");
+        let append_store = CkbadgerStore::open_append_only(&append_path).expect("append store");
+        let mut materializer = Materializer::new(&domain_store, &append_store);
+        owner
+            .flush_sealed(&mut materializer)
+            .expect("flush sealed object owner");
+        owner
+            .materialize_final(&mut materializer)
+            .expect("materialize object owner");
+
+        let agg = domain_store
+            .get_mnft_collection_aggregate(&class_id)
+            .expect("class aggregate read")
+            .expect("class aggregate exists");
+        assert_eq!(agg.activities_count, 3);
     }
 
     #[test]
