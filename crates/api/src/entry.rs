@@ -26,6 +26,7 @@ pub struct ApiServiceConfig {
     pub port: u16,
     pub rate_limit: u32,
     pub rate_limit_burst: u32,
+    pub slow_request_threshold_ms: u64,
     pub ckb_db_path: String,
     pub store_runtime_config: StoreRuntimeConfig,
     /// Root directory for content-addressed media blobs.
@@ -82,6 +83,7 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
         ckb_network: config.ckb_network,
         rate_limit_per_second: Some(config.rate_limit),
         rate_limit_burst: Some(config.rate_limit_burst),
+        slow_request_threshold_ms: config.slow_request_threshold_ms,
         start_background_tasks: true,
         ckb_db_path: config.ckb_db_path,
         ckb_db_cleanup: None,
@@ -448,6 +450,7 @@ mod tests {
             port: 3001,
             rate_limit: 100,
             rate_limit_burst: 200,
+            slow_request_threshold_ms: 100,
             ckb_db_path: "/ckb/data/db".to_string(),
             store_runtime_config: StoreRuntimeConfig::default(),
             dob_decode_dir: PathBuf::from("/data/media"),

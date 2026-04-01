@@ -151,6 +151,7 @@ pub struct AppConfig {
     pub ckb_network: String,
     pub rate_limit_per_second: Option<u32>,
     pub rate_limit_burst: Option<u32>,
+    pub slow_request_threshold_ms: u64,
     pub start_background_tasks: bool,
     /// Resolved path to the CKB node RocksDB directory for direct reads.
     pub ckb_db_path: String,

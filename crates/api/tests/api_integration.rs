@@ -89,6 +89,7 @@ fn test_config_with_ckb_db_path(
         ckb_network: "mainnet".to_string(),
         rate_limit_per_second: Some(1000),
         rate_limit_burst: Some(2000),
+        slow_request_threshold_ms: 100,
         start_background_tasks: false,
         ckb_db_path,
         ckb_db_cleanup,

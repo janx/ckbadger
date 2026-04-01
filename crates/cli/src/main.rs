@@ -408,6 +408,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 port: config.api.port,
                 rate_limit: config.api.rate_limit,
                 rate_limit_burst: config.api.rate_limit_burst,
+                slow_request_threshold_ms: config.api.slow_request_threshold_ms,
                 ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
                 store_runtime_config,
                 dob_decode_dir: work.dob_decode_dir.clone(),
