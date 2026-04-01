@@ -36,7 +36,7 @@ const BUILD_VERSION: &str = env!("CKBADGER_BUILD_VERSION");
 const FD_LIMIT_MIN: u64 = 4096;
 
 /// Target fd limit we attempt to raise to.
-const FD_LIMIT_TARGET: u64 = 65536;
+const FD_LIMIT_TARGET: u64 = 65535;
 
 /// Attempt to raise the process fd limit to [`FD_LIMIT_TARGET`].
 ///
