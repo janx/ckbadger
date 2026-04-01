@@ -265,6 +265,62 @@ fn tx_slice_claimed_dao_compensation(
     Ok(claimed)
 }
 
+/// Correct fees for DAO withdrawal-completion txs in the live-sync pipeline.
+///
+/// The parser stage cannot compute the real miner fee for these txs because
+/// DAO compensation (interest) makes outputs > inputs. It sets fee=0.
+/// After `pre_compute_dao_compensations` runs, we can add compensation to
+/// the input side and derive the correct fee = (inputs + compensation) - outputs.
+fn correct_dao_withdrawal_fees(
+    all_tx_data: &mut [TxData],
+    dao_compensations: &HashMap<(Vec<u8>, i16), i64>,
+) -> Result<()> {
+    for tx_data in all_tx_data.iter_mut() {
+        if tx_data.is_cellbase || tx_data.fee != 0 {
+            continue;
+        }
+        // Sum DAO compensation for all inputs in this tx
+        let mut total_compensation: i64 = 0;
+        for input in &tx_data.inputs {
+            let key = (
+                input.previous_tx_hash.to_vec(),
+                parsed_input_outpoint_index_i16(input.previous_output_index, "dao_fee_correct")?,
+            );
+            if let Some(&comp) = dao_compensations.get(&key) {
+                total_compensation = total_compensation.checked_add(comp).ok_or_else(|| {
+                    anyhow!(
+                        "DAO compensation overflow in fee correction: tx=0x{} block={}",
+                        hex::encode(tx_data.hash),
+                        tx_data.block_number
+                    )
+                })?;
+            }
+        }
+        if total_compensation > 0 {
+            let effective_input = tx_data
+                .total_input_capacity
+                .checked_add(total_compensation)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "effective input overflow in DAO fee correction: tx=0x{} block={}",
+                        hex::encode(tx_data.hash),
+                        tx_data.block_number
+                    )
+                })?;
+            tx_data.fee = effective_input.checked_sub(tx_data.total_output_capacity).ok_or_else(|| {
+                anyhow!(
+                    "negative fee after DAO compensation in fee correction: tx=0x{} block={} effective_input={} outputs={}",
+                    hex::encode(tx_data.hash),
+                    tx_data.block_number,
+                    effective_input,
+                    tx_data.total_output_capacity
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 /// Pre-compute DAO compensation for each withdraw-complete outpoint.
 /// This allows the activity builder to include compensation in activities
 /// without duplicating the DAO processing logic.
@@ -1114,7 +1170,7 @@ impl Indexer {
         &self,
         blocks: &[BlockResponseWithCycles],
         all_parsed_blocks: &[crate::parser::block::ParsedBlock],
-        all_tx_data: Vec<TxData>,
+        mut all_tx_data: Vec<TxData>,
         input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
@@ -1672,6 +1728,14 @@ impl Indexer {
             dao_withdraw_outpoints = dao_withdraw_outpoints_from_map(&consumed_dao_map);
             dao_compensations =
                 pre_compute_dao_compensations(self.writer.store(), &consumed_dao_map)?;
+
+            // Correct fees for DAO withdrawal-completion txs.
+            // The parser stage sets fee=0 for these txs (outputs > inputs)
+            // because it doesn't have DAO compensation data. Now that
+            // dao_compensations is available, re-compute the correct miner fee.
+            if !dao_compensations.is_empty() {
+                correct_dao_withdrawal_fees(&mut all_tx_data, &dao_compensations)?;
+            }
 
             // Build a same-batch deposit map for deposits created in this
             // batch that may also be consumed within the same batch.
