@@ -11,6 +11,7 @@ use std::sync::Arc;
 use crate::response::{ok, ApiError, ApiResult};
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
 use crate::AppState;
+use tracing::instrument;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -159,6 +160,7 @@ fn append_consumed_by_relation(
     }
 }
 
+#[instrument(skip(state), level = "debug")]
 async fn get_cell_graph(
     State(state): State<Arc<AppState>>,
     Path((tx_hash, output_index)): Path<(String, i32)>,
@@ -311,6 +313,7 @@ async fn get_cell_graph(
     ok(GraphResponse { nodes, links })
 }
 
+#[instrument(skip(state), level = "debug")]
 async fn get_tx_graph(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
@@ -559,6 +562,7 @@ pub struct ProposalCommitmentWindow {
     pub latest_commit_block: i64,
 }
 
+#[instrument(skip(state), level = "debug")]
 async fn get_proposal_graph(
     State(state): State<Arc<AppState>>,
     Path(block_number): Path<i64>,

@@ -21,6 +21,7 @@ use crate::response::{
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
 use crate::utils::script_to_address;
 use crate::AppState;
+use tracing::instrument;
 
 /// (block_number, tx_hash, tx_index, tx_index_entry, block_hash)
 type TxListEntry = (i64, Vec<u8>, i32, ckbadger_store::TxIndexEntry, Vec<u8>);
@@ -372,6 +373,7 @@ async fn list_transactions(
     }
 }
 
+#[instrument(skip(state), level = "debug")]
 async fn get_transaction(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
@@ -674,6 +676,7 @@ fn resolve_stored_input_type_hash_type(
     }
 }
 
+#[instrument(skip(state), level = "debug")]
 async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
@@ -1853,6 +1856,7 @@ impl Default for CommitmentWindow {
     }
 }
 
+#[instrument(skip(state), level = "debug")]
 async fn get_transaction_lifecycle(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,

@@ -18,6 +18,7 @@ use crate::response::{
 };
 use crate::utils::{script_to_address, shannon_to_ckb, shannon_to_ckb_signed};
 use crate::AppState;
+use tracing::instrument;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
 const DAO_STATS_CACHE_TTL: Duration = Duration::from_secs(30);
@@ -712,6 +713,7 @@ fn dao_latest_to_response(
     }
 }
 
+#[instrument(skip(state), level = "debug")]
 async fn get_address_dao_summary(
     State(state): State<Arc<AppState>>,
     Path(lock_hash): Path<String>,
@@ -832,6 +834,7 @@ async fn get_address_dao_summary(
     ok(response)
 }
 
+#[instrument(skip(state), level = "debug")]
 async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStatisticsResponse> {
     let (latest_block_number, latest_ar, tip_timestamp, tip_s) =
         resolve_latest_block_and_ar(&state, "statistics")?;
@@ -1027,6 +1030,7 @@ fn format_deposit_days(days: f64) -> String {
     }
 }
 
+#[instrument(skip(state), level = "debug")]
 async fn calculate_compensation(
     State(state): State<Arc<AppState>>,
     Query(params): Query<CalculatorParams>,

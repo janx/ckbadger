@@ -18,6 +18,7 @@ use crate::warmup::{
     CACHE_KEY_SCRIPTS_NAMED,
 };
 use crate::AppState;
+use tracing::instrument;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new().route("/search", get(search))
@@ -232,6 +233,7 @@ fn normalized_query_for_response(query: &str) -> String {
     trimmed.to_string()
 }
 
+#[instrument(skip(state), level = "debug")]
 async fn search(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SearchParams>,

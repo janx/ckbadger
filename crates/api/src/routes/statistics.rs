@@ -23,6 +23,7 @@ use crate::warmup::{
     CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN, CACHE_KEY_SCRIPTS_ALL,
 };
 use crate::AppState;
+use tracing::instrument;
 
 fn load_script_infos_cached(
     state: &Arc<AppState>,
@@ -166,6 +167,7 @@ pub struct CapacityCategory {
     pub percentage: String,
 }
 
+#[instrument(skip(state), level = "debug")]
 async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<NetworkStats> {
     let mut stats = if let Some(cached) = state
         .cache
@@ -199,6 +201,7 @@ async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<Netw
     ok(stats)
 }
 
+#[instrument(skip(state), level = "debug")]
 async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsResponse> {
     let cache_key = "statistics:tx-stats";
     if let Some(cached) = state.cache.get::<TxStatsResponse>(cache_key).await {
@@ -3316,6 +3319,7 @@ async fn get_activity_summary_24h(
     ok(result)
 }
 
+#[instrument(skip(state), level = "debug")]
 async fn get_asset_ecosystem(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<AssetEcosystemResponse> {
