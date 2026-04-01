@@ -14,7 +14,7 @@ use ckbadger_common::{BackgroundTaskKind, BackgroundTaskState};
 use ckbadger_store::AddressBalance;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
@@ -33,6 +33,51 @@ pub const CACHE_KEY_SCRIPTS_NAMED: &str = "scripts:named";
 pub const CACHE_KEY_SCRIPT_VERSIONS_ALL: &str = "scripts:versions:all";
 const ADDRESS_CACHE_LIMIT: usize = 500;
 const SPORE_CACHE_LIMIT: usize = 100_000;
+
+/// Typed, pre-indexed spore cache. Built once at warmup, replaced atomically.
+/// Eliminates per-request JSON deserialization of the full spore dataset.
+pub struct SporeCache {
+    /// All spores sorted by created_at_block descending.
+    pub all: Vec<(Vec<u8>, ckbadger_store::ObjectEntry)>,
+    /// Indexes into `all` where is_live == true (preserves desc order).
+    pub live_indices: Vec<usize>,
+    /// owner_lock_hash -> sorted indexes into `all` (live spores only).
+    pub by_owner: HashMap<Vec<u8>, Vec<usize>>,
+    /// (index into `all`, lowercased name) for name-search.
+    /// Non-cluster spores with a name only. Sorted by created_at_block desc.
+    pub name_index: Vec<(usize, String)>,
+}
+
+impl SporeCache {
+    /// Build a SporeCache from a pre-sorted (desc by created_at_block) spore list.
+    pub fn build(all: Vec<(Vec<u8>, ckbadger_store::ObjectEntry)>) -> Self {
+        let mut live_indices = Vec::new();
+        let mut by_owner: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+        let mut name_index = Vec::new();
+
+        for (i, (_id, entry)) in all.iter().enumerate() {
+            if entry.is_live {
+                live_indices.push(i);
+                if let Some(ref owner) = entry.owner_lock_hash {
+                    by_owner.entry(owner.clone()).or_default().push(i);
+                }
+            }
+
+            if !entry.standard.is_cluster() {
+                if let Some(ref name) = entry.name {
+                    name_index.push((i, name.to_ascii_lowercase()));
+                }
+            }
+        }
+
+        SporeCache {
+            all,
+            live_indices,
+            by_owner,
+            name_index,
+        }
+    }
+}
 
 /// Cached asset entry with pre-computed metrics, ready for API serving.
 #[derive(Clone, Serialize, Deserialize)]
@@ -1120,6 +1165,7 @@ mod tests {
     use super::*;
     use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
     use ckbadger_common::{BackgroundTaskEntry, BackgroundTaskKind};
+    use ckbadger_store::{ObjectEntry, ObjectExtra, ObjectStandard, SporeMediaProfile};
 
     fn compact_to_difficulty(compact: i64) -> u64 {
         let difficulty = ckb_compact_to_difficulty(compact as u32);
@@ -1270,5 +1316,82 @@ mod tests {
         assert_eq!(entry.elapsed_ms, Some(987.5));
         assert_eq!(entry.error.as_deref(), Some("rpc timeout"));
         assert_eq!(entry.last_trigger_reason.as_deref(), Some("new_tip"));
+    }
+
+    fn make_entry(
+        block: i64,
+        is_live: bool,
+        owner: Option<Vec<u8>>,
+        name: Option<&str>,
+        is_cluster: bool,
+    ) -> ObjectEntry {
+        ObjectEntry {
+            standard: if is_cluster {
+                ObjectStandard::SporeCluster
+            } else {
+                ObjectStandard::Spore
+            },
+            collection_id: None,
+            token_id: None,
+            owner_lock_hash: owner,
+            name: name.map(|s| s.to_string()),
+            description: None,
+            is_live,
+            created_at_block: block,
+            created_at_tx: vec![0x11; 32],
+            extra: ObjectExtra::Spore {
+                content_type: "text/plain".to_string(),
+                content_length: 5,
+                media_profile: SporeMediaProfile::default(),
+            },
+        }
+    }
+
+    #[test]
+    fn test_spore_cache_build_indexes() {
+        let owner_a = vec![0xAA; 32];
+        let owner_b = vec![0xBB; 32];
+        let spores = vec![
+            (
+                vec![0x01; 32],
+                make_entry(300, true, Some(owner_a.clone()), Some("Alpha"), false),
+            ),
+            (
+                vec![0x02; 32],
+                make_entry(200, false, Some(owner_a.clone()), Some("Beta"), false),
+            ),
+            (
+                vec![0x03; 32],
+                make_entry(100, true, Some(owner_b.clone()), Some("Gamma"), false),
+            ),
+            (
+                vec![0x04; 32],
+                make_entry(50, true, Some(owner_a.clone()), None, false),
+            ),
+            (
+                vec![0x05; 32],
+                make_entry(25, true, None, Some("Cluster One"), true),
+            ),
+        ];
+
+        let cache = SporeCache::build(spores);
+
+        assert_eq!(cache.all.len(), 5);
+        assert_eq!(cache.live_indices, vec![0, 2, 3, 4]);
+        assert_eq!(cache.by_owner.get(&owner_a).unwrap(), &vec![0, 3]);
+        assert_eq!(cache.by_owner.get(&owner_b).unwrap(), &vec![2]);
+        assert_eq!(cache.name_index.len(), 3);
+        assert_eq!(cache.name_index[0], (0, "alpha".to_string()));
+        assert_eq!(cache.name_index[1], (1, "beta".to_string()));
+        assert_eq!(cache.name_index[2], (2, "gamma".to_string()));
+    }
+
+    #[test]
+    fn test_spore_cache_empty() {
+        let cache = SporeCache::build(vec![]);
+        assert!(cache.all.is_empty());
+        assert!(cache.live_indices.is_empty());
+        assert!(cache.by_owner.is_empty());
+        assert!(cache.name_index.is_empty());
     }
 }
