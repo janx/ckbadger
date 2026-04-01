@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-const CELL_PX = 10;
-const STEP_EVERY = 9;
+const CELL_PX = 28;
+const STEP_EVERY = 50;
 
 /* Vertex */
 const VERT = `
@@ -11,7 +11,8 @@ attribute vec2 a;
 void main(){gl_Position=vec4(a,0,1);}
 `;
 
-/* Simulation — GoL B3/S23 + diagonal spawn waves */
+/* Simulation — GoL B3/S23 + sparse spawn
+   r = alive, g = phase (fade in/out), b = birth offset (set once, frozen) */
 const SIM = `
 precision highp float;
 uniform sampler2D u_s;
@@ -21,7 +22,7 @@ float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 void main(){
   vec2 uv=gl_FragCoord.xy*u_t;
   vec4 s=texture2D(u_s,uv);
-  float a=step(.5,s.r),b=s.g,nx=a;
+  float a=step(.5,s.r),ph=s.g,off=s.b,nx=a;
   if(u_step>.5){
     float n=0.;
     for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++){
@@ -29,20 +30,24 @@ void main(){
       n+=step(.5,texture2D(u_s,uv+vec2(float(x),float(y))*u_t).r);
     }
     nx=a>.5?(n>1.5&&n<3.5?1.:0.):(n>2.5&&n<3.5?1.:0.);
-    float w1=sin(uv.x*6.28+uv.y*4.2+u_seed*.12);
-    float w2=sin(uv.x*3.5-uv.y*5.8+u_seed*.09+2.);
-    float sp=max(smoothstep(.92,1.,w1)*.30,smoothstep(.94,1.,w2)*.20);
+    float w1=sin(uv.x*6.28+uv.y*4.2+u_seed*.03);
+    float w2=sin(uv.x*3.5-uv.y*5.8+u_seed*.02+2.);
+    float sp=max(smoothstep(.98,1.,w1)*.07,smoothstep(.985,1.,w2)*.05);
     float r=h(gl_FragCoord.xy*.37+u_seed);
-    float inj=max(step(1.-sp,r),step(.999,r));
+    float inj=max(step(1.-sp,r),step(.9999,r));
     nx=max(nx,inj);
-    if(inj>.5&&b<.01)b=.5;
   }
-  b=nx>.5?min(1.,b+.025):max(0.,b-.006);
-  gl_FragColor=vec4(nx,b,0,1);
+  ph=nx>.5?min(1.,ph+.020):max(0.,ph-.002);
+  // set birth offset once
+  if(a<.5&&nx>.5) off=h(gl_FragCoord.xy*.73+u_seed*1.1);
+  gl_FragColor=vec4(nx,ph,off,1);
 }
 `;
 
-/* Render — plasma cells + bloom + CRT */
+/* Render — innate identity diversity + breathing + bloom
+   Each cell's personality is determined by its grid position (hash),
+   NOT by age or life stage. Diversity is who you ARE, not how old you are.
+   h1 = color identity, h2 = size/bloom character, h3 = breathing rhythm */
 const RENDER = `
 precision highp float;
 uniform sampler2D u_s;
@@ -55,54 +60,72 @@ void main(){
   vec2 uv=gl_FragCoord.xy/u_r;
   vec2 cell=uv*u_g, id=floor(cell), fr=fract(cell), tx=1./u_g;
 
-  vec3 col=vec3(.031,.035,.055);
-  vec3 jade=vec3(.18,.86,.64), aqua=vec3(.41,.80,.94);
-  vec3 rouge=vec3(.91,.33,.35), gold=vec3(.95,.77,.36);
+  vec3 col=vec3(.018,.020,.038);
+
+  // color palette endpoints
+  vec3 jade=vec3(.18,.86,.64);
+  vec3 aqua=vec3(.35,.75,.95);
+  vec3 gold=vec3(.92,.72,.28);
+  vec3 rose=vec3(.85,.40,.55);
+  vec3 lilac=vec3(.60,.45,.85);
 
   // 5x5 neighborhood for wide bloom
   for(int iy=-2;iy<=2;iy++){
     for(int ix=-2;ix<=2;ix++){
       vec2 nId=id+vec2(float(ix),float(iy));
       vec4 st=texture2D(u_s,(nId+.5)*tx);
-      float br=st.g;
-      if(br<.003)continue;
+      float ph=st.g, off=st.b;
+      if(ph<.003)continue;
 
-      float alive=step(.5,st.r);
-      float dying=(1.-alive)*step(.05,br);
-      float h1=fract(sin(dot(nId,vec2(13.7,7.3)))*437.5);
+      // --- Three independent identity hashes (innate, permanent) ---
+      float h1=fract(sin(dot(nId,vec2(13.7,7.3)))*437.5);   // color
+      float h2=fract(sin(dot(nId,vec2(91.3,47.1)))*317.8);   // size & bloom
+      float h3=fract(sin(dot(nId,vec2(53.9,29.4)))*641.2);   // rhythm
+
+      // --- Color identity: 5-stop gradient, each cell picks its hue ---
+      vec3 cellCol;
+      float ci=h1*4.;
+      if(ci<1.) cellCol=mix(jade,aqua,ci);
+      else if(ci<2.) cellCol=mix(aqua,gold,ci-1.);
+      else if(ci<3.) cellCol=mix(gold,rose,ci-2.);
+      else cellCol=mix(rose,lilac,ci-3.);
+
+      // --- Breathing: rhythm is personality, not life stage ---
+      float bSpeed=mix(.20,.55,h3);           // some naturally slow, some quick
+      float bDepth=mix(.08,.30,1.-h3);        // slow breathers go deeper
+      float breath=sin(u_time*bSpeed+off*6.28)*.5+.5;
+      float br=ph*mix(1.-bDepth,1.,breath);
+
+      // smooth fade on death (no binary jump)
+      float fade=smoothstep(0.,.4,ph);
 
       vec2 lp=fr-vec2(float(ix)+.5,float(iy)+.5);
       float d=length(lp);
       float cheby=max(abs(lp.x),abs(lp.y));
 
-      // --- Bloom: dominant layer, everything is glow ---
-      float bloom=exp(-d*d*1.0)*.28     // huge atmospheric wash
-                 +exp(-d*d*3.0)*.18     // mid halo
-                 +exp(-d*d*10.)*.10;    // core concentration
+      // --- Size identity: some cells naturally large, some small (square) ---
+      float coreSz=mix(.24,.50,h2);
+      float fill=smoothstep(coreSz+.04,coreSz-.10,cheby);
 
-      // --- Soft square core (barely visible shape hint) ---
-      float sz=.44;
-      float noiseEdge=h(nId*3.7+floor(lp*14.)*.1)*.10-.05;
-      float fuzzSz=sz+noiseEdge;
-      float fill=smoothstep(fuzzSz+.06,fuzzSz-.14,cheby);
+      // --- Bloom identity: small-core cells → wide soft glow (star),
+      //     large-core cells → tight focused glow (ember) ---
+      float bw1=mix(.35,1.2,h2);     // small→wide atmosphere, large→tight
+      float bw2=mix(1.5,4.0,h2);     // same logic for mid halo
+      float ba1=mix(.35,.18,h2);      // small→strong wash, large→subtle
+      float bloom=exp(-d*d*bw1)*ba1
+                 +exp(-d*d*bw2)*.16
+                 +exp(-d*d*10.)*.06;
 
-      // --- Plasma wave inside ---
-      float pf=10.;
-      float p1=sin(lp.x*pf+u_time*2.+h1*6.28);
-      float p2=sin(lp.y*pf-u_time*1.6+h1*3.14);
-      float pw=(p1*p2)*.5+.5;
+      // --- Subtle inner shimmer at cell's own tempo ---
+      float shim=sin(d*8.+u_time*mix(.3,.6,h1)+h1*6.28)*.5+.5;
+      vec3 pc=mix(cellCol,cellCol*1.2,shim*.15);
+      pc=mix(pc*vec3(.4,.45,.5),pc,fade);  // desaturate on death
+      float pi=mix(.12,.42,fade);
 
-      vec3 pc=mix(jade,aqua,pw);
-      pc=mix(pc,gold,smoothstep(.82,1.,pw)*.25);
-      pc=mix(pc,rouge*.6,dying*.8);
-      float pi=mix(.45,.15,dying);
+      vec3 bc=mix(cellCol*.6,pc,.3);
 
-      // --- Bloom color (plasma-tinted) ---
-      vec3 bc=mix(mix(jade,aqua,h1*.3),pc,.3);
-      bc=mix(bc,rouge*.4,dying*.6);
-
-      col+=pc*fill*pi*br*.5;  // faint plasma core hint
-      col+=bc*bloom*br;       // dominant bloom wash
+      col+=pc*fill*pi*br*.6;   // core
+      col+=bc*bloom*br;        // atmosphere
     }
   }
 
@@ -110,14 +133,14 @@ void main(){
   vec2 c=(gl_FragCoord.xy-u_r*.5)/u_r.y;
   float ty=mod(u_time*.15,1.)*2.-1.;
   float tear=smoothstep(.015,0.,abs(c.y-ty))*step(fract(u_time*.27),.12);
-  col.r+=tear*.20; col.b-=tear*.08;
+  col.r+=tear*.15; col.b-=tear*.06;
 
   // --- Film grain ---
-  col+=(h(gl_FragCoord.xy+fract(u_time*37.)*773.)-.5)*.015;
+  col+=(h(gl_FragCoord.xy+fract(u_time*37.)*773.)-.5)*.012;
 
-  // --- Vignette ---
-  float vig=1.-dot(c,c)*1.5;
-  col*=smoothstep(0.,.55,vig);
+  // --- Vignette (deep) ---
+  float vig=1.-dot(c,c)*2.0;
+  col*=smoothstep(0.,.45,vig);
 
   // --- Chromatic aberration ---
   float ed=length(c);
@@ -181,11 +204,11 @@ function tex(gl: WebGLRenderingContext, w: number, h: number, d: Uint8Array | nu
 function seed(w: number, h: number) {
   const b = new Uint8Array(w * h * 4);
   for (let i = 0; i < w * h; i++) {
-    const a = Math.random() < 0.28 ? 255 : 0,
+    const a = Math.random() < 0.045 ? 255 : 0,
       o = i * 4;
     b[o] = a;
-    b[o + 1] = a ? 180 : 0;
-    b[o + 2] = 0;
+    b[o + 1] = a ? 230 : 0; // high initial phase
+    b[o + 2] = a ? Math.floor(Math.random() * 255) : 0; // breathing offset
     b[o + 3] = 255;
   }
   return b;

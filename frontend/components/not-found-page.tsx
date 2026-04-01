@@ -150,7 +150,7 @@ export function NotFoundPage({ errMessage }: NotFoundPageProps = {}) {
       <Header />
 
       {/* Content section */}
-      <section className="relative z-20 flex h-full items-center justify-center">
+      <section className="relative z-20 flex h-full items-center justify-center pb-24">
         <div className="flex flex-col items-center gap-8">
           {/* Glitch 404 text */}
           <div
