@@ -71,7 +71,12 @@ export default function BlockDetailPage() {
     queryKey: ['block-fee-stats', id],
     queryFn: () => api.getBlockFeeStats(id),
     enabled: !!block,
-    refetchInterval: (query) => (query.state.data?.cyclesPending ? 3000 : false),
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      if (!d) return false;
+      // Keep polling while cycles are pending or total is still zero (worker hasn't finished)
+      return d.cyclesPending || (d.totalCycles === 0 && d.transactionCount > 0) ? 3000 : false;
+    },
   });
 
   const { data: proposals } = useQuery({
@@ -305,10 +310,11 @@ export default function BlockDetailPage() {
                         <span className="text-text-dim text-xs italic">(partial)</span>
                       )}
                     </span>
-                  ) : feeStats?.cyclesPending ? (
+                  ) : feeStats?.cyclesPending ||
+                    (feeStats && feeStats.totalCycles === 0 && feeStats.transactionCount > 0) ? (
                     <span className="text-text-dim italic">Calculating...</span>
                   ) : (
-                    <span className="text-text-dim italic">Calculating...</span>
+                    <span className="text-text-dim">-</span>
                   )}
                 </DataField>
                 <DataField label="Uncle Count">{block.unclesCount}</DataField>
