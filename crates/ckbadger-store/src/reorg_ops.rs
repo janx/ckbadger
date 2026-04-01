@@ -3191,6 +3191,38 @@ impl CkbadgerStore {
                 )
             })?;
         }
+        // Sum surviving daily deltas to restore cumulative capacity on each cluster aggregate.
+        {
+            let prefix = [keys::STATS_PREFIX_CLUSTER_DAILY];
+            let iter = self.prefix_iterator_cf(self.cf_stats_spore(), &prefix);
+            for item in iter {
+                let (key, value) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate cluster daily deltas during rollback capacity repair: {}",
+                        e
+                    )
+                })?;
+                if !key.starts_with(&prefix) {
+                    break;
+                }
+                if key.len() != keys::CLUSTER_DAILY_KEY_SIZE {
+                    continue;
+                }
+                let (cluster_id_bytes, _date) = keys::decode_cluster_daily_key(&key);
+                let delta: ClusterDailyDelta = bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize cluster daily delta during rollback capacity repair: cluster_id=0x{}, error={}",
+                        bytes_to_hex(&cluster_id_bytes),
+                        e
+                    )
+                })?;
+                if let Some(agg) = cluster_aggs.get_mut(&cluster_id_bytes) {
+                    agg.owned_capacity += delta.owned_capacity_delta;
+                    agg.owned_knowledge += delta.owned_knowledge_delta;
+                }
+            }
+        }
+
         for (cluster_id, agg) in &mut cluster_aggs {
             agg.owner_count = cluster_owner_totals.get(cluster_id).copied().unwrap_or(0);
             let encoded = bincode::serialize(agg).map_err(|e| {
@@ -5844,6 +5876,81 @@ mod tests {
             .unwrap();
         assert_eq!(class_agg.total_count, 1);
         assert_eq!(class_agg.live_count, 1);
+    }
+
+    #[test]
+    fn test_rollback_repair_recomputes_cluster_capacity() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let cluster_id = vec![0x11u8; 32];
+        let spore_id = vec![0x22u8; 32];
+        let owner = vec![0xAAu8; 32];
+
+        // Seed block header 200 so rollback_to_block(200) can update sync status.
+        let header200 = CachedBlockHeader {
+            hash: vec![0xC8; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_780_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 0,
+            cycles: None,
+        };
+
+        // Seed: one live spore in cluster, with daily deltas
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(200, &header200);
+        batch.put_spore(
+            &spore_id,
+            &ObjectEntry {
+                standard: ObjectStandard::Spore,
+                collection_id: Some(cluster_id.clone()),
+                token_id: None,
+                owner_lock_hash: Some(owner.clone()),
+                name: None,
+                description: None,
+                is_live: true,
+                created_at_block: 100,
+                created_at_tx: vec![0x01; 32],
+                extra: ObjectExtra::Spore {
+                    content_type: "image/png".to_string(),
+                    content_length: 8,
+                    media_profile: SporeMediaProfile {
+                        tier: CompositionTier::PureCkb,
+                        ..Default::default()
+                    },
+                },
+            },
+        );
+        batch.put_spore_by_cluster(&cluster_id, &spore_id);
+        batch.put_cluster_daily_delta(
+            &cluster_id,
+            20260101,
+            &ClusterDailyDelta {
+                owned_capacity_delta: 500,
+                owned_knowledge_delta: 200,
+            },
+        );
+        batch.put_cluster_daily_delta(
+            &cluster_id,
+            20260102,
+            &ClusterDailyDelta {
+                owned_capacity_delta: 300,
+                owned_knowledge_delta: 100,
+            },
+        );
+        batch.put_cluster_owner_count(&cluster_id, &owner, 1);
+        batch.commit().unwrap();
+
+        // Run rollback (rollback_to > created_at_block so spore survives)
+        store.rollback_to_block(200).unwrap();
+
+        let agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
+        assert_eq!(agg.owned_capacity, 800); // 500 + 300
+        assert_eq!(agg.owned_knowledge, 300); // 200 + 100
     }
 
     #[test]
