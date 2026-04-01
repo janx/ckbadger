@@ -95,6 +95,17 @@ pub fn print_discovery(discovery: &Discovery) {
         }
     );
     println!(
+        "  dao_deposit_capacity: {}",
+        p.dao_deposit_capacity.as_deref().unwrap_or("(none)")
+    );
+    println!(
+        "  dao_deposit_block:    {}",
+        p.dao_deposit_block
+            .map(|b| b.to_string())
+            .as_deref()
+            .unwrap_or("(none)")
+    );
+    println!(
         "  token_type_hashes:    [{}]",
         p.token_type_hashes.join(", ")
     );
@@ -399,7 +410,7 @@ async fn discover_params(
             }
         }
 
-        // dao_deposit_outpoint from /dao/deposits?limit=1
+        // dao deposit params from /dao/deposits?limit=1
         let deposits = fetch_json(client, &format!("{}/dao/deposits?limit=1", base)).await?;
         if let Some(first) = data_array(&deposits).and_then(|arr| arr.first()) {
             let tx_hash = first
@@ -413,6 +424,14 @@ async fn discover_params(
                 .unwrap_or(0) as u32;
             if !tx_hash.is_empty() {
                 params.dao_deposit_outpoint = Some((tx_hash, output_index));
+            }
+            // Extract capacity and deposit_block for /dao/calculator
+            if let (Some(capacity), Some(block)) = (
+                first.get("capacity").and_then(|v| v.as_str()),
+                first.get("depositBlockNumber").and_then(|v| v.as_i64()),
+            ) {
+                params.dao_deposit_capacity = Some(capacity.to_string());
+                params.dao_deposit_block = Some(block);
             }
         }
     }
@@ -507,16 +526,12 @@ async fn discover_params(
         }
     }
 
-    // script_names from /scripts?limit=3
+    // script_names from /scripts?limit=3 (use "name" for /scripts/{name} lookup)
     let scripts = fetch_json(client, &format!("{}/scripts?limit=3", base)).await?;
     if let Some(arr) = data_array(&scripts) {
         params.script_names = arr
             .iter()
-            .filter_map(|item| {
-                item.get("familyId")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-            })
+            .filter_map(|item| item.get("name").and_then(|v| v.as_str()).map(String::from))
             .collect();
     }
 
@@ -532,11 +547,7 @@ async fn discover_params(
     if let Some(arr) = data_array(&top_scripts) {
         params.top_script_names = arr
             .iter()
-            .filter_map(|item| {
-                item.get("familyId")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-            })
+            .filter_map(|item| item.get("name").and_then(|v| v.as_str()).map(String::from))
             .collect();
     }
 

@@ -64,9 +64,10 @@ pub fn entries() -> Vec<EndpointEntry> {
             path_template: "/dao/calculator",
             description: "DAO compensation calculator",
             resolve: Box::new(|base, p| {
-                let (h, i) = p.dao_deposit_outpoint.as_ref()?;
+                let capacity = p.dao_deposit_capacity.as_ref()?;
+                let block = p.dao_deposit_block?;
                 Some(get(&format!(
-                    "{base}/dao/calculator?tx_hash={h}&output_index={i}"
+                    "{base}/dao/calculator?capacity={capacity}&deposit_block={block}"
                 )))
             }),
             expect_status: 200,
@@ -96,9 +97,21 @@ pub fn entries() -> Vec<EndpointEntry> {
         EndpointEntry {
             module: "dao",
             method: Method::Get,
-            path_template: "/dao/charts/deposit-rate",
-            description: "DAO deposit rate chart",
-            resolve: Box::new(|base, _p| Some(get(&format!("{base}/dao/charts/deposit-rate")))),
+            path_template: "/dao/charts/daily-depositors",
+            description: "DAO daily depositors chart",
+            resolve: Box::new(|base, _p| Some(get(&format!("{base}/dao/charts/daily-depositors")))),
+            expect_status: 200,
+            risk_tier: RiskTier::Medium,
+            read_pattern: ReadPattern::Aggregation,
+        },
+        EndpointEntry {
+            module: "dao",
+            method: Method::Get,
+            path_template: "/dao/charts/circulation-ratio",
+            description: "DAO circulation ratio chart",
+            resolve: Box::new(|base, _p| {
+                Some(get(&format!("{base}/dao/charts/circulation-ratio")))
+            }),
             expect_status: 200,
             risk_tier: RiskTier::Medium,
             read_pattern: ReadPattern::Aggregation,

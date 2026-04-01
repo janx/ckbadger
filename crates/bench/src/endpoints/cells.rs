@@ -16,11 +16,13 @@ pub fn entries() -> Vec<EndpointEntry> {
             module: "cells",
             method: Method::Get,
             path_template: "/cells/by-script",
-            description: "List cells by lock script hash",
-            resolve: Box::new(|base, p| {
-                let lh = p.top_lock_hashes.first()?;
+            description: "List cells by code_hash + hash_type",
+            resolve: Box::new(|base, _p| {
+                // Use DAO code_hash (type) as a well-known script
+                let dao_code_hash =
+                    "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
                 Some(get(&format!(
-                    "{base}/cells/by-script?lock_script_hash={lh}&limit=10"
+                    "{base}/cells/by-script?code_hash={dao_code_hash}&hash_type=type&limit=10"
                 )))
             }),
             expect_status: 200,

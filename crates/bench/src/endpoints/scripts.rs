@@ -16,13 +16,10 @@ pub fn entries() -> Vec<EndpointEntry> {
             module: "scripts",
             method: Method::Post,
             path_template: "/scripts/lookup",
-            description: "Lookup scripts by hash",
-            resolve: Box::new(|base, p| {
-                let name = p.script_names.first()?;
-                Some(post(
-                    &format!("{base}/scripts/lookup"),
-                    &format!(r#"{{"hashes":["{name}"]}}"#),
-                ))
+            description: "Lookup scripts by code_hash",
+            resolve: Box::new(|_base, _p| {
+                // Requires code_hash values not available from list endpoint
+                None
             }),
             expect_status: 200,
             risk_tier: RiskTier::Low,

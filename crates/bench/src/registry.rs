@@ -79,6 +79,7 @@ pub fn get(url: &str) -> ResolvedRequest {
     }
 }
 
+#[allow(dead_code)]
 pub fn post(url: &str, body: &str) -> ResolvedRequest {
     ResolvedRequest {
         url: url.to_string(),
@@ -111,6 +112,8 @@ pub struct DiscoveredParams {
     pub top_lock_hashes: Vec<String>,
     pub dao_lock_hashes: Vec<String>,
     pub dao_deposit_outpoint: Option<(String, u32)>,
+    pub dao_deposit_capacity: Option<String>,
+    pub dao_deposit_block: Option<i64>,
     pub token_type_hashes: Vec<String>,
     pub cluster_ids: Vec<String>,
     pub spore_ids: Vec<String>,

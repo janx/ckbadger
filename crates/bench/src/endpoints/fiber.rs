@@ -28,11 +28,11 @@ pub fn entries() -> Vec<EndpointEntry> {
         EndpointEntry {
             module: "fiber",
             method: Method::Get,
-            path_template: "/fiber/channels/{channel_id}/nodes",
-            description: "Get nodes for a Fiber channel",
+            path_template: "/addresses/{addr}/fiber/channels",
+            description: "Get Fiber channels for an address",
             resolve: Box::new(|base, p| {
-                let id = p.fiber_channel_id.as_ref()?;
-                Some(get(&format!("{base}/fiber/channels/{id}/nodes")))
+                let lh = p.top_lock_hashes.first()?;
+                Some(get(&format!("{base}/addresses/{lh}/fiber/channels")))
             }),
             expect_status: 200,
             risk_tier: RiskTier::Low,
