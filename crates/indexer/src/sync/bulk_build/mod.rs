@@ -3826,15 +3826,78 @@ fn resolved_tx_fee(tx: &facts::TxFacts, resolved_tx: &facts::ResolvedTxFacts<'_>
         })
     })?;
 
-    total_input_capacity
+    // For DAO withdrawal-completion inputs, the output capacity exceeds the raw
+    // input capacity because the output includes DAO compensation (interest).
+    // Add compensation to the input side so the fee reflects the actual miner fee.
+    let total_dao_compensation = resolved_tx
+        .resolved_inputs
+        .iter()
+        .try_fold(0i64, |acc, input| {
+            let compensation = match (&input.dao_state, &input.dao_compensation_ars) {
+                (
+                    Some(facts::DaoCellState::WithdrawRequest { .. }),
+                    Some(facts::DaoCompensationArs {
+                        deposit_ar,
+                        withdraw_request_ar,
+                    }),
+                ) => crate::db::writer::dao::calculate_dao_compensation_from_ar(
+                    input.capacity,
+                    *deposit_ar,
+                    *withdraw_request_ar,
+                )
+                .map_err(|e| {
+                    anyhow!(
+                        "bulk build DAO compensation error while materializing tx index: tx=0x{} block={} tx_index={} outpoint=0x{}:{}: {e}",
+                        hex::encode(tx.hash),
+                        tx.block_number,
+                        tx.tx_index,
+                        hex::encode(input.outpoint.tx_hash),
+                        input.outpoint.index
+                    )
+                })?,
+                (Some(facts::DaoCellState::WithdrawRequest { .. }), None) => {
+                    return Err(anyhow!(
+                        "bulk build missing DAO compensation ARs while materializing tx index: tx=0x{} block={} tx_index={} outpoint=0x{}:{}",
+                        hex::encode(tx.hash),
+                        tx.block_number,
+                        tx.tx_index,
+                        hex::encode(input.outpoint.tx_hash),
+                        input.outpoint.index
+                    ));
+                }
+                _ => 0i64,
+            };
+            acc.checked_add(compensation).ok_or_else(|| {
+                anyhow!(
+                    "bulk build DAO compensation overflow while materializing tx index: tx=0x{} block={} tx_index={}",
+                    hex::encode(tx.hash),
+                    tx.block_number,
+                    tx.tx_index
+                )
+            })
+        })?;
+
+    let effective_input = total_input_capacity
+        .checked_add(total_dao_compensation)
+        .ok_or_else(|| {
+            anyhow!(
+                "bulk build effective input capacity overflow while materializing tx index: tx=0x{} block={} tx_index={}",
+                hex::encode(tx.hash),
+                tx.block_number,
+                tx.tx_index
+            )
+        })?;
+
+    effective_input
         .checked_sub(total_output_capacity)
         .ok_or_else(|| {
             anyhow!(
-                "bulk build negative fee while materializing tx index: tx=0x{} block={} tx_index={} inputs={} outputs={}",
+                "bulk build negative fee while materializing tx index: tx=0x{} block={} tx_index={} inputs={} dao_compensation={} outputs={}",
                 hex::encode(tx.hash),
                 tx.block_number,
                 tx.tx_index,
                 total_input_capacity,
+                total_dao_compensation,
                 total_output_capacity
             )
         })
@@ -7105,5 +7168,129 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_resolved_tx_fee_includes_dao_compensation() {
+        // Scenario: DAO withdrawal-completion transaction.
+        //
+        // Input:  200 CKB DAO WithdrawRequest cell
+        //         deposit_ar = 10_000_000_000_000_000 (10^16)
+        //         withdraw_ar = 10_100_000_000_000_000 (1.01 * 10^16, i.e. 1% yield)
+        //
+        // The DAO compensation on a 200 CKB cell:
+        //   free_capacity = 200_00000000 - 102_00000000 = 98_00000000
+        //   gross = 98_00000000 * 10_100_000_000_000_000 / 10_000_000_000_000_000 = 98_98000000
+        //   compensation = 98_98000000 - 98_00000000 = 98000000  (0.98 CKB)
+        //
+        // Output: plain cell with capacity = input + compensation - miner_fee
+        //   miner_fee = 1_000  (1000 shannons)
+        //   output_capacity = 200_00000000 + 98000000 - 1_000 = 200_97999000
+
+        let deposit_ar: u64 = 10_000_000_000_000_000;
+        let withdraw_ar: u64 = 10_100_000_000_000_000;
+        let input_capacity: i64 = 200_00000000;
+        let miner_fee: i64 = 1_000;
+
+        let compensation = ckbadger_common::dao::calculate_dao_compensation_from_ar(
+            input_capacity,
+            deposit_ar,
+            withdraw_ar,
+        )
+        .expect("compensation should be valid");
+
+        let output_capacity = input_capacity + compensation - miner_fee;
+
+        // Build a minimal TxFacts (non-cellbase).
+        let tx = facts::TxFacts {
+            hash: [0xab; 32],
+            block_number: 1000,
+            block_hash: [0x01; 32],
+            timestamp_ms: 0,
+            block_dao_ar: withdraw_ar,
+            tx_index: 1,
+            is_cellbase: false,
+            inputs_count: 1,
+            outputs_count: 1,
+            tx_size: 100,
+            cycles: None,
+            dotbit_action: None,
+            input_outpoints: vec![],
+            output_range: 0..1,
+        };
+
+        // Build a minimal ResolvedInputFacts for the WithdrawRequest input.
+        let dummy_intern = InternId::new(0);
+        let resolved_input = ResolvedInputFacts {
+            outpoint: facts::OutPointKey::new([0xcc; 32], 0),
+            created_at_block: 900,
+            created_by_block_dao_ar: deposit_ar,
+            capacity: input_capacity,
+            occupied_capacity: 102_00000000,
+            udt_amount: None,
+            lock_script_hash_id: dummy_intern,
+            lock_code_hash_id: dummy_intern,
+            lock_hash_type: 1,
+            lock_args_id: dummy_intern,
+            type_script_hash_id: None,
+            type_code_hash_id: None,
+            type_hash_type: None,
+            type_args_id: None,
+            data_size: 0,
+            data_hash: None,
+            semantic_tag: facts::CellSemanticTag::Dao,
+            dao_state: Some(facts::DaoCellState::WithdrawRequest {
+                deposit_block_number: 900,
+            }),
+            dao_compensation_ars: Some(facts::DaoCompensationArs {
+                deposit_ar,
+                withdraw_request_ar: withdraw_ar,
+            }),
+            protocol_facts: None,
+        };
+
+        // Build a minimal output CellFacts.
+        let output_cell = facts::CellFacts {
+            outpoint: facts::OutPointKey::new([0xab; 32], 0),
+            created_at_block: 1000,
+            created_by_block_dao_ar: withdraw_ar,
+            capacity: output_capacity,
+            lock_script_hash_id: dummy_intern,
+            lock_code_hash_id: dummy_intern,
+            lock_hash_type: 1,
+            lock_args_id: dummy_intern,
+            type_script_hash_id: None,
+            type_code_hash_id: None,
+            type_hash_type: None,
+            type_args_id: None,
+            occupied_capacity: 61_00000000,
+            data_size: 0,
+            data: vec![],
+            data_hash: None,
+            udt_amount: None,
+            semantic_tag: facts::CellSemanticTag::Plain,
+            dao_state: None,
+            protocol_facts: None,
+        };
+
+        let resolved_tx = facts::ResolvedTxFacts {
+            tx_hash: tx.hash,
+            block_number: tx.block_number,
+            block_hash: tx.block_hash,
+            timestamp_ms: tx.timestamp_ms,
+            block_dao_ar: tx.block_dao_ar,
+            tx_index: tx.tx_index,
+            dotbit_action: None,
+            resolved_inputs: vec![resolved_input],
+            cells: std::borrow::Cow::Owned(vec![output_cell]),
+        };
+
+        let fee = resolved_tx_fee(&tx, &resolved_tx)
+            .expect("resolved_tx_fee should succeed for DAO withdrawal-completion");
+
+        assert_eq!(
+            fee, miner_fee,
+            "fee should equal the actual miner fee ({miner_fee}), not the raw input-output diff"
+        );
     }
 }
