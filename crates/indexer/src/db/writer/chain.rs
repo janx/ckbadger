@@ -55,7 +55,7 @@ impl BatchWriter {
                 fee: tx.fee,
                 tx_size: tx.tx_size,
                 cycles: tx.cycles,
-                semantic_tags: 0,
+                semantic_tags: tx.semantic_tags,
             };
             batch.put_tx_index(tx.block_number, tx.tx_index, &entry);
             batch.put_tx_hash_map(&tx.hash, tx.block_number, tx.tx_index);

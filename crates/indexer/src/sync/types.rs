@@ -106,6 +106,7 @@ pub(crate) struct TxData {
     pub(crate) tx_size: i32,
     pub(crate) cycles: Option<i64>,
     pub(crate) timestamp: DateTime<Utc>,
+    pub(crate) semantic_tags: u16,
 }
 
 // ── Address balance delta (accumulated per-batch) ─────────────────────

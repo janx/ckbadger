@@ -987,6 +987,7 @@ pub(super) fn parse_blocks_parallel(
                             tx_size: parsed_tx.tx_size,
                             cycles,
                             timestamp: parsed.timestamp,
+                            semantic_tags: 0,
                         })
                     })
                     .collect();
@@ -1289,11 +1290,20 @@ impl Indexer {
         }
 
         // Compute per-tx address entries for addr_txs index
-        let mut addr_tx_entries: Vec<(Vec<u8>, i64, i32, Vec<u8>)> = Vec::new();
+        // per_addr: lock_hash -> (output_cap_sum, input_cap_sum, has_outputs, has_inputs)
+        let mut addr_tx_entries: Vec<(
+            Vec<u8>,
+            i64,
+            i32,
+            Vec<u8>,
+            ckbadger_store::types::AddrTxValue,
+        )> = Vec::new();
         for tx_data in &all_tx_data {
-            let mut touched: HashSet<Vec<u8>> = HashSet::new();
+            let mut per_addr: HashMap<Vec<u8>, (i64, i64, bool, bool)> = HashMap::new();
             for cell in &tx_data.cells {
-                touched.insert(cell.lock_script_hash.clone());
+                let e = per_addr.entry(cell.lock_script_hash.clone()).or_default();
+                e.0 = e.0.saturating_add(cell.capacity);
+                e.2 = true;
             }
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
@@ -1316,15 +1326,19 @@ impl Indexer {
                             tx_data.block_number
                         )
                     })?;
-                    touched.insert(info.lock_script_hash.clone());
+                    let e = per_addr.entry(info.lock_script_hash.clone()).or_default();
+                    e.1 = e.1.saturating_add(info.capacity);
+                    e.3 = true;
                 }
             }
-            for lock_hash in touched {
+            for (lock_hash, (out_cap, in_cap, has_out, has_in)) in per_addr {
+                let capacity_change = out_cap.saturating_sub(in_cap);
                 addr_tx_entries.push((
                     lock_hash,
                     tx_data.block_number,
                     tx_data.tx_index,
                     tx_data.hash.to_vec(),
+                    ckbadger_store::types::AddrTxValue::new(capacity_change, has_in, has_out),
                 ));
             }
         }
@@ -1544,7 +1558,7 @@ impl Indexer {
         }
 
         // Write addr_txs entries
-        for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
+        for (lock_hash, block_num, tx_idx, tx_hash, addr_tx_value) in &addr_tx_entries {
             put_addr_tx(
                 &mut append_history_batch,
                 &mut append_undo_seq_by_block,
@@ -1552,7 +1566,7 @@ impl Indexer {
                 *block_num,
                 *tx_idx,
                 tx_hash,
-                &ckbadger_store::types::AddrTxValue::new(0, false, true),
+                addr_tx_value,
             );
         }
 
@@ -4266,6 +4280,7 @@ mod tests {
             tx_size: 0,
             cycles: None,
             timestamp: Utc::now(),
+            semantic_tags: 0,
         }
     }
 

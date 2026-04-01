@@ -836,6 +836,7 @@ mod tests {
             tx_size: 0,
             cycles: None,
             timestamp: Utc::now(),
+            semantic_tags: 0,
         }
     }
 
