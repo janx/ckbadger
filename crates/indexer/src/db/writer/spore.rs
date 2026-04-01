@@ -997,6 +997,29 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Apply cumulative capacity deltas from cluster_daily_changes to cluster aggregates.
+    /// Called after spore insert/consume so the aggregate cache is warm.
+    pub(crate) fn apply_cluster_capacity_deltas(
+        &self,
+        changes: &HashMap<(Vec<u8>, u32), (i128, i128)>,
+        batch: &mut StoreBatch,
+        state: &mut SporeBatchState,
+    ) -> Result<()> {
+        let mut per_cluster: HashMap<Vec<u8>, (i128, i128)> = HashMap::new();
+        for ((cluster_id, _date), (cap, know)) in changes {
+            let e = per_cluster.entry(cluster_id.clone()).or_insert((0, 0));
+            e.0 += cap;
+            e.1 += know;
+        }
+        for (cluster_id, (cap_delta, know_delta)) in &per_cluster {
+            let mut agg = state.get_cluster_aggregate(self.store.as_ref(), cluster_id)?;
+            agg.owned_capacity += cap_delta;
+            agg.owned_knowledge += know_delta;
+            state.put_cluster_aggregate(cluster_id, agg, batch);
+        }
+        Ok(())
+    }
+
     pub fn get_spore_id_by_outpoint(
         &self,
         tx_hash: &[u8],
@@ -1975,5 +1998,53 @@ mod tests {
         assert_eq!(agg.total_count, 1);
         assert_eq!(agg.live_count, 0);
         assert_eq!(agg.owner_count, 0);
+    }
+
+    #[test]
+    fn test_apply_cluster_capacity_deltas_updates_aggregate() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let cluster_a = vec![0x11u8; 32];
+        let cluster_b = vec![0x22u8; 32];
+
+        // Seed cluster_a with existing aggregate
+        {
+            let mut batch = StoreBatch::new(writer.store());
+            batch.put_cluster_aggregate(
+                &cluster_a,
+                &ClusterAggregate {
+                    total_count: 5,
+                    live_count: 3,
+                    ..Default::default()
+                },
+            );
+            batch.commit().unwrap();
+        }
+
+        // Apply capacity deltas across two dates for cluster_a, one for cluster_b
+        let mut changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
+        changes.insert((cluster_a.clone(), 20260101), (1000, 400));
+        changes.insert((cluster_a.clone(), 20260102), (500, 200));
+        changes.insert((cluster_b.clone(), 20260101), (300, 100));
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        writer
+            .apply_cluster_capacity_deltas(&changes, &mut batch, &mut state)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let agg_a = store.get_cluster_aggregate(&cluster_a).unwrap().unwrap();
+        assert_eq!(agg_a.owned_capacity, 1500);
+        assert_eq!(agg_a.owned_knowledge, 600);
+        assert_eq!(agg_a.total_count, 5); // unchanged
+        assert_eq!(agg_a.live_count, 3); // unchanged
+
+        let agg_b = store.get_cluster_aggregate(&cluster_b).unwrap().unwrap();
+        assert_eq!(agg_b.owned_capacity, 300);
+        assert_eq!(agg_b.owned_knowledge, 100);
     }
 }

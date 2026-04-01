@@ -2621,6 +2621,15 @@ impl Indexer {
             mnft_state.extend_pending_collection_aggregates(&mut pending_object_collection_aggs);
             spore_state.extend_pending_cluster_ids(&mut pending_cluster_ids);
 
+            // Apply cumulative capacity deltas to cluster aggregates
+            if !cluster_daily_changes.is_empty() {
+                self.writer.apply_cluster_capacity_deltas(
+                    &cluster_daily_changes,
+                    &mut data_batch,
+                    &mut spore_state,
+                )?;
+            }
+
             pending_identity_aggs.extend(
                 spore_state
                     .pending_identity_aggs()
