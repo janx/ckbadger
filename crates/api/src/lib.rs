@@ -19,7 +19,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultOnFailure, TraceLayer};
+use tracing::Level;
 
 use cache::{CacheBackend, InMemoryCache};
 use ckb_store_reader::CkbChainReader;
@@ -294,13 +295,58 @@ pub async fn create_router(config: AppConfig) -> Router {
         }
     });
 
+    let slow_threshold = std::time::Duration::from_millis(config.slow_request_threshold_ms);
+
+    let trace_layer = TraceLayer::new_for_http()
+        .make_span_with(|request: &axum::http::Request<_>| {
+            tracing::info_span!(
+                "http_request",
+                method = %request.method(),
+                path = request.uri().path(),
+                query = request.uri().query().unwrap_or(""),
+            )
+        })
+        .on_response(
+            move |response: &axum::http::Response<_>,
+                  latency: std::time::Duration,
+                  span: &tracing::Span| {
+                let status = response.status().as_u16();
+                let latency_ms = latency.as_millis() as u64;
+                let size = response
+                    .headers()
+                    .get(axum::http::header::CONTENT_LENGTH)
+                    .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
+                    .and_then(|v: &str| v.parse::<u64>().ok())
+                    .unwrap_or(0);
+
+                if latency >= slow_threshold {
+                    tracing::warn!(
+                        parent: span,
+                        status,
+                        latency_ms,
+                        size,
+                        "slow request"
+                    );
+                } else {
+                    tracing::info!(
+                        parent: span,
+                        status,
+                        latency_ms,
+                        size,
+                        "completed"
+                    );
+                }
+            },
+        )
+        .on_failure(DefaultOnFailure::new().level(Level::ERROR));
+
     Router::new()
         .nest("/api/v1", routes::api_routes())
         .route("/ws", get(ws::ws_handler))
         .layer(rate_limit_layer)
         .layer(cors)
         .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http())
+        .layer(trace_layer)
         .with_state(state)
 }
 
