@@ -299,6 +299,23 @@ async fn probe_ok(client: &reqwest::Client, url: &str) -> bool {
     }
 }
 
+/// Filter a list of IDs, keeping only those whose detail endpoint returns 200.
+async fn validate_ids(
+    client: &reqwest::Client,
+    base: &str,
+    ids: Vec<String>,
+    path_template: &str,
+) -> Vec<String> {
+    let mut valid = Vec::new();
+    for id in ids {
+        let url = format!("{}/{}", base, path_template.replace("{id}", &id));
+        if probe_ok(client, &url).await {
+            valid.push(id);
+        }
+    }
+    valid
+}
+
 // ---------------------------------------------------------------------------
 // Phase 3: Parameter discovery
 // ---------------------------------------------------------------------------
@@ -478,9 +495,9 @@ async fn discover_params(
                 .collect();
         }
 
-        let spores = fetch_json(client, &format!("{}/spore/objects?limit=3", base)).await?;
+        let spores = fetch_json(client, &format!("{}/spore/objects?limit=10", base)).await?;
         if let Some(arr) = data_array(&spores) {
-            params.spore_ids = arr
+            let candidate_ids: Vec<String> = arr
                 .iter()
                 .filter_map(|item| {
                     item.get("sporeId")
@@ -488,19 +505,9 @@ async fn discover_params(
                         .map(String::from)
                 })
                 .collect();
-        }
-
-        // top_spore_ids: first 10 spore objects (default sort)
-        let top_spores = fetch_json(client, &format!("{}/spore/objects?limit=10", base)).await?;
-        if let Some(arr) = data_array(&top_spores) {
-            params.top_spore_ids = arr
-                .iter()
-                .filter_map(|item| {
-                    item.get("sporeId")
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                })
-                .collect();
+            let valid = validate_ids(client, base, candidate_ids, "spore/objects/{id}").await;
+            params.spore_ids = valid.iter().take(3).cloned().collect();
+            params.top_spore_ids = valid;
         }
 
         // top_cluster_ids: top 10 clusters by spore count (heaviest cluster pages)
@@ -608,15 +615,20 @@ async fn discover_params(
         }
     }
 
-    // object_collection_id from /assets?limit=1 (if has_assets)
+    // object_collection_id from /assets (if has_assets)
+    // Try multiple candidates and validate each against the detail endpoint.
     if availability.has_assets {
-        let assets = fetch_json(client, &format!("{}/assets?limit=1&type=object", base)).await?;
-        if let Some(first) = data_array(&assets).and_then(|arr| arr.first()) {
-            let collection_id = first.get("id").and_then(|v| v.as_str()).map(String::from);
-            params.object_collection_id = collection_id.clone();
+        let assets = fetch_json(client, &format!("{}/assets?limit=10&type=object", base)).await?;
+        if let Some(arr) = data_array(&assets) {
+            let candidate_ids: Vec<String> = arr
+                .iter()
+                .filter_map(|item| item.get("id").and_then(|v| v.as_str()).map(String::from))
+                .collect();
+            let valid = validate_ids(client, base, candidate_ids, "assets/objects/{id}").await;
+            params.object_collection_id = valid.first().cloned();
 
             // object_item_id from /assets/objects/{collection_id}/items?limit=1
-            if let Some(cid) = &collection_id {
+            if let Some(cid) = &params.object_collection_id {
                 let items = fetch_json(
                     client,
                     &format!("{}/assets/objects/{}/items?limit=1", base, cid),
