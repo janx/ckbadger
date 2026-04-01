@@ -45,7 +45,7 @@ fn get_collection_aggregate(
 ) -> anyhow::Result<Option<MnftCollectionAggregate>> {
     if is_identity_sentinel(collection_id) {
         let opt = store.get_identity_collection_aggregate(collection_id)?;
-        Ok(opt.map(|id_agg| {
+        return Ok(opt.map(|id_agg| {
             use ckbadger_store::types::ObjectStandard;
             MnftCollectionAggregate {
                 name: id_agg.name,
@@ -62,10 +62,35 @@ fn get_collection_aggregate(
                 activities_count: id_agg.activities_count,
                 ..Default::default()
             }
-        }))
-    } else {
-        store.get_mnft_collection_aggregate(collection_id)
+        }));
     }
+
+    // Try mNFT collection aggregate first, then Spore cluster aggregate.
+    // The unified /assets list includes both sources, so the detail endpoint
+    // must be able to resolve IDs from either CF.
+    if let Some(agg) = store.get_mnft_collection_aggregate(collection_id)? {
+        return Ok(Some(agg));
+    }
+
+    // Fallback: Spore/DOB cluster from CF_CLUSTER_AGG
+    if let Some(cluster) = store.get_cluster_aggregate(collection_id)? {
+        use ckbadger_store::types::ObjectStandard;
+        return Ok(Some(MnftCollectionAggregate {
+            name: cluster.name,
+            standard: ObjectStandard::Spore,
+            total_count: cluster.total_count,
+            live_count: cluster.live_count,
+            holders_count: cluster.owner_count,
+            activities_count: 0,
+            btc_ckb_count: cluster.btc_ckb_count,
+            pure_ckb_count: cluster.pure_ckb_count,
+            decentralized_mixture_count: cluster.decentralized_mixture_count,
+            centralized_mixture_count: cluster.centralized_mixture_count,
+            unknown_count: cluster.unknown_count,
+        }));
+    }
+
+    Ok(None)
 }
 
 const NFT_ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
