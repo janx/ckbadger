@@ -175,16 +175,22 @@ async fn process_block_request(
 
     if missing_indices.is_empty() {
         // All txs already have cycles — compute block total from existing data.
-        let total: i64 = block_txs
+        let any_negative = block_txs
             .iter()
-            .filter_map(|(_, entry)| entry.cycles)
-            .filter(|c| *c >= 0)
-            .sum();
-        if let Err(e) = store.update_block_cycles(block_num, total) {
+            .any(|(_, entry)| matches!(entry.cycles, Some(c) if c < 0));
+        if any_negative {
             warn!(
-                "Cycles worker: failed to write block cycles for block {}: {}",
-                block_number, e
+                "Cycles worker: block {} has failed tx cycles (early exit), skipping block total",
+                block_number
             );
+        } else {
+            let total: i64 = block_txs.iter().filter_map(|(_, entry)| entry.cycles).sum();
+            if let Err(e) = store.update_block_cycles(block_num, total) {
+                warn!(
+                    "Cycles worker: failed to write block cycles for block {}: {}",
+                    block_number, e
+                );
+            }
         }
         return 0;
     }

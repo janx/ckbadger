@@ -55,8 +55,8 @@ export function useCyclesCalculation(
           setIsCalculating(true);
           await invalidateTransactionQuery();
         } else if (response.status === 'notFound') {
-          // Transaction not yet indexed — retry later, don't mark as permanent failure
-          setIsCalculating(false);
+          // Transaction not yet indexed — keep polling until it appears
+          setIsCalculating(true);
         } else if (response.status === 'failed') {
           setIsCalculating(false);
           setHasFailed(true);
@@ -88,8 +88,7 @@ export function useCyclesCalculation(
         } else if (response.status === 'calculating' || response.status === 'queued') {
           await invalidateTransactionQuery();
         } else if (response.status === 'notFound') {
-          // Transaction not yet indexed — retry later
-          setIsCalculating(false);
+          // Transaction not yet indexed — keep polling until it appears
         } else if (response.status === 'failed') {
           setIsCalculating(false);
           setHasFailed(true);
