@@ -1552,6 +1552,7 @@ impl Indexer {
                 *block_num,
                 *tx_idx,
                 tx_hash,
+                &ckbadger_store::types::AddrTxValue::new(0, false, true),
             );
         }
 

@@ -18,14 +18,14 @@ use ckbadger_common::{BackgroundTaskKind, BackgroundTaskState};
 use ckbadger_indexer::label_import::run_label_import_bundled;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    AssetAction, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta, CompositionTier,
-    DailyBlockStats, DailyStats, DaoDailySnapshot, DaoDepositCacheEntry, DeepForkInfo,
-    DobDecodedEntry, DobDecodedTrait, EpochStats, HourlyStats, IdentityCollectionAggregate,
-    IdentityEntry, IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats,
-    MnftCollectionAggregate, MnftDailyDelta, ObjectCollectionActivityEntry, ObjectEntry,
-    ObjectExtra, ObjectStandard, ProtocolAction, ReorgEvent, ScriptDailyDelta, ScriptFamilyInfo,
-    ScriptInfo, ScriptReferenceInfo, ScriptVersionInfo, SporeDailyDelta, SporeMediaProfile,
-    TokenDailyDelta, TokenInfo, TxActions, TxIndexEntry, TypeCallEntry,
+    AddrTxValue, AssetAction, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta,
+    CompositionTier, DailyBlockStats, DailyStats, DaoDailySnapshot, DaoDepositCacheEntry,
+    DeepForkInfo, DobDecodedEntry, DobDecodedTrait, EpochStats, HourlyStats,
+    IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard, LiveCellInfo,
+    MinerStats, MnftCollectionAggregate, MnftDailyDelta, ObjectCollectionActivityEntry,
+    ObjectEntry, ObjectExtra, ObjectStandard, ProtocolAction, ReorgEvent, ScriptDailyDelta,
+    ScriptFamilyInfo, ScriptInfo, ScriptReferenceInfo, ScriptVersionInfo, SporeDailyDelta,
+    SporeMediaProfile, TokenDailyDelta, TokenInfo, TxActions, TxIndexEntry, TypeCallEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -8804,7 +8804,13 @@ async fn test_address_activities_reads_from_store() {
     );
     let actions = make_test_tx_actions(&lock_hash, &tx_hash, &block_hash, 10, 0, 100, 0);
     core_batch.put_tx_actions(&actions);
-    core_batch.put_addr_tx(&lock_hash, 10, 0, &tx_hash);
+    core_batch.put_addr_tx(
+        &lock_hash,
+        10,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(0, false, true),
+    );
     core_batch.commit().unwrap();
     core_store
         .update_sync_status(|s| {
@@ -8877,7 +8883,13 @@ async fn test_address_activities_returns_protocol_metadata() {
         },
     );
     batch.put_tx_actions(&actions);
-    batch.put_addr_tx(&lock_hash, 88, 1, &tx_hash);
+    batch.put_addr_tx(
+        &lock_hash,
+        88,
+        1,
+        &tx_hash,
+        &AddrTxValue::new(0, false, true),
+    );
     batch.commit().unwrap();
     core_store
         .update_sync_status(|s| {
@@ -8984,7 +8996,13 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
     core_batch.put_tx_actions(&actions);
-    core_batch.put_addr_tx(&lock_hash, 88, 0, &tx_hash);
+    core_batch.put_addr_tx(
+        &lock_hash,
+        88,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(0, false, true),
+    );
     core_batch.put_tx_hash_map(&tx_hash, 88, 0);
     core_batch.put_tx_index(
         88,
@@ -9657,7 +9675,13 @@ async fn test_address_transactions_reads_from_derived_store() {
     assert_eq!(json["data"].as_array().unwrap().len(), 0);
 
     let mut derived_batch = StoreBatch::new(append_only_store.as_ref());
-    derived_batch.put_addr_tx(&lock_hash, 10, 0, &tx_hash);
+    derived_batch.put_addr_tx(
+        &lock_hash,
+        10,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(0, false, true),
+    );
     derived_batch.commit().unwrap();
 
     let request = Request::builder()

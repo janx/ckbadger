@@ -2679,7 +2679,7 @@ fn list_canonical_addr_txs_page(
         }
         let rows_len = rows.len();
         let mut last_seen = None;
-        for (block_num, tx_idx, tx_hash) in rows {
+        for (block_num, tx_idx, tx_hash, _addr_tx_value) in rows {
             last_seen = Some((block_num, tx_idx));
             if is_canonical_addr_tx(store, block_num, tx_idx, &tx_hash)? {
                 out.push((block_num, tx_idx, tx_hash));
@@ -3798,9 +3798,27 @@ mod tests {
             semantic_tags: 0,
         };
         let mut domain_batch = StoreBatch::new(&domain);
-        domain_batch.put_addr_tx(&lock_hash, 30, 0, &stale_tx);
-        domain_batch.put_addr_tx(&lock_hash, 20, 0, &canonical_tx_new);
-        domain_batch.put_addr_tx(&lock_hash, 10, 0, &canonical_tx_old);
+        domain_batch.put_addr_tx(
+            &lock_hash,
+            30,
+            0,
+            &stale_tx,
+            &ckbadger_store::types::AddrTxValue::new(0, false, true),
+        );
+        domain_batch.put_addr_tx(
+            &lock_hash,
+            20,
+            0,
+            &canonical_tx_new,
+            &ckbadger_store::types::AddrTxValue::new(0, false, true),
+        );
+        domain_batch.put_addr_tx(
+            &lock_hash,
+            10,
+            0,
+            &canonical_tx_old,
+            &ckbadger_store::types::AddrTxValue::new(0, false, true),
+        );
         domain_batch.put_tx_hash_map(&stale_tx, 30, 0);
         domain_batch.put_tx_hash_map(&canonical_tx_new, 20, 0);
         domain_batch.put_tx_hash_map(&canonical_tx_old, 10, 0);

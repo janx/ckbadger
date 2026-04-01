@@ -170,7 +170,7 @@ impl CkbadgerStore {
 
             let action_keys: Vec<Vec<u8>> = rows
                 .iter()
-                .map(|(block_num, tx_idx, tx_hash)| {
+                .map(|(block_num, tx_idx, tx_hash, _addr_tx_value)| {
                     keys::encode_tx_actions_key(*block_num, *tx_idx, tx_hash)
                 })
                 .collect();
@@ -181,7 +181,9 @@ impl CkbadgerStore {
             let action_values = self.multi_get_cf(action_refs);
 
             let mut last_seen = None;
-            for ((block_num, tx_idx, tx_hash), value_result) in rows.iter().zip(action_values) {
+            for ((block_num, tx_idx, tx_hash, _addr_tx_value), value_result) in
+                rows.iter().zip(action_values)
+            {
                 last_seen = Some((*block_num, *tx_idx));
                 let value = match value_result {
                     Ok(Some(value)) => value,

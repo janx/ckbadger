@@ -2,7 +2,7 @@
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    AddressBalance, FiberChannel, FiberChannelState, ParticipantDelta, ScriptInfo,
+    AddrTxValue, AddressBalance, FiberChannel, FiberChannelState, ParticipantDelta, ScriptInfo,
     ScriptReferenceInfo, TokenInfo, TxActions,
 };
 use ckbadger_store::CkbadgerStore;
@@ -422,7 +422,13 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
             }],
         };
         domain_batch.put_tx_actions(&tx_actions);
-        domain_batch.put_addr_tx(&lock_hash, block, 0, &tx_hash);
+        domain_batch.put_addr_tx(
+            &lock_hash,
+            block,
+            0,
+            &tx_hash,
+            &AddrTxValue::new(0, false, true),
+        );
     }
     // Also insert block headers so rollback_to_block works
     for i in 1..=5i64 {
@@ -1009,7 +1015,7 @@ fn test_rollback_deletes_multi_participant_activities() {
         }],
     };
     batch.put_tx_actions(&actions_2);
-    batch.put_addr_tx(&lock_a, 2, 0, &tx_hash_2);
+    batch.put_addr_tx(&lock_a, 2, 0, &tx_hash_2, &AddrTxValue::new(0, false, true));
 
     // Block 3, tx 0: two participants — should be deleted on rollback to 2
     let mut tx_hash_3 = vec![0u8; 32];
@@ -1042,8 +1048,8 @@ fn test_rollback_deletes_multi_participant_activities() {
         ],
     };
     batch.put_tx_actions(&actions_3);
-    batch.put_addr_tx(&lock_a, 3, 0, &tx_hash_3);
-    batch.put_addr_tx(&lock_b, 3, 0, &tx_hash_3);
+    batch.put_addr_tx(&lock_a, 3, 0, &tx_hash_3, &AddrTxValue::new(0, false, true));
+    batch.put_addr_tx(&lock_b, 3, 0, &tx_hash_3, &AddrTxValue::new(0, false, true));
 
     // Block 4, tx 1: another multi-participant — should also be deleted
     let mut tx_hash_4 = vec![0u8; 32];
@@ -1076,8 +1082,8 @@ fn test_rollback_deletes_multi_participant_activities() {
         ],
     };
     batch.put_tx_actions(&actions_4);
-    batch.put_addr_tx(&lock_a, 4, 1, &tx_hash_4);
-    batch.put_addr_tx(&lock_b, 4, 1, &tx_hash_4);
+    batch.put_addr_tx(&lock_a, 4, 1, &tx_hash_4, &AddrTxValue::new(0, false, true));
+    batch.put_addr_tx(&lock_b, 4, 1, &tx_hash_4, &AddrTxValue::new(0, false, true));
 
     batch.commit().unwrap();
 

@@ -131,9 +131,10 @@ pub(crate) fn put_addr_tx(
     block_num: i64,
     tx_idx: i32,
     tx_hash: &[u8],
+    value: &ckbadger_store::types::AddrTxValue,
 ) {
     // addr_txs is now in domain store; rollback deletes entries directly (no undo log needed)
-    batch.put_addr_tx(lock_hash, block_num, tx_idx, tx_hash);
+    batch.put_addr_tx(lock_hash, block_num, tx_idx, tx_hash, value);
 }
 
 pub(crate) fn put_tx_actions(
@@ -464,7 +465,13 @@ mod tests {
 
         // Bulk pattern: write directly to domain store without undo log
         let mut domain_batch = StoreBatch::new(&domain_store);
-        domain_batch.put_addr_tx(&lock_hash, 100, 0, &[0xAA; 32]);
+        domain_batch.put_addr_tx(
+            &lock_hash,
+            100,
+            0,
+            &[0xAA; 32],
+            &ckbadger_store::types::AddrTxValue::new(0, false, true),
+        );
         domain_batch.commit().unwrap();
 
         // Verify data was written

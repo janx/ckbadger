@@ -3527,8 +3527,20 @@ mod tests {
         put_canonical_tx(&mut batch, 2, 0, &tx_hash_drop);
         batch.put_tx_actions(&keep_actions);
         batch.put_tx_actions(&drop_actions);
-        batch.put_addr_tx(&lock_hash, 1, 0, &tx_hash_keep);
-        batch.put_addr_tx(&lock_hash, 2, 0, &tx_hash_drop);
+        batch.put_addr_tx(
+            &lock_hash,
+            1,
+            0,
+            &tx_hash_keep,
+            &AddrTxValue::new(0, false, true),
+        );
+        batch.put_addr_tx(
+            &lock_hash,
+            2,
+            0,
+            &tx_hash_drop,
+            &AddrTxValue::new(0, false, true),
+        );
         batch.commit().unwrap();
         seed_sync_status(&store, 2, &header2.hash, 2, 2, 2);
 
@@ -3537,7 +3549,10 @@ mod tests {
         assert!(store.get_tx_actions(1, 0, &tx_hash_keep).unwrap().is_some());
         assert!(store.get_tx_actions(2, 0, &tx_hash_drop).unwrap().is_none());
         let addr_rows = store.list_addr_txs_recent(&lock_hash, 10, None).unwrap();
-        assert_eq!(addr_rows, vec![(1, 0, tx_hash_keep)]);
+        assert_eq!(addr_rows.len(), 1);
+        assert_eq!(addr_rows[0].0, 1);
+        assert_eq!(addr_rows[0].1, 0);
+        assert_eq!(addr_rows[0].2, tx_hash_keep);
     }
 
     #[test]
@@ -5300,7 +5315,13 @@ mod tests {
         batch.put_block_header(2, &header2);
         put_canonical_tx(&mut batch, 2, 0, &tx_hash);
         batch.put_cell(&tx_hash, 0, &cell, 2);
-        batch.put_addr_tx(&lock_hash, 2, 0, &tx_hash);
+        batch.put_addr_tx(
+            &lock_hash,
+            2,
+            0,
+            &tx_hash,
+            &AddrTxValue::new(0, false, true),
+        );
         batch.put_addr_balance(
             &lock_hash,
             &AddressBalance {
