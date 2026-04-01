@@ -619,10 +619,15 @@ impl ObjectOwner {
             .unwrap_or_else(|| SOLE_SPORES_SENTINEL_COLLECTION.to_vec());
         let cluster_entry = self
             .cluster_daily_deltas
-            .entry((effective_cluster_id, date_yyyymmdd))
+            .entry((effective_cluster_id.clone(), date_yyyymmdd))
             .or_insert((0, 0));
         cluster_entry.0 += capacity_delta;
         cluster_entry.1 += occupied_delta;
+
+        // Accumulate cumulative capacity into cluster aggregate
+        let agg = self.cluster_aggs.entry(effective_cluster_id).or_default();
+        agg.owned_capacity += capacity_delta;
+        agg.owned_knowledge += occupied_delta;
     }
 
     fn insert_cluster(
@@ -3804,5 +3809,49 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_record_spore_daily_delta_accumulates_cluster_capacity() {
+        let mut owner = ObjectOwner::default();
+        let cluster_id = vec![0x11u8; 32];
+        let spore_a = vec![0xAAu8; 32];
+        let spore_b = vec![0xBBu8; 32];
+
+        // Spore A created: +500 capacity, +200 knowledge
+        owner.record_spore_daily_delta(&spore_a, Some(&cluster_id), 20260101, 500, 200);
+        // Spore B created: +300 capacity, +100 knowledge
+        owner.record_spore_daily_delta(&spore_b, Some(&cluster_id), 20260101, 300, 100);
+
+        let agg = owner.cluster_aggs.get(&cluster_id).unwrap();
+        assert_eq!(agg.owned_capacity, 800);
+        assert_eq!(agg.owned_knowledge, 300);
+    }
+
+    #[test]
+    fn test_record_spore_daily_delta_handles_sole_spores() {
+        let mut owner = ObjectOwner::default();
+        let spore = vec![0xCCu8; 32];
+
+        owner.record_spore_daily_delta(&spore, None, 20260101, 100, 50);
+
+        let sentinel = SOLE_SPORES_SENTINEL_COLLECTION.to_vec();
+        let agg = owner.cluster_aggs.get(&sentinel).unwrap();
+        assert_eq!(agg.owned_capacity, 100);
+        assert_eq!(agg.owned_knowledge, 50);
+    }
+
+    #[test]
+    fn test_record_spore_daily_delta_negative_delta_on_consume() {
+        let mut owner = ObjectOwner::default();
+        let cluster_id = vec![0x22u8; 32];
+        let spore = vec![0xDDu8; 32];
+
+        owner.record_spore_daily_delta(&spore, Some(&cluster_id), 20260101, 500, 200);
+        owner.record_spore_daily_delta(&spore, Some(&cluster_id), 20260102, -500, -200);
+
+        let agg = owner.cluster_aggs.get(&cluster_id).unwrap();
+        assert_eq!(agg.owned_capacity, 0);
+        assert_eq!(agg.owned_knowledge, 0);
     }
 }
