@@ -170,6 +170,8 @@ pub struct WorkDir {
     pub bulk_sync_perf_dir: PathBuf,
     /// DOB decode output blobs directory.
     pub dob_decode_dir: PathBuf,
+    /// Benchmark report output directory.
+    pub bench_dir: PathBuf,
     /// Supervisor PID file.
     pub supervisor_pid: PathBuf,
     /// Indexer IPC socket.
@@ -197,6 +199,7 @@ impl WorkDir {
         let perf_dir = root.join("perf");
         let bulk_sync_perf_dir = perf_dir.join("bulk-sync");
         let dob_decode_dir = root.join("dob_decode");
+        let bench_dir = root.join("bench");
         let supervisor_pid = run_dir.join("supervisor.pid");
         let indexer_sock = run_dir.join("indexer.sock");
         let cycles_request_dir = run_dir.join("cycles_requests");
@@ -218,6 +221,7 @@ impl WorkDir {
             perf_dir,
             bulk_sync_perf_dir,
             dob_decode_dir,
+            bench_dir,
             supervisor_pid,
             indexer_sock,
             cycles_request_dir,
@@ -747,6 +751,7 @@ network = "testnet"
         assert_eq!(wd.perf_dir, root.join("perf"));
         assert_eq!(wd.bulk_sync_perf_dir, root.join("perf/bulk-sync"));
         assert_eq!(wd.dob_decode_dir, root.join("dob_decode"));
+        assert_eq!(wd.bench_dir, root.join("bench"));
         assert_eq!(wd.supervisor_pid, root.join("run/supervisor.pid"));
         assert_eq!(wd.indexer_sock, root.join("run/indexer.sock"));
         assert_eq!(wd.cycles_request_dir, root.join("run/cycles_requests"));

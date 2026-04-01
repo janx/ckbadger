@@ -5,6 +5,7 @@ mod registry;
 mod report;
 mod runner;
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -56,9 +57,13 @@ struct Cli {
     #[arg(long)]
     json: bool,
 
-    /// Save JSON output to file
+    /// Save JSON output to file (in addition to auto-saved workdir report)
     #[arg(long)]
     output: Option<String>,
+
+    /// Work directory (defaults to current directory)
+    #[arg(long, default_value = ".")]
+    workdir: PathBuf,
 
     /// Compare against baseline JSON file
     #[arg(long)]
@@ -150,6 +155,23 @@ async fn main() -> Result<()> {
 
         if result.skipped {
             eprintln!(" SKIPPED");
+        } else if result.metrics.error_rate > 0.0 {
+            // Show error status codes in progress line
+            let mut statuses = std::collections::BTreeMap::new();
+            for s in &result.samples {
+                if s.error.is_some() {
+                    *statuses.entry(s.status).or_insert(0u32) += 1;
+                }
+            }
+            let codes: Vec<String> = statuses
+                .iter()
+                .map(|(code, count)| format!("{code}x{count}"))
+                .collect();
+            eprintln!(
+                " p95={:.0}ms ERRORS({})",
+                result.metrics.p95_ms,
+                codes.join(",")
+            );
         } else {
             eprintln!(" p95={:.0}ms", result.metrics.p95_ms);
         }
@@ -176,8 +198,14 @@ async fn main() -> Result<()> {
         report::print_table(&bench_report);
     }
 
+    // Auto-save to workdir/bench/
+    let bench_dir = cli.workdir.join("bench");
+    let timestamp = bench_report.timestamp.replace(':', "-").replace('+', "p");
+    let auto_path = bench_dir.join(format!("{timestamp}.json"));
+    report::save_json(&bench_report, &auto_path)?;
+
     if let Some(ref path) = cli.output {
-        report::save_json(&bench_report, path)?;
+        report::save_json(&bench_report, path.as_ref())?;
     }
 
     if let Some(ref baseline_path) = cli.compare {

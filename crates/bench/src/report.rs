@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 
 use anyhow::{Context, Result};
@@ -63,6 +64,9 @@ pub struct ReportEntry {
     pub max_ms: f64,
     pub mean_ms: f64,
     pub error_rate: f64,
+    /// HTTP status code histogram for error responses (status != expect_status).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub error_statuses: BTreeMap<u16, u32>,
     pub avg_body_size: usize,
     pub throughput_rps: f64,
     pub skipped: bool,
@@ -118,6 +122,13 @@ pub fn build_report(
 }
 
 fn entry_from_result(r: &EndpointResult) -> ReportEntry {
+    let mut error_statuses = BTreeMap::new();
+    for sample in &r.samples {
+        if sample.error.is_some() {
+            *error_statuses.entry(sample.status).or_insert(0) += 1;
+        }
+    }
+
     ReportEntry {
         module: r.module.clone(),
         method: r.method.clone(),
@@ -132,6 +143,7 @@ fn entry_from_result(r: &EndpointResult) -> ReportEntry {
         max_ms: r.metrics.max_ms,
         mean_ms: r.metrics.mean_ms,
         error_rate: r.metrics.error_rate,
+        error_statuses,
         avg_body_size: r.metrics.avg_body_size,
         throughput_rps: r.metrics.throughput_rps,
         skipped: r.skipped,
@@ -240,17 +252,27 @@ pub fn print_table(report: &BenchmarkReport) {
     println!();
 }
 
-fn entry_flag(entry: &ReportEntry) -> &'static str {
+fn entry_flag(entry: &ReportEntry) -> String {
     if entry.skipped {
-        "SKIPPED"
+        "SKIPPED".to_string()
     } else if entry.p95_ms > VERY_SLOW_THRESHOLD_MS {
-        "VERY SLOW"
+        "VERY SLOW".to_string()
     } else if entry.error_rate > 0.0 {
-        "ERRORS"
+        if entry.error_statuses.is_empty() {
+            "ERRORS".to_string()
+        } else {
+            // Show status codes, e.g. "ERRORS(404)" or "ERRORS(404,500)"
+            let codes: Vec<String> = entry
+                .error_statuses
+                .keys()
+                .map(|code| code.to_string())
+                .collect();
+            format!("ERRORS({})", codes.join(","))
+        }
     } else if entry.p95_ms > SLOW_THRESHOLD_MS {
-        "SLOW"
+        "SLOW".to_string()
     } else {
-        ""
+        String::new()
     }
 }
 
@@ -282,10 +304,15 @@ pub fn print_json(report: &BenchmarkReport) -> Result<()> {
     Ok(())
 }
 
-pub fn save_json(report: &BenchmarkReport, path: &str) -> Result<()> {
+pub fn save_json(report: &BenchmarkReport, path: &std::path::Path) -> Result<()> {
     let json = serde_json::to_string_pretty(report).context("failed to serialize report")?;
-    fs::write(path, json).with_context(|| format!("failed to write report to {path}"))?;
-    println!("Report saved to {path}");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(path, json)
+        .with_context(|| format!("failed to write report to {}", path.display()))?;
+    println!("Report saved to {}", path.display());
     Ok(())
 }
 
@@ -404,6 +431,18 @@ mod tests {
         error_rate: f64,
         skipped: bool,
     ) -> EndpointResult {
+        make_result_with_status(module, method, path, p95, error_rate, skipped, 500)
+    }
+
+    fn make_result_with_status(
+        module: &str,
+        method: &str,
+        path: &str,
+        p95: f64,
+        error_rate: f64,
+        skipped: bool,
+        error_status: u16,
+    ) -> EndpointResult {
         EndpointResult {
             module: module.to_string(),
             method: method.to_string(),
@@ -414,10 +453,10 @@ mod tests {
             risk_tier: "low".to_string(),
             samples: vec![Sample {
                 latency_ms: p95,
-                status: 200,
+                status: if error_rate > 0.0 { error_status } else { 200 },
                 body_size: 1024,
                 error: if error_rate > 0.0 {
-                    Some("err".to_string())
+                    Some(format!("expected status 200, got {error_status}"))
                 } else {
                     None
                 },
@@ -483,9 +522,16 @@ mod tests {
         entry.p95_ms = 600.0;
         assert_eq!(entry_flag(&entry), "VERY SLOW");
 
-        entry.p95_ms = 50.0;
-        entry.error_rate = 0.1;
-        assert_eq!(entry_flag(&entry), "ERRORS");
+        // Error with status code
+        let entry_404 = entry_from_result(&make_result_with_status(
+            "m", "GET", "/p", 50.0, 1.0, false, 404,
+        ));
+        assert_eq!(entry_flag(&entry_404), "ERRORS(404)");
+
+        let entry_500 = entry_from_result(&make_result_with_status(
+            "m", "GET", "/p", 50.0, 1.0, false, 500,
+        ));
+        assert_eq!(entry_flag(&entry_500), "ERRORS(500)");
 
         entry.skipped = true;
         assert_eq!(entry_flag(&entry), "SKIPPED");
@@ -520,6 +566,29 @@ mod tests {
         assert_eq!(deserialized.summary.tested, 1);
         assert_eq!(deserialized.summary.skipped, 1);
         assert_eq!(deserialized.config.iterations, 10);
+    }
+
+    #[test]
+    fn test_error_statuses_in_report() {
+        let results = vec![
+            make_result_with_status("scripts", "GET", "/scripts/{name}", 10.0, 1.0, false, 404),
+            make_result_with_status("dao", "GET", "/dao/calculator", 10.0, 1.0, false, 500),
+            make_result("blocks", "GET", "/blocks/latest", 10.0, 0.0, false),
+        ];
+        let report = build_report(&results, "http://localhost:8101/api/v1", 10, 1, 2);
+
+        // scripts entry should have 404 in error_statuses
+        let scripts = &report.results[0];
+        assert_eq!(scripts.error_statuses.get(&404), Some(&1));
+        assert!(!scripts.error_statuses.contains_key(&200));
+
+        // dao entry should have 500
+        let dao = &report.results[1];
+        assert_eq!(dao.error_statuses.get(&500), Some(&1));
+
+        // blocks entry should have empty error_statuses
+        let blocks = &report.results[2];
+        assert!(blocks.error_statuses.is_empty());
     }
 
     #[test]

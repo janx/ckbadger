@@ -698,6 +698,13 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
         deleted.push(format!("  {}/", work.run_dir.display()));
     }
 
+    // Delete bench report directory contents
+    if work.bench_dir.exists() {
+        remove_dir_contents(&work.bench_dir)
+            .with_context(|| format!("failed to purge {}", work.bench_dir.display()))?;
+        deleted.push(format!("  {}/", work.bench_dir.display()));
+    }
+
     for secondary_path in known_domain_secondary_store_paths(&store_paths.domain_data) {
         if remove_dir_if_exists(&secondary_path)
             .with_context(|| format!("failed to purge {}", secondary_path.display()))?
@@ -1221,6 +1228,28 @@ mod tests {
         cmd_purge(&root, &args).unwrap();
 
         assert!(perf_metrics.exists(), "perf artifacts should be preserved");
+    }
+
+    #[test]
+    fn test_purge_deletes_bench_reports() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+
+        cmd_init(&root).unwrap();
+
+        let bench_dir = root.join("bench");
+        std::fs::create_dir_all(&bench_dir).unwrap();
+        let report_file = bench_dir.join("2026-04-01T12-00-00.json");
+        std::fs::write(&report_file, "{}").unwrap();
+
+        let args = PurgeArgs { confirm: true };
+        cmd_purge(&root, &args).unwrap();
+
+        assert!(!report_file.exists(), "bench reports should be purged");
+        assert!(
+            bench_dir.exists(),
+            "bench directory itself should be preserved"
+        );
     }
 
     #[test]
