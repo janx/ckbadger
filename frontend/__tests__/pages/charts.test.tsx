@@ -248,11 +248,10 @@ describe('ChartsPage', () => {
     expect(screen.getByText('Charts')).toBeInTheDocument();
 
     expect(screen.getByText('Proof of Work')).toBeInTheDocument();
-    expect(screen.getByText('Nervos DAO')).toBeInTheDocument();
+    expect(screen.getByText('Nervos DAO & Economics')).toBeInTheDocument();
     expect(screen.getByText('Block')).toBeInTheDocument();
     expect(screen.getByText('Activities')).toBeInTheDocument();
     expect(screen.getByText('Common Knowledge Bytes')).toBeInTheDocument();
-    expect(screen.getByText('Economics')).toBeInTheDocument();
     expect(screen.getByText('Scripts Used & Total CKBytes')).toBeInTheDocument();
     expect(screen.getByText('Assets Used & Total CKBytes')).toBeInTheDocument();
 
