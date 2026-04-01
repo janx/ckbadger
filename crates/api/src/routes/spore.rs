@@ -23,10 +23,9 @@ use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
 use crate::utils::{apply_owned_capacity_delta, date_keys_inclusive, parse_chart_date_range};
-use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_SPORES_ALL};
+use crate::warmup::{CachedAssetEntry, SporeCache, CACHE_KEY_ASSETS_NFT};
 use crate::AppState;
 use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
-type CachedSporeRows = Vec<(Vec<u8>, ckbadger_store::ObjectEntry)>;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -702,34 +701,17 @@ fn build_cluster_responses_from_cached_entries(
     clusters
 }
 
-fn load_spores_cached_or_store(state: &Arc<AppState>) -> Result<CachedSporeRows, ApiRouteError> {
-    if let Some(cached) = state.mem_cache.get::<CachedSporeRows>(CACHE_KEY_SPORES_ALL) {
-        return Ok(cached);
+fn load_spore_cache(
+    state: &AppState,
+) -> Result<arc_swap::Guard<Arc<Option<SporeCache>>>, ApiRouteError> {
+    let guard = state.spore_cache.load();
+    if guard.is_some() {
+        Ok(guard)
+    } else {
+        Err(ApiError::warmup_pending(
+            "spore cache unavailable; warmup in progress",
+        ))
     }
-    Err(ApiError::warmup_pending(
-        "spore cache unavailable; warmup in progress",
-    ))
-}
-
-fn collect_spore_page<F>(
-    all_spores: &[(Vec<u8>, ckbadger_store::ObjectEntry)],
-    limit: usize,
-    mut predicate: F,
-) -> Vec<(&Vec<u8>, &ckbadger_store::ObjectEntry)>
-where
-    F: FnMut(&ckbadger_store::ObjectEntry) -> bool,
-{
-    let mut page: Vec<(&Vec<u8>, &ckbadger_store::ObjectEntry)> = Vec::with_capacity(limit + 1);
-    for (spore_id, entry) in all_spores {
-        if !predicate(entry) {
-            continue;
-        }
-        page.push((spore_id, entry));
-        if page.len() > limit {
-            break;
-        }
-    }
-    page
 }
 
 async fn get_cluster_holders(
@@ -1048,12 +1030,23 @@ async fn list_spores(
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
-    let all_spores = load_spores_cached_or_store(&state)?;
-    let page = collect_spore_page(&all_spores, limit, |entry| {
-        entry.is_live && entry.created_at_block < cursor_block
-    });
-    let has_more = page.len() > limit;
-    let page: Vec<_> = page.into_iter().take(limit).collect();
+    let guard = load_spore_cache(&state)?;
+    let cache = guard.as_ref().as_ref().unwrap();
+
+    let start = cache
+        .live_indices
+        .iter()
+        .position(|&i| cache.all[i].1.created_at_block < cursor_block)
+        .unwrap_or(cache.live_indices.len());
+
+    let selected: Vec<_> = cache.live_indices[start..]
+        .iter()
+        .take(limit + 1)
+        .map(|&i| &cache.all[i])
+        .collect();
+
+    let has_more = selected.len() > limit;
+    let page = &selected[..selected.len().min(limit)];
 
     let next_cursor = if has_more {
         page.last()
@@ -1063,7 +1056,7 @@ async fn list_spores(
     };
 
     let spores: Vec<SporeResponse> = page
-        .into_iter()
+        .iter()
         .map(|(spore_id, entry)| spore_to_response(spore_id, entry, None, None))
         .collect();
 
@@ -1659,14 +1652,28 @@ async fn get_spores_by_owner(
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
-    let all_spores = load_spores_cached_or_store(&state)?;
-    let page = collect_spore_page(&all_spores, limit, |entry| {
-        entry.is_live
-            && entry.owner_lock_hash.as_ref() == Some(&hash)
-            && entry.created_at_block < cursor_block
-    });
-    let has_more = page.len() > limit;
-    let page: Vec<_> = page.into_iter().take(limit).collect();
+    let guard = load_spore_cache(&state)?;
+    let cache = guard.as_ref().as_ref().unwrap();
+
+    let selected: Vec<_> = cache
+        .by_owner
+        .get(&hash)
+        .map(|indices| {
+            let start = indices
+                .iter()
+                .position(|&i| cache.all[i].1.created_at_block < cursor_block)
+                .unwrap_or(indices.len());
+
+            indices[start..]
+                .iter()
+                .take(limit + 1)
+                .map(|&i| &cache.all[i])
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let has_more = selected.len() > limit;
+    let page = &selected[..selected.len().min(limit)];
 
     let next_cursor = if has_more {
         page.last()
@@ -1676,7 +1683,7 @@ async fn get_spores_by_owner(
     };
 
     let spores: Vec<SporeResponse> = page
-        .into_iter()
+        .iter()
         .map(|(spore_id, entry)| spore_to_response(spore_id, entry, None, None))
         .collect();
 
@@ -1714,32 +1721,59 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_spore_page_respects_limit_plus_one() {
+    fn test_list_spores_pagination_uses_live_indices() {
+        use crate::warmup::SporeCache;
+
         let spores = vec![
             (vec![0x01; 32], make_spore_entry(300, Some(vec![0xAA; 32]))),
-            (vec![0x02; 32], make_spore_entry(200, Some(vec![0xAA; 32]))),
+            (vec![0x02; 32], {
+                let mut e = make_spore_entry(200, Some(vec![0xAA; 32]));
+                e.is_live = false;
+                e
+            }),
             (vec![0x03; 32], make_spore_entry(100, Some(vec![0xAA; 32]))),
         ];
-        let page = collect_spore_page(&spores, 2, |_| true);
-        assert_eq!(page.len(), 3);
-        assert_eq!(page[0].1.created_at_block, 300);
-        assert_eq!(page[2].1.created_at_block, 100);
+        let cache = SporeCache::build(spores);
+
+        assert_eq!(cache.live_indices, vec![0, 2]);
+
+        let cursor_block = i64::MAX;
+        let limit = 1;
+        let start = cache
+            .live_indices
+            .iter()
+            .position(|&i| cache.all[i].1.created_at_block < cursor_block)
+            .unwrap_or(cache.live_indices.len());
+        let selected: Vec<_> = cache.live_indices[start..]
+            .iter()
+            .take(limit + 1)
+            .map(|&i| &cache.all[i])
+            .collect();
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].1.created_at_block, 300);
+        assert_eq!(selected[1].1.created_at_block, 100);
     }
 
     #[test]
-    fn test_collect_spore_page_filters_by_predicate() {
+    fn test_owner_lookup_uses_by_owner_index() {
+        use crate::warmup::SporeCache;
+
+        let owner_a = vec![0xAA; 32];
+        let owner_b = vec![0xBB; 32];
         let spores = vec![
-            (vec![0x01; 32], make_spore_entry(300, Some(vec![0xAA; 32]))),
-            (vec![0x02; 32], make_spore_entry(200, Some(vec![0xBB; 32]))),
-            (vec![0x03; 32], make_spore_entry(100, Some(vec![0xAA; 32]))),
+            (vec![0x01; 32], make_spore_entry(300, Some(owner_a.clone()))),
+            (vec![0x02; 32], make_spore_entry(200, Some(owner_b.clone()))),
+            (vec![0x03; 32], make_spore_entry(100, Some(owner_a.clone()))),
         ];
-        let target_owner = vec![0xAA; 32];
-        let page = collect_spore_page(&spores, 10, |entry| {
-            entry.owner_lock_hash.as_ref() == Some(&target_owner)
-        });
-        assert_eq!(page.len(), 2);
-        assert_eq!(page[0].1.created_at_block, 300);
-        assert_eq!(page[1].1.created_at_block, 100);
+        let cache = SporeCache::build(spores);
+
+        let indices_a = cache.by_owner.get(&owner_a).unwrap();
+        assert_eq!(indices_a, &vec![0, 2]);
+        assert_eq!(cache.all[indices_a[0]].1.created_at_block, 300);
+        assert_eq!(cache.all[indices_a[1]].1.created_at_block, 100);
+
+        let indices_b = cache.by_owner.get(&owner_b).unwrap();
+        assert_eq!(indices_b, &vec![1]);
     }
 
     #[test]
