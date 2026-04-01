@@ -17,9 +17,12 @@ pub fn entries() -> Vec<EndpointEntry> {
             method: Method::Post,
             path_template: "/scripts/lookup",
             description: "Lookup scripts by code_hash",
-            resolve: Box::new(|_base, _p| {
-                // Requires code_hash values not available from list endpoint
-                None
+            resolve: Box::new(|base, _p| {
+                let dao = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
+                Some(post(
+                    &format!("{base}/scripts/lookup"),
+                    &format!(r#"{{"codeHashes":["{dao}"]}}"#),
+                ))
             }),
             expect_status: 200,
             risk_tier: RiskTier::Low,
@@ -30,9 +33,11 @@ pub fn entries() -> Vec<EndpointEntry> {
             method: Method::Get,
             path_template: "/scripts/code-cell",
             description: "Get script code cell",
-            resolve: Box::new(|_base, _p| {
-                // Skip — needs specific code_hash query param
-                None
+            resolve: Box::new(|base, _p| {
+                let dao = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
+                Some(get(&format!(
+                    "{base}/scripts/code-cell?code_hash={dao}&hash_type=type"
+                )))
             }),
             expect_status: 200,
             risk_tier: RiskTier::Medium,
@@ -43,9 +48,11 @@ pub fn entries() -> Vec<EndpointEntry> {
             method: Method::Get,
             path_template: "/scripts/code-cells",
             description: "List script code cells",
-            resolve: Box::new(|_base, _p| {
-                // Skip — needs specific query params
-                None
+            resolve: Box::new(|base, _p| {
+                let dao = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
+                Some(get(&format!(
+                    "{base}/scripts/code-cells?code_hash={dao}&hash_type=type"
+                )))
             }),
             expect_status: 200,
             risk_tier: RiskTier::Medium,
@@ -55,10 +62,12 @@ pub fn entries() -> Vec<EndpointEntry> {
             module: "scripts",
             method: Method::Get,
             path_template: "/scripts/charts/capacity-history",
-            description: "Script capacity history chart (global)",
-            resolve: Box::new(|_base, _p| {
-                // Skip — needs code_hash query param
-                None
+            description: "Script capacity history chart (by code_hash)",
+            resolve: Box::new(|base, _p| {
+                let dao = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
+                Some(get(&format!(
+                    "{base}/scripts/charts/capacity-history?code_hash={dao}&hash_type=type"
+                )))
             }),
             expect_status: 200,
             risk_tier: RiskTier::Medium,

@@ -28,8 +28,8 @@ pub fn entries() -> Vec<EndpointEntry> {
             path_template: "/addresses/{addr}/activities",
             description: "List activities for an address",
             resolve: Box::new(|base, p| {
-                let addr = p.top_addresses.first()?;
-                Some(get(&format!("{base}/addresses/{addr}/activities?limit=50")))
+                let lh = p.top_lock_hashes.first()?;
+                Some(get(&format!("{base}/addresses/{lh}/activities?limit=50")))
             }),
             expect_status: 200,
             risk_tier: RiskTier::High,

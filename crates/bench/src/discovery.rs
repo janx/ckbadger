@@ -507,7 +507,16 @@ async fn discover_params(
                 .collect();
             let valid = validate_ids(client, base, candidate_ids, "spore/objects/{id}").await;
             params.spore_ids = valid.iter().take(3).cloned().collect();
-            params.top_spore_ids = valid;
+            params.top_spore_ids = valid.clone();
+
+            // Find a spore with renderable SVG
+            for id in &valid {
+                let url = format!("{}/spore/objects/{}/render", base, id);
+                if probe_ok(client, &url).await {
+                    params.renderable_spore_id = Some(id.clone());
+                    break;
+                }
+            }
         }
 
         // top_cluster_ids: top 10 clusters by spore count (heaviest cluster pages)

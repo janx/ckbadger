@@ -35,7 +35,10 @@ pub fn entries() -> Vec<EndpointEntry> {
             path_template: "/cells/{tx_hash}/{output_index}",
             description: "Get cell by outpoint",
             resolve: Box::new(|base, p| {
-                let (tx_hash, idx) = p.live_cell_outpoint.as_ref()?;
+                let (tx_hash, idx) = p
+                    .live_cell_outpoint
+                    .as_ref()
+                    .or(p.dao_deposit_outpoint.as_ref())?;
                 Some(get(&format!("{base}/cells/{tx_hash}/{idx}")))
             }),
             expect_status: 200,
@@ -68,8 +71,8 @@ pub fn entries() -> Vec<EndpointEntry> {
             path_template: "/addresses/{addr}",
             description: "Get address summary",
             resolve: Box::new(|base, p| {
-                let addr = p.top_addresses.first()?;
-                Some(get(&format!("{base}/addresses/{addr}")))
+                let lh = p.top_lock_hashes.first()?;
+                Some(get(&format!("{base}/addresses/{lh}")))
             }),
             expect_status: 200,
             risk_tier: RiskTier::Low,
@@ -81,10 +84,8 @@ pub fn entries() -> Vec<EndpointEntry> {
             path_template: "/addresses/{addr}/transactions",
             description: "List transactions for an address",
             resolve: Box::new(|base, p| {
-                let addr = p.top_addresses.first()?;
-                Some(get(&format!(
-                    "{base}/addresses/{addr}/transactions?limit=20"
-                )))
+                let lh = p.top_lock_hashes.first()?;
+                Some(get(&format!("{base}/addresses/{lh}/transactions?limit=20")))
             }),
             expect_status: 200,
             risk_tier: RiskTier::High,
@@ -96,8 +97,8 @@ pub fn entries() -> Vec<EndpointEntry> {
             path_template: "/addresses/{addr}/tokens",
             description: "List tokens held by an address",
             resolve: Box::new(|base, p| {
-                let addr = p.top_addresses.first()?;
-                Some(get(&format!("{base}/addresses/{addr}/tokens")))
+                let lh = p.top_lock_hashes.first()?;
+                Some(get(&format!("{base}/addresses/{lh}/tokens")))
             }),
             expect_status: 200,
             risk_tier: RiskTier::High,

@@ -8,7 +8,10 @@ pub fn entries() -> Vec<EndpointEntry> {
             path_template: "/graph/cell/{tx_hash}/{output_index}",
             description: "Get cell dependency graph",
             resolve: Box::new(|base, p| {
-                let (tx_hash, idx) = p.live_cell_outpoint.as_ref()?;
+                let (tx_hash, idx) = p
+                    .live_cell_outpoint
+                    .as_ref()
+                    .or(p.dao_deposit_outpoint.as_ref())?;
                 Some(get(&format!("{base}/graph/cell/{tx_hash}/{idx}")))
             }),
             expect_status: 200,

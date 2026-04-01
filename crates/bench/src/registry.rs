@@ -79,7 +79,6 @@ pub fn get(url: &str) -> ResolvedRequest {
     }
 }
 
-#[allow(dead_code)]
 pub fn post(url: &str, body: &str) -> ResolvedRequest {
     ResolvedRequest {
         url: url.to_string(),
@@ -117,6 +116,7 @@ pub struct DiscoveredParams {
     pub token_type_hashes: Vec<String>,
     pub cluster_ids: Vec<String>,
     pub spore_ids: Vec<String>,
+    pub renderable_spore_id: Option<String>,
     pub script_names: Vec<String>,
     pub live_cell_outpoint: Option<(String, u32)>,
     pub fiber_channel_id: Option<String>,

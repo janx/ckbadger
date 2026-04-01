@@ -134,9 +134,9 @@ pub fn entries() -> Vec<EndpointEntry> {
             module: "spore",
             method: Method::Get,
             path_template: "/spore/objects/{spore_id}/render",
-            description: "Render a Spore object",
+            description: "Render a Spore object (SVG)",
             resolve: Box::new(|base, p| {
-                let id = p.spore_ids.first()?;
+                let id = p.renderable_spore_id.as_ref()?;
                 Some(get(&format!("{base}/spore/objects/{id}/render")))
             }),
             expect_status: 200,
