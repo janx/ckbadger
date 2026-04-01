@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueries, keepPreviousData } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
@@ -254,13 +254,30 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     enabled: !!clusterId && activeCollectionTab === 'activities',
     placeholderData: keepPreviousData,
   });
+  const capacityRef = useRef<HTMLDivElement>(null);
+  const [capacityInView, setCapacityInView] = useState(false);
+
+  useEffect(() => {
+    if (!capacityRef.current || capacityInView) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          setCapacityInView(true);
+        }
+      },
+      { rootMargin: '200px 0px' }
+    );
+    observer.observe(capacityRef.current);
+    return () => observer.disconnect();
+  }, [capacityInView]);
+
   const { data: capacityChart, isLoading: isCapacityChartLoading } = useQuery({
     queryKey: ['cluster-capacity-chart', clusterId, capacityRange],
     queryFn: () =>
       capacityRangeParams
         ? api.getSporeClusterCapacityChart(clusterId, capacityRangeParams)
         : api.getSporeClusterCapacityChart(clusterId),
-    enabled: !!clusterId,
+    enabled: !!clusterId && capacityInView,
   });
   const { data: creatorAddressRecord } = useQuery({
     queryKey: ['cluster-creator-address', cluster?.ownerLockHash],
@@ -585,15 +602,17 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
             )}
           </TerminalPanelContent>
         </TerminalPanel>
-        <CapacityStatisticsSection
-          className="mb-6"
-          capacityRange={capacityRange}
-          onCapacityRangeChange={setCapacityRange}
-          capacityChart={capacityChart}
-          isCapacityChartLoading={isCapacityChartLoading}
-          totalCapacity={cluster.ownedCapacity}
-          commonKnowledgeSize={cluster.ownedKnowledge}
-        />
+        <div ref={capacityRef}>
+          <CapacityStatisticsSection
+            className="mb-6"
+            capacityRange={capacityRange}
+            onCapacityRangeChange={setCapacityRange}
+            capacityChart={capacityChart}
+            isCapacityChartLoading={isCapacityChartLoading}
+            totalCapacity={cluster.ownedCapacity}
+            commonKnowledgeSize={cluster.ownedKnowledge}
+          />
+        </div>
         {dobInfo && (
           <TerminalPanel className="mb-6">
             <TerminalPanelHeader indicator="active">DOB Blueprint</TerminalPanelHeader>
