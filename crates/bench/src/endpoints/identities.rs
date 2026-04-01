@@ -33,11 +33,11 @@ pub fn entries() -> Vec<EndpointEntry> {
         EndpointEntry {
             module: "identities",
             method: Method::Get,
-            path_template: "/assets/identities/did/items/{identity_id}",
-            description: "Get DID identity item",
-            resolve: Box::new(|_base, _p| {
-                // Skip — no DID discovery yet
-                None
+            path_template: "/assets/identities/did_ckb/items/{identity_id}",
+            description: "Get did:ckb identity item",
+            resolve: Box::new(|base, p| {
+                let id = p.did_ckb_item_id.as_ref()?;
+                Some(get(&format!("{base}/assets/identities/did_ckb/items/{id}")))
             }),
             expect_status: 200,
             risk_tier: RiskTier::Medium,
@@ -46,11 +46,13 @@ pub fn entries() -> Vec<EndpointEntry> {
         EndpointEntry {
             module: "identities",
             method: Method::Get,
-            path_template: "/assets/identities/did/items/{identity_id}/activities",
-            description: "List activities for a DID identity",
-            resolve: Box::new(|_base, _p| {
-                // Skip — no DID discovery yet
-                None
+            path_template: "/assets/identities/did_ckb/items/{identity_id}/activities",
+            description: "List activities for a did:ckb identity",
+            resolve: Box::new(|base, p| {
+                let id = p.did_ckb_item_id.as_ref()?;
+                Some(get(&format!(
+                    "{base}/assets/identities/did_ckb/items/{id}/activities"
+                )))
             }),
             expect_status: 200,
             risk_tier: RiskTier::Medium,

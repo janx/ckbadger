@@ -622,6 +622,19 @@ async fn discover_params(
                 .filter_map(|item| item.get("nftId").and_then(|v| v.as_str()).map(String::from))
                 .collect();
         }
+
+        // did:ckb item discovery
+        let did_items = fetch_json(
+            client,
+            &format!("{}/assets/identities/did_ckb/items?limit=1", base),
+        )
+        .await?;
+        if let Some(first) = data_array(&did_items).and_then(|arr| arr.first()) {
+            params.did_ckb_item_id = first
+                .get("nftId")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+        }
     }
 
     // object_collection_id from /assets (if has_assets)
