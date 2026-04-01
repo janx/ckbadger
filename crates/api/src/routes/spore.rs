@@ -940,13 +940,11 @@ async fn get_cluster(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // Count spores in cluster using secondary index
-    let store = state.store.clone();
-    let id_c = id.clone();
-    let spores_count = tokio::task::spawn_blocking(move || store.count_spores_in_cluster(&id_c))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Read counts from pre-computed aggregate (zero RocksDB scans).
+    let spores_count = cluster_aggregate
+        .as_ref()
+        .map(|agg| agg.total_count)
+        .unwrap_or(0);
 
     if spores_count == 0 && cluster_entry.is_none() && !is_sole_spores_sentinel(&id) {
         return Err(ApiError::not_found("Cluster not found"));

@@ -1,6 +1,6 @@
 use crate::cache::CacheTtl;
 use crate::response::ChartResponse;
-use crate::routes::assets::AssetResponse;
+use crate::routes::assets::{count_nft_collection_activities_cached, AssetResponse};
 use crate::routes::statistics::{
     build_address_cohort_response, build_block_time_distribution_response, build_cell_size_response,
 };
@@ -512,6 +512,7 @@ fn refresh_spore_cache_sync(state: &AppState) -> anyhow::Result<()> {
     state.spore_cache.store(Arc::new(Some(cache)));
 
     warmup_cluster_daily_deltas_sync(state);
+    warmup_cluster_activity_counts_sync(state);
 
     Ok(())
 }
@@ -546,6 +547,44 @@ fn warmup_cluster_daily_deltas_sync(state: &AppState) {
         clusters_warmed = warmed,
         clusters_total = clusters.len(),
         "Warmed cluster daily deltas block cache"
+    );
+}
+
+fn warmup_cluster_activity_counts_sync(state: &AppState) {
+    let clusters = match state.store.list_cluster_aggregates() {
+        Ok(clusters) => clusters,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to list cluster aggregates for activity count warmup: {}",
+                e
+            );
+            return;
+        }
+    };
+
+    let mut warmed = 0usize;
+    for (cluster_id, _agg) in &clusters {
+        match count_nft_collection_activities_cached(
+            state.store.as_ref(),
+            state.store.as_ref(),
+            &state.mem_cache,
+            cluster_id,
+        ) {
+            Ok(_) => warmed += 1,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to warm activity count for cluster 0x{}: {}",
+                    hex::encode(cluster_id),
+                    e
+                );
+            }
+        }
+    }
+
+    info!(
+        clusters_warmed = warmed,
+        clusters_total = clusters.len(),
+        "Warmed cluster activity count caches"
     );
 }
 
