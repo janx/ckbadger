@@ -1064,6 +1064,19 @@ impl ActivityStatsAccumulator {
                 keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes()),
                 bincode::serialize(&stats)?,
             ));
+            if let Some(addrs) = self.daily_addrs.get(&date) {
+                let mut sorted: Vec<[u8; 32]> = addrs.iter().copied().collect();
+                sorted.sort_unstable();
+                let flat: Vec<u8> = sorted.iter().flat_map(|h| h.iter().copied()).collect();
+                rows.push(materialize::MaterializedRow::new(
+                    CF_STATS_CHAIN,
+                    keys::encode_stats_key(
+                        keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET,
+                        date.as_bytes(),
+                    ),
+                    flat,
+                ));
+            }
         }
 
         let mut hourly_entries = self
@@ -1082,6 +1095,19 @@ impl ActivityStatsAccumulator {
                 keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour.as_bytes()),
                 bincode::serialize(&stats)?,
             ));
+            if let Some(addrs) = self.hourly_addrs.get(&hour) {
+                let mut sorted: Vec<[u8; 32]> = addrs.iter().copied().collect();
+                sorted.sort_unstable();
+                let flat: Vec<u8> = sorted.iter().flat_map(|h| h.iter().copied()).collect();
+                rows.push(materialize::MaterializedRow::new(
+                    CF_STATS_CHAIN,
+                    keys::encode_stats_key(
+                        keys::stats_prefix::ACTIVITY_HOURLY_ADDR_SET,
+                        hour.as_bytes(),
+                    ),
+                    flat,
+                ));
+            }
         }
 
         Ok(rows)
