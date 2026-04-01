@@ -58,8 +58,9 @@ Just try it and feel.
 ### Prerequisites
 
 - A running CKB node with RPC accessible (default: `http://127.0.0.1:8114`)
-- If you can run a CKB node, you can run CKBadger.
-- If you don't know how to run CKB — no worries, agents can do that for you.
+- ~60GB harddisk space
+
+If you can run a CKB node, you can run CKBadger. If you don't know how to run CKB — no worries, agents can do that for you.
 
 Note. only tested on Linux so far, probabaly will run on Macos, not compatible with Windows.
 
