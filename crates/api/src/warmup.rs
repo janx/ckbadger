@@ -42,6 +42,8 @@ pub struct SporeCache {
     pub live_indices: Vec<usize>,
     /// owner_lock_hash -> sorted indexes into `all` (live spores only).
     pub by_owner: HashMap<Vec<u8>, Vec<usize>>,
+    /// cluster_id -> sorted indexes into `all` (all spores, preserves desc order).
+    pub by_cluster: HashMap<Vec<u8>, Vec<usize>>,
     /// (index into `all`, lowercased name) for name-search.
     /// Non-cluster spores with a name only. Sorted by created_at_block desc.
     pub name_index: Vec<(usize, String)>,
@@ -52,6 +54,7 @@ impl SporeCache {
     pub fn build(all: Vec<(Vec<u8>, ckbadger_store::ObjectEntry)>) -> Self {
         let mut live_indices = Vec::new();
         let mut by_owner: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+        let mut by_cluster: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
         let mut name_index = Vec::new();
 
         for (i, (_id, entry)) in all.iter().enumerate() {
@@ -62,7 +65,11 @@ impl SporeCache {
                 }
             }
 
+            // Index all non-cluster spores by their collection_id
             if !entry.standard.is_cluster() {
+                if let Some(ref cluster_id) = entry.collection_id {
+                    by_cluster.entry(cluster_id.clone()).or_default().push(i);
+                }
                 if let Some(ref name) = entry.name {
                     name_index.push((i, name.to_ascii_lowercase()));
                 }
@@ -73,6 +80,7 @@ impl SporeCache {
             all,
             live_indices,
             by_owner,
+            by_cluster,
             name_index,
         }
     }

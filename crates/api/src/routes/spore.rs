@@ -865,7 +865,7 @@ async fn get_cluster_activities(
     ))
 }
 
-/// Get spores by cluster — use secondary index instead of full scan.
+/// Get spores by cluster — served from in-memory SporeCache (zero RocksDB reads).
 async fn get_spores_by_cluster(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
@@ -876,25 +876,29 @@ async fn get_spores_by_cluster(
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
-    // Use secondary index for efficient lookup
-    let store = state.store.clone();
-    let id_c = id.clone();
-    let cluster_spores =
-        tokio::task::spawn_blocking(move || store.list_spores_by_cluster(&id_c, 10_000))
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+    let guard = load_spore_cache(&state)?;
+    let cache = guard.as_ref().as_ref().unwrap();
 
-    let mut filtered: Vec<_> = cluster_spores
-        .into_iter()
-        .filter(|(_, entry)| entry.is_live && entry.created_at_block < cursor_block)
-        .collect();
+    // by_cluster indices are already sorted by created_at_block desc (insertion order).
+    // Filter to live spores with created_at_block < cursor_block.
+    let selected: Vec<_> = cache
+        .by_cluster
+        .get(&id)
+        .map(|indices| {
+            indices
+                .iter()
+                .filter(|&&i| {
+                    let entry = &cache.all[i].1;
+                    entry.is_live && entry.created_at_block < cursor_block
+                })
+                .take(limit + 1)
+                .map(|&i| &cache.all[i])
+                .collect()
+        })
+        .unwrap_or_default();
 
-    filtered.sort_by(|a, b| b.1.created_at_block.cmp(&a.1.created_at_block));
-
-    let page: Vec<_> = filtered.iter().take(limit + 1).collect();
-    let has_more = page.len() > limit;
-    let page: Vec<_> = page.into_iter().take(limit).collect();
+    let has_more = selected.len() > limit;
+    let page: Vec<_> = selected.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
         page.last()
