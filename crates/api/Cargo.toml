@@ -45,6 +45,7 @@ tracing-subscriber = { workspace = true }
 # Utilities
 chrono = { workspace = true }
 hex = { workspace = true }
+arc-swap = "1"
 uuid = { workspace = true }
 
 # Configuration
