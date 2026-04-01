@@ -94,7 +94,7 @@ fn get_collection_aggregate(
 }
 
 const NFT_ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
-const NFT_ACTIVITY_COUNT_CACHE_TTL: Duration = Duration::from_secs(30);
+const NFT_ACTIVITY_COUNT_CACHE_TTL: Duration = Duration::from_secs(300);
 const NFT_HOLDER_LIST_CACHE_TTL: Duration = Duration::from_secs(30);
 
 pub fn routes() -> Router<Arc<AppState>> {
