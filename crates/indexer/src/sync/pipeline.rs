@@ -44,7 +44,6 @@ use super::indexer::{
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{AddressBalanceDelta, CachedCellInfo, ReorgAction, TxData};
-use super::undo::*;
 use crate::bulk_sync_perf::BatchSample;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -66,7 +65,48 @@ struct ParserBatchPerfSample {
     precompute_ms: f64,
 }
 
-fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemanticTag {
+pub(crate) fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemanticTag {
+    let Some(type_code_hash) = cell.type_code_hash.as_deref() else {
+        return CellSemanticTag::Plain;
+    };
+
+    if DaoParser::is_dao_code_hash(type_code_hash) {
+        return CellSemanticTag::Dao;
+    }
+
+    if let Some(hash_type) = cell.type_hash_type {
+        if let Some(standard) = UdtParser::is_udt_code_hash_bytes(type_code_hash, hash_type) {
+            return match standard {
+                UdtStandard::Sudt => CellSemanticTag::Sudt,
+                UdtStandard::Xudt => CellSemanticTag::Xudt,
+            };
+        }
+    }
+
+    if DotbitParser::is_account_cell_type_script(type_code_hash) {
+        return CellSemanticTag::Dotbit;
+    }
+
+    if MnftParser::is_issuer_type_script(type_code_hash)
+        || MnftParser::is_class_type_script(type_code_hash)
+        || MnftParser::is_token_type_script(type_code_hash)
+    {
+        return CellSemanticTag::Mnft;
+    }
+
+    if SporeParser::is_cluster_type_script(type_code_hash) {
+        return CellSemanticTag::Cluster;
+    }
+
+    if SporeParser::is_spore_type_script(type_code_hash) {
+        return CellSemanticTag::Spore;
+    }
+
+    CellSemanticTag::Plain
+}
+
+/// Classify a resolved input cell (from the store) into a semantic tag.
+pub(crate) fn classify_live_cell_semantic_tag(cell: &LiveCellInfo) -> CellSemanticTag {
     let Some(type_code_hash) = cell.type_code_hash.as_deref() else {
         return CellSemanticTag::Plain;
     };
@@ -2501,15 +2541,6 @@ impl Indexer {
                                         start_block
                                     )
                                 })? - 1;
-                                rollback_undo_log_after_batch_cleanup(
-                                    self.writer.store().as_ref(),
-                                    self.append_only_store.as_ref(),
-                                    cleanup_tip,
-                                    &format!(
-                                        "pipeline range {}-{} (chain_tip={})",
-                                        start_block, end_block, chain_tip
-                                    ),
-                                )?;
                                 if let Err(consistency_err) =
                                     self.reconcile_hodl_tracker_with_tip(cleanup_tip)
                                 {

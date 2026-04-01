@@ -152,7 +152,16 @@ async fn process_block_request(
     http_client: &reqwest::Client,
     block_number: u64,
 ) -> u64 {
-    let block_num = block_number as i64;
+    let block_num = match i64::try_from(block_number) {
+        Ok(n) => n,
+        Err(_) => {
+            warn!(
+                "Cycles worker: block_number exceeds i64 range: {}",
+                block_number
+            );
+            return 0;
+        }
+    };
 
     // 1. List all txs in this block.
     let block_txs = match store.list_block_txs(block_num) {

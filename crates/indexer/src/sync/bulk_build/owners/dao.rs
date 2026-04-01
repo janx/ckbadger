@@ -506,6 +506,15 @@ impl DaoOwner {
                 * std::mem::size_of::<(NaiveDate, i128)>() as u64
             + self.active_deposit_counts_by_lock.len() as u64
                 * std::mem::size_of::<(Vec<u8>, i64)>() as u64
+            + self.daily_cumulative_depositors_delta.len() as u64
+                * std::mem::size_of::<(NaiveDate, i64)>() as u64
+            + self.ever_deposited.len() as u64
+                * (std::mem::size_of::<Vec<u8>>() as u64 + 32) // 32-byte lock hashes on heap
+            + self.daily_depositing_addresses.len() as u64
+                * std::mem::size_of::<(NaiveDate, HashSet<Vec<u8>>)>() as u64
+            + self.daily_depositing_addresses.values().map(|s|
+                s.len() as u64 * (std::mem::size_of::<Vec<u8>>() as u64 + 32)
+              ).sum::<u64>()
             + self.claimed_compensation_by_block.len() as u64
                 * std::mem::size_of::<(i64, i128)>() as u64
             + self.daily_end_of_day.len() as u64

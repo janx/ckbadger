@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use anyhow::{anyhow, bail, Result};
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::CkbadgerStore;
 
 use super::types::{TxData, UndoSeqScope, UNDO_SEQ_LOCAL_MAX, UNDO_SEQ_SCOPE_SHIFT};
 
@@ -151,27 +150,27 @@ pub(crate) fn put_tx_actions(
     batch.put_tx_actions(actions);
 }
 
-pub(crate) fn rollback_undo_log_after_batch_cleanup(
-    store: &CkbadgerStore,
-    append_only_store: &CkbadgerStore,
-    cleanup_tip: i64,
-    context: &str,
-) -> Result<()> {
-    let _ = store
-        .rollback_via_undo_log(append_only_store, cleanup_tip)
-        .map_err(|e| {
-            anyhow!(
-                "failed to rollback undo log after batch cleanup: cleanup_tip={}, context={}, error={:#}",
-                cleanup_tip,
-                context,
-                e
-            )
-        })?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
+    fn rollback_undo_log_after_batch_cleanup(
+        store: &CkbadgerStore,
+        append_only_store: &CkbadgerStore,
+        cleanup_tip: i64,
+        context: &str,
+    ) -> anyhow::Result<()> {
+        let _ = store
+            .rollback_via_undo_log(append_only_store, cleanup_tip)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to rollback undo log after batch cleanup: cleanup_tip={}, context={}, error={:#}",
+                    cleanup_tip,
+                    context,
+                    e
+                )
+            })?;
+        Ok(())
+    }
+
     use super::*;
     use chrono::Utc;
     use ckbadger_store::batch::StoreBatch;

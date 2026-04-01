@@ -372,10 +372,19 @@ impl BatchWriter {
             start_block, end_block
         );
 
+        let cleanup_tip = start_block - 1;
+
+        // Replay undo-log entries BEFORE domain rollback, matching the ordering
+        // used by execute_reorg and init_sync_start. Entity mutations (Spore,
+        // mNFT, dotbit) are reverted first so the subsequent domain rollback
+        // can rebuild aggregates from correct entity state.
+        self.store
+            .rollback_via_undo_log(append_store, cleanup_tip)?;
+
         // For range cleanup, we rollback to the block before the range
         // then the caller will re-sync from start_block
         self.store
-            .rollback_to_block_with_append_only_store(start_block - 1, Some(append_store))?;
+            .rollback_to_block_with_append_only_store(cleanup_tip, Some(append_store))?;
         // Re-derive script version/family rollups from corrected reference info.
         self.refresh_script_reference_rollups()?;
 

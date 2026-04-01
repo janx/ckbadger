@@ -144,6 +144,23 @@ pub enum CellSemanticTag {
     Cluster,
 }
 
+impl CellSemanticTag {
+    /// Convert to bitmask bit for `TxIndexEntry.semantic_tags`.
+    pub fn to_bit(self) -> u16 {
+        use ckbadger_store::types::semantic_tags;
+        match self {
+            Self::Plain => semantic_tags::PLAIN,
+            Self::Dao => semantic_tags::DAO,
+            Self::Sudt => semantic_tags::SUDT,
+            Self::Xudt => semantic_tags::XUDT,
+            Self::Dotbit => semantic_tags::DOTBIT,
+            Self::Mnft => semantic_tags::MNFT,
+            Self::Spore => semantic_tags::SPORE,
+            Self::Cluster => semantic_tags::CLUSTER,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) enum DaoCellState {
     Deposit,

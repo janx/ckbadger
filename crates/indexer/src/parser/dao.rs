@@ -209,30 +209,6 @@ impl DaoParser {
         let bytes: [u8; 8] = dao[8..16].try_into().ok()?;
         Some(u64::from_le_bytes(bytes))
     }
-
-    pub fn calculate_compensation(
-        capacity: u128,
-        occupied_capacity: u128,
-        ar_deposit: u64,
-        ar_withdraw_request: u64,
-    ) -> Option<u128> {
-        // AR starts at 10^16 at genesis and only increases; ar_deposit == 0 means
-        // invalid/corrupt chain data, so return None rather than a misleading zero.
-        if ar_deposit == 0 {
-            return None;
-        }
-
-        if capacity < occupied_capacity {
-            return None;
-        }
-        let free_capacity = capacity - occupied_capacity;
-
-        let ar_deposit = ar_deposit as u128;
-        let ar_withdraw_request = ar_withdraw_request as u128;
-
-        let gross = free_capacity.checked_mul(ar_withdraw_request)? / ar_deposit;
-        gross.checked_sub(free_capacity)
-    }
 }
 
 #[cfg(test)]
@@ -345,38 +321,40 @@ mod tests {
 
     #[test]
     fn test_calculate_compensation_basic() {
-        let capacity: u128 = 200_00000000;
-        let occupied: u128 = 102_00000000;
+        use ckbadger_common::dao::calculate_dao_compensation_from_ar;
+        let capacity: i64 = 200_00000000;
         let ar_deposit: u64 = 10_000_000_000_000_000;
         let ar_withdraw: u64 = 10_100_000_000_000_000;
 
         let compensation =
-            DaoParser::calculate_compensation(capacity, occupied, ar_deposit, ar_withdraw).unwrap();
+            calculate_dao_compensation_from_ar(capacity, ar_deposit, ar_withdraw).unwrap();
 
-        let free_capacity = capacity - occupied;
+        let free_capacity = (capacity as u128) - 102_00000000u128;
         let expected = (free_capacity * ar_withdraw as u128 / ar_deposit as u128) - free_capacity;
-        assert_eq!(compensation, expected);
+        assert_eq!(compensation, expected as i64);
     }
 
     #[test]
     fn test_calculate_compensation_zero_ar_deposit() {
-        // ar_deposit == 0 is invalid chain data (AR starts at 10^16), returns None
-        let compensation = DaoParser::calculate_compensation(100, 50, 0, 100);
-        assert_eq!(compensation, None);
+        use ckbadger_common::dao::calculate_dao_compensation_from_ar;
+        // ar_deposit == 0 is invalid chain data (AR starts at 10^16), returns Err
+        let result = calculate_dao_compensation_from_ar(200_00000000, 0, 100);
+        assert!(result.is_err());
     }
 
     #[test]
     fn test_calculate_compensation_no_growth() {
+        use ckbadger_common::dao::calculate_dao_compensation_from_ar;
         let ar = 10_000_000_000_000_000u64;
-        let compensation =
-            DaoParser::calculate_compensation(200_00000000, 102_00000000, ar, ar).unwrap();
+        let compensation = calculate_dao_compensation_from_ar(200_00000000, ar, ar).unwrap();
         assert_eq!(compensation, 0);
     }
 
     #[test]
-    fn test_calculate_compensation_returns_none_when_capacity_below_occupied() {
-        let compensation = DaoParser::calculate_compensation(100, 200, 10, 11);
-        assert!(compensation.is_none());
+    fn test_calculate_compensation_returns_err_when_capacity_below_occupied() {
+        use ckbadger_common::dao::calculate_dao_compensation_from_ar;
+        let result = calculate_dao_compensation_from_ar(100, 10, 11);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -557,16 +535,16 @@ mod proptest_tests {
     proptest! {
         #[test]
         fn prop_compensation_non_negative(
-            capacity in 102_00000000u128..10_000_000_000_000u128,
+            // Canonical function uses i64, so cap at i64::MAX
+            capacity in 102_00000000i64..10_000_000_000_000i64,
             ar_deposit in 1u64..u64::MAX / 2,
             ar_growth in 0u64..1_000_000_000_000u64,
         ) {
-            let occupied = 102_00000000u128;
+            use ckbadger_common::dao::calculate_dao_compensation_from_ar;
             let ar_withdraw = ar_deposit.saturating_add(ar_growth);
 
-            let compensation = DaoParser::calculate_compensation(
+            let compensation = calculate_dao_compensation_from_ar(
                 capacity,
-                occupied,
                 ar_deposit,
                 ar_withdraw
             ).unwrap();
@@ -576,23 +554,22 @@ mod proptest_tests {
 
         #[test]
         fn prop_compensation_bounded_by_capacity(
-            capacity in 102_00000000u128..10_000_000_000_000u128,
+            capacity in 102_00000000i64..10_000_000_000_000i64,
             ar_deposit in 1_000_000_000_000_000u64..10_000_000_000_000_000u64,
             ar_multiplier in 1u64..10u64,
         ) {
-            let occupied = 102_00000000u128;
+            use ckbadger_common::dao::calculate_dao_compensation_from_ar;
             let ar_withdraw = ar_deposit.saturating_mul(ar_multiplier);
 
-            let compensation = DaoParser::calculate_compensation(
+            let compensation = calculate_dao_compensation_from_ar(
                 capacity,
-                occupied,
                 ar_deposit,
                 ar_withdraw
             ).unwrap();
 
-            let max_possible = capacity.saturating_mul(ar_multiplier as u128);
+            let max_possible = (capacity as i128).saturating_mul(ar_multiplier as i128);
             prop_assert!(
-                compensation <= max_possible,
+                (compensation as i128) <= max_possible,
                 "Compensation {} should not exceed {} (capacity * ar_multiplier)",
                 compensation,
                 max_possible

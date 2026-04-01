@@ -992,6 +992,13 @@ pub(super) fn parse_blocks_parallel(
                         let witnesses: Vec<String> = tx.witnesses.clone();
                         let outputs_data: Vec<String> = tx.outputs_data.clone();
                         let total_output_capacity: i64 = cells.iter().map(|c| c.capacity).sum();
+                        // Compute output-side semantic tags; input-side tags are
+                        // OR-ed in later by write_parsed_batch after prefetch.
+                        let mut output_semantic_tags: u16 = 0;
+                        for cell in &cells {
+                            output_semantic_tags |=
+                                super::pipeline::classify_bulk_cell_semantic_tag(cell).to_bit();
+                        }
                         let cycles = if tx_index == 0 {
                             None
                         } else {
@@ -1043,7 +1050,7 @@ pub(super) fn parse_blocks_parallel(
                             tx_size: parsed_tx.tx_size,
                             cycles,
                             timestamp: parsed.timestamp,
-                            semantic_tags: 0,
+                            semantic_tags: output_semantic_tags,
                         })
                     })
                     .collect();
@@ -1233,6 +1240,29 @@ impl Indexer {
         let t_precompute = Instant::now();
 
         // Build reference vectors from pre-computed data (Passes 1-3 done in parser)
+        // OR-in input-side semantic tags now that input cells are resolved.
+        for tx_data in all_tx_data.iter_mut() {
+            if tx_data.is_cellbase {
+                continue;
+            }
+            for input in &tx_data.inputs {
+                let key = (
+                    input.previous_tx_hash.to_vec(),
+                    parsed_input_outpoint_index_i16(
+                        input.previous_output_index,
+                        "semantic_tags_input",
+                    )?,
+                );
+                if let Some(info) = input_cell_info
+                    .get(&key)
+                    .or_else(|| batch_cell_infos.get(&key))
+                {
+                    tx_data.semantic_tags |=
+                        super::pipeline::classify_live_cell_semantic_tag(&info.cell).to_bit();
+                }
+            }
+        }
+
         let mut all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = Vec::new();
         let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
         let txs_for_batch: Vec<&TxData> = all_tx_data.iter().collect();

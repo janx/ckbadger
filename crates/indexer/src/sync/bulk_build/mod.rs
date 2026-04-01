@@ -2714,17 +2714,7 @@ fn build_history_batches(
 }
 
 fn semantic_tag_to_bit(tag: facts::CellSemanticTag) -> u16 {
-    use ckbadger_store::types::semantic_tags;
-    match tag {
-        facts::CellSemanticTag::Plain => semantic_tags::PLAIN,
-        facts::CellSemanticTag::Dao => semantic_tags::DAO,
-        facts::CellSemanticTag::Sudt => semantic_tags::SUDT,
-        facts::CellSemanticTag::Xudt => semantic_tags::XUDT,
-        facts::CellSemanticTag::Dotbit => semantic_tags::DOTBIT,
-        facts::CellSemanticTag::Mnft => semantic_tags::MNFT,
-        facts::CellSemanticTag::Spore => semantic_tags::SPORE,
-        facts::CellSemanticTag::Cluster => semantic_tags::CLUSTER,
-    }
+    tag.to_bit()
 }
 
 /// Serialize into a pre-allocated Vec, avoiding realloc overhead of `bincode::serialize`

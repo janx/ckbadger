@@ -770,9 +770,15 @@ fn classify_output<'a>(
                 if deposit_block == 0 {
                     accum.dao_deposits.push(capacity);
                 } else {
+                    let deposit_block_i64 = i64::try_from(deposit_block).map_err(|_| {
+                        anyhow!(
+                            "DAO deposit block number exceeds i64 range: deposit_block={}",
+                            deposit_block
+                        )
+                    })?;
                     accum
                         .dao_withdraw_requests
-                        .push((capacity, deposit_block as i64));
+                        .push((capacity, deposit_block_i64));
                 }
             }
         }
