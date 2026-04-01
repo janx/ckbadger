@@ -80,14 +80,6 @@ static SPORE_CODE_HASH_BYTES: LazyLock<[Vec<u8>; 4]> =
 static CLUSTER_CODE_HASH_BYTES: LazyLock<[Vec<u8>; 3]> =
     LazyLock::new(|| CLUSTER_CODE_HASHES.map(decode_code_hash_bytes));
 
-fn format_script_code_hash_label(code_hash: &[u8]) -> String {
-    let full = hex::encode(code_hash);
-    let prefix = &full[..full.len().min(10)];
-    let suffix_start = full.len().saturating_sub(8);
-    let suffix = &full[suffix_start..];
-    format!("script:0x{}...{}", prefix, suffix)
-}
-
 /// Convert a `semantic_tags` bitmap into human-readable script label strings.
 /// Returns an empty vec when no bits are set (including legacy `0` values).
 fn script_labels_from_semantic_tags(semantic_tags: u16) -> Vec<String> {
@@ -115,96 +107,6 @@ fn script_labels_from_semantic_tags(semantic_tags: u16) -> Vec<String> {
         labels.push("Spore Cluster".to_string());
     }
     labels
-}
-
-/// Fallback script-label resolution for legacy data where `semantic_tags == 0`.
-/// Reads output cells (and input cells via CKB store) to collect code hashes,
-/// then resolves them to human-readable names via script_info.
-fn resolve_script_labels_from_cells(
-    state: &AppState,
-    tx_hash: &[u8],
-    outputs_count: i16,
-    is_cellbase: bool,
-) -> Result<Vec<String>, (axum::http::StatusCode, axum::Json<ApiError>)> {
-    let mut script_code_hashes: std::collections::HashSet<Vec<u8>> =
-        std::collections::HashSet::new();
-
-    // Check outputs to collect code hashes.
-    let output_outpoints: Vec<(&[u8], i16)> = (0..outputs_count)
-        .map(|output_index| (tx_hash, output_index))
-        .collect();
-    let output_cells = load_cells_preferring_consumed(
-        state.store.as_ref(),
-        &output_outpoints,
-        state.append_only_store.as_ref(),
-    )?;
-    for cell in output_cells.values() {
-        if let Some(ref tch) = cell.type_code_hash {
-            script_code_hashes.insert(tch.clone());
-        }
-        script_code_hashes.insert(cell.lock_code_hash.clone());
-    }
-
-    // Check inputs to collect code hashes.
-    if !is_cellbase {
-        if let Some(ref ckb_store) = state.ckb_store {
-            if tx_hash.len() == 32 {
-                let mut tx_hash_arr = [0u8; 32];
-                tx_hash_arr.copy_from_slice(tx_hash);
-                if let Some(tx_view) = ckb_store.get_transaction(&tx_hash_arr) {
-                    use ckb_types::prelude::*;
-                    let mut input_outpoints: Vec<(Vec<u8>, i16)> = Vec::new();
-                    for input in tx_view.inputs().into_iter() {
-                        let prev_hash: [u8; 32] = input.previous_output().tx_hash().unpack();
-                        let prev_index_u32: u32 = input.previous_output().index().unpack();
-                        if let Ok(prev_index) = i16::try_from(prev_index_u32) {
-                            input_outpoints.push((prev_hash.to_vec(), prev_index));
-                        }
-                    }
-                    let input_refs: Vec<(&[u8], i16)> = input_outpoints
-                        .iter()
-                        .map(|(h, i)| (h.as_slice(), *i))
-                        .collect();
-                    let input_cells = load_cells_preferring_consumed(
-                        state.store.as_ref(),
-                        &input_refs,
-                        state.append_only_store.as_ref(),
-                    )?;
-                    for cell in input_cells.values() {
-                        if let Some(ref tch) = cell.type_code_hash {
-                            script_code_hashes.insert(tch.clone());
-                        }
-                        script_code_hashes.insert(cell.lock_code_hash.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    let mut script_labels: Vec<String> = script_code_hashes
-        .iter()
-        .map(
-            |ch| -> Result<String, (axum::http::StatusCode, axum::Json<ApiError>)> {
-                let known_name = state
-                    .store
-                    .get_script_info(ch)
-                    .map_err(|e| ApiError::internal(e.to_string()))?
-                    .and_then(|si| si.name)
-                    .map(|name| name.trim().to_string())
-                    .filter(|name| is_known_script_name(Some(name)));
-                Ok(known_name.unwrap_or_else(|| format_script_code_hash_label(ch)))
-            },
-        )
-        .collect::<Result<Vec<_>, _>>()?;
-    script_labels.retain(|name| {
-        !matches!(
-            name.as_str(),
-            "Default Lock" | "Default Multisig" | "anyone_can_pay"
-        )
-    });
-    script_labels.sort();
-    script_labels.dedup();
-    Ok(script_labels)
 }
 
 pub(crate) struct DepGroupParseResult {
@@ -2819,30 +2721,6 @@ fn list_canonical_addr_txs_page(
     Ok(out)
 }
 
-fn load_cells_preferring_consumed(
-    store: &CkbadgerStore,
-    outpoints: &[(&[u8], i16)],
-    cells_store: &CkbadgerStore,
-) -> Result<
-    HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>,
-    (axum::http::StatusCode, axum::Json<ApiError>),
-> {
-    if outpoints.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    let mut cells = store
-        .get_cells_batch(outpoints, cells_store)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let consumed_cells = store
-        .get_consumed_cells_batch(outpoints, cells_store)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    for (outpoint, cell) in consumed_cells {
-        cells.insert(outpoint, cell);
-    }
-    Ok(cells)
-}
-
 async fn get_address_transactions(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(addr): axum::extract::Path<String>,
@@ -2957,14 +2835,9 @@ async fn get_address_transactions(
                 let tx_size = Some(tx_entry.tx_size);
                 let cycles = tx_entry.cycles;
 
-                // Script labels from semantic_tags bitmap.
-                // When semantic_tags == 0 (legacy data before Task 5/6 materialization),
-                // fall back to the cell-based label resolution.
-                let script_labels = if tx_entry.semantic_tags != 0 {
-                    script_labels_from_semantic_tags(tx_entry.semantic_tags)
-                } else {
-                    resolve_script_labels_from_cells(&state, &tx_hash, outputs_count, is_cellbase)?
-                };
+                // Script labels from semantic_tags bitmap (single calculation path).
+                // semantic_tags == 0 means "plain CKB transfer" → empty labels is correct.
+                let script_labels = script_labels_from_semantic_tags(tx_entry.semantic_tags);
 
                 Ok(AddressTransactionResponse {
                     tx_hash: format!("0x{}", hex::encode(&tx_hash)),
@@ -3788,12 +3661,6 @@ mod tests {
     }
 
     #[test]
-    fn test_format_script_code_hash_label() {
-        let label = format_script_code_hash_label(&[0xAB; 32]);
-        assert_eq!(label, "script:0xababababab...abababab");
-    }
-
-    #[test]
     fn test_script_labels_from_semantic_tags() {
         use ckbadger_store::types::semantic_tags as st;
 
@@ -3920,42 +3787,6 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].lock_script_hash, "0x01");
         assert_eq!(rows[0].last_activity_block, 100);
-    }
-
-    #[test]
-    fn test_load_cells_preferring_consumed_merges_live_and_consumed_cells() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let tx_live = [0x11u8; 32];
-        let tx_consumed = [0x22u8; 32];
-
-        let live_cell = LiveCellInfo {
-            capacity: 42_00000000,
-            ..make_payload()
-        };
-        let consumed_cell = LiveCellInfo {
-            capacity: 99_00000000,
-            ..make_payload()
-        };
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&tx_live, 0, &live_cell, 100);
-        batch.put_cell(&tx_consumed, 0, &consumed_cell, 100);
-        batch.put_consumed_cell_with_consumer(&tx_consumed, 0, &consumed_cell, 100, 123, None);
-        batch.delete_cell(&tx_consumed, 0);
-        batch.commit().unwrap();
-
-        let outpoints: Vec<(&[u8], i16)> = vec![(&tx_live, 0), (&tx_consumed, 0)];
-        let cells = load_cells_preferring_consumed(&store, &outpoints, &store).unwrap();
-        assert_eq!(cells.len(), 2);
-        assert_eq!(
-            cells.get(&(tx_live.to_vec(), 0)).map(|c| c.capacity),
-            Some(42_00000000)
-        );
-        assert_eq!(
-            cells.get(&(tx_consumed.to_vec(), 0)).map(|c| c.capacity),
-            Some(99_00000000)
-        );
     }
 
     #[test]
