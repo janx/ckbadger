@@ -2713,6 +2713,20 @@ fn build_history_batches(
     })
 }
 
+fn semantic_tag_to_bit(tag: facts::CellSemanticTag) -> u16 {
+    use ckbadger_store::types::semantic_tags;
+    match tag {
+        facts::CellSemanticTag::Plain => semantic_tags::PLAIN,
+        facts::CellSemanticTag::Dao => semantic_tags::DAO,
+        facts::CellSemanticTag::Sudt => semantic_tags::SUDT,
+        facts::CellSemanticTag::Xudt => semantic_tags::XUDT,
+        facts::CellSemanticTag::Dotbit => semantic_tags::DOTBIT,
+        facts::CellSemanticTag::Mnft => semantic_tags::MNFT,
+        facts::CellSemanticTag::Spore => semantic_tags::SPORE,
+        facts::CellSemanticTag::Cluster => semantic_tags::CLUSTER,
+    }
+}
+
 /// Serialize into a pre-allocated Vec, avoiding realloc overhead of `bincode::serialize`
 /// which starts with a small buffer and grows. Pre-computes exact size first.
 ///
@@ -2791,6 +2805,13 @@ fn build_history_rows_for_block(
             );
         }
 
+        let mut stags: u16 = 0;
+        for cell in resolved_tx.cells.iter() {
+            stags |= semantic_tag_to_bit(cell.semantic_tag);
+        }
+        for input in &resolved_tx.resolved_inputs {
+            stags |= semantic_tag_to_bit(input.semantic_tag);
+        }
         let entry = TxIndexEntry {
             is_cellbase: tx.is_cellbase,
             timestamp: tx.timestamp_ms,
@@ -2799,7 +2820,7 @@ fn build_history_rows_for_block(
             fee: resolved_tx_fee(tx, resolved_tx)?,
             tx_size: tx.tx_size,
             cycles: tx.cycles,
-            semantic_tags: 0,
+            semantic_tags: stags,
         };
         let tx_location = keys::encode_composite(&[
             &keys::encode_block_num(tx.block_number),
@@ -2816,14 +2837,24 @@ fn build_history_rows_for_block(
             tx_location,
         ));
 
-        let mut touched_lock_hash_ids = FxHashSet::default();
+        // Compute per-address capacity change (output_cap - input_cap for each lock).
+        let mut per_addr: FxHashMap<crate::sync::types::InternId, (i64, i64, bool, bool)> =
+            FxHashMap::default();
+        // Tuple: (output_cap_sum, input_cap_sum, has_outputs, has_inputs)
         for output in resolved_tx.cells.iter() {
-            touched_lock_hash_ids.insert(output.lock_script_hash_id);
+            let e = per_addr.entry(output.lock_script_hash_id).or_default();
+            e.0 = e.0.saturating_add(output.capacity);
+            e.2 = true;
         }
         for input in &resolved_tx.resolved_inputs {
-            touched_lock_hash_ids.insert(input.lock_script_hash_id);
+            let e = per_addr.entry(input.lock_script_hash_id).or_default();
+            e.1 = e.1.saturating_add(input.capacity);
+            e.3 = true;
         }
-        for lock_hash_id in touched_lock_hash_ids {
+        for (lock_hash_id, (out_cap, in_cap, has_out, has_in)) in per_addr {
+            let capacity_change = out_cap.saturating_sub(in_cap);
+            let value = ckbadger_store::types::AddrTxValue::new(capacity_change, has_in, has_out);
+            let encoded_value = bincode_serialize_presized(&value)?;
             rows.push(materialize::MaterializedRow::new(
                 CF_ADDR_TXS,
                 keys::encode_addr_tx_key(
@@ -2832,7 +2863,7 @@ fn build_history_rows_for_block(
                     tx.tx_index,
                     &tx.hash,
                 ),
-                vec![],
+                encoded_value,
             ));
         }
 
