@@ -312,7 +312,10 @@ export default function BlockDetailPage() {
                     </span>
                   ) : feeStats?.cyclesPending ||
                     (feeStats && feeStats.totalCycles === 0 && feeStats.transactionCount > 0) ? (
-                    <span className="text-text-dim italic">Calculating...</span>
+                    <span className="text-text inline-flex items-center gap-2 italic">
+                      <span className="border-base-border inline-block h-3 w-3 animate-spin rounded-full border-2 border-t-transparent" />
+                      <span className="cycles-calculating-marquee">Calculating ...</span>
+                    </span>
                   ) : (
                     <span className="text-text-dim">-</span>
                   )}
