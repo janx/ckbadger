@@ -9,6 +9,7 @@ pub mod utils;
 pub mod warmup;
 pub mod ws;
 
+use arc_swap::ArcSwap;
 use axum::{routing::get, Router};
 use ckbadger_common::{
     BackgroundTaskEntry, BackgroundTaskKind, BackgroundTaskState, BackgroundTasksData,
@@ -25,6 +26,7 @@ use ckb_store_reader::CkbChainReader;
 use cycles::CyclesClient;
 use middleware::IpRateLimitLayer;
 use response::{ApiError, ApiRouteError};
+use warmup::SporeCache;
 use ws::WsManager;
 
 #[derive(Debug)]
@@ -73,6 +75,8 @@ pub struct AppState {
     pub background_tasks: Arc<RwLock<BackgroundTasksData>>,
     /// Root directory for content-addressed media blobs (decoded DOB outputs).
     pub dob_decode_dir: PathBuf,
+    /// Typed spore cache with pre-computed indexes, replaced atomically by warmup.
+    pub spore_cache: Arc<ArcSwap<Option<SporeCache>>>,
 }
 
 impl AppState {
@@ -200,6 +204,7 @@ pub async fn create_router(config: AppConfig) -> Router {
         asset_cache_warmup_error: Arc::new(RwLock::new(None)),
         background_tasks: Arc::new(RwLock::new(BackgroundTasksData::default())),
         dob_decode_dir: config.dob_decode_dir,
+        spore_cache: Arc::new(ArcSwap::from_pointee(None)),
     });
 
     if let Err(e) = warmup::warmup_assets_cache_once(state.clone()).await {
