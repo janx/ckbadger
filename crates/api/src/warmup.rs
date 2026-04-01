@@ -502,7 +502,43 @@ fn refresh_spore_cache_sync(state: &AppState) -> anyhow::Result<()> {
     spores.sort_by(|a, b| b.1.created_at_block.cmp(&a.1.created_at_block));
     let cache = SporeCache::build(spores);
     state.spore_cache.store(Arc::new(Some(cache)));
+
+    warmup_cluster_daily_deltas_sync(state);
+
     Ok(())
+}
+
+fn warmup_cluster_daily_deltas_sync(state: &AppState) {
+    // Get all cluster IDs from cluster_agg CF (small CF, fast scan)
+    let clusters = match state.store.list_cluster_aggregates() {
+        Ok(clusters) => clusters,
+        Err(e) => {
+            tracing::warn!("Failed to list cluster aggregates for warmup: {}", e);
+            return;
+        }
+    };
+
+    // Scan daily deltas for each cluster to warm the block cache.
+    // We don't need the results — just iterating warms the RocksDB block cache.
+    let mut warmed = 0usize;
+    for (cluster_id, _agg) in &clusters {
+        match state.store.list_cluster_daily_deltas(cluster_id) {
+            Ok(_) => warmed += 1,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to warm cluster daily deltas for cluster 0x{}: {}",
+                    hex::encode(cluster_id),
+                    e
+                );
+            }
+        }
+    }
+
+    info!(
+        clusters_warmed = warmed,
+        clusters_total = clusters.len(),
+        "Warmed cluster daily deltas block cache"
+    );
 }
 
 fn refresh_named_script_cache_sync(state: &AppState) -> anyhow::Result<()> {
