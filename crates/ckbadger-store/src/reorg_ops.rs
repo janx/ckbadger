@@ -439,13 +439,13 @@ fn should_delete_stats_for_replay(
             Ok(date >= cutoff_date)
         }
         // collection_id(32 padded) + date(4B u32 YYYYMMDD BE)
-        keys::STATS_PREFIX_NFT_DAILY => {
+        keys::STATS_PREFIX_OBJECT_DAILY => {
             let cutoff_date = parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd)?;
             if suffix.len() < 36 {
                 return Ok(false);
             }
             let date = u32::from_be_bytes(suffix[32..36].try_into().map_err(|_| {
-                anyhow::anyhow!("invalid nft_daily suffix length: {}", suffix.len())
+                anyhow::anyhow!("invalid object_daily suffix length: {}", suffix.len())
             })?);
             Ok(date >= cutoff_date)
         }
@@ -468,7 +468,7 @@ fn should_delete_stats_for_replay(
         // per-asset hourly transfer counters: entity_hash(32B) + hour_bucket(8B BE i64)
         keys::STATS_PREFIX_TOKEN_HOURLY
         | keys::STATS_PREFIX_SPORE_HOURLY
-        | keys::STATS_PREFIX_NFT_HOURLY => {
+        | keys::STATS_PREFIX_OBJECT_HOURLY => {
             if suffix.len() < 40 {
                 return Ok(false);
             }
@@ -2178,7 +2178,7 @@ impl CkbadgerStore {
 
         // 8d. Delete object_collection_activities entries for rolled-back blocks.
         // Also count surviving entries per collection to avoid a duplicate scan in stage 10.
-        let mut nft_activity_totals: HashMap<Vec<u8>, i64> = HashMap::new();
+        let mut object_activity_totals: HashMap<Vec<u8>, i64> = HashMap::new();
         {
             let mut removed = 0u64;
             let mut stage = RollbackStageProgress::new("delete_object_collection_activities");
@@ -2191,19 +2191,19 @@ impl CkbadgerStore {
                         e
                     )
                 })?;
-                if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
+                if key.len() != keys::OBJECT_COLLECTION_ACTIVITY_KEY_SIZE {
                     continue;
                 }
                 let (collection_id, block_num, _tx_idx, _block_hash, _tx_hash) =
-                    keys::decode_nft_collection_activity_key(&key);
+                    keys::decode_object_collection_activity_key(&key);
                 if block_num <= rollback_to {
                     // Surviving entry — count it for the aggregate rebuild.
-                    let total = nft_activity_totals
+                    let total = object_activity_totals
                         .entry(collection_id.to_vec())
                         .or_insert(0);
                     *total = total.checked_add(1).ok_or_else(|| {
                         anyhow::anyhow!(
-                            "nft collection activities_count overflow while counting survivors in rollback"
+                            "object collection activities_count overflow while counting survivors in rollback"
                         )
                     })?;
                     stage.tick(removed);
@@ -2239,11 +2239,11 @@ impl CkbadgerStore {
                         e
                     )
                 })?;
-                if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
+                if key.len() != keys::OBJECT_COLLECTION_ACTIVITY_KEY_SIZE {
                     continue;
                 }
                 let (collection_id, block_num, _tx_idx, _block_hash, _tx_hash) =
-                    keys::decode_nft_collection_activity_key(&key);
+                    keys::decode_object_collection_activity_key(&key);
                 if block_num <= rollback_to {
                     // Surviving entry — count it for the aggregate rebuild.
                     let total = identity_activity_totals
@@ -2752,10 +2752,10 @@ impl CkbadgerStore {
                 + tokens_updated,
         );
 
-        // 10. Repair Spore/NFT domain state for orphaned blocks and rebuild secondary indexes.
-        let mut stage = RollbackStageProgress::new("repair_spore_nft_domain");
+        // 10. Repair Spore/Object domain state for orphaned blocks and rebuild secondary indexes.
+        let mut stage = RollbackStageProgress::new("repair_spore_object_domain");
         let mut spore_deleted = 0u64;
-        let mut nft_deleted = 0u64;
+        let mut object_deleted = 0u64;
         let mut secondary_keys_deleted = 0u64;
         let mut secondary_keys_written = 0u64;
         let mut aggregate_rows_written = 0u64;
@@ -2784,10 +2784,10 @@ impl CkbadgerStore {
         batch.delete_range_cf::<&[u8]>(self.cf_stats_identity(), &[], &[0xFF; 128]);
         batch.delete_range_cf::<&[u8]>(self.cf_identity_by_collection(), &[], &[0xFF; 128]);
 
-        // Clear NFT collection-owner counters (single-byte prefix in stats_object CF).
+        // Clear object collection-owner counters (single-byte prefix in stats_mnft CF).
         {
-            let start = [keys::STATS_PREFIX_NFT_COLLECTION_OWNER];
-            let end = [keys::STATS_PREFIX_NFT_COLLECTION_OWNER + 1];
+            let start = [keys::STATS_PREFIX_OBJECT_COLLECTION_OWNER];
+            let end = [keys::STATS_PREFIX_OBJECT_COLLECTION_OWNER + 1];
             batch.delete_range_cf(self.cf_stats_mnft(), start, end);
         }
 
@@ -2795,8 +2795,8 @@ impl CkbadgerStore {
 
         let mut cluster_aggs: HashMap<Vec<u8>, ClusterAggregate> = HashMap::new();
         let mut cluster_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
-        let mut nft_collection_aggs: HashMap<Vec<u8>, MnftCollectionAggregate> = HashMap::new();
-        let mut nft_collection_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
+        let mut object_collection_aggs: HashMap<Vec<u8>, MnftCollectionAggregate> = HashMap::new();
+        let mut object_collection_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
 
         let iter = self.iterator_cf(self.cf_spore_data(), IteratorMode::Start);
         for item in iter {
@@ -2841,7 +2841,7 @@ impl CkbadgerStore {
                 spore_deleted += 1;
                 stage.tick(
                     spore_deleted
-                        + nft_deleted
+                        + object_deleted
                         + secondary_keys_deleted
                         + secondary_keys_written
                         + aggregate_rows_written
@@ -2920,7 +2920,7 @@ impl CkbadgerStore {
             }
             stage.tick(
                 spore_deleted
-                    + nft_deleted
+                    + object_deleted
                     + secondary_keys_deleted
                     + secondary_keys_written
                     + aggregate_rows_written
@@ -2932,25 +2932,25 @@ impl CkbadgerStore {
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate nft_data while repairing rollback state: {}",
+                    "failed to iterate mnft_data while repairing rollback state: {}",
                     e
                 )
             })?;
-            let nft_id = key.to_vec();
+            let object_id = key.to_vec();
             let entry: ObjectEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to deserialize nft_data entry during rollback repair: nft_id=0x{}, error={}",
-                    bytes_to_hex(&nft_id),
+                    "failed to deserialize mnft_data entry during rollback repair: object_id=0x{}, error={}",
+                    bytes_to_hex(&object_id),
                     e
                 )
             })?;
 
             if entry.created_at_block > rollback_to {
                 batch.delete_cf(self.cf_mnft_data(), &key);
-                nft_deleted += 1;
+                object_deleted += 1;
                 stage.tick(
                     spore_deleted
-                        + nft_deleted
+                        + object_deleted
                         + secondary_keys_deleted
                         + secondary_keys_written
                         + aggregate_rows_written
@@ -2961,7 +2961,7 @@ impl CkbadgerStore {
 
             match entry.standard {
                 ObjectStandard::MnftClass => {
-                    let agg = nft_collection_aggs.entry(nft_id).or_insert_with(|| {
+                    let agg = object_collection_aggs.entry(object_id).or_insert_with(|| {
                         MnftCollectionAggregate {
                             standard: ObjectStandard::MnftClass,
                             ..Default::default()
@@ -2974,7 +2974,8 @@ impl CkbadgerStore {
                 }
                 ObjectStandard::MnftToken => {
                     if let Some(collection_id) = entry.collection_id.as_ref() {
-                        let idx_key = keys::encode_nft_by_collection_key(collection_id, &nft_id);
+                        let idx_key =
+                            keys::encode_object_by_collection_key(collection_id, &object_id);
                         batch.put_cf(self.cf_mnft_by_collection(), idx_key, []);
                         secondary_keys_written += 1;
                         // Resolve storage tier from class entry before taking mutable borrow on agg
@@ -2989,7 +2990,7 @@ impl CkbadgerStore {
                                 _ => CompositionTier::Unknown,
                             })
                             .unwrap_or(CompositionTier::Unknown);
-                        let agg = nft_collection_aggs
+                        let agg = object_collection_aggs
                             .entry(collection_id.clone())
                             .or_insert_with(|| MnftCollectionAggregate {
                                 standard: ObjectStandard::MnftClass,
@@ -3027,14 +3028,14 @@ impl CkbadgerStore {
                             })?;
                             let owner_lock_hash = entry.owner_lock_hash.as_ref().ok_or_else(|| {
                                 anyhow::anyhow!(
-                                    "mNFT live entry missing owner_lock_hash while repairing rollback state: collection_id=0x{}, nft_id=0x{}",
+                                    "mNFT live entry missing owner_lock_hash while repairing rollback state: collection_id=0x{}, object_id=0x{}",
                                     bytes_to_hex(collection_id),
-                                    bytes_to_hex(&nft_id)
+                                    bytes_to_hex(&object_id)
                                 )
                             })?;
                             let owner_key = (collection_id.clone(), owner_lock_hash.clone());
                             let owner_count =
-                                nft_collection_owner_counts.entry(owner_key).or_insert(0);
+                                object_collection_owner_counts.entry(owner_key).or_insert(0);
                             *owner_count = owner_count.checked_add(1).ok_or_else(|| {
                                 anyhow::anyhow!(
                                     "mNFT owner count overflow while repairing rollback state: collection_id=0x{}",
@@ -3053,7 +3054,7 @@ impl CkbadgerStore {
             }
             stage.tick(
                 spore_deleted
-                    + nft_deleted
+                    + object_deleted
                     + secondary_keys_deleted
                     + secondary_keys_written
                     + aggregate_rows_written
@@ -3112,7 +3113,7 @@ impl CkbadgerStore {
                 secondary_keys_deleted += 1;
                 stage.tick(
                     spore_deleted
-                        + nft_deleted
+                        + object_deleted
                         + secondary_keys_deleted
                         + secondary_keys_written
                         + aggregate_rows_written
@@ -3166,7 +3167,7 @@ impl CkbadgerStore {
             }
             stage.tick(
                 spore_deleted
-                    + nft_deleted
+                    + object_deleted
                     + secondary_keys_deleted
                     + secondary_keys_written
                     + aggregate_rows_written
@@ -3236,34 +3237,39 @@ impl CkbadgerStore {
             aggregate_rows_written += 1;
         }
 
-        let mut nft_owner_totals: HashMap<Vec<u8>, i64> = HashMap::new();
-        for ((collection_id, lock_hash), count) in &nft_collection_owner_counts {
-            let owner_key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
+        let mut object_owner_totals: HashMap<Vec<u8>, i64> = HashMap::new();
+        for ((collection_id, lock_hash), count) in &object_collection_owner_counts {
+            let owner_key = keys::encode_object_collection_owner_key(collection_id, lock_hash);
             batch.put_cf(
                 self.cf_stats_mnft(),
                 owner_key,
                 count.to_le_bytes().as_slice(),
             );
             secondary_keys_written += 1;
-            let holder_total = nft_owner_totals.entry(collection_id.clone()).or_insert(0);
+            let holder_total = object_owner_totals
+                .entry(collection_id.clone())
+                .or_insert(0);
             *holder_total = holder_total.checked_add(1).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "nft collection holders_count overflow while repairing rollback state: collection_id=0x{}",
+                    "object collection holders_count overflow while repairing rollback state: collection_id=0x{}",
                     bytes_to_hex(collection_id)
                 )
             })?;
         }
 
-        // Collection activity counts (nft_activity_totals, identity_activity_totals)
+        // Collection activity counts (object_activity_totals, identity_activity_totals)
         // were already computed during stages 8d/8e to avoid a duplicate full-CF scan
         // and the data inconsistency from reading uncommitted batch deletes.
 
-        for (collection_id, agg) in &mut nft_collection_aggs {
-            agg.holders_count = nft_owner_totals.get(collection_id).copied().unwrap_or(0);
-            agg.activities_count = nft_activity_totals.get(collection_id).copied().unwrap_or(0);
+        for (collection_id, agg) in &mut object_collection_aggs {
+            agg.holders_count = object_owner_totals.get(collection_id).copied().unwrap_or(0);
+            agg.activities_count = object_activity_totals
+                .get(collection_id)
+                .copied()
+                .unwrap_or(0);
             let encoded = bincode::serialize(agg).map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to serialize nft collection aggregate during rollback repair: collection_id=0x{}, error={}",
+                    "failed to serialize object collection aggregate during rollback repair: collection_id=0x{}, error={}",
                     bytes_to_hex(collection_id),
                     e
                 )
@@ -3336,7 +3342,7 @@ impl CkbadgerStore {
 
         stage.finish(
             spore_deleted
-                + nft_deleted
+                + object_deleted
                 + secondary_keys_deleted
                 + secondary_keys_written
                 + aggregate_rows_written
@@ -3649,15 +3655,15 @@ mod tests {
     }
 
     #[test]
-    fn test_should_delete_stats_for_replay_nft_daily_prefix() {
+    fn test_should_delete_stats_for_replay_object_daily_prefix() {
         let cutoff = b"20260210";
         let cutoff_hh = b"2026021000";
         let collection_id = [0xEE; 24];
 
-        let new_key = crate::keys::encode_nft_daily_key(&collection_id, 20260211);
+        let new_key = crate::keys::encode_object_daily_key(&collection_id, 20260211);
         assert!(should_delete_stats_for_replay(&new_key, cutoff, cutoff_hh, 0, 0).unwrap());
 
-        let old_key = crate::keys::encode_nft_daily_key(&collection_id, 20260209);
+        let old_key = crate::keys::encode_object_daily_key(&collection_id, 20260209);
         assert!(!should_delete_stats_for_replay(&old_key, cutoff, cutoff_hh, 0, 0).unwrap());
     }
 
@@ -3720,7 +3726,7 @@ mod tests {
         );
         assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
 
-        let key = crate::keys::encode_nft_type_index_key(&type_script_hash);
+        let key = crate::keys::encode_object_type_index_key(&type_script_hash);
         assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, 0, 0).unwrap());
     }
 
@@ -3750,12 +3756,12 @@ mod tests {
         let key = crate::keys::encode_spore_hourly_key(&cluster_id, cutoff_hour - 1);
         assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
 
-        // NFT_HOURLY at cutoff_hour → deleted
-        let key = crate::keys::encode_nft_hourly_key(&collection_id, cutoff_hour);
+        // OBJECT_HOURLY at cutoff_hour → deleted
+        let key = crate::keys::encode_object_hourly_key(&collection_id, cutoff_hour);
         assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
 
-        // NFT_HOURLY before cutoff → preserved
-        let key = crate::keys::encode_nft_hourly_key(&collection_id, cutoff_hour - 1);
+        // OBJECT_HOURLY before cutoff → preserved
+        let key = crate::keys::encode_object_hourly_key(&collection_id, cutoff_hour - 1);
         assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hh, cutoff_hour, 0).unwrap());
     }
 
@@ -3992,11 +3998,11 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_rebuilds_nft_collection_aggregate_with_canonical_activity_count_only() {
+    fn test_rollback_rebuilds_object_collection_aggregate_with_canonical_activity_count_only() {
         let dir = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(dir.path()).unwrap();
         let class_id = vec![0x44; 32];
-        let nft_id = vec![0x55; 32];
+        let object_id = vec![0x55; 32];
 
         let header0 = CachedBlockHeader {
             hash: vec![0x01; 32],
@@ -4025,11 +4031,11 @@ mod tests {
         domain_batch.put_block_header(0, &header0);
         domain_batch.put_block_header(1, &header1);
         domain_batch.put_mnft(
-            &nft_id,
+            &object_id,
             &ObjectEntry {
                 standard: ObjectStandard::MnftToken,
                 collection_id: Some(class_id.clone()),
-                token_id: Some(nft_id.clone()),
+                token_id: Some(object_id.clone()),
                 owner_lock_hash: Some(vec![0x66; 32]),
                 name: None,
                 description: None,
@@ -4101,7 +4107,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(dir.path()).unwrap();
         let class_id = vec![0x44; 32];
-        let nft_id = vec![0x55; 32];
+        let object_id = vec![0x55; 32];
 
         let header0 = CachedBlockHeader {
             hash: vec![0x01; 32],
@@ -4130,11 +4136,11 @@ mod tests {
         batch.put_block_header(0, &header0);
         batch.put_block_header(1, &header1);
         batch.put_mnft(
-            &nft_id,
+            &object_id,
             &ObjectEntry {
                 standard: ObjectStandard::MnftToken,
                 collection_id: Some(class_id.clone()),
-                token_id: Some(nft_id.clone()),
+                token_id: Some(object_id.clone()),
                 owner_lock_hash: Some(vec![0x66; 32]),
                 name: None,
                 description: None,
@@ -5684,7 +5690,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_repairs_spore_nft_domain_indexes_and_aggregates() {
+    fn test_rollback_repairs_spore_object_domain_indexes_and_aggregates() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
@@ -5715,8 +5721,8 @@ mod tests {
         let owner = vec![0xCC; 32];
         let spore_keep_id = vec![0x11; 32];
         let spore_drop_id = vec![0x22; 32];
-        let nft_keep_id = vec![0x33; 32];
-        let nft_drop_id = vec![0x44; 32];
+        let object_keep_id = vec![0x33; 32];
+        let object_drop_id = vec![0x44; 32];
         let class_id = vec![0x55; 24];
 
         let mut batch = StoreBatch::new(&store);
@@ -5782,11 +5788,11 @@ mod tests {
             },
         );
         batch.put_mnft(
-            &nft_keep_id,
+            &object_keep_id,
             &ObjectEntry {
                 standard: ObjectStandard::MnftToken,
                 collection_id: Some(class_id.clone()),
-                token_id: Some(nft_keep_id.clone()),
+                token_id: Some(object_keep_id.clone()),
                 owner_lock_hash: Some(owner.clone()),
                 name: None,
                 description: None,
@@ -5802,11 +5808,11 @@ mod tests {
             },
         );
         batch.put_mnft(
-            &nft_drop_id,
+            &object_drop_id,
             &ObjectEntry {
                 standard: ObjectStandard::MnftToken,
                 collection_id: Some(class_id.clone()),
-                token_id: Some(nft_drop_id.clone()),
+                token_id: Some(object_drop_id.clone()),
                 owner_lock_hash: Some(owner.clone()),
                 name: None,
                 description: None,
@@ -5851,8 +5857,8 @@ mod tests {
 
         assert!(store.get_spore(&spore_keep_id).unwrap().is_some());
         assert!(store.get_spore(&spore_drop_id).unwrap().is_none());
-        assert!(store.get_mnft(&nft_keep_id).unwrap().is_some());
-        assert!(store.get_mnft(&nft_drop_id).unwrap().is_none());
+        assert!(store.get_mnft(&object_keep_id).unwrap().is_some());
+        assert!(store.get_mnft(&object_drop_id).unwrap().is_none());
 
         let spores_in_cluster = store.list_spores_by_cluster(&cluster_id, 10).unwrap();
         assert_eq!(spores_in_cluster.len(), 1);
@@ -5862,7 +5868,7 @@ mod tests {
             .list_mnft_ids_by_collection(&class_id, None, 10)
             .unwrap();
         assert_eq!(class_tokens.len(), 1);
-        assert_eq!(class_tokens[0], nft_keep_id);
+        assert_eq!(class_tokens[0], object_keep_id);
 
         let cluster_agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
         assert_eq!(cluster_agg.total_count, 1);

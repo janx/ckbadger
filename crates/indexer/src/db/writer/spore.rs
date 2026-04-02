@@ -421,7 +421,7 @@ impl BatchWriter {
         state: &mut SporeBatchState,
     ) -> Result<()> {
         let existing = state.get_spore(self.store.as_ref(), &cluster.cluster_id)?;
-        self.record_nft_undo(
+        self.record_object_undo(
             batch,
             block_number,
             CF_SPORE_DATA,
@@ -481,7 +481,7 @@ impl BatchWriter {
         // did:ckb entries are written to the identity store, not the spore/object store.
         if new_is_did {
             let existing = state.get_identity(self.store.as_ref(), &spore.spore_id)?;
-            self.record_nft_undo(
+            self.record_object_undo(
                 batch,
                 block_number,
                 CF_IDENTITY_DATA,
@@ -561,7 +561,7 @@ impl BatchWriter {
 
         // Regular spore/object handling below.
         let existing = state.get_spore(self.store.as_ref(), &spore.spore_id)?;
-        self.record_nft_undo(
+        self.record_object_undo(
             batch,
             block_number,
             CF_SPORE_DATA,
@@ -802,7 +802,7 @@ impl BatchWriter {
                     hex::encode(spore_id)
                 );
             }
-            self.record_nft_undo(
+            self.record_object_undo(
                 batch,
                 block_number,
                 CF_IDENTITY_DATA,
@@ -847,7 +847,7 @@ impl BatchWriter {
                     hex::encode(spore_id)
                 );
             }
-            self.record_nft_undo(
+            self.record_object_undo(
                 batch,
                 block_number,
                 CF_SPORE_DATA,

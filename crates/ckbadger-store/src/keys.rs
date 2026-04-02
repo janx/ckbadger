@@ -511,21 +511,21 @@ pub mod stats_prefix {
     pub const HODL_WAVE: u8 = 0x0B;
     pub const CLUSTER_OWNER: u8 = 0x0C;
     pub const SPORE_HOURLY: u8 = 0x0D;
-    pub const NFT_HOURLY: u8 = 0x0E;
+    pub const OBJECT_HOURLY: u8 = 0x0E;
     pub const SCRIPT_DAILY: u8 = 0x0F;
     pub const TOKEN_DAILY: u8 = 0x10;
     pub const CLUSTER_DAILY: u8 = 0x11;
     pub const SPORE_DAILY: u8 = 0x12;
     pub const SPORE_OUTPOINT: u8 = 0x13;
     pub const SPORE_TYPE_INDEX: u8 = 0x14;
-    pub const NFT_DAILY: u8 = 0x15;
-    pub const NFT_TYPE_INDEX: u8 = 0x16;
+    pub const OBJECT_DAILY: u8 = 0x15;
+    pub const OBJECT_TYPE_INDEX: u8 = 0x16;
     pub const MNFT_CLASS_OUTPOINT: u8 = 0x17;
     pub const MNFT_TOKEN_OUTPOINT: u8 = 0x18;
     pub const DOTBIT_ACCOUNT_OUTPOINT: u8 = 0x19;
     pub const SPORE_OUTPOINT_BY_ID: u8 = 0x1A;
     pub const DAO_LATEST_STATS: u8 = 0x1B;
-    pub const NFT_COLLECTION_OWNER: u8 = 0x1C;
+    pub const OBJECT_COLLECTION_OWNER: u8 = 0x1C;
     pub const ACTIVITY_DAILY: u8 = 0x1D;
     pub const ACTIVITY_HOURLY: u8 = 0x1E;
     pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 = 0x1F;
@@ -553,21 +553,21 @@ pub const STATS_PREFIX_TOKEN_HOURLY: u8 = stats_prefix::TOKEN_HOURLY;
 pub const STATS_PREFIX_HODL_WAVE: u8 = stats_prefix::HODL_WAVE;
 pub const STATS_PREFIX_CLUSTER_OWNER: u8 = stats_prefix::CLUSTER_OWNER;
 pub const STATS_PREFIX_SPORE_HOURLY: u8 = stats_prefix::SPORE_HOURLY;
-pub const STATS_PREFIX_NFT_HOURLY: u8 = stats_prefix::NFT_HOURLY;
+pub const STATS_PREFIX_OBJECT_HOURLY: u8 = stats_prefix::OBJECT_HOURLY;
 pub const STATS_PREFIX_SCRIPT_DAILY: u8 = stats_prefix::SCRIPT_DAILY;
 pub const STATS_PREFIX_TOKEN_DAILY: u8 = stats_prefix::TOKEN_DAILY;
 pub const STATS_PREFIX_CLUSTER_DAILY: u8 = stats_prefix::CLUSTER_DAILY;
 pub const STATS_PREFIX_SPORE_DAILY: u8 = stats_prefix::SPORE_DAILY;
 pub const STATS_PREFIX_SPORE_OUTPOINT: u8 = stats_prefix::SPORE_OUTPOINT;
 pub const STATS_PREFIX_SPORE_TYPE_INDEX: u8 = stats_prefix::SPORE_TYPE_INDEX;
-pub const STATS_PREFIX_NFT_DAILY: u8 = stats_prefix::NFT_DAILY;
-pub const STATS_PREFIX_NFT_TYPE_INDEX: u8 = stats_prefix::NFT_TYPE_INDEX;
+pub const STATS_PREFIX_OBJECT_DAILY: u8 = stats_prefix::OBJECT_DAILY;
+pub const STATS_PREFIX_OBJECT_TYPE_INDEX: u8 = stats_prefix::OBJECT_TYPE_INDEX;
 pub const STATS_PREFIX_MNFT_CLASS_OUTPOINT: u8 = stats_prefix::MNFT_CLASS_OUTPOINT;
 pub const STATS_PREFIX_MNFT_TOKEN_OUTPOINT: u8 = stats_prefix::MNFT_TOKEN_OUTPOINT;
 pub const STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT: u8 = stats_prefix::DOTBIT_ACCOUNT_OUTPOINT;
 pub const STATS_PREFIX_SPORE_OUTPOINT_BY_ID: u8 = stats_prefix::SPORE_OUTPOINT_BY_ID;
 pub const STATS_PREFIX_DAO_LATEST_STATS: u8 = stats_prefix::DAO_LATEST_STATS;
-pub const STATS_PREFIX_NFT_COLLECTION_OWNER: u8 = stats_prefix::NFT_COLLECTION_OWNER;
+pub const STATS_PREFIX_OBJECT_COLLECTION_OWNER: u8 = stats_prefix::OBJECT_COLLECTION_OWNER;
 pub const STATS_PREFIX_ACTIVITY_DAILY: u8 = stats_prefix::ACTIVITY_DAILY;
 pub const STATS_PREFIX_ACTIVITY_HOURLY: u8 = stats_prefix::ACTIVITY_HOURLY;
 pub const STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 =
@@ -812,74 +812,77 @@ pub fn encode_spore_type_index_key(type_script_hash: &[u8]) -> [u8; SPORE_TYPE_I
     key
 }
 
-/// NFT collection daily stats key: prefix(1B) + collection_id(32B padded) + date(4B YYYYMMDD BE)
-pub const NFT_DAILY_KEY_SIZE: usize = 37;
+/// Object collection daily stats key: prefix(1B) + collection_id(32B padded) + date(4B YYYYMMDD BE)
+pub const OBJECT_DAILY_KEY_SIZE: usize = 37;
 
-pub fn encode_nft_daily_key(collection_id: &[u8], date_yyyymmdd: u32) -> [u8; NFT_DAILY_KEY_SIZE] {
-    let mut key = [0u8; NFT_DAILY_KEY_SIZE];
-    key[0] = STATS_PREFIX_NFT_DAILY;
+pub fn encode_object_daily_key(
+    collection_id: &[u8],
+    date_yyyymmdd: u32,
+) -> [u8; OBJECT_DAILY_KEY_SIZE] {
+    let mut key = [0u8; OBJECT_DAILY_KEY_SIZE];
+    key[0] = STATS_PREFIX_OBJECT_DAILY;
     key[1..33].copy_from_slice(&pad_id_32(collection_id));
     key[33..37].copy_from_slice(&date_yyyymmdd.to_be_bytes());
     key
 }
 
-pub fn encode_nft_daily_prefix(collection_id: &[u8]) -> [u8; 33] {
+pub fn encode_object_daily_prefix(collection_id: &[u8]) -> [u8; 33] {
     let mut prefix = [0u8; 33];
-    prefix[0] = STATS_PREFIX_NFT_DAILY;
+    prefix[0] = STATS_PREFIX_OBJECT_DAILY;
     prefix[1..33].copy_from_slice(&pad_id_32(collection_id));
     prefix
 }
 
-pub const NFT_COLLECTION_OWNER_KEY_SIZE: usize = 65;
+pub const OBJECT_COLLECTION_OWNER_KEY_SIZE: usize = 65;
 
-pub fn encode_nft_collection_owner_key(
+pub fn encode_object_collection_owner_key(
     collection_id: &[u8],
     lock_hash: &[u8],
-) -> [u8; NFT_COLLECTION_OWNER_KEY_SIZE] {
-    let mut key = [0u8; NFT_COLLECTION_OWNER_KEY_SIZE];
-    key[0] = STATS_PREFIX_NFT_COLLECTION_OWNER;
+) -> [u8; OBJECT_COLLECTION_OWNER_KEY_SIZE] {
+    let mut key = [0u8; OBJECT_COLLECTION_OWNER_KEY_SIZE];
+    key[0] = STATS_PREFIX_OBJECT_COLLECTION_OWNER;
     key[1..33].copy_from_slice(&pad_id_32(collection_id));
     key[33..65].copy_from_slice(&pad_id_32(lock_hash));
     key
 }
 
-pub fn encode_nft_collection_owner_prefix(collection_id: &[u8]) -> [u8; 33] {
+pub fn encode_object_collection_owner_prefix(collection_id: &[u8]) -> [u8; 33] {
     let mut prefix = [0u8; 33];
-    prefix[0] = STATS_PREFIX_NFT_COLLECTION_OWNER;
+    prefix[0] = STATS_PREFIX_OBJECT_COLLECTION_OWNER;
     prefix[1..33].copy_from_slice(&pad_id_32(collection_id));
     prefix
 }
 
-pub fn decode_nft_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
+pub fn decode_object_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
     let collection_id = key[1..33].to_vec();
     let date = u32::from_be_bytes(key[33..37].try_into().unwrap());
     (collection_id, date)
 }
 
-/// NFT type-script index key: prefix(1B) + type_script_hash(32B)
-pub const NFT_TYPE_INDEX_KEY_SIZE: usize = 33;
+/// Object type-script index key: prefix(1B) + type_script_hash(32B)
+pub const OBJECT_TYPE_INDEX_KEY_SIZE: usize = 33;
 
-pub fn encode_nft_type_index_key(type_script_hash: &[u8]) -> [u8; NFT_TYPE_INDEX_KEY_SIZE] {
-    let mut key = [0u8; NFT_TYPE_INDEX_KEY_SIZE];
-    key[0] = STATS_PREFIX_NFT_TYPE_INDEX;
+pub fn encode_object_type_index_key(type_script_hash: &[u8]) -> [u8; OBJECT_TYPE_INDEX_KEY_SIZE] {
+    let mut key = [0u8; OBJECT_TYPE_INDEX_KEY_SIZE];
+    key[0] = STATS_PREFIX_OBJECT_TYPE_INDEX;
     key[1..33].copy_from_slice(&type_script_hash[..32]);
     key
 }
 
-/// NFT-by-collection secondary index key: collection_id(32B padded) + nft_id(variable).
-pub fn encode_nft_by_collection_key(collection_id: &[u8], nft_id: &[u8]) -> Vec<u8> {
-    let mut key = Vec::with_capacity(32 + nft_id.len());
+/// Object-by-collection secondary index key: collection_id(32B padded) + object_id(variable).
+pub fn encode_object_by_collection_key(collection_id: &[u8], object_id: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(32 + object_id.len());
     key.extend_from_slice(&pad_id_32(collection_id));
-    key.extend_from_slice(nft_id);
+    key.extend_from_slice(object_id);
     key
 }
 
-/// Prefix for scanning all NFTs in a collection.
-pub fn encode_nft_by_collection_prefix(collection_id: &[u8]) -> [u8; 32] {
+/// Prefix for scanning all objects in a collection.
+pub fn encode_object_by_collection_prefix(collection_id: &[u8]) -> [u8; 32] {
     pad_id_32(collection_id)
 }
 
-pub fn decode_nft_by_collection_key(key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+pub fn decode_object_by_collection_key(key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     if key.len() < 32 {
         return None;
     }
@@ -952,19 +955,19 @@ pub fn encode_spore_hourly_prefix(cluster_id: &[u8]) -> Vec<u8> {
     key
 }
 
-/// NFT hourly transfer count key: prefix(1B) + collection_id(32B) + hour_bucket(8B BE) = 41 bytes
-pub fn encode_nft_hourly_key(collection_id: &[u8], hour_bucket: i64) -> Vec<u8> {
+/// Object hourly transfer count key: prefix(1B) + collection_id(32B) + hour_bucket(8B BE) = 41 bytes
+pub fn encode_object_hourly_key(collection_id: &[u8], hour_bucket: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(41);
-    key.push(STATS_PREFIX_NFT_HOURLY);
+    key.push(STATS_PREFIX_OBJECT_HOURLY);
     key.extend_from_slice(&pad_id_32(collection_id));
     key.extend_from_slice(&hour_bucket.to_be_bytes());
     key
 }
 
-/// Prefix for scanning all hourly buckets of a given NFT collection.
-pub fn encode_nft_hourly_prefix(collection_id: &[u8]) -> Vec<u8> {
+/// Prefix for scanning all hourly buckets of a given object collection.
+pub fn encode_object_hourly_prefix(collection_id: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(33);
-    key.push(STATS_PREFIX_NFT_HOURLY);
+    key.push(STATS_PREFIX_OBJECT_HOURLY);
     key.extend_from_slice(&pad_id_32(collection_id));
     key
 }
@@ -1213,29 +1216,29 @@ pub fn timestamp_ms_to_date(timestamp_ms: i64) -> u32 {
         .expect("timestamp_ms_to_date: formatted date must parse into u32")
 }
 
-/// NFT collection activity key:
+/// Object collection activity key:
 /// collection_id(32B padded) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + block_hash(32B) + tx_hash(32B)
 /// Uses descending block_num and tx_idx so newest activities come first in prefix scan.
-pub const NFT_COLLECTION_ACTIVITY_KEY_SIZE: usize = 108;
+pub const OBJECT_COLLECTION_ACTIVITY_KEY_SIZE: usize = 108;
 
-pub fn encode_nft_collection_activity_key(
+pub fn encode_object_collection_activity_key(
     collection_id: &[u8],
     block_num: i64,
     tx_idx: i32,
     block_hash: &[u8],
     tx_hash: &[u8],
-) -> [u8; NFT_COLLECTION_ACTIVITY_KEY_SIZE] {
+) -> [u8; OBJECT_COLLECTION_ACTIVITY_KEY_SIZE] {
     assert!(
         block_hash.len() >= 32,
-        "encode_nft_collection_activity_key: block_hash must be >= 32 bytes, got {}",
+        "encode_object_collection_activity_key: block_hash must be >= 32 bytes, got {}",
         block_hash.len()
     );
     assert!(
         tx_hash.len() >= 32,
-        "encode_nft_collection_activity_key: tx_hash must be >= 32 bytes, got {}",
+        "encode_object_collection_activity_key: tx_hash must be >= 32 bytes, got {}",
         tx_hash.len()
     );
-    let mut key = [0u8; NFT_COLLECTION_ACTIVITY_KEY_SIZE];
+    let mut key = [0u8; OBJECT_COLLECTION_ACTIVITY_KEY_SIZE];
     key[..32].copy_from_slice(&pad_id_32(collection_id));
     key[32..40].copy_from_slice(&encode_desc_block_num(block_num));
     key[40..44].copy_from_slice(&encode_desc_tx_idx(tx_idx));
@@ -1244,27 +1247,27 @@ pub fn encode_nft_collection_activity_key(
     key
 }
 
-pub fn encode_nft_collection_activity_prefix(collection_id: &[u8]) -> [u8; 32] {
+pub fn encode_object_collection_activity_prefix(collection_id: &[u8]) -> [u8; 32] {
     pad_id_32(collection_id)
 }
 
-pub fn encode_nft_collection_activity_seek_after_key(
+pub fn encode_object_collection_activity_seek_after_key(
     collection_id: &[u8],
     block_num: i64,
     tx_idx: i32,
-) -> [u8; NFT_COLLECTION_ACTIVITY_KEY_SIZE] {
-    let mut key = [0xFFu8; NFT_COLLECTION_ACTIVITY_KEY_SIZE];
+) -> [u8; OBJECT_COLLECTION_ACTIVITY_KEY_SIZE] {
+    let mut key = [0xFFu8; OBJECT_COLLECTION_ACTIVITY_KEY_SIZE];
     key[..32].copy_from_slice(&pad_id_32(collection_id));
     key[32..40].copy_from_slice(&encode_desc_block_num(block_num));
     key[40..44].copy_from_slice(&encode_desc_tx_idx(tx_idx));
     key
 }
 
-pub fn decode_nft_collection_activity_key(key: &[u8]) -> ([u8; 32], i64, i32, Vec<u8>, Vec<u8>) {
+pub fn decode_object_collection_activity_key(key: &[u8]) -> ([u8; 32], i64, i32, Vec<u8>, Vec<u8>) {
     assert!(
-        key.len() == NFT_COLLECTION_ACTIVITY_KEY_SIZE,
-        "decode_nft_collection_activity_key: expected {} bytes, got {}",
-        NFT_COLLECTION_ACTIVITY_KEY_SIZE,
+        key.len() == OBJECT_COLLECTION_ACTIVITY_KEY_SIZE,
+        "decode_object_collection_activity_key: expected {} bytes, got {}",
+        OBJECT_COLLECTION_ACTIVITY_KEY_SIZE,
         key.len()
     );
     let mut collection_id = [0u8; 32];
@@ -1730,53 +1733,53 @@ mod tests {
     }
 
     #[test]
-    fn test_nft_daily_key_roundtrip() {
+    fn test_object_daily_key_roundtrip() {
         let collection_id = [0x66u8; 24];
-        let key = encode_nft_daily_key(&collection_id, 20260219);
-        assert_eq!(key.len(), NFT_DAILY_KEY_SIZE);
-        let (decoded_id, decoded_date) = decode_nft_daily_key(&key);
+        let key = encode_object_daily_key(&collection_id, 20260219);
+        assert_eq!(key.len(), OBJECT_DAILY_KEY_SIZE);
+        let (decoded_id, decoded_date) = decode_object_daily_key(&key);
         assert_eq!(&decoded_id[..24], &collection_id);
         assert_eq!(&decoded_id[24..], &[0u8; 8]);
         assert_eq!(decoded_date, 20260219);
     }
 
     #[test]
-    fn test_nft_daily_prefix_is_prefix_of_full_key() {
+    fn test_object_daily_prefix_is_prefix_of_full_key() {
         let collection_id = [0x77u8; 24];
-        let prefix = encode_nft_daily_prefix(&collection_id);
-        let key = encode_nft_daily_key(&collection_id, 20240101);
+        let prefix = encode_object_daily_prefix(&collection_id);
+        let key = encode_object_daily_key(&collection_id, 20240101);
         assert_eq!(prefix.len(), 33);
         assert!(key.starts_with(&prefix));
     }
 
     #[test]
-    fn test_nft_type_index_key_structure() {
+    fn test_object_type_index_key_structure() {
         let type_script_hash = [0xDDu8; 32];
-        let key = encode_nft_type_index_key(&type_script_hash);
-        assert_eq!(key.len(), NFT_TYPE_INDEX_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_NFT_TYPE_INDEX);
+        let key = encode_object_type_index_key(&type_script_hash);
+        assert_eq!(key.len(), OBJECT_TYPE_INDEX_KEY_SIZE);
+        assert_eq!(key[0], STATS_PREFIX_OBJECT_TYPE_INDEX);
         assert_eq!(&key[1..33], &type_script_hash);
     }
 
     #[test]
-    fn test_nft_by_collection_key_roundtrip() {
+    fn test_object_by_collection_key_roundtrip() {
         let collection_id = [0xA1u8; 24];
-        let nft_id = [0xB2u8; 20];
-        let key = encode_nft_by_collection_key(&collection_id, &nft_id);
+        let object_id = [0xB2u8; 20];
+        let key = encode_object_by_collection_key(&collection_id, &object_id);
         assert_eq!(key.len(), 52);
-        let (decoded_collection, decoded_nft) =
-            decode_nft_by_collection_key(&key).expect("valid nft-by-collection key");
+        let (decoded_collection, decoded_object) =
+            decode_object_by_collection_key(&key).expect("valid object-by-collection key");
         assert_eq!(&decoded_collection[..24], &collection_id);
         assert_eq!(&decoded_collection[24..], &[0u8; 8]);
-        assert_eq!(decoded_nft, nft_id.to_vec());
+        assert_eq!(decoded_object, object_id.to_vec());
     }
 
     #[test]
-    fn test_nft_by_collection_prefix_is_prefix_of_full_key() {
+    fn test_object_by_collection_prefix_is_prefix_of_full_key() {
         let collection_id = [0xF1u8; 24];
-        let nft_id = [0x1Fu8; 20];
-        let prefix = encode_nft_by_collection_prefix(&collection_id);
-        let key = encode_nft_by_collection_key(&collection_id, &nft_id);
+        let object_id = [0x1Fu8; 20];
+        let prefix = encode_object_by_collection_prefix(&collection_id);
+        let key = encode_object_by_collection_key(&collection_id, &object_id);
         assert_eq!(prefix.len(), 32);
         assert!(key.starts_with(&prefix));
     }
@@ -1890,12 +1893,12 @@ mod tests {
     }
 
     #[test]
-    fn test_nft_hourly_key_structure() {
+    fn test_object_hourly_key_structure() {
         let collection_id = [0xCDu8; 32];
         let hour_bucket: i64 = 482_000;
-        let key = encode_nft_hourly_key(&collection_id, hour_bucket);
+        let key = encode_object_hourly_key(&collection_id, hour_bucket);
         assert_eq!(key.len(), 41);
-        assert_eq!(key[0], STATS_PREFIX_NFT_HOURLY);
+        assert_eq!(key[0], STATS_PREFIX_OBJECT_HOURLY);
         assert_eq!(&key[1..33], &collection_id);
         assert_eq!(
             i64::from_be_bytes(key[33..41].try_into().unwrap()),
@@ -1904,20 +1907,20 @@ mod tests {
     }
 
     #[test]
-    fn test_nft_hourly_key_sort_order() {
+    fn test_object_hourly_key_sort_order() {
         let collection_id = [0x01u8; 32];
-        let k1 = encode_nft_hourly_key(&collection_id, 100);
-        let k2 = encode_nft_hourly_key(&collection_id, 200);
-        let k3 = encode_nft_hourly_key(&collection_id, 300);
+        let k1 = encode_object_hourly_key(&collection_id, 100);
+        let k2 = encode_object_hourly_key(&collection_id, 200);
+        let k3 = encode_object_hourly_key(&collection_id, 300);
         assert!(k1 < k2);
         assert!(k2 < k3);
     }
 
     #[test]
-    fn test_nft_hourly_prefix_is_prefix_of_full_key() {
+    fn test_object_hourly_prefix_is_prefix_of_full_key() {
         let collection_id = [0x42u8; 32];
-        let prefix = encode_nft_hourly_prefix(&collection_id);
-        let full_key = encode_nft_hourly_key(&collection_id, 999);
+        let prefix = encode_object_hourly_prefix(&collection_id);
+        let full_key = encode_object_hourly_key(&collection_id, 999);
         assert_eq!(prefix.len(), 33);
         assert!(full_key.starts_with(&prefix));
     }
@@ -1925,12 +1928,12 @@ mod tests {
     // ---- Regression: short IDs (mNFT class_id = 24 bytes) must not panic ----
 
     #[test]
-    fn test_nft_hourly_key_short_collection_id() {
+    fn test_object_hourly_key_short_collection_id() {
         // mNFT class_id is 24 bytes (20B issuer + 4B class index)
         let short_id = [0xAB; 24];
-        let key = encode_nft_hourly_key(&short_id, 500);
+        let key = encode_object_hourly_key(&short_id, 500);
         assert_eq!(key.len(), 41);
-        assert_eq!(key[0], STATS_PREFIX_NFT_HOURLY);
+        assert_eq!(key[0], STATS_PREFIX_OBJECT_HOURLY);
         // First 24 bytes of ID field should match, rest zero-padded
         assert_eq!(&key[1..25], &short_id);
         assert_eq!(&key[25..33], &[0u8; 8]);
@@ -1938,32 +1941,32 @@ mod tests {
     }
 
     #[test]
-    fn test_nft_hourly_prefix_short_collection_id() {
+    fn test_object_hourly_prefix_short_collection_id() {
         let short_id = [0xAB; 24];
-        let prefix = encode_nft_hourly_prefix(&short_id);
-        let full_key = encode_nft_hourly_key(&short_id, 999);
+        let prefix = encode_object_hourly_prefix(&short_id);
+        let full_key = encode_object_hourly_key(&short_id, 999);
         assert_eq!(prefix.len(), 33);
         assert!(full_key.starts_with(&prefix));
     }
 
     #[test]
-    fn test_nft_collection_owner_key_structure() {
+    fn test_object_collection_owner_key_structure() {
         let collection_id = [0xA1u8; 32];
         let owner = [0xB2u8; 32];
-        let key = encode_nft_collection_owner_key(&collection_id, &owner);
-        assert_eq!(key.len(), NFT_COLLECTION_OWNER_KEY_SIZE);
-        assert_eq!(key[0], STATS_PREFIX_NFT_COLLECTION_OWNER);
+        let key = encode_object_collection_owner_key(&collection_id, &owner);
+        assert_eq!(key.len(), OBJECT_COLLECTION_OWNER_KEY_SIZE);
+        assert_eq!(key[0], STATS_PREFIX_OBJECT_COLLECTION_OWNER);
         assert_eq!(&key[1..33], &collection_id);
         assert_eq!(&key[33..65], &owner);
     }
 
     #[test]
-    fn test_nft_collection_owner_prefix_short_collection_id() {
+    fn test_object_collection_owner_prefix_short_collection_id() {
         let collection_id = [0xCCu8; 24];
-        let prefix = encode_nft_collection_owner_prefix(&collection_id);
-        let key = encode_nft_collection_owner_key(&collection_id, &[0xDDu8; 32]);
+        let prefix = encode_object_collection_owner_prefix(&collection_id);
+        let key = encode_object_collection_owner_key(&collection_id, &[0xDDu8; 32]);
         assert_eq!(prefix.len(), 33);
-        assert_eq!(prefix[0], STATS_PREFIX_NFT_COLLECTION_OWNER);
+        assert_eq!(prefix[0], STATS_PREFIX_OBJECT_COLLECTION_OWNER);
         assert!(key.starts_with(&prefix));
     }
 
@@ -2025,10 +2028,10 @@ mod tests {
         );
     }
 
-    // ---- NFT collection activity key ----
+    // ---- Object collection activity key ----
 
     #[test]
-    fn test_nft_collection_activity_key_roundtrip() {
+    fn test_object_collection_activity_key_roundtrip() {
         let collection_id = [0xAAu8; 32];
         for (block, idx) in [
             (0i64, 0i32),
@@ -2039,16 +2042,16 @@ mod tests {
         ] {
             let block_hash = [idx as u8; 32];
             let tx_hash = [block as u8; 32];
-            let key = encode_nft_collection_activity_key(
+            let key = encode_object_collection_activity_key(
                 &collection_id,
                 block,
                 idx,
                 &block_hash,
                 &tx_hash,
             );
-            assert_eq!(key.len(), NFT_COLLECTION_ACTIVITY_KEY_SIZE);
+            assert_eq!(key.len(), OBJECT_COLLECTION_ACTIVITY_KEY_SIZE);
             let (decoded_cid, decoded_block, decoded_idx, decoded_block_hash, decoded_tx_hash) =
-                decode_nft_collection_activity_key(&key);
+                decode_object_collection_activity_key(&key);
             assert_eq!(decoded_cid, collection_id);
             assert_eq!(decoded_block, block);
             assert_eq!(decoded_idx, idx);
@@ -2058,42 +2061,43 @@ mod tests {
     }
 
     #[test]
-    fn test_nft_collection_activity_key_descending_sort() {
+    fn test_object_collection_activity_key_descending_sort() {
         let cid = [0xBBu8; 32];
         let block_hash = [0x66u8; 32];
         let tx_hash = [0x77u8; 32];
-        let k1 = encode_nft_collection_activity_key(&cid, 300, 5, &block_hash, &tx_hash);
-        let k2 = encode_nft_collection_activity_key(&cid, 200, 5, &block_hash, &tx_hash);
-        let k3 = encode_nft_collection_activity_key(&cid, 100, 5, &block_hash, &tx_hash);
+        let k1 = encode_object_collection_activity_key(&cid, 300, 5, &block_hash, &tx_hash);
+        let k2 = encode_object_collection_activity_key(&cid, 200, 5, &block_hash, &tx_hash);
+        let k3 = encode_object_collection_activity_key(&cid, 100, 5, &block_hash, &tx_hash);
         // Higher block_num => smaller key (descending)
         assert!(k1 < k2);
         assert!(k2 < k3);
 
         // Same block, higher tx_idx => smaller key (descending)
-        let k4 = encode_nft_collection_activity_key(&cid, 100, 10, &block_hash, &tx_hash);
-        let k5 = encode_nft_collection_activity_key(&cid, 100, 5, &block_hash, &tx_hash);
+        let k4 = encode_object_collection_activity_key(&cid, 100, 10, &block_hash, &tx_hash);
+        let k5 = encode_object_collection_activity_key(&cid, 100, 5, &block_hash, &tx_hash);
         assert!(k4 < k5);
     }
 
     #[test]
-    fn test_nft_collection_activity_prefix_matching() {
+    fn test_object_collection_activity_prefix_matching() {
         let cid = [0xCCu8; 32];
-        let prefix = encode_nft_collection_activity_prefix(&cid);
-        let key = encode_nft_collection_activity_key(&cid, 500, 3, &[0x77; 32], &[0x88; 32]);
+        let prefix = encode_object_collection_activity_prefix(&cid);
+        let key = encode_object_collection_activity_key(&cid, 500, 3, &[0x77; 32], &[0x88; 32]);
         assert!(key.starts_with(&prefix));
 
         let other_cid = [0xDDu8; 32];
         let other_key =
-            encode_nft_collection_activity_key(&other_cid, 500, 3, &[0x78; 32], &[0x99; 32]);
+            encode_object_collection_activity_key(&other_cid, 500, 3, &[0x78; 32], &[0x99; 32]);
         assert!(!other_key.starts_with(&prefix));
     }
 
     #[test]
-    fn test_nft_collection_activity_padded_short_id() {
+    fn test_object_collection_activity_padded_short_id() {
         let short_id = [0xEEu8; 20];
-        let key = encode_nft_collection_activity_key(&short_id, 100, 0, &[0xAB; 32], &[0xAA; 32]);
+        let key =
+            encode_object_collection_activity_key(&short_id, 100, 0, &[0xAB; 32], &[0xAA; 32]);
         let (decoded_cid, decoded_block, _, decoded_block_hash, decoded_tx_hash) =
-            decode_nft_collection_activity_key(&key);
+            decode_object_collection_activity_key(&key);
         // First 20 bytes match, rest is zero-padded
         assert_eq!(&decoded_cid[..20], &short_id);
         assert_eq!(&decoded_cid[20..], &[0u8; 12]);
@@ -2117,19 +2121,20 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_nft_collection_activity_key_includes_block_hash_and_tx_hash() {
+    fn test_encode_object_collection_activity_key_includes_block_hash_and_tx_hash() {
         let collection_id = [0x33u8; 32];
         let block_hash = [0xABu8; 32];
         let tx_hash = [0xCCu8; 32];
-        let key = encode_nft_collection_activity_key(&collection_id, 300, 9, &block_hash, &tx_hash);
-        assert_eq!(key.len(), NFT_COLLECTION_ACTIVITY_KEY_SIZE);
+        let key =
+            encode_object_collection_activity_key(&collection_id, 300, 9, &block_hash, &tx_hash);
+        assert_eq!(key.len(), OBJECT_COLLECTION_ACTIVITY_KEY_SIZE);
         let (
             decoded_collection_id,
             decoded_block,
             decoded_idx,
             decoded_block_hash,
             decoded_tx_hash,
-        ) = decode_nft_collection_activity_key(&key);
+        ) = decode_object_collection_activity_key(&key);
         assert_eq!(decoded_collection_id, collection_id);
         assert_eq!(decoded_block, 300);
         assert_eq!(decoded_idx, 9);

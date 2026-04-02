@@ -1,7 +1,7 @@
 //! DAO calculation helpers and related pure functions.
 //!
 //! Issuance splits, snapshot deltas, deposit/withdraw accounting,
-//! address counting, NFT collection classification, occupied capacity,
+//! address counting, object collection classification, occupied capacity,
 //! and tx-fee validation.
 
 #![allow(clippy::type_complexity)]
@@ -119,10 +119,10 @@ pub(crate) fn count_new_addresses(
 }
 
 // ---------------------------------------------------------------------------
-// NFT collection classification
+// Object collection classification
 // ---------------------------------------------------------------------------
 
-pub(crate) fn classify_nft_collection_id(
+pub(crate) fn classify_object_collection_id(
     type_code_hash: &[u8],
     type_args: &[u8],
 ) -> Option<Vec<u8>> {
@@ -953,46 +953,46 @@ mod tests {
         assert_eq!(count_new_addresses(&changes, &existing), 0);
     }
 
-    // -- classify_nft_collection_id -----------------------------------------
+    // -- classify_object_collection_id -----------------------------------------
 
     #[test]
-    fn test_classify_nft_collection_id_mnft_uses_first_24_args_bytes() {
+    fn test_classify_object_collection_id_mnft_uses_first_24_args_bytes() {
         let mnft_code_hash =
             crate::rpc::parse_hex_to_bytes(crate::parser::mnft::MNFT_TOKEN_CODE_HASH);
         let mut args = vec![0xAB; 24];
         args.extend_from_slice(&[0xCD; 8]);
 
-        let collection_id = classify_nft_collection_id(&mnft_code_hash, &args)
+        let collection_id = classify_object_collection_id(&mnft_code_hash, &args)
             .expect("mNFT token type should map to collection id");
         assert_eq!(collection_id, vec![0xAB; 24]);
     }
 
     #[test]
-    fn test_classify_nft_collection_id_dotbit_uses_sentinel_collection() {
+    fn test_classify_object_collection_id_dotbit_uses_sentinel_collection() {
         let dotbit_code_hash =
             crate::rpc::parse_hex_to_bytes(crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID);
-        let collection_id = classify_nft_collection_id(&dotbit_code_hash, &[])
+        let collection_id = classify_object_collection_id(&dotbit_code_hash, &[])
             .expect("dotbit account type should map to sentinel collection");
         assert_eq!(collection_id, DOTBIT_SENTINEL_COLLECTION.to_vec());
     }
 
     #[test]
-    fn test_classify_nft_collection_id_did_ckb_uses_sentinel_collection() {
+    fn test_classify_object_collection_id_did_ckb_uses_sentinel_collection() {
         let did_code_hash =
             crate::rpc::parse_hex_to_bytes(crate::parser::spore::SPORE_CODE_HASH_MAINNET_DID);
-        let collection_id = classify_nft_collection_id(&did_code_hash, &[0x99; 32])
+        let collection_id = classify_object_collection_id(&did_code_hash, &[0x99; 32])
             .expect("did:ckb type should map to sentinel collection");
         assert_eq!(collection_id, DID_CKB_SENTINEL_COLLECTION.to_vec());
     }
 
     #[test]
-    fn test_classify_nft_collection_id_rejects_non_nft_or_short_mnft_args() {
-        let non_nft = vec![0x11; 32];
-        assert!(classify_nft_collection_id(&non_nft, &[0x22; 24]).is_none());
+    fn test_classify_object_collection_id_rejects_non_object_or_short_mnft_args() {
+        let non_object = vec![0x11; 32];
+        assert!(classify_object_collection_id(&non_object, &[0x22; 24]).is_none());
 
         let mnft_code_hash =
             crate::rpc::parse_hex_to_bytes(crate::parser::mnft::MNFT_TOKEN_CODE_HASH);
-        assert!(classify_nft_collection_id(&mnft_code_hash, &[0x33; 23]).is_none());
+        assert!(classify_object_collection_id(&mnft_code_hash, &[0x33; 23]).is_none());
     }
 
     // -- derive_pre_batch_live_cells ----------------------------------------

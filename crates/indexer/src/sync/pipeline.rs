@@ -1635,7 +1635,7 @@ impl Indexer {
                             cell.type_args.as_ref(),
                         ) {
                             let collection_id =
-                                classify_nft_collection_id(type_code_hash, type_args);
+                                classify_object_collection_id(type_code_hash, type_args);
                             if let Some(collection_id) = collection_id {
                                 let index = MnftTypeIndex {
                                     collection_id: collection_id.clone(),
@@ -1871,7 +1871,7 @@ impl Indexer {
                                                 match load_optional_index_from_store(
                                                     &mut object_type_index_cache,
                                                     type_script_hash,
-                                                    "nft_type",
+                                                    "object_type",
                                                     || {
                                                         writer_for_parser
                                                             .store()
@@ -1885,13 +1885,13 @@ impl Indexer {
                                                         error!(
                                                             start_block,
                                                             end_block,
-                                                            "Parser: failed to load nft type index: {}",
+                                                            "Parser: failed to load object type index: {}",
                                                             e
                                                         );
                                                         record_worker_exit_reason(
                                                             &parser_exit_reason_for_parser,
                                                             format!(
-                                                                "failed to load nft type index for range {}-{}: {}",
+                                                                "failed to load object type index for range {}-{}: {}",
                                                                 start_block, end_block, e
                                                             ),
                                                         );

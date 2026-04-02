@@ -743,7 +743,7 @@ impl BatchWriter {
             if agg.standard == ObjectStandard::MnftClass {
                 total_deleted += self
                     .store
-                    .cleanup_old_nft_hourly_buckets(&collection_id, cutoff_hour)?;
+                    .cleanup_old_object_hourly_buckets(&collection_id, cutoff_hour)?;
             }
         }
 
@@ -1579,9 +1579,9 @@ mod tests {
         let deleted = writer.refresh_mnft_24h_transfers().unwrap();
         assert_eq!(deleted, 1);
 
-        let mnft_old_key = keys::encode_nft_hourly_key(&mnft_collection, old_hour);
-        let mnft_new_key = keys::encode_nft_hourly_key(&mnft_collection, current_hour);
-        let spore_old_key = keys::encode_nft_hourly_key(&spore_collection, old_hour);
+        let mnft_old_key = keys::encode_object_hourly_key(&mnft_collection, old_hour);
+        let mnft_new_key = keys::encode_object_hourly_key(&mnft_collection, current_hour);
+        let spore_old_key = keys::encode_object_hourly_key(&spore_collection, old_hour);
 
         assert!(store.get_stats_key(&mnft_old_key).unwrap().is_none());
         assert!(store.get_stats_key(&mnft_new_key).unwrap().is_some());

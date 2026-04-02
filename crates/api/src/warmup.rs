@@ -6,8 +6,8 @@ use crate::routes::statistics::{
 };
 use crate::utils::{
     accumulate_owned_capacity, hash_type_to_string, resolve_collection_standard,
-    resolve_dob_collection_name, resolve_nft_collection_composition_tier_override,
-    resolve_nft_collection_name,
+    resolve_dob_collection_name, resolve_object_collection_composition_tier_override,
+    resolve_object_collection_name,
 };
 use crate::AppState;
 use ckbadger_common::{BackgroundTaskKind, BackgroundTaskState};
@@ -23,7 +23,7 @@ const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
 
 // Cache keys for assets
 pub const CACHE_KEY_ASSETS_TOKEN: &str = "assets:token";
-pub const CACHE_KEY_ASSETS_NFT: &str = "assets:nft";
+pub const CACHE_KEY_ASSETS_OBJECT: &str = "assets:object";
 pub const CACHE_KEY_ADDRESSES_TOP: &str = "addresses:top";
 pub const CACHE_KEY_ADDRESSES_ACTIVE: &str = "addresses:active";
 pub const CACHE_KEY_SCRIPT_FAMILIES_ALL: &str = "scripts:families:all";
@@ -110,7 +110,7 @@ pub struct CachedAssetEntry {
     pub composition_tier: Option<String>,
     pub onchain_ratio: Option<String>,
     pub onchain_count: Option<i64>,
-    // Token-specific fields (None for NFT entries)
+    // Token-specific fields (None for object entries)
     pub type_code_hash: Option<String>,
     pub type_hash_type: Option<String>,
     pub type_args: Option<String>,
@@ -630,7 +630,7 @@ fn refresh_named_script_cache_sync(state: &AppState) -> anyhow::Result<()> {
 }
 
 /// Sync function that computes and caches all asset lists.
-/// Uses pre-aggregated CFs for NFTs, including Spore/DOB collections.
+/// Uses pre-aggregated CFs for objects, including Spore/DOB collections.
 /// Uses a single scan for all token 24h transfers instead of N+1 per-token queries.
 fn build_asset_caches_sync(
     state: &AppState,
@@ -704,13 +704,13 @@ fn build_asset_caches_sync(
             .then_with(|| b.holders_count.cmp(&a.holders_count))
     });
 
-    // -- NFT assets, including Spore/DOB collections --
-    let mut nft_assets: Vec<CachedAssetEntry> = Vec::new();
+    // -- Object assets, including Spore/DOB collections --
+    let mut object_assets: Vec<CachedAssetEntry> = Vec::new();
 
     // Spore/DOB collections from pre-aggregated cluster_agg CF
     let cluster_aggs = state.store.list_cluster_aggregates()?;
     let spore_transfers_24h_map = state.store.scan_all_spore_24h_transfers(now_ms)?;
-    nft_assets.reserve(cluster_aggs.len());
+    object_assets.reserve(cluster_aggs.len());
 
     for (cluster_id_bytes, agg) in &cluster_aggs {
         if agg.total_count == 0 {
@@ -749,7 +749,7 @@ fn build_asset_caches_sync(
             agg.unknown_count,
         );
 
-        nft_assets.push(CachedAssetEntry {
+        object_assets.push(CachedAssetEntry {
             id: cluster_hex.clone(),
             asset_type: "object".to_string(),
             standard: "spore".to_string(),
@@ -778,10 +778,10 @@ fn build_asset_caches_sync(
         });
     }
 
-    // NFT collections from pre-aggregated nft_collection_agg CF
+    // Object collections from pre-aggregated nft_collection_agg CF
     let nft_aggs = state.store.list_mnft_collection_aggregates()?;
-    let nft_transfers_24h_map = state.store.scan_all_nft_24h_transfers(now_ms)?;
-    nft_assets.reserve(nft_aggs.len());
+    let nft_transfers_24h_map = state.store.scan_all_object_24h_transfers(now_ms)?;
+    object_assets.reserve(nft_aggs.len());
 
     for (collection_id_bytes, agg) in &nft_aggs {
         if agg.total_count == 0 {
@@ -799,7 +799,7 @@ fn build_asset_caches_sync(
         } else {
             "object"
         };
-        let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
+        let display_name = resolve_object_collection_name(&standard, agg.name.as_deref());
         let has_tier_counts = agg.pure_ckb_count > 0
             || agg.btc_ckb_count > 0
             || agg.decentralized_mixture_count > 0
@@ -813,7 +813,7 @@ fn build_asset_caches_sync(
                 agg.unknown_count,
             )
         } else {
-            resolve_nft_collection_composition_tier_override(&standard)
+            resolve_object_collection_composition_tier_override(&standard)
                 .unwrap_or("unknown")
                 .to_string()
         };
@@ -833,13 +833,13 @@ fn build_asset_caches_sync(
         )
         .map_err(|e| {
             anyhow::anyhow!(
-                "invalid NFT daily capacity deltas for collection_id=0x{}: {}",
+                "invalid object daily capacity deltas for collection_id=0x{}: {}",
                 hex::encode(collection_id_bytes),
                 e
             )
         })?;
 
-        nft_assets.push(CachedAssetEntry {
+        object_assets.push(CachedAssetEntry {
             id: collection_hex.clone(),
             asset_type: asset_type.to_string(),
             standard,
@@ -870,7 +870,7 @@ fn build_asset_caches_sync(
 
     // Identity collections from pre-aggregated identity_agg CF
     let identity_aggs = state.store.list_identity_collection_aggregates()?;
-    nft_assets.reserve(identity_aggs.len());
+    object_assets.reserve(identity_aggs.len());
 
     for (collection_id_bytes, agg) in &identity_aggs {
         if agg.total_count == 0 {
@@ -883,8 +883,8 @@ fn build_asset_caches_sync(
             .unwrap_or(0);
         let standard_str = agg.standard.asset_standard().to_string();
         let standard = resolve_collection_standard(collection_id_bytes, &standard_str);
-        let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
-        let composition_tier = resolve_nft_collection_composition_tier_override(&standard)
+        let display_name = resolve_object_collection_name(&standard, agg.name.as_deref());
+        let composition_tier = resolve_object_collection_composition_tier_override(&standard)
             .unwrap_or("unknown")
             .to_string();
         let onchain_count = if matches!(composition_tier.as_str(), "btc_ckb" | "pure_ckb") {
@@ -907,7 +907,7 @@ fn build_asset_caches_sync(
             )
         })?;
 
-        nft_assets.push(CachedAssetEntry {
+        object_assets.push(CachedAssetEntry {
             id: collection_hex.clone(),
             asset_type: "identity".to_string(),
             standard,
@@ -936,13 +936,13 @@ fn build_asset_caches_sync(
         });
     }
 
-    nft_assets.sort_by(|a, b| {
+    object_assets.sort_by(|a, b| {
         b.transfers_24h
             .cmp(&a.transfers_24h)
             .then_with(|| b.holders_count.cmp(&a.holders_count))
     });
 
-    Ok((token_assets, nft_assets))
+    Ok((token_assets, object_assets))
 }
 
 fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
@@ -953,11 +953,11 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
     }
 
     let ttl = CacheTtl::ASSETS;
-    let (token_assets, nft_assets) = match build_asset_caches_sync(state) {
+    let (token_assets, object_assets) = match build_asset_caches_sync(state) {
         Ok(caches) => caches,
         Err(err) => {
             state.mem_cache.delete(CACHE_KEY_ASSETS_TOKEN);
-            state.mem_cache.delete(CACHE_KEY_ASSETS_NFT);
+            state.mem_cache.delete(CACHE_KEY_ASSETS_OBJECT);
             state.record_asset_cache_warmup_error(err.to_string());
             return Err(err);
         }
@@ -966,7 +966,9 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
     state
         .mem_cache
         .set(CACHE_KEY_ASSETS_TOKEN, &token_assets, ttl);
-    state.mem_cache.set(CACHE_KEY_ASSETS_NFT, &nft_assets, ttl);
+    state
+        .mem_cache
+        .set(CACHE_KEY_ASSETS_OBJECT, &object_assets, ttl);
     state.clear_asset_cache_warmup_error();
     refresh_address_cache_sync(state)?;
     refresh_spore_cache_sync(state)?;

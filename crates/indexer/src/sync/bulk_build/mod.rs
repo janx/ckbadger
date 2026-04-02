@@ -3116,9 +3116,9 @@ fn build_history_rows_for_block(
     // Object/identity collection activities for this block's txs.
     {
         let mut object_activity_acc =
-            crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator::new();
+            crate::db::writer::object_activity_acc::ObjectCollectionActivityAccumulator::new();
         let mut identity_activity_acc =
-            crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator::new();
+            crate::db::writer::object_activity_acc::ObjectCollectionActivityAccumulator::new();
 
         for tx in block_resolved {
             let mut dotbit_created_account_ids = FxHashSet::default();
@@ -3226,7 +3226,7 @@ fn build_history_rows_for_block(
             ) {
                 rows.push(materialize::MaterializedRow::new(
                     CF_IDENTITY_COLLECTION_ACTIVITIES,
-                    keys::encode_nft_collection_activity_key(
+                    keys::encode_object_collection_activity_key(
                         &DOTBIT_SENTINEL_COLLECTION,
                         tx.block_number,
                         tx.tx_index,
@@ -3261,7 +3261,7 @@ fn build_history_rows_for_block(
             })?;
             rows.push(materialize::MaterializedRow::new(
                 CF_OBJECT_COLLECTION_ACTIVITIES,
-                keys::encode_nft_collection_activity_key(
+                keys::encode_object_collection_activity_key(
                     &resolved_entry.collection_id,
                     resolved_entry.block_number,
                     resolved_entry.tx_idx,
@@ -3285,7 +3285,7 @@ fn build_history_rows_for_block(
             })?;
             rows.push(materialize::MaterializedRow::new(
                 CF_IDENTITY_COLLECTION_ACTIVITIES,
-                keys::encode_nft_collection_activity_key(
+                keys::encode_object_collection_activity_key(
                     &resolved_entry.collection_id,
                     resolved_entry.block_number,
                     resolved_entry.tx_idx,
@@ -3366,9 +3366,9 @@ fn build_object_collection_activity_rows(
     identity_activity_count_deltas: &mut FxHashMap<Vec<u8>, i64>,
 ) -> Result<Vec<materialize::MaterializedRow>> {
     let mut object_activity_acc =
-        crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator::new();
+        crate::db::writer::object_activity_acc::ObjectCollectionActivityAccumulator::new();
     let mut identity_activity_acc =
-        crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator::new();
+        crate::db::writer::object_activity_acc::ObjectCollectionActivityAccumulator::new();
     let mut rows = Vec::new();
 
     for tx in resolved {
@@ -3477,7 +3477,7 @@ fn build_object_collection_activity_rows(
         ) {
             rows.push(materialize::MaterializedRow::new(
                 CF_IDENTITY_COLLECTION_ACTIVITIES,
-                keys::encode_nft_collection_activity_key(
+                keys::encode_object_collection_activity_key(
                     &DOTBIT_SENTINEL_COLLECTION,
                     tx.block_number,
                     tx.tx_index,
@@ -3512,7 +3512,7 @@ fn build_object_collection_activity_rows(
         })?;
         rows.push(materialize::MaterializedRow::new(
             CF_OBJECT_COLLECTION_ACTIVITIES,
-            keys::encode_nft_collection_activity_key(
+            keys::encode_object_collection_activity_key(
                 &resolved_entry.collection_id,
                 resolved_entry.block_number,
                 resolved_entry.tx_idx,
@@ -3536,7 +3536,7 @@ fn build_object_collection_activity_rows(
         })?;
         rows.push(materialize::MaterializedRow::new(
             CF_IDENTITY_COLLECTION_ACTIVITIES,
-            keys::encode_nft_collection_activity_key(
+            keys::encode_object_collection_activity_key(
                 &resolved_entry.collection_id,
                 resolved_entry.block_number,
                 resolved_entry.tx_idx,
@@ -5744,21 +5744,21 @@ mod tests {
                 .collect();
         let _ = std::fs::remove_dir_all(&root);
 
-        let cluster_mint_key = keys::encode_nft_collection_activity_key(
+        let cluster_mint_key = keys::encode_object_collection_activity_key(
             &cluster_id,
             14_001_000,
             0,
             &create_block_hash,
             &create_tx_hash,
         );
-        let cluster_transfer_key = keys::encode_nft_collection_activity_key(
+        let cluster_transfer_key = keys::encode_object_collection_activity_key(
             &cluster_id,
             14_001_001,
             1,
             &transfer_block_hash,
             &transfer_tx_hash,
         );
-        let did_mint_key = keys::encode_nft_collection_activity_key(
+        let did_mint_key = keys::encode_object_collection_activity_key(
             &DID_CKB_SENTINEL_COLLECTION,
             14_001_000,
             0,
@@ -5943,21 +5943,21 @@ mod tests {
             })
             .collect();
 
-        let mint_key = keys::encode_nft_collection_activity_key(
+        let mint_key = keys::encode_object_collection_activity_key(
             &DOTBIT_SENTINEL_COLLECTION,
             300,
             0,
             &[0xa0; 32],
             &[0x31; 32],
         );
-        let transfer_key = keys::encode_nft_collection_activity_key(
+        let transfer_key = keys::encode_object_collection_activity_key(
             &DOTBIT_SENTINEL_COLLECTION,
             301,
             0,
             &[0xa1; 32],
             &[0x32; 32],
         );
-        let recycle_key = keys::encode_nft_collection_activity_key(
+        let recycle_key = keys::encode_object_collection_activity_key(
             &DOTBIT_SENTINEL_COLLECTION,
             302,
             0,
@@ -6167,15 +6167,25 @@ mod tests {
         assert_eq!(identity_count, 0);
 
         // Verify mint
-        let mint_key =
-            keys::encode_nft_collection_activity_key(&class_id, 400, 0, &[0xb0; 32], &[0x41; 32]);
+        let mint_key = keys::encode_object_collection_activity_key(
+            &class_id,
+            400,
+            0,
+            &[0xb0; 32],
+            &[0x41; 32],
+        );
         let mint = object_rows.get(mint_key.as_slice()).expect("mnft mint");
         assert_eq!(mint.actions.len(), 1);
         assert!(matches!(mint.actions[0], AssetAction::Mint));
 
         // Verify transfer
-        let transfer_key =
-            keys::encode_nft_collection_activity_key(&class_id, 401, 0, &[0xb1; 32], &[0x42; 32]);
+        let transfer_key = keys::encode_object_collection_activity_key(
+            &class_id,
+            401,
+            0,
+            &[0xb1; 32],
+            &[0x42; 32],
+        );
         let transfer = object_rows
             .get(transfer_key.as_slice())
             .expect("mnft transfer");
@@ -6183,8 +6193,13 @@ mod tests {
         assert!(matches!(transfer.actions[0], AssetAction::Transfer));
 
         // Verify burn
-        let burn_key =
-            keys::encode_nft_collection_activity_key(&class_id, 402, 0, &[0xb2; 32], &[0x43; 32]);
+        let burn_key = keys::encode_object_collection_activity_key(
+            &class_id,
+            402,
+            0,
+            &[0xb2; 32],
+            &[0x43; 32],
+        );
         let burn = object_rows.get(burn_key.as_slice()).expect("mnft burn");
         assert_eq!(burn.actions.len(), 1);
         assert!(matches!(burn.actions[0], AssetAction::Burn));

@@ -134,7 +134,7 @@ impl CkbadgerStore {
             );
         }
 
-        let key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
+        let key = keys::encode_object_collection_owner_key(collection_id, lock_hash);
         match self.get_cf(self.cf_stats_mnft(), &key)? {
             Some(value) if value.len() == 8 => {
                 Ok(i64::from_le_bytes(value[..8].try_into().unwrap()))
@@ -155,7 +155,7 @@ impl CkbadgerStore {
             );
         }
 
-        let prefix = keys::encode_nft_collection_owner_prefix(collection_id);
+        let prefix = keys::encode_object_collection_owner_prefix(collection_id);
         let iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix);
         let mut results = Vec::new();
 
@@ -169,10 +169,10 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            if key.len() != keys::NFT_COLLECTION_OWNER_KEY_SIZE {
+            if key.len() != keys::OBJECT_COLLECTION_OWNER_KEY_SIZE {
                 anyhow::bail!(
                     "invalid object collection owner key length: expected {}, got {}",
-                    keys::NFT_COLLECTION_OWNER_KEY_SIZE,
+                    keys::OBJECT_COLLECTION_OWNER_KEY_SIZE,
                     key.len()
                 );
             }
@@ -197,7 +197,7 @@ impl CkbadgerStore {
         &self,
         type_script_hash: &[u8],
     ) -> anyhow::Result<Option<MnftTypeIndex>> {
-        let key = keys::encode_nft_type_index_key(type_script_hash);
+        let key = keys::encode_object_type_index_key(type_script_hash);
         match self.get_cf(self.cf_stats_mnft(), &key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
@@ -209,7 +209,7 @@ impl CkbadgerStore {
         type_script_hash: &[u8],
         index: &MnftTypeIndex,
     ) -> anyhow::Result<()> {
-        let key = keys::encode_nft_type_index_key(type_script_hash);
+        let key = keys::encode_object_type_index_key(type_script_hash);
         let value = bincode::serialize(index)?;
         self.put_cf(self.cf_stats_mnft(), &key, &value)
     }
@@ -219,7 +219,7 @@ impl CkbadgerStore {
         collection_id: &[u8],
         date_yyyymmdd: u32,
     ) -> anyhow::Result<Option<MnftDailyDelta>> {
-        let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
+        let key = keys::encode_object_daily_key(collection_id, date_yyyymmdd);
         match self.get_cf(self.cf_stats_mnft(), &key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
@@ -232,7 +232,7 @@ impl CkbadgerStore {
         date_yyyymmdd: u32,
         delta: &MnftDailyDelta,
     ) -> anyhow::Result<()> {
-        let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
+        let key = keys::encode_object_daily_key(collection_id, date_yyyymmdd);
         let value = bincode::serialize(delta)?;
         self.put_cf(self.cf_stats_mnft(), &key, &value)
     }
@@ -250,9 +250,9 @@ impl CkbadgerStore {
         from_date_yyyymmdd: Option<u32>,
         to_date_yyyymmdd: Option<u32>,
     ) -> anyhow::Result<Vec<(u32, MnftDailyDelta)>> {
-        let prefix = keys::encode_nft_daily_prefix(collection_id);
+        let prefix = keys::encode_object_daily_prefix(collection_id);
         let start_key =
-            keys::encode_nft_daily_key(collection_id, from_date_yyyymmdd.unwrap_or(u32::MIN));
+            keys::encode_object_daily_key(collection_id, from_date_yyyymmdd.unwrap_or(u32::MIN));
         let iter = self.iterator_cf(
             self.cf_stats_mnft(),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
@@ -269,10 +269,10 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            if key.len() != keys::NFT_DAILY_KEY_SIZE {
+            if key.len() != keys::OBJECT_DAILY_KEY_SIZE {
                 continue;
             }
-            let (_, date) = keys::decode_nft_daily_key(&key);
+            let (_, date) = keys::decode_object_daily_key(&key);
             if let Some(to_date) = to_date_yyyymmdd {
                 if date > to_date {
                     break;
@@ -307,9 +307,9 @@ impl CkbadgerStore {
             return Ok(Vec::new());
         }
 
-        let prefix = keys::encode_nft_by_collection_prefix(collection_id);
+        let prefix = keys::encode_object_by_collection_prefix(collection_id);
         let start_object_id = cursor.unwrap_or(&[]);
-        let start_key = keys::encode_nft_by_collection_key(collection_id, start_object_id);
+        let start_key = keys::encode_object_by_collection_key(collection_id, start_object_id);
 
         let iter = self.iterator_cf(
             self.cf_mnft_by_collection(),
@@ -332,7 +332,7 @@ impl CkbadgerStore {
                 continue;
             }
 
-            let Some((_, object_id)) = keys::decode_nft_by_collection_key(&key) else {
+            let Some((_, object_id)) = keys::decode_object_by_collection_key(&key) else {
                 anyhow::bail!("invalid object_by_collection key length: {}", key.len());
             };
             if object_id.is_empty() {
@@ -363,15 +363,15 @@ impl CkbadgerStore {
             return Ok(Vec::new());
         }
 
-        let prefix = keys::encode_nft_collection_activity_prefix(collection_id);
+        let prefix = keys::encode_object_collection_activity_prefix(collection_id);
         let start_key = if let Some((cursor_block, cursor_tx_idx)) = cursor {
-            keys::encode_nft_collection_activity_seek_after_key(
+            keys::encode_object_collection_activity_seek_after_key(
                 collection_id,
                 cursor_block,
                 cursor_tx_idx,
             )
         } else {
-            let mut k = [0u8; keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE];
+            let mut k = [0u8; keys::OBJECT_COLLECTION_ACTIVITY_KEY_SIZE];
             k[..32].copy_from_slice(&prefix);
             k
         };
@@ -408,12 +408,12 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
+            if key.len() != keys::OBJECT_COLLECTION_ACTIVITY_KEY_SIZE {
                 continue;
             }
 
             let (_, block_num, tx_idx, block_hash_from_key, tx_hash_from_key) =
-                keys::decode_nft_collection_activity_key(&key);
+                keys::decode_object_collection_activity_key(&key);
             let entry: ObjectCollectionActivityEntry = bincode::deserialize(&value)?;
             if entry.tx_hash != tx_hash_from_key {
                 anyhow::bail!(
@@ -458,7 +458,7 @@ impl CkbadgerStore {
 
     /// Count total activities for a collection (prefix scan, no deserialization).
     pub fn count_object_collection_activities(&self, collection_id: &[u8]) -> anyhow::Result<i64> {
-        let prefix = keys::encode_nft_collection_activity_prefix(collection_id);
+        let prefix = keys::encode_object_collection_activity_prefix(collection_id);
         let iter = self.iterator_cf(
             self.cf_object_collection_activities(),
             rocksdb::IteratorMode::From(&prefix, rocksdb::Direction::Forward),
@@ -782,7 +782,7 @@ mod tests {
     fn test_list_object_daily_deltas_fails_on_invalid_payload() {
         let (_dir, store) = test_store();
         let collection_id = [0x77u8; 24];
-        let key = keys::encode_nft_daily_key(&collection_id, 20260219);
+        let key = keys::encode_object_daily_key(&collection_id, 20260219);
         store
             .put_cf(store.cf_stats_mnft(), &key, b"invalid-object-daily")
             .unwrap();

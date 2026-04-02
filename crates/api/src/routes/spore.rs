@@ -23,7 +23,7 @@ use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
 use crate::utils::{apply_owned_capacity_delta, date_keys_inclusive, parse_chart_date_range};
-use crate::warmup::{CachedAssetEntry, SporeCache, CACHE_KEY_ASSETS_NFT};
+use crate::warmup::{CachedAssetEntry, SporeCache, CACHE_KEY_ASSETS_OBJECT};
 use crate::AppState;
 use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
 
@@ -561,7 +561,7 @@ fn cluster_composition_from_aggregate(
     }
 }
 
-/// List clusters — use cached NFT assets (filtered to Spore) when available.
+/// List clusters — use cached object assets (filtered to Spore) when available.
 async fn list_clusters(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
@@ -569,12 +569,12 @@ async fn list_clusters(
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
-    // Try cached NFT assets first (Spore entries carry cluster grouping)
-    if let Some(cached_nfts) = state
+    // Try cached object assets first (Spore entries carry cluster grouping)
+    if let Some(cached_objects) = state
         .mem_cache
-        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
+        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_OBJECT)
     {
-        return serve_clusters_from_cache(cached_nfts, cursor_block, limit, &state);
+        return serve_clusters_from_cache(cached_objects, cursor_block, limit, &state);
     }
 
     Err(state.asset_cache_unavailable("cluster cache unavailable; warmup in progress"))

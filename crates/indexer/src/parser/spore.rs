@@ -546,7 +546,7 @@ mod tests {
             type_: Some(create_did_type_script(did_id)),
         };
 
-        // did:ckb uses its own NFT standard; parser must not interpret payload as spore molecule.
+        // did:ckb uses its own object standard; parser must not interpret payload as spore molecule.
         let data_hex = "0x0102030405";
         let parsed = SporeParser::parse_spore_cell(&output, data_hex).expect("should parse did");
         assert!(parsed.is_did);

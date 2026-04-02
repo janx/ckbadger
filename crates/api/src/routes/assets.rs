@@ -23,10 +23,10 @@ use crate::response::{
 };
 use crate::utils::{
     apply_owned_capacity_delta, date_keys_inclusive, parse_chart_date_range,
-    resolve_collection_standard, resolve_nft_collection_composition_tier_override,
-    resolve_nft_collection_name,
+    resolve_collection_standard, resolve_object_collection_composition_tier_override,
+    resolve_object_collection_name,
 };
-use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN};
+use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_OBJECT, CACHE_KEY_ASSETS_TOKEN};
 use crate::AppState;
 
 fn is_identity_sentinel(collection_id: &[u8]) -> bool {
@@ -188,7 +188,6 @@ pub struct CollectionActivitiesParams {
 #[serde(rename_all = "lowercase")]
 enum AssetFilterType {
     Token,
-    Nft,
     Object,
     Identity,
 }
@@ -455,7 +454,7 @@ fn fetch_assets_cached(
     let mut all_cached: Vec<CachedAssetEntry> = Vec::new();
 
     // Collect from cache based on type filter.
-    // Frontend uses "object" and "identity"; legacy "nft" returns all non-token assets.
+    // Frontend uses "object" and "identity".
     match filter_type {
         Some(AssetFilterType::Token) => {
             if let Some(tokens) = state
@@ -468,38 +467,28 @@ fn fetch_assets_cached(
                     .asset_cache_unavailable("token asset cache unavailable; warmup in progress"));
             }
         }
-        Some(AssetFilterType::Nft) => {
-            // Legacy: return all non-token assets (objects + identities)
-            if let Some(nfts) = state
-                .mem_cache
-                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
-            {
-                all_cached.extend(nfts);
-            } else {
-                return Err(state
-                    .asset_cache_unavailable("nft asset cache unavailable; warmup in progress"));
-            }
-        }
         Some(AssetFilterType::Object) => {
-            if let Some(nfts) = state
+            if let Some(objects) = state
                 .mem_cache
-                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
+                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_OBJECT)
             {
-                all_cached.extend(nfts.into_iter().filter(|e| e.asset_type == "object"));
+                all_cached.extend(objects.into_iter().filter(|e| e.asset_type == "object"));
             } else {
-                return Err(state
-                    .asset_cache_unavailable("nft asset cache unavailable; warmup in progress"));
+                return Err(
+                    state.asset_cache_unavailable("object cache unavailable; warmup in progress")
+                );
             }
         }
         Some(AssetFilterType::Identity) => {
-            if let Some(nfts) = state
+            if let Some(objects) = state
                 .mem_cache
-                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
+                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_OBJECT)
             {
-                all_cached.extend(nfts.into_iter().filter(|e| e.asset_type == "identity"));
+                all_cached.extend(objects.into_iter().filter(|e| e.asset_type == "identity"));
             } else {
-                return Err(state
-                    .asset_cache_unavailable("nft asset cache unavailable; warmup in progress"));
+                return Err(
+                    state.asset_cache_unavailable("object cache unavailable; warmup in progress")
+                );
             }
         }
         None => {
@@ -513,14 +502,15 @@ fn fetch_assets_cached(
                     .asset_cache_unavailable("token asset cache unavailable; warmup in progress"));
             }
 
-            if let Some(nfts) = state
+            if let Some(objects) = state
                 .mem_cache
-                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
+                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_OBJECT)
             {
-                all_cached.extend(nfts);
+                all_cached.extend(objects);
             } else {
-                return Err(state
-                    .asset_cache_unavailable("nft asset cache unavailable; warmup in progress"));
+                return Err(
+                    state.asset_cache_unavailable("object cache unavailable; warmup in progress")
+                );
             }
         }
     }
@@ -625,7 +615,6 @@ fn normalize_assets_composition_tier(
 fn parse_asset_cursor(cursor: &str) -> Option<(String, String)> {
     let normalize_type = |asset_type: &str| match asset_type {
         "token" => Some("token"),
-        "nft" => Some("nft"),
         "object" => Some("object"),
         "identity" => Some("identity"),
         _ => None,
@@ -773,7 +762,7 @@ fn collection_composition_from_aggregate(
     } else {
         // No per-item tier counts available — use standard-level override
         // (e.g. dotbit / did:ckb are known pure_ckb).
-        let tier = resolve_nft_collection_composition_tier_override(standard)
+        let tier = resolve_object_collection_composition_tier_override(standard)
             .unwrap_or("unknown")
             .to_string();
         let onchain_count = if matches!(tier.as_str(), "btc_ckb" | "pure_ckb") {
@@ -889,7 +878,7 @@ fn format_yyyymmdd_for_chart(date_yyyymmdd: u32) -> String {
     format!("{}-{}-{}", &date[0..4], &date[4..6], &date[6..8])
 }
 
-fn decode_nft_collection_id(
+fn decode_object_collection_id(
     raw: &str,
 ) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
     let normalized = raw.to_ascii_lowercase();
@@ -900,14 +889,14 @@ fn decode_nft_collection_id(
         return Ok(DID_CKB_SENTINEL_COLLECTION.to_vec());
     }
     hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
-        .map_err(|_| ApiError::bad_request("Invalid NFT collection ID"))
+        .map_err(|_| ApiError::bad_request("Invalid object collection ID"))
 }
 
-pub(crate) fn decode_nft_item_cursor(
+pub(crate) fn decode_object_item_cursor(
     raw: &str,
 ) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
     hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
-        .map_err(|_| ApiError::bad_request("Invalid NFT items cursor"))
+        .map_err(|_| ApiError::bad_request("Invalid object items cursor"))
 }
 
 pub(super) fn decode_item_id(
@@ -937,28 +926,28 @@ pub(crate) fn decode_activity_cursor(
     Ok((block, tx_index))
 }
 
-fn decode_nft_collection_holders_cursor(
+fn decode_object_collection_holders_cursor(
     raw: &str,
 ) -> Result<(i64, Vec<u8>), (axum::http::StatusCode, Json<ApiError>)> {
     let mut parts = raw.split(':');
     let count = parts
         .next()
-        .ok_or_else(|| ApiError::bad_request("Invalid NFT collection holders cursor"))?
+        .ok_or_else(|| ApiError::bad_request("Invalid object collection holders cursor"))?
         .parse::<i64>()
-        .map_err(|_| ApiError::bad_request("Invalid NFT collection holders cursor"))?;
+        .map_err(|_| ApiError::bad_request("Invalid object collection holders cursor"))?;
     let lock_hash_hex = parts
         .next()
-        .ok_or_else(|| ApiError::bad_request("Invalid NFT collection holders cursor"))?;
+        .ok_or_else(|| ApiError::bad_request("Invalid object collection holders cursor"))?;
     if parts.next().is_some() {
         return Err(ApiError::bad_request(
-            "Invalid NFT collection holders cursor",
+            "Invalid object collection holders cursor",
         ));
     }
     let lock_hash = hex::decode(lock_hash_hex.strip_prefix("0x").unwrap_or(lock_hash_hex))
-        .map_err(|_| ApiError::bad_request("Invalid NFT collection holders cursor"))?;
+        .map_err(|_| ApiError::bad_request("Invalid object collection holders cursor"))?;
     if lock_hash.len() != 32 {
         return Err(ApiError::bad_request(
-            "Invalid NFT collection holders cursor",
+            "Invalid object collection holders cursor",
         ));
     }
     Ok((count, lock_hash))
@@ -1124,7 +1113,7 @@ pub(crate) fn count_canonical_nft_collection_activities(
             {
                 total = total.checked_add(1).ok_or_else(|| {
                     anyhow::anyhow!(
-                        "canonical nft collection activity count overflow: collection_id=0x{}",
+                        "canonical object collection activity count overflow: collection_id=0x{}",
                         hex::encode(collection_id)
                     )
                 })?;
@@ -1187,7 +1176,7 @@ pub(crate) fn normalize_nft_items_status(
         "live" => Ok(NftItemStatusFilter::Live),
         "recycled" => Ok(NftItemStatusFilter::Recycled),
         _ => Err(ApiError::bad_request(
-            "Invalid nft item status filter. Expected one of: all, live, recycled",
+            "Invalid object item status filter. Expected one of: all, live, recycled",
         )),
     }
 }
@@ -1623,7 +1612,7 @@ fn collect_nft_item_lifecycle_actions(
         if let Some(meta) = consumed_meta.get(&(tx_hash.clone(), output_index)) {
             let consumed_by_tx = meta.consumed_by_tx.clone().ok_or_else(|| {
                 ApiError::internal(format!(
-                    "consumed nft outpoint missing consumer tx: nft_id=0x{}, tx_hash=0x{}, output_index={}",
+                    "consumed object outpoint missing consumer tx: nft_id=0x{}, tx_hash=0x{}, output_index={}",
                     hex::encode(nft_id_bytes),
                     hex::encode(&tx_hash),
                     output_index
@@ -1788,11 +1777,11 @@ async fn get_object_collection(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
 ) -> ApiResult<NftCollectionDetailResponse> {
-    let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
+    let collection_id_bytes = decode_object_collection_id(&collection_id)?;
 
     let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
+    let agg = agg.ok_or_else(|| ApiError::not_found("Object collection not found"))?;
 
     let daily = state
         .store
@@ -1809,26 +1798,26 @@ async fn get_object_collection(
                 )
             })
             .collect(),
-        "NFT Collection Capacity History".to_string(),
+        "Object Collection Capacity History".to_string(),
     )
     .map_err(|e| ApiError::internal(e.to_string()))?;
     let (owned_capacity, owned_knowledge) = latest_capacity_from_chart(&chart);
 
     let raw_standard = agg.standard.asset_standard().to_string();
     let standard = resolve_collection_standard(&collection_id_bytes, &raw_standard);
-    let name = resolve_nft_collection_name(&standard, agg.name.as_deref());
+    let name = resolve_object_collection_name(&standard, agg.name.as_deref());
     let composition = collection_composition_from_aggregate(&agg, &standard);
 
     if agg.holders_count < 0 {
         return Err(ApiError::internal(format!(
-            "invalid nft collection aggregate holders_count: collection_id=0x{}, holders_count={}",
+            "invalid object collection aggregate holders_count: collection_id=0x{}, holders_count={}",
             hex::encode(&collection_id_bytes),
             agg.holders_count
         )));
     }
     if agg.activities_count < 0 {
         return Err(ApiError::internal(format!(
-            "invalid nft collection aggregate activities_count: collection_id=0x{}, activities_count={}",
+            "invalid object collection aggregate activities_count: collection_id=0x{}, activities_count={}",
             hex::encode(&collection_id_bytes),
             agg.activities_count
         )));
@@ -2287,18 +2276,18 @@ async fn list_object_collection_items(
     Query(params): Query<ObjectItemsParams>,
 ) -> ApiResult<CursorPaginatedResponse<CollectionItemResponse>> {
     let limit = params.limit.clamp(1, 100);
-    let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
+    let collection_id_bytes = decode_object_collection_id(&collection_id)?;
     let search_lower = normalize_nft_items_search(params.search.as_deref());
     let status_filter = normalize_nft_items_status(params.status.as_deref())?;
     let cursor_bytes = params
         .cursor
         .as_deref()
-        .map(decode_nft_item_cursor)
+        .map(decode_object_item_cursor)
         .transpose()?;
 
     let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
+    let agg = agg.ok_or_else(|| ApiError::not_found("Object collection not found"))?;
 
     if is_identity_sentinel(&collection_id_bytes) {
         return list_identity_items_inner(
@@ -2459,7 +2448,7 @@ async fn list_object_collection_items(
                     .checked_sub(agg.live_count)
                     .ok_or_else(|| {
                         ApiError::internal(format!(
-                            "invalid nft collection aggregate counts: collection_id=0x{}, total_count={}, live_count={}",
+                            "invalid object collection aggregate counts: collection_id=0x{}, total_count={}, live_count={}",
                             hex::encode(&collection_id_bytes),
                             agg.total_count,
                             agg.live_count
@@ -2493,7 +2482,7 @@ fn collect_nft_collection_holder_counts(
         }
         if holder_counts.insert(lock_hash.clone(), count).is_some() {
             return Err(ApiError::internal(format!(
-                "duplicate nft collection owner counter key while collecting holders: collection_id=0x{}, lock_hash=0x{}",
+                "duplicate object collection owner counter key while collecting holders: collection_id=0x{}, lock_hash=0x{}",
                 hex::encode(collection_id_bytes),
                 hex::encode(&lock_hash)
             )));
@@ -2541,19 +2530,19 @@ async fn list_object_collection_holders(
     Query(params): Query<CollectionHoldersParams>,
 ) -> ApiResult<CursorPaginatedResponse<CollectionHolderResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
-    let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
+    let collection_id_bytes = decode_object_collection_id(&collection_id)?;
     let cursor = params
         .cursor
         .as_deref()
-        .map(decode_nft_collection_holders_cursor)
+        .map(decode_object_collection_holders_cursor)
         .transpose()?;
 
     let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
+        .ok_or_else(|| ApiError::not_found("Object collection not found"))?;
     if agg.holders_count < 0 {
         return Err(ApiError::internal(format!(
-            "invalid nft collection aggregate holders_count: collection_id=0x{}, holders_count={}",
+            "invalid object collection aggregate holders_count: collection_id=0x{}, holders_count={}",
             hex::encode(&collection_id_bytes),
             agg.holders_count
         )));
@@ -2572,7 +2561,7 @@ async fn list_object_collection_holders(
             .iter()
             .position(|(lock_hash, count)| *count == cursor_count && *lock_hash == cursor_lock_hash)
             .map(|idx| idx + 1)
-            .ok_or_else(|| ApiError::bad_request("Invalid NFT collection holders cursor"))?
+            .ok_or_else(|| ApiError::bad_request("Invalid object collection holders cursor"))?
     } else {
         0
     };
@@ -2611,7 +2600,7 @@ async fn list_object_collection_activities(
     Query(params): Query<CollectionActivitiesParams>,
 ) -> ApiResult<CursorPaginatedResponse<CollectionActivityResponse>> {
     let limit = params.limit.clamp(1, 100);
-    let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
+    let collection_id_bytes = decode_object_collection_id(&collection_id)?;
     let cursor = params
         .cursor
         .as_deref()
@@ -2622,7 +2611,7 @@ async fn list_object_collection_activities(
     // Validate collection exists
     let _agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
+        .ok_or_else(|| ApiError::not_found("Object collection not found"))?;
 
     // Fetch canonical rows only; skip orphaned history entries.
     let results = list_canonical_nft_collection_activities_page(
@@ -2684,11 +2673,11 @@ async fn get_object_collection_capacity_chart(
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
-    let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
+    let collection_id_bytes = decode_object_collection_id(&collection_id)?;
 
     let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
+    let agg = agg.ok_or_else(|| ApiError::not_found("Object collection not found"))?;
 
     let daily = state
         .store
@@ -2711,7 +2700,7 @@ async fn get_object_collection_capacity_chart(
                 base_used,
                 delta.owned_capacity_delta,
                 delta.owned_knowledge_delta,
-                "building NFT baseline capacity history chart",
+                "building object baseline capacity history chart",
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
         }
@@ -2721,7 +2710,7 @@ async fn get_object_collection_capacity_chart(
     };
     let raw_standard = agg.standard.asset_standard().to_string();
     let standard = resolve_collection_standard(&collection_id_bytes, &raw_standard);
-    let title = resolve_nft_collection_name(&standard, agg.name.as_deref())
+    let title = resolve_object_collection_name(&standard, agg.name.as_deref())
         .unwrap_or_else(|| format!("0x{}", hex::encode(&collection_id_bytes)));
 
     ok(build_capacity_history_chart_with_initial(
@@ -2785,10 +2774,6 @@ mod tests {
             Some(("token".to_string(), "0xabc".to_string()))
         );
         assert_eq!(
-            parse_asset_cursor("nft:0xdef"),
-            Some(("nft".to_string(), "0xdef".to_string()))
-        );
-        assert_eq!(
             parse_asset_cursor("object:0xabc"),
             Some(("object".to_string(), "0xabc".to_string()))
         );
@@ -2796,6 +2781,7 @@ mod tests {
             parse_asset_cursor("identity:0xabc"),
             Some(("identity".to_string(), "0xabc".to_string()))
         );
+        assert_eq!(parse_asset_cursor("nft:0xdef"), None);
         assert_eq!(parse_asset_cursor("dob:0xdef"), None);
         assert_eq!(parse_asset_cursor("1:2:3:nft"), None);
     }
@@ -3011,7 +2997,7 @@ mod tests {
             1
         );
 
-        // Add another live NFT for holder A1; cached ranking should remain stale until TTL refresh.
+        // Add another live object for holder A1; cached ranking should remain stale until TTL refresh.
         let mut overwrite_batch = StoreBatch::new(&domain);
         overwrite_batch.put_mnft_collection_owner_count(&collection_id, &[0xA1; 32], 2);
         overwrite_batch.commit().unwrap();

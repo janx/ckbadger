@@ -9,7 +9,7 @@ export default function AssetsRedirectPage() {
 
   useEffect(() => {
     const type = searchParams.get('type');
-    if (type === 'object' || type === 'dob' || type === 'nft') {
+    if (type === 'object' || type === 'dob') {
       router.replace('/inventory/objects');
     } else if (type === 'identity') {
       router.replace('/inventory/identities');

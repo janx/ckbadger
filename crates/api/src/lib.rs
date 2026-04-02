@@ -68,7 +68,7 @@ pub struct AppState {
     pub ckb_store: Option<Arc<CkbChainReader>>,
     /// Optional guard that keeps a temporary CKB RocksDB fixture alive for the router lifetime.
     pub ckb_db_cleanup: Option<Arc<CleanupPathGuard>>,
-    /// In-memory cache for assets/tokens/NFT data (refreshed by background loop).
+    /// In-memory cache for assets/tokens/object data (refreshed by background loop).
     pub mem_cache: InMemoryCache,
     /// Last asset cache warmup failure. `None` means warmup is still pending or last refresh succeeded.
     pub asset_cache_warmup_error: Arc<RwLock<Option<String>>>,

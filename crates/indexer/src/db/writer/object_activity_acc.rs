@@ -230,12 +230,12 @@ mod tests {
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
         let block_hash = [0xA1u8; 32];
-        let nft_id = [3u8; 32];
+        let object_id = [3u8; 32];
 
         acc.record(
             &collection_id,
             &tx_hash,
-            &nft_id,
+            &object_id,
             &block_hash,
             100,
             1,
@@ -258,19 +258,19 @@ mod tests {
     }
 
     #[test]
-    fn test_transfer_create_and_consume_same_nft() {
+    fn test_transfer_create_and_consume_same_object() {
         let (_dir, store) = test_store();
         let mut acc = ObjectCollectionActivityAccumulator::new();
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
         let block_hash = [0xA2u8; 32];
-        let nft_id = [3u8; 32];
+        let object_id = [3u8; 32];
 
-        // Same NFT created and consumed in same tx = Transfer
+        // Same object created and consumed in same tx = Transfer
         acc.record(
             &collection_id,
             &tx_hash,
-            &nft_id,
+            &object_id,
             &block_hash,
             200,
             5,
@@ -280,7 +280,7 @@ mod tests {
         acc.record(
             &collection_id,
             &tx_hash,
-            &nft_id,
+            &object_id,
             &block_hash,
             200,
             5,
@@ -307,12 +307,12 @@ mod tests {
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
         let block_hash = [0xA3u8; 32];
-        let nft_id = [3u8; 32];
+        let object_id = [3u8; 32];
 
         acc.record(
             &collection_id,
             &tx_hash,
-            &nft_id,
+            &object_id,
             &block_hash,
             300,
             2,
@@ -333,19 +333,19 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_mint_multiple_nfts() {
+    fn test_batch_mint_multiple_objects() {
         let (_dir, store) = test_store();
         let mut acc = ObjectCollectionActivityAccumulator::new();
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
         let block_hash = [0xA4u8; 32];
-        let nft_a = [3u8; 32];
-        let nft_b = [4u8; 32];
+        let object_a = [3u8; 32];
+        let object_b = [4u8; 32];
 
         acc.record(
             &collection_id,
             &tx_hash,
-            &nft_a,
+            &object_a,
             &block_hash,
             400,
             0,
@@ -355,7 +355,7 @@ mod tests {
         acc.record(
             &collection_id,
             &tx_hash,
-            &nft_b,
+            &object_b,
             &block_hash,
             400,
             0,
@@ -383,13 +383,13 @@ mod tests {
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
         let block_hash = [0xA5u8; 32];
-        let nft_a = [3u8; 32]; // gets minted
-        let nft_b = [4u8; 32]; // gets burned
+        let object_a = [3u8; 32]; // gets minted
+        let object_b = [4u8; 32]; // gets burned
 
         acc.record(
             &collection_id,
             &tx_hash,
-            &nft_a,
+            &object_a,
             &block_hash,
             500,
             3,
@@ -399,7 +399,7 @@ mod tests {
         acc.record(
             &collection_id,
             &tx_hash,
-            &nft_b,
+            &object_b,
             &block_hash,
             500,
             3,
@@ -427,12 +427,12 @@ mod tests {
         let collection_id = *b"dotbit_collection_______________";
         let tx_hash = [2u8; 32];
         let block_hash = [0xA1u8; 32];
-        let nft_id = [3u8; 32];
+        let object_id = [3u8; 32];
 
         acc.record(
             &collection_id,
             &tx_hash,
-            &nft_id,
+            &object_id,
             &block_hash,
             100,
             1,
@@ -475,12 +475,12 @@ mod tests {
         let tx1 = [10u8; 32];
         let tx2 = [11u8; 32];
         let block_hash = [0xC1u8; 32];
-        let nft_a = [3u8; 32];
-        let nft_b = [4u8; 32];
+        let object_a = [3u8; 32];
+        let object_b = [4u8; 32];
 
         // Two mint events across two transactions
-        acc.record(&coll, &tx1, &nft_a, &block_hash, 100, 1, 1000, true);
-        acc.record(&coll, &tx2, &nft_b, &block_hash, 100, 2, 1000, true);
+        acc.record(&coll, &tx1, &object_a, &block_hash, 100, 1, 1000, true);
+        acc.record(&coll, &tx2, &object_b, &block_hash, 100, 2, 1000, true);
 
         let mut batch = StoreBatch::new(&store);
         let inserted = acc.flush_identity(&mut batch);
@@ -513,10 +513,10 @@ mod tests {
         let tx2 = [11u8; 32];
         let block_hash_a = [0xB1u8; 32];
         let block_hash_b = [0xB2u8; 32];
-        let nft = [3u8; 32];
+        let object = [3u8; 32];
 
-        acc.record(&coll_a, &tx1, &nft, &block_hash_a, 100, 0, 1000, true);
-        acc.record(&coll_b, &tx2, &nft, &block_hash_b, 200, 1, 2000, true);
+        acc.record(&coll_a, &tx1, &object, &block_hash_a, 100, 0, 1000, true);
+        acc.record(&coll_b, &tx2, &object, &block_hash_b, 200, 1, 2000, true);
 
         let mut batch = StoreBatch::new(&store);
         acc.flush(&mut batch);

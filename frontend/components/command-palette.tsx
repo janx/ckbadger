@@ -42,7 +42,7 @@ const COMMANDS: CommandItem[] = [
   {
     id: 'go-inventory-objects',
     label: 'Go to Objects',
-    keywords: ['inventory', 'object', 'objects', 'nft', 'spore', 'dob'],
+    keywords: ['inventory', 'object', 'objects', 'spore', 'dob'],
     href: '/inventory/objects',
   },
   {

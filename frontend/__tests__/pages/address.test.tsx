@@ -519,7 +519,7 @@ describe('AddressDetailPage', () => {
     );
   });
 
-  it('shows dotbit label in activities for nft changes', async () => {
+  it('shows dotbit label in activities for object changes', async () => {
     vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
     vi.mocked(api.getAddressActivities).mockResolvedValue({
       data: [

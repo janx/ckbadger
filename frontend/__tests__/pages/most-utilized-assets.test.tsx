@@ -38,7 +38,7 @@ describe('MostUtilizedAssetsPage', () => {
         title: 'Top Assets Capacity Share',
         data: [{ date: '2024-01-01', values: { top0: '200', others: '30' } }],
         series: [
-          { key: 'top0', label: 'Cluster A (nft)', color: '#00c389' },
+          { key: 'top0', label: 'Cluster A (object)', color: '#00c389' },
           { key: 'others', label: 'Others', color: '#64748b' },
         ],
       },
@@ -61,7 +61,7 @@ describe('MostUtilizedAssetsPage', () => {
       expect(screen.getByText('Total CKBytes Share (%) - Top 20 + Others')).toBeInTheDocument();
       expect(screen.getAllByTestId('stacked-area-chart')).toHaveLength(2);
       expect(screen.getByTitle('Token A (token)')).toBeInTheDocument();
-      expect(screen.getByTitle('Cluster A (nft)')).toBeInTheDocument();
+      expect(screen.getByTitle('Cluster A (object)')).toBeInTheDocument();
       expect(screen.getByText(/Drag to select range/i)).toBeInTheDocument();
     });
 
@@ -86,7 +86,7 @@ describe('MostUtilizedAssetsPage', () => {
         valueUnit: 'shannon',
         data: [{ date: '2024-01-01', values: { top0: '200', others: '30' } }],
         series: [
-          { key: 'top0', label: 'Cluster A (nft)', color: '#00c389' },
+          { key: 'top0', label: 'Cluster A (object)', color: '#00c389' },
           { key: 'others', label: 'Others', color: '#64748b' },
         ],
       })

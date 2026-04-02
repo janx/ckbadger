@@ -14,7 +14,7 @@ use crate::utils::{
     CurrentScriptVersionResolution,
 };
 use crate::warmup::{
-    CachedAssetEntry, CachedScriptEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN,
+    CachedAssetEntry, CachedScriptEntry, CACHE_KEY_ASSETS_OBJECT, CACHE_KEY_ASSETS_TOKEN,
     CACHE_KEY_SCRIPTS_NAMED,
 };
 use crate::AppState;
@@ -82,7 +82,7 @@ fn cached_cluster_match(entry: &CachedAssetEntry, pattern: &str) -> Option<(Stri
     Some((cluster_id, name, entry.transfers_count))
 }
 
-fn cached_nft_collection_match(
+fn cached_object_collection_match(
     entry: &CachedAssetEntry,
     pattern: &str,
 ) -> Option<(String, String, i64)> {
@@ -560,9 +560,9 @@ async fn search(
         let cached_tokens = state
             .mem_cache
             .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN);
-        let cached_nfts = state
+        let cached_objects = state
             .mem_cache
-            .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT);
+            .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_OBJECT);
         let spore_guard = state.spore_cache.load();
 
         if scope_allows(scope, &[SearchScope::Script]) {
@@ -639,8 +639,8 @@ async fn search(
         }
 
         if scope_allows(scope, &[SearchScope::Cluster, SearchScope::Asset]) {
-            let cached = cached_nfts.as_ref().ok_or_else(|| {
-                state.asset_cache_unavailable("nft asset cache unavailable; warmup in progress")
+            let cached = cached_objects.as_ref().ok_or_else(|| {
+                state.asset_cache_unavailable("object cache unavailable; warmup in progress")
             })?;
             let mut cluster_matches: Vec<(String, String, i64)> = cached
                 .iter()
@@ -660,20 +660,20 @@ async fn search(
         }
 
         if scope_allows(scope, &[SearchScope::Asset]) {
-            let cached = cached_nfts.as_ref().ok_or_else(|| {
-                state.asset_cache_unavailable("nft asset cache unavailable; warmup in progress")
+            let cached = cached_objects.as_ref().ok_or_else(|| {
+                state.asset_cache_unavailable("object cache unavailable; warmup in progress")
             })?;
-            let mut nft_collection_matches: Vec<(String, String, i64)> = cached
+            let mut object_collection_matches: Vec<(String, String, i64)> = cached
                 .iter()
-                .filter_map(|entry| cached_nft_collection_match(entry, &pattern))
+                .filter_map(|entry| cached_object_collection_match(entry, &pattern))
                 .collect();
 
-            nft_collection_matches.sort_by(|a, b| b.2.cmp(&a.2));
+            object_collection_matches.sort_by(|a, b| b.2.cmp(&a.2));
             for (collection_hex, name, _) in
-                nft_collection_matches.into_iter().take(NAME_MATCH_LIMIT)
+                object_collection_matches.into_iter().take(NAME_MATCH_LIMIT)
             {
                 results.push(SearchResult {
-                    result_type: "nft".to_string(),
+                    result_type: "object".to_string(),
                     id: collection_hex.clone(),
                     label: format!("Object Collection {}", name),
                     url: format!("/objects/{}", collection_hex),
@@ -834,7 +834,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cached_cluster_and_nft_collection_match() {
+    fn test_cached_cluster_and_object_collection_match() {
         let cluster_entry = CachedAssetEntry {
             id: "0xcluster".to_string(),
             asset_type: "object".to_string(),
@@ -862,7 +862,7 @@ mod tests {
             type_args: None,
             description: None,
         };
-        let nft_entry = CachedAssetEntry {
+        let object_entry = CachedAssetEntry {
             id: "0xnft".to_string(),
             asset_type: "identity".to_string(),
             standard: "dotbit".to_string(),
@@ -893,11 +893,11 @@ mod tests {
         let cluster = cached_cluster_match(&cluster_entry, "genesis").unwrap();
         assert_eq!(cluster.0, "0xcluster");
         assert_eq!(cluster.2, 9);
-        assert!(cached_cluster_match(&nft_entry, "dotbit").is_none());
+        assert!(cached_cluster_match(&object_entry, "dotbit").is_none());
 
-        let nft = cached_nft_collection_match(&nft_entry, "dotbit").unwrap();
-        assert_eq!(nft.0, "0xnft");
-        assert_eq!(nft.2, 11);
-        assert!(cached_nft_collection_match(&cluster_entry, "genesis").is_none());
+        let object_result = cached_object_collection_match(&object_entry, "dotbit").unwrap();
+        assert_eq!(object_result.0, "0xnft");
+        assert_eq!(object_result.2, 11);
+        assert!(cached_object_collection_match(&cluster_entry, "genesis").is_none());
     }
 }

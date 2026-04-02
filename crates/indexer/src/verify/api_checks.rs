@@ -20,8 +20,8 @@ const SPORE_CLUSTER_SPORE_PAGE_LIMIT: usize = 100;
 const SPORE_PER_CLUSTER_SAMPLE: usize = 2;
 const SPORE_OWNER_PAGE_LIMIT: usize = 100;
 const SPORE_OWNER_MAX_PAGES: usize = 50;
-const NFT_ASSET_LIST_LIMIT: usize = 100;
-const NFT_COLLECTION_SAMPLE_MAX: usize = 20;
+const OBJECT_ASSET_LIST_LIMIT: usize = 100;
+const OBJECT_COLLECTION_SAMPLE_MAX: usize = 20;
 const SECONDARY_ISSUANCE_MAX_DRIFT_CKB: i128 = 10_000;
 const TOP_ASSET_LIMIT: usize = 10;
 const TOP_HOLDER_LIMIT: usize = 10;
@@ -2755,31 +2755,31 @@ impl Check for SporeOwnerRoundtrip {
     }
 }
 
-/// S21: NFT asset list/detail/items totals must stay internally consistent.
-pub struct NftAssetCollectionConsistency;
+/// S21: Object asset list/detail/items totals must stay internally consistent.
+pub struct ObjectAssetCollectionConsistency;
 
-impl Check for NftAssetCollectionConsistency {
+impl Check for ObjectAssetCollectionConsistency {
     fn name(&self) -> &'static str {
-        "nft_asset_collection_consistency"
+        "object_asset_collection_consistency"
     }
     fn description(&self) -> &'static str {
-        "NFT list/detail/items totals are consistent"
+        "Object list/detail/items totals are consistent"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
     }
     fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
-        Some(ctx.sample_count.min(NFT_COLLECTION_SAMPLE_MAX) as u64)
+        Some(ctx.sample_count.min(OBJECT_COLLECTION_SAMPLE_MAX) as u64)
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let assets: CursorPageWithTotal<AssetListApiRecord> = api_get(
             ctx,
-            &format!("assets?type=nft&limit={}", NFT_ASSET_LIST_LIMIT),
+            &format!("assets?type=object&limit={}", OBJECT_ASSET_LIST_LIMIT),
         )?;
         if assets.data.is_empty() || ctx.sample_count == 0 {
             return Ok(CheckResult::pass_with_detail(
                 0,
-                "no NFT collections available for sampling".to_string(),
+                "no object collections available for sampling".to_string(),
             ));
         }
 
@@ -2787,7 +2787,7 @@ impl Check for NftAssetCollectionConsistency {
             ctx.seed.wrapping_add(30),
             assets.data.len(),
             ctx.sample_count,
-            NFT_COLLECTION_SAMPLE_MAX,
+            OBJECT_COLLECTION_SAMPLE_MAX,
         );
 
         let mut findings = vec![];
@@ -2796,7 +2796,7 @@ impl Check for NftAssetCollectionConsistency {
         for idx in sample_indices {
             let asset = &assets.data[idx];
 
-            // The ?type=nft filter is a legacy catch-all returning object + identity types.
+            // The ?type=object filter is a catch-all returning object + identity types.
             let detail_prefix = match asset.asset_type.as_str() {
                 "object" => "assets/objects",
                 "identity" => "assets/identities",
@@ -2804,7 +2804,7 @@ impl Check for NftAssetCollectionConsistency {
                     findings.push(Finding {
                         entity: format!("asset={}", asset.id),
                         details: vec![format!(
-                            "unexpected asset type '{}' in nft asset list",
+                            "unexpected asset type '{}' in object asset list",
                             other
                         )],
                     });
@@ -2878,14 +2878,14 @@ impl Check for NftAssetCollectionConsistency {
         if checked == 0 {
             return Ok(CheckResult::pass_with_detail(
                 0,
-                "no non-spore NFT collections sampled".to_string(),
+                "no non-spore object collections sampled".to_string(),
             ));
         }
 
         if findings.is_empty() {
             Ok(CheckResult::pass_with_detail(
                 checked,
-                format!("{} sampled NFT collections", checked),
+                format!("{} sampled object collections", checked),
             ))
         } else {
             Ok(CheckResult::fail(checked, findings))
@@ -2893,7 +2893,7 @@ impl Check for NftAssetCollectionConsistency {
     }
 }
 
-/// S22: Top token/NFT asset holders must align with address-page counts.
+/// S22: Top token/object asset holders must align with address-page counts.
 pub struct AssetTopHoldersAddressConsistency;
 
 impl Check for AssetTopHoldersAddressConsistency {
@@ -2912,13 +2912,15 @@ impl Check for AssetTopHoldersAddressConsistency {
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let token_assets: CursorPageWithTotal<AssetListApiRecord> =
             api_get(ctx, &format!("assets?type=token&limit={}", TOP_ASSET_LIMIT))?;
-        let nft_assets: CursorPageWithTotal<AssetListApiRecord> =
-            api_get(ctx, &format!("assets?type=nft&limit={}", TOP_ASSET_LIMIT))?;
+        let object_assets: CursorPageWithTotal<AssetListApiRecord> = api_get(
+            ctx,
+            &format!("assets?type=object&limit={}", TOP_ASSET_LIMIT),
+        )?;
 
-        if token_assets.data.is_empty() && nft_assets.data.is_empty() {
+        if token_assets.data.is_empty() && object_assets.data.is_empty() {
             return Ok(CheckResult::pass_with_detail(
                 0,
-                "no token/nft assets available for holder consistency checks".to_string(),
+                "no token/object assets available for holder consistency checks".to_string(),
             ));
         }
 
@@ -3001,7 +3003,7 @@ impl Check for AssetTopHoldersAddressConsistency {
             }
         }
 
-        for asset in nft_assets.data.iter().take(TOP_ASSET_LIMIT) {
+        for asset in object_assets.data.iter().take(TOP_ASSET_LIMIT) {
             let mut asset_details = vec![];
 
             let (detail_id, detail_holders_count, holders): (
@@ -3020,15 +3022,15 @@ impl Check for AssetTopHoldersAddressConsistency {
                 )?;
                 (detail.cluster_id, detail.holders_count, holders_page)
             } else {
-                // ?type=nft returns object + identity types
+                // ?type=object returns object + identity types
                 let detail_prefix = match asset.asset_type.as_str() {
                     "object" => "assets/objects",
                     "identity" => "assets/identities",
                     other => {
                         asset_details
-                            .push(format!("unexpected asset type '{}' in nft list", other));
+                            .push(format!("unexpected asset type '{}' in object list", other));
                         findings.push(Finding {
-                            entity: format!("nft={} standard={}", asset.id, asset.standard),
+                            entity: format!("object={} standard={}", asset.id, asset.standard),
                             details: asset_details,
                         });
                         checked += 1;
@@ -3073,7 +3075,7 @@ impl Check for AssetTopHoldersAddressConsistency {
 
             if !asset_details.is_empty() {
                 findings.push(Finding {
-                    entity: format!("nft={} standard={}", asset.id, asset.standard),
+                    entity: format!("object={} standard={}", asset.id, asset.standard),
                     details: asset_details,
                 });
             }
@@ -3100,7 +3102,7 @@ impl Check for AssetTopHoldersAddressConsistency {
                 if !holder_details.is_empty() {
                     findings.push(Finding {
                         entity: format!(
-                            "nft={} holder={} standard={}",
+                            "object={} holder={} standard={}",
                             asset.id, holder.lock_script_hash, asset.standard
                         ),
                         details: holder_details,
@@ -3114,7 +3116,7 @@ impl Check for AssetTopHoldersAddressConsistency {
         if checked == 0 {
             return Ok(CheckResult::pass_with_detail(
                 0,
-                "no holders returned by top token/nft assets".to_string(),
+                "no holders returned by top token/object assets".to_string(),
             ));
         }
 
@@ -3122,7 +3124,7 @@ impl Check for AssetTopHoldersAddressConsistency {
             Ok(CheckResult::pass_with_detail(
                 checked,
                 format!(
-                    "{} holder address checks across top {} token + top {} nft assets",
+                    "{} holder address checks across top {} token + top {} object assets",
                     checked, TOP_ASSET_LIMIT, TOP_ASSET_LIMIT
                 ),
             ))
@@ -3359,7 +3361,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(RpcBlockSpotCheck),
         Box::new(TokenActivityTransferBidirectional),
         Box::new(SporeOwnerRoundtrip),
-        Box::new(NftAssetCollectionConsistency),
+        Box::new(ObjectAssetCollectionConsistency),
         Box::new(AssetTopHoldersAddressConsistency),
         Box::new(IdentityCollectionHolderConsistency),
     ]
@@ -3410,7 +3412,7 @@ mod tests {
         assert!(names.contains(&"burnt_supply_genesis_invariant"));
         assert!(names.contains(&"token_activity_transfer_bidirectional"));
         assert!(names.contains(&"spore_owner_roundtrip"));
-        assert!(names.contains(&"nft_asset_collection_consistency"));
+        assert!(names.contains(&"object_asset_collection_consistency"));
         assert!(names.contains(&"asset_top_holders_address_consistency"));
         assert!(names.contains(&"identity_collection_holder_consistency"));
     }
@@ -3489,7 +3491,7 @@ mod tests {
             if call == 0 {
                 ResponseTemplate::new(503).set_body_json(json!({
                     "error": "warmup_pending",
-                    "message": "nft asset cache unavailable; warmup in progress"
+                    "message": "object cache unavailable; warmup in progress"
                 }))
             } else {
                 ResponseTemplate::new(200).set_body_json(json!({
@@ -3528,7 +3530,7 @@ mod tests {
         };
 
         let response: CursorPageWithTotal<serde_json::Value> =
-            api_get(&ctx, "assets?type=nft&limit=100").expect("api_get should retry warmup");
+            api_get(&ctx, "assets?type=object&limit=100").expect("api_get should retry warmup");
 
         assert!(response.data.is_empty());
         assert_eq!(response.total, Some(0));

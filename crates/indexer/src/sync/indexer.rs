@@ -1232,8 +1232,8 @@ impl Indexer {
                     Err(e) => warn!("Failed to refresh token 24h transfers: {}", e),
                 }
                 match writer.refresh_mnft_24h_transfers() {
-                    Ok(count) => info!("Refreshed 24h transfers for {} NFT classes", count),
-                    Err(e) => warn!("Failed to refresh NFT 24h transfers: {}", e),
+                    Ok(count) => info!("Refreshed 24h transfers for {} object classes", count),
+                    Err(e) => warn!("Failed to refresh object 24h transfers: {}", e),
                 }
             }
         });

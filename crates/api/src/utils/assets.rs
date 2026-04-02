@@ -24,11 +24,11 @@ struct NftTiersDoc {
     overrides: HashMap<String, String>,
 }
 
-static NFT_COMPOSITION_TIER_OVERRIDES: LazyLock<HashMap<String, String>> =
+static OBJECT_COMPOSITION_TIER_OVERRIDES: LazyLock<HashMap<String, String>> =
     LazyLock::new(
-        || match load_and_validate_nft_composition_tier_overrides() {
+        || match load_and_validate_object_composition_tier_overrides() {
             Ok(overrides) => overrides,
-            Err(e) => panic!("nft_composition_tier_overrides initialization failed: {e}"),
+            Err(e) => panic!("object_composition_tier_overrides initialization failed: {e}"),
         },
     );
 
@@ -40,7 +40,7 @@ const VALID_TIERS: &[&str] = &[
     "unknown",
 ];
 
-fn default_nft_composition_tier_overrides() -> HashMap<String, String> {
+fn default_object_composition_tier_overrides() -> HashMap<String, String> {
     let mut defaults = HashMap::new();
     for standard in [".bit", "dotbit", "did:ckb", "did_ckb"] {
         defaults.insert(
@@ -51,20 +51,20 @@ fn default_nft_composition_tier_overrides() -> HashMap<String, String> {
     defaults
 }
 
-fn load_and_validate_nft_composition_tier_overrides() -> Result<HashMap<String, String>> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata/nft-tiers.toml");
+fn load_and_validate_object_composition_tier_overrides() -> Result<HashMap<String, String>> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata/object-tiers.toml");
     let content = match std::fs::read_to_string(&path) {
         Ok(content) => content,
         Err(_) => {
             // File may not exist in deployed binaries (CARGO_MANIFEST_DIR is
             // baked at compile time). Fall back to hardcoded defaults.
-            return Ok(default_nft_composition_tier_overrides());
+            return Ok(default_object_composition_tier_overrides());
         }
     };
 
     let parsed: NftTiersDoc = toml::from_str(&content).map_err(|e| {
         anyhow!(
-            "malformed docs/metadata/nft-tiers.toml at {}: {}",
+            "malformed docs/metadata/object-tiers.toml at {}: {}",
             path.display(),
             e
         )
@@ -76,7 +76,7 @@ fn load_and_validate_nft_composition_tier_overrides() -> Result<HashMap<String, 
         let normalized_tier = tier.trim().to_ascii_lowercase();
         if !VALID_TIERS.contains(&normalized_tier.as_str()) {
             bail!(
-                "invalid nft_composition_tier_overrides tier for standard='{}': '{}' (valid: {})",
+                "invalid object_composition_tier_overrides tier for standard='{}': '{}' (valid: {})",
                 standard,
                 normalized_tier,
                 VALID_TIERS.join(", ")
@@ -96,9 +96,9 @@ fn normalize_standard_alias_key(standard: &str) -> String {
     }
 }
 
-pub fn resolve_nft_collection_composition_tier_override(standard: &str) -> Option<&'static str> {
+pub fn resolve_object_collection_composition_tier_override(standard: &str) -> Option<&'static str> {
     let normalized = normalize_standard_alias_key(standard);
-    NFT_COMPOSITION_TIER_OVERRIDES
+    OBJECT_COMPOSITION_TIER_OVERRIDES
         .get(&normalized)
         .map(String::as_str)
 }
@@ -206,12 +206,15 @@ pub fn resolve_collection_standard(collection_id: &[u8], agg_standard: &str) -> 
     agg_standard.to_string()
 }
 
-/// Resolve an NFT collection display name.
+/// Resolve an object collection display name.
 ///
 /// Priority:
 /// 1) non-empty aggregate name
 /// 2) standard fallback (currently ".bit" for dotbit)
-pub fn resolve_nft_collection_name(standard: &str, aggregate_name: Option<&str>) -> Option<String> {
+pub fn resolve_object_collection_name(
+    standard: &str,
+    aggregate_name: Option<&str>,
+) -> Option<String> {
     if let Some(name) = non_empty_name(aggregate_name) {
         return Some(name);
     }
@@ -293,62 +296,62 @@ mod tests {
     }
 
     #[test]
-    fn resolve_nft_name_prefers_aggregate_name() {
+    fn resolve_object_name_prefers_aggregate_name() {
         assert_eq!(
-            resolve_nft_collection_name("dotbit", Some("  Dotbit Club  ")).as_deref(),
+            resolve_object_collection_name("dotbit", Some("  Dotbit Club  ")).as_deref(),
             Some("Dotbit Club")
         );
     }
 
     #[test]
-    fn resolve_nft_name_falls_back_to_dotbit_default() {
+    fn resolve_object_name_falls_back_to_dotbit_default() {
         assert_eq!(
-            resolve_nft_collection_name("dotbit", None).as_deref(),
+            resolve_object_collection_name("dotbit", None).as_deref(),
             Some(".bit")
         );
         assert_eq!(
-            resolve_nft_collection_name("DOTBIT", Some("   ")).as_deref(),
+            resolve_object_collection_name("DOTBIT", Some("   ")).as_deref(),
             Some(".bit")
         );
     }
 
     #[test]
-    fn resolve_nft_name_returns_none_for_other_standards_without_name() {
-        assert!(resolve_nft_collection_name("m-nft", None).is_none());
+    fn resolve_object_name_returns_none_for_other_standards_without_name() {
+        assert!(resolve_object_collection_name("m-nft", None).is_none());
     }
 
     #[test]
-    fn resolve_nft_name_falls_back_to_did_ckb_default() {
+    fn resolve_object_name_falls_back_to_did_ckb_default() {
         assert_eq!(
-            resolve_nft_collection_name("did_ckb", None).as_deref(),
+            resolve_object_collection_name("did_ckb", None).as_deref(),
             Some("did:ckb")
         );
         assert_eq!(
-            resolve_nft_collection_name("did:ckb", Some("   ")).as_deref(),
+            resolve_object_collection_name("did:ckb", Some("   ")).as_deref(),
             Some("did:ckb")
         );
     }
 
     #[test]
-    fn nft_composition_tier_overrides_cover_dotbit_and_did_ckb() {
+    fn object_composition_tier_overrides_cover_dotbit_and_did_ckb() {
         assert_eq!(
-            resolve_nft_collection_composition_tier_override("dotbit"),
+            resolve_object_collection_composition_tier_override("dotbit"),
             Some("pure_ckb")
         );
         assert_eq!(
-            resolve_nft_collection_composition_tier_override(".bit"),
+            resolve_object_collection_composition_tier_override(".bit"),
             Some("pure_ckb")
         );
         assert_eq!(
-            resolve_nft_collection_composition_tier_override("did_ckb"),
+            resolve_object_collection_composition_tier_override("did_ckb"),
             Some("pure_ckb")
         );
         assert_eq!(
-            resolve_nft_collection_composition_tier_override("did:ckb"),
+            resolve_object_collection_composition_tier_override("did:ckb"),
             Some("pure_ckb")
         );
         assert_eq!(
-            resolve_nft_collection_composition_tier_override("m-nft"),
+            resolve_object_collection_composition_tier_override("m-nft"),
             None
         );
     }

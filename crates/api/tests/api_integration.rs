@@ -2585,8 +2585,8 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
     assert_eq!(json["title"], "Assets Used & Total CKBytes");
     let used_share = &json["usedShare"];
     let used_series = used_share["series"].as_array().unwrap();
-    assert_eq!(used_series[0]["label"], "NFT Collection (nft)");
-    assert_eq!(used_series[1]["label"], "DOB Cluster (nft)");
+    assert_eq!(used_series[0]["label"], "NFT Collection (object)");
+    assert_eq!(used_series[1]["label"], "DOB Cluster (object)");
     assert_eq!(used_series[2]["label"], "A (token)");
     assert_eq!(used_series[3]["label"], "B (token)");
     assert_eq!(used_series[4]["label"], "Others");
@@ -2602,8 +2602,8 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
     let capacity_share = &json["capacityShare"];
     let capacity_series = capacity_share["series"].as_array().unwrap();
     assert_eq!(capacity_series[0]["label"], "B (token)");
-    assert_eq!(capacity_series[1]["label"], "NFT Collection (nft)");
-    assert_eq!(capacity_series[2]["label"], "DOB Cluster (nft)");
+    assert_eq!(capacity_series[1]["label"], "NFT Collection (object)");
+    assert_eq!(capacity_series[2]["label"], "DOB Cluster (object)");
     assert_eq!(capacity_series[3]["label"], "A (token)");
     assert_eq!(capacity_series[4]["label"], "Others");
 
@@ -6176,7 +6176,7 @@ async fn test_assets_nft_includes_spore_cluster_name_when_aggregate_name_missing
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/assets?type=nft")
+        .uri("/api/v1/assets?type=object")
         .body(Body::empty())
         .unwrap();
 
@@ -6313,7 +6313,7 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
     assert_eq!(token_json["data"][0]["assetType"], "token");
 
     let nft_request = Request::builder()
-        .uri("/api/v1/assets?type=nft&standard=spore")
+        .uri("/api/v1/assets?type=object&standard=spore")
         .body(Body::empty())
         .unwrap();
     let nft_response = app.oneshot(nft_request).await.unwrap();
@@ -6370,7 +6370,7 @@ async fn test_assets_list_supports_composition_tier_filter_and_onchain_ratio_sor
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/assets?type=nft&composition_tier=pure_ckb")
+        .uri("/api/v1/assets?type=object&composition_tier=pure_ckb")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -6383,7 +6383,7 @@ async fn test_assets_list_supports_composition_tier_filter_and_onchain_ratio_sor
     assert_eq!(rows[0]["compositionTier"], "pure_ckb");
 
     let request = Request::builder()
-        .uri("/api/v1/assets?type=nft&composition_tier=centralized_mixture")
+        .uri("/api/v1/assets?type=object&composition_tier=centralized_mixture")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -6396,7 +6396,7 @@ async fn test_assets_list_supports_composition_tier_filter_and_onchain_ratio_sor
     assert_eq!(rows[0]["compositionTier"], "centralized_mixture");
 
     let request = Request::builder()
-        .uri("/api/v1/assets?type=nft&sort_key=onchain_ratio&sort_direction=desc")
+        .uri("/api/v1/assets?type=object&sort_key=onchain_ratio&sort_direction=desc")
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
@@ -6433,7 +6433,7 @@ async fn test_assets_list_includes_did_ckb_collection_under_nft_type() {
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/assets?type=nft&standard=did:ckb")
+        .uri("/api/v1/assets?type=identity&standard=did:ckb")
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
@@ -7258,7 +7258,7 @@ async fn test_assets_nft_list_uses_dotbit_display_name_when_aggregate_name_missi
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/assets?type=nft")
+        .uri("/api/v1/assets?type=identity")
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();

@@ -404,24 +404,27 @@ impl CkbadgerStore {
         Ok(result)
     }
 
-    /// Scan ALL NFT hourly transfer entries in one pass and group by collection_id.
+    /// Scan ALL object hourly transfer entries in one pass and group by collection_id.
     /// Returns a map of collection_id → 24h transfer count.
-    pub fn scan_all_nft_24h_transfers(&self, now_ms: i64) -> anyhow::Result<HashMap<Vec<u8>, i64>> {
+    pub fn scan_all_object_24h_transfers(
+        &self,
+        now_ms: i64,
+    ) -> anyhow::Result<HashMap<Vec<u8>, i64>> {
         let current_hour = now_ms / 3_600_000;
         let cutoff_hour = current_hour - 24;
 
-        let prefix = [keys::STATS_PREFIX_NFT_HOURLY];
+        let prefix = [keys::STATS_PREFIX_OBJECT_HOURLY];
         let iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix);
         let mut result: HashMap<Vec<u8>, i64> = HashMap::new();
 
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_object in scan_all_nft_24h_transfers: {}",
+                    "failed to iterate stats_object in scan_all_object_24h_transfers: {}",
                     e
                 )
             })?;
-            if key.first() != Some(&keys::STATS_PREFIX_NFT_HOURLY) {
+            if key.first() != Some(&keys::STATS_PREFIX_OBJECT_HOURLY) {
                 break;
             }
             if key.len() == 41 && value.len() == 8 {
@@ -468,26 +471,26 @@ impl CkbadgerStore {
         Ok(deleted)
     }
 
-    /// Delete NFT hourly buckets older than the cutoff hour for a collection.
-    pub fn cleanup_old_nft_hourly_buckets(
+    /// Delete object hourly buckets older than the cutoff hour for a collection.
+    pub fn cleanup_old_object_hourly_buckets(
         &self,
         collection_id: &[u8],
         cutoff_hour: i64,
     ) -> anyhow::Result<u64> {
         if collection_id.is_empty() || collection_id.len() > 32 {
             anyhow::bail!(
-                "cleanup_old_nft_hourly_buckets expects 1..=32 byte collection_id, got {} bytes",
+                "cleanup_old_object_hourly_buckets expects 1..=32 byte collection_id, got {} bytes",
                 collection_id.len()
             );
         }
-        let prefix = keys::encode_nft_hourly_prefix(collection_id);
+        let prefix = keys::encode_object_hourly_prefix(collection_id);
         let iter = self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix);
         let mut deleted = 0u64;
 
         for item in iter {
             let (key, _value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate nft hourly buckets in cleanup_old_nft_hourly_buckets: {}",
+                    "failed to iterate object hourly buckets in cleanup_old_object_hourly_buckets: {}",
                     e
                 )
             })?;
@@ -1260,7 +1263,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cleanup_old_nft_hourly_buckets() {
+    fn test_cleanup_old_object_hourly_buckets() {
         let (_dir, store) = test_store();
         let collection_id = [0x16u8; 32];
         let current_hour = 510_000i64;
@@ -1273,40 +1276,42 @@ mod tests {
 
         let cutoff = current_hour - 48;
         let deleted = store
-            .cleanup_old_nft_hourly_buckets(&collection_id, cutoff)
+            .cleanup_old_object_hourly_buckets(&collection_id, cutoff)
             .unwrap();
         assert_eq!(deleted, 1);
 
-        let keep_key = keys::encode_nft_hourly_key(&collection_id, current_hour);
-        let keep_key2 = keys::encode_nft_hourly_key(&collection_id, current_hour - 24);
-        let deleted_key = keys::encode_nft_hourly_key(&collection_id, current_hour - 100);
+        let keep_key = keys::encode_object_hourly_key(&collection_id, current_hour);
+        let keep_key2 = keys::encode_object_hourly_key(&collection_id, current_hour - 24);
+        let deleted_key = keys::encode_object_hourly_key(&collection_id, current_hour - 100);
         assert!(store.get_stats_key(&keep_key).unwrap().is_some());
         assert!(store.get_stats_key(&keep_key2).unwrap().is_some());
         assert!(store.get_stats_key(&deleted_key).unwrap().is_none());
     }
 
     #[test]
-    fn test_cleanup_old_nft_hourly_buckets_rejects_empty_collection_id() {
-        let (_dir, store) = test_store();
-        let err = store.cleanup_old_nft_hourly_buckets(&[], 100).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("cleanup_old_nft_hourly_buckets expects 1..=32 byte collection_id"));
-    }
-
-    #[test]
-    fn test_cleanup_old_nft_hourly_buckets_rejects_oversized_collection_id() {
+    fn test_cleanup_old_object_hourly_buckets_rejects_empty_collection_id() {
         let (_dir, store) = test_store();
         let err = store
-            .cleanup_old_nft_hourly_buckets(&[0x16u8; 33], 100)
+            .cleanup_old_object_hourly_buckets(&[], 100)
             .unwrap_err();
         assert!(err
             .to_string()
-            .contains("cleanup_old_nft_hourly_buckets expects 1..=32 byte collection_id"));
+            .contains("cleanup_old_object_hourly_buckets expects 1..=32 byte collection_id"));
     }
 
     #[test]
-    fn test_cleanup_old_nft_hourly_buckets_accepts_24_byte_collection_id() {
+    fn test_cleanup_old_object_hourly_buckets_rejects_oversized_collection_id() {
+        let (_dir, store) = test_store();
+        let err = store
+            .cleanup_old_object_hourly_buckets(&[0x16u8; 33], 100)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("cleanup_old_object_hourly_buckets expects 1..=32 byte collection_id"));
+    }
+
+    #[test]
+    fn test_cleanup_old_object_hourly_buckets_accepts_24_byte_collection_id() {
         let (_dir, store) = test_store();
         let collection_id = [0x16u8; 24]; // mNFT class_id: 20B issuer + 4B class index
         let current_hour = 510_000i64;
@@ -1318,7 +1323,7 @@ mod tests {
 
         let cutoff = current_hour - 48;
         let deleted = store
-            .cleanup_old_nft_hourly_buckets(&collection_id, cutoff)
+            .cleanup_old_object_hourly_buckets(&collection_id, cutoff)
             .unwrap();
         assert_eq!(deleted, 1); // current_hour - 100 < cutoff
     }
@@ -1458,18 +1463,18 @@ mod tests {
         assert_eq!(*result.get(cluster_a.as_slice()).unwrap(), 10);
     }
 
-    // ---- NFT hourly transfers ----
+    // ---- Object hourly transfers ----
 
     #[test]
-    fn test_scan_all_nft_24h_transfers_empty() {
+    fn test_scan_all_object_24h_transfers_empty() {
         let (_dir, store) = test_store();
         let now_ms = 1_700_000_000_000i64;
-        let result = store.scan_all_nft_24h_transfers(now_ms).unwrap();
+        let result = store.scan_all_object_24h_transfers(now_ms).unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
-    fn test_scan_all_nft_24h_transfers_multiple_collections() {
+    fn test_scan_all_object_24h_transfers_multiple_collections() {
         let (_dir, store) = test_store();
         let coll_a = [0x0Au8; 32];
         let coll_b = [0x0Bu8; 32];
@@ -1482,14 +1487,14 @@ mod tests {
         batch.put_mnft_hourly_transfer(&coll_b, current_hour - 1, 15);
         batch.commit().unwrap();
 
-        let result = store.scan_all_nft_24h_transfers(now_ms).unwrap();
+        let result = store.scan_all_object_24h_transfers(now_ms).unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(*result.get(coll_a.as_slice()).unwrap(), 30);
         assert_eq!(*result.get(coll_b.as_slice()).unwrap(), 15);
     }
 
     #[test]
-    fn test_scan_all_nft_24h_transfers_excludes_old() {
+    fn test_scan_all_object_24h_transfers_excludes_old() {
         let (_dir, store) = test_store();
         let coll_a = [0x0Au8; 32];
         let now_ms = 1_700_000_000_000i64;
@@ -1501,7 +1506,7 @@ mod tests {
         batch.put_mnft_hourly_transfer(&coll_a, current_hour - 48, 30); // old, excluded
         batch.commit().unwrap();
 
-        let result = store.scan_all_nft_24h_transfers(now_ms).unwrap();
+        let result = store.scan_all_object_24h_transfers(now_ms).unwrap();
         assert_eq!(*result.get(coll_a.as_slice()).unwrap(), 10);
     }
 

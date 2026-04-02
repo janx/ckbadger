@@ -286,7 +286,7 @@ impl BatchWriter {
         state: &mut MnftBatchState,
     ) -> Result<()> {
         let existing = state.get_token(self.store.as_ref(), &issuer.issuer_id)?;
-        self.record_nft_undo(
+        self.record_object_undo(
             batch,
             block_number,
             CF_MNFT_DATA,
@@ -350,7 +350,7 @@ impl BatchWriter {
         state: &mut MnftBatchState,
     ) -> Result<()> {
         let existing = state.get_token(self.store.as_ref(), &class.class_id)?;
-        self.record_nft_undo(
+        self.record_object_undo(
             batch,
             block_number,
             CF_MNFT_DATA,
@@ -465,7 +465,7 @@ impl BatchWriter {
         state: &mut MnftBatchState,
     ) -> Result<()> {
         let existing = state.get_token(self.store.as_ref(), &token.token_id)?;
-        self.record_nft_undo(
+        self.record_object_undo(
             batch,
             block_number,
             CF_MNFT_DATA,
@@ -616,7 +616,7 @@ impl BatchWriter {
 
             // Re-insert (transfer) — increment hourly bucket for 24h tracking
             let hour_bucket = timestamp_ms / 3_600_000;
-            let key = ckbadger_store::keys::encode_nft_hourly_key(&token.class_id, hour_bucket);
+            let key = ckbadger_store::keys::encode_object_hourly_key(&token.class_id, hour_bucket);
             let current = state.get_hourly_transfer(self.store.as_ref(), &key)?;
             let next = current.checked_add(1).ok_or_else(|| {
                 anyhow::anyhow!(
@@ -663,7 +663,7 @@ impl BatchWriter {
                     hex::encode(tx_hash)
                 );
             }
-            self.record_nft_undo(
+            self.record_object_undo(
                 batch,
                 block_number,
                 CF_MNFT_DATA,
@@ -810,7 +810,7 @@ impl BatchWriter {
                     )
                 })?;
             if current.owned_capacity_delta == 0 && current.owned_knowledge_delta == 0 {
-                let key = keys::encode_nft_daily_key(collection_id, *date);
+                let key = keys::encode_object_daily_key(collection_id, *date);
                 batch.delete_stats(&key);
             } else {
                 batch.put_mnft_daily_delta(collection_id, *date, &current);
@@ -1044,7 +1044,7 @@ mod tests {
             .unwrap();
         batch.commit().unwrap();
 
-        let key = ckbadger_store::keys::encode_nft_hourly_key(&class.class_id, hour_bucket);
+        let key = ckbadger_store::keys::encode_object_hourly_key(&class.class_id, hour_bucket);
         let value = writer.store().get_stats_key(&key).unwrap().unwrap();
         let transfer_count = i64::from_le_bytes(value[..8].try_into().unwrap());
         assert_eq!(transfer_count, 2);
@@ -1104,7 +1104,7 @@ mod tests {
         let mut state = writer.new_mnft_batch_state();
 
         let collection_id = vec![0x88; 24];
-        let key = ckbadger_store::keys::encode_nft_hourly_key(&collection_id, 1);
+        let key = ckbadger_store::keys::encode_object_hourly_key(&collection_id, 1);
         let mut seed = StoreBatch::new(writer.store());
         seed.put_stats(&key, &[1, 2, 3, 4]);
         seed.commit().unwrap();

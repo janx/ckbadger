@@ -67,7 +67,7 @@ function detectInventoryContext(cell: Cell): InventoryContext | null {
 // ---------------------------------------------------------------------------
 
 export interface InventoryLabel {
-  /** Generic type label, e.g. "Token (UDT)", "Spore NFT" */
+  /** Generic type label, e.g. "Token (UDT)", "Spore Object" */
   typeLabel: string;
   /** Concrete item name when available, e.g. "@PalofSeal (Otter)", "alice.bit" */
   displayName: string | null;
@@ -80,7 +80,7 @@ export interface InventoryLabel {
 function getTypeLabel(itemType: InventoryItemType): string {
   switch (itemType) {
     case 'spore':
-      return 'Spore NFT';
+      return 'Spore Object';
     case 'cluster':
       return 'Spore Cluster';
     case 'mnft_token':

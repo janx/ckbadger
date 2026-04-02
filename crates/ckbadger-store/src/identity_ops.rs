@@ -200,15 +200,15 @@ impl CkbadgerStore {
             return Ok(Vec::new());
         }
 
-        let prefix = keys::encode_nft_collection_activity_prefix(collection_id);
+        let prefix = keys::encode_object_collection_activity_prefix(collection_id);
         let start_key = if let Some((cursor_block, cursor_tx_idx)) = cursor {
-            keys::encode_nft_collection_activity_seek_after_key(
+            keys::encode_object_collection_activity_seek_after_key(
                 collection_id,
                 cursor_block,
                 cursor_tx_idx,
             )
         } else {
-            let mut k = [0u8; keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE];
+            let mut k = [0u8; keys::OBJECT_COLLECTION_ACTIVITY_KEY_SIZE];
             k[..32].copy_from_slice(&prefix);
             k
         };
@@ -245,12 +245,12 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
+            if key.len() != keys::OBJECT_COLLECTION_ACTIVITY_KEY_SIZE {
                 continue;
             }
 
             let (_, block_num, tx_idx, block_hash_from_key, tx_hash_from_key) =
-                keys::decode_nft_collection_activity_key(&key);
+                keys::decode_object_collection_activity_key(&key);
             let entry: ObjectCollectionActivityEntry = bincode::deserialize(&value)?;
             if entry.tx_hash != tx_hash_from_key {
                 anyhow::bail!(

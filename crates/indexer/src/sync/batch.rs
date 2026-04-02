@@ -20,7 +20,7 @@ use ckbadger_store::types::{
 use ckbadger_store::CkbadgerStore;
 
 use crate::db::writer::dotbit::resolve_dotbit_tx_activity;
-use crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator;
+use crate::db::writer::object_activity_acc::ObjectCollectionActivityAccumulator;
 use crate::db::{BatchWriter, DaoWithdrawalContext};
 use crate::parser::{
     BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, ScriptParser, SporeParser,
@@ -494,7 +494,7 @@ fn apply_object_collection_activity_count_deltas_with_pending(
                         || pending_cluster_ids.contains(&collection_id)
                     {
                         // Spore cluster activities share the same append-only CF but do not
-                        // belong to nft_collection_agg.
+                        // belong to object_collection_agg.
                         continue;
                     }
                     bail!(
@@ -507,7 +507,7 @@ fn apply_object_collection_activity_count_deltas_with_pending(
 
         let next = agg.activities_count.checked_add(delta).ok_or_else(|| {
             anyhow!(
-                "nft collection activities_count overflow: collection_id=0x{}, current={}, delta={}",
+                "object collection activities_count overflow: collection_id=0x{}, current={}, delta={}",
                 hex::encode(&collection_id),
                 agg.activities_count,
                 delta
@@ -515,7 +515,7 @@ fn apply_object_collection_activity_count_deltas_with_pending(
         })?;
         if next < 0 {
             bail!(
-                "nft collection activities_count underflow: collection_id=0x{}, current={}, delta={}",
+                "object collection activities_count underflow: collection_id=0x{}, current={}, delta={}",
                 hex::encode(&collection_id),
                 agg.activities_count,
                 delta
@@ -2105,7 +2105,7 @@ impl Indexer {
         // Dotbit account IDs resolved during consume, needed later by activity builder.
         let mut resolved_dotbit_ids: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
 
-        // Group C: NFT/Spore processing
+        // Group C: Object/Spore processing
         {
             let mut batch_mnft_token_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
             let mut batch_mnft_last_output_tx_index: HashMap<Vec<u8>, usize> = HashMap::new();
@@ -2604,7 +2604,7 @@ impl Indexer {
                     .entry(collection_id)
                     .or_insert(0);
                 *delta = delta.checked_add(1).ok_or_else(|| {
-                    anyhow!("nft activity delta overflow while writing grouped batch")
+                    anyhow!("object activity delta overflow while writing grouped batch")
                 })?;
             }
             for (collection_id, _block_number, _tx_idx, _block_hash, _tx_hash) in
@@ -3803,7 +3803,7 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_nft_collection_activity_count_deltas_updates_only_nft_collections() {
+    fn test_apply_object_collection_activity_count_deltas_updates_only_object_collections() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let object_collection_id = vec![0x11; 32];
@@ -3850,7 +3850,7 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_nft_collection_activity_count_deltas_uses_pending_batch_aggregate() {
+    fn test_apply_object_collection_activity_count_deltas_uses_pending_batch_aggregate() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let collection_id = vec![0x33; 32];
@@ -3888,7 +3888,7 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_nft_collection_activity_count_deltas_uses_pending_cluster_ids() {
+    fn test_apply_object_collection_activity_count_deltas_uses_pending_cluster_ids() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let cluster_id = vec![0x44; 32];

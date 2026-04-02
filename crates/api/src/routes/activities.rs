@@ -608,19 +608,11 @@ fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
     if let Some(value) = filter {
         if !matches!(
             value,
-            "all"
-                | "ckb"
-                | "token"
-                | "nft"
-                | "object"
-                | "identity"
-                | "dao"
-                | "type_call"
-                | "lock_call"
+            "all" | "ckb" | "token" | "object" | "identity" | "dao" | "type_call" | "lock_call"
         ) && !value.starts_with("protocol:")
         {
             return Err(ApiError::bad_request(format!(
-                "invalid activity filter '{}'; expected one of: all, ckb, token, nft, object, identity, dao, type_call, lock_call, protocol:<name>",
+                "invalid activity filter '{}'; expected one of: all, ckb, token, object, identity, dao, type_call, lock_call, protocol:<name>",
                 value
             )));
         }

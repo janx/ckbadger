@@ -349,7 +349,6 @@ function SearchResultIcon({ type }: { type: string }) {
     token: 'text-gold',
     spore: 'text-lavender',
     cluster: 'text-lavender-dim',
-    nft: 'text-lavender-dim',
     object: 'text-lavender-dim',
     identity: 'text-lavender-dim',
     default: 'text-text-dim',
@@ -408,7 +407,6 @@ function SearchResultIcon({ type }: { type: string }) {
         );
       case 'spore':
       case 'cluster':
-      case 'nft':
       case 'object':
       case 'identity':
         return (

@@ -53,10 +53,10 @@ impl BatchWriter {
         &self.append_only_store
     }
 
-    /// Record an undo log entry for an NFT/identity entity mutation.
+    /// Record an undo log entry for an object/identity entity mutation.
     /// Captures the previous value so rollback can restore it.
     /// Skipped during bulk sync mode (no undo log needed).
-    pub(crate) fn record_nft_undo(
+    pub(crate) fn record_object_undo(
         &self,
         batch: &mut StoreBatch,
         block_number: i64,
@@ -68,7 +68,7 @@ impl BatchWriter {
         if self.store.is_bulk_sync_mode() {
             return;
         }
-        let seq = next_undo_seq(undo_seq, block_number, UndoSeqScope::Nft);
+        let seq = next_undo_seq(undo_seq, block_number, UndoSeqScope::Object);
         batch.put_reorg_undo_log_by_block(
             block_number,
             seq,
@@ -93,7 +93,7 @@ pub(crate) mod fiber;
 pub(crate) mod fiber_detector;
 pub mod hodl_wave;
 mod mnft;
-pub(crate) mod nft_activity_acc;
+pub(crate) mod object_activity_acc;
 mod reorg;
 pub(crate) mod rgbpp_detector;
 mod spore;

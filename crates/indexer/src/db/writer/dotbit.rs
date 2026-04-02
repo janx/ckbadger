@@ -765,7 +765,7 @@ impl BatchWriter {
             }
             if old_owner.as_deref() != Some(account.owner_lock_hash.as_slice()) {
                 let hour_bucket = timestamp_ms / 3_600_000;
-                let key = ckbadger_store::keys::encode_nft_hourly_key(
+                let key = ckbadger_store::keys::encode_object_hourly_key(
                     &DOTBIT_SENTINEL_COLLECTION,
                     hour_bucket,
                 );
@@ -1228,7 +1228,7 @@ mod tests {
         let writer = BatchWriter::new(store.clone(), store.clone());
         let mut state = writer.new_dotbit_batch_state();
 
-        let key = ckbadger_store::keys::encode_nft_hourly_key(&DOTBIT_SENTINEL_COLLECTION, 1);
+        let key = ckbadger_store::keys::encode_object_hourly_key(&DOTBIT_SENTINEL_COLLECTION, 1);
         let mut seed = StoreBatch::new(writer.store());
         seed.put_stats(&key, &[1, 2, 3, 4]);
         seed.commit().unwrap();

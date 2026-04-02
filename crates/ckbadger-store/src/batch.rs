@@ -778,7 +778,7 @@ impl<'a> StoreBatch<'a> {
     }
 
     pub fn put_mnft_hourly_transfer(&mut self, collection_id: &[u8], hour_bucket: i64, count: i64) {
-        let key = keys::encode_nft_hourly_key(collection_id, hour_bucket);
+        let key = keys::encode_object_hourly_key(collection_id, hour_bucket);
         self.put_cf(self.store.cf_stats_mnft(), key, count.to_le_bytes());
     }
 
@@ -788,13 +788,13 @@ impl<'a> StoreBatch<'a> {
         date_yyyymmdd: u32,
         delta: &MnftDailyDelta,
     ) {
-        let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
+        let key = keys::encode_object_daily_key(collection_id, date_yyyymmdd);
         let value = bincode::serialize(delta).expect("serialize MnftDailyDelta");
         self.put_cf(self.store.cf_stats_mnft(), key, &value);
     }
 
     pub fn put_mnft_type_index(&mut self, type_script_hash: &[u8], index: &MnftTypeIndex) {
-        let key = keys::encode_nft_type_index_key(type_script_hash);
+        let key = keys::encode_object_type_index_key(type_script_hash);
         let value = bincode::serialize(index).expect("serialize MnftTypeIndex");
         self.put_cf(self.store.cf_stats_mnft(), key, &value);
     }
@@ -925,7 +925,7 @@ impl<'a> StoreBatch<'a> {
     }
 
     pub fn put_mnft_by_collection(&mut self, collection_id: &[u8], object_id: &[u8]) {
-        let key = keys::encode_nft_by_collection_key(collection_id, object_id);
+        let key = keys::encode_object_by_collection_key(collection_id, object_id);
         self.put_cf(self.store.cf_mnft_by_collection(), key, []);
     }
 
@@ -996,12 +996,12 @@ impl<'a> StoreBatch<'a> {
         lock_hash: &[u8],
         count: i64,
     ) {
-        let key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
+        let key = keys::encode_object_collection_owner_key(collection_id, lock_hash);
         self.put_cf(self.store.cf_stats_mnft(), key, count.to_le_bytes());
     }
 
     pub fn delete_mnft_collection_owner(&mut self, collection_id: &[u8], lock_hash: &[u8]) {
-        let key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
+        let key = keys::encode_object_collection_owner_key(collection_id, lock_hash);
         self.delete_cf(self.store.cf_stats_mnft(), key);
     }
 
@@ -1034,7 +1034,7 @@ impl<'a> StoreBatch<'a> {
         tx_idx: i32,
         entry: &ObjectCollectionActivityEntry,
     ) {
-        let key = keys::encode_nft_collection_activity_key(
+        let key = keys::encode_object_collection_activity_key(
             collection_id,
             block_num,
             tx_idx,
@@ -1054,7 +1054,7 @@ impl<'a> StoreBatch<'a> {
         tx_idx: i32,
         entry: &ObjectCollectionActivityEntry,
     ) {
-        let key = keys::encode_nft_collection_activity_key(
+        let key = keys::encode_object_collection_activity_key(
             collection_id,
             block_num,
             tx_idx,
@@ -1768,7 +1768,7 @@ mod tests {
     }
 
     #[test]
-    fn test_append_only_nft_collection_activity_preserves_competing_block_hash_history() {
+    fn test_append_only_object_collection_activity_preserves_competing_block_hash_history() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let collection_id = [0x12u8; 32];

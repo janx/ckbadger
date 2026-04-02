@@ -82,13 +82,13 @@ describe('useInventoryLabel', () => {
     expect(result.current).toBeNull();
   });
 
-  it('returns Spore NFT label with content info from segments', () => {
+  it('returns Spore Object label with content info from segments', () => {
     const cell = makeCell({
       type: { codeHash: '0xspore_code', hashType: 'type', args: '0xspore123' },
       dataAnalysis: {
         deterministic: {
           kind: 'spore_cell',
-          summary: 'Spore NFT',
+          summary: 'Spore Object',
           segments: [
             {
               label: 'content_type',
@@ -113,7 +113,7 @@ describe('useInventoryLabel', () => {
     const { result } = renderHook(() => useInventoryLabel(cell), { wrapper });
 
     expect(result.current).not.toBeNull();
-    expect(result.current!.typeLabel).toBe('Spore NFT');
+    expect(result.current!.typeLabel).toBe('Spore Object');
     expect(result.current!.summary).toContain('image/png');
     expect(result.current!.href).toBe('/objects/0xspore123');
   });

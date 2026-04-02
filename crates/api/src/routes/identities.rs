@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::assets::{
     build_nft_item_activities_response, decode_activity_cursor, decode_item_id,
-    decode_nft_item_cursor, list_canonical_nft_collection_activities_page,
+    decode_object_item_cursor, list_canonical_nft_collection_activities_page,
     list_identity_items_inner, normalize_activity_action_filter,
     normalize_identity_activity_action_filter, normalize_nft_items_search,
     normalize_nft_items_status, CollectionActivitiesParams, CollectionActivityResponse,
@@ -359,7 +359,7 @@ async fn list_identity_collection_items(
     let cursor_bytes = params
         .cursor
         .as_deref()
-        .map(decode_nft_item_cursor)
+        .map(decode_object_item_cursor)
         .transpose()?;
 
     let store = state.store.clone();

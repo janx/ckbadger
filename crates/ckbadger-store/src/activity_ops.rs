@@ -137,7 +137,7 @@ impl CkbadgerStore {
     /// List activities for an address (lock_hash), newest first.
     ///
     /// Optionally start after the given `(block_num, tx_idx)` cursor.
-    /// An optional `filter` narrows results: "ckb", "token", "nft"/"object",
+    /// An optional `filter` narrows results: "ckb", "token", "object",
     /// "identity", "dao", "type_call", "lock_call", "protocol:X".
     /// Returns `Vec<TxActions>` for cursor construction via block_number/tx_index.
     pub fn list_activities(
@@ -269,7 +269,7 @@ impl CkbadgerStore {
                         tags & non_ckb_mask == 0
                     }
                     "token" => tags & TAG_TOKEN != 0,
-                    "object" | "nft" => tags & TAG_OBJECT != 0,
+                    "object" => tags & TAG_OBJECT != 0,
                     "identity" => tags & TAG_IDENTITY != 0,
                     "dao" => tags & TAG_DAO != 0,
                     "type_call" => tags & TAG_TYPE_CALL != 0,

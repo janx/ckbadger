@@ -20,7 +20,7 @@ use crate::response::{
 };
 use crate::utils::{apply_owned_capacity_delta, format_duration};
 use crate::warmup::{
-    CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN, CACHE_KEY_SCRIPTS_ALL,
+    CachedAssetEntry, CACHE_KEY_ASSETS_OBJECT, CACHE_KEY_ASSETS_TOKEN, CACHE_KEY_SCRIPTS_ALL,
 };
 use crate::AppState;
 use tracing::instrument;
@@ -948,15 +948,15 @@ async fn get_most_utilized_assets_chart(
         }
     }
 
-    let nft_assets = state
+    let object_assets = state
         .mem_cache
-        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
+        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_OBJECT)
         .ok_or_else(|| {
-            state.asset_cache_unavailable("nft asset cache unavailable; warmup in progress")
+            state.asset_cache_unavailable("object cache unavailable; warmup in progress")
         })?;
-    for nft in nft_assets {
-        if nft.standard == "spore" {
-            let cluster_id = nft.cluster_id.clone().unwrap_or_else(|| nft.id.clone());
+    for obj in object_assets {
+        if obj.standard == "spore" {
+            let cluster_id = obj.cluster_id.clone().unwrap_or_else(|| obj.id.clone());
             let cluster_bytes = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
                 .map_err(|_| {
                 ApiError::internal(format!(
@@ -976,9 +976,9 @@ async fn get_most_utilized_assets_chart(
             if total_cells_capacity <= 0 && used_cap <= 0 {
                 continue;
             }
-            let name = nft.name.clone().unwrap_or_else(|| cluster_id.clone());
+            let name = obj.name.clone().unwrap_or_else(|| cluster_id.clone());
             let entity_key = format!("dob:{cluster_id}");
-            labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "nft"));
+            labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "object"));
             if used_cap > total_cells_capacity {
                 return Err(ApiError::internal(format!(
                     "DOB common knowledge size exceeds total for {}: used={}, total={}",
@@ -1000,13 +1000,13 @@ async fn get_most_utilized_assets_chart(
             continue;
         }
 
-        let collection_id = nft.id;
+        let collection_id = obj.id;
         let collection_bytes = hex::decode(
             collection_id.strip_prefix("0x").unwrap_or(&collection_id),
         )
         .map_err(|_| {
             ApiError::internal(format!(
-                "invalid nft collection id in warmup cache while building chart: {}",
+                "invalid object collection id in warmup cache while building chart: {}",
                 collection_id
             ))
         })?;
@@ -1025,12 +1025,12 @@ async fn get_most_utilized_assets_chart(
         if total_cells_capacity <= 0 && used_cap <= 0 {
             continue;
         }
-        let name = nft.name.clone().unwrap_or_else(|| collection_id.clone());
-        let entity_key = format!("nft:{collection_id}");
-        labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "nft"));
+        let name = obj.name.clone().unwrap_or_else(|| collection_id.clone());
+        let entity_key = format!("object:{collection_id}");
+        labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "object"));
         if used_cap > total_cells_capacity {
             return Err(ApiError::internal(format!(
-                "NFT common knowledge size exceeds total for {}: used={}, total={}",
+                "Object common knowledge size exceeds total for {}: used={}, total={}",
                 entity_key, used_cap, total_cells_capacity
             )));
         }
@@ -1441,7 +1441,7 @@ async fn get_common_knowledge_composition_chart(
             0,
             nft_spore_daily_delta.remove(&date).unwrap_or(0),
             0,
-            &format!("accumulating NFT/spore composition for date {}", date),
+            &format!("accumulating object/spore composition for date {}", date),
         )?;
 
         if cumulative_dao + cumulative_udt + cumulative_nft_spore > cumulative_type {
@@ -1503,7 +1503,7 @@ async fn get_common_knowledge_composition_chart(
             },
             StackedAreaSeries {
                 key: "nftSpore".to_string(),
-                label: "NFT (Spore)".to_string(),
+                label: "Object (Spore)".to_string(),
                 color: "#ec4899".to_string(),
             },
             StackedAreaSeries {
@@ -3365,15 +3365,15 @@ async fn get_asset_ecosystem(
         })
         .sum();
 
-    // Get total NFT/object capacity
-    let nft_assets = state
+    // Get total object capacity
+    let object_assets = state
         .mem_cache
-        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
+        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_OBJECT)
         .ok_or_else(|| {
-            state.asset_cache_unavailable("nft asset cache unavailable; warmup in progress")
+            state.asset_cache_unavailable("object cache unavailable; warmup in progress")
         })?;
 
-    let total_object_capacity: i128 = nft_assets
+    let total_object_capacity: i128 = object_assets
         .iter()
         .filter_map(|n| {
             n.owned_capacity

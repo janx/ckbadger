@@ -426,7 +426,7 @@ export const handlers = [
       class: {
         classId: '0xclass123',
         issuerId: '0xissuer123',
-        name: 'Test NFT Class',
+        name: 'Test Object Class',
         description: 'A test class',
         renderer: null,
         total: 100,
@@ -458,7 +458,7 @@ export const handlers = [
       classDetail: {
         classId: '0xclass123',
         issuerId: '0xissuer123',
-        name: 'Test NFT Class',
+        name: 'Test Object Class',
         description: 'A test class',
         renderer: null,
         total: 100,

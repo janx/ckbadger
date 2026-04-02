@@ -187,7 +187,7 @@ impl ObjectOwner {
         sealed_rows.extend(self.mnft_type_indexes.iter().map(|(type_hash, index)| {
             MaterializedRow::new(
                 CF_STATS_MNFT,
-                keys::encode_nft_type_index_key(type_hash).to_vec(),
+                keys::encode_object_type_index_key(type_hash).to_vec(),
                 bincode::serialize(index).expect("object type index serialization must succeed"),
             )
         }));
@@ -214,7 +214,7 @@ impl ObjectOwner {
                 .map(|((collection_id, date), (cap_delta, know_delta))| {
                     MaterializedRow::new(
                         CF_STATS_MNFT,
-                        keys::encode_nft_daily_key(collection_id, *date).to_vec(),
+                        keys::encode_object_daily_key(collection_id, *date).to_vec(),
                         bincode::serialize(&MnftDailyDelta {
                             owned_capacity_delta: *cap_delta,
                             owned_knowledge_delta: *know_delta,
@@ -262,7 +262,7 @@ impl ObjectOwner {
                 .map(|((class_id, lock_hash), count)| {
                     MaterializedRow::new(
                         CF_STATS_MNFT,
-                        keys::encode_nft_collection_owner_key(class_id, lock_hash).to_vec(),
+                        keys::encode_object_collection_owner_key(class_id, lock_hash).to_vec(),
                         count.to_le_bytes().to_vec(),
                     )
                 }),
@@ -1231,7 +1231,7 @@ impl ObjectOwner {
         );
 
         self.mnft_by_collection
-            .insert(keys::encode_nft_by_collection_key(&class_id, &token_id));
+            .insert(keys::encode_object_by_collection_key(&class_id, &token_id));
 
         let token_tier = self.resolve_mnft_token_tier(&class_id);
         let agg = self
@@ -1291,7 +1291,7 @@ impl ObjectOwner {
             // matching the live sync path in db/writer/mnft.rs.
             {
                 let hour_bucket = tx.timestamp_ms / 3_600_000;
-                let key = keys::encode_nft_hourly_key(&class_id, hour_bucket).to_vec();
+                let key = keys::encode_object_hourly_key(&class_id, hour_bucket).to_vec();
                 let current = *self.mnft_hourly_transfers.get(key.as_slice()).unwrap_or(&0);
                 let next = checked_next_i64(
                     current,
@@ -1985,7 +1985,7 @@ impl ObjectOwner {
         block_number: i64,
     ) -> Result<()> {
         let hour_bucket = timestamp_ms / 3_600_000;
-        let key = keys::encode_nft_hourly_key(class_id, hour_bucket).to_vec();
+        let key = keys::encode_object_hourly_key(class_id, hour_bucket).to_vec();
         let current = *self.mnft_hourly_transfers.get(key.as_slice()).unwrap_or(&0);
         let next = checked_next_i64(current, 1, "mnft hourly transfer", token_id, block_number)?;
         self.mnft_hourly_transfers.insert(key, next);
@@ -1999,7 +1999,7 @@ impl ObjectOwner {
         block_number: i64,
     ) -> Result<()> {
         let hour_bucket = timestamp_ms / 3_600_000;
-        let key = keys::encode_nft_hourly_key(&DOTBIT_SENTINEL_COLLECTION, hour_bucket).to_vec();
+        let key = keys::encode_object_hourly_key(&DOTBIT_SENTINEL_COLLECTION, hour_bucket).to_vec();
         let current = *self
             .dotbit_hourly_transfers
             .get(key.as_slice())
@@ -2160,8 +2160,8 @@ impl ObjectOwner {
     }
 }
 
-/// Classify a cell's protocol facts into an NFT collection ID for daily delta tracking.
-/// Mirrors `classify_nft_collection_id` from `dao_helpers.rs` but operates on parsed protocol
+/// Classify a cell's protocol facts into an object collection ID for daily delta tracking.
+/// Mirrors `classify_object_collection_id` from `dao_helpers.rs` but operates on parsed protocol
 /// facts rather than raw code_hash/type_args.
 fn classify_nft_collection_from_protocol(
     protocol_facts: &Option<CellProtocolFacts>,
@@ -2332,7 +2332,7 @@ pub(crate) fn materialize_object_state_for_test(
                 object_owner_counts.insert(collection_id.clone(), owners);
             }
 
-            let prefix = keys::encode_nft_hourly_prefix(collection_id);
+            let prefix = keys::encode_object_hourly_prefix(collection_id);
             let iter = domain_store.prefix_iterator_cf(domain_store.cf_stats_mnft(), &prefix);
             let mut hourly = HashMap::new();
             for item in iter {
@@ -2463,8 +2463,8 @@ pub(crate) fn materialize_object_state_for_test(
         for item in &mut stats_object_iter {
             let (key, value) = item?;
             match key.first().copied() {
-                Some(keys::STATS_PREFIX_NFT_TYPE_INDEX) => {
-                    if key.len() != keys::NFT_TYPE_INDEX_KEY_SIZE {
+                Some(keys::STATS_PREFIX_OBJECT_TYPE_INDEX) => {
+                    if key.len() != keys::OBJECT_TYPE_INDEX_KEY_SIZE {
                         bail!(
                             "invalid object type index key length in object snapshot helper: len={}",
                             key.len()
@@ -3526,7 +3526,7 @@ mod tests {
         assert_eq!(token_outpoints.len(), 2);
 
         let hour_bucket = tx1.timestamp_ms / 3_600_000;
-        let hourly_key = keys::encode_nft_hourly_key(&class_id, hour_bucket);
+        let hourly_key = keys::encode_object_hourly_key(&class_id, hour_bucket);
         let hourly_value = domain_store
             .get_stats_key(&hourly_key)
             .expect("stats lookup")
@@ -3795,7 +3795,7 @@ mod tests {
         );
 
         let hour_bucket = tx1.timestamp_ms / 3_600_000;
-        let hourly_key = keys::encode_nft_hourly_key(
+        let hourly_key = keys::encode_object_hourly_key(
             &ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION,
             hour_bucket,
         );

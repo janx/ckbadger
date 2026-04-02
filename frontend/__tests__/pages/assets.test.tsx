@@ -44,11 +44,11 @@ describe('AssetsRedirectPage', () => {
     });
   });
 
-  it('redirects to /inventory/objects for legacy type=nft', async () => {
+  it('redirects to /inventory/tokens for legacy type=nft (no longer recognized)', async () => {
     window.history.replaceState(null, '', '/assets?type=nft');
     render(<AssetsRedirectPage />);
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith('/inventory/objects');
+      expect(mockReplace).toHaveBeenCalledWith('/inventory/tokens');
     });
   });
 

@@ -1617,14 +1617,14 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_SPORE_OUTPOINT
             | keys::STATS_PREFIX_SPORE_TYPE_INDEX
             | keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID => Ok(self.cf_stats_spore()),
-            keys::STATS_PREFIX_NFT_HOURLY
-            | keys::STATS_PREFIX_NFT_DAILY
-            | keys::STATS_PREFIX_NFT_TYPE_INDEX
+            keys::STATS_PREFIX_OBJECT_HOURLY
+            | keys::STATS_PREFIX_OBJECT_DAILY
+            | keys::STATS_PREFIX_OBJECT_TYPE_INDEX
             | keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT
             | keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT
             | keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
             | keys::STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID
-            | keys::STATS_PREFIX_NFT_COLLECTION_OWNER => Ok(self.cf_stats_mnft()),
+            | keys::STATS_PREFIX_OBJECT_COLLECTION_OWNER => Ok(self.cf_stats_mnft()),
             _ => anyhow::bail!("unsupported stats prefix: 0x{:02x}", prefix),
         }
     }
@@ -2406,8 +2406,8 @@ mod tests {
                 b"spore",
             ),
             (
-                crate::keys::encode_nft_daily_key(&[0xDE; 24], 20240201).to_vec(),
-                b"nft",
+                crate::keys::encode_object_daily_key(&[0xDE; 24], 20240201).to_vec(),
+                b"object",
             ),
         ];
 
