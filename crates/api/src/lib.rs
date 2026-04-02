@@ -78,6 +78,10 @@ pub struct AppState {
     pub dob_decode_dir: PathBuf,
     /// Typed spore cache with pre-computed indexes, replaced atomically by warmup.
     pub spore_cache: Arc<ArcSwap<Option<SporeCache>>>,
+    /// Token asset cache, replaced atomically by warmup loop (no TTL expiry).
+    pub token_cache: Arc<ArcSwap<Option<Vec<warmup::CachedAssetEntry>>>>,
+    /// Object asset cache, replaced atomically by warmup loop (no TTL expiry).
+    pub object_cache: Arc<ArcSwap<Option<Vec<warmup::CachedAssetEntry>>>>,
 }
 
 impl AppState {
@@ -128,6 +132,18 @@ impl AppState {
         };
         f(entry);
         data.updated_at = chrono::Utc::now().timestamp();
+    }
+
+    /// Load the token asset cache snapshot. Returns None if warmup hasn't populated it yet.
+    pub fn load_token_cache(&self) -> Option<Vec<warmup::CachedAssetEntry>> {
+        let guard = self.token_cache.load();
+        guard.as_ref().clone()
+    }
+
+    /// Load the object asset cache snapshot. Returns None if warmup hasn't populated it yet.
+    pub fn load_object_cache(&self) -> Option<Vec<warmup::CachedAssetEntry>> {
+        let guard = self.object_cache.load();
+        guard.as_ref().clone()
     }
 
     pub fn asset_cache_unavailable(&self, pending_message: &'static str) -> ApiRouteError {
@@ -207,6 +223,8 @@ pub async fn create_router(config: AppConfig) -> Router {
         background_tasks: Arc::new(RwLock::new(BackgroundTasksData::default())),
         dob_decode_dir: config.dob_decode_dir,
         spore_cache: Arc::new(ArcSwap::from_pointee(None)),
+        token_cache: Arc::new(ArcSwap::from_pointee(None)),
+        object_cache: Arc::new(ArcSwap::from_pointee(None)),
     });
 
     if let Err(e) = warmup::warmup_assets_cache_once(state.clone()).await {

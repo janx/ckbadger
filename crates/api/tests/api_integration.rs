@@ -118,6 +118,8 @@ fn create_router_without_warmup(config: AppConfig) -> axum::Router {
         background_tasks: Arc::new(std::sync::RwLock::new(Default::default())),
         dob_decode_dir: config.dob_decode_dir,
         spore_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
+        token_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
+        object_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
     });
 
     axum::Router::new()
@@ -9900,6 +9902,8 @@ async fn test_network_stats_includes_api_background_tasks() {
         background_tasks: Arc::new(std::sync::RwLock::new(Default::default())),
         dob_decode_dir: config.dob_decode_dir,
         spore_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
+        token_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
+        object_cache: Arc::new(arc_swap::ArcSwap::from_pointee(None)),
     });
 
     // Register a watcher-shaped background task.

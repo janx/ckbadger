@@ -21,9 +21,7 @@ use tracing::info;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
 
-// Cache keys for assets
-pub const CACHE_KEY_ASSETS_TOKEN: &str = "assets:token";
-pub const CACHE_KEY_ASSETS_OBJECT: &str = "assets:object";
+// Cache keys (token/object asset caches use ArcSwap in AppState, not mem_cache)
 pub const CACHE_KEY_ADDRESSES_TOP: &str = "addresses:top";
 pub const CACHE_KEY_ADDRESSES_ACTIVE: &str = "addresses:active";
 pub const CACHE_KEY_SCRIPT_FAMILIES_ALL: &str = "scripts:families:all";
@@ -315,7 +313,7 @@ fn set_api_cache_refresh_failure(
 /// Skips the refresh cycle when the sync tip block number hasn't changed
 /// since the last successful refresh, avoiding wasteful CF scans when idle.
 pub async fn refresh_assets_cache_loop(state: Arc<AppState>) {
-    let mut last_refreshed_tip: i64 = -1;
+    let mut last_refreshed_tip: Option<i64> = None;
 
     state.update_background_task("api_cache_refresh", |entry| {
         set_api_cache_refresh_startup(entry);
@@ -326,10 +324,13 @@ pub async fn refresh_assets_cache_loop(state: Arc<AppState>) {
             .store
             .get_sync_status()
             .map(|s| s.tip_block_number)
-            .unwrap_or(-1);
+            .ok();
 
-        if current_tip == last_refreshed_tip {
-            tracing::trace!("Warmup: tip unchanged at {}, skipping refresh", current_tip);
+        if current_tip.is_some() && current_tip == last_refreshed_tip {
+            tracing::trace!(
+                "Warmup: tip unchanged at {:?}, skipping refresh",
+                current_tip
+            );
             state.update_background_task("api_cache_refresh", |entry| {
                 set_api_cache_refresh_idle(entry, "tip_unchanged");
             });
@@ -351,7 +352,7 @@ pub async fn refresh_assets_cache_loop(state: Arc<AppState>) {
         match result {
             Ok(Ok(())) => {
                 last_refreshed_tip = current_tip;
-                tracing::debug!("Assets cache refreshed at tip {}", current_tip);
+                tracing::debug!("Assets cache refreshed at tip {:?}", current_tip);
                 state.update_background_task("api_cache_refresh", |entry| {
                     set_api_cache_refresh_success(
                         entry,
@@ -980,23 +981,18 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
     // (refresh_script_cache_loop) so it survives the long asset build.
     // Do NOT call refresh_named_script_cache_sync() here.
 
-    let ttl = CacheTtl::ASSETS;
     let (token_assets, object_assets) = match build_asset_caches_sync(state) {
         Ok(caches) => caches,
         Err(err) => {
-            state.mem_cache.delete(CACHE_KEY_ASSETS_TOKEN);
-            state.mem_cache.delete(CACHE_KEY_ASSETS_OBJECT);
+            state.token_cache.store(Arc::new(None));
+            state.object_cache.store(Arc::new(None));
             state.record_asset_cache_warmup_error(err.to_string());
             return Err(err);
         }
     };
 
-    state
-        .mem_cache
-        .set(CACHE_KEY_ASSETS_TOKEN, &token_assets, ttl);
-    state
-        .mem_cache
-        .set(CACHE_KEY_ASSETS_OBJECT, &object_assets, ttl);
+    state.token_cache.store(Arc::new(Some(token_assets)));
+    state.object_cache.store(Arc::new(Some(object_assets)));
     state.clear_asset_cache_warmup_error();
     refresh_address_cache_sync(state)?;
     refresh_spore_cache_sync(state)?;

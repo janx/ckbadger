@@ -13,10 +13,7 @@ use crate::utils::{
     address_to_lock_script_hash, is_ckb_address, is_known_script_name, resolve_script_by_hash,
     CurrentScriptVersionResolution,
 };
-use crate::warmup::{
-    CachedAssetEntry, CachedScriptEntry, CACHE_KEY_ASSETS_OBJECT, CACHE_KEY_ASSETS_TOKEN,
-    CACHE_KEY_SCRIPTS_NAMED,
-};
+use crate::warmup::{CachedAssetEntry, CachedScriptEntry, CACHE_KEY_SCRIPTS_NAMED};
 use crate::AppState;
 use tracing::instrument;
 
@@ -557,12 +554,8 @@ async fn search(
         let cached_scripts = state
             .mem_cache
             .get::<Vec<CachedScriptEntry>>(CACHE_KEY_SCRIPTS_NAMED);
-        let cached_tokens = state
-            .mem_cache
-            .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN);
-        let cached_objects = state
-            .mem_cache
-            .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_OBJECT);
+        let cached_tokens = state.load_token_cache();
+        let cached_objects = state.load_object_cache();
         let spore_guard = state.spore_cache.load();
 
         if scope_allows(scope, &[SearchScope::Script]) {

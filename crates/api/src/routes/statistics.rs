@@ -19,9 +19,7 @@ use crate::response::{
     SyncStatusResponse as SyncStatus,
 };
 use crate::utils::{apply_owned_capacity_delta, format_duration};
-use crate::warmup::{
-    CachedAssetEntry, CACHE_KEY_ASSETS_OBJECT, CACHE_KEY_ASSETS_TOKEN, CACHE_KEY_SCRIPTS_ALL,
-};
+use crate::warmup::CACHE_KEY_SCRIPTS_ALL;
 use crate::AppState;
 use tracing::instrument;
 
@@ -891,12 +889,9 @@ async fn get_most_utilized_assets_chart(
     let mut entities: Vec<AssetEntity> = Vec::new();
     let mut deltas_by_date: BTreeMap<u32, Vec<(String, i128, i128)>> = BTreeMap::new();
 
-    let token_assets = state
-        .mem_cache
-        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
-        .ok_or_else(|| {
-            state.asset_cache_unavailable("token asset cache unavailable; warmup in progress")
-        })?;
+    let token_assets = state.load_token_cache().ok_or_else(|| {
+        state.asset_cache_unavailable("token asset cache unavailable; warmup in progress")
+    })?;
     for token in token_assets {
         let type_hash = hex::decode(token.id.strip_prefix("0x").unwrap_or(token.id.as_str()))
             .map_err(|_| {
@@ -948,12 +943,9 @@ async fn get_most_utilized_assets_chart(
         }
     }
 
-    let object_assets = state
-        .mem_cache
-        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_OBJECT)
-        .ok_or_else(|| {
-            state.asset_cache_unavailable("object cache unavailable; warmup in progress")
-        })?;
+    let object_assets = state.load_object_cache().ok_or_else(|| {
+        state.asset_cache_unavailable("object cache unavailable; warmup in progress")
+    })?;
     for obj in object_assets {
         if obj.standard == "spore" {
             let cluster_id = obj.cluster_id.clone().unwrap_or_else(|| obj.id.clone());
@@ -3329,12 +3321,9 @@ async fn get_asset_ecosystem(
     }
 
     // Get top 5 tokens from the warmup cache (already sorted by transfers_24h DESC, holders DESC)
-    let token_assets = state
-        .mem_cache
-        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
-        .ok_or_else(|| {
-            state.asset_cache_unavailable("token asset cache unavailable; warmup in progress")
-        })?;
+    let token_assets = state.load_token_cache().ok_or_else(|| {
+        state.asset_cache_unavailable("token asset cache unavailable; warmup in progress")
+    })?;
 
     let top_tokens: Vec<TopTokenEntry> = token_assets
         .iter()
@@ -3366,12 +3355,9 @@ async fn get_asset_ecosystem(
         .sum();
 
     // Get total object capacity
-    let object_assets = state
-        .mem_cache
-        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_OBJECT)
-        .ok_or_else(|| {
-            state.asset_cache_unavailable("object cache unavailable; warmup in progress")
-        })?;
+    let object_assets = state.load_object_cache().ok_or_else(|| {
+        state.asset_cache_unavailable("object cache unavailable; warmup in progress")
+    })?;
 
     let total_object_capacity: i128 = object_assets
         .iter()

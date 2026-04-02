@@ -23,7 +23,7 @@ use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
 use crate::utils::{apply_owned_capacity_delta, date_keys_inclusive, parse_chart_date_range};
-use crate::warmup::{CachedAssetEntry, SporeCache, CACHE_KEY_ASSETS_OBJECT};
+use crate::warmup::{CachedAssetEntry, SporeCache};
 use crate::AppState;
 use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
 
@@ -570,10 +570,7 @@ async fn list_clusters(
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
     // Try cached object assets first (Spore entries carry cluster grouping)
-    if let Some(cached_objects) = state
-        .mem_cache
-        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_OBJECT)
-    {
+    if let Some(cached_objects) = state.load_object_cache() {
         return serve_clusters_from_cache(cached_objects, cursor_block, limit, &state);
     }
 

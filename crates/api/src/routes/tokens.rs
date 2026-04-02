@@ -16,7 +16,7 @@ use crate::utils::{
     accumulate_owned_capacity, apply_owned_capacity_delta, date_keys_inclusive,
     parse_chart_date_range,
 };
-use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_TOKEN};
+use crate::warmup::CachedAssetEntry;
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -261,13 +261,7 @@ async fn list_tokens(
 ) -> ApiResult<CursorPaginatedResponse<TokenResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
 
-    // Try reading from in-memory cache first
-    let cached = state
-        .mem_cache
-        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN);
-
-    // Apply filters and serve from cache if available
-    if let Some(cached_tokens) = cached {
+    if let Some(cached_tokens) = state.load_token_cache() {
         return serve_tokens_from_cache(cached_tokens, &params, limit);
     }
 

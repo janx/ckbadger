@@ -26,7 +26,7 @@ use crate::utils::{
     resolve_collection_standard, resolve_object_collection_composition_tier_override,
     resolve_object_collection_name,
 };
-use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_OBJECT, CACHE_KEY_ASSETS_TOKEN};
+use crate::warmup::CachedAssetEntry;
 use crate::AppState;
 
 fn is_identity_sentinel(collection_id: &[u8]) -> bool {
@@ -457,10 +457,7 @@ fn fetch_assets_cached(
     // Frontend uses "object" and "identity".
     match filter_type {
         Some(AssetFilterType::Token) => {
-            if let Some(tokens) = state
-                .mem_cache
-                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
-            {
+            if let Some(tokens) = state.load_token_cache() {
                 all_cached.extend(tokens);
             } else {
                 return Err(state
@@ -468,10 +465,7 @@ fn fetch_assets_cached(
             }
         }
         Some(AssetFilterType::Object) => {
-            if let Some(objects) = state
-                .mem_cache
-                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_OBJECT)
-            {
+            if let Some(objects) = state.load_object_cache() {
                 all_cached.extend(objects.into_iter().filter(|e| e.asset_type == "object"));
             } else {
                 return Err(
@@ -480,10 +474,7 @@ fn fetch_assets_cached(
             }
         }
         Some(AssetFilterType::Identity) => {
-            if let Some(objects) = state
-                .mem_cache
-                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_OBJECT)
-            {
+            if let Some(objects) = state.load_object_cache() {
                 all_cached.extend(objects.into_iter().filter(|e| e.asset_type == "identity"));
             } else {
                 return Err(
@@ -492,20 +483,14 @@ fn fetch_assets_cached(
             }
         }
         None => {
-            if let Some(tokens) = state
-                .mem_cache
-                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
-            {
+            if let Some(tokens) = state.load_token_cache() {
                 all_cached.extend(tokens);
             } else {
                 return Err(state
                     .asset_cache_unavailable("token asset cache unavailable; warmup in progress"));
             }
 
-            if let Some(objects) = state
-                .mem_cache
-                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_OBJECT)
-            {
+            if let Some(objects) = state.load_object_cache() {
                 all_cached.extend(objects);
             } else {
                 return Err(
