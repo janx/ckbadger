@@ -2106,6 +2106,15 @@ impl Indexer {
         let mut resolved_dotbit_ids: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
 
         // Group C: Object/Spore processing
+        //
+        // IMPORTANT: Within each transaction, inputs (consumes) MUST be
+        // processed BEFORE outputs (inserts).  This matches the bulk-build
+        // engine ordering (apply_input → apply_output) and ensures that
+        // spore/mNFT transfers leave is_live=true after the output re-creates
+        // the entity.  The previous outputs-first ordering caused transferred
+        // entities to be left as is_live=false (the consume ran after the
+        // insert), which then triggered "already consumed" errors when the
+        // entity was next consumed in a later batch.
         {
             let mut batch_mnft_token_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
             let mut batch_mnft_last_output_tx_index: HashMap<Vec<u8>, usize> = HashMap::new();
@@ -2121,6 +2130,103 @@ impl Indexer {
             // Cache DAS actions for all non-cellbase txs so consumption-only
             // txs can look up their action (not just txs with .bit outputs).
             let mut das_action_cache: HashMap<[u8; 32], String> = HashMap::new();
+
+            // --- Pre-pass: collect all input outpoints for batch DB lookup ---
+            let bulk_sync_active = self.is_bulk_sync_active();
+            let mut all_prev_tx_hashes: Vec<Vec<u8>> = Vec::new();
+            let mut all_prev_indices: Vec<i16> = Vec::new();
+            // For each flat input index, record (block_idx, tx_idx_in_block, dotbit_consume_order, tx_global_index).
+            let mut input_meta: Vec<(usize, usize, u64, usize)> = Vec::new();
+            {
+                let mut pre_block_tx_idx = 0usize;
+                for (block_idx, block_response) in blocks.iter().enumerate() {
+                    let parsed = &all_parsed_blocks[block_idx];
+                    let tx_count_for_block =
+                        checked_tx_count(parsed.transactions_count, parsed.number)?;
+                    let tx_slice =
+                        &all_tx_data[pre_block_tx_idx..pre_block_tx_idx + tx_count_for_block];
+                    for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                        if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                            continue;
+                        }
+                        let tx_global_index = pre_block_tx_idx + tx_idx;
+                        let dotbit_consume_order = dotbit_consume_event_order(tx_global_index)?;
+                        let tx = &block_response.block.transactions[tx_idx];
+                        for input in &tx.inputs {
+                            let prev_tx_hash =
+                                crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
+                            let prev_index = parse_outpoint_index_i16(
+                                &input.previous_output.index,
+                                "input.previous_output.index",
+                            )
+                            .map_err(|e| {
+                                anyhow!(
+                                    "invalid input index while prefetching outpoints at block {}, tx 0x{}: {}",
+                                    parsed.number,
+                                    hex::encode(tx_data.hash),
+                                    e
+                                )
+                            })?;
+                            all_prev_tx_hashes.push(prev_tx_hash);
+                            all_prev_indices.push(prev_index);
+                            input_meta.push((
+                                block_idx,
+                                tx_idx,
+                                dotbit_consume_order,
+                                tx_global_index,
+                            ));
+                        }
+                    }
+                    pre_block_tx_idx += tx_count_for_block;
+                }
+            }
+
+            // --- Batch DB lookups (efficient: one query per entity type) ---
+            let dotbit_results = if !all_prev_tx_hashes.is_empty() {
+                self.writer.get_dotbit_account_ids_by_outpoints_batch(
+                    &all_prev_tx_hashes,
+                    &all_prev_indices,
+                )?
+            } else {
+                Vec::new()
+            };
+            let spore_db_results = if !all_prev_tx_hashes.is_empty() && !bulk_sync_active {
+                self.writer
+                    .get_spore_ids_by_outpoints_batch(&all_prev_tx_hashes, &all_prev_indices)?
+            } else {
+                Vec::new()
+            };
+            let mnft_db_results = if !all_prev_tx_hashes.is_empty() && !bulk_sync_active {
+                self.writer
+                    .get_mnft_token_ids_by_outpoints_batch(&all_prev_tx_hashes, &all_prev_indices)?
+            } else {
+                Vec::new()
+            };
+
+            // Build base maps from DB results (immutable for the batch).
+            let mut spore_map: HashMap<(Vec<u8>, i16), Vec<u8>> = spore_db_results
+                .into_iter()
+                .map(|(h, i, id)| ((h, i), id))
+                .collect();
+            let mut mnft_map: HashMap<(Vec<u8>, i16), Vec<u8>> = mnft_db_results
+                .into_iter()
+                .map(|(h, i, id)| ((h, i), id))
+                .collect();
+            let mut dotbit_map: HashMap<(Vec<u8>, i16), Vec<u8>> = dotbit_results
+                .into_iter()
+                .map(|(h, i, id)| ((h, i), id))
+                .collect();
+
+            // Group flat input indices by (block_idx, tx_idx) for per-tx access.
+            let mut inputs_by_tx: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+            for (flat_idx, &(block_idx, tx_idx, _, _)) in input_meta.iter().enumerate() {
+                inputs_by_tx
+                    .entry((block_idx, tx_idx))
+                    .or_default()
+                    .push(flat_idx);
+            }
+
+            // --- Main pass: per-tx with inputs-before-outputs ---
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
                 let parsed = &all_parsed_blocks[block_idx];
@@ -2130,8 +2236,179 @@ impl Indexer {
                 let ts_ms = parsed.timestamp.timestamp_millis();
                 for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
                     let tx_global_index = block_tx_idx + tx_idx;
-                    let dotbit_create_order = dotbit_create_event_order(tx_global_index)?;
                     let tx = &block_response.block.transactions[tx_idx];
+
+                    // Parse DAS action early — needed by both input and output processing.
+                    if !tx_data.is_cellbase {
+                        if let Some(action) = DotbitParser::parse_das_action(&tx.witnesses) {
+                            das_action_cache.insert(tx_data.hash, action);
+                        }
+                    }
+
+                    // ===== INPUTS FIRST (consumes) =====
+                    if let Some(flat_indices) = inputs_by_tx.get(&(block_idx, tx_idx)) {
+                        for &flat_idx in flat_indices {
+                            let key = (
+                                all_prev_tx_hashes[flat_idx].clone(),
+                                all_prev_indices[flat_idx],
+                            );
+                            let (_, _, dotbit_consume_order, consume_tx_global_index) =
+                                input_meta[flat_idx];
+
+                            // Augment maps with in-batch cache (outpoints from earlier txs).
+                            if !bulk_sync_active && !spore_map.contains_key(&key) {
+                                if let Some(spore_id) =
+                                    spore_state.get_cached_spore_id_by_outpoint(&key.0, key.1)
+                                {
+                                    spore_map.insert(key.clone(), spore_id);
+                                }
+                            }
+                            if !bulk_sync_active && !mnft_map.contains_key(&key) {
+                                if let Some(token_id) = batch_mnft_token_outpoints.get(&key) {
+                                    mnft_map.insert(key.clone(), token_id.clone());
+                                }
+                            }
+                            if !dotbit_map.contains_key(&key) {
+                                if let Some(account_id) = batch_dotbit_outpoints.get(&key) {
+                                    dotbit_map.insert(key.clone(), account_id.clone());
+                                }
+                            }
+
+                            if !bulk_sync_active {
+                                // Spore consumption
+                                if let Some(spore_id) = spore_map.get(&key) {
+                                    if let Some(coll_id) = self.writer.consume_spore(
+                                        spore_id,
+                                        parsed.number,
+                                        &tx_data.hash,
+                                        &mut data_batch,
+                                        &mut spore_state,
+                                    )? {
+                                        object_activity_acc.record(
+                                            &coll_id,
+                                            &tx_data.hash,
+                                            spore_id,
+                                            &parsed.hash,
+                                            parsed.number,
+                                            checked_usize_to_i32(tx_idx, "tx_idx")?,
+                                            ts_ms,
+                                            false,
+                                        );
+                                    }
+                                } else if let Some(info) = input_cell_info
+                                    .get(&key)
+                                    .or_else(|| batch_cell_infos.get(&key))
+                                {
+                                    if let Some(tch) = info.type_code_hash.as_ref() {
+                                        if SporeParser::is_spore_type_script(tch) {
+                                            bail!(
+                                                "spore outpoint-id mapping missing for consumed spore cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
+                                                parsed.number,
+                                                hex::encode(tx_data.hash),
+                                                hex::encode(&key.0),
+                                                key.1
+                                            );
+                                        }
+                                    }
+                                }
+
+                                // mNFT consumption
+                                if let Some(token_id) = mnft_map.get(&key) {
+                                    let should_consume = should_consume_grouped_mnft_token(
+                                        batch_mnft_last_output_tx_index.get(token_id).copied(),
+                                        consume_tx_global_index,
+                                    );
+                                    if should_consume {
+                                        if let Some(coll_id) =
+                                            self.writer.consume_mnft_token_with_state(
+                                                token_id,
+                                                parsed.number,
+                                                &tx_data.hash,
+                                                &mut data_batch,
+                                                &mut mnft_state,
+                                            )?
+                                        {
+                                            object_activity_acc.record(
+                                                &coll_id,
+                                                &tx_data.hash,
+                                                token_id,
+                                                &parsed.hash,
+                                                parsed.number,
+                                                checked_usize_to_i32(tx_idx, "tx_idx")?,
+                                                ts_ms,
+                                                false,
+                                            );
+                                        }
+                                    }
+                                } else if let Some(info) = input_cell_info
+                                    .get(&key)
+                                    .or_else(|| batch_cell_infos.get(&key))
+                                {
+                                    if let Some(tch) = info.type_code_hash.as_ref() {
+                                        if MnftParser::is_token_type_script(tch) {
+                                            bail!(
+                                                "mNFT outpoint-id mapping missing for consumed mNFT cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
+                                                parsed.number,
+                                                hex::encode(tx_data.hash),
+                                                hex::encode(&key.0),
+                                                key.1
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+
+                            // DotBit consumption (runs in all sync modes)
+                            let dotbit_account_id = resolve_live_dotbit_account_id_for_consume(
+                                &key,
+                                &input_cell_info,
+                                &batch_cell_infos,
+                                &dotbit_map,
+                            );
+                            if let Some(ref id) = dotbit_account_id {
+                                resolved_dotbit_ids.insert(key.clone(), id.clone());
+                            }
+                            if let Some(account_id) = dotbit_account_id.as_ref() {
+                                let latest_create_order =
+                                    batch_dotbit_latest_create_order.get(account_id).copied();
+                                if should_consume_dotbit_account(
+                                    latest_create_order,
+                                    dotbit_consume_order,
+                                ) && self
+                                    .writer
+                                    .consume_dotbit_account_with_state(
+                                        account_id,
+                                        parsed.number,
+                                        &tx_data.hash,
+                                        &mut data_batch,
+                                        &mut dotbit_state,
+                                    )?
+                                    .is_some()
+                                {
+                                    let tx_key: [u8; 32] = tx_data.hash.as_slice()[..32]
+                                        .try_into()
+                                        .expect("tx_hash must be 32 bytes");
+                                    let activity = dotbit_tx_activity_data
+                                        .entry(tx_key)
+                                        .or_insert_with(|| DotbitTxActivityData {
+                                            das_action: das_action_cache.get(&tx_key).cloned(),
+                                            created_account_ids: HashSet::new(),
+                                            consumed_account_ids: HashSet::new(),
+                                            block_number: parsed.number,
+                                            block_hash: parsed.hash.clone(),
+                                            tx_idx: checked_usize_to_i32(tx_idx, "tx_idx")
+                                                .expect("tx_idx overflow"),
+                                            timestamp_ms: ts_ms,
+                                        });
+                                    activity.consumed_account_ids.insert(account_id.clone());
+                                }
+                            }
+                        }
+                    }
+
+                    // ===== OUTPUTS SECOND (inserts) =====
+                    let dotbit_create_order = dotbit_create_event_order(tx_global_index)?;
+
                     for cluster in SporeParser::parse_clusters(tx) {
                         self.writer.insert_spore_cluster(
                             &cluster,
@@ -2265,13 +2542,6 @@ impl Indexer {
                             true,
                         );
                     }
-                    // Parse DAS action for all non-cellbase txs so
-                    // consumption-only .bit txs can look up their action.
-                    if !tx_data.is_cellbase {
-                        if let Some(action) = DotbitParser::parse_das_action(&tx.witnesses) {
-                            das_action_cache.insert(tx_data.hash, action);
-                        }
-                    }
                     let dotbit_accounts = DotbitParser::parse_accounts(tx)?;
                     if !dotbit_accounts.is_empty() {
                         let das_action = das_action_cache.get(&tx_data.hash).cloned();
@@ -2317,258 +2587,6 @@ impl Indexer {
                 block_tx_idx += tx_count_for_block;
             }
 
-            // Spore/mNFT consumption runs in live sync mode only, DotBit consumption runs in all sync modes.
-            let bulk_sync_active = self.is_bulk_sync_active();
-            let mut all_prev_tx_hashes: Vec<Vec<u8>> = Vec::new();
-            let mut all_prev_indices: Vec<i16> = Vec::new();
-            // (block_number, block_hash, consuming_tx_hash, dotbit_consume_order, tx_idx, ts_ms, tx_global_index)
-            let mut outpoint_context: Vec<(i64, Vec<u8>, Vec<u8>, u64, i32, i64, usize)> =
-                Vec::new();
-            let mut block_tx_idx = 0usize;
-            for (block_idx, block_response) in blocks.iter().enumerate() {
-                let parsed = &all_parsed_blocks[block_idx];
-                let tx_count_for_block =
-                    checked_tx_count(parsed.transactions_count, parsed.number)?;
-                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                    if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                        continue;
-                    }
-                    let tx_global_index = block_tx_idx + tx_idx;
-                    let dotbit_consume_order = dotbit_consume_event_order(tx_global_index)?;
-                    let tx = &block_response.block.transactions[tx_idx];
-                    for input in &tx.inputs {
-                        let prev_tx_hash =
-                            crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
-                        let prev_index = parse_outpoint_index_i16(
-                            &input.previous_output.index,
-                            "input.previous_output.index",
-                        )
-                        .map_err(|e| {
-                            anyhow!(
-                                "invalid input index while prefetching outpoints at block {}, tx 0x{}: {}",
-                                parsed.number,
-                                hex::encode(tx_data.hash),
-                                e
-                            )
-                        })?;
-                        all_prev_tx_hashes.push(prev_tx_hash);
-                        all_prev_indices.push(prev_index);
-                        outpoint_context.push((
-                            parsed.number,
-                            parsed.hash.clone(),
-                            tx_data.hash.to_vec(),
-                            dotbit_consume_order,
-                            checked_usize_to_i32(tx_idx, "tx_idx")?,
-                            parsed.timestamp.timestamp_millis(),
-                            tx_global_index,
-                        ));
-                    }
-                }
-                block_tx_idx += tx_count_for_block;
-            }
-            if !all_prev_tx_hashes.is_empty() {
-                let dotbit_results = self.writer.get_dotbit_account_ids_by_outpoints_batch(
-                    &all_prev_tx_hashes,
-                    &all_prev_indices,
-                )?;
-                let spore_results = if bulk_sync_active {
-                    Vec::new()
-                } else {
-                    self.writer
-                        .get_spore_ids_by_outpoints_batch(&all_prev_tx_hashes, &all_prev_indices)?
-                };
-                let mnft_results = if bulk_sync_active {
-                    Vec::new()
-                } else {
-                    self.writer.get_mnft_token_ids_by_outpoints_batch(
-                        &all_prev_tx_hashes,
-                        &all_prev_indices,
-                    )?
-                };
-
-                let spore_map: HashMap<(Vec<u8>, i16), Vec<u8>> = spore_results
-                    .into_iter()
-                    .map(|(h, i, id)| ((h, i), id))
-                    .collect();
-                let mut spore_map = spore_map;
-                if !bulk_sync_active {
-                    for (idx, tx_hash) in all_prev_tx_hashes.iter().enumerate() {
-                        let key = (tx_hash.clone(), all_prev_indices[idx]);
-                        if spore_map.contains_key(&key) {
-                            continue;
-                        }
-                        if let Some(spore_id) = spore_state
-                            .get_cached_spore_id_by_outpoint(tx_hash, all_prev_indices[idx])
-                        {
-                            spore_map.insert(key, spore_id);
-                        }
-                    }
-                }
-
-                let mnft_map: HashMap<(Vec<u8>, i16), Vec<u8>> = mnft_results
-                    .into_iter()
-                    .map(|(h, i, id)| ((h, i), id))
-                    .collect();
-                let mut mnft_map = mnft_map;
-                if !bulk_sync_active {
-                    for (key, token_id) in &batch_mnft_token_outpoints {
-                        mnft_map
-                            .entry(key.clone())
-                            .or_insert_with(|| token_id.clone());
-                    }
-                }
-
-                let dotbit_map: HashMap<(Vec<u8>, i16), Vec<u8>> = dotbit_results
-                    .into_iter()
-                    .map(|(h, i, id)| ((h, i), id))
-                    .collect();
-                let mut dotbit_map = dotbit_map;
-                for (key, account_id) in &batch_dotbit_outpoints {
-                    dotbit_map
-                        .entry(key.clone())
-                        .or_insert_with(|| account_id.clone());
-                }
-
-                for (
-                    i,
-                    (
-                        block_number,
-                        block_hash,
-                        consuming_tx_hash,
-                        dotbit_consume_order,
-                        ctx_tx_idx,
-                        ctx_ts_ms,
-                        consume_tx_global_index,
-                    ),
-                ) in outpoint_context.iter().enumerate()
-                {
-                    let key = (all_prev_tx_hashes[i].clone(), all_prev_indices[i]);
-                    if !bulk_sync_active {
-                        if let Some(spore_id) = spore_map.get(&key) {
-                            if let Some(coll_id) = self.writer.consume_spore(
-                                spore_id,
-                                *block_number,
-                                consuming_tx_hash,
-                                &mut data_batch,
-                                &mut spore_state,
-                            )? {
-                                object_activity_acc.record(
-                                    &coll_id,
-                                    consuming_tx_hash,
-                                    spore_id,
-                                    block_hash,
-                                    *block_number,
-                                    *ctx_tx_idx,
-                                    *ctx_ts_ms,
-                                    false,
-                                );
-                            }
-                        } else if let Some(info) = input_cell_info
-                            .get(&key)
-                            .or_else(|| batch_cell_infos.get(&key))
-                        {
-                            if let Some(tch) = info.type_code_hash.as_ref() {
-                                if SporeParser::is_spore_type_script(tch) {
-                                    bail!(
-                                        "spore outpoint-id mapping missing for consumed spore cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
-                                        block_number,
-                                        hex::encode(consuming_tx_hash),
-                                        hex::encode(&key.0),
-                                        key.1
-                                    );
-                                }
-                            }
-                        }
-                        if let Some(token_id) = mnft_map.get(&key) {
-                            let should_consume = should_consume_grouped_mnft_token(
-                                batch_mnft_last_output_tx_index.get(token_id).copied(),
-                                *consume_tx_global_index,
-                            );
-                            if should_consume {
-                                if let Some(coll_id) = self.writer.consume_mnft_token_with_state(
-                                    token_id,
-                                    *block_number,
-                                    consuming_tx_hash,
-                                    &mut data_batch,
-                                    &mut mnft_state,
-                                )? {
-                                    object_activity_acc.record(
-                                        &coll_id,
-                                        consuming_tx_hash,
-                                        token_id,
-                                        block_hash,
-                                        *block_number,
-                                        *ctx_tx_idx,
-                                        *ctx_ts_ms,
-                                        false,
-                                    );
-                                }
-                            }
-                        } else if let Some(info) = input_cell_info
-                            .get(&key)
-                            .or_else(|| batch_cell_infos.get(&key))
-                        {
-                            if let Some(tch) = info.type_code_hash.as_ref() {
-                                if MnftParser::is_token_type_script(tch) {
-                                    bail!(
-                                        "mNFT outpoint-id mapping missing for consumed mNFT cell: block={}, tx=0x{}, prev_outpoint=0x{}:{}",
-                                        block_number,
-                                        hex::encode(consuming_tx_hash),
-                                        hex::encode(&key.0),
-                                        key.1
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    // Match bulk precompute semantics: if resolved input metadata exists,
-                    // only treat it as dotbit when the input cell itself is dotbit.
-                    let dotbit_account_id = resolve_live_dotbit_account_id_for_consume(
-                        &key,
-                        &input_cell_info,
-                        &batch_cell_infos,
-                        &dotbit_map,
-                    );
-                    if let Some(ref id) = dotbit_account_id {
-                        resolved_dotbit_ids.insert(key.clone(), id.clone());
-                    }
-                    if let Some(account_id) = dotbit_account_id.as_ref() {
-                        let latest_create_order =
-                            batch_dotbit_latest_create_order.get(account_id).copied();
-                        if should_consume_dotbit_account(latest_create_order, *dotbit_consume_order)
-                            && self
-                                .writer
-                                .consume_dotbit_account_with_state(
-                                    account_id,
-                                    *block_number,
-                                    consuming_tx_hash,
-                                    &mut data_batch,
-                                    &mut dotbit_state,
-                                )?
-                                .is_some()
-                        {
-                            let tx_key: [u8; 32] = consuming_tx_hash
-                                .as_slice()
-                                .try_into()
-                                .expect("consuming_tx_hash must be 32 bytes");
-                            let activity =
-                                dotbit_tx_activity_data.entry(tx_key).or_insert_with(|| {
-                                    DotbitTxActivityData {
-                                        das_action: das_action_cache.get(&tx_key).cloned(),
-                                        created_account_ids: HashSet::new(),
-                                        consumed_account_ids: HashSet::new(),
-                                        block_number: *block_number,
-                                        block_hash: block_hash.clone(),
-                                        tx_idx: *ctx_tx_idx,
-                                        timestamp_ms: *ctx_ts_ms,
-                                    }
-                                });
-                            activity.consumed_account_ids.insert(account_id.clone());
-                        }
-                    }
-                }
-            }
             // Write .bit collection activities directly (bypassing accumulator)
             for (tx_hash, activity) in &dotbit_tx_activity_data {
                 let inserted = resolve_dotbit_tx_activity(
