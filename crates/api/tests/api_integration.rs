@@ -9959,3 +9959,25 @@ async fn test_lookup_scripts_accepts_tx_hash_parameter() {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+/// Verify that the initial startup warmup seeds the script cache independently
+/// of the (potentially slow) asset cache build, so `/api/v1/scripts` returns
+/// 200 immediately after startup rather than 503.
+#[tokio::test]
+async fn test_scripts_cache_seeded_at_startup_independently_of_asset_cache() {
+    let store = test_store();
+    // Use create_router (WITH warmup) — this runs warmup_assets_cache_once
+    // which should seed the script cache even though refresh_assets_cache_sync
+    // no longer calls refresh_named_script_cache_sync.
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/scripts?limit=10")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    // Must be 200 (empty list), NOT 503 (warmup_pending).
+    assert_eq!(response.status(), StatusCode::OK);
+}

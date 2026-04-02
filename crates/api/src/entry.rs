@@ -51,6 +51,29 @@ pub struct FrontendServiceConfig {
 
 /// Run the API server (API + WebSocket only, no frontend). Blocks until shutdown.
 pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
+    // When started by the supervisor alongside the indexer, the domain store
+    // may not exist yet (the indexer creates it on first open).  Wait up to
+    // 60 seconds for the CURRENT marker file before attempting to open the
+    // secondary instance — this avoids the "No such file or directory"
+    // crash-restart loop on fresh installs.
+    let domain_current = Path::new(&config.domain_data_path).join("CURRENT");
+    let wait_start = std::time::Instant::now();
+    let max_wait = std::time::Duration::from_secs(60);
+    while !domain_current.exists() {
+        if wait_start.elapsed() >= max_wait {
+            bail!(
+                "domain store not found after {}s — is the indexer running? (expected: {})",
+                max_wait.as_secs(),
+                domain_current.display(),
+            );
+        }
+        info!(
+            "Waiting for indexer to create domain store ({}s)...",
+            wait_start.elapsed().as_secs()
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+
     let secondary_path = secondary_store_path(&config.domain_data_path, SecondaryStoreOwner::Api);
     info!(
         "Opening ckbadger domain store (secondary) at: {} -> {}",

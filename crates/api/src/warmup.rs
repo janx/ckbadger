@@ -382,6 +382,36 @@ pub async fn refresh_assets_cache_loop(state: Arc<AppState>) {
     }
 }
 
+/// Lightweight loop that keeps the script cache alive independently of the
+/// heavy asset-build cycle.  The script cache only performs 4 fast CF reads
+/// (families, infos, versions, named) so a 10-second interval is cheap.
+///
+/// This loop is decoupled from `refresh_assets_cache_loop` because
+/// `build_asset_caches_sync` can take minutes (65 000+ token holder scans),
+/// which would let the 45-second script-cache TTL expire before the next
+/// refresh cycle even starts.
+pub async fn refresh_script_cache_loop(state: Arc<AppState>) {
+    // Seed the cache immediately on first iteration (no initial sleep).
+    loop {
+        let state_clone = state.clone();
+        let result =
+            tokio::task::spawn_blocking(move || refresh_named_script_cache_sync(&state_clone))
+                .await;
+
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!("Script cache refresh failed: {}", e);
+            }
+            Err(e) => {
+                tracing::warn!("Script cache refresh task panicked: {}", e);
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(10)).await;
+    }
+}
+
 fn push_bounded<T: Ord>(heap: &mut BinaryHeap<Reverse<T>>, item: T, limit: usize) {
     if heap.len() < limit {
         heap.push(Reverse(item));
@@ -946,11 +976,9 @@ fn build_asset_caches_sync(
 }
 
 fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
-    // Scripts cache is independent — warm it up first so the scripts page
-    // is available even when the heavier asset/address/spore caches fail.
-    if let Err(e) = refresh_named_script_cache_sync(state) {
-        tracing::warn!("Scripts cache warmup failed (non-fatal): {}", e);
-    }
+    // NOTE: Script cache is refreshed by its own independent loop
+    // (refresh_script_cache_loop) so it survives the long asset build.
+    // Do NOT call refresh_named_script_cache_sync() here.
 
     let ttl = CacheTtl::ASSETS;
     let (token_assets, object_assets) = match build_asset_caches_sync(state) {
@@ -986,6 +1014,10 @@ pub async fn warmup_assets_cache_once(state: Arc<AppState>) -> anyhow::Result<()
 
     let start = std::time::Instant::now();
     let refresh = tokio::task::spawn_blocking(move || {
+        // Seed script cache immediately (its independent loop hasn't started yet).
+        if let Err(e) = refresh_named_script_cache_sync(&state) {
+            tracing::warn!("Initial script cache warmup failed (non-fatal): {}", e);
+        }
         let result = refresh_assets_cache_sync(&state);
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         match &result {
