@@ -413,6 +413,34 @@ pub async fn refresh_script_cache_loop(state: Arc<AppState>) {
     }
 }
 
+/// Independent loop that keeps the address cache alive regardless of the
+/// heavy asset-build cycle.  The address cache performs a single CF scan
+/// (addr_balance) so a 20-second interval is acceptable.
+///
+/// Decoupled from `refresh_assets_cache_loop` for the same reason as the
+/// script cache: `build_asset_caches_sync` can take minutes, which would
+/// let the 30-second address-cache TTL expire before the address refresh
+/// even starts.
+pub async fn refresh_address_cache_loop(state: Arc<AppState>) {
+    loop {
+        let state_clone = state.clone();
+        let result =
+            tokio::task::spawn_blocking(move || refresh_address_cache_sync(&state_clone)).await;
+
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!("Address cache refresh failed: {}", e);
+            }
+            Err(e) => {
+                tracing::warn!("Address cache refresh task panicked: {}", e);
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(20)).await;
+    }
+}
+
 fn push_bounded<T: Ord>(heap: &mut BinaryHeap<Reverse<T>>, item: T, limit: usize) {
     if heap.len() < limit {
         heap.push(Reverse(item));
@@ -994,7 +1022,9 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
     state.token_cache.store(Arc::new(Some(token_assets)));
     state.object_cache.store(Arc::new(Some(object_assets)));
     state.clear_asset_cache_warmup_error();
-    refresh_address_cache_sync(state)?;
+    // NOTE: Address cache is refreshed by its own independent loop
+    // (refresh_address_cache_loop) so it survives the long asset build.
+    // Do NOT call refresh_address_cache_sync() here.
     refresh_spore_cache_sync(state)?;
 
     Ok(())
@@ -1013,6 +1043,10 @@ pub async fn warmup_assets_cache_once(state: Arc<AppState>) -> anyhow::Result<()
         // Seed script cache immediately (its independent loop hasn't started yet).
         if let Err(e) = refresh_named_script_cache_sync(&state) {
             tracing::warn!("Initial script cache warmup failed (non-fatal): {}", e);
+        }
+        // Seed address cache immediately (its independent loop hasn't started yet).
+        if let Err(e) = refresh_address_cache_sync(&state) {
+            tracing::warn!("Initial address cache warmup failed (non-fatal): {}", e);
         }
         let result = refresh_assets_cache_sync(&state);
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;

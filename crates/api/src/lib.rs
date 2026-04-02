@@ -282,6 +282,11 @@ pub async fn create_router(config: AppConfig) -> Router {
         tokio::spawn(async move {
             warmup::refresh_script_cache_loop(script_cache_state).await;
         });
+
+        let address_cache_state = state.clone();
+        tokio::spawn(async move {
+            warmup::refresh_address_cache_loop(address_cache_state).await;
+        });
     }
 
     // Spawn periodic store refresh for secondary instances.
