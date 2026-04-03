@@ -3,8 +3,9 @@ import './globals.css';
 import { Providers } from './providers';
 
 export const metadata = {
-  title: 'ckbadger - CKB Blockchain Explorer',
-  description: 'High-performance blockchain explorer for Nervos CKB',
+  title: 'CKBadger — Local-first CKB-native Explorer',
+  description:
+    'Local-first, agent-friendly Nervos CKB explorer. All you need is a CKB node and the will to run your own stack.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
