@@ -235,10 +235,15 @@ async fn frontend_runtime_config_handler(config: FrontendRuntimeConfig) -> Respo
         r#"(() => {{
   const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
   const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const hostname = window.location.hostname || '127.0.0.1';
+  const defaultPort = window.location.protocol === 'https:' ? '443' : '80';
+  const currentPort = window.location.port || defaultPort;
+  const behindProxy = currentPort !== '{api_port}';
+  const host = behindProxy
+    ? window.location.host
+    : (window.location.hostname || '127.0.0.1') + ':{api_port}';
   window.__CKBADGER_RUNTIME_CONFIG__ = {{
-    apiBase: `${{protocol}}//${{hostname}}:{api_port}/api/v1`,
-    wsUrl: `${{wsProtocol}}//${{hostname}}:{api_port}/ws`,
+    apiBase: `${{protocol}}//${{host}}/api/v1`,
+    wsUrl: `${{wsProtocol}}//${{host}}/ws`,
     ckbNetwork: {network},
     ckbRpcUrl: {rpc_url},
     buildVersion: {build_version},
@@ -619,7 +624,14 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let text = String::from_utf8(body.to_vec()).unwrap();
-        assert!(text.contains(":9101/api/v1"));
+        assert!(
+            text.contains("'9101'"),
+            "should contain api_port for proxy detection"
+        );
+        assert!(
+            text.contains(":9101"),
+            "should contain api_port in host fallback"
+        );
         assert!(text.contains("\"testnet\""));
         assert!(text.contains("\"http://127.0.0.1:18114\""));
         assert!(text.contains("buildVersion"));
