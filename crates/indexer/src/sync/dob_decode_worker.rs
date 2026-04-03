@@ -189,7 +189,7 @@ impl DobDecodeWorker {
                     }
                     Err(e) => {
                         batch_skipped += 1;
-                        debug!(
+                        warn!(
                             spore_id = hex::encode(&spore_id),
                             error = %e,
                             "skipping DOB spore decode"
