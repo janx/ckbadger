@@ -19,7 +19,7 @@ The web does not have to be centralized services that every user connects to.
 
 Web5 is the local-first web. It is a network of equally connected nodes, each running its own stack: CKB node, Fiber node, CKBadger, and whatever else you choose to run. No single point of failure. No single point of control. CKBadger is the eyes of that stack.
 
-### Unix Aesthetics Through Radical Simplicity
+### Radical Simplicity
 
 Take local-first to its logical extreme and you arrive at a design with Unix aesthetics. No RPC middleware. No SQL databases. No container orchestration. Everything is files. Everything is disk I/O.
 
@@ -43,11 +43,13 @@ In the AI era, agents handle setup for you. The friction that kept local-first i
 
 This is the era local-first architecture was waiting for. This is the era Fiber and Web5 were waiting for.
 
-### Design Starting Point
+### [CKBadger Don't Care](https://www.youtube.com/watch?v=4r7wHMg5Yjg)
+
+Whether or not you share the [Web5 vision](https://web5.tech), I hope CKBadger inspires you to build great things.
+
+## Design Starting Point
 
 Documents under `docs/prompts/` are manually marinated texts capturing the ideas and principles behind CKBadger. Start there for all design reasoning.
-
-Whether or not you share the web5/local-first vision, I hope CKBadger inspires you to build great things.
 
 ## Features
 
