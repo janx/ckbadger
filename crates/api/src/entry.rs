@@ -155,6 +155,7 @@ struct FrontendFsState {
 #[derive(Clone)]
 struct FrontendRuntimeConfig {
     api_port: u16,
+    frontend_port: u16,
     ckb_network: String,
     ckb_rpc_url: String,
     build_version: String,
@@ -163,6 +164,7 @@ struct FrontendRuntimeConfig {
 pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
     let runtime_config = FrontendRuntimeConfig {
         api_port: config.api_port,
+        frontend_port: config.port,
         ckb_network: config.ckb_network.clone(),
         ckb_rpc_url: config.ckb_rpc_url.clone(),
         build_version: config.build_version.clone(),
@@ -237,7 +239,7 @@ async fn frontend_runtime_config_handler(config: FrontendRuntimeConfig) -> Respo
   const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const defaultPort = window.location.protocol === 'https:' ? '443' : '80';
   const currentPort = window.location.port || defaultPort;
-  const behindProxy = currentPort !== '{api_port}';
+  const behindProxy = currentPort !== '{api_port}' && currentPort !== '{frontend_port}';
   const host = behindProxy
     ? window.location.host
     : (window.location.hostname || '127.0.0.1') + ':{api_port}';
@@ -251,6 +253,7 @@ async fn frontend_runtime_config_handler(config: FrontendRuntimeConfig) -> Respo
 }})();
 "#,
         api_port = config.api_port,
+        frontend_port = config.frontend_port,
         network = network,
         rpc_url = rpc_url,
         build_version = build_version,
@@ -627,6 +630,10 @@ mod tests {
         assert!(
             text.contains("'9101'"),
             "should contain api_port for proxy detection"
+        );
+        assert!(
+            text.contains("'8100'"),
+            "should contain frontend_port for proxy detection"
         );
         assert!(
             text.contains(":9101"),
