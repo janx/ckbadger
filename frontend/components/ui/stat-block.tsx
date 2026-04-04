@@ -118,7 +118,7 @@ export function StatBlock({
   const glowClass = getGlowClass(color, glowTier);
 
   return (
-    <div className={cn('flex flex-col', config.gap, className)}>
+    <div className={cn('flex min-w-0 flex-col', config.gap, className)}>
       <div
         className={cn(
           'text-text-dim font-mono uppercase tracking-wider',
@@ -129,15 +129,16 @@ export function StatBlock({
         {label}
       </div>
 
-      <div className="flex items-baseline gap-2">
+      <div className="flex min-w-0 items-baseline gap-2">
         <span
           className={cn(
-            'font-mono font-bold tabular-nums transition-all',
+            'truncate font-mono font-bold tabular-nums transition-all',
             config.value,
             colorClasses[color],
             glowClass
           )}
           style={glowStyle}
+          title={`${prefix ?? ''}${formatValue(value)}${suffix ?? ''}`}
         >
           {prefix}
           {formatValue(value)}
@@ -166,8 +167,8 @@ interface StatGridProps {
 
 export function StatGrid({ children, columns = 3, className }: StatGridProps) {
   const columnClasses = {
-    2: 'grid-cols-2',
-    3: 'grid-cols-2 md:grid-cols-3',
+    2: 'grid-cols-1 min-[480px]:grid-cols-2',
+    3: 'grid-cols-1 min-[480px]:grid-cols-2 md:grid-cols-3',
     4: 'grid-cols-2 md:grid-cols-4',
   };
 
