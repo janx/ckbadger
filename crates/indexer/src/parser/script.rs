@@ -2,6 +2,10 @@ use ckb_hash::new_blake2b;
 
 use crate::rpc::{parse_hex_to_bytes, Script};
 
+/// TypeID script code_hash (all-zeros prefix + "TYPE_ID" ASCII).
+pub const TYPE_ID_CODE_HASH: &str =
+    "00000000000000000000000000000000000000000000000000545950455f4944";
+
 pub struct ScriptParser;
 
 impl ScriptParser {
@@ -63,6 +67,18 @@ impl ScriptParser {
         buf.extend_from_slice(args); // Bytes data
 
         buf
+    }
+
+    /// Compute script hash from raw byte components (no hex parsing).
+    pub fn compute_script_hash_raw(code_hash: &[u8], hash_type: u8, args: &[u8]) -> Vec<u8> {
+        let encoded = Self::molecule_encode_script(code_hash, hash_type, args);
+
+        let mut hasher = new_blake2b();
+        hasher.update(&encoded);
+
+        let mut hash = vec![0u8; 32];
+        hasher.finalize(&mut hash);
+        hash
     }
 
     pub fn compute_data_hash(data: &[u8]) -> [u8; 32] {

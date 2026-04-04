@@ -15,7 +15,6 @@ use serde_json::Value;
 use tracing::{debug, info, warn};
 
 use ckbadger_dob_decoder::cache::DecoderBinaryCache;
-use ckbadger_dob_decoder::fetch::fetch_decoder_binary;
 use ckbadger_dob_decoder::types::{DecoderRef, DobTrait};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
@@ -46,12 +45,8 @@ pub struct DobDecodeWorker {
     decoder_cache: Arc<DecoderBinaryCache>,
     /// Content-addressed blob store for decoded media files.
     media_store: Arc<MediaBlobStore>,
-    /// CKB RPC endpoint URL for fetching decoder binaries.
-    rpc_url: String,
     /// Reusable RPC client for CKB node calls (connection-pooled).
     rpc_client: CkbRpcClient,
-    /// Reusable HTTP client for decoder binary fetches (connection-pooled).
-    http_client: reqwest::Client,
     /// Cooperative shutdown flag.
     shutdown: Arc<AtomicBool>,
 }
@@ -66,20 +61,13 @@ impl DobDecodeWorker {
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         let rpc_client = CkbRpcClient::new(&rpc_url);
-        let http_client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .expect("failed to build HTTP client");
         let media_store = Arc::new(MediaBlobStore::new(dob_decode_dir));
         Self {
             store,
             append_only_store,
             decoder_cache,
             media_store,
-            rpc_url,
             rpc_client,
-            http_client,
             shutdown,
         }
     }
@@ -145,8 +133,6 @@ impl DobDecodeWorker {
                 decoder_cache: Arc::clone(&self.decoder_cache),
                 media_store: Arc::clone(&self.media_store),
                 rpc_client: self.rpc_client.clone(),
-                http_client: self.http_client.clone(),
-                rpc_url: self.rpc_url.clone(),
             });
 
             let decode_futures =
@@ -440,8 +426,6 @@ struct DecodeContext {
     decoder_cache: Arc<DecoderBinaryCache>,
     media_store: Arc<MediaBlobStore>,
     rpc_client: CkbRpcClient,
-    http_client: reqwest::Client,
-    rpc_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -623,14 +607,57 @@ async fn load_decoder_binary(decoder_ref: &DecoderRef, ctx: &DecodeContext) -> R
 
             Ok(binary)
         }
-        DecoderRef::TypeId(_) => {
-            fetch_decoder_binary(
-                decoder_ref,
-                &ctx.rpc_url,
-                &ctx.decoder_cache,
-                &ctx.http_client,
-            )
-            .await
+        DecoderRef::TypeId(type_id_hash) => {
+            let cache_key = DecoderBinaryCache::type_id_key(type_id_hash);
+            if let Some(binary) = ctx.decoder_cache.get(&cache_key) {
+                return Ok(Arc::try_unwrap(binary).unwrap_or_else(|arc| (*arc).clone()));
+            }
+
+            // Compute the script hash of the TypeID type script so we can look
+            // it up in our cell_by_type index — avoids the CKB node indexer
+            // `get_cells` RPC which requires the Indexer module to be enabled.
+            let type_id_code_hash =
+                hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).expect("valid hex constant");
+            let type_script_hash = crate::parser::script::ScriptParser::compute_script_hash_raw(
+                &type_id_code_hash,
+                1, // hash_type "type"
+                type_id_hash,
+            );
+
+            let cells = ctx
+                .store
+                .list_cells_by_type(&type_script_hash, 1, None, ctx.append_only_store.as_ref())
+                .with_context(|| {
+                    format!(
+                        "failed to query local cell_by_type index for TypeID decoder: type_id=0x{}",
+                        hex::encode(type_id_hash)
+                    )
+                })?;
+
+            let (tx_hash, output_index, _) = cells.into_iter().next().with_context(|| {
+                format!(
+                    "no live cell found in local index for TypeID decoder: type_id=0x{}",
+                    hex::encode(type_id_hash)
+                )
+            })?;
+
+            let binary =
+                fetch_output_data_by_outpoint(&tx_hash, output_index, &ctx.rpc_client)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to fetch TypeID decoder binary: type_id=0x{}, tx_hash=0x{}, output_index={}",
+                            hex::encode(type_id_hash),
+                            hex::encode(&tx_hash),
+                            output_index
+                        )
+                    })?;
+
+            ctx.decoder_cache
+                .put(&cache_key, &binary)
+                .context("failed to cache TypeID decoder binary")?;
+
+            Ok(binary)
         }
     }
 }
@@ -1431,8 +1458,6 @@ mod tests {
             decoder_cache: decoder_cache.clone(),
             media_store,
             rpc_client: CkbRpcClient::new(server.uri()),
-            http_client: reqwest::Client::new(),
-            rpc_url: server.uri(),
         };
 
         let loaded = load_decoder_binary(&DecoderRef::CodeHash(code_hash.clone()), &ctx)
