@@ -313,8 +313,8 @@ function ActivityStreamRow({ activity, isNew = false }: ActivityStreamRowProps) 
           <div className="space-y-1 pl-3">
             {txEvents.map((event, i) => (
               <div key={i} className="flex items-center justify-between gap-2">
-                {event.badge}
-                {event.value}
+                <div className="min-w-0 truncate">{event.badge}</div>
+                <div className="shrink-0">{event.value}</div>
               </div>
             ))}
           </div>
