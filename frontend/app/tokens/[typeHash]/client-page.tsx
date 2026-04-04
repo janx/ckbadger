@@ -10,7 +10,7 @@ import {
   TerminalPanelFooter,
   TerminalRow,
 } from '@/components/ui/terminal-panel';
-import { PageHeader, Badge } from '@/components/ui/page-header';
+import { Badge } from '@/components/ui/page-header';
 import { StatBlock, StatGrid } from '@/components/ui/stat-block';
 import { DataField } from '@/components/ui/data-field';
 import { HexDisplay } from '@/components/ui/hex-display';
@@ -129,15 +129,22 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
-        <PageHeader
-          title={token.symbol || token.name || 'Unknown Token'}
-          subtitle={
-            <div className="flex items-center gap-2">
-              <HexDisplay value={token.typeScriptHash} truncate size="sm" />
-            </div>
-          }
-          badge={
-            <div className="flex items-center gap-2">
+        <div className="mb-6">
+          <Link
+            href="/inventory/tokens"
+            className="hover:text-emphasis text-text-dim text-sm transition-colors"
+          >
+            ← Back to Tokens
+          </Link>
+        </div>
+        <TerminalPanel className="mb-6" glow>
+          <TerminalPanelHeader indicator="active">Overview</TerminalPanelHeader>
+          <TerminalPanelContent>
+            {/* Name + badges */}
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-text-bright font-mono text-2xl font-bold">
+                {token.symbol || token.name || 'Unknown Token'}
+              </h1>
               <Badge variant="neutral">{token.standard.toUpperCase()}</Badge>
               {token.published && (
                 <span className="text-emphasis" title="Verified">
@@ -158,24 +165,27 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                 </span>
               )}
             </div>
-          }
-        />
-        {token.tags && token.tags.length > 0 && (
-          <div className="mb-6 flex flex-wrap gap-2">
-            {token.tags.map((tag) => (
-              <Badge key={tag} variant="gray">
-                {tag}
-              </Badge>
-            ))}
-          </div>
-        )}
-        <div
-          className={`mb-6 grid gap-6 ${token.operatorWebsite || token.manager || token.email ? 'lg:grid-cols-2' : ''}`}
-        >
-          <TerminalPanel glow>
-            <TerminalPanelHeader indicator="active">Overview</TerminalPanelHeader>
-            <TerminalPanelContent>
-              <StatGrid columns={token.operatorWebsite || token.manager || token.email ? 2 : 3}>
+
+            {/* Type script hash */}
+            <div className="mt-3 flex flex-wrap items-baseline gap-2 font-mono text-sm">
+              <span className="text-text-dim text-xs uppercase tracking-wider">type hash</span>
+              <HexDisplay value={token.typeScriptHash} truncate={false} size="sm" />
+            </div>
+
+            {/* Tags */}
+            {token.tags && token.tags.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {token.tags.map((tag) => (
+                  <Badge key={tag} variant="gray">
+                    {tag}
+                  </Badge>
+                ))}
+              </div>
+            )}
+
+            {/* Stats */}
+            <div className="border-base-border mt-4 border-t pt-4">
+              <StatGrid columns={3}>
                 <StatBlock label="Holders" value={token.holdersCount} color="jade" />
                 <StatBlock label="Transfers" value={token.transfersCount} color="gold" />
                 <StatBlock label="Decimals" value={token.decimals} color="default" />
@@ -209,62 +219,61 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                   <StatBlock label="Cells" value={token.cellsCount} color="default" />
                 )}
               </StatGrid>
-              {token.description && (
-                <div className="border-base-border mt-4 border-t pt-4">
-                  <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
-                    Description
-                  </div>
-                  <div className="text-text mt-1 text-sm">{token.description}</div>
+            </div>
+
+            {/* Description */}
+            {token.description && (
+              <div className="border-base-border mt-4 border-t pt-4">
+                <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
+                  Description
                 </div>
-              )}
-            </TerminalPanelContent>
-          </TerminalPanel>
-          {(token.operatorWebsite || token.manager || token.email) && (
-            <TerminalPanel>
-              <TerminalPanelHeader indicator="none">Token Info</TerminalPanelHeader>
-              <TerminalPanelContent>
-                <div className="space-y-1">
-                  {token.operatorWebsite && (
-                    <DataField label="Website">
-                      <a
-                        href={token.operatorWebsite}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-emphasis hover:underline"
-                      >
-                        {token.operatorWebsite}
-                      </a>
-                    </DataField>
-                  )}
-                  {token.manager && (
-                    <DataField label="Manager">
-                      <Link
-                        href={`/address/${token.manager}`}
-                        className="text-emphasis font-mono text-sm hover:underline"
-                      >
-                        {token.manager.length > 40
-                          ? `${token.manager.slice(0, 20)}...${token.manager.slice(-20)}`
-                          : token.manager}
-                      </Link>
-                    </DataField>
-                  )}
-                  {token.email && (
-                    <DataField label="Contact">
-                      <a href={`mailto:${token.email}`} className="text-emphasis hover:underline">
-                        {token.email}
-                      </a>
-                    </DataField>
-                  )}
-                  {token.udtType && (
-                    <DataField label="UDT Type">
-                      <span className="text-text-bright">{token.udtType}</span>
-                    </DataField>
-                  )}
-                </div>
-              </TerminalPanelContent>
-            </TerminalPanel>
-          )}
-        </div>
+                <div className="text-text mt-1 text-sm">{token.description}</div>
+              </div>
+            )}
+
+            {/* Token info fields */}
+            {(token.operatorWebsite || token.manager || token.email || token.udtType) && (
+              <div className="border-base-border mt-4 space-y-1 border-t pt-4">
+                {token.operatorWebsite && (
+                  <DataField label="Website">
+                    <a
+                      href={token.operatorWebsite}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-emphasis hover:underline"
+                    >
+                      {token.operatorWebsite}
+                    </a>
+                  </DataField>
+                )}
+                {token.manager && (
+                  <DataField label="Manager">
+                    <Link
+                      href={`/address/${token.manager}`}
+                      className="text-emphasis font-mono text-sm hover:underline"
+                    >
+                      {token.manager.length > 40
+                        ? `${token.manager.slice(0, 20)}...${token.manager.slice(-20)}`
+                        : token.manager}
+                    </Link>
+                  </DataField>
+                )}
+                {token.email && (
+                  <DataField label="Contact">
+                    <a href={`mailto:${token.email}`} className="text-emphasis hover:underline">
+                      {token.email}
+                    </a>
+                  </DataField>
+                )}
+                {token.udtType && (
+                  <DataField label="UDT Type">
+                    <span className="text-text-bright">{token.udtType}</span>
+                  </DataField>
+                )}
+              </div>
+            )}
+          </TerminalPanelContent>
+        </TerminalPanel>
         <CapacityStatisticsSection
           className="mb-6"
           capacityRange={capacityRange}
