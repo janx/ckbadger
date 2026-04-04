@@ -181,6 +181,76 @@ function getFilterLabel(filter: GlobalActivityFilter): string {
   return FILTER_OPTIONS.find((option) => option.value === filter)?.label ?? 'All';
 }
 
+function FilterDropdown({
+  selectedFilter,
+  onFilterChange,
+}: {
+  selectedFilter: GlobalActivityFilter;
+  onFilterChange: (value: string | number | undefined) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const activeLabel = getFilterLabel(selectedFilter).toUpperCase();
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClose = (e: MouseEvent | TouchEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClose);
+    document.addEventListener('touchstart', handleClose);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleClose);
+      document.removeEventListener('touchstart', handleClose);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [open]);
+
+  return (
+    <div ref={dropdownRef} className="relative sm:hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="border-jade/15 flex items-center gap-1 rounded-sm border px-2 py-0.5 font-mono text-[11px] uppercase tracking-[0.14em] transition-colors"
+      >
+        <span className="text-jade font-bold">{activeLabel}</span>
+        <span className="text-jade/35 text-[9px]">&#9662;</span>
+      </button>
+      {open && (
+        <div className="border-jade/15 bg-base-surface/95 absolute left-0 top-full z-40 mt-1 min-w-[8rem] rounded-md border py-1 shadow-xl backdrop-blur-sm">
+          {FILTER_OPTIONS.map((option) => {
+            const isActive = selectedFilter === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => {
+                  onFilterChange(option.value);
+                  setOpen(false);
+                }}
+                className={cn(
+                  'block w-full px-3 py-1.5 text-left font-mono text-[11px] uppercase tracking-[0.14em] transition-colors',
+                  isActive
+                    ? 'bg-jade/8 text-jade'
+                    : 'text-jade/50 hover:bg-jade/[0.04] hover:text-jade/80'
+                )}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ActivityStreamToolbar({
   selectedFilter,
   visibleItemsCount,
@@ -206,7 +276,19 @@ function ActivityStreamToolbar({
         stacked ? 'border-jade/10 border-b' : 'border-jade/10 border-y'
       )}
     >
-      <div className="container mx-auto flex min-h-12 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5">
+      {/* Mobile: compact single-line toolbar */}
+      <div className="flex items-center gap-0 px-4 py-1.5 font-mono text-[11px] tabular-nums leading-none sm:hidden">
+        <span className={cn('mr-2 inline-block h-1.5 w-1.5 rounded-full', indicatorClass)} />
+        <FilterDropdown selectedFilter={selectedFilter} onFilterChange={onFilterChange} />
+        <span className="text-jade/20 mx-2 select-none">|</span>
+        <span className="text-jade/50 uppercase tracking-wider">
+          {visibleItemsCount.toLocaleString()}
+        </span>
+        <span className="text-jade/50 ml-1 uppercase tracking-wider">loaded</span>
+      </div>
+
+      {/* Desktop: full toolbar with inline buttons */}
+      <div className="container mx-auto hidden min-h-12 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 sm:flex">
         <div className="flex min-w-0 flex-1 items-center gap-0 overflow-x-auto font-mono text-[11px] tabular-nums leading-none">
           <span className={cn('mr-2 inline-block h-1.5 w-1.5 rounded-full', indicatorClass)} />
           <span className="text-jade/50 uppercase tracking-wider">filter</span>
@@ -539,9 +621,20 @@ export function ActivitiesStreamExplorer() {
                 type="button"
                 onClick={handleMergePending}
                 aria-label={`${pendingNewItems.length} new activit${pendingNewItems.length === 1 ? 'y' : 'ies'}`}
-                className="border-jade/10 w-full rounded-none border-y bg-[#04070d] px-4 py-2 text-left transition-colors hover:bg-[#060a11]"
+                className="border-jade/10 w-full rounded-none border-y bg-[#04070d] px-4 py-1.5 text-left transition-colors hover:bg-[#060a11] sm:py-2"
               >
-                <div className="flex flex-wrap items-center gap-0 font-mono text-[11px] tabular-nums leading-none">
+                {/* Mobile: compact single line */}
+                <div className="flex items-center gap-0 font-mono text-[11px] tabular-nums leading-none sm:hidden">
+                  <span className="bg-jade/80 mr-2 block h-1.5 w-1.5 rounded-full shadow-[0_0_8px_rgba(46,219,163,0.35)]" />
+                  <span className="text-jade font-bold uppercase tracking-[0.14em]">
+                    {pendingNewItems.length} new
+                  </span>
+                  <span className="text-text-dim ml-1.5 uppercase tracking-[0.18em]">
+                    &mdash; tap to load
+                  </span>
+                </div>
+                {/* Desktop: full labels */}
+                <div className="hidden flex-wrap items-center gap-0 font-mono text-[11px] tabular-nums leading-none sm:flex">
                   <span className="bg-jade/80 mr-2 block h-2 w-2 rounded-full shadow-[0_0_10px_rgba(46,219,163,0.35)]" />
                   <span className="text-jade/55 uppercase tracking-wider">LIVE BUFFER</span>
                   <span className="text-jade/20 mx-2.5 select-none">|</span>

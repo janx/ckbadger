@@ -90,40 +90,42 @@ export function GlobalStatsBar() {
   return (
     <div className="flex items-center gap-0 overflow-x-auto font-mono text-[11px] tabular-nums leading-none">
       <Link href={`/blocks/${stats.latestBlock}`} className="group flex items-center">
-        <span className="text-jade/50 uppercase tracking-wider">block</span>
-        <span className="text-jade group-hover:text-emphasis ml-1.5 font-bold transition-colors">
+        <span className="text-jade/50 hidden uppercase tracking-wider sm:inline">block</span>
+        <span className="text-jade/50 uppercase tracking-wider sm:hidden">#</span>
+        <span className="text-jade group-hover:text-emphasis ml-0.5 font-bold transition-colors sm:ml-1.5">
           {stats.latestBlock.toLocaleString()}
         </span>
       </Link>
 
-      <span className="text-jade/20 mx-2.5 select-none">|</span>
+      <span className="text-jade/20 mx-1.5 select-none sm:mx-2.5">|</span>
 
       <Link href="/charts/epoch-time-length" className="group flex items-center">
-        <span className="text-jade/50 uppercase tracking-wider">epoch</span>
-        <span className="text-jade group-hover:text-emphasis ml-1.5 font-bold transition-colors">
+        <span className="text-jade/50 hidden uppercase tracking-wider sm:inline">epoch</span>
+        <span className="text-jade/50 uppercase tracking-wider sm:hidden">E</span>
+        <span className="text-jade group-hover:text-emphasis ml-0.5 font-bold transition-colors sm:ml-1.5">
           {epoch ? epoch.number.toLocaleString() : stats.epoch}
         </span>
         {epoch && (
-          <span className="text-jade/40 ml-1.5">
+          <span className="text-jade/40 ml-1.5 hidden sm:inline">
             {epoch.index}/{epoch.length} {epochPct}%
           </span>
         )}
       </Link>
 
-      <span className="text-jade/20 mx-2.5 select-none">|</span>
+      <span className="text-jade/20 mx-1.5 select-none sm:mx-2.5">|</span>
 
       <Link href="/charts/hash-rate" className="group flex items-center">
-        <span className="text-jade/50 uppercase tracking-wider">hash</span>
-        <span className="text-jade group-hover:text-emphasis ml-1.5 font-bold transition-colors">
+        <span className="text-jade/50 hidden uppercase tracking-wider sm:inline">hash</span>
+        <span className="text-jade group-hover:text-emphasis font-bold transition-colors sm:ml-1.5">
           {stats.hashRate}
         </span>
       </Link>
 
-      <span className="text-jade/20 mx-2.5 select-none">|</span>
+      <span className="text-jade/20 mx-1.5 select-none sm:mx-2.5">|</span>
 
       <span className="flex items-center">
-        <span className="text-jade/50 uppercase tracking-wider">interval</span>
-        <span className="text-jade ml-1.5 font-bold">{stats.avgBlockTime}</span>
+        <span className="text-jade/50 hidden uppercase tracking-wider sm:inline">interval</span>
+        <span className="text-jade font-bold sm:ml-1.5">{stats.avgBlockTime}</span>
       </span>
     </div>
   );
