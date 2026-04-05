@@ -1092,8 +1092,15 @@ impl BatchWriter {
         }
 
         // Update today's dao daily snapshot with the latest unclaimed compensation
+        // and unmade_dao_interests.  The snapshot's unmade_dao_interests was computed
+        // by scanning the store BEFORE the batch commit, so it lags by one batch.
+        // Patching it here (post-commit) ensures the chart's treasury computation
+        // (secondary_pool - unmade_dao_interests) matches the stats endpoint's
+        // live computation (tip_s - unmade_active_compensation).
         if let Some(mut today_snapshot) = self.store.get_latest_dao_daily_snapshot()? {
             today_snapshot.unclaimed_compensation = unclaimed_compensation;
+            today_snapshot.unmade_dao_interests = unmade_active_compensation as i128;
+            today_snapshot.secondary_pool = tip_s as i128;
             let date_key = today_snapshot.date.replace('-', "");
             let snap_key =
                 keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, date_key.as_bytes());
@@ -1380,6 +1387,12 @@ mod tests {
         assert_eq!(latest.mining_reward, 10_00000000);
         assert_eq!(latest.deposit_compensation, 20_00000000);
         assert_eq!(latest.burnt, 32_00000000);
+
+        // Verify snapshot's unmade_dao_interests and secondary_pool were patched
+        // to the live tip values, ensuring chart and stats agree.
+        let patched_snapshot = store.get_latest_dao_daily_snapshot().unwrap().unwrap();
+        assert_eq!(patched_snapshot.unmade_dao_interests, 98_00000000);
+        assert_eq!(patched_snapshot.secondary_pool, 130_00000000); // tip_s
     }
 
     #[test]
