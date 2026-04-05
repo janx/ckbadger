@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Link from '@/components/ui/link';
+import { HelpPopover } from '@/components/ui/help-popover';
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query';
 import { api, MempoolBlock, Block, BlockFeeStats, Transaction, PendingProposal } from '@/lib/api';
 import { resolveBubbleOverlaps } from '@/lib/pipeline-bubble-layout';
@@ -746,7 +747,7 @@ function PendingBlock({
 }: {
   block: MempoolBlock;
   predictedNumber?: number;
-  topLabel?: string;
+  topLabel?: React.ReactNode;
   tone?: PendingTone;
   isNextBlock: boolean;
   large?: boolean;
@@ -1784,7 +1785,30 @@ export function MempoolBlocks({
                 >
                   <PendingBlock
                     block={mempoolStageBlock}
-                    topLabel="Mempool"
+                    topLabel={
+                      <span className="inline-flex items-center gap-1">
+                        Mempool
+                        <HelpPopover label="Explain Mempool" title="Mempool">
+                          <p>
+                            The mempool (transaction pool) holds transactions that have been
+                            broadcast to the network but not yet{' '}
+                            <span className="text-emphasis">proposed</span> in any block. Nodes
+                            validate and queue these transactions locally, waiting for miners to
+                            include their proposal IDs in an upcoming block.
+                          </p>
+                          <p>
+                            <a
+                              href="https://docs.nervos.org/docs/tech-explanation/transaction#transaction-states"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-emphasis hover:underline"
+                            >
+                              Learn more →
+                            </a>
+                          </p>
+                        </HelpPopover>
+                      </span>
+                    }
                     tone="mempool"
                     isNextBlock={false}
                     large
@@ -1800,7 +1824,41 @@ export function MempoolBlocks({
                 >
                   <PendingBlock
                     block={proposalsStageBlock}
-                    topLabel="Proposals"
+                    topLabel={
+                      <span className="inline-flex items-center gap-1">
+                        Proposals
+                        <HelpPopover label="Explain Proposals" title="Proposals">
+                          <p>
+                            CKB uses a{' '}
+                            <span className="text-emphasis">two-step transaction confirmation</span>{' '}
+                            mechanism. Before a transaction can be committed into a block, its short
+                            proposal ID (first 10 bytes of tx hash) must first be{' '}
+                            <span className="text-emphasis">proposed</span> in an earlier block.
+                          </p>
+                          <p>
+                            A transaction committed in block{' '}
+                            <span className="text-text font-mono">c</span> must have been proposed
+                            in block <span className="text-text font-mono">p</span>, where{' '}
+                            <span className="text-text font-mono">
+                              2 {'<='} c - p {'<='} 10
+                            </span>
+                            . This window ensures transactions propagate across the network before
+                            commitment, enabling shorter block intervals without increasing orphan
+                            rates.
+                          </p>
+                          <p>
+                            <a
+                              href="https://docs.nervos.org/docs/tech-explanation/proposals"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-emphasis hover:underline"
+                            >
+                              Learn more →
+                            </a>
+                          </p>
+                        </HelpPopover>
+                      </span>
+                    }
                     tone="proposals"
                     isNextBlock={false}
                     large
