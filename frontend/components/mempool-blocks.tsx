@@ -266,13 +266,23 @@ function shortProposalLabel(proposalId: string | null | undefined): string | und
   return `${proposalId.slice(0, 10)}...${proposalId.slice(-4)}`;
 }
 
-function proposalPriorityScore(proposal: PendingProposal): number {
-  const feeRate = Math.max(0, proposal.feeRate ?? 0);
-  const urgency = 1 / Math.max(1, proposal.blocksUntilExpiry + 1);
-  return Math.log10(feeRate + 1) * 6 + urgency * 14;
-}
+/**
+ * CKB two-step confirmation: a proposal in block N is committable in blocks
+ * [N + CLOSEST, N + FARTHEST]. CLOSEST = 2 on mainnet.
+ * A proposal is committable in the next block (tipBlockNumber + 1) when
+ * proposedAtBlock + 2 <= tipBlockNumber + 1, i.e. proposedAtBlock <= tipBlockNumber - 1.
+ *
+ * Not all committable proposals fit in a block — cycles/size limits apply.
+ * Miners maximize fee revenue, so we sort committable proposals by fee rate
+ * (descending) and cap at the predicted next-block transaction count.
+ */
+const PROPOSAL_WINDOW_CLOSEST = 2;
 
-function splitProposalBuckets(proposals: PendingProposal[]): {
+function splitProposalBuckets(
+  proposals: PendingProposal[],
+  tipBlockNumber: number,
+  predictedNextBlockTxCount: number | null
+): {
   nextBlockProposals: PendingProposal[];
   backlogProposals: PendingProposal[];
 } {
@@ -280,31 +290,24 @@ function splitProposalBuckets(proposals: PendingProposal[]): {
     return { nextBlockProposals: [], backlogProposals: [] };
   }
 
-  const ranked = [...proposals].sort((a, b) => proposalPriorityScore(b) - proposalPriorityScore(a));
-  const urgentIds = new Set(
-    ranked
-      .filter((proposal) => proposal.blocksUntilExpiry <= 2)
-      .map((proposal) => proposal.proposalId)
-  );
-  const baseCount = Math.max(1, Math.min(MAX_LENS_STAGE_ITEMS, Math.round(ranked.length * 0.4)));
-  const selectedIds = new Set<string>();
+  const committableThreshold = tipBlockNumber - PROPOSAL_WINDOW_CLOSEST + 1;
+  const committable = proposals
+    .filter((p) => p.proposedAtBlock <= committableThreshold)
+    .sort((a, b) => (b.feeRate ?? 0) - (a.feeRate ?? 0));
+  const notYetCommittable = proposals.filter((p) => p.proposedAtBlock > committableThreshold);
 
-  ranked.forEach((proposal) => {
-    if (selectedIds.size >= baseCount) return;
-    selectedIds.add(proposal.proposalId);
-  });
+  // Cap by predicted block capacity (minus cellbase). If no prediction, include all committable.
+  const cap =
+    predictedNextBlockTxCount !== null && predictedNextBlockTxCount > 0
+      ? predictedNextBlockTxCount
+      : committable.length;
+  const nextBlockProposals = committable.slice(0, cap);
+  const overflowCommittable = committable.slice(cap);
 
-  ranked.forEach((proposal) => {
-    if (selectedIds.size >= MAX_LENS_STAGE_ITEMS) return;
-    if (urgentIds.has(proposal.proposalId)) {
-      selectedIds.add(proposal.proposalId);
-    }
-  });
-
-  const nextBlockProposals = ranked.filter((proposal) => selectedIds.has(proposal.proposalId));
-  const backlogProposals = ranked.filter((proposal) => !selectedIds.has(proposal.proposalId));
-
-  return { nextBlockProposals, backlogProposals };
+  return {
+    nextBlockProposals,
+    backlogProposals: [...overflowCommittable, ...notYetCommittable],
+  };
 }
 
 function lensColor(
@@ -514,6 +517,7 @@ function Block2D({
   isEmpty,
   large = false,
   transparent = false,
+  pool = false,
   borderClassName,
   children,
 }: {
@@ -521,12 +525,29 @@ function Block2D({
   isEmpty?: boolean;
   large?: boolean;
   transparent?: boolean;
+  pool?: boolean;
   borderClassName?: string;
   children: React.ReactNode;
 }) {
   const sizeClass = large
     ? 'h-[98px] w-[126px] sm:h-[114px] sm:w-[148px]'
     : 'h-[80px] w-[100px] sm:h-[96px] sm:w-[116px]';
+
+  if (pool) {
+    return (
+      <div className={sizeClass}>
+        <div
+          className={cn(
+            'relative flex h-full w-full cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-2 text-center transition-all duration-200 hover:-translate-y-0.5',
+            borderClassName || 'border-base-border/50'
+          )}
+          style={{ backgroundColor: 'transparent' }}
+        >
+          <div className="relative z-10 flex h-full w-full flex-col">{children}</div>
+        </div>
+      </div>
+    );
+  }
 
   if (transparent) {
     return (
@@ -577,12 +598,19 @@ function TxBubbleLayer({
   bubbles,
   showAxes = false,
   glowClassName = 'to-emphasis/10',
+  fading = false,
 }: {
   bubbles: TxBubble[];
   showAxes?: boolean;
   glowClassName?: string;
+  fading?: boolean;
 }) {
   const [hovered, setHovered] = useState<{ bubble: TxBubble; x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    if (fading) setHovered(null);
+  }, [fading]);
+
   if (bubbles.length === 0 && !showAxes) return null;
 
   const viewportWidth = typeof window === 'undefined' ? 1024 : window.innerWidth;
@@ -638,39 +666,42 @@ function TxBubbleLayer({
 
   return (
     <div className="absolute inset-0 z-10 overflow-visible">
-      <div className="absolute inset-0 overflow-hidden rounded-[inherit]">
-        {showAxes && (
-          <>
+      {showAxes && (
+        <div className="absolute inset-0 overflow-hidden rounded-[inherit]">
+          <div
+            data-testid="tx-bubble-layer-glow"
+            className={cn(
+              'pointer-events-none absolute inset-1 rounded-[inherit] bg-gradient-to-br from-white/[0.02] via-transparent',
+              glowClassName
+            )}
+          />
+          {[0.33, 0.66].map((ratio) => (
             <div
-              data-testid="tx-bubble-layer-glow"
-              className={cn(
-                'pointer-events-none absolute inset-1 rounded-[inherit] bg-gradient-to-br from-white/[0.02] via-transparent',
-                glowClassName
-              )}
+              key={`vertical-guide-${ratio}`}
+              className="border-base-border/15 pointer-events-none absolute bottom-2 top-2 border-l border-dashed"
+              style={{ left: `calc(${ratio * 100}% - 0.5px)` }}
             />
-            {[0.33, 0.66].map((ratio) => (
-              <div
-                key={`vertical-guide-${ratio}`}
-                className="border-base-border/15 pointer-events-none absolute bottom-2 top-2 border-l border-dashed"
-                style={{ left: `calc(${ratio * 100}% - 0.5px)` }}
-              />
+          ))}
+          {[0.33, 0.66].map((ratio) => (
+            <div
+              key={`horizontal-guide-${ratio}`}
+              className="border-base-border/15 pointer-events-none absolute left-2 right-2 border-t border-dashed"
+              style={{ top: `calc(${ratio * 100}% - 0.5px)` }}
+            />
+          ))}
+          <div className="bg-base-border/50 pointer-events-none absolute bottom-2 left-2 right-2 h-px" />
+          <div className="bg-base-border/50 pointer-events-none absolute bottom-2 left-2 top-2 w-px" />
+          <div className="pointer-events-none absolute inset-1.5 grid grid-cols-8 grid-rows-7">
+            {Array.from({ length: 56 }, (_, idx) => (
+              <div key={idx} className="border-base-border/40 border" />
             ))}
-            {[0.33, 0.66].map((ratio) => (
-              <div
-                key={`horizontal-guide-${ratio}`}
-                className="border-base-border/15 pointer-events-none absolute left-2 right-2 border-t border-dashed"
-                style={{ top: `calc(${ratio * 100}% - 0.5px)` }}
-              />
-            ))}
-            <div className="bg-base-border/50 pointer-events-none absolute bottom-2 left-2 right-2 h-px" />
-            <div className="bg-base-border/50 pointer-events-none absolute bottom-2 left-2 top-2 w-px" />
-            <div className="pointer-events-none absolute inset-1.5 grid grid-cols-8 grid-rows-7">
-              {Array.from({ length: 56 }, (_, idx) => (
-                <div key={idx} className="border-base-border/40 border" />
-              ))}
-            </div>
-          </>
-        )}
+          </div>
+        </div>
+      )}
+      <div
+        className="absolute inset-0 overflow-hidden rounded-[inherit] transition-opacity duration-500"
+        style={{ opacity: fading ? 0 : 1 }}
+      >
         {bubbles.map((bubble) => (
           <div
             key={bubble.id}
@@ -711,6 +742,7 @@ function PendingBlock({
   isNextBlock,
   large = false,
   bubbles = [],
+  fading = false,
 }: {
   block: MempoolBlock;
   predictedNumber?: number;
@@ -719,8 +751,10 @@ function PendingBlock({
   isNextBlock: boolean;
   large?: boolean;
   bubbles?: TxBubble[];
+  fading?: boolean;
 }) {
   const isEmpty = block.transactionCount === 0;
+  const isPool = tone === 'mempool' || tone === 'proposals';
   const gradient = isEmpty
     ? ''
     : tone === 'mempool'
@@ -735,10 +769,12 @@ function PendingBlock({
   const borderClassName = isEmpty
     ? 'border-base-border/70'
     : tone === 'mempool'
-      ? 'border-warning/70'
-      : tone === 'proposals' || tone === 'next'
-        ? 'border-emphasis-dim/70'
-        : 'border-emphasis/70';
+      ? 'border-warning/40'
+      : tone === 'proposals'
+        ? 'border-emphasis-dim/40'
+        : tone === 'next'
+          ? 'border-emphasis-dim/70'
+          : 'border-emphasis/70';
   const topLabelClass = isEmpty
     ? 'text-text-dim'
     : tone === 'mempool'
@@ -753,6 +789,7 @@ function PendingBlock({
       : tone === 'proposals' || tone === 'next'
         ? 'to-emphasis-dim/[0.12]'
         : 'to-emphasis/10';
+  const innerBorderRadius = isPool && large ? 'rounded-xl' : 'rounded-lg';
 
   return (
     <div className="flex flex-col items-center">
@@ -768,12 +805,24 @@ function PendingBlock({
         gradient={effectiveGradient}
         isEmpty={isEmpty && !large}
         large={large}
-        transparent={large}
+        transparent={large && !isPool}
+        pool={large && isPool}
         borderClassName={borderClassName}
       >
         {large ? (
-          <div className="relative h-full w-full overflow-visible rounded-lg border border-white/25 bg-transparent">
-            <TxBubbleLayer bubbles={bubbles} showAxes glowClassName={glowClassName} />
+          <div
+            className={cn(
+              'relative h-full w-full overflow-visible border bg-transparent',
+              innerBorderRadius,
+              isPool ? 'border-white/15' : 'border-white/25'
+            )}
+          >
+            <TxBubbleLayer
+              bubbles={bubbles}
+              showAxes
+              glowClassName={glowClassName}
+              fading={fading}
+            />
           </div>
         ) : isEmpty ? (
           <>
@@ -783,7 +832,7 @@ function PendingBlock({
         ) : (
           <div className="flex h-full w-full flex-col gap-1">
             <div className="relative h-10 overflow-visible rounded-md border border-white/20 bg-black/25">
-              <TxBubbleLayer bubbles={bubbles} />
+              <TxBubbleLayer bubbles={bubbles} fading={fading} />
             </div>
             <div className="flex flex-col items-center">
               <div className="font-mono text-[10px] font-bold tabular-nums text-white drop-shadow-sm sm:text-[11px]">
@@ -820,8 +869,17 @@ function PendingBlock({
         </div>
       )}
       {isNextBlock && (
-        <div className="bg-emphasis-dim/15 text-emphasis-dim mt-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium sm:text-xs">
+        <div className="bg-emphasis-dim/15 text-emphasis-dim mt-1.5 flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium sm:text-xs">
           Next Block
+          <span className="group/hint relative cursor-help">
+            <span className="border-emphasis-dim/50 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border text-[9px] leading-none opacity-60 transition-opacity group-hover/hint:opacity-100">
+              ?
+            </span>
+            <span className="border-base-border/50 bg-base-surface/95 text-text pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 w-56 -translate-x-1/2 rounded-lg border px-3 py-2 text-[10px] leading-relaxed opacity-0 shadow-xl backdrop-blur-md transition-opacity group-hover/hint:pointer-events-auto group-hover/hint:opacity-100">
+              Prediction based on fee rate ranking. Actual miner packing strategy may differ, so the
+              mined block may not match this estimate.
+            </span>
+          </span>
         </div>
       )}
     </div>
@@ -1178,7 +1236,16 @@ export function MempoolBlocks({
     () => pendingProposalsData?.proposals ?? [],
     [pendingProposalsData?.proposals]
   );
-  const proposalBuckets = useMemo(() => splitProposalBuckets(pendingProposals), [pendingProposals]);
+  const proposalTipBlock = pendingProposalsData?.tipBlockNumber ?? minedBlocks[0]?.number ?? 0;
+  const proposalBuckets = useMemo(
+    () =>
+      splitProposalBuckets(
+        pendingProposals,
+        proposalTipBlock,
+        pendingBlocks[0]?.transactionCount ?? null
+      ),
+    [pendingProposals, proposalTipBlock, pendingBlocks]
+  );
 
   const proposalLookupHashes = useMemo(
     () =>
@@ -1424,17 +1491,85 @@ export function MempoolBlocks({
     };
   }, []);
 
+  // Phase 1: next block fades out + mined blocks shift (mempool/proposals unchanged)
+  // Phase 2: next block fades in + mempool/proposals data refreshes with their own fades
+  const [nextBlockFading, setNextBlockFading] = useState(false);
+  const phase2RefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Mempool bubble fade on txn change
+  const [mempoolFading, setMempoolFading] = useState(false);
+  const prevMempoolIdsRef = useRef<string | null>(null);
+  const mempoolFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const mempoolIdKey = useMemo(
+    () =>
+      mempoolLensItems
+        .map((item) => item.id)
+        .sort()
+        .join(','),
+    [mempoolLensItems]
+  );
+
+  useEffect(() => {
+    if (prevMempoolIdsRef.current === null) {
+      prevMempoolIdsRef.current = mempoolIdKey;
+      return;
+    }
+    if (mempoolIdKey === prevMempoolIdsRef.current) return;
+    prevMempoolIdsRef.current = mempoolIdKey;
+
+    setMempoolFading(true);
+    if (mempoolFadeTimeoutRef.current) clearTimeout(mempoolFadeTimeoutRef.current);
+    mempoolFadeTimeoutRef.current = setTimeout(() => {
+      setMempoolFading(false);
+      mempoolFadeTimeoutRef.current = null;
+    }, 600);
+  }, [mempoolIdKey]);
+
+  // Proposals bubble fade on txn change
+  const [proposalsFading, setProposalsFading] = useState(false);
+  const prevProposalIdsRef = useRef<string | null>(null);
+  const proposalsFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const proposalIdKey = useMemo(
+    () =>
+      [...nextProposalLensItems, ...backlogProposalLensItems]
+        .map((item) => item.id)
+        .sort()
+        .join(','),
+    [nextProposalLensItems, backlogProposalLensItems]
+  );
+
+  useEffect(() => {
+    if (prevProposalIdsRef.current === null) {
+      prevProposalIdsRef.current = proposalIdKey;
+      return;
+    }
+    if (proposalIdKey === prevProposalIdsRef.current) return;
+    prevProposalIdsRef.current = proposalIdKey;
+
+    setProposalsFading(true);
+    if (proposalsFadeTimeoutRef.current) clearTimeout(proposalsFadeTimeoutRef.current);
+    proposalsFadeTimeoutRef.current = setTimeout(() => {
+      setProposalsFading(false);
+      proposalsFadeTimeoutRef.current = null;
+    }, 600);
+  }, [proposalIdKey]);
+
+  useEffect(() => {
+    return () => {
+      if (mempoolFadeTimeoutRef.current) clearTimeout(mempoolFadeTimeoutRef.current);
+      if (proposalsFadeTimeoutRef.current) clearTimeout(proposalsFadeTimeoutRef.current);
+      if (phase2RefreshRef.current) clearTimeout(phase2RefreshRef.current);
+    };
+  }, []);
+
   const minedNodeIds = useMemo(
     () => displayedMinedBlocks.map((block) => `block-${block.number}`),
     [displayedMinedBlocks]
   );
-  const visibleNodeIds = useMemo(
-    () =>
-      showTxnLens
-        ? [mempoolNodeId, proposalsNodeId, nextNodeId, ...minedNodeIds]
-        : [...minedNodeIds],
-    [mempoolNodeId, minedNodeIds, nextNodeId, proposalsNodeId, showTxnLens]
-  );
+  // Only mined blocks shift; mempool/proposals/next are handled separately
+  const shiftNodeIds = useMemo(() => [...minedNodeIds], [minedNodeIds]);
 
   useEffect(() => {
     if (latestBlockNumber <= 0) return;
@@ -1443,8 +1578,7 @@ export function MempoolBlocks({
       previousTipForRefreshRef.current !== null &&
       latestBlockNumber !== previousTipForRefreshRef.current
     ) {
-      // Force-refresh txn-related card data on tip change so card internals update
-      // immediately instead of waiting for interval-based polling.
+      // Phase 1: immediately refresh mined-block data only
       void queryClient.refetchQueries({
         queryKey: ['mempool-blocks'],
         exact: true,
@@ -1454,23 +1588,29 @@ export function MempoolBlocks({
 
       if (showTxnLens) {
         void queryClient.refetchQueries({
-          queryKey: ['mempool-blocks-lens-mempool-transactions'],
-          exact: true,
-          type: 'active',
-        });
-        void queryClient.refetchQueries({
-          queryKey: ['mempool-blocks-lens-pending-proposals'],
-          exact: true,
-          type: 'active',
-        });
-        void queryClient.refetchQueries({
           queryKey: ['mempool-blocks-lens-block-transactions'],
           type: 'active',
         });
-        void queryClient.refetchQueries({
-          queryKey: ['mempool-blocks-lens-proposal-transaction'],
-          type: 'active',
-        });
+
+        // Phase 2: refresh mempool/proposals after phase 1 animation completes
+        if (phase2RefreshRef.current) clearTimeout(phase2RefreshRef.current);
+        phase2RefreshRef.current = setTimeout(() => {
+          void queryClient.refetchQueries({
+            queryKey: ['mempool-blocks-lens-mempool-transactions'],
+            exact: true,
+            type: 'active',
+          });
+          void queryClient.refetchQueries({
+            queryKey: ['mempool-blocks-lens-pending-proposals'],
+            exact: true,
+            type: 'active',
+          });
+          void queryClient.refetchQueries({
+            queryKey: ['mempool-blocks-lens-proposal-transaction'],
+            type: 'active',
+          });
+          phase2RefreshRef.current = null;
+        }, 1300);
       }
     }
 
@@ -1487,7 +1627,7 @@ export function MempoolBlocks({
 
   useLayoutEffect(() => {
     const currentRects = new Map<string, DOMRect>();
-    visibleNodeIds.forEach((nodeId) => {
+    shiftNodeIds.forEach((nodeId) => {
       const node = blockNodeRefs.current.get(nodeId);
       if (node) {
         currentRects.set(nodeId, node.getBoundingClientRect());
@@ -1507,15 +1647,16 @@ export function MempoolBlocks({
         resetTimeoutRef.current = null;
       }
 
-      const orderedRects = visibleNodeIds
+      // Compute shift only from mined block positions
+      const orderedRects = shiftNodeIds
         .map((nodeId) => currentRects.get(nodeId))
         .filter((rect): rect is DOMRect => Boolean(rect));
       const shiftDeltaX = computeUniformShiftDeltaX(orderedRects);
 
-      visibleNodeIds.forEach((nodeId) => {
+      // Only shift mined blocks (mempool/proposals stay fixed)
+      shiftNodeIds.forEach((nodeId) => {
         const node = blockNodeRefs.current.get(nodeId);
-        const nextRect = currentRects.get(nodeId);
-        if (!node || !nextRect) return;
+        if (!node) return;
 
         const shouldAnimate = Math.abs(shiftDeltaX) > 0.5;
         if (!shouldAnimate) return;
@@ -1525,9 +1666,13 @@ export function MempoolBlocks({
         node.style.transform = `translate3d(${shiftDeltaX}px, 0, 0)`;
       });
 
+      // Phase 1: fade out next block card
+      setNextBlockFading(true);
+
       const frame1 = requestAnimationFrame(() => {
         const frame2 = requestAnimationFrame(() => {
-          visibleNodeIds.forEach((nodeId) => {
+          // Animate mined blocks sliding into place
+          shiftNodeIds.forEach((nodeId) => {
             const node = blockNodeRefs.current.get(nodeId);
             if (!node) return;
 
@@ -1536,13 +1681,15 @@ export function MempoolBlocks({
           });
 
           resetTimeoutRef.current = setTimeout(() => {
-            visibleNodeIds.forEach((nodeId) => {
+            shiftNodeIds.forEach((nodeId) => {
               const node = blockNodeRefs.current.get(nodeId);
               if (!node) return;
               node.style.transition = '';
               node.style.transform = '';
               node.style.willChange = '';
             });
+            // Phase 2: fade in new next block (data refreshed by phase2RefreshRef)
+            setNextBlockFading(false);
             resetTimeoutRef.current = null;
           }, 1220);
         });
@@ -1554,7 +1701,7 @@ export function MempoolBlocks({
     if (latestBlockNumber > 0) {
       previousTipRef.current = latestBlockNumber;
     }
-  }, [latestBlockNumber, showTxnLens, visibleNodeIds]);
+  }, [latestBlockNumber, showTxnLens, shiftNodeIds]);
 
   const containerClassName =
     chrome === 'flat'
@@ -1633,7 +1780,7 @@ export function MempoolBlocks({
               <>
                 <div
                   ref={(node) => setBlockNodeRef(mempoolNodeId, node)}
-                  className="flex items-center transition-opacity duration-500"
+                  className="flex items-center"
                 >
                   <PendingBlock
                     block={mempoolStageBlock}
@@ -1642,13 +1789,14 @@ export function MempoolBlocks({
                     isNextBlock={false}
                     large
                     bubbles={mempoolBubbles}
+                    fading={mempoolFading}
                   />
                 </div>
                 <ChainArrow isPending />
 
                 <div
                   ref={(node) => setBlockNodeRef(proposalsNodeId, node)}
-                  className="flex items-center transition-opacity duration-500"
+                  className="flex items-center"
                 >
                   <PendingBlock
                     block={proposalsStageBlock}
@@ -1657,13 +1805,15 @@ export function MempoolBlocks({
                     isNextBlock={false}
                     large
                     bubbles={proposalBacklogBubbles}
+                    fading={proposalsFading}
                   />
                 </div>
                 <ChainArrow isPending />
 
                 <div
                   ref={(node) => setBlockNodeRef(nextNodeId, node)}
-                  className="flex items-center transition-opacity duration-500"
+                  className="flex items-center transition-opacity duration-700"
+                  style={{ opacity: nextBlockFading ? 0 : 1 }}
                 >
                   <PendingBlock
                     block={
@@ -1676,6 +1826,7 @@ export function MempoolBlocks({
                     isNextBlock
                     large
                     bubbles={nextProposalBubbles}
+                    fading={nextBlockFading}
                   />
                 </div>
               </>
