@@ -2734,7 +2734,13 @@ async fn get_total_supply_chart(
         title: "Total Supply".to_string(),
     };
 
-    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    // Short TTL: includes the current incomplete day whose cumulative values
+    // change every block.  Must stay fresh enough to match dao/statistics
+    // (verified by S16 with a 10K CKB tolerance).
+    state
+        .cache
+        .set(cache_key, &response, CacheTtl::ADDRESS_BALANCE)
+        .await;
 
     ok(response)
 }
@@ -2848,7 +2854,13 @@ async fn get_secondary_issuance_chart(
         title: "Secondary Issuance".to_string(),
     };
 
-    state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+    // Short TTL: includes the current incomplete day whose cumulative values
+    // change every block.  Must stay fresh enough to match dao/statistics
+    // (verified by S16 with a 10K CKB tolerance).
+    state
+        .cache
+        .set(cache_key, &response, CacheTtl::ADDRESS_BALANCE)
+        .await;
 
     ok(response)
 }
