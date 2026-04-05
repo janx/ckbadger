@@ -40,13 +40,13 @@ export function NotFoundPage({ errMessage }: NotFoundPageProps = {}) {
       const idx = Math.floor(Math.random() * 3);
       const el = charRefs[idx].current;
       if (!el) {
-        timeoutId = setTimeout(glitchCycle, 2000 + Math.random() * 4000);
+        timeoutId = setTimeout(glitchCycle, 4000 + Math.random() * 8000);
         return;
       }
 
       // First corruption
       el.textContent = GLYPHS[Math.floor(Math.random() * GLYPHS.length)];
-      el.style.color = Math.random() < 0.5 ? '#e8555a' : '#68ccf0';
+      el.style.color = Math.random() < 0.5 ? '#1fb88a' : '#148061';
       const tx = (Math.random() - 0.5) * 4;
       const ty = (Math.random() - 0.5) * 4;
       el.style.transform = `translate(${tx}px, ${ty}px)`;
@@ -64,15 +64,15 @@ export function NotFoundPage({ errMessage }: NotFoundPageProps = {}) {
         el.style.transform = 'translate(0, 0)';
       }, restoreDelay);
 
-      // Schedule next glitch
-      timeoutId = setTimeout(glitchCycle, 2000 + Math.random() * 4000);
+      // Schedule next glitch — infrequent, mysterious
+      timeoutId = setTimeout(glitchCycle, 4000 + Math.random() * 8000);
 
       // Store sub-timeouts for cleanup
       subTimeouts.push(t1, t2);
     }
 
     const subTimeouts: ReturnType<typeof setTimeout>[] = [];
-    timeoutId = setTimeout(glitchCycle, 1000 + Math.random() * 2000);
+    timeoutId = setTimeout(glitchCycle, 2000 + Math.random() * 5000);
 
     return () => {
       clearTimeout(timeoutId);
@@ -91,11 +91,7 @@ export function NotFoundPage({ errMessage }: NotFoundPageProps = {}) {
           100% { top: 100%; opacity: 0; }
         }
         @keyframes screenFlash {
-          0%, 92%, 100% { background-color: transparent; }
-          93% { background-color: rgba(46, 219, 163, 0.03); }
-          93.5% { background-color: transparent; }
-          94% { background-color: rgba(232, 85, 90, 0.04); }
-          94.5% { background-color: transparent; }
+          0%, 100% { background-color: transparent; }
         }
         @keyframes blink {
           50% { opacity: 0; }
@@ -111,32 +107,14 @@ export function NotFoundPage({ errMessage }: NotFoundPageProps = {}) {
 
       <NotFoundCellOcean />
 
-      {/* Screen tear overlay */}
+      {/* Subtle scan line — single faint sweep */}
       <div className="pointer-events-none fixed inset-0 z-[12]">
         <div
-          className="absolute left-0 h-[2px] w-full"
-          style={{
-            background:
-              'linear-gradient(90deg, transparent 0%, rgba(46,219,163,0.15) 20%, rgba(104,204,240,0.1) 50%, rgba(46,219,163,0.15) 80%, transparent 100%)',
-            animation: 'tearScan 8s linear infinite',
-          }}
-        />
-        <div
           className="absolute left-0 h-[1px] w-full"
           style={{
             background:
-              'linear-gradient(90deg, transparent 0%, rgba(232,85,90,0.12) 30%, rgba(232,85,90,0.08) 70%, transparent 100%)',
-            animation: 'tearScan 8s linear infinite',
-            animationDelay: '2.8s',
-          }}
-        />
-        <div
-          className="absolute left-0 h-[1px] w-full"
-          style={{
-            background:
-              'linear-gradient(90deg, transparent 0%, rgba(46,219,163,0.08) 40%, rgba(104,204,240,0.06) 60%, transparent 100%)',
-            animation: 'tearScan 8s linear infinite',
-            animationDelay: '5.3s',
+              'linear-gradient(90deg, transparent 0%, rgba(46,219,163,0.05) 30%, rgba(31,184,138,0.04) 70%, transparent 100%)',
+            animation: 'tearScan 12s linear infinite',
           }}
         />
       </div>
@@ -159,7 +137,7 @@ export function NotFoundPage({ errMessage }: NotFoundPageProps = {}) {
               fontSize: '120px',
               lineHeight: 1,
               color: '#2edba3',
-              textShadow: '0 0 20px rgba(46,219,163,0.4), 0 0 40px rgba(46,219,163,0.2)',
+              textShadow: '0 0 25px rgba(46,219,163,0.35), 0 0 50px rgba(46,219,163,0.15)',
             }}
           >
             <span ref={charRefs[0]} style={{ display: 'inline-block', transition: 'none' }}>
@@ -182,7 +160,7 @@ export function NotFoundPage({ errMessage }: NotFoundPageProps = {}) {
             <p
               style={{
                 color: '#2edba3',
-                textShadow: '0 0 10px rgba(46,219,163,0.3)',
+                textShadow: '0 0 12px rgba(46,219,163,0.25)',
               }}
             >
               yet more is crystallizing from the chain

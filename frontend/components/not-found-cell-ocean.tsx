@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 const CELL_PX = 28;
-const STEP_EVERY = 50;
+const STEP_EVERY = 55;
 
 /* Vertex */
 const VERT = `
@@ -32,12 +32,12 @@ void main(){
     nx=a>.5?(n>1.5&&n<3.5?1.:0.):(n>2.5&&n<3.5?1.:0.);
     float w1=sin(uv.x*6.28+uv.y*4.2+u_seed*.03);
     float w2=sin(uv.x*3.5-uv.y*5.8+u_seed*.02+2.);
-    float sp=max(smoothstep(.98,1.,w1)*.07,smoothstep(.985,1.,w2)*.05);
+    float sp=max(smoothstep(.95,1.,w1)*.12,smoothstep(.96,1.,w2)*.10);
     float r=h(gl_FragCoord.xy*.37+u_seed);
-    float inj=max(step(1.-sp,r),step(.9999,r));
+    float inj=max(step(1.-sp,r),step(.997,r));
     nx=max(nx,inj);
   }
-  ph=nx>.5?min(1.,ph+.020):max(0.,ph-.002);
+  ph=nx>.5?min(1.,ph+.012):max(0.,ph-.01);
   // set birth offset once
   if(a<.5&&nx>.5) off=h(gl_FragCoord.xy*.73+u_seed*1.1);
   gl_FragColor=vec4(nx,ph,off,1);
@@ -47,7 +47,8 @@ void main(){
 /* Render — innate identity diversity + breathing + bloom
    Each cell's personality is determined by its grid position (hash),
    NOT by age or life stage. Diversity is who you ARE, not how old you are.
-   h1 = color identity, h2 = size/bloom character, h3 = breathing rhythm */
+   h1 = color identity, h2 = size/bloom character, h3 = breathing rhythm
+   Atmosphere: mysterious, tranquil terminal — jade green variants, slow breath, wide bloom */
 const RENDER = `
 precision highp float;
 uniform sampler2D u_s;
@@ -60,14 +61,14 @@ void main(){
   vec2 uv=gl_FragCoord.xy/u_r;
   vec2 cell=uv*u_g, id=floor(cell), fr=fract(cell), tx=1./u_g;
 
-  vec3 col=vec3(.018,.020,.038);
+  vec3 col=vec3(.008,.014,.010);
 
-  // color palette endpoints
-  vec3 jade=vec3(.18,.86,.64);
-  vec3 aqua=vec3(.35,.75,.95);
-  vec3 gold=vec3(.92,.72,.28);
-  vec3 rose=vec3(.85,.40,.55);
-  vec3 lilac=vec3(.60,.45,.85);
+  // color palette — jade-dominant with subtle hue variation
+  vec3 c0=vec3(.08,.52,.40);    // deep emerald (shadow green)
+  vec3 c1=vec3(.16,.76,.72);    // jade-cyan (cool shift, aqua undertone)
+  vec3 c2=vec3(.18,.86,.64);    // jade — pure theme #2edba3 (center)
+  vec3 c3=vec3(.26,.82,.52);    // warm jade (slight gold-green shift)
+  vec3 c4=vec3(.28,.68,.80);    // muted aqua accent (cool breath)
 
   // 5x5 neighborhood for wide bloom
   for(int iy=-2;iy<=2;iy++){
@@ -82,17 +83,27 @@ void main(){
       float h2=fract(sin(dot(nId,vec2(91.3,47.1)))*317.8);   // size & bloom
       float h3=fract(sin(dot(nId,vec2(53.9,29.4)))*641.2);   // rhythm
 
-      // --- Color identity: 5-stop gradient, each cell picks its hue ---
+      // --- Color identity: 95% jade gradient, 5% rare accent ---
+      // off (birth offset) is random per birth event, so rare color
+      // is tied to each cell's life, not its grid position
       vec3 cellCol;
-      float ci=h1*4.;
-      if(ci<1.) cellCol=mix(jade,aqua,ci);
-      else if(ci<2.) cellCol=mix(aqua,gold,ci-1.);
-      else if(ci<3.) cellCol=mix(gold,rose,ci-2.);
-      else cellCol=mix(rose,lilac,ci-3.);
+      if(off<.05){
+        // rare accent — pick from theme palette (rouge, gold, lavender)
+        float ri=fract(off*20.)*3.;
+        if(ri<1.) cellCol=mix(vec3(.91,.33,.35),vec3(.85,.40,.55),ri);       // rouge
+        else if(ri<2.) cellCol=mix(vec3(.95,.78,.36),vec3(.83,.56,.22),ri-1.); // gold→amber
+        else cellCol=mix(vec3(.72,.66,.91),vec3(.60,.45,.85),ri-2.);          // lavender
+      } else {
+        float ci=h1*4.;
+        if(ci<1.) cellCol=mix(c0,c1,ci);
+        else if(ci<2.) cellCol=mix(c1,c2,ci-1.);
+        else if(ci<3.) cellCol=mix(c2,c3,ci-2.);
+        else cellCol=mix(c3,c4,ci-3.);
+      }
 
-      // --- Breathing: rhythm is personality, not life stage ---
-      float bSpeed=mix(.20,.55,h3);           // some naturally slow, some quick
-      float bDepth=mix(.08,.30,1.-h3);        // slow breathers go deeper
+      // --- Breathing: slow, deep, meditative ---
+      float bSpeed=mix(.08,.25,h3);
+      float bDepth=mix(.05,.15,1.-h3);
       float breath=sin(u_time*bSpeed+off*6.28)*.5+.5;
       float br=ph*mix(1.-bDepth,1.,breath);
 
@@ -107,45 +118,36 @@ void main(){
       float coreSz=mix(.24,.50,h2);
       float fill=smoothstep(coreSz+.04,coreSz-.10,cheby);
 
-      // --- Bloom identity: small-core cells → wide soft glow (star),
-      //     large-core cells → tight focused glow (ember) ---
-      float bw1=mix(.35,1.2,h2);     // small→wide atmosphere, large→tight
-      float bw2=mix(1.5,4.0,h2);     // same logic for mid halo
-      float ba1=mix(.35,.18,h2);      // small→strong wash, large→subtle
+      // --- Bloom identity: wider, softer glow for atmospheric feel ---
+      float bw1=mix(.25,.90,h2);
+      float bw2=mix(1.0,3.2,h2);
+      float ba1=mix(.40,.22,h2);
       float bloom=exp(-d*d*bw1)*ba1
-                 +exp(-d*d*bw2)*.16
-                 +exp(-d*d*10.)*.06;
+                 +exp(-d*d*bw2)*.18
+                 +exp(-d*d*8.)*.08;
 
       // --- Subtle inner shimmer at cell's own tempo ---
-      float shim=sin(d*8.+u_time*mix(.3,.6,h1)+h1*6.28)*.5+.5;
-      vec3 pc=mix(cellCol,cellCol*1.2,shim*.15);
-      pc=mix(pc*vec3(.4,.45,.5),pc,fade);  // desaturate on death
-      float pi=mix(.12,.42,fade);
+      float shim=sin(d*8.+u_time*mix(.15,.35,h1)+h1*6.28)*.5+.5;
+      vec3 pc=mix(cellCol,cellCol*1.15,shim*.12);
+      pc=mix(pc*vec3(.30,.42,.35),pc,fade);  // desaturate on death → dark green-grey
+      float pi=mix(.08,.30,fade);
 
-      vec3 bc=mix(cellCol*.6,pc,.3);
+      vec3 bc=mix(cellCol*.5,pc,.3);
 
-      col+=pc*fill*pi*br*.6;   // core
+      col+=pc*fill*pi*br*.5;   // core (dimmer)
       col+=bc*bloom*br;        // atmosphere
     }
   }
 
-  // --- Horizontal tear ---
+  // --- Film grain (barely perceptible) ---
   vec2 c=(gl_FragCoord.xy-u_r*.5)/u_r.y;
-  float ty=mod(u_time*.15,1.)*2.-1.;
-  float tear=smoothstep(.015,0.,abs(c.y-ty))*step(fract(u_time*.27),.12);
-  col.r+=tear*.15; col.b-=tear*.06;
+  col+=(h(gl_FragCoord.xy+fract(u_time*37.)*773.)-.5)*.006;
 
-  // --- Film grain ---
-  col+=(h(gl_FragCoord.xy+fract(u_time*37.)*773.)-.5)*.012;
-
-  // --- Vignette (deep) ---
-  float vig=1.-dot(c,c)*2.0;
-  col*=smoothstep(0.,.45,vig);
-
-  // --- Chromatic aberration ---
-  float ed=length(c);
-  col.r*=1.+smoothstep(.3,.55,ed)*.03;
-  col.b*=1.-smoothstep(.3,.55,ed)*.02;
+  // --- CRT rectangular vignette (thin border fade) ---
+  vec2 uv2=gl_FragCoord.xy/u_r;           // [0,1] screen coords
+  vec2 edge=smoothstep(0.,.06,uv2)*smoothstep(0.,.06,1.-uv2);  // fade at each edge
+  float vig=edge.x*edge.y;
+  col*=vig;
 
   gl_FragColor=vec4(clamp(col,0.,1.),1.);
 }
@@ -203,14 +205,42 @@ function tex(gl: WebGLRenderingContext, w: number, h: number, d: Uint8Array | nu
 
 function seed(w: number, h: number) {
   const b = new Uint8Array(w * h * 4);
+
+  // Sparse background cells
   for (let i = 0; i < w * h; i++) {
-    const a = Math.random() < 0.045 ? 255 : 0,
+    const a = Math.random() < 0.025 ? 255 : 0,
       o = i * 4;
     b[o] = a;
-    b[o + 1] = a ? 230 : 0; // high initial phase
-    b[o + 2] = a ? Math.floor(Math.random() * 255) : 0; // breathing offset
+    b[o + 1] = a ? 230 : 0;
+    b[o + 2] = a ? Math.floor(Math.random() * 255) : 0;
     b[o + 3] = 255;
   }
+
+  // Two dense clusters at random positions
+  for (let ci = 0; ci < 2; ci++) {
+    const cx = Math.floor(Math.random() * w);
+    const cy = Math.floor(Math.random() * h);
+    const rx = Math.floor(w * (0.12 + Math.random() * 0.1));
+    const ry = Math.floor(h * (0.12 + Math.random() * 0.1));
+    for (let y = cy - ry; y <= cy + ry; y++) {
+      for (let x = cx - rx; x <= cx + rx; x++) {
+        const wx = ((x % w) + w) % w;
+        const wy = ((y % h) + h) % h;
+        const dx = (x - cx) / rx,
+          dy = (y - cy) / ry;
+        const dist = dx * dx + dy * dy;
+        if (dist > 1) continue;
+        const prob = 0.35 * (1 - dist * dist);
+        if (Math.random() < prob) {
+          const o = (wy * w + wx) * 4;
+          b[o] = 255;
+          b[o + 1] = 230;
+          b[o + 2] = Math.floor(Math.random() * 255);
+        }
+      }
+    }
+  }
+
   return b;
 }
 
@@ -362,7 +392,7 @@ export function NotFoundCellOcean() {
       <canvas ref={ref} className="h-full w-full" aria-hidden="true" />
       {fb && (
         <div
-          className="absolute inset-0 animate-pulse bg-[radial-gradient(circle_at_20%_20%,rgba(46,219,163,0.15),transparent_35%),radial-gradient(circle_at_80%_70%,rgba(104,204,240,0.10),transparent_40%),radial-gradient(circle_at_52%_45%,rgba(46,219,163,0.12),transparent_30%)]"
+          className="absolute inset-0 animate-pulse bg-[radial-gradient(circle_at_20%_20%,rgba(46,219,163,0.08),transparent_35%),radial-gradient(circle_at_80%_70%,rgba(31,184,138,0.06),transparent_40%),radial-gradient(circle_at_52%_45%,rgba(20,128,97,0.07),transparent_30%)]"
           aria-hidden="true"
         />
       )}
