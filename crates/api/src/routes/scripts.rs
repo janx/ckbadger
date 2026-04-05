@@ -1946,17 +1946,21 @@ async fn get_script_capacity_history_chart_by_code_hash(
                     .into_iter()
                     .map(|(_, info)| info)
                     .collect();
-            let related_hashes =
+            let mut related_hashes =
                 related_code_hashes_for_reference(&all_script_infos, &version_hash);
-            let target_hashes = if related_hashes.is_empty() {
-                // For type-hash scripts: version_hash is a data_hash, not a code_hash.
-                // Use associated_code_hash from label data to find the correct ScriptInfo
-                // whose code_hash is used to key daily deltas.
-                if let Some(assoc) = version_info.associated_code_hash.as_ref() {
-                    vec![assoc.clone()]
-                } else {
-                    vec![version_hash]
+            // For type-hash scripts the version_hash is a data_hash, which may
+            // only match the data-hash ScriptInfo.  The type-hash ScriptInfo
+            // (where the vast majority of daily deltas live) won't be found
+            // unless its dep_data_hash is populated.  Always include the
+            // associated_code_hash from label data so both code_hashes
+            // contribute to the chart.
+            if let Some(assoc) = version_info.associated_code_hash.as_ref() {
+                if !related_hashes.iter().any(|h| h == assoc) {
+                    related_hashes.push(assoc.clone());
                 }
+            }
+            let target_hashes = if related_hashes.is_empty() {
+                vec![version_hash]
             } else {
                 related_hashes
             };
