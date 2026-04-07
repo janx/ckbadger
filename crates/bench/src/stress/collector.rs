@@ -17,6 +17,7 @@ pub struct StressSample {
     pub read_pattern: String,
     pub latency_ms: f64,
     pub status: u16,
+    #[allow(dead_code)] // used by report module (Task 6)
     pub body_size: usize,
     pub error: Option<String>,
 }
@@ -25,7 +26,8 @@ pub struct StressSample {
 // Per-endpoint metrics for a single stage
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EndpointStageMetrics {
     pub endpoint_path: String,
     pub read_pattern: String,
@@ -40,7 +42,7 @@ pub struct EndpointStageMetrics {
 // Stage health status
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum StageStatus {
     Baseline,
     Ok,
@@ -53,10 +55,12 @@ pub enum StageStatus {
 // StageResult — aggregate metrics for one completed stage
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StageResult {
     pub stage_id: usize,
     pub vus: usize,
+    #[serde(serialize_with = "serialize_duration_secs")]
     pub duration: Duration,
     pub total_requests: u64,
     pub rps: f64,
@@ -249,6 +253,10 @@ pub type SampleReceiver = mpsc::UnboundedReceiver<StressSample>;
 
 pub fn sample_channel() -> (SampleSender, SampleReceiver) {
     mpsc::unbounded_channel()
+}
+
+fn serialize_duration_secs<S: serde::Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_f64(d.as_secs_f64())
 }
 
 pub fn drain_samples(rx: &mut SampleReceiver) -> Vec<StressSample> {

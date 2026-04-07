@@ -4,7 +4,8 @@ use rand::Rng;
 use crate::registry::{EndpointEntry, ReadPattern, RiskTier};
 
 /// Which stress scenario to run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Scenario {
     /// Realistic traffic mix weighted by page popularity.
     Mixed,
@@ -35,6 +36,7 @@ impl Scenario {
 
 /// A group of related endpoints with a selection weight.
 pub struct EndpointGroup {
+    #[allow(dead_code)] // used by report module (Task 6)
     pub name: &'static str,
     pub weight: u32,
     pub endpoint_indices: Vec<usize>,
