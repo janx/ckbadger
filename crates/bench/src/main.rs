@@ -4,12 +4,13 @@ mod metrics;
 mod registry;
 mod report;
 mod runner;
+mod stress;
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 use crate::discovery::{check_connectivity, print_discovery, run_discovery};
 use crate::registry::RiskTier;
@@ -17,6 +18,23 @@ use crate::registry::RiskTier;
 #[derive(Parser)]
 #[command(name = "ckbadger-bench", about = "API performance benchmark")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    #[command(flatten)]
+    bench_args: BenchArgs,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run per-endpoint benchmarks (default when no subcommand given)
+    Bench(BenchArgs),
+    /// Run multi-stage stress tests
+    Stress(stress::StressArgs),
+}
+
+#[derive(Debug, Clone, Parser)]
+pub struct BenchArgs {
     /// API base URL
     #[arg(long, default_value = "http://localhost:8101/api/v1")]
     api_url: String,
@@ -78,6 +96,14 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    match cli.command {
+        Some(Commands::Stress(args)) => stress::run_stress(args).await,
+        Some(Commands::Bench(args)) => run_bench(args).await,
+        None => run_bench(cli.bench_args).await,
+    }
+}
+
+async fn run_bench(cli: BenchArgs) -> Result<()> {
     println!("ckbadger-bench: api_url={}", cli.api_url);
 
     // Build HTTP client with configured timeout

@@ -76,7 +76,7 @@ impl ComputedMetrics {
     }
 }
 
-fn percentile(sorted: &[f64], pct: f64) -> f64 {
+pub fn percentile(sorted: &[f64], pct: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;
     }

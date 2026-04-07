@@ -35,7 +35,7 @@ pub struct RunConfig {
 }
 
 /// Execute a single HTTP request and record a `Sample`.
-async fn execute_request(
+pub async fn execute_request(
     client: &reqwest::Client,
     resolved: &ResolvedRequest,
     expect_status: u16,
