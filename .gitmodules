@@ -1,9 +1,1 @@
-[submodule "docs/docs.nervos.org"]
-	path = docs/docs.nervos.org
-	url = https://github.com/nervosnetwork/docs.nervos.org.git
-[submodule "docs/rfcs"]
-	path = docs/rfcs
-	url = https://github.com/nervosnetwork/rfcs.git
-[submodule "docs/dob-cookbook"]
-	path = docs/dob-cookbook
-	url = https://github.com/sporeprotocol/dob-cookbook.git
+
