@@ -11,6 +11,8 @@ pub enum Scenario {
     Mixed,
     /// Hammer the heaviest (High-risk) endpoints only.
     Heavy,
+    /// All API endpoints, uniform weight, no think time, no frontend.
+    Api,
 }
 
 impl Scenario {
@@ -24,7 +26,10 @@ impl Scenario {
             match trimmed.to_lowercase().as_str() {
                 "mixed" => out.push(Scenario::Mixed),
                 "heavy" => out.push(Scenario::Heavy),
-                other => bail!("unknown scenario: {other:?}; expected \"mixed\" or \"heavy\""),
+                "api" => out.push(Scenario::Api),
+                other => {
+                    bail!("unknown scenario: {other:?}; expected \"mixed\", \"heavy\", or \"api\"")
+                }
             }
         }
         if out.is_empty() {
@@ -106,6 +111,21 @@ pub fn build_mixed_groups(entries: &[EndpointEntry]) -> Vec<EndpointGroup> {
         }
     }
     groups
+}
+
+/// Build a single endpoint group for the `Api` scenario.
+///
+/// All API endpoints with uniform weight, no grouping.
+pub fn build_api_group(entries: &[EndpointEntry]) -> Vec<EndpointGroup> {
+    let indices: Vec<usize> = (0..entries.len()).collect();
+    if indices.is_empty() {
+        return Vec::new();
+    }
+    vec![EndpointGroup {
+        name: "api",
+        weight: 1,
+        endpoint_indices: indices,
+    }]
 }
 
 /// Build endpoint groups for the `Heavy` scenario.
@@ -223,9 +243,15 @@ mod tests {
         let heavy = Scenario::parse("heavy").unwrap();
         assert_eq!(heavy, vec![Scenario::Heavy]);
 
+        let api = Scenario::parse("api").unwrap();
+        assert_eq!(api, vec![Scenario::Api]);
+
         // Multiple
         let both = Scenario::parse("mixed,heavy").unwrap();
         assert_eq!(both, vec![Scenario::Mixed, Scenario::Heavy]);
+
+        let all = Scenario::parse("mixed,heavy,api").unwrap();
+        assert_eq!(all, vec![Scenario::Mixed, Scenario::Heavy, Scenario::Api]);
 
         // Case insensitive
         let upper = Scenario::parse("MIXED").unwrap();

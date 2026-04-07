@@ -263,13 +263,17 @@ pub async fn run_stress(args: StressArgs) -> Result<()> {
                 groups.push(build_frontend_group(registry.entries.len()));
                 (targets, groups)
             }
-            Scenario::Heavy => {
+            Scenario::Heavy | Scenario::Api => {
                 let targets: Vec<ResolvedTarget> =
                     resolve_all(&registry.entries, &api_url, &discovery.params)
                         .into_iter()
                         .map(ResolvedTarget::Api)
                         .collect();
-                let groups = build_heavy_groups(&registry.entries);
+                let groups = match scenario {
+                    Scenario::Heavy => build_heavy_groups(&registry.entries),
+                    Scenario::Api => scenario::build_api_group(&registry.entries),
+                    _ => unreachable!(),
+                };
                 (targets, groups)
             }
         };
@@ -328,10 +332,10 @@ pub async fn run_stress(args: StressArgs) -> Result<()> {
             // Spawn VUs
             let mut handles = Vec::new();
             for _ in 0..vu_count {
-                // Mixed scenario gets think_time; Heavy does not
+                // Only Mixed scenario gets think_time
                 let vu_think = match scenario {
                     Scenario::Mixed => Some(think_time),
-                    Scenario::Heavy => None,
+                    Scenario::Heavy | Scenario::Api => None,
                 };
                 let handle = spawn_vu(
                     Arc::clone(&client),
