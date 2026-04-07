@@ -16,3 +16,4 @@ serde_json = { workspace = true }
 clap = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
+rand = "0.9"

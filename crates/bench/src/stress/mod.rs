@@ -1,5 +1,6 @@
 pub mod collector;
 pub mod report;
+#[allow(dead_code)] // consumed by later tasks (vu, stage scheduler)
 pub mod scenario;
 pub mod vu;
 
