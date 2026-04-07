@@ -251,55 +251,14 @@ ckb-debugger \
 | **Cache**         | In-memory LRU                                           | API response cache              |
 | **IPC**           | Unix domain sockets                                     | Inter-process communication     |
 
-### Data Integrity Verification
+### Testing
 
-The `verify` subcommand validates data by calling the CKBadger REST API — no direct store access needed. Runs from anywhere the API is reachable.
-
-```bash
-# Quick sanity checks (seconds)
-ckbadger verify --depth fast
-
-# Sampling + explorer comparison (minutes)
-ckbadger verify --depth sampling
-
-# Skip explorer HTTP calls
-ckbadger verify --depth sampling --no-explorer
-
-# Custom API URL
-ckbadger verify --api-url http://localhost:8101/api/v1
-
-# Add CKB RPC spot-checks
-ckbadger verify --rpc-url http://localhost:8114
-
-# List all available checks
-ckbadger verify --list-checks
-```
-
-| Tier         | Checks | What it validates                                                                              |
-| ------------ | ------ | ---------------------------------------------------------------------------------------------- |
-| **Fast**     | 6      | API reachable, sync complete, genesis block, tip block, DAO, forks                             |
-| **Sampling** | 23     | Block hash roundtrips, parent chain, balances, charts, supply invariants, tokens, spores, NFTs |
-| **Explorer** | 27     | Last 30 days vs official CKB explorer (cached, 24h freshness)                                  |
-
-Explorer API responses are cached to `.verify-cache/` with 24-hour freshness. On HTTP failure, stale cache is used as fallback.
-
-### Running Tests
+Three testing systems: data integrity verification, per-endpoint benchmarking, and concurrent load stress testing. See [docs/TESTING.md](docs/TESTING.md) for full details.
 
 ```bash
-# Rust tests
-cargo test                               # All tests
-cargo test --lib                         # Unit tests only
-cargo test -p ckbadger-cli               # CLI crate
-cargo test -p ckbadger-config            # Config crate
-cargo test test_parse_epoch              # Single test (partial match)
-
-# Frontend tests
-cd frontend && pnpm test                 # Run Vitest
-cd frontend && pnpm test:coverage        # With coverage
-
-# Type check & lint
-cd frontend && pnpm type-check           # TypeScript (tsc --noEmit)
-cd frontend && pnpm lint                 # ESLint
+ckbadger verify --depth fast                       # Data integrity (6 checks, seconds)
+make bench                                         # Per-endpoint latency baseline
+make stress STRESS_ARGS="--scenario api --auto-ramp"  # Find API breaking point
 ```
 
 ## License
