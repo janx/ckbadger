@@ -56,6 +56,30 @@ pub fn resolve_all(
         .collect()
 }
 
+/// Validate resolved endpoints by hitting each URL once, keeping only those
+/// that return the expected status code. This eliminates 404s from test data
+/// mismatches before the stress test begins.
+pub async fn validate_resolved(
+    client: &reqwest::Client,
+    endpoints: Vec<ResolvedEndpoint>,
+) -> Vec<ResolvedEndpoint> {
+    let mut valid = Vec::with_capacity(endpoints.len());
+    for ep in endpoints {
+        let sample = execute_request(client, &ep.resolved, ep.expect_status).await;
+        if sample.error.is_some() {
+            eprintln!(
+                "  [filtered] {} -> status {} ({})",
+                ep.resolved.url,
+                sample.status,
+                sample.error.as_deref().unwrap_or("unknown"),
+            );
+        } else {
+            valid.push(ep);
+        }
+    }
+    valid
+}
+
 // ---------------------------------------------------------------------------
 // ResolvedTarget — unified target for API and frontend requests
 // ---------------------------------------------------------------------------

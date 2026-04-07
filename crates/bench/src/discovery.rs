@@ -403,11 +403,12 @@ async fn discover_params(
             })
             .collect();
         with_counts.sort_by(|a, b| b.1.cmp(&a.1));
-        params.busiest_lock_hashes = with_counts
+        let candidates: Vec<String> = with_counts
             .into_iter()
             .take(10)
             .map(|(hash, _)| hash.to_string())
             .collect();
+        params.busiest_lock_hashes = validate_ids(client, base, candidates, "addresses/{id}").await;
     }
 
     // DAO parameters (if has_dao)
@@ -470,7 +471,7 @@ async fn discover_params(
         // top_token_type_hashes: top 10 tokens by holders (default sort)
         let top_tokens = fetch_json(client, &format!("{}/tokens?limit=10", base)).await?;
         if let Some(arr) = data_array(&top_tokens) {
-            params.top_token_type_hashes = arr
+            let candidates: Vec<String> = arr
                 .iter()
                 .filter_map(|item| {
                     item.get("typeScriptHash")
@@ -478,6 +479,8 @@ async fn discover_params(
                         .map(String::from)
                 })
                 .collect();
+            params.top_token_type_hashes =
+                validate_ids(client, base, candidates, "tokens/{id}").await;
         }
     }
 
@@ -534,11 +537,13 @@ async fn discover_params(
                 })
                 .collect();
             with_counts.sort_by(|a, b| b.1.cmp(&a.1));
-            params.top_cluster_ids = with_counts
+            let candidates: Vec<String> = with_counts
                 .into_iter()
                 .take(10)
                 .map(|(id, _)| id.to_string())
                 .collect();
+            params.top_cluster_ids =
+                validate_ids(client, base, candidates, "spore/clusters/{id}").await;
         }
     }
 
@@ -561,10 +566,11 @@ async fn discover_params(
     )
     .await?;
     if let Some(arr) = data_array(&top_scripts) {
-        params.top_script_names = arr
+        let candidates: Vec<String> = arr
             .iter()
             .filter_map(|item| item.get("name").and_then(|v| v.as_str()).map(String::from))
             .collect();
+        params.top_script_names = validate_ids(client, base, candidates, "scripts/{id}").await;
     }
 
     // live_cell_outpoint from /cells/live?limit=1
@@ -617,10 +623,17 @@ async fn discover_params(
         )
         .await?;
         if let Some(arr) = data_array(&top_items) {
-            params.top_dotbit_item_ids = arr
+            let candidates: Vec<String> = arr
                 .iter()
                 .filter_map(|item| item.get("nftId").and_then(|v| v.as_str()).map(String::from))
                 .collect();
+            params.top_dotbit_item_ids = validate_ids(
+                client,
+                base,
+                candidates,
+                "assets/identities/dotbit/items/{id}",
+            )
+            .await;
         }
 
         // did:ckb item discovery

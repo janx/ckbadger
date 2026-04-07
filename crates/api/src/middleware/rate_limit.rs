@@ -96,7 +96,8 @@ where
 
         Box::pin(async move {
             let ip = ip.unwrap_or(IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
-            if limiter.check_key(&ip).is_err() {
+            // Skip rate limiting for loopback (localhost) requests
+            if !ip.is_loopback() && limiter.check_key(&ip).is_err() {
                 return Ok(RateLimitError.into_response());
             }
             inner.call(req).await

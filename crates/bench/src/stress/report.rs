@@ -63,7 +63,13 @@ pub struct StageJson {
     pub p99_ms: f64,
     pub error_rate: f64,
     pub error_count: u64,
+    pub server_error_count: u64,
+    pub client_error_count: u64,
+    pub rate_limited_count: u64,
+    pub server_error_rate: f64,
     pub connection_refused: u64,
+    pub timeouts: u64,
+    pub error_status_codes: HashMap<u16, u64>,
     pub status: String,
 }
 
@@ -75,6 +81,8 @@ pub struct EndpointBreakdownEntry {
     pub stable_p95_ms: f64,
     pub break_p95_ms: f64,
     pub degradation: f64,
+    pub error_rate: f64,
+    pub server_error_rate: f64,
     pub verdict: String,
 }
 
@@ -127,7 +135,9 @@ pub fn stage_status_label(status: StageStatus) -> &'static str {
 // ---------------------------------------------------------------------------
 
 fn endpoint_verdict(breaking_metrics: &EndpointStageMetrics, degradation: f64) -> String {
-    if breaking_metrics.error_rate > 0.1 {
+    // Use server_error_rate (5xx + network) for verdict.
+    // Client errors (4xx) indicate test data issues, not system failure.
+    if breaking_metrics.server_error_rate > 0.1 {
         "\u{2716} critical".to_string()
     } else if degradation > 10.0 {
         "\u{2716} first to break".to_string()
@@ -160,6 +170,8 @@ pub fn build_endpoint_breakdown(
                 stable_p95_ms: stable_ep.p95_ms,
                 break_p95_ms: break_ep.p95_ms,
                 degradation,
+                error_rate: break_ep.error_rate,
+                server_error_rate: break_ep.server_error_rate,
                 verdict,
             });
         }
@@ -301,6 +313,28 @@ pub fn print_tables(report: &StressReport) {
             );
         }
 
+        // Error breakdown for each stage
+        for stage in &sr.stage_results {
+            if stage.error_count > 0 {
+                let mut parts = Vec::new();
+                if stage.server_error_count > 0 {
+                    parts.push(format!("{} server", stage.server_error_count));
+                }
+                if stage.client_error_count > 0 {
+                    parts.push(format!("{} client", stage.client_error_count));
+                }
+                if stage.rate_limited_count > 0 {
+                    parts.push(format!("{} rate-limited", stage.rate_limited_count));
+                }
+                eprintln!(
+                    "  Stage {} errors: {} total ({})",
+                    stage.stage_id + 1,
+                    stage.error_count,
+                    parts.join(", "),
+                );
+            }
+        }
+
         // Soft degradation / breaking point summary
         eprintln!();
         if let Some(vus) = sr.soft_degradation_vus {
@@ -430,7 +464,13 @@ fn build_report_json(report: &StressReport) -> StressReportJson {
                     p99_ms: s.p99_ms,
                     error_rate: s.error_rate,
                     error_count: s.error_count,
+                    server_error_count: s.server_error_count,
+                    client_error_count: s.client_error_count,
+                    rate_limited_count: s.rate_limited_count,
+                    server_error_rate: s.server_error_rate,
                     connection_refused: s.connection_refused,
+                    timeouts: s.timeouts,
+                    error_status_codes: s.error_status_codes.clone(),
                     status: stage_status_label(s.status).to_string(),
                 })
                 .collect();
@@ -522,14 +562,24 @@ mod tests {
             p99_ms: 100.0,
             error_rate: 0.0,
             error_count: 0,
+            server_error_count: 0,
+            client_error_count: 0,
+            rate_limited_count: 0,
+            server_error_rate: 0.0,
             connection_refused: 0,
             timeouts: 0,
+            error_status_codes: HashMap::new(),
             per_endpoint,
             status,
         }
     }
 
-    fn make_ep(path: &str, pattern: &str, p95_ms: f64, error_rate: f64) -> EndpointStageMetrics {
+    fn make_ep(
+        path: &str,
+        pattern: &str,
+        p95_ms: f64,
+        server_error_rate: f64,
+    ) -> EndpointStageMetrics {
         EndpointStageMetrics {
             endpoint_path: path.to_string(),
             read_pattern: pattern.to_string(),
@@ -537,7 +587,8 @@ mod tests {
             p50_ms: p95_ms * 0.5,
             p95_ms,
             p99_ms: p95_ms * 1.5,
-            error_rate,
+            error_rate: server_error_rate,
+            server_error_rate,
         }
     }
 
@@ -628,13 +679,47 @@ mod tests {
             breakdown[1].verdict
         );
 
-        // /txs = 100/20 = 5.0 but error_rate > 0.1 => "critical"
+        // /txs = 100/20 = 5.0 but server_error_rate > 0.1 => "critical"
         assert_eq!(breakdown[2].endpoint_path, "/txs");
         assert!((breakdown[2].degradation - 5.0).abs() < 0.01);
         assert!(
             breakdown[2].verdict.contains("critical"),
             "expected 'critical', got: {}",
             breakdown[2].verdict
+        );
+    }
+
+    #[test]
+    fn test_client_errors_produce_ok_verdict() {
+        // Endpoint with high total error_rate but zero server_error_rate
+        let mut stable_eps = HashMap::new();
+        stable_eps.insert(0, make_ep("/tokens/{id}", "KeyLookup", 2.0, 0.0));
+
+        let mut break_eps = HashMap::new();
+        break_eps.insert(
+            0,
+            EndpointStageMetrics {
+                endpoint_path: "/tokens/{id}".to_string(),
+                read_pattern: "KeyLookup".to_string(),
+                count: 100,
+                p50_ms: 1.5,
+                p95_ms: 3.0,
+                p99_ms: 5.0,
+                error_rate: 0.4,        // 40% total errors (all 4xx)
+                server_error_rate: 0.0, // 0% server errors
+            },
+        );
+
+        let stable = make_stage(0, 10, StageStatus::Ok, stable_eps);
+        let breaking = make_stage(1, 100, StageStatus::HardFailure, break_eps);
+
+        let breakdown = build_endpoint_breakdown(&stable, &breaking);
+
+        assert_eq!(breakdown.len(), 1);
+        // degradation = 3.0/2.0 = 1.5, server_error_rate = 0 -> "ok"
+        assert_eq!(
+            breakdown[0].verdict, "ok",
+            "client-only errors should not trigger critical verdict"
         );
     }
 }

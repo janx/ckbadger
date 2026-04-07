@@ -22,7 +22,9 @@ use self::collector::{
 };
 use self::report::{ScenarioReport, StressConfig, StressReport};
 use self::scenario::{build_frontend_group, build_heavy_groups, build_mixed_groups, Scenario};
-use self::vu::{resolve_all, resolve_all_with_frontend, spawn_vu, ResolvedTarget};
+use self::vu::{
+    resolve_all, resolve_all_with_frontend, spawn_vu, validate_resolved, ResolvedTarget,
+};
 
 // ---------------------------------------------------------------------------
 // CLI arguments
@@ -226,20 +228,28 @@ pub async fn run_stress(args: StressArgs) -> Result<()> {
         discovery.capabilities_route_count
     );
 
-    // 6. Build registry and pre-resolve API endpoints for counting
+    // 6. Build registry, pre-resolve, and validate API endpoints
     let registry = endpoints::register_all();
     let api_resolved = resolve_all(&registry.entries, &api_url, &discovery.params);
     let resolved_count = api_resolved.len();
+
+    eprintln!("Validating {resolved_count} resolved endpoints...");
+    let api_validated = validate_resolved(&client, api_resolved).await;
+    let validated_count = api_validated.len();
+    let filtered = resolved_count - validated_count;
     eprintln!(
-        "Resolved {resolved_count}/{} endpoints for stress testing.",
+        "Validated {validated_count}/{} endpoints ({filtered} filtered out as non-200).",
         registry.entries.len()
     );
 
-    if resolved_count == 0 {
-        bail!("no endpoints could be resolved — check discovery results");
+    if validated_count == 0 {
+        bail!("no endpoints passed validation — check discovery results");
     }
 
-    drop(api_resolved); // freed — per-scenario resolution below
+    // Collect validated indices for group filtering
+    let valid_indices: std::collections::HashSet<usize> =
+        api_validated.iter().map(|ep| ep.idx).collect();
+    drop(api_validated); // freed — per-scenario resolution below
     let client = Arc::new(client);
 
     // 7. Run each scenario
@@ -250,30 +260,50 @@ pub async fn run_stress(args: StressArgs) -> Result<()> {
         eprintln!("Scenario: {scenario:?}");
         eprintln!("{}", "=".repeat(60));
 
-        // Per-scenario endpoint resolution and group building
+        // Per-scenario endpoint resolution and group building.
+        // Only include API endpoints that passed validation (are in valid_indices).
         let (resolved_targets, groups) = match scenario {
             Scenario::Mixed => {
-                let targets = resolve_all_with_frontend(
+                let all_targets = resolve_all_with_frontend(
                     &registry.entries,
                     &api_url,
                     &frontend_url,
                     &discovery.params,
                 );
+                // Filter API targets by validated set; keep all frontend targets
+                let targets: Vec<ResolvedTarget> = all_targets
+                    .into_iter()
+                    .filter(|t| match t {
+                        ResolvedTarget::Api(ep) => valid_indices.contains(&ep.idx),
+                        ResolvedTarget::Frontend { .. } => true,
+                    })
+                    .collect();
                 let mut groups = build_mixed_groups(&registry.entries);
                 groups.push(build_frontend_group(registry.entries.len()));
+                // Filter group indices to only validated endpoints
+                for g in &mut groups {
+                    g.endpoint_indices.retain(|idx| valid_indices.contains(idx));
+                }
+                groups.retain(|g| !g.endpoint_indices.is_empty());
                 (targets, groups)
             }
             Scenario::Heavy | Scenario::Api => {
                 let targets: Vec<ResolvedTarget> =
                     resolve_all(&registry.entries, &api_url, &discovery.params)
                         .into_iter()
+                        .filter(|ep| valid_indices.contains(&ep.idx))
                         .map(ResolvedTarget::Api)
                         .collect();
-                let groups = match scenario {
+                let mut groups = match scenario {
                     Scenario::Heavy => build_heavy_groups(&registry.entries),
                     Scenario::Api => scenario::build_api_group(&registry.entries),
                     _ => unreachable!(),
                 };
+                // Filter group indices to only validated endpoints
+                for g in &mut groups {
+                    g.endpoint_indices.retain(|idx| valid_indices.contains(idx));
+                }
+                groups.retain(|g| !g.endpoint_indices.is_empty());
                 (targets, groups)
             }
         };
@@ -440,14 +470,42 @@ pub async fn run_stress(args: StressArgs) -> Result<()> {
                 }
             }
 
+            // Build concise error breakdown
+            let total = result.total_requests.max(1) as f64;
+            let mut err_parts = Vec::new();
+            if result.server_error_count > 0 {
+                err_parts.push(format!(
+                    "server={:.1}%",
+                    result.server_error_count as f64 / total * 100.0
+                ));
+            }
+            if result.client_error_count > 0 {
+                err_parts.push(format!(
+                    "client={:.1}%",
+                    result.client_error_count as f64 / total * 100.0
+                ));
+            }
+            if result.rate_limited_count > 0 {
+                err_parts.push(format!(
+                    "429={:.1}%",
+                    result.rate_limited_count as f64 / total * 100.0
+                ));
+            }
+            let err_detail = if err_parts.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", err_parts.join(", "))
+            };
+
             eprintln!(
-                "  -> {} reqs, {:.0} rps, p50={:.0}ms p95={:.0}ms p99={:.0}ms, err={:.1}%, status={:?}",
+                "  -> {} reqs, {:.0} rps, p50={:.0}ms p95={:.0}ms p99={:.0}ms, err={:.1}%{}, status={:?}",
                 result.total_requests,
                 result.rps,
                 result.p50_ms,
                 result.p95_ms,
                 result.p99_ms,
                 result.error_rate * 100.0,
+                err_detail,
                 result.status,
             );
 

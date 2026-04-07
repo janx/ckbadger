@@ -36,6 +36,8 @@ pub struct EndpointStageMetrics {
     pub p95_ms: f64,
     pub p99_ms: f64,
     pub error_rate: f64,
+    /// Error rate counting only 5xx and network errors (not 4xx).
+    pub server_error_rate: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -69,8 +71,18 @@ pub struct StageResult {
     pub p99_ms: f64,
     pub error_rate: f64,
     pub error_count: u64,
+    /// Errors from 5xx responses and network failures (status == 0).
+    pub server_error_count: u64,
+    /// Errors from 4xx responses excluding 429 (test data / client issues).
+    pub client_error_count: u64,
+    /// Responses with HTTP 429 Too Many Requests (rate limiting).
+    pub rate_limited_count: u64,
+    /// Server error rate: server_error_count / total_requests.
+    pub server_error_rate: f64,
     pub connection_refused: u64,
     pub timeouts: u64,
+    /// HTTP status code histogram for error responses.
+    pub error_status_codes: HashMap<u16, u64>,
     pub per_endpoint: HashMap<usize, EndpointStageMetrics>,
     pub status: StageStatus,
 }
@@ -100,12 +112,24 @@ impl StageResult {
 
         // Error counting
         let mut error_count: u64 = 0;
+        let mut server_error_count: u64 = 0;
+        let mut client_error_count: u64 = 0;
+        let mut rate_limited_count: u64 = 0;
         let mut connection_refused: u64 = 0;
         let mut timeouts: u64 = 0;
+        let mut error_status_codes: HashMap<u16, u64> = HashMap::new();
 
         for s in samples {
             if s.error.is_some() {
                 error_count += 1;
+                *error_status_codes.entry(s.status).or_insert(0) += 1;
+                if s.status == 429 {
+                    rate_limited_count += 1;
+                } else if is_server_error(s.status) {
+                    server_error_count += 1;
+                } else if is_client_error(s.status) {
+                    client_error_count += 1;
+                }
             }
             if let Some(ref err) = s.error {
                 if err.contains("onnection refused") || s.status == 0 {
@@ -117,8 +141,16 @@ impl StageResult {
             }
         }
 
+        // error_rate excludes rate-limited (429) responses — those are expected
+        // API behavior under load, not failures.
+        let real_errors = error_count - rate_limited_count;
         let error_rate = if total_requests > 0 {
-            error_count as f64 / total_requests as f64
+            real_errors as f64 / total_requests as f64
+        } else {
+            0.0
+        };
+        let server_error_rate = if total_requests > 0 {
+            server_error_count as f64 / total_requests as f64
         } else {
             0.0
         };
@@ -134,11 +166,23 @@ impl StageResult {
             let mut ep_latencies: Vec<f64> = group.iter().map(|s| s.latency_ms).collect();
             ep_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-            let ep_errors = group.iter().filter(|s| s.error.is_some()).count();
+            let ep_errors = group
+                .iter()
+                .filter(|s| s.error.is_some() && s.status != 429)
+                .count();
+            let ep_server_errors = group
+                .iter()
+                .filter(|s| s.error.is_some() && is_server_error(s.status))
+                .count();
             let ep_error_rate = if group.is_empty() {
                 0.0
             } else {
                 ep_errors as f64 / group.len() as f64
+            };
+            let ep_server_error_rate = if group.is_empty() {
+                0.0
+            } else {
+                ep_server_errors as f64 / group.len() as f64
             };
 
             // Use the first sample's path/pattern as representative
@@ -154,6 +198,7 @@ impl StageResult {
                     p95_ms: percentile(&ep_latencies, 95.0),
                     p99_ms: percentile(&ep_latencies, 99.0),
                     error_rate: ep_error_rate,
+                    server_error_rate: ep_server_error_rate,
                 },
             );
         }
@@ -169,8 +214,13 @@ impl StageResult {
             p99_ms,
             error_rate,
             error_count,
+            server_error_count,
+            client_error_count,
+            rate_limited_count,
+            server_error_rate,
             connection_refused,
             timeouts,
+            error_status_codes,
             per_endpoint,
             status: StageStatus::Ok,
         }
@@ -190,11 +240,12 @@ pub enum DegradationSignal {
 }
 
 pub fn detect_degradation(baseline: &StageResult, current: &StageResult) -> DegradationSignal {
-    // Check in priority order: hard failure first
-    if current.error_rate > 0.10 {
+    // Use server_error_rate (5xx + network) for degradation detection.
+    // Client errors (4xx) indicate test data issues, not system degradation.
+    if current.server_error_rate > 0.10 {
         return DegradationSignal::HardFailure;
     }
-    if current.error_rate > 0.01 {
+    if current.server_error_rate > 0.01 {
         return DegradationSignal::ErrorsEmerging;
     }
     if baseline.p95_ms > 0.0 && current.p95_ms > 2.0 * baseline.p95_ms {
@@ -259,6 +310,16 @@ fn serialize_duration_secs<S: serde::Serializer>(d: &Duration, s: S) -> Result<S
     s.serialize_f64(d.as_secs_f64())
 }
 
+/// Server error: 5xx status or network failure (status == 0).
+fn is_server_error(status: u16) -> bool {
+    status == 0 || (500..600).contains(&status)
+}
+
+/// Client error: 4xx status.
+fn is_client_error(status: u16) -> bool {
+    (400..500).contains(&status)
+}
+
 pub fn drain_samples(rx: &mut SampleReceiver) -> Vec<StressSample> {
     let mut samples = Vec::new();
     while let Ok(sample) = rx.try_recv() {
@@ -293,6 +354,25 @@ mod tests {
         }
     }
 
+    fn make_sample_with_status(
+        endpoint_idx: usize,
+        path: &str,
+        pattern: &str,
+        latency_ms: f64,
+        status: u16,
+        error: Option<&str>,
+    ) -> StressSample {
+        StressSample {
+            endpoint_idx,
+            endpoint_path: path.to_string(),
+            read_pattern: pattern.to_string(),
+            latency_ms,
+            status,
+            body_size: 100,
+            error: error.map(|e| e.to_string()),
+        }
+    }
+
     #[test]
     fn test_stage_result_from_samples() {
         let samples = vec![
@@ -310,7 +390,10 @@ mod tests {
         assert_eq!(result.total_requests, 5);
         assert!((result.rps - 1.0).abs() < 0.01);
         assert_eq!(result.error_count, 0);
+        assert_eq!(result.server_error_count, 0);
+        assert_eq!(result.client_error_count, 0);
         assert_eq!(result.error_rate, 0.0);
+        assert_eq!(result.server_error_rate, 0.0);
         assert_eq!(result.p50_ms, 30.0);
         assert!(result.p95_ms > 40.0);
         assert_eq!(result.status, StageStatus::Ok);
@@ -321,15 +404,21 @@ mod tests {
         let samples = vec![
             make_sample(0, "/blocks", "KeyLookup", 10.0, None),
             make_sample(0, "/blocks", "KeyLookup", 20.0, None),
+            // status=500 (server error) with "Connection refused" text
             make_sample(0, "/blocks", "KeyLookup", 30.0, Some("Connection refused")),
+            // status=500 (server error) with timeout text
             make_sample(0, "/blocks", "KeyLookup", 40.0, Some("request timed out")),
+            // status=500 (server error)
             make_sample(0, "/blocks", "KeyLookup", 50.0, Some("server error")),
         ];
 
         let result = StageResult::from_samples(1, 2, Duration::from_secs(5), &samples);
 
         assert_eq!(result.error_count, 3);
+        assert_eq!(result.server_error_count, 3); // all 3 errors are 500 (server)
+        assert_eq!(result.client_error_count, 0);
         assert!((result.error_rate - 0.6).abs() < 0.01);
+        assert!((result.server_error_rate - 0.6).abs() < 0.01);
         assert_eq!(result.connection_refused, 1);
         assert_eq!(result.timeouts, 1);
     }
@@ -465,6 +554,125 @@ mod tests {
             detect_degradation(&baseline, &current),
             DegradationSignal::ErrorsEmerging
         );
+    }
+
+    #[test]
+    fn test_error_classification_client_vs_server() {
+        let samples = vec![
+            // 200 OK
+            sample(10.0, 200, None),
+            sample(10.0, 200, None),
+            // 404 Not Found (client error)
+            sample(10.0, 404, Some("expected status 200, got 404".into())),
+            sample(10.0, 404, Some("expected status 200, got 404".into())),
+            // 500 Internal Server Error (server error)
+            sample(10.0, 500, Some("expected status 200, got 500".into())),
+            // Network failure (server error, status=0)
+            sample(10.0, 0, Some("Connection refused".into())),
+        ];
+
+        let result = StageResult::from_samples(0, 1, Duration::from_secs(10), &samples);
+
+        assert_eq!(result.error_count, 4); // 2x 404 + 1x 500 + 1x network
+        assert_eq!(result.client_error_count, 2); // 2x 404
+        assert_eq!(result.server_error_count, 2); // 1x 500 + 1x network (status=0)
+        assert!((result.error_rate - 4.0 / 6.0).abs() < 0.01);
+        assert!((result.server_error_rate - 2.0 / 6.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_client_errors_do_not_trigger_hard_failure() {
+        let baseline = StageResult::from_samples(
+            0,
+            10,
+            Duration::from_secs(30),
+            &vec![sample(10.0, 200, None); 100],
+        );
+
+        // 40% client errors (4xx) but 0% server errors
+        let mut samples: Vec<StressSample> = vec![sample(10.0, 200, None); 60];
+        samples.extend(vec![
+            sample(
+                10.0,
+                404,
+                Some("expected status 200, got 404".into())
+            );
+            40
+        ]);
+        let current = StageResult::from_samples(1, 50, Duration::from_secs(30), &samples);
+
+        // High total error_rate but zero server_error_rate
+        assert!(current.error_rate > 0.3);
+        assert_eq!(current.server_error_rate, 0.0);
+
+        // Should NOT detect degradation because server_error_rate is 0
+        assert_eq!(
+            detect_degradation(&baseline, &current),
+            DegradationSignal::None
+        );
+    }
+
+    #[test]
+    fn test_mixed_errors_only_server_triggers_degradation() {
+        let baseline = StageResult::from_samples(
+            0,
+            10,
+            Duration::from_secs(30),
+            &vec![sample(10.0, 200, None); 100],
+        );
+
+        // 30% client errors, 5% server errors -> errors emerging (not hard failure)
+        let mut samples: Vec<StressSample> = vec![sample(10.0, 200, None); 65];
+        samples.extend(vec![
+            sample(
+                10.0,
+                404,
+                Some("expected status 200, got 404".into())
+            );
+            30
+        ]);
+        samples.extend(vec![
+            sample(
+                10.0,
+                500,
+                Some("expected status 200, got 500".into())
+            );
+            5
+        ]);
+        let current = StageResult::from_samples(1, 50, Duration::from_secs(30), &samples);
+
+        // Total error_rate is 35%, but server_error_rate is only 5%
+        assert!(current.error_rate > 0.3);
+        assert!((current.server_error_rate - 0.05).abs() < 0.01);
+
+        // 5% server errors -> ErrorsEmerging (between 1% and 10%)
+        assert_eq!(
+            detect_degradation(&baseline, &current),
+            DegradationSignal::ErrorsEmerging
+        );
+    }
+
+    #[test]
+    fn test_per_endpoint_server_error_rate() {
+        let samples = vec![
+            // endpoint 0: 2 ok, 1 client error (404)
+            make_sample_with_status(0, "/blocks", "KeyLookup", 10.0, 200, None),
+            make_sample_with_status(0, "/blocks", "KeyLookup", 20.0, 200, None),
+            make_sample_with_status(0, "/blocks", "KeyLookup", 10.0, 404, Some("not found")),
+            // endpoint 1: 1 ok, 1 server error (500)
+            make_sample_with_status(1, "/txs", "RangeScan", 100.0, 200, None),
+            make_sample_with_status(1, "/txs", "RangeScan", 200.0, 500, Some("server error")),
+        ];
+
+        let result = StageResult::from_samples(1, 2, Duration::from_secs(10), &samples);
+
+        let ep0 = result.per_endpoint.get(&0).unwrap();
+        assert!((ep0.error_rate - 1.0 / 3.0).abs() < 0.01); // 1 error out of 3
+        assert_eq!(ep0.server_error_rate, 0.0); // 404 is client error, not server
+
+        let ep1 = result.per_endpoint.get(&1).unwrap();
+        assert!((ep1.error_rate - 0.5).abs() < 0.01); // 1 error out of 2
+        assert!((ep1.server_error_rate - 0.5).abs() < 0.01); // 500 is server error
     }
 
     #[test]
