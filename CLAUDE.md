@@ -160,7 +160,7 @@ docs/ARCHITECTURE_MAP.md     # Module ownership and entry points
 docs/POSTMORTEM.md           # Historical bugs - READ BEFORE CKB/DAO WORK
 docs/INDEXER_PIPELINE.md     # Pipeline architecture and progress tracking
 docs/STORE_SCHEMA.md         # Column families reference (60 domain + 1 append-only)
-docs/VERIFY.md               # Data integrity verification details
+docs/TESTING.md               # Data integrity verification details
 ```
 
 ## Indexer Pipeline Configuration
@@ -188,7 +188,7 @@ Memory: ~22GB peak (>=32GB RAM), ~8GB peak (<32GB RAM).
 
 ## Data Integrity Verification
 
-55 checks across 3 tiers: Fast (6, seconds), Sampling (23, minutes), Explorer (26, minutes). See `docs/VERIFY.md` for full details.
+55 checks across 3 tiers: Fast (6, seconds), Sampling (23, minutes), Explorer (26, minutes). See `docs/TESTING.md` for full details.
 
 ```bash
 ckbadger verify --depth fast              # Quick sanity
