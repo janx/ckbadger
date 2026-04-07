@@ -3,6 +3,7 @@ pub mod collector;
 pub mod report;
 #[allow(dead_code)] // consumed by later tasks (vu, stage scheduler)
 pub mod scenario;
+#[allow(dead_code)] // consumed by later tasks (stage scheduler)
 pub mod vu;
 
 use anyhow::Result;
