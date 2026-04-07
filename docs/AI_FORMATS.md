@@ -1,9 +1,9 @@
-# AI-Friendly Page Output (Frontend)
+# Agent-Friendly Page Output
 
-Frontend pages support two machine-oriented formats:
+Frontend pages support two machine-oriented formats alongside the default HTML:
 
-- `md` for summary-style markdown
-- `raw` for structured automation payloads
+- `md` — human+agent readable summaries
+- `raw` — structured payloads for tooling/automation
 - Both carry `buildVersion` in structured metadata (`.md` frontmatter, `.raw` meta)
 
 ## Format Negotiation
@@ -32,11 +32,38 @@ Priority order (strict):
 - `profile=debugger` is supported on `/tx/{hash}` and includes `data.txDebugger.mockTransaction`
 - Unknown/unsupported profiles fail fast with `invalid_profile` / `profile_not_supported`
 
+## Agent Discovery
+
+- `frontend/public/llms.txt` — short discovery doc
+- `frontend/public/llms-full.txt` — full discovery doc
+- `http://localhost:8100/capabilities` — machine-readable format/profile/route matrix
+
+## Examples
+
+```bash
+# Markdown
+curl http://localhost:8100/blocks.md
+curl "http://localhost:8100/blocks?format=md&limit=20"
+curl -H "Accept: text/markdown" http://localhost:8100/charts/hash-rate
+
+# Raw (default profile)
+curl http://localhost:8100/blocks/123.raw
+curl "http://localhost:8100/cell/0x...txhash...-0?format=raw"
+curl -H "Accept: application/vnd.ckbadger.raw+json" http://localhost:8100/tx/0x...hash...
+
+# Raw debugger profile (tx only)
+curl "http://localhost:8100/tx/0x...hash....raw?profile=debugger" \
+  | jq '.data.txDebugger.mockTransaction'
+
+# Capabilities
+curl http://localhost:8100/capabilities
+```
+
 ## End-to-End Debugger Workflow
 
 ```bash
 TX_HASH=0x...replace_with_real_tx_hash...
-curl "http://localhost:3000/tx/${TX_HASH}.raw?profile=debugger" \
+curl "http://localhost:8100/tx/${TX_HASH}.raw?profile=debugger" \
   | jq '.data.txDebugger.mockTransaction' > /tmp/mock_tx.json
 
 ckb-debugger \
@@ -49,7 +76,7 @@ ckb-debugger \
 ### Troubleshooting
 
 - `invalid_profile` / `profile_not_supported`: check route support via `/capabilities`
-- `rpc_http_error` / `rpc_error`: verify `CKB_RPC_URL` (default `http://127.0.0.1:8114`)
+- `rpc_http_error` / `rpc_error`: verify CKB RPC URL (default `http://127.0.0.1:8114`)
 - `tx_not_found`: confirm tx hash and network alignment
 
 ### Matrix Run Helper
@@ -68,9 +95,9 @@ CONTINUE_ON_ERROR=1 scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
 
 ## Implementation Boundary
 
-- Markdown/raw output is handled in frontend only (`Next.js` route + middleware)
+- Markdown/raw output is handled in frontend only (Vite SPA middleware)
 - API JSON endpoints under `/api/v1` are not rewritten to markdown/raw
-- Static files and `/_next/*` are not rewritten
+- Static files are not rewritten
 - Raw responses include `x-ckbadger-format`, `x-ckbadger-profile`, and `x-ckbadger-schema`
 
 ## Checklist: Adding/Changing Routes or Formats (MANDATORY)
@@ -81,15 +108,3 @@ CONTINUE_ON_ERROR=1 scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
 4. Update rewrite negotiation in `frontend/lib/ai/markdown-request.ts` if format rules change
 5. Update capability/discovery files: `frontend/lib/ai/capabilities.ts`, `frontend/public/llms.txt`, and `frontend/public/llms-full.txt`
 6. Add/adjust tests in `frontend/__tests__/lib/markdown-*.test.ts`, `frontend/__tests__/lib/raw-*.test.ts`, and `frontend/__tests__/lib/capabilities.test.ts`
-
-## Example Commands
-
-```bash
-curl http://localhost:3000/blocks.md
-curl "http://localhost:3000/blocks?format=md&limit=20"
-curl -H "Accept: text/markdown" http://localhost:3000/charts/hash-rate
-curl http://localhost:3000/blocks/123.raw
-curl "http://localhost:3000/tx/0x...hash....raw?profile=debugger" | jq '.data.txDebugger.mockTransaction'
-curl -H "Accept: application/vnd.ckbadger.raw+json" http://localhost:3000/tx/0x...hash...
-curl http://localhost:3000/capabilities
-```
