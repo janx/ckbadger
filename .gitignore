@@ -70,5 +70,5 @@ frontend/tsconfig.tsbuildinfo
 .claude
 .worktrees/
 .superpowers/
-docs/plans/*
-docs/superpowers/*
+docs/plans/
+docs/superpowers/
