@@ -75,6 +75,10 @@ pub struct StressArgs {
     #[arg(long)]
     pub json: bool,
 
+    /// Save JSON report to this file
+    #[arg(long)]
+    pub output: Option<String>,
+
     /// Directory for auto-saved timestamped JSON reports
     #[arg(long)]
     pub output_dir: Option<PathBuf>,
@@ -486,6 +490,10 @@ pub async fn run_stress(args: StressArgs) -> Result<()> {
         let timestamp = stress_report.timestamp.replace(':', "-").replace('+', "p");
         let auto_path = dir.join(format!("stress-{timestamp}.json"));
         report::save_json(&stress_report, &auto_path)?;
+    }
+
+    if let Some(ref path) = args.output {
+        report::save_json(&stress_report, path.as_ref())?;
     }
 
     Ok(())

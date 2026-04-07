@@ -40,6 +40,7 @@ coverage/
 fuzzing/reports/
 playwright-report/
 test-results/
+test_outputs/
 .verify-cache/
 
 # CLI runtime

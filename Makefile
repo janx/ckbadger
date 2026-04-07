@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help build build-full release check test lint verify bench bench-json bench-baseline
+.PHONY: help build build-full release check test lint verify bench bench-json bench-baseline stress
 
 help:
 	@echo "Available targets:"
@@ -14,6 +14,7 @@ help:
 	@echo "  make bench      Run API performance benchmark (requires running API)"
 	@echo "  make bench-json Run benchmark with JSON output"
 	@echo "  make bench-baseline  Save benchmark baseline to bench-baseline.json"
+	@echo "  make stress     Run stress test (requires running API)"
 
 build:
 	cargo build -p ckbadger
@@ -39,10 +40,13 @@ verify:
 	cargo run -p ckbadger -- verify --depth fast
 
 bench:
-	cargo run -p ckbadger-bench -- $(BENCH_ARGS)
+	cargo run -p ckbadger-bench -- --output-dir test_outputs/bench $(BENCH_ARGS)
 
 bench-json:
 	cargo run -p ckbadger-bench -- --json $(BENCH_ARGS)
 
 bench-baseline:
 	cargo run -p ckbadger-bench -- --json --output bench-baseline.json $(BENCH_ARGS)
+
+stress:
+	cargo run -p ckbadger-bench -- stress --output-dir test_outputs/stress $(STRESS_ARGS)
