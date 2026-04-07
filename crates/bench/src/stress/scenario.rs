@@ -34,6 +34,26 @@ impl Scenario {
     }
 }
 
+/// Predefined frontend page routes used in the mixed scenario.
+pub const FRONTEND_ROUTES: &[&str] = &[
+    "/",
+    "/blocks",
+    "/transactions",
+    "/tokens",
+    "/dao",
+    "/scripts",
+    "/charts",
+];
+
+/// Build a frontend endpoint group. Indices start from `offset`.
+pub fn build_frontend_group(offset: usize) -> EndpointGroup {
+    EndpointGroup {
+        name: "frontend",
+        weight: 5,
+        endpoint_indices: (offset..offset + FRONTEND_ROUTES.len()).collect(),
+    }
+}
+
 /// A group of related endpoints with a selection weight.
 pub struct EndpointGroup {
     #[allow(dead_code)] // used by report module (Task 6)

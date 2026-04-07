@@ -165,8 +165,13 @@ pub fn build_endpoint_breakdown(
         }
     }
 
-    // Sort by degradation descending
-    entries.sort_by(|a, b| b.degradation.partial_cmp(&a.degradation).unwrap());
+    // Sort by degradation descending, then by endpoint_path for stability
+    entries.sort_by(|a, b| {
+        b.degradation
+            .partial_cmp(&a.degradation)
+            .unwrap()
+            .then_with(|| a.endpoint_path.cmp(&b.endpoint_path))
+    });
     entries
 }
 
@@ -603,7 +608,8 @@ mod tests {
 
         assert_eq!(breakdown.len(), 3);
 
-        // Sorted by degradation desc: /cells (12.0), /txs (5.0), /blocks (5.0)
+        // Sorted by degradation desc, then path asc:
+        //   /cells (12.0), /blocks (5.0), /txs (5.0)
         // /cells = 60/5 = 12.0
         assert_eq!(breakdown[0].endpoint_path, "/cells");
         assert!((breakdown[0].degradation - 12.0).abs() < 0.01);
@@ -613,21 +619,21 @@ mod tests {
             breakdown[0].verdict
         );
 
-        // /txs = 100/20 = 5.0 but error_rate > 0.1 => "critical"
-        assert_eq!(breakdown[1].endpoint_path, "/txs");
+        // /blocks = 50/10 = 5.0, no errors => "N.Nx slow"
+        assert_eq!(breakdown[1].endpoint_path, "/blocks");
         assert!((breakdown[1].degradation - 5.0).abs() < 0.01);
         assert!(
-            breakdown[1].verdict.contains("critical"),
-            "expected 'critical', got: {}",
+            breakdown[1].verdict.contains("slow"),
+            "expected 'slow', got: {}",
             breakdown[1].verdict
         );
 
-        // /blocks = 50/10 = 5.0, no errors => "N.Nx slow"
-        assert_eq!(breakdown[2].endpoint_path, "/blocks");
+        // /txs = 100/20 = 5.0 but error_rate > 0.1 => "critical"
+        assert_eq!(breakdown[2].endpoint_path, "/txs");
         assert!((breakdown[2].degradation - 5.0).abs() < 0.01);
         assert!(
-            breakdown[2].verdict.contains("slow"),
-            "expected 'slow', got: {}",
+            breakdown[2].verdict.contains("critical"),
+            "expected 'critical', got: {}",
             breakdown[2].verdict
         );
     }

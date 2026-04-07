@@ -21,8 +21,8 @@ use self::collector::{
     StatusLine,
 };
 use self::report::{ScenarioReport, StressConfig, StressReport};
-use self::scenario::{build_heavy_groups, build_mixed_groups, Scenario};
-use self::vu::{resolve_all, spawn_vu};
+use self::scenario::{build_frontend_group, build_heavy_groups, build_mixed_groups, Scenario};
+use self::vu::{resolve_all, resolve_all_with_frontend, spawn_vu, ResolvedTarget};
 
 // ---------------------------------------------------------------------------
 // CLI arguments
@@ -222,10 +222,10 @@ pub async fn run_stress(args: StressArgs) -> Result<()> {
         discovery.capabilities_route_count
     );
 
-    // 6. Build registry and resolve endpoints
+    // 6. Build registry and pre-resolve API endpoints for counting
     let registry = endpoints::register_all();
-    let resolved_endpoints = resolve_all(&registry.entries, &api_url, &discovery.params);
-    let resolved_count = resolved_endpoints.len();
+    let api_resolved = resolve_all(&registry.entries, &api_url, &discovery.params);
+    let resolved_count = api_resolved.len();
     eprintln!(
         "Resolved {resolved_count}/{} endpoints for stress testing.",
         registry.entries.len()
@@ -235,7 +235,7 @@ pub async fn run_stress(args: StressArgs) -> Result<()> {
         bail!("no endpoints could be resolved — check discovery results");
     }
 
-    let resolved_endpoints = Arc::new(resolved_endpoints);
+    drop(api_resolved); // freed — per-scenario resolution below
     let client = Arc::new(client);
 
     // 7. Run each scenario
@@ -246,10 +246,28 @@ pub async fn run_stress(args: StressArgs) -> Result<()> {
         eprintln!("Scenario: {scenario:?}");
         eprintln!("{}", "=".repeat(60));
 
-        // Build endpoint groups for this scenario
-        let groups = match scenario {
-            Scenario::Mixed => build_mixed_groups(&registry.entries),
-            Scenario::Heavy => build_heavy_groups(&registry.entries),
+        // Per-scenario endpoint resolution and group building
+        let (resolved_targets, groups) = match scenario {
+            Scenario::Mixed => {
+                let targets = resolve_all_with_frontend(
+                    &registry.entries,
+                    &api_url,
+                    &frontend_url,
+                    &discovery.params,
+                );
+                let mut groups = build_mixed_groups(&registry.entries);
+                groups.push(build_frontend_group(registry.entries.len()));
+                (targets, groups)
+            }
+            Scenario::Heavy => {
+                let targets: Vec<ResolvedTarget> =
+                    resolve_all(&registry.entries, &api_url, &discovery.params)
+                        .into_iter()
+                        .map(ResolvedTarget::Api)
+                        .collect();
+                let groups = build_heavy_groups(&registry.entries);
+                (targets, groups)
+            }
         };
 
         if groups.is_empty() {
@@ -257,6 +275,7 @@ pub async fn run_stress(args: StressArgs) -> Result<()> {
             continue;
         }
 
+        let resolved_targets = Arc::new(resolved_targets);
         let groups = Arc::new(groups);
 
         // Warmup: 1 VU for warmup_duration, discard all samples
@@ -267,7 +286,7 @@ pub async fn run_stress(args: StressArgs) -> Result<()> {
 
             let handle = spawn_vu(
                 Arc::clone(&client),
-                Arc::clone(&resolved_endpoints),
+                Arc::clone(&resolved_targets),
                 Arc::clone(&groups),
                 warmup_tx,
                 Some(think_time),
@@ -312,7 +331,7 @@ pub async fn run_stress(args: StressArgs) -> Result<()> {
                 };
                 let handle = spawn_vu(
                     Arc::clone(&client),
-                    Arc::clone(&resolved_endpoints),
+                    Arc::clone(&resolved_targets),
                     Arc::clone(&groups),
                     tx.clone(),
                     vu_think,

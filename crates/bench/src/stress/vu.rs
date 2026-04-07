@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use rand::Rng;
 use tokio_util::sync::CancellationToken;
@@ -7,7 +8,7 @@ use crate::registry::{DiscoveredParams, EndpointEntry, ResolvedRequest};
 use crate::runner::execute_request;
 
 use super::collector::{SampleSender, StressSample};
-use super::scenario::{pick_endpoint, EndpointGroup};
+use super::scenario::{pick_endpoint, EndpointGroup, FRONTEND_ROUTES};
 
 // ---------------------------------------------------------------------------
 // ResolvedEndpoint — pre-resolved endpoint ready for stress execution
@@ -56,6 +57,50 @@ pub fn resolve_all(
 }
 
 // ---------------------------------------------------------------------------
+// ResolvedTarget — unified target for API and frontend requests
+// ---------------------------------------------------------------------------
+
+/// A resolved target that can be either an API endpoint or a frontend route.
+pub enum ResolvedTarget {
+    Api(ResolvedEndpoint),
+    Frontend {
+        idx: usize,
+        route: String,
+        url: String,
+    },
+}
+
+/// Pre-resolve all endpoints including frontend routes.
+///
+/// Creates API `ResolvedTarget`s from `resolve_all()`, then appends Frontend
+/// targets for each `FRONTEND_ROUTE` with `idx` starting at `entries.len()`.
+pub fn resolve_all_with_frontend(
+    entries: &[EndpointEntry],
+    api_base: &str,
+    frontend_url: &str,
+    params: &DiscoveredParams,
+) -> Vec<ResolvedTarget> {
+    let api_targets: Vec<ResolvedTarget> = resolve_all(entries, api_base, params)
+        .into_iter()
+        .map(ResolvedTarget::Api)
+        .collect();
+
+    let frontend_targets: Vec<ResolvedTarget> = FRONTEND_ROUTES
+        .iter()
+        .enumerate()
+        .map(|(i, route)| ResolvedTarget::Frontend {
+            idx: entries.len() + i,
+            route: route.to_string(),
+            url: format!("{}{}", frontend_url.trim_end_matches('/'), route),
+        })
+        .collect();
+
+    let mut all = api_targets;
+    all.extend(frontend_targets);
+    all
+}
+
+// ---------------------------------------------------------------------------
 // Virtual User task
 // ---------------------------------------------------------------------------
 
@@ -66,7 +111,7 @@ pub fn resolve_all(
 /// random think time.
 pub fn spawn_vu(
     client: Arc<reqwest::Client>,
-    resolved_endpoints: Arc<Vec<ResolvedEndpoint>>,
+    resolved_targets: Arc<Vec<ResolvedTarget>>,
     groups: Arc<Vec<EndpointGroup>>,
     tx: SampleSender,
     think_time: Option<(u64, u64)>,
@@ -81,24 +126,64 @@ pub fn spawn_vu(
             // Pick an endpoint index from weighted groups
             let target_idx = pick_endpoint(&groups);
 
-            // Find the matching pre-resolved endpoint
-            let ep = match resolved_endpoints.iter().find(|e| e.idx == target_idx) {
-                Some(ep) => ep,
-                None => continue, // endpoint didn't resolve, skip
+            // Find the matching pre-resolved target
+            let target = match resolved_targets.iter().find(|t| match t {
+                ResolvedTarget::Api(ep) => ep.idx == target_idx,
+                ResolvedTarget::Frontend { idx, .. } => *idx == target_idx,
+            }) {
+                Some(t) => t,
+                None => continue, // target didn't resolve, skip
             };
 
-            // Execute the request
-            let sample = execute_request(&client, &ep.resolved, ep.expect_status).await;
+            let stress_sample = match target {
+                ResolvedTarget::Api(ep) => {
+                    let sample = execute_request(&client, &ep.resolved, ep.expect_status).await;
+                    StressSample {
+                        endpoint_idx: ep.idx,
+                        endpoint_path: ep.path_template.clone(),
+                        read_pattern: ep.read_pattern.clone(),
+                        latency_ms: sample.latency_ms,
+                        status: sample.status,
+                        body_size: sample.body_size,
+                        error: sample.error,
+                    }
+                }
+                ResolvedTarget::Frontend { idx, route, url } => {
+                    let start = Instant::now();
+                    let result = client.get(url).send().await;
+                    let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-            // Build and send stress sample
-            let stress_sample = StressSample {
-                endpoint_idx: ep.idx,
-                endpoint_path: ep.path_template.clone(),
-                read_pattern: ep.read_pattern.clone(),
-                latency_ms: sample.latency_ms,
-                status: sample.status,
-                body_size: sample.body_size,
-                error: sample.error,
+                    match result {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            let body_bytes = response.bytes().await.unwrap_or_default();
+                            let body_size = body_bytes.len();
+                            let error = if status != 200 {
+                                Some(format!("expected status 200, got {}", status))
+                            } else {
+                                None
+                            };
+                            StressSample {
+                                endpoint_idx: *idx,
+                                endpoint_path: route.clone(),
+                                read_pattern: "Frontend".to_string(),
+                                latency_ms,
+                                status,
+                                body_size,
+                                error,
+                            }
+                        }
+                        Err(e) => StressSample {
+                            endpoint_idx: *idx,
+                            endpoint_path: route.clone(),
+                            read_pattern: "Frontend".to_string(),
+                            latency_ms,
+                            status: 0,
+                            body_size: 0,
+                            error: Some(e.to_string()),
+                        },
+                    }
+                }
             };
 
             if tx.send(stress_sample).is_err() {
