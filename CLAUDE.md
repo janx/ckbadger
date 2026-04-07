@@ -155,6 +155,7 @@ crates/
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
   tui/            # Terminal monitoring UI library (sync/memory/throughput)
+  bench/          # API stress testing and benchmarking tool
 frontend/         # Vite + React SPA
 docs/ARCHITECTURE_MAP.md     # Module ownership and entry points
 docs/POSTMORTEM.md           # Historical bugs - READ BEFORE CKB/DAO WORK
@@ -243,18 +244,16 @@ ckbadger verify --list-checks             # List all checks
 
 **BEFORE making changes to CKB-related code, READ the relevant documentation:**
 
-| Topic             | Document                                                             | Must Read Before                              |
-| ----------------- | -------------------------------------------------------------------- | --------------------------------------------- |
-| **Worldview**     | `docs/prompts/WORLD_VIEW.md`                                         | **Any design or implementation**              |
-| Bulk sync rules   | `docs/prompts/BULK_SYNC.md`                                          | Bulk sync logic or sync-mode boundary changes |
-| Bulk-build engine | `docs/superpowers/specs/2026-03-17-bulk-sync-build-engine-design.md` | Bulk-build reducer or materializer changes    |
-| Reorg handling    | `docs/prompts/REORG_HANDLING.md`                                     | Reorg or fork-related changes                 |
-| Activity system   | `docs/prompts/ACTIVITY_DESIGN.md`                                    | Activity feed or activity CF changes          |
-| Protocol actions  | `docs/plans/2026-03-14-protocol-action-framework-design.md`          | Protocol detector or protocol action changes  |
-| CKB protocol      | `docs/rfcs/`                                                         | Understanding CKB internals                   |
-| Nervos docs       | `docs/docs.nervos.org/`                                              | User-facing explanations                      |
-| DAO, APC, Supply  | `docs/DAO_CALCULATIONS.md`                                           | Any DAO/supply/circulation changes            |
-| Architecture      | `docs/ARCHITECTURE_MAP.md`                                           | Module ownership questions                    |
+| Topic            | Document                          | Must Read Before                              |
+| ---------------- | --------------------------------- | --------------------------------------------- |
+| **Worldview**    | `docs/prompts/WORLD_VIEW.md`      | **Any design or implementation**              |
+| Bulk sync rules  | `docs/prompts/BULK_SYNC.md`       | Bulk sync logic or sync-mode boundary changes |
+| Reorg handling   | `docs/prompts/REORG_HANDLING.md`  | Reorg or fork-related changes                 |
+| Activity system  | `docs/prompts/ACTIVITY_DESIGN.md` | Activity feed or activity CF changes          |
+| CKB protocol     | `docs/rfcs/`                      | Understanding CKB internals                   |
+| Nervos docs      | `docs/docs.nervos.org/`           | User-facing explanations                      |
+| DAO, APC, Supply | `docs/DAO_CALCULATIONS.md`        | Any DAO/supply/circulation changes            |
+| Architecture     | `docs/ARCHITECTURE_MAP.md`        | Module ownership questions                    |
 
 ### Common Knowledge (CKB Core Concept)
 
@@ -337,6 +336,7 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | Label import     | `crates/indexer/src/label_import.rs`                                                                                                               |
 | Verify checks    | `crates/indexer/src/verify/*.rs`                                                                                                                   |
 | TUI              | `crates/tui/src/`                                                                                                                                  |
+| Bench            | `crates/bench/src/` (stress testing, endpoint benchmarks, reports)                                                                                 |
 | Frontend API     | `frontend/lib/api.ts`                                                                                                                              |
 | LLM discovery    | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                                                        |
 | UI components    | `frontend/components/ui/`                                                                                                                          |
