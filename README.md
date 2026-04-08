@@ -101,8 +101,9 @@ All subcommands accept `-C <path>` to specify work directory (default: current d
 
 For a fresh db, `ckbadger run` will kick off bulk-sync mode, read data from the local ckb node and build indexes. The time a full sync will take depends:
 
-- ~20mins on a dev machine, AMD Ryzen AI 9 HX 370, 96GB mem, btrfs+LUKS on NVMe SSD.
+- ~20mins on my dev machines, 24 cores, 64-96GB mem, NVMe SSD.
 - ~5hrs on an aws ec2 instance, 8 vCPU @ 2.5GHz, 30GB mem, XFS on 640 NVMe EBS.
+- probably requires tweaking on <=16GB mem servers.
 
 ### Agent-Friendly Page Output
 
