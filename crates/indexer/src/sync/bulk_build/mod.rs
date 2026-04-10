@@ -2782,6 +2782,7 @@ fn build_history_rows_for_block(
         epoch_length: block.epoch_length,
         dao: block.dao.to_vec(),
         transactions_count: block.transactions_count,
+        uncles_count: block.uncles_count,
         cycles: None,
     };
     rows.push(materialize::MaterializedRow::new(
