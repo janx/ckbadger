@@ -3791,6 +3791,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -3841,6 +3842,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -3852,6 +3854,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -3907,6 +3910,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -3918,6 +3922,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 2,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -4013,6 +4018,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header1 = CachedBlockHeader {
@@ -4024,6 +4030,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -4118,6 +4125,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header1 = CachedBlockHeader {
@@ -4129,6 +4137,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -4212,6 +4221,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4223,6 +4233,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let cell = LiveCellInfo {
@@ -4293,6 +4304,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4304,6 +4316,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -4430,6 +4443,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4441,6 +4455,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -4578,6 +4593,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4589,6 +4605,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -4756,6 +4773,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4767,6 +4785,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 2,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -4941,6 +4960,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -4952,6 +4972,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -4998,6 +5019,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5009,6 +5031,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -5069,6 +5092,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5080,6 +5104,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -5173,6 +5198,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5184,6 +5210,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let keep_cell = LiveCellInfo {
@@ -5308,6 +5335,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5319,6 +5347,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header3 = CachedBlockHeader {
@@ -5330,6 +5359,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -5490,6 +5520,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5501,6 +5532,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -5588,6 +5620,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -5616,6 +5649,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5627,6 +5661,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let tx_hash = vec![0x21; 32];
@@ -5703,6 +5738,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5714,6 +5750,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -5903,6 +5940,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 0,
+            uncles_count: 0,
             cycles: None,
         };
 
@@ -5973,6 +6011,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -5984,6 +6023,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let mut batch = StoreBatch::new(&store);
@@ -6086,6 +6126,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let header2 = CachedBlockHeader {
@@ -6097,6 +6138,7 @@ mod tests {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         };
         let mut batch = StoreBatch::new(&store);
@@ -6291,6 +6333,7 @@ mod tests {
                     epoch_length: 1800,
                     dao: vec![0; 32],
                     transactions_count: 0,
+            uncles_count: 0,
                     cycles: None,
                 },
             );
@@ -6345,6 +6388,7 @@ mod tests {
                     epoch_length: 1800,
                     dao: vec![0; 32],
                     transactions_count: 3,
+            uncles_count: 0,
                     cycles: None,
                 },
             );

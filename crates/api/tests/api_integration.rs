@@ -239,6 +239,7 @@ fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) {
             epoch_length: 1000,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -380,6 +381,7 @@ async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
             epoch_length: 1800,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -561,6 +563,7 @@ async fn test_tx_stats_reads_from_derived_store() {
             epoch_length: 1800,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -704,6 +707,7 @@ async fn test_network_stats_reads_derived_statistics() {
             epoch_length: 1800,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -816,6 +820,7 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
             epoch_length: 1800,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -1068,6 +1073,7 @@ async fn test_get_block_includes_hardfork_activation() {
             epoch_length: 1800,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -1131,6 +1137,7 @@ async fn test_blocks_list_includes_hardfork_activation() {
             epoch_length: 1800,
             dao: vec![0; 32],
             transactions_count: 2,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -1145,6 +1152,7 @@ async fn test_blocks_list_includes_hardfork_activation() {
             epoch_length: 1800,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -1379,6 +1387,7 @@ async fn test_search_hash_without_0x_returns_ambiguous_block_and_transaction() {
             epoch_length: 1000,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -1771,6 +1780,7 @@ async fn test_dao_stats_uses_precomputed_latest_stats_when_tip_matches() {
             epoch_length: 1,
             dao,
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -1836,6 +1846,7 @@ async fn test_dao_stats_ignores_stale_precomputed_latest_stats() {
             epoch_length: 1,
             dao,
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -1901,6 +1912,7 @@ async fn test_dao_stats_cached_response_is_stable_within_ttl() {
             epoch_length: 1,
             dao,
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -2640,6 +2652,7 @@ async fn test_charts_block_time_distribution_with_data() {
                 epoch_length: 3,
                 dao: vec![0; 32],
                 transactions_count: 1,
+            uncles_count: 0,
                 cycles: None,
             },
         );
@@ -3913,6 +3926,7 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -3927,6 +3941,7 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -3941,6 +3956,7 @@ async fn test_get_script_returns_versions_sorted_by_deployed_at() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -4506,6 +4522,7 @@ async fn test_script_capacity_chart_aggregates_deployments() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -4593,6 +4610,7 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -4650,6 +4668,7 @@ async fn test_script_capacity_chart_by_code_hash_extends_to_latest_complete_ckb_
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -5697,6 +5716,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -5711,6 +5731,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -5725,6 +5746,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -7980,6 +8002,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -7994,6 +8017,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -8008,6 +8032,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -8817,6 +8842,7 @@ async fn test_address_activities_reads_from_store() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -8897,6 +8923,7 @@ async fn test_address_activities_returns_protocol_metadata() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -9047,6 +9074,7 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -9157,6 +9185,7 @@ async fn test_latest_activities_return_type_calls() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 2,
+            uncles_count: 0,
             cycles: None,
         },
     );
@@ -9223,6 +9252,7 @@ async fn test_global_activities_basic() {
             epoch_length: 1,
             dao: vec![0; 32],
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         },
     );

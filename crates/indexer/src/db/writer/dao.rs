@@ -658,6 +658,7 @@ mod tests {
             epoch_length: 1,
             dao,
             transactions_count: 1,
+            uncles_count: 0,
             cycles: None,
         }
     }

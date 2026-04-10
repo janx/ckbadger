@@ -1424,6 +1424,7 @@ mod tests {
             epoch_length: 1800,
             dao: vec![0u8; 32],
             transactions_count: 5,
+            uncles_count: 0,
             cycles: None,
         };
         batch.put_block_header(0, &header);
@@ -2213,6 +2214,7 @@ mod tests {
             epoch_length: 1800,
             dao: vec![0u8; 32],
             transactions_count: 2,
+            uncles_count: 0,
             cycles: None,
         };
         a.put_block_header(42, &header);
