@@ -29,6 +29,7 @@ impl BatchWriter {
                 epoch_length: block.epoch_length,
                 dao: block.dao.to_vec(),
                 transactions_count: block.transactions_count,
+                uncles_count: block.uncles_count,
                 cycles: None,
             };
             batch.put_block_header(block.number, &header);
