@@ -204,6 +204,11 @@ pub struct CachedBlockHeader {
     pub epoch_length: i32,
     pub dao: Vec<u8>,
     pub transactions_count: i32,
+    /// Number of uncle blocks included in this block.
+    /// Needed by reorg rollback to correctly decrement
+    /// `DailyBlockStats.total_uncles` for rolled-back blocks.
+    #[serde(default)]
+    pub uncles_count: i32,
     /// Total cycles consumed by all transactions in this block.
     /// Written only by lazy cycles evaluation, not during bulk/live sync.
     #[serde(default)]
