@@ -1305,7 +1305,7 @@ mod tests {
                 epoch_length: 1,
                 dao,
                 transactions_count: 1,
-            uncles_count: 0,
+                uncles_count: 0,
                 cycles: None,
             },
         );
@@ -1419,7 +1419,7 @@ mod tests {
                 epoch_length: 100,
                 dao,
                 transactions_count: 1,
-            uncles_count: 0,
+                uncles_count: 0,
                 cycles: None,
             },
         );
@@ -1436,7 +1436,7 @@ mod tests {
                 epoch_length: 100,
                 dao: vec![0u8; 32],
                 transactions_count: 1,
-            uncles_count: 0,
+                uncles_count: 0,
                 cycles: None,
             },
         );
@@ -1646,7 +1646,7 @@ mod tests {
                 epoch_length: 1,
                 dao: vec![0; 32],
                 transactions_count: 1,
-            uncles_count: 0,
+                uncles_count: 0,
                 cycles: None,
             },
         );

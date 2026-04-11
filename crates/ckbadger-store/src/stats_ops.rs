@@ -954,15 +954,15 @@ impl CkbadgerStore {
         batch: &mut crate::batch::StoreBatch,
     ) -> anyhow::Result<()> {
         use crate::types::DaoDailySnapshot;
-        use ckbadger_common::CKB_UTC8_OFFSET;
         use chrono::{FixedOffset, TimeZone};
+        use ckbadger_common::CKB_UTC8_OFFSET;
         use std::collections::{HashMap, HashSet};
 
         // 1. Compute the UTC ms bounds of the target UTC+8 date.
         let utc8 = FixedOffset::east_opt(CKB_UTC8_OFFSET).unwrap();
-        let day_start_naive = date.and_hms_opt(0, 0, 0).ok_or_else(|| {
-            anyhow::anyhow!("invalid midnight for date {}", date)
-        })?;
+        let day_start_naive = date
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| anyhow::anyhow!("invalid midnight for date {}", date))?;
         let day_start_utc = utc8
             .from_local_datetime(&day_start_naive)
             .single()
@@ -989,7 +989,9 @@ impl CkbadgerStore {
         {
             let mut bn = day_start_block + 1;
             while bn <= end_block_inclusive {
-                let Some(h) = self.get_block_header(bn)? else { break; };
+                let Some(h) = self.get_block_header(bn)? else {
+                    break;
+                };
                 if h.timestamp >= day_end_ms {
                     break;
                 }
@@ -1029,15 +1031,20 @@ impl CkbadgerStore {
                 p.cumulative_depositors,
                 p.secondary_pool,
             ),
-            None => (0i128, 0i128, 0i64, 0i64, 0i128, 0i128, 0i128, 0i128, 0i64, 0i64, 0i128),
+            None => (
+                0i128, 0i128, 0i64, 0i64, 0i128, 0i128, 0i128, 0i128, 0i64, 0i64, 0i128,
+            ),
         };
 
         // 4. Scan dao_deposits CF once. Group entries by (deposit_block_number,
         //    withdraw_request_block, withdraw_block) for block-by-block walk.
         //    Also build the "prior_ever_deposited" set for cumulative_depositors.
-        let mut by_deposit_block: HashMap<i64, Vec<crate::types::DaoDepositCacheEntry>> = HashMap::new();
-        let mut by_phase1_block: HashMap<i64, Vec<crate::types::DaoDepositCacheEntry>> = HashMap::new();
-        let mut by_phase2_block: HashMap<i64, Vec<crate::types::DaoDepositCacheEntry>> = HashMap::new();
+        let mut by_deposit_block: HashMap<i64, Vec<crate::types::DaoDepositCacheEntry>> =
+            HashMap::new();
+        let mut by_phase1_block: HashMap<i64, Vec<crate::types::DaoDepositCacheEntry>> =
+            HashMap::new();
+        let mut by_phase2_block: HashMap<i64, Vec<crate::types::DaoDepositCacheEntry>> =
+            HashMap::new();
         let mut prior_ever_deposited: HashSet<Vec<u8>> = HashSet::new();
 
         self.scan_dao_deposits(|_key, entry| {
@@ -1106,38 +1113,54 @@ impl CkbadgerStore {
                 for d in deposits {
                     running_total_deposited = running_total_deposited
                         .checked_add(d.capacity as i128)
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "total_deposited overflow during recompute: block_num={}", block_num
-                        ))?;
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "total_deposited overflow during recompute: block_num={}",
+                                block_num
+                            )
+                        })?;
                     running_cumulative_deposit = running_cumulative_deposit
                         .checked_add(d.capacity as i128)
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "cumulative_deposit_amount overflow during recompute: block_num={}", block_num
-                        ))?;
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "cumulative_deposit_amount overflow during recompute: block_num={}",
+                                block_num
+                            )
+                        })?;
                     running_protocol_deposited = running_protocol_deposited
                         .checked_add(d.capacity as i128)
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "protocol_deposited overflow during recompute: block_num={}", block_num
-                        ))?;
-                    running_new_deposits = running_new_deposits
-                        .checked_add(1)
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "new_deposits overflow during recompute: block_num={}", block_num
-                        ))?;
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "protocol_deposited overflow during recompute: block_num={}",
+                                block_num
+                            )
+                        })?;
+                    running_new_deposits =
+                        running_new_deposits.checked_add(1).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "new_deposits overflow during recompute: block_num={}",
+                                block_num
+                            )
+                        })?;
                     daily_depositor_locks.insert(d.lock_script_hash.clone());
                     if !prior_ever_deposited.contains(&d.lock_script_hash) {
                         prior_ever_deposited.insert(d.lock_script_hash.clone());
                         running_cumulative_depositors = running_cumulative_depositors
                             .checked_add(1)
-                            .ok_or_else(|| anyhow::anyhow!(
-                                "cumulative_depositors overflow during recompute: block_num={}", block_num
-                            ))?;
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "cumulative_depositors overflow during recompute: block_num={}",
+                                    block_num
+                                )
+                            })?;
                     }
-                    running_total_depositors = running_total_depositors
-                        .checked_add(1)
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "depositors_count overflow during recompute: block_num={}", block_num
-                        ))?;
+                    running_total_depositors =
+                        running_total_depositors.checked_add(1).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "depositors_count overflow during recompute: block_num={}",
+                                block_num
+                            )
+                        })?;
                 }
             }
 
@@ -1147,14 +1170,19 @@ impl CkbadgerStore {
                 for p in phase1s {
                     running_total_deposited = running_total_deposited
                         .checked_sub(p.capacity as i128)
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "total_deposited phase-1 underflow during recompute: block_num={}", block_num
-                        ))?;
-                    running_total_depositors = running_total_depositors
-                        .checked_sub(1)
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "depositors_count phase-1 underflow during recompute: block_num={}", block_num
-                        ))?;
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "total_deposited phase-1 underflow during recompute: block_num={}",
+                                block_num
+                            )
+                        })?;
+                    running_total_depositors =
+                        running_total_depositors.checked_sub(1).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "depositors_count phase-1 underflow during recompute: block_num={}",
+                                block_num
+                            )
+                        })?;
                 }
             }
 
@@ -1177,22 +1205,29 @@ impl CkbadgerStore {
                         .ok_or_else(|| anyhow::anyhow!(
                             "protocol_deposited phase-2 underflow during recompute: block_num={}", block_num
                         ))?;
-                    running_withdrawals = running_withdrawals
-                        .checked_add(1)
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "withdrawals overflow during recompute: block_num={}", block_num
-                        ))?;
+                    running_withdrawals = running_withdrawals.checked_add(1).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "withdrawals overflow during recompute: block_num={}",
+                            block_num
+                        )
+                    })?;
                 }
             }
 
             // 5d. Secondary issuance delta for this block.
             let s_delta = s.checked_sub(prev_s).ok_or_else(|| {
-                anyhow::anyhow!("secondary_pool s_delta overflow during recompute: block_num={}", block_num)
+                anyhow::anyhow!(
+                    "secondary_pool s_delta overflow during recompute: block_num={}",
+                    block_num
+                )
             })?;
             let non_miner_delta = s_delta
                 .checked_add(claimed_compensation_in_block)
                 .ok_or_else(|| {
-                    anyhow::anyhow!("non_miner_delta overflow during recompute: block_num={}", block_num)
+                    anyhow::anyhow!(
+                        "non_miner_delta overflow during recompute: block_num={}",
+                        block_num
+                    )
                 })?;
             if non_miner_delta > 0 {
                 let (miner, dao_share, treasury) = split_secondary_issuance_for_recompute(
@@ -1202,14 +1237,24 @@ impl CkbadgerStore {
                     non_miner_delta,
                 )?;
                 running_cum_miner = running_cum_miner.checked_add(miner).ok_or_else(|| {
-                    anyhow::anyhow!("cum_miner_secondary overflow during recompute: block_num={}", block_num)
+                    anyhow::anyhow!(
+                        "cum_miner_secondary overflow during recompute: block_num={}",
+                        block_num
+                    )
                 })?;
                 running_cum_dao = running_cum_dao.checked_add(dao_share).ok_or_else(|| {
-                    anyhow::anyhow!("cum_dao_compensation overflow during recompute: block_num={}", block_num)
+                    anyhow::anyhow!(
+                        "cum_dao_compensation overflow during recompute: block_num={}",
+                        block_num
+                    )
                 })?;
-                running_cum_treasury = running_cum_treasury.checked_add(treasury).ok_or_else(|| {
-                    anyhow::anyhow!("cum_treasury overflow during recompute: block_num={}", block_num)
-                })?;
+                running_cum_treasury =
+                    running_cum_treasury.checked_add(treasury).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "cum_treasury overflow during recompute: block_num={}",
+                            block_num
+                        )
+                    })?;
             }
             prev_s = s;
         }

@@ -1268,10 +1268,12 @@ impl CkbadgerStore {
             let uncles_entry = stats_date_uncles.entry(date_str.clone()).or_insert(0);
             *uncles_entry = uncles_entry
                 .checked_add(header.uncles_count)
-                .ok_or_else(|| anyhow::anyhow!(
-                    "uncles_count overflow during rollback delta accumulation: block_num={}",
-                    block_num
-                ))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "uncles_count overflow during rollback delta accumulation: block_num={}",
+                        block_num
+                    )
+                })?;
             block_date_map.insert(block_num, (date_str, hour_str));
 
             batch.delete_cf(self.cf_block_headers(), &key);
@@ -2151,11 +2153,7 @@ impl CkbadgerStore {
                 // the inner WriteBatch and merge its serialized operations into
                 // the main batch so all rollback writes commit atomically.
                 let mut recompute_batch = crate::batch::StoreBatch::new(self);
-                self.recompute_dao_daily_snapshot_for_date(
-                    d,
-                    rollback_to,
-                    &mut recompute_batch,
-                )?;
+                self.recompute_dao_daily_snapshot_for_date(d, rollback_to, &mut recompute_batch)?;
                 let recompute_wb = recompute_batch.into_write_batch();
                 if !recompute_wb.is_empty() {
                     // Merge via RocksDB WriteBatch wire format:
@@ -2163,16 +2161,19 @@ impl CkbadgerStore {
                     let main_data = batch.data();
                     let extra_data = recompute_wb.data();
                     let main_count = u32::from_le_bytes(
-                        main_data[8..12].try_into().expect("WriteBatch header >= 12 bytes"),
+                        main_data[8..12]
+                            .try_into()
+                            .expect("WriteBatch header >= 12 bytes"),
                     );
                     let extra_count = u32::from_le_bytes(
-                        extra_data[8..12].try_into().expect("WriteBatch header >= 12 bytes"),
+                        extra_data[8..12]
+                            .try_into()
+                            .expect("WriteBatch header >= 12 bytes"),
                     );
                     let total_count = main_count.checked_add(extra_count).expect(
                         "WriteBatch operation count overflow during DAO snapshot recompute merge",
                     );
-                    let mut merged =
-                        Vec::with_capacity(main_data.len() + extra_data.len() - 12);
+                    let mut merged = Vec::with_capacity(main_data.len() + extra_data.len() - 12);
                     merged.extend_from_slice(&main_data[..8]); // sequence from main
                     merged.extend_from_slice(&total_count.to_le_bytes()); // combined count
                     merged.extend_from_slice(&main_data[12..]); // ops from main
@@ -6913,7 +6914,10 @@ mod tests {
             .get_daily_block_stats("20260408")
             .unwrap()
             .expect("DailyBlockStats for 20260408 must still exist after partial-day rollback");
-        assert_eq!(repaired.block_count, 3, "block_count must be 3 after rollback");
+        assert_eq!(
+            repaired.block_count, 3,
+            "block_count must be 3 after rollback"
+        );
         assert_eq!(
             repaired.total_uncles,
             1,

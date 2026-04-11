@@ -744,7 +744,7 @@ mod tests {
                 epoch_length: 1800,
                 dao: vec![0x00; 32],
                 transactions_count: 1,
-            uncles_count: 0,
+                uncles_count: 0,
                 cycles: None,
             };
 
