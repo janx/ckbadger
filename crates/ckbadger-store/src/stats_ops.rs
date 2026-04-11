@@ -932,6 +932,411 @@ impl CkbadgerStore {
 
         Ok(results)
     }
+
+    /// Recompute the DAO daily snapshot for a single date from the canonical
+    /// `dao_deposits` CF plus `block_headers` CF. Used by reorg rollback to
+    /// rebuild the cutoff-date snapshot after a partial-day rollback.
+    ///
+    /// `date` is the target UTC+8 date (e.g., 2026-04-08).
+    /// `end_block_inclusive` is the highest block number to include (typically
+    /// the rollback target for partial-day reorgs, or the last block of the
+    /// day for cross-day reorgs).
+    ///
+    /// Assumes:
+    /// - `dao_deposits` CF is in its post-rollback normalized state (i.e.,
+    ///   `repair_and_rebuild_dao_indexes` has already run).
+    /// - `block_headers` CF still contains all headers for blocks up to
+    ///   `end_block_inclusive`.
+    pub fn recompute_dao_daily_snapshot_for_date(
+        &self,
+        date: chrono::NaiveDate,
+        end_block_inclusive: i64,
+        batch: &mut crate::batch::StoreBatch,
+    ) -> anyhow::Result<()> {
+        use crate::types::DaoDailySnapshot;
+        use ckbadger_common::CKB_UTC8_OFFSET;
+        use chrono::{FixedOffset, TimeZone};
+        use std::collections::{HashMap, HashSet};
+
+        // 1. Compute the UTC ms bounds of the target UTC+8 date.
+        let utc8 = FixedOffset::east_opt(CKB_UTC8_OFFSET).unwrap();
+        let day_start_naive = date.and_hms_opt(0, 0, 0).ok_or_else(|| {
+            anyhow::anyhow!("invalid midnight for date {}", date)
+        })?;
+        let day_start_utc = utc8
+            .from_local_datetime(&day_start_naive)
+            .single()
+            .ok_or_else(|| anyhow::anyhow!("ambiguous day start for {}", date))?;
+        let day_end_utc = day_start_utc + chrono::Duration::days(1);
+        let day_start_ms = day_start_utc.timestamp_millis();
+        let day_end_ms = day_end_utc.timestamp_millis();
+
+        // 2. Locate the first block whose timestamp >= day_start_ms, bounded
+        //    above by end_block_inclusive.
+        let Some(day_start_block) = self.find_first_block_at_or_after_ms(day_start_ms)? else {
+            return Ok(()); // no blocks at or after this date — nothing to recompute
+        };
+        if day_start_block > end_block_inclusive {
+            return Ok(()); // day_start is after our upper bound
+        }
+
+        // Walk forward to find the last block on this date <= end_block_inclusive.
+        let mut day_end_block = day_start_block;
+        {
+            let mut bn = day_start_block + 1;
+            while bn <= end_block_inclusive {
+                let Some(h) = self.get_block_header(bn)? else { break; };
+                if h.timestamp >= day_end_ms {
+                    break;
+                }
+                day_end_block = bn;
+                bn += 1;
+            }
+        }
+
+        // 3. Load previous day's snapshot as the starting baseline.
+        let prev_date = date - chrono::Duration::days(1);
+        let prev_date_key = prev_date.format("%Y%m%d").to_string();
+        let prev_snap = self.get_dao_daily_snapshot(&prev_date_key)?;
+
+        let (
+            mut running_total_deposited,
+            mut running_protocol_deposited,
+            mut running_new_deposits,
+            mut running_withdrawals,
+            mut running_cumulative_deposit,
+            mut running_cum_miner,
+            mut running_cum_dao,
+            mut running_cum_treasury,
+            mut running_total_depositors,
+            mut running_cumulative_depositors,
+            mut prev_s,
+        ) = match prev_snap.as_ref() {
+            Some(p) => (
+                p.total_deposited,
+                p.protocol_deposited.unwrap_or(p.total_deposited),
+                p.new_deposits,
+                p.withdrawals,
+                p.cumulative_deposit_amount,
+                p.cum_miner_secondary,
+                p.cum_dao_compensation,
+                p.cum_treasury,
+                p.depositors_count,
+                p.cumulative_depositors,
+                p.secondary_pool,
+            ),
+            None => (0i128, 0i128, 0i64, 0i64, 0i128, 0i128, 0i128, 0i128, 0i64, 0i64, 0i128),
+        };
+
+        // 4. Scan dao_deposits CF once. Group entries by (deposit_block_number,
+        //    withdraw_request_block, withdraw_block) for block-by-block walk.
+        //    Also build the "prior_ever_deposited" set for cumulative_depositors.
+        let mut by_deposit_block: HashMap<i64, Vec<crate::types::DaoDepositCacheEntry>> = HashMap::new();
+        let mut by_phase1_block: HashMap<i64, Vec<crate::types::DaoDepositCacheEntry>> = HashMap::new();
+        let mut by_phase2_block: HashMap<i64, Vec<crate::types::DaoDepositCacheEntry>> = HashMap::new();
+        let mut prior_ever_deposited: HashSet<Vec<u8>> = HashSet::new();
+
+        self.scan_dao_deposits(|_key, entry| {
+            // For cumulative_depositors delta: any deposit with deposit_block_number
+            // strictly before our day_start_block counts as "previously seen".
+            if entry.deposit_block_number < day_start_block {
+                prior_ever_deposited.insert(entry.lock_script_hash.clone());
+            }
+            if entry.deposit_block_number >= day_start_block
+                && entry.deposit_block_number <= day_end_block
+            {
+                by_deposit_block
+                    .entry(entry.deposit_block_number)
+                    .or_default()
+                    .push(entry.clone());
+            }
+            if let Some(wrb) = entry.withdraw_request_block {
+                if wrb >= day_start_block && wrb <= day_end_block {
+                    by_phase1_block.entry(wrb).or_default().push(entry.clone());
+                }
+            }
+            if let Some(wb) = entry.withdraw_block {
+                if wb >= day_start_block && wb <= day_end_block {
+                    by_phase2_block.entry(wb).or_default().push(entry.clone());
+                }
+            }
+            Ok(())
+        })?;
+
+        // Track unique lock hashes for daily_depositor_addresses.
+        let mut daily_depositor_locks: HashSet<Vec<u8>> = HashSet::new();
+
+        // 5. Walk blocks day_start_block..=day_end_block, applying deltas.
+        let mut last_header_ar: u64 = 0;
+        let mut last_header_c: i128 = 0;
+        let mut last_header_s: i128 = 0;
+        let mut last_header_u: i128 = 0;
+        for block_num in day_start_block..=day_end_block {
+            let header = self.get_block_header(block_num)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing block header during DAO snapshot recompute: block_num={}",
+                    block_num
+                )
+            })?;
+            let (c, s, u) = extract_dao_csu(&header.dao).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "invalid DAO field during recompute: block_num={}, dao_len={}",
+                    block_num,
+                    header.dao.len()
+                )
+            })?;
+            let ar = extract_dao_ar(&header.dao).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "invalid AR during recompute: block_num={}, dao_len={}",
+                    block_num,
+                    header.dao.len()
+                )
+            })?;
+            last_header_ar = ar;
+            last_header_c = c;
+            last_header_s = s;
+            last_header_u = u;
+
+            // 5a. Deposits created in this block.
+            if let Some(deposits) = by_deposit_block.get(&block_num) {
+                for d in deposits {
+                    running_total_deposited = running_total_deposited
+                        .checked_add(d.capacity as i128)
+                        .ok_or_else(|| anyhow::anyhow!(
+                            "total_deposited overflow during recompute: block_num={}", block_num
+                        ))?;
+                    running_cumulative_deposit = running_cumulative_deposit
+                        .checked_add(d.capacity as i128)
+                        .ok_or_else(|| anyhow::anyhow!(
+                            "cumulative_deposit_amount overflow during recompute: block_num={}", block_num
+                        ))?;
+                    running_protocol_deposited = running_protocol_deposited
+                        .checked_add(d.capacity as i128)
+                        .ok_or_else(|| anyhow::anyhow!(
+                            "protocol_deposited overflow during recompute: block_num={}", block_num
+                        ))?;
+                    running_new_deposits = running_new_deposits
+                        .checked_add(1)
+                        .ok_or_else(|| anyhow::anyhow!(
+                            "new_deposits overflow during recompute: block_num={}", block_num
+                        ))?;
+                    daily_depositor_locks.insert(d.lock_script_hash.clone());
+                    if !prior_ever_deposited.contains(&d.lock_script_hash) {
+                        prior_ever_deposited.insert(d.lock_script_hash.clone());
+                        running_cumulative_depositors = running_cumulative_depositors
+                            .checked_add(1)
+                            .ok_or_else(|| anyhow::anyhow!(
+                                "cumulative_depositors overflow during recompute: block_num={}", block_num
+                            ))?;
+                    }
+                    running_total_depositors = running_total_depositors
+                        .checked_add(1)
+                        .ok_or_else(|| anyhow::anyhow!(
+                            "depositors_count overflow during recompute: block_num={}", block_num
+                        ))?;
+                }
+            }
+
+            // 5b. Phase-1 (withdraw request) in this block. Subtract from active
+            //     total_deposited but NOT from protocol_deposited (cell still locked).
+            if let Some(phase1s) = by_phase1_block.get(&block_num) {
+                for p in phase1s {
+                    running_total_deposited = running_total_deposited
+                        .checked_sub(p.capacity as i128)
+                        .ok_or_else(|| anyhow::anyhow!(
+                            "total_deposited phase-1 underflow during recompute: block_num={}", block_num
+                        ))?;
+                    running_total_depositors = running_total_depositors
+                        .checked_sub(1)
+                        .ok_or_else(|| anyhow::anyhow!(
+                            "depositors_count phase-1 underflow during recompute: block_num={}", block_num
+                        ))?;
+                }
+            }
+
+            // 5c. Phase-2 (withdraw completion) in this block. Increment withdrawals
+            //     count, subtract from protocol_deposited, and accumulate claimed
+            //     compensation for the secondary-issuance split.
+            let claimed_compensation_in_block: i128 = by_phase2_block
+                .get(&block_num)
+                .map(|v| {
+                    v.iter()
+                        .filter_map(|e| e.compensation)
+                        .map(i128::from)
+                        .sum()
+                })
+                .unwrap_or(0);
+            if let Some(phase2s) = by_phase2_block.get(&block_num) {
+                for p in phase2s {
+                    running_protocol_deposited = running_protocol_deposited
+                        .checked_sub(p.capacity as i128)
+                        .ok_or_else(|| anyhow::anyhow!(
+                            "protocol_deposited phase-2 underflow during recompute: block_num={}", block_num
+                        ))?;
+                    running_withdrawals = running_withdrawals
+                        .checked_add(1)
+                        .ok_or_else(|| anyhow::anyhow!(
+                            "withdrawals overflow during recompute: block_num={}", block_num
+                        ))?;
+                }
+            }
+
+            // 5d. Secondary issuance delta for this block.
+            let s_delta = s.checked_sub(prev_s).ok_or_else(|| {
+                anyhow::anyhow!("secondary_pool s_delta overflow during recompute: block_num={}", block_num)
+            })?;
+            let non_miner_delta = s_delta
+                .checked_add(claimed_compensation_in_block)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("non_miner_delta overflow during recompute: block_num={}", block_num)
+                })?;
+            if non_miner_delta > 0 {
+                let (miner, dao_share, treasury) = split_secondary_issuance_for_recompute(
+                    c,
+                    u,
+                    running_protocol_deposited,
+                    non_miner_delta,
+                )?;
+                running_cum_miner = running_cum_miner.checked_add(miner).ok_or_else(|| {
+                    anyhow::anyhow!("cum_miner_secondary overflow during recompute: block_num={}", block_num)
+                })?;
+                running_cum_dao = running_cum_dao.checked_add(dao_share).ok_or_else(|| {
+                    anyhow::anyhow!("cum_dao_compensation overflow during recompute: block_num={}", block_num)
+                })?;
+                running_cum_treasury = running_cum_treasury.checked_add(treasury).ok_or_else(|| {
+                    anyhow::anyhow!("cum_treasury overflow during recompute: block_num={}", block_num)
+                })?;
+            }
+            prev_s = s;
+        }
+
+        // 6. End-of-day unmade DAO interests: uses the last block's AR over all
+        //    currently-active deposits in dao_deposits CF (already normalized).
+        let unmade_dao_interests = if last_header_ar > 0 {
+            self.compute_unmade_dao_interests(last_header_ar)?
+        } else {
+            0
+        };
+
+        // 7. Write the rebuilt snapshot.
+        let snapshot = DaoDailySnapshot {
+            date: date.format("%Y-%m-%d").to_string(),
+            total_deposited: running_total_deposited,
+            depositors_count: running_total_depositors,
+            new_deposits: running_new_deposits,
+            withdrawals: running_withdrawals,
+            compensation: running_cum_dao,
+            cumulative_deposit_amount: running_cumulative_deposit,
+            total_issuance: last_header_c,
+            secondary_pool: last_header_s,
+            occupied_capacity: last_header_u,
+            cum_miner_secondary: running_cum_miner,
+            cum_dao_compensation: running_cum_dao,
+            cum_treasury: running_cum_treasury,
+            unmade_dao_interests,
+            unclaimed_compensation: 0, // refreshed by refresh_latest_dao_statistics post-reorg
+            cumulative_depositors: running_cumulative_depositors,
+            daily_depositor_addresses: daily_depositor_locks.len() as i64,
+            protocol_deposited: Some(running_protocol_deposited),
+        };
+        let key = keys::encode_stats_key(
+            keys::stats_prefix::DAO_DAILY_SNAPSHOT,
+            date.format("%Y%m%d").to_string().as_bytes(),
+        );
+        batch.put_stats(&key, &bincode::serialize(&snapshot)?);
+        Ok(())
+    }
+
+    /// Binary-search `block_headers` to find the first block whose timestamp
+    /// is >= `ms`. Returns None if no such block exists.
+    fn find_first_block_at_or_after_ms(&self, ms: i64) -> anyhow::Result<Option<i64>> {
+        let (tip, _) = match self.get_sync_tip_block()? {
+            Some(x) => x,
+            None => return Ok(None),
+        };
+        let mut lo: i64 = 0;
+        let mut hi: i64 = tip;
+        let mut result: Option<i64> = None;
+        while lo <= hi {
+            let mid = lo + (hi - lo) / 2;
+            match self.get_block_header(mid)? {
+                Some(h) => {
+                    if h.timestamp >= ms {
+                        result = Some(mid);
+                        hi = mid - 1;
+                    } else {
+                        lo = mid + 1;
+                    }
+                }
+                None => {
+                    // Hole in block_headers — search above (higher blocks may
+                    // still exist for dense CF).
+                    lo = mid + 1;
+                }
+            }
+        }
+        Ok(result)
+    }
+}
+
+fn extract_dao_csu(dao: &[u8]) -> Option<(i128, i128, i128)> {
+    if dao.len() < 32 {
+        return None;
+    }
+    let c = u64::from_le_bytes(dao[0..8].try_into().ok()?) as i128;
+    let s = u64::from_le_bytes(dao[16..24].try_into().ok()?) as i128;
+    let u = u64::from_le_bytes(dao[24..32].try_into().ok()?) as i128;
+    Some((c, s, u))
+}
+
+fn extract_dao_ar(dao: &[u8]) -> Option<u64> {
+    if dao.len() < 16 {
+        return None;
+    }
+    Some(u64::from_le_bytes(dao[8..16].try_into().ok()?))
+}
+
+/// Split a positive `non_miner_secondary` amount into (miner, dao, treasury).
+/// Mirrors `crates/indexer/src/sync/dao_helpers.rs::split_secondary_issuance`
+/// but lives here to avoid a cross-crate dep from store → indexer.
+fn split_secondary_issuance_for_recompute(
+    total_issuance: i128,
+    occupied_capacity: i128,
+    total_deposited: i128,
+    non_miner_secondary: i128,
+) -> anyhow::Result<(i128, i128, i128)> {
+    if non_miner_secondary <= 0 {
+        return Ok((0, 0, 0));
+    }
+    if total_issuance < 0 || occupied_capacity < 0 || total_deposited < 0 {
+        anyhow::bail!(
+            "negative input in secondary issuance split during recompute: total_issuance={}, occupied_capacity={}, total_deposited={}",
+            total_issuance, occupied_capacity, total_deposited
+        );
+    }
+    if total_issuance <= occupied_capacity {
+        anyhow::bail!(
+            "invalid DAO C/U relationship during recompute: total_issuance={}, occupied_capacity={}",
+            total_issuance, occupied_capacity
+        );
+    }
+    let denom = total_issuance - occupied_capacity;
+    if total_deposited > denom {
+        anyhow::bail!(
+            "dao deposited exceeds liquid supply during recompute: total_deposited={}, liquid_supply={}",
+            total_deposited, denom
+        );
+    }
+    let miner = non_miner_secondary * occupied_capacity / denom;
+    let dao = non_miner_secondary * total_deposited / denom;
+    let treasury = non_miner_secondary - dao;
+    if miner < 0 || dao < 0 || treasury < 0 {
+        anyhow::bail!(
+            "secondary issuance split produced negative component during recompute: miner={}, dao={}, treasury={}",
+            miner, dao, treasury
+        );
+    }
+    Ok((miner, dao, treasury))
 }
 
 #[cfg(test)]
