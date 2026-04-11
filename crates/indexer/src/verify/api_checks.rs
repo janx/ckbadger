@@ -27,6 +27,10 @@ const TOP_ASSET_LIMIT: usize = 10;
 const TOP_HOLDER_LIMIT: usize = 10;
 const IDENTITY_HOLDER_SPOT_CHECK_LIMIT: usize = 10;
 const ADDRESS_TOKENS_LIMIT: usize = 100;
+// Safety cap for paginating /addresses/{addr}/tokens when searching for a
+// specific top-holder's token. 1000 pages x 100 = 100k tokens; exceeding this
+// is almost certainly a data bug, so hitting the cap is reported as a finding.
+const ADDRESS_TOKENS_MAX_PAGES: usize = 1000;
 
 // ---------------------------------------------------------------------------
 // Lightweight API response types (deserialized from ckbadger API JSON).
@@ -402,22 +406,58 @@ fn token_holder_balance_mismatch_details(
 ) -> anyhow::Result<Vec<String>> {
     let mut details = vec![];
     let holder_balance_value = parse_i128_strict(holder_balance, "token holder balance")?;
-    let address_tokens: CursorPage<AddressTokenApiRecord> = api_get(
-        ctx,
-        &format!(
-            "addresses/{}/tokens?limit={}",
-            holder_lock_hash, ADDRESS_TOKENS_LIMIT
-        ),
-    )?;
     let token_key = normalize_hex_key(token_type_hash);
-    let token_entry = address_tokens
-        .data
-        .iter()
-        .find(|entry| normalize_hex_key(&entry.type_script_hash) == token_key);
 
-    match token_entry {
-        Some(entry) => {
-            let address_balance = parse_i128_strict(&entry.balance, "address token balance")?;
+    // The address-tokens list is sorted by balance DESC, so a holder with
+    // more than ADDRESS_TOKENS_LIMIT (100) distinct tokens can legitimately
+    // have the target token beyond page 1 — e.g. a whale wallet whose other
+    // positions have larger raw balances than this token. Paginate through
+    // the full list until we find the target or exhaust the pages.
+    let mut cursor: Option<String> = None;
+    let mut pages_scanned = 0usize;
+    let mut found_balance: Option<i128> = None;
+    loop {
+        let path = match cursor.as_deref() {
+            Some(c) => format!(
+                "addresses/{}/tokens?limit={}&cursor={}",
+                holder_lock_hash, ADDRESS_TOKENS_LIMIT, c
+            ),
+            None => format!(
+                "addresses/{}/tokens?limit={}",
+                holder_lock_hash, ADDRESS_TOKENS_LIMIT
+            ),
+        };
+        let page: CursorPage<AddressTokenApiRecord> = api_get(ctx, &path)?;
+        pages_scanned += 1;
+
+        if let Some(entry) = page
+            .data
+            .iter()
+            .find(|entry| normalize_hex_key(&entry.type_script_hash) == token_key)
+        {
+            found_balance = Some(parse_i128_strict(&entry.balance, "address token balance")?);
+            break;
+        }
+
+        match page.next_cursor {
+            Some(next) => {
+                if pages_scanned >= ADDRESS_TOKENS_MAX_PAGES {
+                    details.push(format!(
+                        "address tokens scan exceeded cap of {} pages (~{} tokens) without finding 0x{}",
+                        ADDRESS_TOKENS_MAX_PAGES,
+                        ADDRESS_TOKENS_MAX_PAGES * ADDRESS_TOKENS_LIMIT,
+                        token_key
+                    ));
+                    return Ok(details);
+                }
+                cursor = Some(next);
+            }
+            None => break,
+        }
+    }
+
+    match found_balance {
+        Some(address_balance) => {
             if address_balance != holder_balance_value {
                 details.push(format!(
                     "token balance mismatch: holders={} address_tokens={}",
@@ -426,14 +466,10 @@ fn token_holder_balance_mismatch_details(
             }
         }
         None => {
-            if address_tokens.next_cursor.is_some() {
-                details.push(format!(
-                    "address tokens list (limit={}) truncated and missing token 0x{}",
-                    ADDRESS_TOKENS_LIMIT, token_key
-                ));
-            } else {
-                details.push(format!("address tokens list missing token 0x{}", token_key));
-            }
+            details.push(format!(
+                "address tokens list missing token 0x{} after scanning {} page(s)",
+                token_key, pages_scanned
+            ));
         }
     }
 
@@ -3534,6 +3570,204 @@ mod tests {
 
         assert!(response.data.is_empty());
         assert_eq!(response.total, Some(0));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// Mock responder that returns a pre-computed list of response bodies
+    /// in call order. Used to simulate multi-page paginated endpoints.
+    struct SequentialPagesResponder {
+        calls: Arc<AtomicUsize>,
+        pages: Vec<serde_json::Value>,
+    }
+
+    impl Respond for SequentialPagesResponder {
+        fn respond(&self, _: &Request) -> ResponseTemplate {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            let body = self
+                .pages
+                .get(n)
+                .cloned()
+                .unwrap_or_else(|| json!({ "data": [], "nextCursor": null }));
+            ResponseTemplate::new(200).set_body_json(body)
+        }
+    }
+
+    fn decoy_address_tokens_page(count: usize) -> Vec<serde_json::Value> {
+        (0..count)
+            .map(|i| {
+                json!({
+                    "typeScriptHash": format!("0x{:064x}", i + 1),
+                    "balance": "99999999999999",
+                })
+            })
+            .collect()
+    }
+
+    fn address_tokens_ctx(server: &MockServer) -> CheckContext {
+        CheckContext {
+            api_url: format!("{}/api/v1", server.uri()),
+            rpc_url: None,
+            explorer_url: None,
+            http: reqwest::blocking::Client::new(),
+            sample_count: 10,
+            seed: 42,
+            tolerance: 0.001,
+            cache_dir: None,
+        }
+    }
+
+    /// Regression: a top holder of token T may own more distinct UDTs than
+    /// fit on a single page of `/addresses/{addr}/tokens` (which is sorted
+    /// by raw balance DESC). The check used to fetch only page 1 and then
+    /// spuriously report "truncated and missing" whenever the target token
+    /// sat beyond position 100 in the holder's own balance ranking.
+    /// The fix paginates until the token is found.
+    #[test]
+    fn test_token_holder_balance_paginates_across_pages_until_found() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let holder = "0xdeadbeef";
+        let target_hash = "0x8328e4b543901b123b17f4e5f5b5af2a98a3901627feddef21a0a539b3a3fe35";
+        let target_balance = "12345";
+
+        let pages = vec![
+            json!({
+                "data": decoy_address_tokens_page(100),
+                "nextCursor": "cursor_to_page_2",
+            }),
+            json!({
+                "data": [
+                    {
+                        "typeScriptHash": target_hash,
+                        "balance": target_balance,
+                    }
+                ],
+                "nextCursor": null,
+            }),
+        ];
+
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/addresses/{}/tokens", holder)))
+                .respond_with(SequentialPagesResponder {
+                    calls: calls.clone(),
+                    pages,
+                })
+                .mount(&server)
+                .await;
+        });
+
+        let ctx = address_tokens_ctx(&server);
+        let details =
+            token_holder_balance_mismatch_details(&ctx, target_hash, holder, target_balance)
+                .expect("no transport error");
+        assert!(
+            details.is_empty(),
+            "expected no findings when token is found on a later page, got: {:?}",
+            details
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// The check must still flag a truly missing token after exhausting all
+    /// pages (next_cursor = null). This guards against the fix silently
+    /// masking a real indexer inconsistency between
+    /// `token_holders_by_balance` and `addr_tokens_by_balance`.
+    #[test]
+    fn test_token_holder_balance_reports_missing_after_full_scan() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let holder = "0xcafef00d";
+        let target_hash = "0x8328e4b543901b123b17f4e5f5b5af2a98a3901627feddef21a0a539b3a3fe35";
+
+        let pages = vec![
+            json!({
+                "data": decoy_address_tokens_page(100),
+                "nextCursor": "c1",
+            }),
+            json!({
+                "data": decoy_address_tokens_page(50),
+                "nextCursor": null,
+            }),
+        ];
+
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/addresses/{}/tokens", holder)))
+                .respond_with(SequentialPagesResponder {
+                    calls: calls.clone(),
+                    pages,
+                })
+                .mount(&server)
+                .await;
+        });
+
+        let ctx = address_tokens_ctx(&server);
+        let details = token_holder_balance_mismatch_details(&ctx, target_hash, holder, "1000")
+            .expect("no transport error");
+        assert_eq!(details.len(), 1);
+        assert!(
+            details[0].contains("missing token") && details[0].contains("after scanning 2 page(s)"),
+            "unexpected details: {:?}",
+            details
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// When the target token is found on a later page but its balance does
+    /// not match the value reported by the token holders list, the check
+    /// must still flag the mismatch.
+    #[test]
+    fn test_token_holder_balance_detects_mismatch_on_later_page() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let holder = "0xbeefcafe";
+        let target_hash = "0x8328e4b543901b123b17f4e5f5b5af2a98a3901627feddef21a0a539b3a3fe35";
+
+        let pages = vec![
+            json!({
+                "data": decoy_address_tokens_page(100),
+                "nextCursor": "c1",
+            }),
+            json!({
+                "data": [
+                    {
+                        "typeScriptHash": target_hash,
+                        "balance": "500",
+                    }
+                ],
+                "nextCursor": null,
+            }),
+        ];
+
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/addresses/{}/tokens", holder)))
+                .respond_with(SequentialPagesResponder {
+                    calls: calls.clone(),
+                    pages,
+                })
+                .mount(&server)
+                .await;
+        });
+
+        let ctx = address_tokens_ctx(&server);
+        let details = token_holder_balance_mismatch_details(&ctx, target_hash, holder, "1000")
+            .expect("no transport error");
+        assert_eq!(details.len(), 1);
+        assert!(
+            details[0].contains("token balance mismatch")
+                && details[0].contains("holders=1000")
+                && details[0].contains("address_tokens=500"),
+            "unexpected details: {:?}",
+            details
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
