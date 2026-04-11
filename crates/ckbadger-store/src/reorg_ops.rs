@@ -2118,6 +2118,78 @@ impl CkbadgerStore {
                     stats_removed, "rollback: cutoff-day stats repaired via delta subtraction"
                 );
             }
+
+            // 7b. Recompute DAO daily snapshots for all dates affected by
+            // the rollback. Runs AFTER the dao_deposits repair stage and
+            // AFTER the date-scoped stats deletion. This reads the now-correct
+            // dao_deposits CF and walks block_headers forward from the start
+            // of each affected date to produce fully correct snapshots —
+            // including cum_miner_secondary / cum_dao_compensation / cum_treasury
+            // and secondary_pool / total_issuance / occupied_capacity re-read
+            // from the last surviving block's DAO header.
+            //
+            // Runs for both partial-day and cross-day rollbacks:
+            // - Partial-day: recomputes just the cutoff date up to rollback_to
+            // - Cross-day: recomputes every date from fork_point_date through
+            //   cutoff_date (inclusive), each bounded by its end-of-day block.
+            let cutoff_naive = chrono::NaiveDate::parse_from_str(cutoff, "%Y%m%d")
+                .map_err(|e| anyhow::anyhow!("invalid cutoff_date {}: {}", cutoff, e))?;
+            let recompute_start = if let Some(fpd) = fork_point_date.as_deref() {
+                chrono::NaiveDate::parse_from_str(fpd, "%Y%m%d")
+                    .map_err(|e| anyhow::anyhow!("invalid fork_point_date {}: {}", fpd, e))?
+            } else {
+                cutoff_naive
+            };
+            let mut dao_recompute_stage =
+                RollbackStageProgress::new("recompute_dao_daily_snapshots");
+            let mut ticks = 0u64;
+            let mut d = recompute_start;
+            while d <= cutoff_naive {
+                // recompute_dao_daily_snapshot_for_date takes &mut StoreBatch,
+                // while rollback_to_block accumulates into a raw WriteBatch.
+                // Build a temporary StoreBatch, run the recompute, then extract
+                // the inner WriteBatch and merge its serialized operations into
+                // the main batch so all rollback writes commit atomically.
+                let mut recompute_batch = crate::batch::StoreBatch::new(self);
+                self.recompute_dao_daily_snapshot_for_date(
+                    d,
+                    rollback_to,
+                    &mut recompute_batch,
+                )?;
+                let recompute_wb = recompute_batch.into_write_batch();
+                if !recompute_wb.is_empty() {
+                    // Merge via RocksDB WriteBatch wire format:
+                    // [0..8] sequence (u64 LE), [8..12] entry count (u32 LE), [12..] ops.
+                    let main_data = batch.data();
+                    let extra_data = recompute_wb.data();
+                    let main_count = u32::from_le_bytes(
+                        main_data[8..12].try_into().expect("WriteBatch header >= 12 bytes"),
+                    );
+                    let extra_count = u32::from_le_bytes(
+                        extra_data[8..12].try_into().expect("WriteBatch header >= 12 bytes"),
+                    );
+                    let total_count = main_count.checked_add(extra_count).expect(
+                        "WriteBatch operation count overflow during DAO snapshot recompute merge",
+                    );
+                    let mut merged =
+                        Vec::with_capacity(main_data.len() + extra_data.len() - 12);
+                    merged.extend_from_slice(&main_data[..8]); // sequence from main
+                    merged.extend_from_slice(&total_count.to_le_bytes()); // combined count
+                    merged.extend_from_slice(&main_data[12..]); // ops from main
+                    merged.extend_from_slice(&extra_data[12..]); // ops from recompute
+                    batch = WriteBatch::from_data(&merged);
+                }
+                ticks += 1;
+                dao_recompute_stage.tick(ticks);
+                d += chrono::Duration::days(1);
+            }
+            dao_recompute_stage.finish(ticks);
+            info!(
+                cutoff = cutoff,
+                recompute_start = %recompute_start,
+                dates = ticks,
+                "rollback: recomputed DAO daily snapshots from dao_deposits"
+            );
         }
 
         // 8. Delete token_transfers entries > rollback_to

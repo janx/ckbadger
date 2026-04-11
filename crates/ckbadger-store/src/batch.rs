@@ -59,6 +59,24 @@ impl<'a> StoreBatch<'a> {
         self.batch.size_in_bytes()
     }
 
+    /// Extract the inner domain `WriteBatch`, consuming the `StoreBatch`.
+    ///
+    /// # Panics
+    /// Panics if this `StoreBatch` has any pending append-only operations,
+    /// because those cannot be represented in a plain `WriteBatch`. Only
+    /// use this method when the batch contains only domain-store writes.
+    pub fn into_write_batch(self) -> WriteBatch {
+        assert!(
+            self.append_ops.is_empty(),
+            "StoreBatch::into_write_batch: cannot extract WriteBatch when append_ops is non-empty"
+        );
+        assert!(
+            self.pending_dao_deposits.is_empty(),
+            "StoreBatch::into_write_batch: cannot extract WriteBatch when pending_dao_deposits is non-empty"
+        );
+        self.batch
+    }
+
     /// Merge another `StoreBatch` into this one.
     ///
     /// Both batches must reference the same `CkbadgerStore` instance.
