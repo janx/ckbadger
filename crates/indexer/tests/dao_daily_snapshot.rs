@@ -267,6 +267,187 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
     );
 }
 
+/// Phase-1 rollback: the deposit was created at block 99 (before rollback_to),
+/// and a phase-1 withdraw request was issued at block 101 (in rolled-back
+/// range). Pre-reorg, the entry has status=1 (phase-1 requested).
+/// After rollback to block 100, the entry should be normalized back to status=0
+/// by repair_and_rebuild_dao_indexes. The recomputed 2026-04-08 snapshot should
+/// show the deposit as still active (total_deposited = 100 CKB, 0 withdrawals).
+#[test]
+fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
+    let store = setup_store();
+
+    // All three blocks on 2026-04-08 UTC+8.
+    let day_0408_start_ms: i64 = 1_775_577_600_000 + 10_000;
+    let day_0408_mid_ms: i64 = 1_775_577_600_000 + 30_000;
+    let day_0408_late_ms: i64 = 1_775_577_600_000 + 60_000;
+
+    let mut batch = StoreBatch::new(&store);
+
+    // Block 99: earlier in 2026-04-08, the deposit-creating block.
+    batch.put_block_header(99, &CachedBlockHeader {
+        hash: vec![0x63; 32],
+        parent_hash: vec![0x62; 32],
+        timestamp: day_0408_start_ms,
+        epoch_number: 2,
+        epoch_index: 0,
+        epoch_length: 1800,
+        dao: dao_field(
+            1_100_000_000_000_000_000,
+            10_050_000_000_000_000,
+            5_000_000,
+            110_000_000_000_000_000,
+        ),
+        transactions_count: 1,
+        uncles_count: 0,
+        cycles: None,
+    });
+    // Block 100: the rollback target.
+    batch.put_block_header(100, &CachedBlockHeader {
+        hash: vec![0x64; 32],
+        parent_hash: vec![0x63; 32],
+        timestamp: day_0408_mid_ms,
+        epoch_number: 2,
+        epoch_index: 1,
+        epoch_length: 1800,
+        dao: dao_field(
+            1_150_000_000_000_000_000,
+            10_075_000_000_000_000,
+            7_500_000,
+            115_000_000_000_000_000,
+        ),
+        transactions_count: 1,
+        uncles_count: 0,
+        cycles: None,
+    });
+    // Block 101: the rolled-back block containing the phase-1 request.
+    batch.put_block_header(101, &CachedBlockHeader {
+        hash: vec![0x65; 32],
+        parent_hash: vec![0x64; 32],
+        timestamp: day_0408_late_ms,
+        epoch_number: 2,
+        epoch_index: 2,
+        epoch_length: 1800,
+        dao: dao_field(
+            1_200_000_000_000_000_000,
+            10_100_000_000_000_000,
+            10_000_000,
+            120_000_000_000_000_000,
+        ),
+        transactions_count: 2,
+        uncles_count: 0,
+        cycles: None,
+    });
+
+    // Yesterday (2026-04-07) snapshot: zero baseline.
+    let y_key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20260407");
+    let y_snap = DaoDailySnapshot {
+        date: "2026-04-07".to_string(),
+        total_deposited: 0,
+        depositors_count: 0,
+        new_deposits: 0,
+        withdrawals: 0,
+        compensation: 0,
+        cumulative_deposit_amount: 0,
+        total_issuance: 1_000_000_000_000_000_000,
+        secondary_pool: 0,
+        occupied_capacity: 100_000_000_000_000_000,
+        cum_miner_secondary: 0,
+        cum_dao_compensation: 0,
+        cum_treasury: 0,
+        unmade_dao_interests: 0,
+        unclaimed_compensation: 0,
+        cumulative_depositors: 0,
+        daily_depositor_addresses: 0,
+        protocol_deposited: Some(0),
+    };
+    batch.put_stats(&y_key, &bincode::serialize(&y_snap).unwrap());
+
+    // Pre-reorg 2026-04-08 snapshot: 1 deposit created, 0 active (already
+    // phase-1 withdrawn pre-reorg). new_deposits=1, withdrawals=0
+    // (phase-1 doesn't count as completed withdrawal, phase-2 does).
+    let s_key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20260408");
+    let pre_snap = DaoDailySnapshot {
+        date: "2026-04-08".to_string(),
+        total_deposited: 0, // already phase-1 withdrawn pre-reorg
+        depositors_count: 0,
+        new_deposits: 1,
+        withdrawals: 0, // phase-1 doesn't count as completed withdrawal
+        compensation: 0,
+        cumulative_deposit_amount: 100_00000000,
+        total_issuance: 1_200_000_000_000_000_000,
+        secondary_pool: 10_000_000,
+        occupied_capacity: 120_000_000_000_000_000,
+        cum_miner_secondary: 0,
+        cum_dao_compensation: 0,
+        cum_treasury: 0,
+        unmade_dao_interests: 0,
+        unclaimed_compensation: 0,
+        cumulative_depositors: 1,
+        daily_depositor_addresses: 1,
+        protocol_deposited: Some(100_00000000),
+    };
+    batch.put_stats(&s_key, &bincode::serialize(&pre_snap).unwrap());
+
+    // Deposit entry in its pre-reorg state: status=1 (phase-1 at block 101).
+    let tx_hash: Vec<u8> = vec![0xA0; 32];
+    let outpoint = outpoint_bytes(&tx_hash, 0);
+    let entry = DaoDepositCacheEntry {
+        capacity: 100_00000000,
+        deposit_block_number: 99,
+        deposit_timestamp: day_0408_start_ms,
+        lock_script_hash: vec![0xB0; 32],
+        deposit_ar: 10_050_000_000_000_000,
+        status: 1,
+        withdraw_request_tx: Some(vec![0xA1; 32]),
+        withdraw_request_output_index: Some(0),
+        withdraw_request_block: Some(101),
+        withdraw_request_ar: Some(10_100_000_000_000_000),
+        withdraw_block: None,
+        withdraw_tx: None,
+        withdraw_to_output_index: None,
+        compensation: None,
+    };
+    batch.put_dao_deposit(&outpoint, &entry);
+    batch.commit().unwrap();
+
+    store.update_sync_status(|s| {
+        s.tip_block_number = 101;
+        s.tip_block_hash = vec![0x65; 32];
+    }).unwrap();
+
+    // ACT: rollback to block 100 — phase-1 at block 101 is undone.
+    store.rollback_to_block(100).unwrap();
+
+    // ASSERT: after recompute, the deposit should be active again.
+    let raw = store.get_stats_key(&s_key)
+        .expect("get_stats_key succeeded")
+        .expect("snapshot for 2026-04-08 must exist after rollback repair");
+    let repaired: DaoDailySnapshot = bincode::deserialize(&raw).unwrap();
+
+    assert_eq!(
+        repaired.total_deposited, 100_00000000,
+        "deposit should be active again after rolling back its phase-1 withdraw request, got {}",
+        repaired.total_deposited
+    );
+    assert_eq!(
+        repaired.new_deposits, 1,
+        "new_deposits unchanged (deposit itself pre-dated rollback)"
+    );
+    assert_eq!(
+        repaired.withdrawals, 0,
+        "no completed withdrawals"
+    );
+    assert_eq!(
+        repaired.depositors_count, 1,
+        "one active depositor"
+    );
+    assert_eq!(
+        repaired.protocol_deposited, Some(100_00000000),
+        "protocol_deposited includes the now-active deposit"
+    );
+}
+
 /// Cross-day rollback: block 100 on 2026-04-07 end-of-day, blocks 101 and 102
 /// on 2026-04-08 each with one deposit. Rollback to block 100 — drops ALL of
 /// 2026-04-08.
