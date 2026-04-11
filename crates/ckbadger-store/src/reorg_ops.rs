@@ -14,6 +14,9 @@ use crate::types::*;
 struct RollbackStatsDeltas {
     /// Per-date: (blocks, txs, cells_created, cells_consumed)
     date: HashMap<String, (i32, i32, i32, i32)>,
+    /// Per-date rolled-back uncle count (from CachedBlockHeader.uncles_count).
+    /// Used to repair DailyBlockStats.total_uncles on the cutoff date.
+    date_uncles: HashMap<String, i32>,
     /// Per-hour: (blocks, txs, cells_created, cells_consumed)
     hour: HashMap<String, (i32, i32, i32, i32)>,
     /// Per-date: (cap_transferred, used_cap_created, used_cap_consumed, data_created, data_consumed)
@@ -294,7 +297,11 @@ fn repair_cutoff_date_stats(
                 return Ok(false);
             }
             let rb_blocks = deltas.date.get(date_str).map_or(0, |d| d.0);
-            if rb_blocks == 0 {
+            // Absence in date_uncles means no rolled-back block on this date
+            // carried an uncle — a legitimate default of 0, not a masked bad
+            // state. (Matches the pre-existing pattern for rb_blocks above.)
+            let rb_uncles = deltas.date_uncles.get(date_str).copied().unwrap_or(0);
+            if rb_blocks == 0 && rb_uncles == 0 {
                 return Ok(false);
             }
             let mut s: DailyBlockStats = bincode::deserialize(value).map_err(|e| {
@@ -308,8 +315,33 @@ fn repair_cutoff_date_stats(
             if s.block_count <= 0 {
                 return Ok(false); // all blocks rolled back — delete
             }
-            // avg_difficulty and total_uncles: kept unchanged.
-            // For shallow reorgs (1-2 blocks out of ~720/day), the error is negligible.
+            // Subtract rolled-back uncles. Fail-fast if this would go negative,
+            // which indicates the delta collection is out of sync with persisted
+            // state (e.g., historical rows missing uncles_count after a schema
+            // upgrade without re-sync).
+            s.total_uncles = s.total_uncles.checked_sub(rb_uncles).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "daily_block total_uncles underflow on rollback repair: date={}, stored_uncles={}, rolled_back_uncles={}",
+                    date_str,
+                    s.total_uncles,
+                    rb_uncles
+                )
+            })?;
+            // checked_sub only catches arithmetic overflow (result below i32::MIN),
+            // not simply "went negative" — `0i32.checked_sub(5) == Some(-5)`. This
+            // explicit guard catches the case where stored total_uncles is smaller
+            // than the rolled-back count, indicating delta collection is out of
+            // sync with persisted state.
+            if s.total_uncles < 0 {
+                anyhow::bail!(
+                    "daily_block total_uncles went negative on rollback repair: date={}, result={}",
+                    date_str,
+                    s.total_uncles
+                );
+            }
+            // avg_difficulty is kept unchanged: per-block difficulty is not stored
+            // in CachedBlockHeader, and shallow reorgs don't meaningfully change
+            // the daily average.
             let cf = store.stats_cf_by_prefix(prefix)?;
             let encoded = bincode::serialize(&s)
                 .map_err(|e| anyhow::anyhow!("serialize daily_block repair: {}", e))?;
@@ -1195,6 +1227,8 @@ impl CkbadgerStore {
         // block_date_map: block_num → (date_yyyymmdd, hour_yyyymmddhh) for
         // rolled-back blocks, used for per-date stats delta subtraction.
         let mut block_date_map: HashMap<i64, (String, String)> = HashMap::new();
+        // Per-date rolled-back uncle count, populated during block header deletion loop.
+        let mut stats_date_uncles: HashMap<String, i32> = HashMap::new();
 
         // 1. Delete block headers > rollback_to
         let mut stage = RollbackStageProgress::new("delete_block_headers");
@@ -1230,6 +1264,14 @@ impl CkbadgerStore {
             let block_dt = ckbadger_common::block_datetime_from_ms(header.timestamp);
             let date_str = block_dt.format("%Y%m%d").to_string();
             let hour_str = block_dt.format("%Y%m%d%H").to_string();
+            // Accumulate per-date uncle count for repair_cutoff_date_stats.
+            let uncles_entry = stats_date_uncles.entry(date_str.clone()).or_insert(0);
+            *uncles_entry = uncles_entry
+                .checked_add(header.uncles_count)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "uncles_count overflow during rollback delta accumulation: block_num={}",
+                    block_num
+                ))?;
             block_date_map.insert(block_num, (date_str, hour_str));
 
             batch.delete_cf(self.cf_block_headers(), &key);
@@ -2007,6 +2049,7 @@ impl CkbadgerStore {
 
             let rollback_deltas = RollbackStatsDeltas {
                 date: stats_date_deltas,
+                date_uncles: stats_date_uncles,
                 hour: stats_hour_deltas,
                 date_capacity: stats_date_capacity_deltas,
                 activity_date: activity_date_deltas,
@@ -6583,6 +6626,7 @@ mod tests {
 
         let deltas = RollbackStatsDeltas {
             date: std::collections::HashMap::new(),
+            date_uncles: std::collections::HashMap::new(),
             hour: std::collections::HashMap::new(),
             date_capacity: std::collections::HashMap::new(),
             activity_date,
@@ -6637,6 +6681,7 @@ mod tests {
 
         let deltas = RollbackStatsDeltas {
             date: date_deltas,
+            date_uncles: std::collections::HashMap::new(),
             hour: std::collections::HashMap::new(),
             date_capacity: std::collections::HashMap::new(),
             activity_date: std::collections::HashMap::new(),
@@ -6685,6 +6730,7 @@ mod tests {
         // Empty miner deltas — this miner not rolled back
         let deltas = RollbackStatsDeltas {
             date: std::collections::HashMap::new(),
+            date_uncles: std::collections::HashMap::new(),
             hour: std::collections::HashMap::new(),
             date_capacity: std::collections::HashMap::new(),
             activity_date: std::collections::HashMap::new(),
