@@ -976,6 +976,10 @@ impl CkbadgerStore {
         let Some(day_start_block) = self.find_first_block_at_or_after_ms(day_start_ms)? else {
             return Ok(()); // no blocks at or after this date — nothing to recompute
         };
+        // NOTE: find_first_block_at_or_after_ms reads the live DB (pre-rollback-
+        // committed state), so day_start_block may be > end_block_inclusive if
+        // the first block on this date is itself being rolled back. This early
+        // return correctly handles that case — do NOT remove this guard.
         if day_start_block > end_block_inclusive {
             return Ok(()); // day_start is after our upper bound
         }

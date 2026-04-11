@@ -2652,7 +2652,7 @@ async fn test_charts_block_time_distribution_with_data() {
                 epoch_length: 3,
                 dao: vec![0; 32],
                 transactions_count: 1,
-            uncles_count: 0,
+                uncles_count: 0,
                 cycles: None,
             },
         );

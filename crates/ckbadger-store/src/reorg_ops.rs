@@ -6448,7 +6448,7 @@ mod tests {
                     epoch_length: 1800,
                     dao: vec![0; 32],
                     transactions_count: 0,
-            uncles_count: 0,
+                    uncles_count: 0,
                     cycles: None,
                 },
             );
@@ -6503,7 +6503,7 @@ mod tests {
                     epoch_length: 1800,
                     dao: vec![0; 32],
                     transactions_count: 3,
-            uncles_count: 0,
+                    uncles_count: 0,
                     cycles: None,
                 },
             );
