@@ -6706,4 +6706,101 @@ mod tests {
 
         assert!(repaired, "unaffected MINER should be preserved (Ok(true))");
     }
+
+    #[test]
+    fn test_rollback_repairs_daily_block_stats_total_uncles() {
+        // 2026-04-08 00:00 UTC+8 = 2026-04-07 16:00 UTC = 1775577600000 ms.
+        // All four block timestamps land on 2026-04-08 in UTC+8, so:
+        //   - fork_point (block 3) date == "20260408"
+        //   - rolled-back block (block 4) date == "20260408"
+        //   - is_partial_day == true → repair_cutoff_date_stats runs
+        let day_start_ms: i64 = 1775577600000;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let headers = [
+            CachedBlockHeader {
+                hash: vec![0x01; 32],
+                parent_hash: vec![0u8; 32],
+                timestamp: day_start_ms + 1000,
+                epoch_number: 1,
+                epoch_index: 0,
+                epoch_length: 1800,
+                dao: vec![0u8; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                cycles: None,
+            },
+            CachedBlockHeader {
+                hash: vec![0x02; 32],
+                parent_hash: vec![0x01; 32],
+                timestamp: day_start_ms + 2000,
+                epoch_number: 1,
+                epoch_index: 1,
+                epoch_length: 1800,
+                dao: vec![0u8; 32],
+                transactions_count: 1,
+                uncles_count: 1, // this block has an uncle
+                cycles: None,
+            },
+            CachedBlockHeader {
+                hash: vec![0x03; 32],
+                parent_hash: vec![0x02; 32],
+                timestamp: day_start_ms + 3000,
+                epoch_number: 1,
+                epoch_index: 2,
+                epoch_length: 1800,
+                dao: vec![0u8; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                cycles: None,
+            },
+            CachedBlockHeader {
+                hash: vec![0x04; 32],
+                parent_hash: vec![0x03; 32],
+                timestamp: day_start_ms + 4000,
+                epoch_number: 1,
+                epoch_index: 3,
+                epoch_length: 1800,
+                dao: vec![0u8; 32],
+                transactions_count: 1,
+                uncles_count: 1, // this block (to be rolled back) has an uncle
+                cycles: None,
+            },
+        ];
+
+        let mut batch = StoreBatch::new(&store);
+        for (i, h) in headers.iter().enumerate() {
+            batch.put_block_header(i as i64 + 1, h);
+        }
+        batch.commit().unwrap();
+
+        // Seed pre-reorg DailyBlockStats: 4 blocks, 2 uncles.
+        let pre_reorg = crate::types::DailyBlockStats {
+            avg_difficulty: 1.0,
+            block_count: 4,
+            total_uncles: 2,
+            avg_block_time_ms: Some(1000),
+        };
+        store.put_daily_block_stats("20260408", &pre_reorg).unwrap();
+
+        // Rollback block 4 — the one with 1 uncle.
+        // rollback_to=3 means block 4 is removed.
+        store.rollback_to_block(3).unwrap();
+
+        // Verify: DailyBlockStats for 2026-04-08 should now have
+        // block_count=3, total_uncles=1 (not 2).
+        let repaired = store
+            .get_daily_block_stats("20260408")
+            .unwrap()
+            .expect("DailyBlockStats for 20260408 must still exist after partial-day rollback");
+        assert_eq!(repaired.block_count, 3, "block_count must be 3 after rollback");
+        assert_eq!(
+            repaired.total_uncles,
+            1,
+            "total_uncles must be decremented from 2 → 1 when the rolled-back block had 1 uncle (currently {})",
+            repaired.total_uncles
+        );
+    }
 }
