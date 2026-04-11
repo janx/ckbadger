@@ -622,3 +622,235 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
         }
     }
 }
+
+/// I1 edge case: a depositor has BOTH a pre-day deposit AND a same-day
+/// deposit in the rolled-back range. Verify cumulative_depositors is
+/// not double-counted.
+///
+/// Setup:
+///   - Block 99: 2026-04-07 end — deposit from lock 0xB0 (survives rollback)
+///   - Block 100: 2026-04-08 — no deposits (rollback target)
+///   - Block 101: 2026-04-08 — second deposit from SAME lock 0xB0 (rolled back)
+///
+/// After rollback to block 100, fork_point_date = cutoff_date = 2026-04-08
+/// (block 100 timestamp is 2026-04-08). Only the 2026-04-08 snapshot is
+/// recomputed. The surviving range (block 100 only) has no deposits, so all
+/// counts must be inherited from the 2026-04-07 baseline — in particular,
+/// cumulative_depositors must remain 1, NOT become 2 (double-counting lock 0xB0
+/// from the rolled-back block 101 deposit).
+#[test]
+fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
+    let store = setup_store();
+
+    // 2026-04-08 00:00 UTC+8 = 1775577600000
+    let day_0407_late_ms: i64 = 1_775_577_600_000 - 5_000;
+    let day_0408_t1_ms: i64 = 1_775_577_600_000 + 10_000;
+    let day_0408_t2_ms: i64 = 1_775_577_600_000 + 20_000;
+
+    let mut batch = StoreBatch::new(&store);
+
+    // Block 99: 2026-04-07 end — deposit from lock 0xB0
+    batch.put_block_header(99, &CachedBlockHeader {
+        hash: vec![0x63; 32],
+        parent_hash: vec![0x62; 32],
+        timestamp: day_0407_late_ms,
+        epoch_number: 1,
+        epoch_index: 99,
+        epoch_length: 1800,
+        dao: dao_field(
+            1_000_000_000_000_000_000,
+            10_000_000_000_000_000,
+            0,
+            100_000_000_000_000_000,
+        ),
+        transactions_count: 1,
+        uncles_count: 0,
+        cycles: None,
+    });
+    // Block 100: 2026-04-08 first block — no deposits (rollback target)
+    batch.put_block_header(100, &CachedBlockHeader {
+        hash: vec![0x64; 32],
+        parent_hash: vec![0x63; 32],
+        timestamp: day_0408_t1_ms,
+        epoch_number: 2,
+        epoch_index: 0,
+        epoch_length: 1800,
+        dao: dao_field(
+            1_050_000_000_000_000_000,
+            10_025_000_000_000_000,
+            2_500_000,
+            105_000_000_000_000_000,
+        ),
+        transactions_count: 1,
+        uncles_count: 0,
+        cycles: None,
+    });
+    // Block 101: 2026-04-08 second block — second deposit from SAME lock 0xB0 (rolled back)
+    batch.put_block_header(101, &CachedBlockHeader {
+        hash: vec![0x65; 32],
+        parent_hash: vec![0x64; 32],
+        timestamp: day_0408_t2_ms,
+        epoch_number: 2,
+        epoch_index: 1,
+        epoch_length: 1800,
+        dao: dao_field(
+            1_100_000_000_000_000_000,
+            10_050_000_000_000_000,
+            5_000_000,
+            110_000_000_000_000_000,
+        ),
+        transactions_count: 2,
+        uncles_count: 0,
+        cycles: None,
+    });
+
+    // Yesterday (2026-04-06) snapshot: zero baseline.
+    let y06_snap = DaoDailySnapshot {
+        date: "2026-04-06".to_string(),
+        total_deposited: 0,
+        depositors_count: 0,
+        new_deposits: 0,
+        withdrawals: 0,
+        compensation: 0,
+        cumulative_deposit_amount: 0,
+        total_issuance: 1_000_000_000_000_000_000,
+        secondary_pool: 0,
+        occupied_capacity: 100_000_000_000_000_000,
+        cum_miner_secondary: 0,
+        cum_dao_compensation: 0,
+        cum_treasury: 0,
+        unmade_dao_interests: 0,
+        unclaimed_compensation: 0,
+        cumulative_depositors: 0,
+        daily_depositor_addresses: 0,
+        protocol_deposited: Some(0),
+    };
+    let y06_key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20260406");
+    batch.put_stats(&y06_key, &bincode::serialize(&y06_snap).unwrap());
+
+    // Pre-reorg 2026-04-07 snapshot: 1 deposit (200 CKB) from lock 0xB0
+    let s07_snap = DaoDailySnapshot {
+        date: "2026-04-07".to_string(),
+        total_deposited: 200_00000000,
+        depositors_count: 1,
+        new_deposits: 1,
+        withdrawals: 0,
+        compensation: 0,
+        cumulative_deposit_amount: 200_00000000,
+        total_issuance: 1_000_000_000_000_000_000,
+        secondary_pool: 0,
+        occupied_capacity: 100_000_000_000_000_000,
+        cum_miner_secondary: 0,
+        cum_dao_compensation: 0,
+        cum_treasury: 0,
+        unmade_dao_interests: 0,
+        unclaimed_compensation: 0,
+        cumulative_depositors: 1,
+        daily_depositor_addresses: 1,
+        protocol_deposited: Some(200_00000000),
+    };
+    let s07_key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20260407");
+    batch.put_stats(&s07_key, &bincode::serialize(&s07_snap).unwrap());
+
+    // Pre-reorg 2026-04-08 snapshot: second deposit (200 CKB) from same lock 0xB0.
+    // cumulative_depositors stays 1 (same lock, not a new unique depositor).
+    // daily_depositor_addresses = 1 (only one lock deposited on 04-08).
+    let s08_snap = DaoDailySnapshot {
+        date: "2026-04-08".to_string(),
+        total_deposited: 400_00000000,
+        depositors_count: 2,
+        new_deposits: 2,
+        withdrawals: 0,
+        compensation: 0,
+        cumulative_deposit_amount: 400_00000000,
+        total_issuance: 1_100_000_000_000_000_000,
+        secondary_pool: 5_000_000,
+        occupied_capacity: 110_000_000_000_000_000,
+        cum_miner_secondary: 0,
+        cum_dao_compensation: 0,
+        cum_treasury: 0,
+        unmade_dao_interests: 0,
+        unclaimed_compensation: 0,
+        cumulative_depositors: 1, // still 1 — same lock, not a new unique depositor
+        daily_depositor_addresses: 1,
+        protocol_deposited: Some(400_00000000),
+    };
+    let s08_key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20260408");
+    batch.put_stats(&s08_key, &bincode::serialize(&s08_snap).unwrap());
+
+    // Two deposit entries — both from lock 0xB0.
+    // Use 200 CKB (>= DAO_OCCUPIED_CAPACITY of 102 CKB) to satisfy validation.
+    let entry_99 = DaoDepositCacheEntry {
+        capacity: 200_00000000,
+        deposit_block_number: 99,
+        deposit_timestamp: day_0407_late_ms,
+        lock_script_hash: vec![0xB0; 32],
+        deposit_ar: 10_000_000_000_000_000,
+        status: 0,
+        withdraw_request_tx: None,
+        withdraw_request_output_index: None,
+        withdraw_request_block: None,
+        withdraw_request_ar: None,
+        withdraw_block: None,
+        withdraw_tx: None,
+        withdraw_to_output_index: None,
+        compensation: None,
+    };
+    let entry_101 = DaoDepositCacheEntry {
+        capacity: 200_00000000,
+        deposit_block_number: 101,
+        deposit_timestamp: day_0408_t2_ms,
+        lock_script_hash: vec![0xB0; 32], // SAME lock
+        deposit_ar: 10_050_000_000_000_000,
+        status: 0,
+        withdraw_request_tx: None,
+        withdraw_request_output_index: None,
+        withdraw_request_block: None,
+        withdraw_request_ar: None,
+        withdraw_block: None,
+        withdraw_tx: None,
+        withdraw_to_output_index: None,
+        compensation: None,
+    };
+    batch.put_dao_deposit(&outpoint_bytes(&vec![0xA0; 32], 0), &entry_99);
+    batch.put_dao_deposit(&outpoint_bytes(&vec![0xA1; 32], 0), &entry_101);
+    batch.commit().unwrap();
+
+    store.update_sync_status(|s| {
+        s.tip_block_number = 101;
+        s.tip_block_hash = vec![0x65; 32];
+    }).unwrap();
+
+    // ACT: rollback to block 100 — drops block 101 only.
+    // fork_point_date = cutoff_date = 2026-04-08, so only 2026-04-08 is recomputed.
+    store.rollback_to_block(100).unwrap();
+
+    // ASSERT: 2026-04-07 snapshot is NOT recomputed (fork_point is on 2026-04-08).
+    // It should still have its pre-existing value.
+    let raw_07 = store
+        .get_stats_key(&s07_key)
+        .expect("get_stats_key for 04-07 succeeded")
+        .expect("2026-04-07 snapshot must still exist");
+    let snap_07: DaoDailySnapshot = bincode::deserialize(&raw_07).unwrap();
+    assert_eq!(snap_07.cumulative_depositors, 1, "04-07 cumulative_depositors unchanged");
+
+    // ASSERT: 2026-04-08 snapshot IS recomputed. The surviving range (block 100
+    // only) contains no DAO deposits, so the 2026-04-08 values should exactly
+    // match the 2026-04-07 snapshot's baseline — in particular, cumulative_depositors
+    // must NOT be 2 (which would double-count the same lock across rolled-back days).
+    let raw_08 = store
+        .get_stats_key(&s08_key)
+        .expect("get_stats_key for 04-08 succeeded")
+        .expect("2026-04-08 snapshot must exist after rollback recompute");
+    let snap_08: DaoDailySnapshot = bincode::deserialize(&raw_08).unwrap();
+    assert_eq!(
+        snap_08.cumulative_depositors, 1,
+        "04-08 cumulative_depositors must NOT double-count the repeat lock across the rolled-back day"
+    );
+    assert_eq!(snap_08.total_deposited, 200_00000000, "04-08 total_deposited inherited from 04-07");
+    assert_eq!(snap_08.depositors_count, 1, "04-08 depositors_count inherited");
+    assert_eq!(snap_08.new_deposits, 1, "04-08 new_deposits inherited");
+    assert_eq!(snap_08.cumulative_deposit_amount, 200_00000000, "04-08 cumulative_deposit_amount inherited");
+    assert_eq!(snap_08.daily_depositor_addresses, 0, "04-08 no new same-day depositors after rollback");
+    assert_eq!(snap_08.protocol_deposited, Some(200_00000000), "04-08 protocol_deposited inherited");
+}
