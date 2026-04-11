@@ -1118,4 +1118,62 @@ return Ok(true);  // BUG: triggers immediate retry
 
 ---
 
-_Last updated: 2026-02-22_
+## Category: NervosDAO
+
+### DAO-021: Partial-day reorg corrupts cutoff-date snapshots and daily_block_stats uncles
+
+**Date**: 2026-04-10
+**Affected**: `dao_daily_snapshots` (all fields), `daily_block_stats.total_uncles`
+
+**Symptom**: On mainnet with multiple tip reorgs per day, the `explorer_total_deposit`,
+`explorer_daily_deposit`, and `explorer_uncle_rate` verify checks all failed.
+Inspection showed `dao_daily_snapshots.total_deposited` / `cumulative_deposit_amount`
+frozen at the previous day's value with tiny bumps corresponding to only the
+last handful of rolled-back-and-replayed blocks, and `daily_block_stats.total_uncles`
+over-counted by 1 per rolled-back block that had contained an uncle.
+
+**Root cause**:
+
+1. `CachedBlockHeader` did not store `uncles_count`, so the reorg rollback path
+   had no way to decrement `total_uncles` — the existing code decremented only
+   `block_count` with a comment dismissing the error as "negligible for shallow
+   reorgs of 1-2 blocks out of ~720/day", not realizing daily block count is
+   ~7500 and that errors compound across many reorgs.
+2. `repair_cutoff_date_stats` had no case for `STATS_PREFIX_DAO_DAILY_SNAPSHOT`,
+   so `should_delete_stats_for_replay` deleted the cutoff-date DAO snapshot
+   unconditionally. When live sync replayed the rolled-back blocks, it loaded
+   `latest_snapshot` (now the previous day's snapshot) and added only the
+   replay-block deltas, silently dropping all contributions from the
+   non-rolled-back portion of the cutoff date.
+
+**Fix**:
+
+1. Added `uncles_count: i32` to `CachedBlockHeader` and populated it in both
+   the live-sync writer (`crates/indexer/src/db/writer/chain.rs`) and the
+   bulk-build writer (`crates/indexer/src/sync/bulk_build/mod.rs`).
+2. Extended `RollbackStatsDeltas` with `date_uncles` and populated it during
+   the block header deletion loop.
+3. Extended `repair_cutoff_date_stats`' `STATS_PREFIX_DAILY_BLOCK` case to
+   subtract `total_uncles` with a fail-fast underflow check (both the
+   `checked_sub` overflow guard AND an explicit `< 0` bail, because
+   `i32::checked_sub` only catches arithmetic overflow, not "went negative").
+4. Added `CkbadgerStore::recompute_dao_daily_snapshot_for_date` that scans
+   the authoritative `dao_deposits` CF (one pass, grouping by
+   deposit/phase1/phase2 block) and walks block headers forward to recompute
+   a single date's snapshot from scratch, including all cumulative secondary
+   issuance splits.
+5. Added a new reorg stage `recompute_dao_daily_snapshots` that runs after
+   `delete_stats_from_cutoff` and invokes the recompute for every date from
+   `fork_point_date` through `cutoff_date`.
+6. Added integration tests in `crates/indexer/tests/dao_daily_snapshot.rs`
+   covering partial-day, cross-day, and phase-1-in-rollback-range cases.
+
+**Re-sync required**: Yes. The `uncles_count` field is new and reads as `0`
+for pre-existing rows via `#[serde(default)]`, so the uncles repair would
+undercount if any rolled-back block has a pre-fix header. Per CLAUDE.md Sync
+Bug Policy, the correct procedure is: land the fix, run `ckbadger purge`,
+re-sync from genesis.
+
+---
+
+_Last updated: 2026-04-10_

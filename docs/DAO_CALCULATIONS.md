@@ -240,7 +240,7 @@ DAO-related state is split across several CFs:
 | Statistic                    | Trigger                                                  | Function                                                  |
 | ---------------------------- | -------------------------------------------------------- | --------------------------------------------------------- |
 | Secondary issuance breakdown | For each processed block when `blocks_remaining <= 1000` | `update_secondary_issuance()`                             |
-| DAO extended statistics hook | When crossing 1000-block boundaries in non-bulk mode     | `recalculate_dao_extended_statistics()` (currently no-op) |
+| Reorg cutoff-date repair     | After partial-day rollback                                | `CkbadgerStore::recompute_dao_daily_snapshot_for_date()` + `repair_cutoff_date_stats` |
 | Daily snapshots              | Daily                                                    | `update_dao_daily_snapshot()`                             |
 
 > **Note:** Estimated APC served by DAO APIs is derived from the latest `DaoDailySnapshot` + protocol constants, not from a periodically persisted `estimated_apc` field.
