@@ -1292,9 +1292,22 @@ impl ChainStatsAccumulator {
             if block.epoch_index == 0 && block.epoch_number > 0 {
                 if let Some((prev_epoch_num, prev_start_ts)) = self.prev_epoch {
                     if prev_epoch_num == block.epoch_number - 1 {
-                        let epoch_duration_minutes =
-                            (block.timestamp_ms - prev_start_ts) as f64 / 60_000.0;
+                        let duration_ms = block.timestamp_ms - prev_start_ts;
+                        let epoch_duration_minutes = duration_ms as f64 / 60_000.0;
                         let bucket_minutes = epoch_duration_minutes.round() as i32;
+                        if bucket_minutes <= 0 {
+                            anyhow::bail!(
+                                "epoch time distribution: invalid bucket_minutes={} \
+                                 for epoch {} (prev_epoch={}, duration_ms={}, \
+                                 block={}, prev_start_ts={})",
+                                bucket_minutes,
+                                block.epoch_number,
+                                prev_epoch_num,
+                                duration_ms,
+                                block.number,
+                                prev_start_ts,
+                            );
+                        }
                         *self.epoch_time_dist.entry(bucket_minutes).or_default() += 1;
                     }
                 }
@@ -1457,14 +1470,20 @@ impl ChainStatsAccumulator {
                 chrono::DateTime::from_timestamp(start_ts_ms / 1000, 0).unwrap_or_default();
             let end_timestamp =
                 chrono::DateTime::from_timestamp(end_ts_ms / 1000, 0).unwrap_or_default();
+            let blocks_count = (end_block - start_block + 1) as i32;
+            let is_complete = blocks_count >= length;
             let stats = ckbadger_store::types::EpochStats {
                 epoch_number,
                 start_block,
                 end_block: Some(end_block),
-                blocks_count: (end_block - start_block + 1) as i32,
+                blocks_count,
                 length,
                 start_timestamp,
-                end_timestamp: Some(end_timestamp),
+                end_timestamp: if is_complete {
+                    Some(end_timestamp)
+                } else {
+                    None
+                },
                 transactions_count: tx_count,
             };
             rows.push(materialize::MaterializedRow::new(
@@ -6952,7 +6971,8 @@ mod tests {
                     epoch_number: 6,
                     epoch_index: 0,
                     epoch_length: 1750,
-                    timestamp_ms: 1_700_000_020_000,
+                    // 240 minutes (4 hours) after epoch 5 start
+                    timestamp_ms: 1_700_000_000_000 + 14_400_000,
                     transactions_count: 1,
                     ..Default::default()
                 },
@@ -7008,7 +7028,106 @@ mod tests {
         assert_eq!(stats5.blocks_count, 2);
         assert_eq!(stats5.length, 1800);
         assert_eq!(stats5.transactions_count, 5);
-        assert!(stats5.end_timestamp.is_some());
+        // Epoch 5 is incomplete (2/1800 blocks), so end_timestamp must be None
+        assert!(stats5.end_timestamp.is_none());
+    }
+
+    #[test]
+    fn chain_stats_complete_epoch_has_end_timestamp() {
+        let mut acc = ChainStatsAccumulator::default();
+
+        // Create a complete epoch: 3 blocks with length=3
+        let arena = facts::FactsArena {
+            blocks: vec![
+                facts::BlockFacts {
+                    number: 100,
+                    epoch_number: 2,
+                    epoch_index: 0,
+                    epoch_length: 3,
+                    timestamp_ms: 1_700_000_000_000,
+                    transactions_count: 1,
+                    ..Default::default()
+                },
+                facts::BlockFacts {
+                    number: 101,
+                    epoch_number: 2,
+                    epoch_index: 1,
+                    epoch_length: 3,
+                    timestamp_ms: 1_700_000_010_000,
+                    transactions_count: 1,
+                    ..Default::default()
+                },
+                facts::BlockFacts {
+                    number: 102,
+                    epoch_number: 2,
+                    epoch_index: 2,
+                    epoch_length: 3,
+                    timestamp_ms: 1_700_000_020_000,
+                    transactions_count: 1,
+                    ..Default::default()
+                },
+            ],
+            txs: vec![],
+            cells: vec![],
+        };
+
+        let resolved: Vec<facts::ResolvedTxFacts<'_>> = vec![];
+        acc.apply_blocks(&arena, &resolved).unwrap();
+
+        let rows = acc.build_rows().unwrap();
+        let epoch_rows: Vec<_> = rows
+            .iter()
+            .filter(|r| {
+                r.cf_name == CF_STATS_CHAIN && r.key.first() == Some(&keys::stats_prefix::EPOCH)
+            })
+            .collect();
+        assert_eq!(epoch_rows.len(), 1);
+
+        let stats: ckbadger_store::types::EpochStats =
+            bincode::deserialize(&epoch_rows[0].value).unwrap();
+        assert_eq!(stats.epoch_number, 2);
+        assert_eq!(stats.blocks_count, 3);
+        assert_eq!(stats.length, 3);
+        // Complete epoch (3/3 blocks) must have end_timestamp
+        assert!(stats.end_timestamp.is_some());
+    }
+
+    #[test]
+    fn chain_stats_epoch_time_dist_rejects_zero_bucket() {
+        let mut acc = ChainStatsAccumulator::default();
+
+        // Epoch 5 starts, then epoch 6 starts with the same timestamp → 0-minute bucket
+        let arena = facts::FactsArena {
+            blocks: vec![
+                facts::BlockFacts {
+                    number: 1000,
+                    epoch_number: 5,
+                    epoch_index: 0,
+                    timestamp_ms: 1_700_000_000_000,
+                    ..Default::default()
+                },
+                facts::BlockFacts {
+                    number: 2800,
+                    epoch_number: 6,
+                    epoch_index: 0,
+                    // Same timestamp → 0-minute duration
+                    timestamp_ms: 1_700_000_000_000,
+                    ..Default::default()
+                },
+            ],
+            txs: vec![],
+            cells: vec![],
+        };
+
+        let resolved: Vec<facts::ResolvedTxFacts<'_>> = vec![];
+        let result = acc.apply_blocks(&arena, &resolved);
+        assert!(result.is_err(), "should reject 0-minute epoch duration");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("invalid bucket_minutes=0"),
+            "error should mention invalid bucket_minutes: {}",
+            err_msg
+        );
     }
 
     #[test]

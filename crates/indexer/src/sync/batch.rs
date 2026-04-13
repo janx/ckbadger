@@ -3147,10 +3147,22 @@ impl Indexer {
             if parsed.epoch_index == 0 && parsed.epoch_number > 0 {
                 if let Some((prev_epoch_num, prev_start_ts, _)) = prev_epoch {
                     if prev_epoch_num == parsed.epoch_number - 1 {
-                        let epoch_duration_minutes =
-                            (parsed.timestamp - prev_start_ts).num_seconds() as f64 / 60.0;
+                        let duration_secs = (parsed.timestamp - prev_start_ts).num_seconds();
+                        let epoch_duration_minutes = duration_secs as f64 / 60.0;
                         let bucket_minutes = i32::try_from(epoch_duration_minutes.round() as i64)
                             .unwrap_or(i32::MAX);
+                        if bucket_minutes <= 0 {
+                            anyhow::bail!(
+                                "epoch time distribution: invalid bucket_minutes={} \
+                                 for epoch {} (prev_epoch={}, duration_secs={}, \
+                                 block={})",
+                                bucket_minutes,
+                                parsed.epoch_number,
+                                prev_epoch_num,
+                                duration_secs,
+                                parsed.number,
+                            );
+                        }
                         *batch_stats
                             .epoch_time_dist
                             .entry(bucket_minutes)

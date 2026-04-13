@@ -405,32 +405,46 @@ impl BatchWriter {
         let existing = self.store.get_stats_key(&key)?;
 
         let stats = if is_new {
+            let blocks_count = (end_block - start_block + 1) as i32;
             EpochStats {
                 epoch_number,
                 start_block,
                 end_block: Some(end_block),
-                blocks_count: (end_block - start_block + 1) as i32,
+                blocks_count,
                 length: epoch_length,
                 start_timestamp,
-                end_timestamp: Some(end_timestamp),
+                end_timestamp: if blocks_count >= epoch_length {
+                    Some(end_timestamp)
+                } else {
+                    None
+                },
                 transactions_count,
             }
         } else if let Some(val) = existing {
             let mut s: EpochStats = deserialize_stats(&val, "epoch stats")?;
             s.end_block = Some(s.end_block.unwrap_or(end_block).max(end_block));
             s.blocks_count = (s.end_block.unwrap_or(end_block) - s.start_block + 1) as i32;
-            s.end_timestamp = Some(end_timestamp);
+            s.end_timestamp = if s.blocks_count >= s.length {
+                Some(end_timestamp)
+            } else {
+                None
+            };
             s.transactions_count += transactions_count;
             s
         } else {
+            let blocks_count = (end_block - start_block + 1) as i32;
             EpochStats {
                 epoch_number,
                 start_block,
                 end_block: Some(end_block),
-                blocks_count: (end_block - start_block + 1) as i32,
+                blocks_count,
                 length: epoch_length,
                 start_timestamp,
-                end_timestamp: Some(end_timestamp),
+                end_timestamp: if blocks_count >= epoch_length {
+                    Some(end_timestamp)
+                } else {
+                    None
+                },
                 transactions_count,
             }
         };
@@ -1827,6 +1841,134 @@ mod tests {
         assert!(err
             .to_string()
             .contains("missing previous day stats while carrying daily totals"));
+    }
+}
+
+#[cfg(test)]
+mod epoch_stats_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use ckbadger_store::CkbadgerStore;
+
+    fn ts(secs: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(secs, 0).unwrap()
+    }
+
+    #[test]
+    fn incomplete_epoch_has_no_end_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let mut batch = StoreBatch::new(&store);
+        // epoch 10: 3 blocks out of 1800 length → incomplete
+        writer
+            .upsert_epoch_statistics_batch(
+                10,
+                1000,
+                1002,
+                1800,
+                ts(1_700_000_000),
+                ts(1_700_000_020),
+                100,
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let stats = store.get_epoch_stats(10).unwrap().unwrap();
+        assert_eq!(stats.blocks_count, 3);
+        assert!(
+            stats.end_timestamp.is_none(),
+            "incomplete epoch must not have end_timestamp"
+        );
+    }
+
+    #[test]
+    fn complete_epoch_has_end_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let mut batch = StoreBatch::new(&store);
+        // epoch 10: 1800 blocks out of 1800 length → complete
+        writer
+            .upsert_epoch_statistics_batch(
+                10,
+                1000,
+                2799,
+                1800,
+                ts(1_700_000_000),
+                ts(1_700_014_400),
+                5000,
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let stats = store.get_epoch_stats(10).unwrap().unwrap();
+        assert_eq!(stats.blocks_count, 1800);
+        assert!(
+            stats.end_timestamp.is_some(),
+            "complete epoch must have end_timestamp"
+        );
+    }
+
+    #[test]
+    fn upsert_sets_end_timestamp_on_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        // First write: epoch 10, 3 blocks out of 5 → incomplete
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .upsert_epoch_statistics_batch(
+                10,
+                100,
+                102,
+                5,
+                ts(1_700_000_000),
+                ts(1_700_000_020),
+                10,
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let stats = store.get_epoch_stats(10).unwrap().unwrap();
+        assert!(
+            stats.end_timestamp.is_none(),
+            "incomplete epoch must not have end_timestamp"
+        );
+
+        // Second write: update with end_block=104, now 5/5 blocks → complete
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .upsert_epoch_statistics_batch(
+                10,
+                103,
+                104,
+                5,
+                ts(1_700_000_030),
+                ts(1_700_000_040),
+                5,
+                false,
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let stats = store.get_epoch_stats(10).unwrap().unwrap();
+        assert_eq!(stats.blocks_count, 5);
+        assert!(
+            stats.end_timestamp.is_some(),
+            "complete epoch must have end_timestamp after update"
+        );
     }
 }
 
