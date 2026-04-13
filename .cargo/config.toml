@@ -1,2 +1,3 @@
 [env]
 RUST_TEST_THREADS = "4"
+LIBZ_SYS_STATIC = "0"
