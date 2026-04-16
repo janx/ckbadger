@@ -47,12 +47,20 @@ test_outputs/
 run/
 *.sock
 *.pid
+ckbadger.toml
 
 # Database
 *.db
 *.sqlite
 *.sqlite3
 temp/
+data/
+
+# DOB decoder cache
+dob_decode/
+
+# Performance data
+perf/
 
 # Generated files
 .sqlx/
@@ -64,6 +72,9 @@ temp/
 credentials.json
 frontend/next-env.d.ts
 frontend/tsconfig.tsbuildinfo
+
+# Tool version managers
+mise.toml
 
 # vibe coding generated
 .sisyphus
