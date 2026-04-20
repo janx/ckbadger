@@ -1,7 +1,7 @@
 //! Explorer comparison checks — compares our API data against the official CKB explorer API.
 //!
 //! Supports file-based caching of explorer responses to avoid repeated HTTP requests.
-//! Cache files are stored in `{cache_dir}/{indicator}.json` with a 24-hour freshness window.
+//! Cache files are stored in `{cache_dir}/{indicator}.json` with a 5-minute freshness window.
 //! On HTTP failure, stale cache is used as fallback with a warning.
 
 use std::collections::HashMap;
@@ -103,7 +103,7 @@ struct CacheEntry {
     data: HashMap<String, String>,
 }
 
-const CACHE_FRESHNESS_SECS: i64 = 24 * 60 * 60; // 24 hours
+const CACHE_FRESHNESS_SECS: i64 = 5 * 60; // 5 minutes
 const CACHE_VERSION: u8 = 3;
 
 fn default_cache_version() -> u8 {
@@ -142,7 +142,7 @@ fn read_cache(cache_dir: &Option<PathBuf>, indicator: &str) -> Option<CacheEntry
     Some(entry)
 }
 
-/// Check if a cache entry is fresh (< 24 hours old).
+/// Check if a cache entry is fresh (< 5 minutes old).
 fn is_cache_fresh(entry: &CacheEntry) -> bool {
     let fetched = chrono::DateTime::parse_from_rfc3339(&entry.fetched_at)
         .map(|dt| dt.with_timezone(&chrono::Utc));

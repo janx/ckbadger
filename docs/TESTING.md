@@ -55,7 +55,7 @@ OPTIONS:
 
 ### Explorer Response Cache
 
-Explorer checks cache HTTP responses to `.verify-cache/`. Fresh cache (< 24h) is reused. Stale cache is re-fetched; on HTTP failure, stale data is used with a warning.
+Explorer checks cache HTTP responses to `.verify-cache/`. Fresh cache (< 5 min) is reused. Stale cache is re-fetched; on HTTP failure, stale data is used with a warning.
 
 ### Adding a Check
 

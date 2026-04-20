@@ -6,8 +6,6 @@
 ![macOS](https://img.shields.io/badge/macOS-compatible-brightgreen?logo=apple&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-incompatible-red?logo=windows&logoColor=white)
 
-Opinionated software for web5 believers - carbon and silicon alike.
-
 ## Principles
 
 - **CKB Native** — Make CKB concepts tangible. Let CKB be felt. The chain is the single source of truth.
@@ -22,7 +20,7 @@ The web does not have to be centralized services that every user connects to.
 
 Web5 is the local-first web. It is a network of equally connected nodes, each running its own stack: CKB node, Fiber node, CKBadger, and whatever else you choose to run. No single point of failure. No single point of control. CKBadger is the eyes of that stack.
 
-### Radical Simplicity
+### Simplicity
 
 Take local-first to its logical extreme and you arrive at a design with Unix aesthetics. No RPC middleware. No SQL databases. No container orchestration. Everything is files. Everything is disk I/O.
 
@@ -160,6 +158,10 @@ Documents under `docs/prompts/` are manually marinated texts capturing the ideas
 | **Storage**       | RocksDB (60 domain + 1 append-only CFs, ckbadger-store) | Embedded dual-store data engine |
 | **Cache**         | In-memory LRU                                           | API response cache              |
 | **IPC**           | Unix domain sockets                                     | Inter-process communication     |
+
+### Deployment
+
+CKBadger is designed local-first, but the architecture doesn't lock you in. The services are stateless beyond RocksDB, so with the right deployment setup the same binary can sit behind a reverse proxy and serve a public audience. Run it for yourself, or run it for others.
 
 ### Work Directory Structure
 
