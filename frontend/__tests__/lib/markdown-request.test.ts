@@ -127,7 +127,7 @@ describe('resolveMarkdownRewrite', () => {
   it('does not rewrite static asset paths', () => {
     const decision = resolveMarkdownRewrite({
       method: 'GET',
-      pathname: '/ckbadger-logo11.png',
+      pathname: '/ckbadger-logo.webp',
       searchParams: params('format=md'),
       acceptHeader: 'text/markdown',
     });

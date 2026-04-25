@@ -20,18 +20,18 @@ export function Logo() {
   return (
     <Link
       href="/"
-      className="logo-container group absolute -left-[8px] -top-[28px] z-[9999] md:-left-[14px] md:-top-[22px]"
+      className="logo-container group absolute -left-[16px] -top-[13px] z-[9999] md:-left-[22px] md:-top-[7px]"
       aria-label="CKBadger Home"
       title="Hi, I'm the ckbadger Shannon!"
     >
       <Image
-        src="/ckbadger-transparent.png"
+        src="/ckbadger-logo.webp"
         alt="CKBadger"
         width={143}
         height={97}
         unoptimized
         priority
-        className={`logo-image h-auto w-[96px] rotate-[8deg] transform-gpu object-contain transition-all duration-300 group-hover:rotate-[9deg] group-hover:scale-100 md:w-[112px] ${isGlitching ? 'neon-flicker' : ''}`}
+        className={`logo-image h-auto w-[135px] rotate-[8deg] transform-gpu object-contain transition-all duration-300 group-hover:rotate-[9deg] group-hover:scale-100 md:w-[157px] ${isGlitching ? 'neon-flicker' : ''}`}
       />
     </Link>
   );
