@@ -1,5 +1,7 @@
 'use client';
 
+import { forwardRef } from 'react';
+
 export interface ImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   src: string;
   alt: string;
@@ -10,18 +12,14 @@ export interface ImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   unoptimized?: boolean;
 }
 
-export default function Image({
-  fill = false,
-  style,
-  width,
-  height,
-  priority: _priority,
-  unoptimized: _unoptimized,
-  ...props
-}: ImageProps) {
+const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
+  { fill = false, style, width, height, priority: _priority, unoptimized: _unoptimized, ...props },
+  ref
+) {
   if (fill) {
     return (
       <img
+        ref={ref}
         {...props}
         style={{
           position: 'absolute',
@@ -35,5 +33,7 @@ export default function Image({
     );
   }
 
-  return <img {...props} width={width} height={height} style={style} />;
-}
+  return <img ref={ref} {...props} width={width} height={height} style={style} />;
+});
+
+export default Image;

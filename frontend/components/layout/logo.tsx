@@ -2,20 +2,32 @@
 
 import Image from '@/components/ui/image';
 import Link from '@/components/ui/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 
 export function Logo() {
-  const latestBlock = useRealtimeStore((state) => state.latestBlock);
-  const [isGlitching, setIsGlitching] = useState(false);
+  const blockNumber = useRealtimeStore((state) => state.latestBlock?.number);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const seenRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
-    if (latestBlock) {
-      setIsGlitching(true);
-      const timer = setTimeout(() => setIsGlitching(false), 800);
-      return () => clearTimeout(timer);
-    }
-  }, [latestBlock]);
+    if (blockNumber === undefined) return;
+    if (seenRef.current === blockNumber) return;
+    seenRef.current = blockNumber;
+
+    const el = imgRef.current;
+    if (!el) return;
+    el.classList.remove('neon-flicker');
+    // Force reflow so the next class add restarts the animation even if
+    // the previous flicker is still mid-run.
+    void el.offsetWidth;
+    el.classList.add('neon-flicker');
+
+    const timer = setTimeout(() => {
+      el.classList.remove('neon-flicker');
+    }, 820);
+    return () => clearTimeout(timer);
+  }, [blockNumber]);
 
   return (
     <Link
@@ -25,13 +37,14 @@ export function Logo() {
       title="Hi, I'm the ckbadger Shannon!"
     >
       <Image
+        ref={imgRef}
         src="/ckbadger-logo.webp"
         alt="CKBadger"
         width={143}
         height={97}
         unoptimized
         priority
-        className={`logo-image h-auto w-[135px] rotate-[8deg] transform-gpu object-contain transition-all duration-300 group-hover:rotate-[9deg] group-hover:scale-100 md:w-[157px] ${isGlitching ? 'neon-flicker' : ''}`}
+        className="logo-image h-auto w-[135px] rotate-[8deg] transform-gpu object-contain transition-[transform,filter] duration-300 group-hover:rotate-[9deg] md:w-[157px]"
       />
     </Link>
   );
