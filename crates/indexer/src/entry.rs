@@ -311,6 +311,11 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         );
     }
 
+    // Long-running health monitor: per-minute sampling, hourly CSV row,
+    // debounced WARN on sustained DB write degradation or recurring slow
+    // chunks/timeouts. Output lands at <perf_root_parent>/live-sync-health.csv.
+    crate::health_monitor::spawn(Arc::clone(&indexer), &config.bulk_sync_perf_output_root);
+
     let data_source = if indexer.is_direct_db_read() {
         "DB"
     } else {

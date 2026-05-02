@@ -853,6 +853,7 @@ impl Indexer {
         let pipeline_perf_for_parser = Arc::clone(&self.pipeline_perf);
         let pipeline_epoch_for_parser = Arc::clone(&self.pipeline_reset_epoch);
         let parser_exit_reason_for_parser = Arc::clone(&parser_exit_reason);
+        let cell_lookup_stats_for_parser = Arc::clone(&self.parser_cell_lookup_stats);
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
             'parser_batches: while let Some((
@@ -1036,6 +1037,7 @@ impl Indexer {
                             .clamp(PARSER_CELL_LOOKUP_MIN_MS, PARSER_CELL_LOOKUP_MAX_MS);
                         let budget = Duration::from_millis(budget_ms);
                         let chunk_size = PARSER_CELL_LOOKUP_CHUNK_SIZE;
+                        let stats_for_blocking = Arc::clone(&cell_lookup_stats_for_parser);
                         let db_query = tokio::task::spawn_blocking(
                             move || -> Result<HashMap<(Vec<u8>, i16), PositionedCellInfo>> {
                                 let started = Instant::now();
@@ -1048,8 +1050,11 @@ impl Indexer {
                                     let refs: Vec<(&[u8], i16)> =
                                         chunk.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
                                     let part = wr.get_full_cells_info_batch_chunk(&refs)?;
-                                    let elapsed_ms = t.elapsed().as_millis();
-                                    if elapsed_ms >= PARSER_CELL_LOOKUP_SLOW_CHUNK_MS {
+                                    let elapsed = t.elapsed();
+                                    let elapsed_ms = elapsed.as_millis();
+                                    let slow = elapsed_ms >= PARSER_CELL_LOOKUP_SLOW_CHUNK_MS;
+                                    stats_for_blocking.record_chunk(chunk.len(), elapsed, slow);
+                                    if slow {
                                         warn!(
                                             chunk_idx,
                                             chunk_size = chunk.len(),
@@ -1099,6 +1104,7 @@ impl Indexer {
                                 db_lookup_failed = true;
                             }
                             Err(_) => {
+                                cell_lookup_stats_for_parser.record_timeout();
                                 warn!(
                                     total_keys,
                                     budget_ms,

@@ -4,6 +4,7 @@ pub mod config;
 pub mod cycles_worker;
 pub mod db;
 pub mod entry;
+pub mod health_monitor;
 pub mod label_import;
 pub mod media_store;
 pub mod parser;

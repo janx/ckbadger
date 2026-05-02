@@ -43,6 +43,56 @@ pub(crate) const PARSER_CELL_LOOKUP_MAX_MS: u64 = 600_000;
 /// reads stand out without spamming the log on every chunk.
 pub(crate) const PARSER_CELL_LOOKUP_SLOW_CHUNK_MS: u128 = 1_000;
 
+// ── ParserCellLookupStats ───────────────────────────────────────────────
+//
+// Lifetime counters of the parser cell-info lookup path. These are sampled
+// (delta-per-period) by the health monitor to detect read-side degradation
+// long before the user notices a stall.
+
+#[derive(Default)]
+pub(crate) struct ParserCellLookupStats {
+    pub(crate) chunks_total: AtomicU64,
+    pub(crate) slow_chunks_total: AtomicU64,
+    pub(crate) timeouts_total: AtomicU64,
+    pub(crate) keys_total: AtomicU64,
+    pub(crate) elapsed_us_total: AtomicU64,
+}
+
+impl ParserCellLookupStats {
+    pub(crate) fn record_chunk(&self, keys: usize, elapsed: Duration, slow: bool) {
+        self.chunks_total.fetch_add(1, Ordering::Relaxed);
+        self.keys_total.fetch_add(keys as u64, Ordering::Relaxed);
+        self.elapsed_us_total
+            .fetch_add(elapsed.as_micros() as u64, Ordering::Relaxed);
+        if slow {
+            self.slow_chunks_total.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn record_timeout(&self) {
+        self.timeouts_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn snapshot(&self) -> ParserCellLookupSnapshot {
+        ParserCellLookupSnapshot {
+            chunks_total: self.chunks_total.load(Ordering::Relaxed),
+            slow_chunks_total: self.slow_chunks_total.load(Ordering::Relaxed),
+            timeouts_total: self.timeouts_total.load(Ordering::Relaxed),
+            keys_total: self.keys_total.load(Ordering::Relaxed),
+            elapsed_us_total: self.elapsed_us_total.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ParserCellLookupSnapshot {
+    pub(crate) chunks_total: u64,
+    pub(crate) slow_chunks_total: u64,
+    pub(crate) timeouts_total: u64,
+    pub(crate) keys_total: u64,
+    pub(crate) elapsed_us_total: u64,
+}
+
 // ── IncidentReport ──────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]

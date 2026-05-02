@@ -372,6 +372,7 @@ pub struct Indexer {
     pub(crate) cell_cache: Arc<DashMap<([u8; 32], i16), CachedCellInfo>>,
     pub(crate) udt_cell_cache: Arc<DashMap<([u8; 32], i16), CachedUdtCellInfo>>,
     pub(crate) perf: PerfStats,
+    pub(crate) parser_cell_lookup_stats: Arc<ParserCellLookupStats>,
     pub(crate) pipeline_perf: Arc<PipelinePerfStats>,
     pub(crate) bulk_build_perf: Arc<BulkBuildPerfStats>,
     pub(crate) adaptive_batch_controller: Arc<LiveBatchController>,
@@ -478,6 +479,7 @@ impl Indexer {
             cell_cache,
             udt_cell_cache,
             perf: PerfStats::default(),
+            parser_cell_lookup_stats: Arc::new(ParserCellLookupStats::default()),
             pipeline_perf: Arc::new(PipelinePerfStats::default()),
             bulk_build_perf: Arc::new(BulkBuildPerfStats::default()),
             adaptive_batch_controller,
@@ -928,6 +930,11 @@ impl Indexer {
     /// Snapshot the current perf stats: (fetch_ms, db_stage_write_ms, db_commit_ms).
     pub fn perf_snapshot_ms(&self) -> (f64, f64, f64) {
         self.perf.snapshot_ms()
+    }
+
+    /// Cumulative parser cell-info lookup counters (used by health monitor).
+    pub(crate) fn parser_cell_lookup_snapshot(&self) -> ParserCellLookupSnapshot {
+        self.parser_cell_lookup_stats.snapshot()
     }
 
     pub fn pipeline_progress_snapshot(&self) -> Option<PipelineProgressData> {
