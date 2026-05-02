@@ -101,7 +101,7 @@ impl CkbadgerStore {
 
         let live_cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
             keys.iter().map(|k| (live_cf, k.as_slice())).collect();
-        let live_values = self.multi_get_cf(live_cf_keys);
+        let live_values = self.multi_get_cf_sorted(live_cf_keys);
 
         let mut present_indices = Vec::new();
         let mut created_at_blocks = Vec::new();
@@ -132,7 +132,7 @@ impl CkbadgerStore {
             }
         }
 
-        let cell_values = cells_store.multi_get_cf(cell_cf_keys);
+        let cell_values = cells_store.multi_get_cf_sorted(cell_cf_keys);
         for (batch_idx, value_result) in cell_values.into_iter().enumerate() {
             let outpoint_idx = present_indices[batch_idx];
             let outpoint_key = &keys[outpoint_idx];
@@ -234,7 +234,7 @@ impl CkbadgerStore {
 
         let consumed_cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
             keys.iter().map(|k| (consumed_cf, k.as_slice())).collect();
-        let consumed_values = self.multi_get_cf(consumed_cf_keys);
+        let consumed_values = self.multi_get_cf_sorted(consumed_cf_keys);
 
         let mut present_indices = Vec::new();
         let mut metas: Vec<Option<ConsumedCellMeta>> = vec![None; keys.len()];
@@ -264,7 +264,7 @@ impl CkbadgerStore {
             }
         }
 
-        let cell_values = cells_store.multi_get_cf(cell_cf_keys);
+        let cell_values = cells_store.multi_get_cf_sorted(cell_cf_keys);
         for (batch_idx, value_result) in cell_values.into_iter().enumerate() {
             let outpoint_idx = present_indices[batch_idx];
             let outpoint_key = &keys[outpoint_idx];
@@ -330,7 +330,7 @@ impl CkbadgerStore {
 
         let consumed_cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
             keys.iter().map(|k| (consumed_cf, k.as_slice())).collect();
-        let consumed_values = self.multi_get_cf(consumed_cf_keys);
+        let consumed_values = self.multi_get_cf_sorted(consumed_cf_keys);
 
         let mut present_indices = Vec::new();
         let mut cell_cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> = Vec::new();
@@ -360,7 +360,7 @@ impl CkbadgerStore {
             }
         }
 
-        let cell_values = cells_store.multi_get_cf(cell_cf_keys);
+        let cell_values = cells_store.multi_get_cf_sorted(cell_cf_keys);
         for (batch_idx, value_result) in cell_values.into_iter().enumerate() {
             let outpoint_idx = present_indices[batch_idx];
             let outpoint_key = &keys[outpoint_idx];

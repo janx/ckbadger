@@ -23,6 +23,26 @@ pub(crate) const CHART_INVALIDATION_MAX_LIVE_LAG: u64 = 100;
 
 pub(crate) const PARSER_UNRESOLVED_MAX_RETRIES: usize = 240;
 
+/// Chunk size for parser cell-info batch lookups. Splitting a large batch
+/// into bounded chunks (~512 keys) lets us emit per-chunk tracing, cooperate
+/// with the timeout budget, and avoid worst-case multi_get blowups on blocks
+/// with thousands of inputs.
+pub(crate) const PARSER_CELL_LOOKUP_CHUNK_SIZE: usize = 512;
+
+/// Per-key time budget for parser cell-info batch reads (ms). The total
+/// budget is `max(MIN_MS, n_keys * PER_KEY_MS).min(MAX_MS)`. 30 ms/key is
+/// generous (real reads should be sub-millisecond on cached data, single-
+/// digit ms on cold disk reads); the cap protects against pathological
+/// stalls without re-introducing the original 30 s hard ceiling that
+/// could not accommodate large blocks (e.g. 4112-input block 19212685).
+pub(crate) const PARSER_CELL_LOOKUP_PER_KEY_MS: u64 = 30;
+pub(crate) const PARSER_CELL_LOOKUP_MIN_MS: u64 = 60_000;
+pub(crate) const PARSER_CELL_LOOKUP_MAX_MS: u64 = 600_000;
+
+/// A single chunk that exceeds this latency triggers a WARN log so slow
+/// reads stand out without spamming the log on every chunk.
+pub(crate) const PARSER_CELL_LOOKUP_SLOW_CHUNK_MS: u128 = 1_000;
+
 // ── IncidentReport ──────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]

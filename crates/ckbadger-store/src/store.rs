@@ -1467,6 +1467,44 @@ impl CkbadgerStore {
         self.db.multi_get_cf(keys)
     }
 
+    /// Same as `multi_get_cf` but sorts the input keys before issuing the
+    /// underlying RocksDB call and remaps results back to the caller's order.
+    ///
+    /// RocksDB's C++ `MultiGet` implementation is faster on sorted keys
+    /// (cursor reuse + I/O coalescing). The rust-rocksdb binding does not
+    /// sort internally, so we do it here for batch read paths that issue
+    /// thousands of point lookups (e.g. parser cell info batch).
+    ///
+    /// The returned `Vec` has the same length and ordering as the input.
+    pub fn multi_get_cf_sorted(
+        &self,
+        keys: Vec<(&ColumnFamily, &[u8])>,
+    ) -> Vec<Result<Option<Vec<u8>>, rocksdb::Error>> {
+        let n = keys.len();
+        if n <= 1 {
+            return self.db.multi_get_cf(keys);
+        }
+        let mut indexed: Vec<(usize, &ColumnFamily, &[u8])> = keys
+            .into_iter()
+            .enumerate()
+            .map(|(i, (cf, k))| (i, cf, k))
+            .collect();
+        indexed.sort_by(|a, b| {
+            let ap = a.1 as *const ColumnFamily as usize;
+            let bp = b.1 as *const ColumnFamily as usize;
+            (ap, a.2).cmp(&(bp, b.2))
+        });
+        let sorted: Vec<(&ColumnFamily, &[u8])> =
+            indexed.iter().map(|(_, cf, k)| (*cf, *k)).collect();
+        let res = self.db.multi_get_cf(sorted);
+        let mut out: Vec<Result<Option<Vec<u8>>, rocksdb::Error>> =
+            (0..n).map(|_| Ok(None)).collect();
+        for ((orig, _, _), r) in indexed.into_iter().zip(res) {
+            out[orig] = r;
+        }
+        out
+    }
+
     fn write_batch_unchecked(&self, batch: WriteBatch) -> anyhow::Result<()> {
         Ok(self.db.write(batch)?)
     }
@@ -3006,5 +3044,120 @@ mod tests {
         store
             .set_max_background_jobs(8)
             .expect("should succeed with different value");
+    }
+
+    #[test]
+    fn test_multi_get_cf_sorted_preserves_input_order() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let cf = store.cf_live_cells();
+
+        // Insert 200 keys with shuffled, non-monotonic values.
+        let mut entries: Vec<(Vec<u8>, Vec<u8>)> = (0u32..200)
+            .map(|i| {
+                let mut k = vec![0u8; 36];
+                k[0..4].copy_from_slice(&i.to_be_bytes());
+                let v = format!("v{}", i).into_bytes();
+                (k, v)
+            })
+            .collect();
+        for (k, v) in &entries {
+            store.put_cf(cf, k, v).unwrap();
+        }
+
+        // Reverse + interleave so input is far from sorted.
+        entries.reverse();
+        let queries: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+            entries.iter().map(|(k, _)| (cf, k.as_slice())).collect();
+        let unsorted = store.multi_get_cf(queries.clone());
+        let sorted = store.multi_get_cf_sorted(queries);
+
+        assert_eq!(unsorted.len(), sorted.len());
+        for (i, (got_unsorted, got_sorted)) in unsorted.into_iter().zip(sorted).enumerate() {
+            let expected = &entries[i].1;
+            assert_eq!(
+                got_unsorted.unwrap().as_deref(),
+                Some(expected.as_slice()),
+                "unsorted[{}] mismatch",
+                i
+            );
+            assert_eq!(
+                got_sorted.unwrap().as_deref(),
+                Some(expected.as_slice()),
+                "sorted[{}] mismatch — output order must match input order",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_multi_get_cf_sorted_handles_duplicates_and_missing() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let cf = store.cf_live_cells();
+
+        let k_a = b"keyA__padding_to_outpoint_size__abcd".to_vec();
+        let k_b = b"keyB__padding_to_outpoint_size__abcd".to_vec();
+        let k_missing = b"missing_padding_to_outpoint_size_xyz".to_vec();
+        store.put_cf(cf, &k_a, b"VA").unwrap();
+        store.put_cf(cf, &k_b, b"VB").unwrap();
+
+        let queries: Vec<(&rocksdb::ColumnFamily, &[u8])> = vec![
+            (cf, k_b.as_slice()),
+            (cf, k_a.as_slice()),
+            (cf, k_b.as_slice()),
+            (cf, k_missing.as_slice()),
+            (cf, k_a.as_slice()),
+        ];
+        let res = store.multi_get_cf_sorted(queries);
+
+        assert_eq!(res[0].as_ref().unwrap().as_deref(), Some(b"VB" as &[u8]));
+        assert_eq!(res[1].as_ref().unwrap().as_deref(), Some(b"VA" as &[u8]));
+        assert_eq!(res[2].as_ref().unwrap().as_deref(), Some(b"VB" as &[u8]));
+        assert!(res[3].as_ref().unwrap().is_none());
+        assert_eq!(res[4].as_ref().unwrap().as_deref(), Some(b"VA" as &[u8]));
+    }
+
+    #[test]
+    fn test_multi_get_cf_sorted_mixed_cfs() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let live = store.cf_live_cells();
+        let consumed = store.cf_consumed_cells();
+
+        let mut k1 = vec![0u8; 36];
+        k1[0] = 1;
+        let mut k2 = vec![0u8; 36];
+        k2[0] = 2;
+        store.put_cf(live, &k1, b"L1").unwrap();
+        store.put_cf(consumed, &k1, b"C1").unwrap();
+        store.put_cf(live, &k2, b"L2").unwrap();
+
+        let queries: Vec<(&rocksdb::ColumnFamily, &[u8])> = vec![
+            (live, k2.as_slice()),
+            (consumed, k1.as_slice()),
+            (live, k1.as_slice()),
+        ];
+        let res = store.multi_get_cf_sorted(queries);
+        assert_eq!(res[0].as_ref().unwrap().as_deref(), Some(b"L2" as &[u8]));
+        assert_eq!(res[1].as_ref().unwrap().as_deref(), Some(b"C1" as &[u8]));
+        assert_eq!(res[2].as_ref().unwrap().as_deref(), Some(b"L1" as &[u8]));
+    }
+
+    #[test]
+    fn test_multi_get_cf_sorted_empty_and_single_inputs() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let cf = store.cf_live_cells();
+
+        let empty: Vec<(&rocksdb::ColumnFamily, &[u8])> = vec![];
+        assert!(store.multi_get_cf_sorted(empty).is_empty());
+
+        let mut k = vec![0u8; 36];
+        k[0] = 9;
+        store.put_cf(cf, &k, b"only").unwrap();
+        let one = store.multi_get_cf_sorted(vec![(cf, k.as_slice())]);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].as_ref().unwrap().as_deref(), Some(b"only" as &[u8]));
     }
 }

@@ -211,6 +211,18 @@ impl BatchWriter {
         &self,
         outpoints: &[(&[u8], i16)],
     ) -> Result<HashMap<(Vec<u8>, i16), PositionedCellInfo>> {
+        self.get_full_cells_info_batch_chunk(outpoints)
+    }
+
+    /// Read a single chunk of outpoints. Callers issuing very large batches
+    /// (thousands of outpoints) should split the input themselves and accumulate
+    /// the results so they can observe per-chunk latency and yield between
+    /// chunks. This function performs the actual two-stage RocksDB lookup
+    /// (live marker → cell payload, with consumed-cell fallback).
+    pub fn get_full_cells_info_batch_chunk(
+        &self,
+        outpoints: &[(&[u8], i16)],
+    ) -> Result<HashMap<(Vec<u8>, i16), PositionedCellInfo>> {
         if outpoints.is_empty() {
             return Ok(HashMap::new());
         }
@@ -226,7 +238,7 @@ impl BatchWriter {
             .iter()
             .map(|k| (self.store.cf_live_cells(), k.as_slice()))
             .collect();
-        let marker_results = self.store.multi_get_cf(marker_refs);
+        let marker_results = self.store.multi_get_cf_sorted(marker_refs);
 
         let mut present_positions = Vec::new();
         let mut live_markers = Vec::new();
@@ -263,7 +275,7 @@ impl BatchWriter {
             }
         }
 
-        let cell_results = self.append_only_store.multi_get_cf(cell_refs);
+        let cell_results = self.append_only_store.multi_get_cf_sorted(cell_refs);
         for (batch_idx, res) in cell_results.into_iter().enumerate() {
             let outpoint_idx = present_positions[batch_idx];
             let (tx_hash, output_index) = outpoints[outpoint_idx];

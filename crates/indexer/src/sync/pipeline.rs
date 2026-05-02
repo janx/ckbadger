@@ -1027,30 +1027,82 @@ impl Indexer {
                             .iter()
                             .map(|(h, i)| (h.clone(), *i))
                             .collect();
-                        let db_query = tokio::task::spawn_blocking(move || {
-                            let refs: Vec<(&[u8], i16)> = missing_owned
-                                .iter()
-                                .map(|(h, i)| (h.as_slice(), *i))
-                                .collect();
-                            wr.get_full_cells_info_batch(&refs)
-                        });
-                        match tokio::time::timeout(Duration::from_secs(30), db_query).await {
+                        let total_keys = missing_owned.len();
+                        // Adaptive budget scales with input size; the hard ceiling
+                        // (PARSER_CELL_LOOKUP_MAX_MS) replaces the previous 30 s
+                        // wall-clock that could not accommodate large blocks.
+                        let budget_ms = (total_keys as u64)
+                            .saturating_mul(PARSER_CELL_LOOKUP_PER_KEY_MS)
+                            .clamp(PARSER_CELL_LOOKUP_MIN_MS, PARSER_CELL_LOOKUP_MAX_MS);
+                        let budget = Duration::from_millis(budget_ms);
+                        let chunk_size = PARSER_CELL_LOOKUP_CHUNK_SIZE;
+                        let db_query = tokio::task::spawn_blocking(
+                            move || -> Result<HashMap<(Vec<u8>, i16), PositionedCellInfo>> {
+                                let started = Instant::now();
+                                let mut out: HashMap<(Vec<u8>, i16), PositionedCellInfo> =
+                                    HashMap::with_capacity(total_keys);
+                                for (chunk_idx, chunk) in
+                                    missing_owned.chunks(chunk_size).enumerate()
+                                {
+                                    let t = Instant::now();
+                                    let refs: Vec<(&[u8], i16)> =
+                                        chunk.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
+                                    let part = wr.get_full_cells_info_batch_chunk(&refs)?;
+                                    let elapsed_ms = t.elapsed().as_millis();
+                                    if elapsed_ms >= PARSER_CELL_LOOKUP_SLOW_CHUNK_MS {
+                                        warn!(
+                                            chunk_idx,
+                                            chunk_size = chunk.len(),
+                                            elapsed_ms,
+                                            total_keys,
+                                            "parser cell read chunk slow"
+                                        );
+                                    } else {
+                                        debug!(
+                                            chunk_idx,
+                                            chunk_size = chunk.len(),
+                                            elapsed_ms,
+                                            total_keys,
+                                            "parser cell read chunk"
+                                        );
+                                    }
+                                    out.extend(part);
+                                    if started.elapsed()
+                                        >= Duration::from_millis(PARSER_CELL_LOOKUP_MAX_MS)
+                                    {
+                                        anyhow::bail!(
+                                        "parser cell lookup exceeded hard cap {}ms (chunk {}, total_keys={})",
+                                        PARSER_CELL_LOOKUP_MAX_MS,
+                                        chunk_idx,
+                                        total_keys
+                                    );
+                                    }
+                                }
+                                Ok(out)
+                            },
+                        );
+                        match tokio::time::timeout(budget, db_query).await {
                             Ok(Ok(Ok(db_info))) => {
                                 for ((tx_hash, idx), info) in db_info {
                                     attempt_input_cell_info.insert((tx_hash, idx), info);
                                 }
                             }
                             Ok(Ok(Err(e))) => {
-                                error!("Parser: DB error fetching cell info: {}", e);
+                                error!(total_keys, "Parser: DB error fetching cell info: {}", e);
                                 db_lookup_failed = true;
                             }
                             Ok(Err(e)) => {
-                                error!("Parser: Failed to fetch cell info from DB: {}", e);
+                                error!(
+                                    total_keys,
+                                    "Parser: Failed to fetch cell info from DB: {}", e
+                                );
                                 db_lookup_failed = true;
                             }
                             Err(_) => {
                                 warn!(
-                                    "Parser: DB query for cell info timed out after 30s, forcing batch retry"
+                                    total_keys,
+                                    budget_ms,
+                                    "Parser: DB query for cell info timed out, forcing batch retry"
                                 );
                                 db_lookup_failed = true;
                             }

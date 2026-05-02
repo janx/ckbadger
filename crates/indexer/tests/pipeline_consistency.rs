@@ -262,6 +262,63 @@ fn test_cell_info_batch_lookup_multiple_cells() {
 }
 
 #[test]
+fn test_chunked_batch_lookup_matches_single_call_across_chunk_boundary() {
+    // Confirms get_full_cells_info_batch_chunk returns identical results
+    // whether the caller issues one big call or N smaller chunks. This is
+    // the contract the parser's chunked retry loop relies on.
+    let (store, writer) = setup_store();
+
+    // Use 1500 cells so we cross the parser's 512-key chunk boundary
+    // multiple times.
+    let n: u32 = 1500;
+    let tx_hashes: Vec<Vec<u8>> = (0..n)
+        .map(|i| {
+            let mut h = vec![0u8; 32];
+            h[0..4].copy_from_slice(&i.to_be_bytes());
+            h
+        })
+        .collect();
+    // Capacity must cover occupied = (8 + lock(33+20) + type(33+20) + data 64) * 1e8
+    // ≈ 178 CKB; use 500 CKB base so all values clear the threshold.
+    let cells: Vec<ParsedCell> = (0..n)
+        .map(|i| make_cell(500_00000000 + i64::from(i), 64, (i & 0xff) as u8))
+        .collect();
+    let inserts: Vec<(&[u8], i16, &ParsedCell, i64)> = (0..n as usize)
+        .map(|i| (tx_hashes[i].as_slice(), 0i16, &cells[i], 100 + i as i64))
+        .collect();
+    insert_cells_for_test(&store, &writer, &inserts, false);
+
+    let outpoints: Vec<(&[u8], i16)> = tx_hashes.iter().map(|h| (h.as_slice(), 0i16)).collect();
+
+    // 1) Single call.
+    let single = writer.get_full_cells_info_batch(&outpoints).unwrap();
+    assert_eq!(single.len(), n as usize);
+
+    // 2) Chunked: 512 keys per chunk (matches parser's PARSER_CELL_LOOKUP_CHUNK_SIZE).
+    let mut chunked: HashMap<(Vec<u8>, i16), PositionedCellInfo> =
+        HashMap::with_capacity(n as usize);
+    for chunk in outpoints.chunks(512) {
+        let part = writer.get_full_cells_info_batch_chunk(chunk).unwrap();
+        chunked.extend(part);
+    }
+    assert_eq!(chunked.len(), single.len());
+
+    // 3) Per-key equality: capacity, created_at_block, hashes match.
+    for k in single.keys() {
+        let s = single.get(k).unwrap();
+        let c = chunked.get(k).expect("chunked must have every key");
+        assert_eq!(s.capacity, c.capacity, "capacity mismatch for {:?}", k);
+        assert_eq!(
+            s.created_at_block, c.created_at_block,
+            "created_at_block mismatch for {:?}",
+            k
+        );
+        assert_eq!(s.lock_script_hash, c.lock_script_hash);
+        assert_eq!(s.data_size, c.data_size);
+    }
+}
+
+#[test]
 fn test_full_cells_info_returns_lock_and_type() {
     let (store, writer) = setup_store();
     let tx_hash = vec![0x01u8; 32];
