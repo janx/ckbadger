@@ -59,6 +59,13 @@ struct Sample {
     elapsed_us_delta: u64,
     current_block: u64,
     target_block: u64,
+    // Flush-side signals — added to verify WBM tuning actually reduces
+    // flush frequency (the suspected dominant cost in per-block commit).
+    num_running_flushes: u64,
+    mem_table_flush_pending: u64,
+    active_memtable_mb: u64,
+    wbm_usage_mb: u64,
+    wbm_budget_mb: u64,
 }
 
 /// Spawn the health monitor as a long-running background task. Returns
@@ -105,6 +112,7 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
 
         let (_fetch_ms, db_stage_ms, db_commit_ms) = indexer.perf_snapshot_ms();
         let memory = indexer.get_memory_stats();
+        let flush = indexer.flush_stats();
         let progress = indexer.progress();
         let sample = Sample {
             db_stage_write_ms: db_stage_ms,
@@ -120,6 +128,11 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
             elapsed_us_delta: lookup_delta.elapsed_us_total,
             current_block: progress.current(),
             target_block: progress.target(),
+            num_running_flushes: flush.num_running_flushes,
+            mem_table_flush_pending: flush.mem_table_flush_pending,
+            active_memtable_mb: flush.active_memtable_bytes / (1024 * 1024),
+            wbm_usage_mb: flush.wbm_usage_bytes / (1024 * 1024),
+            wbm_budget_mb: flush.wbm_budget_bytes / (1024 * 1024),
         };
 
         // Per-minute degradation alert (debounced).
@@ -204,7 +217,9 @@ async fn ensure_header(path: &PathBuf) -> anyhow::Result<()> {
         b"timestamp,current_block,target_block,db_stage_write_ms_avg,db_commit_ms_avg,\
           block_cache_mb_avg,l0_files_avg,l0_max_peak,sst_size_gb_last,\
           chunks_per_hour,slow_chunks_per_hour,timeouts_per_hour,\
-          keys_per_hour,avg_us_per_chunk\n",
+          keys_per_hour,avg_us_per_chunk,\
+          flush_pending_peak,active_memtable_mb_avg,wbm_usage_mb_avg,wbm_budget_mb_last,\
+          flush_observed_in_window\n",
     )
     .await?;
     Ok(())
@@ -231,9 +246,23 @@ async fn write_hourly_row(path: &PathBuf, buffer: &[Sample]) -> anyhow::Result<(
     } else {
         0.0
     };
+    let flush_pending_peak = buffer
+        .iter()
+        .map(|s| s.mem_table_flush_pending)
+        .max()
+        .unwrap_or(0);
+    let avg_active_mt = buffer.iter().map(|s| s.active_memtable_mb).sum::<u64>() as f64 / n;
+    let avg_wbm_usage = buffer.iter().map(|s| s.wbm_usage_mb).sum::<u64>() as f64 / n;
+    let last_wbm_budget = buffer.last().map(|s| s.wbm_budget_mb).unwrap_or(0);
+    // "Flush observed" = at least one sample saw num_running_flushes > 0.
+    // With 60-CF atomic flush the per-minute sample window catches each
+    // flush wave with high probability. This is a minute-resolution
+    // signal of "did we flush in this hour" — useful for verifying that
+    // the WBM cap change actually stretched flush intervals.
+    let flush_observed: u64 = buffer.iter().filter(|s| s.num_running_flushes > 0).count() as u64;
     let last = buffer.last().unwrap();
     let row = format!(
-        "{},{},{},{:.1},{:.1},{:.0},{:.1},{},{:.2},{},{},{},{},{:.0}\n",
+        "{},{},{},{:.1},{:.1},{:.0},{:.1},{},{:.2},{},{},{},{},{:.0},{},{:.0},{:.0},{},{}\n",
         Utc::now().to_rfc3339(),
         last.current_block,
         last.target_block,
@@ -248,6 +277,11 @@ async fn write_hourly_row(path: &PathBuf, buffer: &[Sample]) -> anyhow::Result<(
         timeouts_per_hour,
         keys_per_hour,
         avg_us_per_chunk,
+        flush_pending_peak,
+        avg_active_mt,
+        avg_wbm_usage,
+        last_wbm_budget,
+        flush_observed,
     );
     let mut f = OpenOptions::new().append(true).open(path).await?;
     f.write_all(row.as_bytes()).await?;

@@ -1957,11 +1957,23 @@ impl CkbadgerStore {
         let level_base_str = p.normal_max_bytes_for_level_base.to_string();
         let file_base_str = p.normal_target_file_size_base.to_string();
 
-        // Cap WBM budget for live sync.  The open-time wbm_normal_bytes is
-        // scaled for bulk-sync headroom (often 24 GB+).  Live sync writes
-        // ~3-5 MB/block; a 64 MB cap triggers an atomic flush every ~13-21
-        // blocks, keeping VectorRep memtables small enough for fast reads.
-        let live_wbm = p.wbm_normal_bytes.min(64 * MB as usize);
+        // Cap WBM budget for live sync. The open-time wbm_normal_bytes is
+        // scaled for bulk-sync headroom (often 24 GB+). Live sync writes
+        // ~3-5 MB/block; the previous 64 MB cap triggered an atomic flush
+        // every ~13-21 blocks, which on a 60-CF database produced
+        // sub-second flush waves but ~1.5-3 s per-block stage+commit
+        // (observed: 24h live sync averaged db_stage_write_ms ≈ 2 s and
+        // db_commit_ms ≈ 1.6 s, with flush dominating commit time).
+        //
+        // Raising the cap to 384 MB stretches the flush interval to
+        // ~80-130 blocks, amortising the 60-CF atomic flush over ~6×
+        // more blocks. Skiplist memtables (live sync uses skiplist, not
+        // VectorRep) handle 384 MB without measurable read-side cost.
+        // Memory cost is bounded: at most one full WBM worth of dirty
+        // memtable per generation (~384 MB), well inside the live-sync
+        // memory budget of any reasonable deployment.
+        const LIVE_WBM_CAP_BYTES: usize = 384 * MB as usize;
+        let live_wbm = p.wbm_normal_bytes.min(LIVE_WBM_CAP_BYTES);
         self.write_buffer_manager.set_buffer_size(live_wbm);
 
         self.block_cache
@@ -2232,6 +2244,59 @@ impl CkbadgerStore {
             wbm_budget_bytes: self.write_buffer_manager.get_buffer_size(),
         }
     }
+
+    /// Cheap snapshot of write-side flush activity. Used by the live-sync
+    /// health monitor to verify that WBM tuning actually reduces flush
+    /// frequency (the suspected dominant cost in per-block commit time).
+    ///
+    /// `num_running_flushes` is DB-wide; the per-CF counters are summed
+    /// over all CFs in this store. With atomic_flush enabled, flushes
+    /// fan out across all 60 CFs simultaneously, so summing is
+    /// representative of total flush pressure.
+    pub fn flush_stats(&self) -> FlushStats {
+        let num_running_flushes = self
+            .db
+            .property_int_value("rocksdb.num-running-flushes")
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        let mut mem_table_flush_pending: u64 = 0;
+        let mut active_memtable_bytes: u64 = 0;
+        for &cf_name in ALL_CFS {
+            if let Some(cf) = self.db.cf_handle(cf_name) {
+                if let Ok(Some(v)) = self
+                    .db
+                    .property_int_value_cf(cf, "rocksdb.mem-table-flush-pending")
+                {
+                    mem_table_flush_pending += v;
+                }
+                if let Ok(Some(v)) = self
+                    .db
+                    .property_int_value_cf(cf, "rocksdb.cur-size-active-mem-table")
+                {
+                    active_memtable_bytes += v;
+                }
+            }
+        }
+        FlushStats {
+            num_running_flushes,
+            mem_table_flush_pending,
+            active_memtable_bytes,
+            wbm_usage_bytes: self.write_buffer_manager.get_usage() as u64,
+            wbm_budget_bytes: self.write_buffer_manager.get_buffer_size() as u64,
+        }
+    }
+}
+
+/// Lightweight snapshot of write-side flush activity, sampled by the
+/// live-sync health monitor.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FlushStats {
+    pub num_running_flushes: u64,
+    pub mem_table_flush_pending: u64,
+    pub active_memtable_bytes: u64,
+    pub wbm_usage_bytes: u64,
+    pub wbm_budget_bytes: u64,
 }
 
 #[cfg(test)]

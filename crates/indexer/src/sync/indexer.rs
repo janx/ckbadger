@@ -937,6 +937,11 @@ impl Indexer {
         self.parser_cell_lookup_stats.snapshot()
     }
 
+    /// Cheap flush-side snapshot used by the live-sync health monitor.
+    pub(crate) fn flush_stats(&self) -> ckbadger_store::FlushStats {
+        self.writer.store().flush_stats()
+    }
+
     pub fn pipeline_progress_snapshot(&self) -> Option<PipelineProgressData> {
         self.pipeline_perf.snapshot()
     }
