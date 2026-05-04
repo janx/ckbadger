@@ -2134,7 +2134,7 @@ fn build_resources_column(
 fn cost_model_panel_lines(bb: &BulkBuildProgressData) -> Vec<Line<'static>> {
     let ms_per_block = bb
         .ms_per_block_ema
-        .map(|v| format!("{v:.3} ms/blk"))
+        .map(|v| format!("{:.3} ms/k-blk", v * 1000.0))
         .unwrap_or_else(|| "-".to_string());
     let controllable = bb
         .controllable_ms
@@ -2159,7 +2159,7 @@ fn cost_model_panel_lines(bb: &BulkBuildProgressData) -> Vec<Line<'static>> {
 
     vec![
         Line::from(vec![
-            Span::styled("ms/block  ", Style::default().fg(SLATE_500)),
+            Span::styled("ms/k-blk  ", Style::default().fg(SLATE_500)),
             Span::styled(ms_per_block, Style::default().fg(FOREGROUND)),
         ]),
         Line::from(vec![
