@@ -1937,20 +1937,41 @@ impl CkbadgerStore {
     /// low-write-rate live sync phase, so no automatic flush triggers. A crash then
     /// loses all unflushed data, creating block header gaps.
     pub fn restore_normal_compaction_options(&self) {
-        // Idempotent: skip if already in normal mode
+        // Idempotent: skip if already in normal mode. Reaching this branch
+        // means we are coming out of bulk sync, which is the only context
+        // that needs the pre-flush + WBM step combined.
         if !self.bulk_sync_mode.load(Ordering::Relaxed) {
             return;
         }
         self.bulk_sync_mode.store(false, Ordering::Relaxed);
+        self.apply_normal_compaction_options(true);
+    }
 
-        // Flush all memtables to SST BEFORE reducing WBM budget.
-        // This ensures all commit_no_wal() data from bulk sync is durable.
-        if let Err(e) = self.flush_all_memtables() {
-            error!(
-                error = %e,
-                "Failed to flush memtables during bulk-to-normal transition; \
-                 unflushed commit_no_wal data is at risk on crash"
-            );
+    /// Apply the live-sync compaction profile (WBM cap, per-CF write
+    /// buffers, L0 triggers, block cache size) to a freshly-opened DB.
+    ///
+    /// Used both by `restore_normal_compaction_options` after bulk sync
+    /// completes (with `flush_first = true` so any in-memory bulk data is
+    /// durable before WBM contracts) **and** by the supervisor at
+    /// startup when the indexer comes up directly in live mode (with
+    /// `flush_first = false`, since memtables are empty and there is
+    /// nothing to flush).
+    ///
+    /// Without the startup-time call, the WBM cap was previously only
+    /// applied on the bulk→live boundary; an indexer that started near
+    /// the chain tip kept the open-time `wbm_normal_bytes` (~24 GB) and
+    /// never benefitted from the live-sync tuning intended for it.
+    pub fn apply_normal_compaction_options(&self, flush_first: bool) {
+        if flush_first {
+            // Flush all memtables to SST BEFORE reducing WBM budget. This
+            // ensures all `commit_no_wal()` data from bulk sync is durable.
+            if let Err(e) = self.flush_all_memtables() {
+                error!(
+                    error = %e,
+                    "Failed to flush memtables during bulk-to-normal transition; \
+                     unflushed commit_no_wal data is at risk on crash"
+                );
+            }
         }
 
         let p = &self.memory_profile;
@@ -1960,18 +1981,10 @@ impl CkbadgerStore {
         // Cap WBM budget for live sync. The open-time wbm_normal_bytes is
         // scaled for bulk-sync headroom (often 24 GB+). Live sync writes
         // ~3-5 MB/block; the previous 64 MB cap triggered an atomic flush
-        // every ~13-21 blocks, which on a 60-CF database produced
-        // sub-second flush waves but ~1.5-3 s per-block stage+commit
-        // (observed: 24h live sync averaged db_stage_write_ms ≈ 2 s and
-        // db_commit_ms ≈ 1.6 s, with flush dominating commit time).
-        //
-        // Raising the cap to 384 MB stretches the flush interval to
-        // ~80-130 blocks, amortising the 60-CF atomic flush over ~6×
-        // more blocks. Skiplist memtables (live sync uses skiplist, not
-        // VectorRep) handle 384 MB without measurable read-side cost.
-        // Memory cost is bounded: at most one full WBM worth of dirty
-        // memtable per generation (~384 MB), well inside the live-sync
-        // memory budget of any reasonable deployment.
+        // every ~13-21 blocks. 384 MB stretches the interval to ~80-130
+        // blocks. Skiplist memtables (live sync uses skiplist, not
+        // VectorRep) handle 384 MB comfortably; memory cost is bounded
+        // by at most one full WBM worth of dirty memtable.
         const LIVE_WBM_CAP_BYTES: usize = 384 * MB as usize;
         let live_wbm = p.wbm_normal_bytes.min(LIVE_WBM_CAP_BYTES);
         self.write_buffer_manager.set_buffer_size(live_wbm);
@@ -2008,7 +2021,8 @@ impl CkbadgerStore {
         info!(
             wbm_budget_mb = live_wbm / (1024 * 1024),
             block_cache_mb = p.block_cache_normal_bytes / (1024 * 1024),
-            "Normal compaction options restored: l0_slowdown=12, l0_stop=24"
+            flush_first,
+            "Live compaction options applied: l0_slowdown=12, l0_stop=24"
         );
     }
 

@@ -303,6 +303,17 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     .await?;
     let indexer = Arc::new(indexer);
 
+    // Apply the live-sync compaction profile (incl. capped WBM) when
+    // starting up directly in live mode. Without this, the WBM cap
+    // ($store::apply_normal_compaction_options) is only triggered on
+    // bulk→live transition, leaving direct-live restarts running with
+    // the open-time bulk-sized WBM (~24 GB) — the same memtable budget
+    // intended for bulk throughput, not live latency.
+    if !indexer.is_bulk_sync_active() {
+        store.apply_normal_compaction_options(false);
+        append_only_store.apply_normal_compaction_options(false);
+    }
+
     if let Some(ref dir) = config.cycles_request_dir {
         spawn_cycles_worker(
             store.clone(),

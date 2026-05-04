@@ -66,6 +66,13 @@ struct Sample {
     active_memtable_mb: u64,
     wbm_usage_mb: u64,
     wbm_budget_mb: u64,
+    // Per-phase decomposition of the writer step. We accumulate these
+    // alongside db_stage / db_commit and report the CPU build cost vs
+    // the I/O commit cost separately so the next investigation step
+    // (after the WBM-not-the-bottleneck finding) has direct attribution.
+    precompute_ms: f64,
+    build_ms: f64,
+    finalize_ms: f64,
 }
 
 /// Spawn the health monitor as a long-running background task. Returns
@@ -111,6 +118,7 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
         last_lookup_snap = curr_lookup;
 
         let (_fetch_ms, db_stage_ms, db_commit_ms) = indexer.perf_snapshot_ms();
+        let (precompute_ms, build_ms, finalize_ms) = indexer.perf_write_phase_snapshot_ms();
         let memory = indexer.get_memory_stats();
         let flush = indexer.flush_stats();
         let progress = indexer.progress();
@@ -133,6 +141,9 @@ async fn run(indexer: Arc<Indexer>, csv_path: PathBuf) -> anyhow::Result<()> {
             active_memtable_mb: flush.active_memtable_bytes / (1024 * 1024),
             wbm_usage_mb: flush.wbm_usage_bytes / (1024 * 1024),
             wbm_budget_mb: flush.wbm_budget_bytes / (1024 * 1024),
+            precompute_ms,
+            build_ms,
+            finalize_ms,
         };
 
         // Per-minute degradation alert (debounced).
@@ -219,7 +230,8 @@ async fn ensure_header(path: &PathBuf) -> anyhow::Result<()> {
           chunks_per_hour,slow_chunks_per_hour,timeouts_per_hour,\
           keys_per_hour,avg_us_per_chunk,\
           flush_pending_peak,active_memtable_mb_avg,wbm_usage_mb_avg,wbm_budget_mb_last,\
-          flush_observed_in_window\n",
+          flush_observed_in_window,\
+          precompute_ms_avg,build_ms_avg,finalize_ms_avg\n",
     )
     .await?;
     Ok(())
@@ -260,9 +272,13 @@ async fn write_hourly_row(path: &PathBuf, buffer: &[Sample]) -> anyhow::Result<(
     // signal of "did we flush in this hour" — useful for verifying that
     // the WBM cap change actually stretched flush intervals.
     let flush_observed: u64 = buffer.iter().filter(|s| s.num_running_flushes > 0).count() as u64;
+    let avg_precompute = buffer.iter().map(|s| s.precompute_ms).sum::<f64>() / n;
+    let avg_build = buffer.iter().map(|s| s.build_ms).sum::<f64>() / n;
+    let avg_finalize = buffer.iter().map(|s| s.finalize_ms).sum::<f64>() / n;
     let last = buffer.last().unwrap();
     let row = format!(
-        "{},{},{},{:.1},{:.1},{:.0},{:.1},{},{:.2},{},{},{},{},{:.0},{},{:.0},{:.0},{},{}\n",
+        "{},{},{},{:.1},{:.1},{:.0},{:.1},{},{:.2},{},{},{},{},{:.0},{},{:.0},{:.0},{},{},\
+         {:.1},{:.1},{:.1}\n",
         Utc::now().to_rfc3339(),
         last.current_block,
         last.target_block,
@@ -282,6 +298,9 @@ async fn write_hourly_row(path: &PathBuf, buffer: &[Sample]) -> anyhow::Result<(
         avg_wbm_usage,
         last_wbm_budget,
         flush_observed,
+        avg_precompute,
+        avg_build,
+        avg_finalize,
     );
     let mut f = OpenOptions::new().append(true).open(path).await?;
     f.write_all(row.as_bytes()).await?;

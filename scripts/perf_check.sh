@@ -110,5 +110,11 @@ if [[ -f "$CSV" ]]; then
     # Tight summary of write-side trend (added in PR-2 step A).
     echo "write-side trend (db_stage_avg, db_commit_avg, wbm_budget, flush_observed_in_window):"
     awk -F',' 'NR>1 {printf "  %s  stage=%s commit=%s wbm_budget_mb=%s flush_minutes=%s\n", $1, $4, $5, $18, $19}' "$CSV" | tail -10
+    echo
+    # Per-phase decomposition: precompute (CPU), build (CPU batch
+    # construction), finalize (includes commit/I/O). Subtract commit_avg
+    # from finalize_avg to attribute the remaining CPU bookkeeping cost.
+    echo "write-phase decomposition (precompute / build / finalize, commit shown for reference):"
+    awk -F',' 'NR>1 {printf "  %s  precompute=%s build=%s finalize=%s commit=%s\n", $1, $20, $21, $22, $5}' "$CSV" | tail -10
   fi
 fi

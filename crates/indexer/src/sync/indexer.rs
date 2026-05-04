@@ -932,6 +932,12 @@ impl Indexer {
         self.perf.snapshot_ms()
     }
 
+    /// Per-phase write decomposition (precompute_ms, build_ms, finalize_ms).
+    /// Used by the health monitor to attribute the writer step's CPU vs I/O split.
+    pub(crate) fn perf_write_phase_snapshot_ms(&self) -> (f64, f64, f64) {
+        self.perf.write_phase_snapshot_ms()
+    }
+
     /// Cumulative parser cell-info lookup counters (used by health monitor).
     pub(crate) fn parser_cell_lookup_snapshot(&self) -> ParserCellLookupSnapshot {
         self.parser_cell_lookup_stats.snapshot()

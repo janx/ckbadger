@@ -2653,6 +2653,16 @@ impl Indexer {
                     self.perf.add_db_write(db_elapsed);
                     self.perf
                         .add_db_commit(duration_from_millis(write_metrics.commit_ms));
+                    // Per-phase decomposition: precompute (CPU pre-batch),
+                    // build (CPU batch construction), finalize (post-build
+                    // including the inner db.write() commit). The health
+                    // monitor subtracts commit_ms from finalize_ms to
+                    // attribute the I/O vs CPU split inside finalize.
+                    self.perf.add_write_phase_ms(
+                        write_metrics.prefetch_ms,
+                        write_metrics.write_ms,
+                        write_metrics.finalize_ms,
+                    );
 
                     if db_elapsed.as_secs() >= 5 {
                         let stats = self.writer.store().memory_stats();

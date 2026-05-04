@@ -121,6 +121,18 @@ pub(crate) struct PerfStats {
     pub(crate) last_db_stage_write_us: AtomicU64,
     pub(crate) last_db_commit_us: AtomicU64,
     pub(crate) blocks_count: AtomicU64,
+    // Per-phase decomposition of the writer step. Lets the health monitor
+    // attribute db_stage_write_ms across precompute (CPU pre-batch),
+    // build (CPU batch assembly), commit (I/O rocksdb write), and the
+    // remainder of finalize (CPU bookkeeping). These are accumulated
+    // across batches inside a sampling window and rotated by
+    // `report_and_reset` into the corresponding `last_*` slots.
+    pub(crate) precompute_us: AtomicU64,
+    pub(crate) build_us: AtomicU64,
+    pub(crate) finalize_us: AtomicU64,
+    pub(crate) last_precompute_us: AtomicU64,
+    pub(crate) last_build_us: AtomicU64,
+    pub(crate) last_finalize_us: AtomicU64,
 }
 
 impl PerfStats {
@@ -140,6 +152,18 @@ impl PerfStats {
             .fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
     }
 
+    /// Atomically accumulate per-phase write metrics from a completed
+    /// `write_parsed_batch` invocation. All durations are in milliseconds
+    /// (matching the source `BatchWriteMetrics`).
+    pub(crate) fn add_write_phase_ms(&self, precompute_ms: f64, build_ms: f64, finalize_ms: f64) {
+        let to_us = |ms: f64| ms.max(0.0).round() as u64 * 1000;
+        self.precompute_us
+            .fetch_add(to_us(precompute_ms), Ordering::Relaxed);
+        self.build_us.fetch_add(to_us(build_ms), Ordering::Relaxed);
+        self.finalize_us
+            .fetch_add(to_us(finalize_ms), Ordering::Relaxed);
+    }
+
     pub(crate) fn report_and_reset(&self) {
         let blocks = self.blocks_count.swap(0, Ordering::Relaxed);
         if blocks == 0 {
@@ -148,11 +172,18 @@ impl PerfStats {
         let fetch_us = self.fetch_us.swap(0, Ordering::Relaxed);
         let db_stage_us = self.db_stage_write_us.swap(0, Ordering::Relaxed);
         let db_commit_us = self.db_commit_us.swap(0, Ordering::Relaxed);
+        let precompute_us = self.precompute_us.swap(0, Ordering::Relaxed);
+        let build_us = self.build_us.swap(0, Ordering::Relaxed);
+        let finalize_us = self.finalize_us.swap(0, Ordering::Relaxed);
         self.last_fetch_us.store(fetch_us, Ordering::Relaxed);
         self.last_db_stage_write_us
             .store(db_stage_us, Ordering::Relaxed);
         self.last_db_commit_us
             .store(db_commit_us, Ordering::Relaxed);
+        self.last_precompute_us
+            .store(precompute_us, Ordering::Relaxed);
+        self.last_build_us.store(build_us, Ordering::Relaxed);
+        self.last_finalize_us.store(finalize_us, Ordering::Relaxed);
 
         let fetch_ms = fetch_us as f64 / 1000.0;
         let db_stage_ms = db_stage_us as f64 / 1000.0;
@@ -191,6 +222,36 @@ impl PerfStats {
             rpc as f64 / 1000.0,
             db_stage as f64 / 1000.0,
             db_commit as f64 / 1000.0,
+        )
+    }
+
+    /// Per-phase decomposition snapshot for the health monitor. Falls back
+    /// to the latest completed window when the current accumulator is
+    /// empty so post-restart polls still return useful values.
+    /// Returns (precompute_ms, build_ms, finalize_ms).
+    pub(crate) fn write_phase_snapshot_ms(&self) -> (f64, f64, f64) {
+        let pre = self.precompute_us.load(Ordering::Relaxed);
+        let build = self.build_us.load(Ordering::Relaxed);
+        let fin = self.finalize_us.load(Ordering::Relaxed);
+        let pre = if pre > 0 {
+            pre
+        } else {
+            self.last_precompute_us.load(Ordering::Relaxed)
+        };
+        let build = if build > 0 {
+            build
+        } else {
+            self.last_build_us.load(Ordering::Relaxed)
+        };
+        let fin = if fin > 0 {
+            fin
+        } else {
+            self.last_finalize_us.load(Ordering::Relaxed)
+        };
+        (
+            pre as f64 / 1000.0,
+            build as f64 / 1000.0,
+            fin as f64 / 1000.0,
         )
     }
 }
