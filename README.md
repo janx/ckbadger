@@ -12,13 +12,17 @@
 - **Local First** — All you need is a CKB node and the will to run your own stack.
 - **Agent Friendly** — Agents are first-class users. Built by agents, for agents.
 
-## Web5: The Local-First Web
+## Local-First: A Web5 Pillar
 
 Web5 inherits from Web2 and Web3 to overthrow both. It wields Web2 technologies but rejects the Web2 paradigm. It stands on blockchains but builds off-chain, local-first. Web5 is [web2+web3](https://www.nervos.org/knowledge-base/web5-extra-decentralized), web5 is not [web2+web3](https://talk.nervos.org/t/my-web5-your-web5/9506).
 
-The web does not have to be centralized services that every user connects to.
+Web5 has multiple pillars — local-first software, peer-to-peer networking, a proof-of-work objective anchor, and more. CKBadger is local-first software.
 
-Web5 is the local-first web. It is a network of equally connected nodes, each running its own stack: CKB node, Fiber node, CKBadger, and whatever else you choose to run. No single point of failure. No single point of control. CKBadger is the eyes of that stack.
+The web does not have to be centralized services that every user connects to. Local-first is the alternative: a network of equally connected nodes, each running its own stack — CKB node, Fiber node, CKBadger, and whatever else you choose to run. No single point of failure. No single point of control. CKBadger is the eyes of that stack.
+
+### Self-Custody, Extended
+
+Local-first extends self-custody. Self-custody tells us to hold our own keys and assets; local-first tells us to hold our identity and data too.
 
 ### Simplicity
 
