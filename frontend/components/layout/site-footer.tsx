@@ -56,7 +56,7 @@ export function SiteFooter() {
                 Fiber Dashboard
               </a>
               <a
-                href="https://web5.tech"
+                href="https://web5.info"
                 target="_blank"
                 rel="noreferrer"
                 className="text-text hover:text-jade border-base-border hover:border-jade/30 rounded border px-1.5 py-0.5 transition-colors"
