@@ -33,6 +33,14 @@ body {
     font-variant-numeric: tabular-nums;
   }
 
+  .scrollbar-hide {
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
   .terminal-text {
     color: #2edba3;
     text-shadow: 0 0 6px #2edba340;

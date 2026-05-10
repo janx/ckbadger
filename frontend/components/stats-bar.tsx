@@ -88,7 +88,7 @@ export function GlobalStatsBar() {
   const epochPct = epoch ? ((epoch.index / epoch.length) * 100).toFixed(1) : null;
 
   return (
-    <div className="flex items-center gap-0 overflow-x-auto font-mono text-[11px] tabular-nums leading-none">
+    <div className="scrollbar-hide flex items-center gap-0 overflow-x-auto font-mono text-[11px] tabular-nums leading-none">
       <Link href={`/blocks/${stats.latestBlock}`} className="group flex items-center">
         <span className="text-jade/50 hidden uppercase tracking-wider sm:inline">block</span>
         <span className="text-jade/50 uppercase tracking-wider sm:hidden">#</span>

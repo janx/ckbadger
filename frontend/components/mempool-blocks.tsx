@@ -1770,7 +1770,7 @@ export function MempoolBlocks({
       )}
 
       <div className={cn('relative', showHeader ? 'pb-6' : 'pb-2')}>
-        <div className="overflow-x-auto overscroll-x-contain pb-1 [scrollbar-width:thin]">
+        <div className="scrollbar-hide overflow-x-auto overscroll-x-contain pb-1">
           <div
             className={cn(
               'flex min-w-full items-center gap-1 sm:gap-2',
