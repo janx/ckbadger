@@ -183,6 +183,30 @@ pub(crate) fn block_time_to_bucket(block_time_seconds: i64) -> i32 {
     }
 }
 
+impl BatchStats {
+    /// Accumulate one inter-block time delta into both the per-day sum and the
+    /// per-second bucket histogram. Negative deltas (clock skew) are dropped.
+    ///
+    /// The per-day sum stores full millisecond precision so that the daily
+    /// average matches the on-the-fly average derived from raw block headers.
+    pub(crate) fn accumulate_block_time(
+        &mut self,
+        prev_ts: chrono::DateTime<chrono::Utc>,
+        curr_ts: chrono::DateTime<chrono::Utc>,
+        block_date: NaiveDate,
+    ) {
+        let delta_ms = (curr_ts - prev_ts).num_milliseconds();
+        if delta_ms < 0 {
+            return;
+        }
+        let bucket = block_time_to_bucket(delta_ms / 1000);
+        *self.block_time_dist.entry(bucket).or_default() += 1;
+        let entry = self.daily_block_times.entry(block_date).or_insert((0, 0));
+        entry.0 += delta_ms;
+        entry.1 += 1;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Occupied capacity
 // ---------------------------------------------------------------------------
@@ -706,7 +730,7 @@ fn bump_unique_active_depositors(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use ckbadger_store::types::{LiveCellInfo, PositionedCellInfo};
     use std::collections::HashMap;
 
@@ -1958,5 +1982,67 @@ mod tests {
             !crossed || is_bulk,
             "DAO recalc should not trigger without boundary crossing"
         );
+    }
+
+    // -- BatchStats::accumulate_block_time -----------------------------------
+
+    #[test]
+    fn test_accumulate_block_time_preserves_subsecond_precision() {
+        // Regression: previously the live-sync path computed the delta with
+        // `.num_seconds() * 1000`, truncating to whole seconds and biasing the
+        // daily avg_block_time_ms down by up to ~1s on a ~8s-target chain.
+        let prev_ts = chrono::Utc.with_ymd_and_hms(2024, 6, 1, 12, 0, 0).unwrap();
+        let curr_ts = prev_ts + chrono::Duration::milliseconds(7945);
+        let date = NaiveDate::from_ymd_opt(2024, 6, 1).unwrap();
+
+        let mut stats = BatchStats::default();
+        stats.accumulate_block_time(prev_ts, curr_ts, date);
+
+        let (sum_ms, count) = stats.daily_block_times[&date];
+        assert_eq!(count, 1);
+        assert_eq!(
+            sum_ms, 7945,
+            "daily sum must preserve millisecond precision"
+        );
+        // Bucket uses second-resolution: 7945ms → 7s bucket
+        assert_eq!(stats.block_time_dist.get(&7), Some(&1));
+    }
+
+    #[test]
+    fn test_accumulate_block_time_drops_negative_delta() {
+        let curr_ts = chrono::Utc.with_ymd_and_hms(2024, 6, 1, 12, 0, 0).unwrap();
+        // Clock skew: curr is earlier than prev.
+        let prev_ts = curr_ts + chrono::Duration::milliseconds(500);
+        let date = NaiveDate::from_ymd_opt(2024, 6, 1).unwrap();
+
+        let mut stats = BatchStats::default();
+        stats.accumulate_block_time(prev_ts, curr_ts, date);
+
+        assert!(stats.daily_block_times.is_empty());
+        assert!(stats.block_time_dist.is_empty());
+    }
+
+    #[test]
+    fn test_accumulate_block_time_sums_multiple_deltas() {
+        let base = chrono::Utc.with_ymd_and_hms(2024, 6, 1, 12, 0, 0).unwrap();
+        let date = NaiveDate::from_ymd_opt(2024, 6, 1).unwrap();
+
+        let mut stats = BatchStats::default();
+        // Three deltas: 7945ms, 8123ms, 9999ms = 26067ms total.
+        stats.accumulate_block_time(base, base + chrono::Duration::milliseconds(7945), date);
+        stats.accumulate_block_time(
+            base + chrono::Duration::milliseconds(7945),
+            base + chrono::Duration::milliseconds(7945 + 8123),
+            date,
+        );
+        stats.accumulate_block_time(
+            base + chrono::Duration::milliseconds(7945 + 8123),
+            base + chrono::Duration::milliseconds(7945 + 8123 + 9999),
+            date,
+        );
+
+        let (sum_ms, count) = stats.daily_block_times[&date];
+        assert_eq!(count, 3);
+        assert_eq!(sum_ms, 7945 + 8123 + 9999);
     }
 }

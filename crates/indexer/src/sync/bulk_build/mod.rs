@@ -1373,13 +1373,11 @@ impl ChainStatsAccumulator {
                 .get(date)
                 .and_then(|dao| crate::db::writer::calculate_knowledge_size(dao));
 
-            let avg_block_time_ms = self.daily_block_times.get(date).and_then(|(sum, count)| {
-                if *count > 0 {
-                    Some(*sum / *count as i64)
-                } else {
-                    None
-                }
-            });
+            let (block_time_sum_ms, block_time_count) = self
+                .daily_block_times
+                .get(date)
+                .map(|(sum, count)| (*sum, *count))
+                .unwrap_or((0, 0));
 
             let stats = ckbadger_store::types::DailyStats {
                 blocks_count: blocks,
@@ -1394,7 +1392,8 @@ impl ChainStatsAccumulator {
                 total_all_cells: cum_all,
                 total_data_size: cum_data_size,
                 knowledge_size,
-                avg_block_time_ms,
+                block_time_sum_ms,
+                block_time_count,
             };
             rows.push(materialize::MaterializedRow::new(
                 CF_STATS_CHAIN,
@@ -1417,22 +1416,18 @@ impl ChainStatsAccumulator {
                 0.0
             };
 
-            let avg_block_time_ms = self
+            let (block_time_sum_ms, block_time_count) = self
                 .daily_block_times
                 .get(date)
-                .and_then(|(sum, bt_count)| {
-                    if *bt_count > 0 {
-                        Some(*sum / *bt_count as i64)
-                    } else {
-                        None
-                    }
-                });
+                .map(|(sum, count)| (*sum, *count))
+                .unwrap_or((0, 0));
 
             let stats = ckbadger_store::types::DailyBlockStats {
                 avg_difficulty,
                 block_count: count,
                 total_uncles: uncles,
-                avg_block_time_ms,
+                block_time_sum_ms,
+                block_time_count,
             };
             rows.push(materialize::MaterializedRow::new(
                 CF_STATS_CHAIN,

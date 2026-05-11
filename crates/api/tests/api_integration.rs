@@ -598,7 +598,8 @@ async fn test_tx_stats_reads_from_derived_store() {
                 total_all_cells: 0,
                 total_data_size: 0,
                 knowledge_size: None,
-                avg_block_time_ms: None,
+                block_time_sum_ms: 0,
+                block_time_count: 0,
             },
         )
         .unwrap();
@@ -744,7 +745,8 @@ async fn test_network_stats_reads_derived_statistics() {
                 total_all_cells: 0,
                 total_data_size: 0,
                 knowledge_size: None,
-                avg_block_time_ms: None,
+                block_time_sum_ms: 0,
+                block_time_count: 0,
             },
         )
         .unwrap();
@@ -764,7 +766,8 @@ async fn test_network_stats_reads_derived_statistics() {
                 total_all_cells: 0,
                 total_data_size: 0,
                 knowledge_size: None,
-                avg_block_time_ms: None,
+                block_time_sum_ms: 0,
+                block_time_count: 0,
             },
         )
         .unwrap();
@@ -775,7 +778,8 @@ async fn test_network_stats_reads_derived_statistics() {
                 avg_difficulty: 1_000_000.0,
                 block_count: 100,
                 total_uncles: 5,
-                avg_block_time_ms: Some(10_000),
+                block_time_sum_ms: 100 * 10_000,
+                block_time_count: 100,
             },
         )
         .unwrap();
@@ -857,7 +861,8 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
                 total_all_cells: 0,
                 total_data_size: 0,
                 knowledge_size: None,
-                avg_block_time_ms: None,
+                block_time_sum_ms: 0,
+                block_time_count: 0,
             },
         )
         .unwrap();
@@ -877,7 +882,8 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
                 total_all_cells: 0,
                 total_data_size: 0,
                 knowledge_size: None,
-                avg_block_time_ms: None,
+                block_time_sum_ms: 0,
+                block_time_count: 0,
             },
         )
         .unwrap();
@@ -888,7 +894,8 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
                 avg_difficulty: 1_000_000.0,
                 block_count: 100,
                 total_uncles: 5,
-                avg_block_time_ms: Some(10_000),
+                block_time_sum_ms: 100 * 10_000,
+                block_time_count: 100,
             },
         )
         .unwrap();
@@ -959,7 +966,8 @@ async fn test_daily_block_charts_read_from_derived_store() {
                 avg_difficulty: 1_000_000.0,
                 block_count: 100,
                 total_uncles: 2,
-                avg_block_time_ms: Some(10_000),
+                block_time_sum_ms: 100 * 10_000,
+                block_time_count: 100,
             },
         )
         .unwrap();
@@ -970,7 +978,8 @@ async fn test_daily_block_charts_read_from_derived_store() {
                 avg_difficulty: 2_000_000.0,
                 block_count: 120,
                 total_uncles: 3,
-                avg_block_time_ms: Some(10_000),
+                block_time_sum_ms: 120 * 10_000,
+                block_time_count: 120,
             },
         )
         .unwrap();
@@ -2173,7 +2182,8 @@ async fn test_average_block_time_chart_recomputes_after_initial_empty_response()
         .put_daily_stats(
             "20240115",
             &DailyStats {
-                avg_block_time_ms: Some(12_000),
+                block_time_sum_ms: 12_000,
+                block_time_count: 1,
                 ..Default::default()
             },
         )

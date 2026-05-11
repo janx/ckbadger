@@ -932,10 +932,6 @@ fn collect_committed_proposal_ids(txs: &[TxData]) -> Vec<String> {
     collected
 }
 
-fn block_time_to_bucket(block_time_seconds: i64) -> i32 {
-    super::dao_helpers::block_time_to_bucket(block_time_seconds)
-}
-
 fn truncate_to_hour(dt: DateTime<Utc>) -> DateTime<Utc> {
     dt.with_minute(0)
         .and_then(|d| d.with_second(0))
@@ -3127,20 +3123,7 @@ impl Indexer {
             }
 
             if let Some(prev_ts) = prev_timestamp {
-                let block_time_seconds = (parsed.timestamp - prev_ts).num_seconds();
-                if block_time_seconds >= 0 {
-                    *batch_stats
-                        .block_time_dist
-                        .entry(block_time_to_bucket(block_time_seconds))
-                        .or_default() += 1;
-                    let block_time_ms = block_time_seconds * 1000;
-                    let entry = batch_stats
-                        .daily_block_times
-                        .entry(block_date)
-                        .or_insert((0, 0));
-                    entry.0 += block_time_ms;
-                    entry.1 += 1;
-                }
+                batch_stats.accumulate_block_time(prev_ts, parsed.timestamp, block_date);
             }
             prev_timestamp = Some(parsed.timestamp);
 

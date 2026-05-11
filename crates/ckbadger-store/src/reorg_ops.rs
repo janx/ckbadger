@@ -6564,7 +6564,8 @@ mod tests {
             total_all_cells: 110,
             total_data_size: 500,
             knowledge_size: None,
-            avg_block_time_ms: None,
+            block_time_sum_ms: 0,
+            block_time_count: 0,
         };
         store
             .put_cf(
@@ -6744,7 +6745,8 @@ mod tests {
             avg_difficulty: 1000.0,
             block_count: 720,
             total_uncles: 5,
-            avg_block_time_ms: Some(10000),
+            block_time_sum_ms: 720 * 10_000,
+            block_time_count: 720,
         };
         let key = keys::encode_stats_key(keys::STATS_PREFIX_DAILY_BLOCK, date.as_bytes());
         let value = bincode::serialize(&original).unwrap();
@@ -6900,7 +6902,8 @@ mod tests {
             avg_difficulty: 1.0,
             block_count: 4,
             total_uncles: 2,
-            avg_block_time_ms: Some(1000),
+            block_time_sum_ms: 4 * 1_000,
+            block_time_count: 4,
         };
         store.put_daily_block_stats("20260408", &pre_reorg).unwrap();
 

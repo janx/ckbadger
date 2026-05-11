@@ -1952,7 +1952,7 @@ async fn get_average_block_time_chart(
     let data: Vec<ChartDataPoint> = daily_stats
         .into_iter()
         .filter_map(|(date_str, stats)| {
-            stats.avg_block_time_ms.map(|avg_time_ms| ChartDataPoint {
+            stats.avg_block_time_ms().map(|avg_time_ms| ChartDataPoint {
                 date: format_date_for_chart(&date_str),
                 value: format!("{:.2}", avg_time_ms as f64 / 1000.0),
                 value2: None,

@@ -160,41 +160,13 @@ impl BatchWriter {
         );
         let existing = self.store.get_stats_key(&key)?;
 
-        let avg_block_time_ms = block_time.and_then(|(sum_ms, count)| {
-            if count > 0 {
-                Some(sum_ms / count as i64)
-            } else {
-                None
-            }
-        });
+        let (new_block_time_sum_ms, new_block_time_count) = block_time.unwrap_or((0, 0));
 
         let stats = match existing {
             Some(val) => {
                 let mut s: DailyStats = deserialize_stats(&val, "daily stats")?;
-                // Compute weighted average block time before updating blocks_count
-                if let Some(new_avg) = avg_block_time_ms {
-                    let bt_count = block_time.map(|(_, c)| c).unwrap_or(0);
-                    s.avg_block_time_ms = match s.avg_block_time_ms {
-                        Some(existing_avg) => {
-                            anyhow::ensure!(
-                                s.blocks_count >= 1,
-                                "existing daily stats entry has avg_block_time_ms but blocks_count={} (expected >= 1)",
-                                s.blocks_count,
-                            );
-                            let prev_count = s.blocks_count as i64 - 1;
-                            let new_total = prev_count + bt_count as i64;
-                            if new_total > 0 {
-                                Some(
-                                    (existing_avg * prev_count + new_avg * bt_count as i64)
-                                        / new_total,
-                                )
-                            } else {
-                                Some(new_avg)
-                            }
-                        }
-                        None => Some(new_avg),
-                    };
-                }
+                s.block_time_sum_ms += new_block_time_sum_ms;
+                s.block_time_count += new_block_time_count;
                 s.blocks_count += blocks_count;
                 s.transactions_count += transactions_count;
                 s.cells_created += cells_created;
@@ -308,7 +280,8 @@ impl BatchWriter {
                     total_all_cells: prev_all + cells_created as i64,
                     total_data_size: prev_data_size + data_size_added - data_size_consumed,
                     knowledge_size,
-                    avg_block_time_ms,
+                    block_time_sum_ms: new_block_time_sum_ms,
+                    block_time_count: new_block_time_count,
                 }
             }
         };
@@ -346,7 +319,8 @@ impl BatchWriter {
                 avg_difficulty,
                 block_count,
                 total_uncles,
-                avg_block_time_ms: None,
+                block_time_sum_ms: 0,
+                block_time_count: 0,
             },
         };
 
@@ -1841,6 +1815,78 @@ mod tests {
         assert!(err
             .to_string()
             .contains("missing previous day stats while carrying daily totals"));
+    }
+
+    #[test]
+    fn test_daily_stats_incremental_avg_matches_true_avg_across_batches() {
+        // Regression: previously the incremental update folded the new batch
+        // into the running average using `prev_count = blocks_count - 1`,
+        // which assumed deltas-per-day == blocks-per-day - 1. For any
+        // non-genesis day the first delta crosses the midnight boundary into
+        // that day, so deltas-per-day == blocks-per-day and the formula
+        // systematically under-weighted history. The fix accumulates raw sum +
+        // count and derives the average on read.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let day = NaiveDate::from_ymd_opt(2024, 6, 1).unwrap();
+        let key = keys::encode_stats_key(
+            keys::STATS_PREFIX_DAILY,
+            day.format("%Y%m%d").to_string().as_bytes(),
+        );
+
+        // Batch 1: 3 blocks with deltas 8000+9000+10000ms (avg 9000)
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .update_daily_statistics(
+                day,
+                3,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                None,
+                Some((27_000, 3)),
+                None,
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        // Batch 2: 2 blocks with deltas 6000+7000ms (avg 6500)
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .update_daily_statistics(
+                day,
+                2,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                None,
+                Some((13_000, 2)),
+                None,
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        // True average across all 5 deltas: (27000 + 13000) / 5 = 8000ms
+        let stats: DailyStats =
+            bincode::deserialize(&store.get_stats_key(&key).unwrap().unwrap()).unwrap();
+        assert_eq!(
+            stats.avg_block_time_ms(),
+            Some(8000),
+            "incremental updates must yield the true sum/count average"
+        );
     }
 }
 

@@ -758,7 +758,27 @@ pub struct DailyStats {
     pub total_all_cells: i64,
     pub total_data_size: i64,
     pub knowledge_size: Option<i128>,
-    pub avg_block_time_ms: Option<i64>,
+    /// Sum of inter-block time deltas (ms) for blocks landing on this day.
+    /// Combined with `block_time_count` this is the single source of truth for
+    /// the day's average block time; `avg_block_time_ms()` derives it.
+    #[serde(default)]
+    pub block_time_sum_ms: i64,
+    /// Number of inter-block time deltas accumulated into `block_time_sum_ms`.
+    #[serde(default)]
+    pub block_time_count: i32,
+}
+
+impl DailyStats {
+    /// Derive the day's average block time (ms) from the stored sum and count.
+    /// Returns `None` only when no deltas have been accumulated yet (a fresh
+    /// day with at most one block — typically only the genesis day).
+    pub fn avg_block_time_ms(&self) -> Option<i64> {
+        if self.block_time_count > 0 {
+            Some(self.block_time_sum_ms / self.block_time_count as i64)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -795,7 +815,20 @@ pub struct DailyBlockStats {
     pub avg_difficulty: f64,
     pub block_count: i32,
     pub total_uncles: i32,
-    pub avg_block_time_ms: Option<i64>,
+    #[serde(default)]
+    pub block_time_sum_ms: i64,
+    #[serde(default)]
+    pub block_time_count: i32,
+}
+
+impl DailyBlockStats {
+    pub fn avg_block_time_ms(&self) -> Option<i64> {
+        if self.block_time_count > 0 {
+            Some(self.block_time_sum_ms / self.block_time_count as i64)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -28,7 +28,8 @@ fn test_daily_stats_put_get() {
         total_all_cells: 180_000,
         total_data_size: 500_000_000,
         knowledge_size: Some(200_000_000),
-        avg_block_time_ms: Some(8200),
+        block_time_sum_ms: 144 * 8200,
+        block_time_count: 144,
     };
 
     store.put_daily_stats("2024-01-01", &stats).unwrap();
@@ -48,7 +49,7 @@ fn test_daily_stats_put_get() {
     assert_eq!(retrieved.total_all_cells, 180_000);
     assert_eq!(retrieved.total_data_size, 500_000_000);
     assert_eq!(retrieved.knowledge_size, Some(200_000_000));
-    assert_eq!(retrieved.avg_block_time_ms, Some(8200));
+    assert_eq!(retrieved.avg_block_time_ms(), Some(8200));
 
     // Non-existent date returns None
     assert!(store.get_daily_stats("2099-12-31").unwrap().is_none());
@@ -170,7 +171,8 @@ fn test_daily_block_stats() {
         avg_difficulty: 0.0042,
         block_count: 144,
         total_uncles: 12,
-        avg_block_time_ms: Some(8100),
+        block_time_sum_ms: 144 * 8100,
+        block_time_count: 144,
     };
 
     store.put_daily_block_stats("2024-01-15", &stats).unwrap();
@@ -181,7 +183,7 @@ fn test_daily_block_stats() {
     assert!((retrieved.avg_difficulty - 0.0042).abs() < f64::EPSILON);
     assert_eq!(retrieved.block_count, 144);
     assert_eq!(retrieved.total_uncles, 12);
-    assert_eq!(retrieved.avg_block_time_ms, Some(8100));
+    assert_eq!(retrieved.avg_block_time_ms(), Some(8100));
 
     // Also verify through the list method
     let all = store.list_daily_block_stats().unwrap();
@@ -211,7 +213,8 @@ fn test_list_daily_stats() {
             total_all_cells: 90_000 + (i as i64 * 1800),
             total_data_size: 100_000_000 + (i as i64 * 10_000_000),
             knowledge_size: None,
-            avg_block_time_ms: None,
+            block_time_sum_ms: 0,
+            block_time_count: 0,
         };
         store.put_daily_stats(date, &stats).unwrap();
     }
@@ -248,7 +251,8 @@ fn test_daily_and_hourly_capacity_support_values_above_i64() {
         total_all_cells: 1,
         total_data_size: 0,
         knowledge_size: None,
-        avg_block_time_ms: None,
+        block_time_sum_ms: 0,
+        block_time_count: 0,
     };
     store.put_daily_stats("2024-02-01", &daily).unwrap();
     let got_daily = store.get_daily_stats("2024-02-01").unwrap().unwrap();
