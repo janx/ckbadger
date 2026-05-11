@@ -1415,7 +1415,7 @@ export default function ScriptDetailPage({
             </div>
           }
         />
-        <TerminalPanel className="border-base-border/80 mb-6">
+        <TerminalPanel className="border-base-border/80 mb-6" data-testid="script-versions-panel">
           <TerminalPanelHeader indicator="active">
             <div className="flex items-center gap-2">
               <span>Script Versions</span>
@@ -1672,7 +1672,7 @@ export default function ScriptDetailPage({
         </TerminalPanel>
         {selectedVersion && (
           <>
-            <TerminalPanel className="mb-6">
+            <TerminalPanel className="mb-6" data-testid="version-deployments-panel">
               <TerminalPanelHeader indicator="none">
                 <div className="flex items-center gap-2">
                   <span>Version Deployments</span>
@@ -1689,6 +1689,7 @@ export default function ScriptDetailPage({
                         ({ deployment, outpointKey, codeCell, references }) => (
                           <TerminalRow
                             key={outpointKey ?? deployment.codeHash}
+                            data-testid={outpointKey ? `deployment-row-${outpointKey}` : undefined}
                             onClick={() => handleDeploymentClick(outpointKey)}
                             className={
                               hasMultipleDeployments
@@ -1809,6 +1810,7 @@ export default function ScriptDetailPage({
                         ({ deployment, outpointKey, codeCell, references }) => (
                           <TerminalRow
                             key={outpointKey ?? deployment.codeHash}
+                            data-testid={outpointKey ? `deployment-row-${outpointKey}` : undefined}
                             onClick={() => handleDeploymentClick(outpointKey)}
                             className={`min-w-[860px] ${hasMultipleDeployments ? `cursor-pointer ${isDeploymentSelected(outpointKey) ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}` : ''}`}
                           >
@@ -1898,6 +1900,7 @@ export default function ScriptDetailPage({
                         ({ deployment, outpointKey, codeCell, references }) => (
                           <TerminalRow
                             key={outpointKey ?? deployment.codeHash}
+                            data-testid={outpointKey ? `deployment-row-${outpointKey}` : undefined}
                             onClick={() => handleDeploymentClick(outpointKey)}
                             className={`min-w-[1120px] ${hasMultipleDeployments ? `cursor-pointer ${isDeploymentSelected(outpointKey) ? 'bg-emphasis/10 ring-emphasis/30 ring-1 ring-inset' : ''}` : ''}`}
                           >
@@ -1966,7 +1969,7 @@ export default function ScriptDetailPage({
                 )}
               </TerminalPanelContent>
             </TerminalPanel>
-            <TerminalPanel>
+            <TerminalPanel data-testid="version-usage-panel">
               <TerminalPanelHeader
                 indicator="none"
                 actions={

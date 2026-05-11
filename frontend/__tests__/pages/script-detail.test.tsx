@@ -269,21 +269,6 @@ const sharedVersionUsageCellsByRef = {
   },
 };
 
-function findNearestContainer(
-  start: HTMLElement,
-  predicate: (element: HTMLElement) => boolean
-): HTMLElement {
-  let current: HTMLElement | null = start;
-  while (current) {
-    if (predicate(current)) {
-      return current;
-    }
-    current = current.parentElement;
-  }
-
-  throw new Error('Unable to find matching container');
-}
-
 function hasTextContent(element: HTMLElement, text: string): boolean {
   return element.textContent?.replace(/\s+/g, '').includes(text.replace(/\s+/g, '')) ?? false;
 }
@@ -443,17 +428,7 @@ describe('ScriptDetailPage', () => {
       expect(screen.getByText('SECP256K1_BLAKE160')).toBeInTheDocument();
     });
 
-    const versionsHeader = screen.getByText('Script Versions');
-    const versionsPanel = findNearestContainer(versionsHeader, (element) => {
-      const queries = within(element);
-      return (
-        queries.queryByText('Script Versions') !== null &&
-        queries.queryByText('Code Hash') !== null &&
-        queries.queryByText('First Deployed At') !== null &&
-        queries.queryByText('Deployments') !== null &&
-        queries.queryByText('Cells Using It') !== null
-      );
-    });
+    const versionsPanel = screen.getByTestId('script-versions-panel');
     expect(within(versionsPanel).getByText('Code Hash')).toBeInTheDocument();
     expect(within(versionsPanel).getByText('First Deployed At')).toBeInTheDocument();
     expect(within(versionsPanel).getByText('Used As')).toBeInTheDocument();
@@ -474,17 +449,7 @@ describe('ScriptDetailPage', () => {
     expect(within(sharedVersionRow).getByText(firstDeploymentTimestampLabel)).toBeInTheDocument();
     expect(within(sharedVersionRow).getByText(/^2$/)).toBeInTheDocument();
 
-    const deploymentsHeader = screen.getByText('Version Deployments');
-    const deploymentsPanel = findNearestContainer(deploymentsHeader, (element) => {
-      const queries = within(element);
-      return (
-        queries.queryByText('Version Deployments') !== null &&
-        queries.queryByText('Outpoint') !== null &&
-        queries.queryByText('Governance') !== null &&
-        queries.queryByText('References') !== null &&
-        queries.queryByText('Common Knowledge Size') !== null
-      );
-    });
+    const deploymentsPanel = screen.getByTestId('version-deployments-panel');
     expect(within(deploymentsPanel).getByText('Outpoint')).toBeInTheDocument();
     expect(within(deploymentsPanel).getByText('Status')).toBeInTheDocument();
     expect(within(deploymentsPanel).getByText('Governance')).toBeInTheDocument();
@@ -511,15 +476,8 @@ describe('ScriptDetailPage', () => {
       within(deploymentsScroll).getByTitle(`Click to copy: ${firstDeploymentTxHash}:0`)
     ).toBeInTheDocument();
 
-    const firstDeploymentRow = findNearestContainer(
-      within(deploymentsPanel).getByTitle(`Click to copy: ${firstDeploymentTxHash}:0`),
-      (element) => {
-        const queries = within(element);
-        return (
-          queries.queryByTitle(`Click to copy: ${firstDeploymentTxHash}:0`) !== null &&
-          queries.queryByTitle(`Click to copy: ${secondDeploymentTxHash}:1`) === null
-        );
-      }
+    const firstDeploymentRow = within(deploymentsPanel).getByTestId(
+      `deployment-row-${firstDeploymentTxHash}:0`
     );
     expect(within(firstDeploymentRow).getByText(/^type:/i)).toBeInTheDocument();
     expect(
@@ -532,15 +490,8 @@ describe('ScriptDetailPage', () => {
     expect(hasTextContent(firstDeploymentRow, '61.00000000 CKB')).toBe(true);
     expect(within(firstDeploymentRow).getByText(firstDeploymentTimestampLabel)).toBeInTheDocument();
 
-    const secondDeploymentRow = findNearestContainer(
-      within(deploymentsPanel).getByTitle(`Click to copy: ${secondDeploymentTxHash}:1`),
-      (element) => {
-        const queries = within(element);
-        return (
-          queries.queryByTitle(`Click to copy: ${secondDeploymentTxHash}:1`) !== null &&
-          queries.queryByTitle(`Click to copy: ${firstDeploymentTxHash}:0`) === null
-        );
-      }
+    const secondDeploymentRow = within(deploymentsPanel).getByTestId(
+      `deployment-row-${secondDeploymentTxHash}:1`
     );
     expect(within(secondDeploymentRow).getByText(/^type:/i)).toBeInTheDocument();
     expect(
@@ -602,14 +553,7 @@ describe('ScriptDetailPage', () => {
         'Historical common knowledge and free live capacity for the selected version.'
       )
     ).toBeInTheDocument();
-    const usagePanel = findNearestContainer(screen.getByText('Usage'), (element) => {
-      const queries = within(element);
-      return (
-        queries.queryByText('Usage') !== null &&
-        queries.queryByText('Owned Capacity') !== null &&
-        queries.queryByText(/^Free Capacity:/) !== null
-      );
-    });
+    const usagePanel = screen.getByTestId('version-usage-panel');
     expect(within(usagePanel).getByText(/HMul:/)).toBeInTheDocument();
     expect(within(usagePanel).getByRole('button', { name: 'Explain HMul' })).toBeInTheDocument();
     expect(within(usagePanel).getByText('Owned Capacity')).toBeInTheDocument();
@@ -635,18 +579,13 @@ describe('ScriptDetailPage', () => {
 
     fireEvent.click(screen.getByTestId(`version-row-${legacyVersionCodeHash}`));
 
-    const legacyDeploymentRow = await waitFor(() =>
-      findNearestContainer(
-        within(deploymentsPanel).getByTitle(`Click to copy: ${legacyDeploymentTxHash}:0`),
-        (element) => {
-          const queries = within(element);
-          return (
-            queries.queryByTitle(`Click to copy: ${legacyDeploymentTxHash}:0`) !== null &&
-            queries.queryByText(secondGovernanceScriptName) === null
-          );
-        }
-      )
-    );
+    const legacyDeploymentRow = await waitFor(() => {
+      const row = within(deploymentsPanel).getByTestId(
+        `deployment-row-${legacyDeploymentTxHash}:0`
+      );
+      expect(within(row).queryByText(secondGovernanceScriptName)).toBeNull();
+      return row;
+    });
     expect(
       within(legacyDeploymentRow).getByTitle(`Click to copy: ${legacyGovernanceCodeHash}`)
     ).toBeInTheDocument();
@@ -688,16 +627,7 @@ describe('ScriptDetailPage', () => {
     expect(screen.getByRole('button', { name: 'Explain Version Deployments' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Explain References' })).toBeInTheDocument();
 
-    const firstDeploymentRow = findNearestContainer(
-      screen.getByTitle(`Click to copy: ${firstDeploymentTxHash}:0`),
-      (element) => {
-        const queries = within(element);
-        return (
-          queries.queryByTitle(`Click to copy: ${firstDeploymentTxHash}:0`) !== null &&
-          queries.queryByTitle(`Click to copy: ${secondDeploymentTxHash}:1`) === null
-        );
-      }
-    );
+    const firstDeploymentRow = screen.getByTestId(`deployment-row-${firstDeploymentTxHash}:0`);
     expect(within(firstDeploymentRow).getByText('Live')).toBeInTheDocument();
     expect(within(firstDeploymentRow).getByText('Immutable (all-zero lock)')).toBeInTheDocument();
   });
