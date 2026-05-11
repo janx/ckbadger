@@ -50,7 +50,7 @@ This is the era local-first architecture was waiting for. This is the era Fiber 
 
 ### [CKBadger Don't Care](https://www.youtube.com/watch?v=4r7wHMg5Yjg)
 
-Whether or not you share the [Web5 vision](https://web5.tech), I hope CKBadger inspires you to build great things.
+Whether or not you share the [Web5 vision](https://web5.info), I hope CKBadger inspires you to build great things.
 
 ## Features
 
